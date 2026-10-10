@@ -69,7 +69,7 @@ impl CharacterStore for TrainerFake {
     fn delete_character(
         &self,
         _account_id: u64,
-        _character_guid: u64,
+        _character: Actor,
     ) -> Result<codec::CharDeleteOutcome> {
         unimplemented!("delete_character")
     }

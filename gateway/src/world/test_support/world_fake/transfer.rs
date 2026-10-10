@@ -78,7 +78,11 @@ impl TransferStore for WorldFake {
     /// now the transfer id IS the character guid: a database holding an unreleased ARRIVAL in-row
     /// for this character answers `BeginPlan::Replay` to a genuine new transfer, i.e. reports
     /// success while freezing nothing. A mock that only looked at `out_rows` could not see it.
-    fn begin_transfer(&self, plan: &crate::world::transfer::TransferPlan) -> Result<()> {
+    fn begin_transfer(
+        &self,
+        _character: Actor,
+        plan: &crate::world::transfer::TransferPlan,
+    ) -> Result<()> {
         let db = self.xstep("begin_transfer")?;
         let mut out = lk(&db.out_rows);
         let escrowed_guid = out

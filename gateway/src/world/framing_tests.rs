@@ -464,8 +464,8 @@ fn an_authenticated_stc_order_uses_the_logged_in_actor_and_keeps_the_session_liv
     assert_eq!(
         *store.session.client_commands.lock().unwrap(),
         vec![
-            (42, 1, "example.order".into(), "follow|77".into()),
-            (42, 1, "example.order".into(), "follow|77".into()),
+            (1, "example.order".into(), "follow|77".into()),
+            (1, "example.order".into(), "follow|77".into()),
         ]
     );
     drop(client);

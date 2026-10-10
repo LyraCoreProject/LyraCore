@@ -3,7 +3,7 @@
 //! shape as the rest of the dispatch chain.
 
 use super::party::PartyOutcome;
-use super::{party, presence, send, who, Outbound, SessionTx, WorldConn, WorldState};
+use super::{party, presence, send, who, Actor, Outbound, SessionTx, WorldConn, WorldState};
 use crate::codec;
 use crate::world::{CharacterStore, GuildActionStore, PartyStore, SessionStore, ShardRoutingStore};
 use anyhow::Result;
@@ -80,42 +80,22 @@ pub(crate) trait SocialStore: Send + Sync {
     /// `CMSG_ADD_FRIEND` (the name is already resolved to `target_guid` by the gateway).
     /// `target_race` is the target's own Speaker Fact, read realm-wide by the gateway: the Module's
     /// Enemy Gate needs it and holds no Characters of its own to read it from.
-    fn add_friend(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-        target_race: u8,
-    ) -> Result<ContactOutcome>;
+    fn add_friend(&self, actor: Actor, target_guid: u64, target_race: u8)
+        -> Result<ContactOutcome>;
 
     /// `CMSG_DEL_FRIEND`.
-    fn del_friend(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome>;
+    fn del_friend(&self, actor: Actor, target_guid: u64) -> Result<ContactOutcome>;
 
     /// `CMSG_ADD_IGNORE` (the name is already resolved to `target_guid` by the gateway).
-    fn add_ignore(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome>;
+    fn add_ignore(&self, actor: Actor, target_guid: u64) -> Result<ContactOutcome>;
 
     /// `CMSG_DEL_IGNORE`.
-    fn del_ignore(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<ContactOutcome>;
+    fn del_ignore(&self, actor: Actor, target_guid: u64) -> Result<ContactOutcome>;
 }
 
 /// What one contact-list op answered. A [`ContactRefusal`] is a gameplay answer `SMSG_FRIEND_STATUS`
-/// renders; a timeout, transport failure, or untagged reducer error stays `Err` and ends the
-/// session, because the durable outcome is then unknown.
+/// renders; a Transport Loss or an untagged Refusal stays `Err` and ends the session, because the
+/// durable outcome is then unknown.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum ContactOutcome {
     Done,
@@ -191,51 +171,36 @@ pub(super) fn handle_social<
         }
         // Add a friend/ignore by typed name: resolved realm-wide the same way `/whisper`'s target
         // is, then the module re-validates self/duplicate/cap/team server-side. Either way the
-        // client gets an SMSG_FRIEND_STATUS its system message reads the result code off.
+        // client gets an SMSG_FRIEND_STATUS its system message reads the result code off. The
+        // contact ops are silently dropped outside the world: there is no Character to act as.
         ClientOpcodeMessage::CMSG_ADD_FRIEND(c) => {
-            let (result, guid, online) = resolve_add_contact(
-                store,
-                conn.account_id,
-                self_guid(conn).unwrap_or(0),
-                &c.name,
-                false,
-            )?;
-            let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
-            send(tx, Outbound::Raw { opcode, body })?;
+            if let Some(actor) = self_actor(conn) {
+                let (result, guid, online) = resolve_add_contact(store, actor, &c.name, false)?;
+                let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+                send(tx, Outbound::Raw { opcode, body })?;
+            }
         }
         ClientOpcodeMessage::CMSG_ADD_IGNORE(c) => {
-            let (result, guid, online) = resolve_add_contact(
-                store,
-                conn.account_id,
-                self_guid(conn).unwrap_or(0),
-                &c.name,
-                true,
-            )?;
-            let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
-            send(tx, Outbound::Raw { opcode, body })?;
+            if let Some(actor) = self_actor(conn) {
+                let (result, guid, online) = resolve_add_contact(store, actor, &c.name, true)?;
+                let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+                send(tx, Outbound::Raw { opcode, body })?;
+            }
         }
         // Remove a friend/ignore by guid (the client already has it from the list row).
         ClientOpcodeMessage::CMSG_DEL_FRIEND(c) => {
-            let (result, guid) = resolve_del_contact(
-                store,
-                conn.account_id,
-                self_guid(conn).unwrap_or(0),
-                c.guid.guid(),
-                false,
-            )?;
-            let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
-            send(tx, Outbound::Raw { opcode, body })?;
+            if let Some(actor) = self_actor(conn) {
+                let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), false)?;
+                let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+                send(tx, Outbound::Raw { opcode, body })?;
+            }
         }
         ClientOpcodeMessage::CMSG_DEL_IGNORE(c) => {
-            let (result, guid) = resolve_del_contact(
-                store,
-                conn.account_id,
-                self_guid(conn).unwrap_or(0),
-                c.guid.guid(),
-                true,
-            )?;
-            let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
-            send(tx, Outbound::Raw { opcode, body })?;
+            if let Some(actor) = self_actor(conn) {
+                let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), true)?;
+                let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+                send(tx, Outbound::Raw { opcode, body })?;
+            }
         }
         // Party/group. The invite/uninvite names resolve gateway-side (the add_friend
         // convention); outcomes echo as SMSG_PARTY_COMMAND_RESULT. The cross-player packets
@@ -247,13 +212,10 @@ pub(super) fn handle_social<
         // Silently dropped outside the world: with no in-world character there is no `self_guid` to
         // act as, and none of these opcodes is reachable at character select.
         ClientOpcodeMessage::CMSG_GROUP_INVITE(c) => {
-            let result = match (self_guid(conn), presence::resolve_by_name(store, &c.name)?) {
-                (Some(me), Some(guid)) => party_result(party::run(
-                    store,
-                    conn.account_id,
-                    me,
-                    party::Op::Invite(guid),
-                )?),
+            let result = match (self_actor(conn), presence::resolve_by_name(store, &c.name)?) {
+                (Some(me), Some(guid)) => {
+                    party_result(party::run(store, me, party::Op::Invite(guid))?)
+                }
                 _ => PartyResult::BadPlayerName,
             };
             send(
@@ -269,13 +231,10 @@ pub(super) fn handle_social<
             run_answering_refusal(tx, store, conn, party::Op::Leave)?
         }
         ClientOpcodeMessage::CMSG_GROUP_UNINVITE(c) => {
-            let result = match (self_guid(conn), presence::resolve_by_name(store, &c.name)?) {
-                (Some(me), Some(guid)) => party_result(party::run(
-                    store,
-                    conn.account_id,
-                    me,
-                    party::Op::Uninvite(guid),
-                )?),
+            let result = match (self_actor(conn), presence::resolve_by_name(store, &c.name)?) {
+                (Some(me), Some(guid)) => {
+                    party_result(party::run(store, me, party::Op::Uninvite(guid))?)
+                }
                 _ => PartyResult::BadPlayerName,
             };
             if result != PartyResult::Success {
@@ -363,10 +322,10 @@ fn run_answering_refusal<
     conn: &WorldConn,
     op: party::Op,
 ) -> Result<()> {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return Ok(());
     };
-    match party::run(store, conn.account_id, me, op)? {
+    match party::run(store, me, op)? {
         PartyOutcome::Ran => Ok(()),
         PartyOutcome::Refused(refusal) => send(
             tx,
@@ -391,10 +350,10 @@ fn raid_convert<
     store: &St,
     conn: &WorldConn,
 ) -> Result<()> {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return Ok(());
     };
-    match party::run(store, conn.account_id, me, party::Op::RaidConvert)? {
+    match party::run(store, me, party::Op::RaidConvert)? {
         PartyOutcome::Ran => send(
             tx,
             Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
@@ -425,10 +384,10 @@ fn run_unanswered<
     conn: &WorldConn,
     op: party::Op,
 ) -> Result<()> {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return Ok(());
     };
-    if let PartyOutcome::Refused(refusal) = party::run(store, conn.account_id, me, op)? {
+    if let PartyOutcome::Refused(refusal) = party::run(store, me, op)? {
         log::debug!(
             "world: {op:?} refused (account {}): {refusal:?}",
             conn.account_id
@@ -449,10 +408,10 @@ fn change_subgroup<
     name: &str,
     subgroup: u8,
 ) -> Result<()> {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return Ok(());
     };
-    match party::resolve_roster_member_by_name(store, me, name)? {
+    match party::resolve_roster_member_by_name(store, me.guid(), name)? {
         Some(target) => run_unanswered(store, conn, party::Op::ChangeSubgroup { target, subgroup }),
         None => {
             log::debug!(
@@ -477,10 +436,11 @@ fn swap_subgroup<
     name: &str,
     swap_with_name: &str,
 ) -> Result<()> {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return Ok(());
     };
-    let (first, second) = party::resolve_roster_members_by_name(store, me, name, swap_with_name)?;
+    let (first, second) =
+        party::resolve_roster_members_by_name(store, me.guid(), name, swap_with_name)?;
     match (first, second) {
         (Some(first), Some(second)) => {
             run_unanswered(store, conn, party::Op::SwapSubgroup { first, second })
@@ -507,7 +467,7 @@ pub(super) fn run_group_broadcast<
     conn: &mut WorldConn,
     op: party::Op,
 ) {
-    let Some(me) = self_guid(conn) else {
+    let Some(me) = self_actor(conn) else {
         return;
     };
     if !conn.admit_group_broadcast(op) {
@@ -517,7 +477,7 @@ pub(super) fn run_group_broadcast<
         );
         return;
     }
-    match party::run(store, conn.account_id, me, op) {
+    match party::run(store, me, op) {
         Ok(PartyOutcome::Ran) => {}
         Ok(PartyOutcome::Refused(refusal)) => log::debug!(
             "world: group broadcast {op:?} refused (account {}): {refusal:?}",
@@ -566,6 +526,11 @@ pub(super) fn self_guid(conn: &WorldConn) -> Option<u64> {
         WorldState::InWorld(iw) => Some(iw.self_guid),
         _ => None,
     }
+}
+
+/// [`self_guid`] as the Actor a Durable Request acts as.
+pub(super) fn self_actor(conn: &WorldConn) -> Option<Actor> {
+    self_guid(conn).and_then(Actor::new)
 }
 
 /// The `PartyResult` code one party outcome renders as.
@@ -698,8 +663,7 @@ pub(crate) fn friend_views<St: ShardRoutingStore + SocialStore + ?Sized>(
 /// (self/duplicate/cap/team) is the module's own typed Refusal.
 fn resolve_add_contact<St: CharacterStore + ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
-    account_id: u64,
-    actor_guid: u64,
+    actor: Actor,
     name: &str,
     is_ignore: bool,
 ) -> Result<(FriendResult, u64, Option<codec::FriendOnline>)> {
@@ -712,7 +676,7 @@ fn resolve_add_contact<St: CharacterStore + ShardRoutingStore + SocialStore + ?S
         return Ok((not_found, 0, None));
     };
     if is_ignore {
-        let outcome = store.add_ignore(account_id, actor_guid, target_guid)?;
+        let outcome = store.add_ignore(actor, target_guid)?;
         let result = match outcome {
             ContactOutcome::Done => FriendResult::IgnoreAdded,
             ContactOutcome::Refused(refusal) => friend_result_for(refusal, true),
@@ -741,11 +705,11 @@ fn resolve_add_contact<St: CharacterStore + ShardRoutingStore + SocialStore + ?S
         // moment ago — treat it the same as an unresolved name rather than guess.
         return Ok((FriendResult::NotFound, 0, None));
     };
-    let outcome = store.add_friend(account_id, actor_guid, target_guid, target_race)?;
+    let outcome = store.add_friend(actor, target_guid, target_race)?;
     let (result, online) = match outcome {
         ContactOutcome::Done => {
             let actor_race = store
-                .character_by_guid(actor_guid)?
+                .character_by_guid(actor.guid())?
                 .map_or(0, |character| character.race);
             match target.as_ref().filter(|presence| {
                 presence.session_online
@@ -768,15 +732,14 @@ fn resolve_add_contact<St: CharacterStore + ShardRoutingStore + SocialStore + ?S
 /// trailing presence fields, whatever the outcome.
 fn resolve_del_contact<St: SocialStore + ?Sized>(
     store: &St,
-    account_id: u64,
-    actor_guid: u64,
+    actor: Actor,
     target_guid: u64,
     is_ignore: bool,
 ) -> Result<(FriendResult, u64)> {
     let outcome = if is_ignore {
-        store.del_ignore(account_id, actor_guid, target_guid)?
+        store.del_ignore(actor, target_guid)?
     } else {
-        store.del_friend(account_id, actor_guid, target_guid)?
+        store.del_friend(actor, target_guid)?
     };
     let result = match outcome {
         ContactOutcome::Done if is_ignore => FriendResult::IgnoreRemoved,

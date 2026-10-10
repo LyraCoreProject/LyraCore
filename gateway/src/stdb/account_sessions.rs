@@ -568,8 +568,10 @@ mod tests {
             old.2.clone(),
         );
         let transfer_id = crate::world::transfer::transfer_id_for(1);
-        winner
-            .begin_transfer(&crate::world::transfer::TransferPlan {
+        crate::world::TransferStore::begin_transfer(
+            winner,
+            Actor::new(1).unwrap(),
+            &crate::world::transfer::TransferPlan {
                 transfer_id,
                 character_guid: 1,
                 dest_map_id: 0,
@@ -578,8 +580,9 @@ mod tests {
                 dest_y: 100.0,
                 dest_z: 20.0,
                 dest_o: 0.0,
-            })
-            .unwrap();
+            },
+        )
+        .unwrap();
         assert!(crate::durable_test_support::poll_until(
             Duration::from_secs(5),
             || winner.escrow_row(1).is_some()
@@ -689,10 +692,16 @@ mod tests {
         a.establish_session(account_id, &[7; 40], identity).unwrap();
         let first = a.claim_session(account_id, 1).unwrap();
         let old = a.bind_session(first).unwrap();
-        old.player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
-            .unwrap();
+        let character = Actor::new(1).unwrap();
+        crate::world::SessionStore::player_login(
+            &old,
+            account_id,
+            character,
+            crate::codec::WorldEntry::FreshLogin,
+        )
+        .unwrap();
         assert!(matches!(
-            b.delete_character(account_id, 1).unwrap(),
+            crate::world::CharacterStore::delete_character(&b, account_id, character).unwrap(),
             crate::codec::CharDeleteOutcome::Failed
         ));
         assert_eq!(
@@ -732,9 +741,13 @@ mod tests {
         let second = b.claim_session(account_id, 1).unwrap();
         assert!(second.generation > first.generation);
         let winner = b.bind_session(second).unwrap();
-        winner
-            .player_login(account_id, 1, crate::codec::WorldEntry::FreshLogin)
-            .unwrap();
+        crate::world::SessionStore::player_login(
+            &winner,
+            account_id,
+            character,
+            crate::codec::WorldEntry::FreshLogin,
+        )
+        .unwrap();
         old.release_session(first).unwrap();
         old.release_session(first).unwrap();
         let batch = super::super::movement_batch::MovementBatch::new();

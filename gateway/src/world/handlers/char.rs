@@ -12,7 +12,7 @@ pub(crate) trait CharacterStore: Send + Sync {
     fn characters(&self, account_id: u64) -> Result<Vec<codec::CharacterView>>;
 
     /// Create a character for the account (`CMSG_CHAR_CREATE`). Returns the game outcome
-    /// (success / name-in-use / failed); `Err` only for an unrecoverable transport failure.
+    /// (success / name-in-use / failed); `Err` only for a Transport Loss.
     fn create_character(
         &self,
         account_id: u64,
@@ -23,13 +23,13 @@ pub(crate) trait CharacterStore: Send + Sync {
         appearance: codec::Appearance,
     ) -> Result<codec::CharCreateOutcome>;
 
-    /// Delete a character for the account (`CMSG_CHAR_DELETE`). Returns the game
-    /// outcome (success/failed); `Err` only for an unrecoverable transport failure. Ownership is
-    /// enforced module-side (the character must belong to `account_id`).
+    /// Delete `character` for the account (`CMSG_CHAR_DELETE`). Returns the game outcome
+    /// (success/failed); `Err` only for a Transport Loss. Ownership is enforced module-side (the
+    /// character must belong to `account_id`).
     fn delete_character(
         &self,
         account_id: u64,
-        character_guid: u64,
+        character: Actor,
     ) -> Result<codec::CharDeleteOutcome>;
 
     /// Look up a character by guid (any owner) to answer `CMSG_NAME_QUERY` — the queried guid is
@@ -145,12 +145,13 @@ fn enter_world(
     tx: &SessionTx,
     store: &dyn WorldStore,
     conn: &mut WorldConn,
-    character_guid: u64,
+    character: Actor,
     entry: codec::WorldEntry,
 ) -> Result<()> {
     conn.state = WorldState::CharSelect;
 
-    let mut entity = store.player_login(conn.account_id, character_guid, entry)?;
+    let character_guid = character.guid();
+    let mut entity = store.player_login(conn.account_id, character, entry)?;
     // Character sheet (UNIT_FIELD_RESISTANCES[0]): override the BASE armor `player_login` set with
     // the EFFECTIVE armor (base + worn gear) so the Armor readout is correct at relog. Armor auras
     // self-correct via the on_aura relay; combat mitigation is unchanged (the module still folds its
@@ -244,7 +245,7 @@ fn enter_world(
     //
     // Failures are logged, not propagated: a party frame that renders late is a cosmetic defect,
     // and failing the login over it would be strictly worse for the player.
-    if let Err(e) = party::on_world_entry(tx, store, character_guid) {
+    if let Err(e) = party::on_world_entry(tx, store, character) {
         log::warn!("world: party sync at world entry failed for guid {character_guid}: {e:#}");
     }
     // A Fee Hold that an earlier session or a Transfer left behind is finished here, on the Home
@@ -344,8 +345,8 @@ pub(crate) fn handle_char<
             )?;
         }
         // Character creation. Create the row, reply SMSG_CHAR_CREATE; on success the client
-        // re-sends CMSG_CHAR_ENUM and the new character appears. A creation failure is NOT
-        // session-fatal — report it as a result, never drop the connection.
+        // re-sends CMSG_CHAR_ENUM and the new character appears. A Refusal is NOT session-fatal —
+        // report it as a result. A Transport Loss ends the session.
         ClientOpcodeMessage::CMSG_CHAR_CREATE(c) => {
             let appearance = codec::Appearance {
                 skin: c.skin_color,
@@ -354,16 +355,14 @@ pub(crate) fn handle_char<
                 hair_color: c.hair_color,
                 facial_hair: c.facial_hair,
             };
-            let outcome = store
-                .create_character(
-                    conn.account_id,
-                    c.name.as_str(),
-                    c.race.as_int(),
-                    c.class.as_int(),
-                    c.gender.as_int(),
-                    appearance,
-                )
-                .unwrap_or(codec::CharCreateOutcome::Failed);
+            let outcome = store.create_character(
+                conn.account_id,
+                c.name.as_str(),
+                c.race.as_int(),
+                c.class.as_int(),
+                c.gender.as_int(),
+                appearance,
+            )?;
             send(
                 tx,
                 Outbound::One(ServerOpcodeMessage::SMSG_CHAR_CREATE(
@@ -373,7 +372,8 @@ pub(crate) fn handle_char<
         }
         // Character deletion. Per the wire doc SMSG_CHAR_DELETE alone updates the
         // character-select screen — no re-sent CMSG_CHAR_ENUM needed. Ownership is enforced module-
-        // side; a failure is NOT session-fatal, same treatment as CMSG_CHAR_CREATE above.
+        // side; a Refusal is NOT session-fatal, same treatment as CMSG_CHAR_CREATE above. Guid 0
+        // names no Character and fails like a Refusal.
         //
         // A Guild Leader is not deleted: 1.12 answers CHAR_DELETE_FAILED, the same 0x3A mangos sends
         // as FAILED_GUILD_LEADER (`cm:CharacterHandler.cpp:540-546`). Realm-core holds the Guild and
@@ -381,15 +381,19 @@ pub(crate) fn handle_char<
         // nothing either.
         ClientOpcodeMessage::CMSG_CHAR_DELETE(d) => {
             let character_guid = d.guid.guid();
-            let outcome = match super::leads_a_guild(store, character_guid) {
-                Ok(false) => store
-                    .delete_character(conn.account_id, character_guid)
-                    .unwrap_or(codec::CharDeleteOutcome::Failed),
-                Ok(true) => {
+            let outcome = match (
+                Actor::new(character_guid),
+                super::leads_a_guild(store, character_guid),
+            ) {
+                (None, _) => codec::CharDeleteOutcome::Failed,
+                (Some(character), Ok(false)) => {
+                    store.delete_character(conn.account_id, character)?
+                }
+                (Some(_), Ok(true)) => {
                     log::info!("world: Guild Leader {character_guid} is not deleted");
                     codec::CharDeleteOutcome::Failed
                 }
-                Err(error) => {
+                (Some(_), Err(error)) => {
                     log::warn!(
                         "world: Guild Leader check for {character_guid} failed, not deleted: \
                          {error:#}"
@@ -411,6 +415,9 @@ pub(crate) fn handle_char<
             if conn.session_claim.is_some() {
                 return Err(anyhow::anyhow!("ACCOUNT_IN_USE"));
             }
+            let Some(character) = Actor::new(character_guid) else {
+                return Err(anyhow::anyhow!("CMSG_PLAYER_LOGIN names no Character"));
+            };
             let token = store.claim_session(conn.account_id, character_guid)?;
             conn.session_claim = Some(token);
             if let Some(bound) = store.bind_session(token)? {
@@ -423,13 +430,7 @@ pub(crate) fn handle_char<
             // A single-entry shard map never pins anything → `enter_world` runs on `store`.
             conn.route_home(character_guid)?;
             let home = conn.store.current();
-            enter_world(
-                tx,
-                &*home,
-                conn,
-                character_guid,
-                codec::WorldEntry::FreshLogin,
-            )?;
+            enter_world(tx, &*home, conn, character, codec::WorldEntry::FreshLogin)?;
         }
         // Cross-map teleport: the client's ack that it finished loading the map named
         // by our `SMSG_NEW_WORLD` (sent from the `on_teleport` relay when `teleport_player` despawned
@@ -447,10 +448,11 @@ pub(crate) fn handle_char<
         // client ack in this dispatch. The bound Store retains the same Account ownership.
         ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK => {
             let resume = match &conn.state {
-                WorldState::InWorld(iw) => Some(iw.self_guid),
+                WorldState::InWorld(iw) => Actor::new(iw.self_guid),
                 WorldState::CharSelect => None,
             };
-            if let Some(character_guid) = resume {
+            if let Some(character) = resume {
+                let character_guid = character.guid();
                 // Gate on a REAL pending transfer: cross-map teleport
                 // despawns the entity until this ack; a live entity means no transfer is in
                 // flight and the ack is spurious — ignore it instead of re-entering the world.
@@ -487,13 +489,8 @@ pub(crate) fn handle_char<
                     let mut ported = conn.route_home(character_guid);
                     if ported.is_ok() {
                         let home = conn.store.current();
-                        ported = enter_world(
-                            tx,
-                            &*home,
-                            conn,
-                            character_guid,
-                            codec::WorldEntry::WorldPort,
-                        );
+                        ported =
+                            enter_world(tx, &*home, conn, character, codec::WorldEntry::WorldPort);
                     }
                     if let Err(e) = ported {
                         abort_pending_transfer(tx, store, character_guid, &e);

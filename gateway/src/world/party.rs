@@ -43,7 +43,7 @@ use std::time::{Duration, Instant};
 
 use anyhow::Result;
 
-use super::{presence, send, Outbound, SessionTx, WorldStore};
+use super::{presence, send, Actor, Outbound, SessionTx, WorldStore};
 use crate::codec;
 use lyracore_shared::group::{
     bot_op, realm_op, GroupKind, GroupRefusal, RaidSlot, RosterMember, RosterPayload,
@@ -99,7 +99,7 @@ pub(crate) trait PartyStore: Send + Sync {
     fn realm_group_op(
         &self,
         op: u8,
-        actor_guid: u64,
+        actor: Actor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -112,7 +112,7 @@ pub(crate) trait PartyStore: Send + Sync {
     fn realm_group_op_visible(
         &self,
         op: u8,
-        actor_guid: u64,
+        actor: Actor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -121,7 +121,7 @@ pub(crate) trait PartyStore: Send + Sync {
 
     /// Realm-core LEAVE for a deleted Character. Production returns after its Coordinator cache
     /// has the committed roster; Fakes may reuse the ordinary party operation.
-    fn deleted_character_party_leave(&self, character_guid: u64) -> Result<PartyOutcome>;
+    fn deleted_character_party_leave(&self, character: Actor) -> Result<PartyOutcome>;
 
     /// The party `character_guid` is in, as THIS handle's database sees it: authoritative on
     /// realm-core, a mirror on a world shard. `None` = not in a party there.
@@ -170,37 +170,24 @@ pub(crate) trait PartyStore: Send + Sync {
     /// An empty `roster.members` is the disband tombstone.
     fn sync_group_mirror(&self, roster: &GroupRoster) -> Result<()>;
 
-    // The SINGLE-DATABASE party path (`world::party::run`'s `None` arm). Each takes the caller's
-    // `self_guid` as well as its account: the account is what identifies the player CONNECTION these
-    // reducers run on, and the guid is what identifies the CHARACTER to realm-core on the other arm.
-    // Both are threaded through one call site (`world::social`), so the two planes take the same
-    // arguments and a mock sees which character the op was for either way.
+    // The SINGLE-DATABASE party path (`world::party::run`'s `None` arm): the player-facing
+    // reducers, acting as the session's Character.
 
     /// `CMSG_GROUP_INVITE` (name gateway-resolved). A `GroupRefusal` arrives as an outcome.
-    fn group_invite(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<PartyOutcome>;
+    fn group_invite(&self, actor: Actor, target_guid: u64) -> Result<PartyOutcome>;
 
     /// `CMSG_GROUP_ACCEPT`.
-    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+    fn group_accept(&self, actor: Actor) -> Result<PartyOutcome>;
 
     /// `CMSG_GROUP_DECLINE`.
-    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+    fn group_decline(&self, actor: Actor) -> Result<PartyOutcome>;
 
     /// `CMSG_GROUP_DISBAND` (the client's "Leave Party").
-    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+    fn group_leave(&self, actor: Actor) -> Result<PartyOutcome>;
 
     /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) or `CMSG_GROUP_UNINVITE_GUID` — the leader or
     /// an Assistant kicks a member.
-    fn group_uninvite(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        target_guid: u64,
-    ) -> Result<PartyOutcome>;
+    fn group_uninvite(&self, actor: Actor, target_guid: u64) -> Result<PartyOutcome>;
 
     /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
     /// threshold/master. `loot_setting`/`loot_threshold` are the gateway-decoded `GroupLootSetting`/
@@ -208,8 +195,7 @@ pub(crate) trait PartyStore: Send + Sync {
     /// verbatim — zero translation).
     fn group_loot_method(
         &self,
-        account_id: u64,
-        self_guid: u64,
+        actor: Actor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
@@ -673,18 +659,18 @@ impl Op {
     }
 }
 
-/// Run `op` as `self_guid` through `realm_group_op` on `authority`, the database that holds the
+/// Run `op` as `actor` through `realm_group_op` on `authority`, the database that holds the
 /// party: Realm-core when sharded, the home shard otherwise. It returns before the Coordinator
 /// cache holds the commit, so it is only for an op that pushes no Group mirror after it: a Group
 /// Broadcast, a Target Icon request, a declined invite, or an op on a single database. An ACCEPT
 /// changes a roster, so it never comes here.
 fn run_on_authority<A: PartyStore + ?Sized>(
     authority: &A,
-    self_guid: u64,
+    actor: Actor,
     op: Op,
 ) -> Result<PartyOutcome> {
     let (code, target, arg_a, arg_b, arg_c) = op.realm_args(AcceptorFacts::NONE);
-    authority.realm_group_op(code, self_guid, target, arg_a, arg_b, arg_c)
+    authority.realm_group_op(code, actor, target, arg_a, arg_b, arg_c)
 }
 
 /// [`run_on_authority`] that returns only after the Coordinator cache holds the commit, so the
@@ -693,12 +679,12 @@ fn run_on_authority<A: PartyStore + ?Sized>(
 /// caller must run on its own thread. `acceptor` is read only for an ACCEPT.
 fn run_on_authority_visible<A: PartyStore + ?Sized>(
     authority: &A,
-    self_guid: u64,
+    actor: Actor,
     op: Op,
     acceptor: AcceptorFacts,
 ) -> Result<PartyOutcome> {
     let (code, target, arg_a, arg_b, arg_c) = op.realm_args(acceptor);
-    authority.realm_group_op_visible(code, self_guid, target, arg_a, arg_b, arg_c)
+    authority.realm_group_op_visible(code, actor, target, arg_a, arg_b, arg_c)
 }
 
 /// What one party op answered. A [`GroupRefusal`] is a gameplay answer the client renders, so it
@@ -1087,6 +1073,9 @@ fn answer_for_session_less<
     realm: &dyn WorldStore,
     guid: u64,
 ) {
+    let Some(actor) = Actor::new(guid) else {
+        return;
+    };
     let admission = admit_sessionless_answer(store, guid);
     match admission {
         Ok(PartyOutcome::Ran) => {}
@@ -1097,7 +1086,7 @@ fn answer_for_session_less<
         }
     }
     let acceptor = AcceptorFacts::of(store, guid);
-    let joined = match run_on_authority_visible(realm, guid, Op::Accept, acceptor) {
+    let joined = match run_on_authority_visible(realm, actor, Op::Accept, acceptor) {
         Ok(PartyOutcome::Ran) => {
             log::info!("party: session-less {guid} accepted its group invite");
             return;
@@ -1106,7 +1095,7 @@ fn answer_for_session_less<
         Err(e) => format!("{e:#}"),
     };
     log::info!("party: session-less {guid} cannot join ({joined}), declining explicitly");
-    match run_on_authority(realm, guid, Op::Decline) {
+    match run_on_authority(realm, actor, Op::Decline) {
         Ok(PartyOutcome::Ran) => {}
         outcome => log::warn!(
             "party: session-less {guid} could neither join nor decline ({outcome:?}). The \
@@ -1115,7 +1104,7 @@ fn answer_for_session_less<
     }
 }
 
-/// Run one party op for the session that owns `self_guid`.
+/// Run one party op as the session's Character, `actor`.
 ///
 /// Unsharded → the pre-realm-core path, verbatim: the player's own connection calls the player-facing
 /// reducer on the player's own shard, and nothing else happens. A raid op, a leadership op or a
@@ -1130,10 +1119,10 @@ pub(crate) fn run<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
     store: &St,
-    account_id: u64,
-    self_guid: u64,
+    actor: Actor,
     op: Op,
 ) -> Result<PartyOutcome> {
+    let self_guid = actor.guid();
     if let Op::Invite(target) = op {
         if cross_faction_invite(store, self_guid, target)? {
             return Ok(GroupRefusal::WrongFaction.into());
@@ -1148,16 +1137,16 @@ pub(crate) fn run<
     }
     let Some(realm) = store.realm_store() else {
         return match op {
-            Op::Invite(target) => store.group_invite(account_id, self_guid, target),
-            Op::Accept => store.group_accept(account_id, self_guid),
-            Op::Decline => store.group_decline(account_id, self_guid),
-            Op::Leave => store.group_leave(account_id, self_guid),
-            Op::Uninvite(target) => store.group_uninvite(account_id, self_guid, target),
+            Op::Invite(target) => store.group_invite(actor, target),
+            Op::Accept => store.group_accept(actor),
+            Op::Decline => store.group_decline(actor),
+            Op::Leave => store.group_leave(actor),
+            Op::Uninvite(target) => store.group_uninvite(actor, target),
             Op::LootMethod {
                 setting,
                 master,
                 threshold,
-            } => store.group_loot_method(account_id, self_guid, setting, master, threshold),
+            } => store.group_loot_method(actor, setting, master, threshold),
             // A raid op, a leadership op or a Group Broadcast has no player-facing reducer. With one
             // database, the home shard holds the party, so it runs the same `realm_group_op`
             // Realm-core would.
@@ -1170,11 +1159,11 @@ pub(crate) fn run<
             | Op::ReadyCheckAnswer(_)
             | Op::TargetIcon { .. }
             | Op::MinimapPing { .. }
-            | Op::RandomRoll { .. } => run_on_authority(store, self_guid, op),
+            | Op::RandomRoll { .. } => run_on_authority(store, actor, op),
         };
     };
     if op.is_group_broadcast() {
-        return run_on_authority(realm.as_ref(), self_guid, op);
+        return run_on_authority(realm.as_ref(), actor, op);
     }
     // The two gates realm-core cannot run for itself, because the directory database holds neither
     // characters nor live entities: does the target EXIST, and is it ONLINE. The gateway is the only
@@ -1199,7 +1188,7 @@ pub(crate) fn run<
     }
     let acceptor = AcceptorFacts::for_op(store, self_guid, op);
     if let PartyOutcome::Refused(refusal) =
-        run_on_authority_visible(realm.as_ref(), self_guid, op, acceptor)?
+        run_on_authority_visible(realm.as_ref(), actor, op, acceptor)?
     {
         return Ok(PartyOutcome::Refused(refusal));
     }
@@ -1370,6 +1359,10 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
     inviter_guid: u64,
     target_guid: u64,
 ) -> Result<PartyOutcome> {
+    // Guid 0 names no Character, so it can act in no party.
+    let Some(inviter) = Actor::new(inviter_guid) else {
+        return Ok(GroupRefusal::ActorUnavailable.into());
+    };
     let owned_realm;
     let realm: &dyn WorldStore = match store.realm_store() {
         Some(r) => {
@@ -1382,12 +1375,9 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
         return Ok(refusal.into());
     }
     let before = realm.group_roster(inviter_guid)?;
-    if let PartyOutcome::Refused(refusal) = run_on_authority_visible(
-        realm,
-        inviter_guid,
-        Op::Invite(target_guid),
-        AcceptorFacts::NONE,
-    )? {
+    if let PartyOutcome::Refused(refusal) =
+        run_on_authority_visible(realm, inviter, Op::Invite(target_guid), AcceptorFacts::NONE)?
+    {
         return Ok(PartyOutcome::Refused(refusal));
     }
     answer_for_session_less(store, realm, target_guid);
@@ -1410,6 +1400,9 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
 /// can shrink a group below two members and reach realm-core's disband branch, which force-resolves
 /// live loot rolls that the periodic relay may not have promoted yet.
 pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Result<PartyOutcome> {
+    let Some(leaver) = Actor::new(leaver_guid) else {
+        return Ok(GroupRefusal::ActorUnavailable.into());
+    };
     let owned_realm;
     let realm: &dyn WorldStore = match store.realm_store() {
         Some(r) => {
@@ -1418,8 +1411,8 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         }
         None => store,
     };
-    let leave = run_server_leave(store, realm, leaver_guid, 1, |realm, character_guid| {
-        run_on_authority_visible(realm, character_guid, Op::Leave, AcceptorFacts::NONE)
+    let leave = run_server_leave(store, realm, leaver, 1, |realm, leaver| {
+        run_on_authority_visible(realm, leaver, Op::Leave, AcceptorFacts::NONE)
     })?;
     if leave.outcome == PartyOutcome::Ran {
         sync_membership_mirrors(store, realm, leaver_guid, leave.previous_roster);
@@ -1435,15 +1428,16 @@ struct ServerLeave {
 fn run_server_leave<St: ShardRoutingStore + ?Sized>(
     store: &St,
     realm: &dyn WorldStore,
-    leaver_guid: u64,
+    leaver: Actor,
     attempts: usize,
-    leave_party: impl Fn(&dyn WorldStore, u64) -> Result<PartyOutcome>,
+    leave_party: impl Fn(&dyn WorldStore, Actor) -> Result<PartyOutcome>,
 ) -> Result<ServerLeave> {
+    let leaver_guid = leaver.guid();
     let before = realm.group_roster(leaver_guid)?;
     crate::world::loot::flush_pending_promotions(store, realm);
     let mut last_error = None;
     for _ in 0..attempts {
-        match leave_party(realm, leaver_guid) {
+        match leave_party(realm, leaver) {
             Ok(PartyOutcome::Ran) => {
                 return Ok(ServerLeave {
                     outcome: PartyOutcome::Ran,
@@ -1511,15 +1505,19 @@ pub(crate) fn cleanup_deleted_character<St: CharacterStore + ShardRoutingStore>(
     let Some(realm) = store.party_cleanup_realm()? else {
         return Ok(DeletedCharacterPartyCleanup::AlreadyClean);
     };
+    // Guid 0 names no Character, so no party holds it.
+    let Some(character) = Actor::new(character_guid) else {
+        return Ok(DeletedCharacterPartyCleanup::AlreadyClean);
+    };
     if store.character_exists_on_any_world_shard(character_guid)? {
         return Ok(DeletedCharacterPartyCleanup::Preserved);
     }
     let leave = run_server_leave(
         store,
         realm.as_ref(),
-        character_guid,
+        character,
         DELETED_CHARACTER_LEAVE_ATTEMPTS,
-        |realm, character_guid| realm.deleted_character_party_leave(character_guid),
+        |realm, character| realm.deleted_character_party_leave(character),
     )?;
     match leave.outcome {
         PartyOutcome::Ran => {
@@ -1740,14 +1738,15 @@ pub(crate) fn on_world_entry<
 >(
     tx: &SessionTx,
     store: &St,
-    self_guid: u64,
+    character: Actor,
 ) -> Result<()> {
+    let self_guid = character.guid();
     let Some(roster) = sync_arrival_mirror(store, self_guid)? else {
         return Ok(());
     };
     send(tx, render_list(store, self_guid, &roster.list_payload()))?;
     if roster.kind == GroupKind::Party {
-        request_target_icons(store, self_guid);
+        request_target_icons(store, character);
     }
     Ok(())
 }
@@ -1756,7 +1755,7 @@ pub(crate) fn on_world_entry<
 /// above carries no Target Icons, so ask the party authority for the full list, as the client's
 /// own `0xFF` request does. The answer rides the group event relay onto the same session writer
 /// and so lands after the list. A failure costs only the marks, so it logs.
-fn request_target_icons<St: ShardRoutingStore + ?Sized>(store: &St, self_guid: u64) {
+fn request_target_icons<St: ShardRoutingStore + ?Sized>(store: &St, character: Actor) {
     let Some(realm) = store.realm_store() else {
         return;
     };
@@ -1764,10 +1763,11 @@ fn request_target_icons<St: ShardRoutingStore + ?Sized>(store: &St, self_guid: u
         icon: lyracore_shared::group::TARGET_ICON_LIST_REQUEST,
         target: 0,
     };
-    match run_on_authority(realm.as_ref(), self_guid, op) {
+    match run_on_authority(realm.as_ref(), character, op) {
         Ok(PartyOutcome::Ran) => {}
         outcome => log::warn!(
-            "party: Target Icon list for {self_guid} at world entry not requested: {outcome:?}"
+            "party: Target Icon list for {} at world entry not requested: {outcome:?}",
+            character.guid()
         ),
     }
 }
