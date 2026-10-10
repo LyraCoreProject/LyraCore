@@ -1,6 +1,7 @@
 # Watched reputation faction research
 
-Research status: complete. Client Verification status: outstanding. This note checks source at
+Research status: complete. The reporter confirmed that the affected display is the watched bar near
+the experience bar. Client Verification of the fix is outstanding. This note checks source at
 LyraCore commit `46bf948b27b6d21555832b7505ce06ba5fae4f48`, the commit named in
 [issue #650](https://github.com/LyraCoreProject/LyraCore/issues/650). It uses CMaNGOS Classic commit
 `8ec338a1704e7dcb1c0213eb7ed58f9231ade40f` and the `wow_world_messages` 0.3.0 source commit
@@ -48,9 +49,10 @@ Character row has no watched selection. Login initializes reputation slots in a 
 [Character row](https://github.com/LyraCoreProject/LyraCore/blob/46bf948b27b6d21555832b7505ce06ba5fae4f48/module/src/character.rs),
 [initial factions](https://github.com/LyraCoreProject/LyraCore/blob/46bf948b27b6d21555832b7505ce06ba5fae4f48/gateway/src/codec/entity.rs#L730-L757).
 
-Those omissions establish missing initialization and persistence. They do not establish that the
-Bloodsail Buccaneers display is the watched bar, that Bloodsail occupies an omitted field's client
-default slot, or that standing changed. The issue itself leaves those facts unconfirmed.
+Those omissions establish missing initialization and persistence. The reporter later confirmed
+that the Bloodsail Buccaneers display is the watched bar. We have not established that Bloodsail
+occupies an omitted field's client default slot, or that standing changed. The original issue
+leaves those facts unconfirmed.
 [Reported symptom](https://github.com/LyraCoreProject/LyraCore/issues/650).
 
 ## Chosen implementation
@@ -83,7 +85,8 @@ Use an owner-only field update if the durable selection changes during the World
 
 ## Verification to perform
 
-These are proposed checks, not recorded results.
+Automated checks below exercise protocol and durable state. The graphical client check remains
+outstanding. The PR records the completed runs.
 
 - At the protocol Seam, accept exactly four bytes for `-1`, `0` and `63`. Refuse truncation and
   trailing bytes. At the Module boundary, refuse `-2`, `64` and extreme signed values without
@@ -94,7 +97,7 @@ These are proposed checks, not recorded results.
 - Select, change and clear a faction. Check each result after login, a same-Shard map change and a
   cross-shard Transfer. Check that old Escrow without the appended Character field imports as no
   selection, and that malformed rows still cause a Refusal.
-- With a real 1.12.1 build-5875 client, record whether the reported Bloodsail display is the watched
-  bar or a reputation-pane row, when it appears, and whether selecting and clearing survives the
+- With a real 1.12.1 build-5875 client, check that the unwanted watched bar no longer
+  appears and that selecting and clearing survives the
   lifecycle steps above. Record standing before and after. Keep this symptom outstanding until
   that check establishes a connection.
