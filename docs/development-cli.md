@@ -405,8 +405,8 @@ somewhere else. That is `packages remove`'s rule, for the same reason: local edi
 copy are recorded nowhere, and neither command can get them back.
 
 **The previous revision is kept until the new one is proven.** The old folder moves out of the
-inventory, the new revision installs in its place, and `preflight` runs with it compiled in. Only
-then is the old folder deleted. If anything fails, the previous revision goes back byte for byte,
+inventory, the new revision installs in its place, and `preflight` runs. A disabled Package stays
+disabled and is excluded from compilation. The old folder is deleted only after `preflight` passes. If anything fails, the previous revision goes back byte for byte,
 the candidate is discarded, and the error names both commits. `update` publishes nothing and
 synchronizes no client; it prints the steps it did not run.
 
