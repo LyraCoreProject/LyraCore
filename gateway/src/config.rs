@@ -1,5 +1,18 @@
 //! Gateway configuration. All operational, none of it game state.
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 use crate::accept::BlockingTaskCapacity;
 
 #[derive(Clone, Debug)]
