@@ -12,7 +12,6 @@ use crate::faction::game_faction_template;
 // alias keeps every `graveyard::...` call site below byte-identical.
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
-use crate::spell::game_resurrect_request;
 use crate::{
     game_character, game_character_buyback, game_corpse, game_creature_spline, game_instance,
 };
@@ -109,7 +108,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     // the 3-column planner limit does not apply to `helpers::entities_near`.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell])),
     // Creature searches skip Character entry 0 before consuming their bounded read budget. The
-    // consumer is the playerbots Package's quest loop; nothing in Core reads this index.
+    // consumer is a Package's quest loop; nothing in Core reads this index.
     index(accessor = by_cell_entry, btree(columns = [map_id, instance_id, cell, entry])),
     // `entity_by_owner` is the auth prologue of ~77 player reducer call sites; without this it was a
     // full table scan per transaction (perf catalog 1.2). `owner_identity` never changes for a live
@@ -1899,13 +1898,9 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     // itself inside a dungeon instance.
     teleport_player(ctx, player_guid, gy.map, 0, gy.x, gy.y, gy.z, gy.o);
 
-    // Releasing to spirit resolves the death outside of accepting a pending resurrect offer —
-    // drop any outstanding `game_resurrect_request` for this target so a stale offer doesn't resurface
-    // as a phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
-    ctx.db
-        .game_resurrect_request()
-        .target_guid()
-        .delete(player_guid);
+    // Releasing to spirit drops a pending resurrect offer so it cannot resurface as a phantom
+    // SMSG_RESURRECT_REQUEST on a future reconnect. The ghost keeps its Self-Resurrection Option.
+    crate::spell::clear_resurrect_request(ctx, player_guid);
     Ok(())
 }
 
@@ -2057,10 +2052,7 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
     if player_level >= 11 {
         crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
     }
-    // This resolves the death outside of accepting a pending resurrect offer — drop any
-    // outstanding `game_resurrect_request` for this target so a stale offer doesn't resurface as a
-    // phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
-    ctx.db.game_resurrect_request().target_guid().delete(guid);
+    crate::spell::clear_resurrect_request_and_option(ctx, guid);
     Ok(())
 }
 
@@ -2200,13 +2192,8 @@ pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
         .guid()
         .delete(crate::corpse::corpse_guid_for(entity.guid));
 
-    // Leaving the world resolves the death outside of accepting a pending resurrect offer —
-    // drop any outstanding `game_resurrect_request` for this entity so a stale offer doesn't resurface
-    // as a phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
-    ctx.db
-        .game_resurrect_request()
-        .target_guid()
-        .delete(entity.guid);
+    // A Character that leaves the world comes back alive, so nothing may resurrect it later.
+    crate::spell::clear_resurrect_request_and_option(ctx, entity.guid);
 
     // Stealth drops on logout (vanilla): clear A_STEALTH so a stale aura doesn't survive the disconnect.
     // A_STEALTH is never timer-reaped, so otherwise the gateway's stealth create-skip would find the stale

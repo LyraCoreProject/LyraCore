@@ -1,12 +1,16 @@
 """Exercise the disk policy at its filesystem and SpacetimeDB process boundaries."""
 import importlib.util
+import contextlib
+import io
 import json
 from pathlib import Path
 import subprocess
 import sys
 import tempfile
 import time
+from types import SimpleNamespace
 import unittest
+from unittest.mock import patch
 
 
 def module(name):
@@ -21,6 +25,74 @@ capture = module('lyracore-capture')
 
 
 class DiskPolicyTests(unittest.TestCase):
+    def test_cleanup_start_does_not_revoke_a_recently_verified_lease(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = root / 'config.json'
+            config.write_text(json.dumps({
+                'data_directory': directory, 'state_directory': directory,
+                'spacetime': '/pinned/cli', 'databases': ['world'],
+            }))
+            (root / 'status.json').write_text(json.dumps({'state': 'healthy'}))
+            cleanup = {'result': 'success', 'state': 'inactive', 'finished': 900_000_000}
+            leases = []
+
+            def run(args, **kwargs):
+                if args[0] == 'systemctl':
+                    output = (f"Result={cleanup['result']}\nActiveState={cleanup['state']}\n"
+                              f"ExecMainExitTimestampMonotonic={cleanup['finished']}\n")
+                    return subprocess.CompletedProcess(args, 0, stdout=output)
+                leases.append(json.loads(args[-2]))
+                return subprocess.CompletedProcess(args, 0)
+
+            # systemd clears the current exit timestamp while its next oneshot is running.
+            renew = guard.renew
+            with patch.object(sys, 'argv', ['guard', str(config)]), \
+                    patch.object(guard.subprocess, 'run', side_effect=run), \
+                    patch.object(guard, 'renew', side_effect=lambda config, status: renew(config, status, run)), \
+                    patch.object(guard.shutil, 'disk_usage', return_value=SimpleNamespace(free=50 * guard.GIB)), \
+                    patch.object(guard.time, 'monotonic', return_value=1000), \
+                    contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(guard.main(), 0)
+                cleanup.update(state='activating', finished=0)
+                self.assertEqual(guard.main(), 0)
+                self.assertTrue(all(int(value) > 0 for value in leases), leases)
+                status = json.loads((root / 'status.json').read_text())
+                self.assertEqual(status['state'], 'healthy')
+                self.assertEqual(status['prune_age_seconds'], 100)
+
+    def test_running_cleanup_cannot_extend_the_last_success_deadline(self):
+        previous = {'boot_id': 'boot-one', 'prune_success_monotonic': 100}
+        properties = {'Result': 'success', 'ActiveState': 'activating',
+                      'ExecMainExitTimestampMonotonic': '0'}
+        for now in [1000, 1800, 1900]:
+            status = {'state': 'healthy', 'lease_until_micros': 300_000_000}
+            self.assertTrue(guard.check_prune(status, previous, properties, now, 'boot-one'))
+            previous = status
+        self.assertFalse(guard.check_prune(status, previous, properties, 1901, 'boot-one'))
+        self.assertEqual(status['lease_until_micros'], 0)
+
+    def test_cleanup_failure_or_untrusted_history_cannot_renew_capacity(self):
+        cases = [
+            ('exit-code', 'failed', 'boot-one', 100),
+            ('unknown', 'activating', 'boot-one', 100),
+            ('success', 'inactive', 'boot-one', 100),
+            ('success', 'activating', 'previous-boot', 100),
+            ('success', 'activating', 'boot-one', 1001),
+            ('success', 'activating', 'boot-one', 'broken'),
+            ('success', 'activating', 'boot-one', True),
+            ('success', 'activating', 'boot-one', float('nan')),
+            ('success', 'activating', 'boot-one', 0),
+        ]
+        for result, active, boot, finished in cases:
+            with self.subTest(result=result, active=active, boot=boot, finished=finished):
+                previous = {'boot_id': boot, 'prune_success_monotonic': finished}
+                properties = {'Result': result, 'ActiveState': active,
+                              'ExecMainExitTimestampMonotonic': '0'}
+                status = {'state': 'healthy', 'lease_until_micros': 300_000_000}
+                self.assertFalse(guard.check_prune(status, previous, properties, 1000, 'boot-one'))
+                self.assertEqual(status['lease_until_micros'], 0)
+
     def test_reserve_suspends_and_recovery_requires_explicit_resume(self):
         self.assertEqual(guard.decide(19 * guard.GIB, False), 'suspended')
         self.assertEqual(guard.decide(50 * guard.GIB, True), 'suspended')

@@ -31,7 +31,9 @@
 //!   `GAME_TICK_PASSES` (periodic passes run by the core scheduler tick) and one
 //!   `GAME_HOOKS_<EVENT>` array per known notify-hook event, dispatched at the core chokepoints
 //!   (see `src/hooks.rs`), the optional Package client-command handler, and the map-scoped
-//!   encounter authority registry.
+//!   encounter authority registry. Each Package registration is wrapped so it stops once Package
+//!   Teardown has run (`src/package_teardown.rs`). `GAME_PACKAGES` lists every compiled Package
+//!   with its `#[table]` accessors and its `game_package_characters!` read, for that teardown.
 //! - `hook_dispatch.rs` — from `HOOK_EVENTS` below: the `payload_for` alias mod
 //!   and one `fire_*` fn per event, included INSIDE `src/hooks.rs` so the paths every chokepoint
 //!   already uses (`hooks::fire_*`, `hooks::payload_for::*`) are unchanged. This is what keeps the
@@ -62,7 +64,9 @@
 //! The same pass also lints each package file against the Package API surface
 //! (`PACKAGE_API_ROOTS`, documented at `docs/package-api.md`): a path that reaches the crate root
 //! outside it fails the build naming the Package, the file, the line and the path, unless the line
-//! carries `// package-api: exempt <reason>`. Core `src/` is never linted.
+//! carries `// package-api: exempt <reason>`. A gated root (`PACKAGE_API_GATED_ROOTS`) is on the
+//! surface only in a file that starts with its gate, the debug cfg above or `#![cfg(test)]`, and no
+//! exemption clears it. Core `src/` is never linted.
 //!
 //! EVALUATED AND REJECTED: replacing the marker scan with an explicit per-package `register()`
 //! convention. The registries are const fn-pointer arrays (no allocator-dependent init order in
@@ -275,6 +279,7 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "items",
     "loot",
     "nav",
+    "package_account",
     "package_config",
     "quest",
     "script_binding",
@@ -284,6 +289,14 @@ const PACKAGE_API_ROOTS: &[&str] = &[
     "transfer",
     "world",
     "xp",
+];
+
+/// Roots on the surface only in a Package file whose first non-blank line is the paired gate. Core
+/// compiles each root only under that cfg, so naming one in any other file would break a build
+/// without it. An exemption cannot clear one for the same reason.
+const PACKAGE_API_GATED_ROOTS: &[(&str, &str)] = &[
+    ("package_fixture", DEBUG_REDUCERS_FILE_CFG),
+    ("package_test", TEST_FILE_CFG),
 ];
 
 /// Crate-root names on the surface that are neither a module nor a type: the two marker macros the
@@ -533,7 +546,8 @@ fn main() {
          pub const GAME_TICK_PASSES: &[(&str, fn(&spacetimedb::ReducerContext))] = &[\n",
     );
     for path in &registries.tick_passes {
-        out.push_str(&format!("    (\"{path}\", {path}),\n"));
+        let pass = gated(path, "ctx: &spacetimedb::ReducerContext", "ctx", "");
+        out.push_str(&format!("    (\"{path}\", {pass}),\n"));
     }
     out.push_str("];\n");
     for HookEvent {
@@ -552,7 +566,11 @@ fn main() {
             event.to_uppercase()
         ));
         for path in &hooks {
-            out.push_str(&format!("    {path},\n"));
+            let params = format!("ctx: &spacetimedb::ReducerContext, payload: &{payload_ty}");
+            out.push_str(&format!(
+                "    {},\n",
+                gated(path, &params, "ctx, payload", "")
+            ));
         }
         out.push_str("];\n");
     }
@@ -560,8 +578,14 @@ fn main() {
         "pub const GAME_ENCOUNTER_PACKAGES: &[(crate::encounter::EncounterBinding, crate::encounter::EncounterPackageHandler)] = &[\n",
     );
     for (binding, path) in &registries.encounter_packages {
+        let handler = gated(
+            path,
+            "ctx: &spacetimedb::ReducerContext, instance_id: u64, signal: crate::encounter::EncounterSignal",
+            "ctx, instance_id, signal",
+            "Ok(())",
+        );
         out.push_str(&format!(
-            "    (crate::encounter::EncounterBinding::{binding}, {path}),\n"
+            "    (crate::encounter::EncounterBinding::{binding}, {handler}),\n"
         ));
     }
     out.push_str("];\n");
@@ -571,9 +595,17 @@ fn main() {
     }
     out.push_str("];\n");
     match registries.client_commands.first() {
-        Some((parse, apply)) => out.push_str(&format!(
-            "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply} }});\n"
-        )),
+        Some((parse, apply, reply)) => {
+            let apply = gated(
+                apply,
+                "ctx: &spacetimedb::ReducerContext, command: &crate::bridge::AdmittedClientCommand",
+                "ctx, command",
+                "crate::bridge::CommandOutcome::Suppressed",
+            );
+            out.push_str(&format!(
+                "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = Some(crate::bridge::ClientCommandHandler {{ parse: {parse}, apply: {apply}, reply: {reply} }});\n"
+            ))
+        }
         None => out.push_str(
             "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = None;\n",
         ),
@@ -584,6 +616,40 @@ fn main() {
     out.push_str("pub const GAME_HOOK_EVENT_NAMES: &[&str] = &[\n");
     for HookEvent { event, .. } in HOOK_EVENTS {
         out.push_str(&format!("    \"{event}\",\n"));
+    }
+    out.push_str("];\n");
+    registries.package_characters.sort();
+    for duplicate in registries.package_characters.windows(2) {
+        if duplicate[0].0 == duplicate[1].0 {
+            panic!(
+                "build.rs: Package {} registers `game_package_characters!` twice: {} and {}",
+                duplicate[0].0, duplicate[0].1, duplicate[1].1
+            );
+        }
+    }
+    out.push_str("pub const GAME_PACKAGES: &[crate::package_teardown::InstalledPackage] = &[\n");
+    for (ident, _) in &pkg_mods {
+        let mut tables: Vec<&str> = registries
+            .package_tables
+            .iter()
+            .filter(|(package, _)| package == ident)
+            .map(|(_, table)| table.as_str())
+            .collect();
+        tables.sort_unstable();
+        tables.dedup();
+        let characters = registries
+            .package_characters
+            .iter()
+            .find(|(package, _)| package == ident)
+            .map_or("None".to_string(), |(_, path)| format!("Some({path})"));
+        out.push_str(&format!(
+            "    crate::package_teardown::InstalledPackage {{ name: \"{ident}\", tables: &[{}], characters: {characters} }},\n",
+            tables
+                .iter()
+                .map(|table| format!("\"{table}\""))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
     }
     out.push_str("];\n");
     write_out(&out_dir, "package_registries.rs", &out);
@@ -641,7 +707,79 @@ struct Registries {
     tick_passes: Vec<String>,
     hooks: Vec<(String, String)>, // (event, fully-qualified fn path)
     encounter_packages: Vec<(String, String)>, // (binding variant, fully-qualified fn path)
-    client_commands: Vec<(String, String)>, // (parser path, admitted apply path)
+    client_commands: Vec<(String, String, String)>, // (parser, admitted apply, reply name) paths
+    package_tables: Vec<(String, String)>, // (package ident, table accessor)
+    package_characters: Vec<(String, String)>, // (package ident, fully-qualified fn path)
+}
+
+/// The registry entry for `path`. A Package's fn is wrapped so it stops running once Package
+/// Teardown has run for that Package; the wrapper then returns `otherwise`.
+fn gated(path: &str, params: &str, args: &str, otherwise: &str) -> String {
+    match path
+        .strip_prefix("crate::pkg_")
+        .and_then(|rest| rest.split("::").next())
+    {
+        Some(package) => format!(
+            "|{params}| if crate::package_teardown::runs(ctx, \"{package}\") {{ {path}({args}) }} else {{ {otherwise} }}"
+        ),
+        None => path.to_string(),
+    }
+}
+
+/// The accessor of every `#[table(..)]` and `#[spacetimedb::table(..)]` in stripped source.
+/// Only the attribute's top-level `accessor`, so an index's own `accessor = ..` is never taken.
+fn table_accessors(content: &str) -> Vec<String> {
+    let mut accessors = Vec::new();
+    for (start, _) in content.match_indices("#[") {
+        let attribute = content[start + 2..].trim_start();
+        let Some(args) = attribute
+            .strip_prefix("table")
+            .or_else(|| attribute.strip_prefix("spacetimedb::table"))
+            .and_then(|rest| rest.trim_start().strip_prefix('('))
+        else {
+            continue;
+        };
+        let mut depth = 0usize;
+        let mut item_start = 0usize;
+        for (index, c) in args.char_indices() {
+            match c {
+                '(' | '[' => depth += 1,
+                ')' | ']' if depth == 0 => {
+                    accessors.extend(accessor_item(&args[item_start..index]));
+                    break;
+                }
+                ')' | ']' => depth -= 1,
+                ',' if depth == 0 => {
+                    accessors.extend(accessor_item(&args[item_start..index]));
+                    item_start = index + 1;
+                }
+                _ => {}
+            }
+        }
+    }
+    accessors
+}
+
+fn accessor_item(item: &str) -> Option<String> {
+    let item = item.trim();
+    // Teardown clears a table by name, and `name = ..` would make the name differ from the
+    // accessor this scan reads.
+    if item
+        .strip_prefix("name")
+        .is_some_and(|rest| rest.trim_start().starts_with('='))
+    {
+        panic!(
+            "build.rs: a Package table sets `name`; keep the accessor as its table name so \
+             Package Teardown can empty it"
+        );
+    }
+    let value = item
+        .strip_prefix("accessor")?
+        .trim_start()
+        .strip_prefix('=')?
+        .trim();
+    (!value.is_empty() && value.chars().all(|c| c.is_alphanumeric() || c == '_'))
+        .then(|| value.to_string())
 }
 
 /// The table accessor a transport arm's fully-qualified fn path names: the same
@@ -1041,26 +1179,19 @@ fn try_match_hook(head: &str) -> Option<(String, String)> {
     Some((event, name))
 }
 
-fn try_match_client_command(head: &str) -> Option<(String, String)> {
-    let rest = head.strip_prefix('(')?.trim_start();
-    let parse_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-    if parse_end == 0 {
-        return None;
-    }
-    let parse = rest[..parse_end].to_string();
-    let rest = rest[parse_end..]
-        .trim_start()
-        .strip_prefix(',')?
-        .trim_start();
-    let apply_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
-    if apply_end == 0 {
-        return None;
-    }
-    let apply = rest[..apply_end].to_string();
-    rest[apply_end..]
-        .trim_start()
-        .starts_with(')')
-        .then_some((parse, apply))
+/// `game_client_command!` head: `(PARSE, APPLY, REPLY)` — package files only.
+fn try_match_client_command(head: &str) -> Option<(String, String, String)> {
+    let mut rest = head.strip_prefix('(')?;
+    let mut ident_before = |separator: char| {
+        let trimmed = rest.trim_start();
+        let end = trimmed.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+        if end == 0 {
+            return None;
+        }
+        rest = trimmed[end..].trim_start().strip_prefix(separator)?;
+        Some(trimmed[..end].to_string())
+    };
+    Some((ident_before(',')?, ident_before(',')?, ident_before(')')?))
 }
 
 /// `encounter_package!` head: `(BINDING, fn NAME(...` — package files only.
@@ -1201,7 +1332,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
 
     scan_marker(&content, file, "game_client_command!", |head, line| {
         match try_match_client_command(head) {
-            Some((parse, apply)) => {
+            Some((parse, apply, reply)) => {
                 if !in_package {
                     panic!(
                         "build.rs: `game_client_command!` in {}:{line} is core code; command meaning belongs to a Package",
@@ -1210,11 +1341,41 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
                 }
                 check_facade_reexport(file, scan_root, in_package, &parse);
                 check_facade_reexport(file, scan_root, in_package, &apply);
-                reg.client_commands
-                    .push((format!("{prefix}::{parse}"), format!("{prefix}::{apply}")));
+                check_facade_reexport(file, scan_root, in_package, &reply);
+                reg.client_commands.push((
+                    format!("{prefix}::{parse}"),
+                    format!("{prefix}::{apply}"),
+                    format!("{prefix}::{reply}"),
+                ));
             }
             None => panic!(
-                "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY)`",
+                "build.rs: malformed `game_client_command!` marker in {}:{line} — expected `game_client_command!(PARSE, APPLY, REPLY)`",
+                file.display()
+            ),
+        }
+    });
+
+    if let Some(package) = prefix.strip_prefix("crate::pkg_") {
+        for table in table_accessors(&content) {
+            reg.package_tables.push((package.to_string(), table));
+        }
+    }
+
+    scan_marker(&content, file, "game_package_characters!", |head, line| {
+        match (try_match_tick_pass(head), prefix.strip_prefix("crate::pkg_")) {
+            (Some(name), Some(package)) => {
+                check_facade_reexport(file, scan_root, in_package, &name);
+                reg.package_characters
+                    .push((package.to_string(), format!("{prefix}::{name}")));
+            }
+            (Some(_), None) => panic!(
+                "build.rs: `game_package_characters!` in {}:{line} is core code; only a Package names its Characters",
+                file.display()
+            ),
+            (None, _) => panic!(
+                "build.rs: malformed `game_package_characters!` marker in {}:{line} — expected exactly \
+                 `game_package_characters!(fn NAME(ctx) {{ .. }})`. A marker must never be silently \
+                 skipped.",
                 file.display()
             ),
         }
@@ -1247,6 +1408,7 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
 }
 
 const DEBUG_REDUCERS_FILE_CFG: &str = "#![cfg(feature = \"debug_reducers\")]";
+const TEST_FILE_CFG: &str = "#![cfg(test)]";
 
 /// Keep registry discovery on the same whole-file feature boundary as rustc.
 ///
@@ -1254,11 +1416,25 @@ const DEBUG_REDUCERS_FILE_CFG: &str = "#![cfg(feature = \"debug_reducers\")]";
 /// general Rust `cfg` expressions. A parent module may repeat the gate, but the file owns the
 /// registry contract so recursive discovery can decide without reconstructing the module tree.
 fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
-    debug_reducers
-        || source
-            .lines()
-            .find(|line| !line.trim().is_empty())
-            .is_none_or(|line| line.trim() != DEBUG_REDUCERS_FILE_CFG)
+    debug_reducers || !debug_only_file(source)
+}
+
+/// Whether the file's first non-blank line is `DEBUG_REDUCERS_FILE_CFG`.
+fn debug_only_file(source: &str) -> bool {
+    file_gate(source) == Some(DEBUG_REDUCERS_FILE_CFG)
+}
+
+/// The file's first non-blank line, trimmed: the whole-file gate when it is one.
+fn file_gate(source: &str) -> Option<&str> {
+    source.lines().map(str::trim).find(|line| !line.is_empty())
+}
+
+/// The gate a gated root needs, or `None` when `root` is not gated.
+fn root_gate(root: &str) -> Option<&'static str> {
+    PACKAGE_API_GATED_ROOTS
+        .iter()
+        .find(|(gated, _)| *gated == root)
+        .map(|(_, gate)| *gate)
 }
 
 /// Whether `root`, the first segment of a crate-root path, is on the Package API surface.
@@ -1266,7 +1442,8 @@ fn registry_file_enabled(source: &str, debug_reducers: bool) -> bool {
 /// Three families beyond the listed roots: `game_*` covers the table accessor traits and the
 /// `game_hook!`/`game_tick_pass!` markers, `pkg_*` covers a Package's own generated root (and its
 /// siblings'), and an UpperCamelCase name is a row or payload type re-exported at the crate root.
-fn on_package_api(root: &str) -> bool {
+/// A gated root is on the surface only in a file that starts with its gate.
+fn on_package_api(root: &str, file_gate: Option<&str>) -> bool {
     let upper_camel = root.starts_with(|c: char| c.is_ascii_uppercase())
         && root.chars().any(|c| c.is_ascii_lowercase());
     PACKAGE_API_ROOTS.contains(&root)
@@ -1274,6 +1451,7 @@ fn on_package_api(root: &str) -> bool {
         || root.starts_with("game_")
         || root.starts_with("pkg_")
         || upper_camel
+        || root_gate(root).is_some_and(|gate| file_gate == Some(gate))
 }
 
 #[derive(Clone, Copy)]
@@ -1645,16 +1823,17 @@ fn record_rooted_paths(
     prefix: &str,
     stripped: &str,
     exempt_lines: &[usize],
+    file_gate: Option<&str>,
     found: &mut Vec<(usize, usize, String)>,
 ) {
     for (root_index, root, written) in roots_after_separator(tokens, separator, prefix) {
         let normalized_root = root.strip_prefix("r#").unwrap_or(&root);
-        if normalized_root == "self" || on_package_api(normalized_root) {
+        if normalized_root == "self" || on_package_api(normalized_root, file_gate) {
             continue;
         }
         let offset = tokens[root_index].start;
         let line = stripped[..offset].matches('\n').count() + 1;
-        if !exempt_lines.contains(&line) {
+        if !exempt_lines.contains(&line) || root_gate(normalized_root).is_some() {
             found.push((offset, line, written));
         }
     }
@@ -1670,6 +1849,7 @@ fn record_rooted_paths(
 fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)> {
     let stripped_source = strip_source(source);
     let stripped = stripped_source.code;
+    let file_gate = file_gate(source);
     let tokens = source_tokens(&stripped);
     let pairs = brace_pairs(&tokens);
     let modules = inline_modules(&tokens, &pairs);
@@ -1691,6 +1871,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "$crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
+                file_gate,
                 &mut found,
             );
             index += 3;
@@ -1708,6 +1889,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                 "crate",
                 &stripped,
                 &stripped_source.package_api_exempt_lines,
+                file_gate,
                 &mut found,
             );
         } else if tokens[index].text == "super" && (index == 0 || tokens[index - 1].text != "::") {
@@ -1737,6 +1919,7 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
                     &prefix,
                     &stripped,
                     &stripped_source.package_api_exempt_lines,
+                    file_gate,
                     &mut found,
                 );
             }
@@ -1755,6 +1938,18 @@ fn out_of_surface_paths(source: &str, file_depth: usize) -> Vec<(usize, String)>
 
 /// What the build says when a Package names a core path outside the surface.
 fn out_of_surface_message(package: &str, file: &Path, line: usize, path: &str) -> String {
+    let root = path
+        .split("::")
+        .find(|segment| !matches!(*segment, "crate" | "$crate" | "super" | "self"))
+        .map(|segment| segment.strip_prefix("r#").unwrap_or(segment));
+    if let Some(gate) = root.and_then(root_gate) {
+        return format!(
+            "build.rs: Package `{package}` names `{path}` at {}:{line}, a gated Package API root \
+             (docs/package-api.md, version 1). Name it only from a file whose first non-blank line \
+             is `{gate}`.",
+            file.display()
+        );
+    }
     format!(
         "build.rs: Package `{package}` names `{path}` at {}:{line}, which is outside the Package \
          API surface (docs/package-api.md, version 1). Use a path under a documented root, or, if \
@@ -1853,17 +2048,56 @@ mod package_api_lint_tests {
     }
 
     #[test]
-    fn client_command_marker_names_one_parser_and_apply_operation() {
+    fn client_command_marker_names_one_parser_apply_operation_and_reply() {
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, ORDER_RESULT);"),
+            Some((
+                "parse_order".to_string(),
+                "apply_order".to_string(),
+                "ORDER_RESULT".to_string()
+            ))
+        );
         assert_eq!(
             try_match_client_command("(parse_order, apply_order);"),
-            Some(("parse_order".to_string(), "apply_order".to_string()))
-        );
-        assert_eq!(try_match_client_command("(parse_order);"), None);
-        assert_eq!(try_match_client_command("(, apply_order);"), None);
-        assert_eq!(try_match_client_command("(parse_order, );"), None);
-        assert_eq!(
-            try_match_client_command("(parse_order, apply_order, extra);"),
             None
+        );
+        assert_eq!(
+            try_match_client_command("(, apply_order, ORDER_RESULT);"),
+            None
+        );
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, );"),
+            None
+        );
+        assert_eq!(
+            try_match_client_command("(parse_order, apply_order, ORDER_RESULT, extra);"),
+            None
+        );
+    }
+
+    #[test]
+    fn teardown_finds_each_table_by_its_own_accessor() {
+        let source = "#[table(accessor = pkg_demo_one, public)]\nstruct One;\n\
+                      #[spacetimedb::table(\n    index(accessor = by_due, btree(columns = [due, id])),\n    accessor = pkg_demo_two,\n)]\nstruct Two;\n\
+                      #[derive(Clone)]\n#[tables(accessor = not_a_table)]\nstruct Three;\n";
+        assert_eq!(table_accessors(source), ["pkg_demo_one", "pkg_demo_two"]);
+    }
+
+    #[test]
+    #[should_panic(expected = "sets `name`")]
+    fn a_package_table_with_its_own_name_fails_the_build() {
+        table_accessors("#[table(accessor = pkg_demo_one, name = other)]\nstruct One;\n");
+    }
+
+    #[test]
+    fn a_package_registration_stops_after_teardown_and_core_code_never_does() {
+        assert_eq!(
+            gated("crate::pkg_demo::pass", "ctx: &C", "ctx", ""),
+            "|ctx: &C| if crate::package_teardown::runs(ctx, \"demo\") { crate::pkg_demo::pass(ctx) } else {  }"
+        );
+        assert_eq!(
+            gated("crate::hooks::pass", "ctx: &C", "ctx", ""),
+            "crate::hooks::pass"
         );
     }
 
@@ -1902,14 +2136,14 @@ mod package_api_lint_tests {
     #[test]
     fn the_failure_names_the_package_the_file_the_line_and_the_path() {
         let message = out_of_surface_message(
-            "playerbots",
-            Path::new("packages/playerbots/src/mod.rs"),
+            "sample_package",
+            Path::new("packages/sample_package/src/mod.rs"),
             618,
             "crate::auth::create_character",
         );
-        assert!(message.contains("playerbots"), "{message}");
+        assert!(message.contains("sample_package"), "{message}");
         assert!(
-            message.contains("packages/playerbots/src/mod.rs:618"),
+            message.contains("packages/sample_package/src/mod.rs:618"),
             "{message}"
         );
         assert!(
@@ -1923,6 +2157,103 @@ mod package_api_lint_tests {
     fn an_exemption_clears_its_own_line_and_no_other() {
         let source = "fn f() {\n    crate::auth::create_character(); // package-api: exempt bots fabricate their own characters\n    crate::auth::Account::default();\n}\n";
         assert_eq!(reported(source), vec!["3:crate::auth::Account::default"]);
+    }
+
+    #[test]
+    fn a_debug_root_is_refused_outside_a_debug_only_file() {
+        // A build without `debug_reducers` compiles this file, and an item gate does not change
+        // what the lint sees.
+        let source = "#[cfg(feature = \"debug_reducers\")]\nfn f() {\n    crate::package_fixture::apply_damage();\n}\n";
+        assert_eq!(
+            reported(source),
+            vec!["3:crate::package_fixture::apply_damage"]
+        );
+    }
+
+    #[test]
+    fn a_debug_root_is_on_the_surface_in_a_debug_only_file() {
+        let source = "\n#![cfg(feature = \"debug_reducers\")]\nuse crate::package_fixture::{apply_damage, top_threat_target};\nfn f() {\n    super::package_fixture::client_cast();\n}\n";
+        assert!(reported(source).is_empty(), "{:?}", reported(source));
+    }
+
+    #[test]
+    fn an_exemption_cannot_clear_a_debug_root() {
+        let source =
+            "crate::package_fixture::apply_damage(); // package-api: exempt fixture damage\n";
+        assert_eq!(
+            reported(source),
+            vec!["1:crate::package_fixture::apply_damage"]
+        );
+    }
+
+    #[test]
+    fn a_debug_root_failure_names_the_file_gate() {
+        let message = out_of_surface_message(
+            "dungeons",
+            Path::new("packages/dungeons/src/verify.rs"),
+            3,
+            "crate::package_fixture::apply_damage",
+        );
+        assert!(
+            message.contains("packages/dungeons/src/verify.rs:3"),
+            "{message}"
+        );
+        assert!(message.contains(DEBUG_REDUCERS_FILE_CFG), "{message}");
+        assert!(!message.contains(PACKAGE_API_EXEMPT), "{message}");
+    }
+
+    #[test]
+    fn a_test_root_is_refused_outside_a_test_only_file() {
+        // An ordinary build compiles this file, and an item gate does not change what the lint
+        // sees.
+        let source = "#[cfg(test)]\nmod tests {\n    use crate::package_test::shape_of;\n}\n";
+        assert_eq!(reported(source), vec!["3:crate::package_test::shape_of"]);
+    }
+
+    #[test]
+    fn a_test_root_is_on_the_surface_in_a_test_only_file() {
+        let source = "#![cfg(test)]\nuse crate::package_test::{ask_offline, read_scanned};\nfn f() {\n    super::super::package_test::shape_of();\n}\n";
+        assert!(
+            reported_at_depth(source, 1).is_empty(),
+            "{:?}",
+            reported_at_depth(source, 1)
+        );
+    }
+
+    #[test]
+    fn each_gated_root_needs_its_own_gate() {
+        let test_file = "#![cfg(test)]\ncrate::package_fixture::apply_damage();\n";
+        let debug_file =
+            "#![cfg(feature = \"debug_reducers\")]\ncrate::package_test::ask_offline();\n";
+        assert_eq!(
+            reported(test_file),
+            vec!["2:crate::package_fixture::apply_damage"]
+        );
+        assert_eq!(
+            reported(debug_file),
+            vec!["2:crate::package_test::ask_offline"]
+        );
+    }
+
+    #[test]
+    fn an_exemption_cannot_clear_a_test_root() {
+        let source = "use crate::package_test::read_scanned; // package-api: exempt scan Core\n";
+        assert_eq!(
+            reported(source),
+            vec!["1:crate::package_test::read_scanned"]
+        );
+    }
+
+    #[test]
+    fn a_test_root_failure_names_the_test_gate() {
+        let message = out_of_surface_message(
+            "bots",
+            Path::new("packages/bots/src/goals.rs"),
+            9,
+            "crate::package_test::shape_of",
+        );
+        assert!(message.contains(TEST_FILE_CFG), "{message}");
+        assert!(!message.contains(PACKAGE_API_EXEMPT), "{message}");
     }
 
     #[test]

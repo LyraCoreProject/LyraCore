@@ -8,7 +8,6 @@ use spacetimedb::{table, ReducerContext, Table, Timestamp};
 use lyracore_shared::packing::unpack4;
 
 use crate::game_world_entity;
-use crate::spell::game_resurrect_request;
 
 /// HIGHGUID_CORPSE high bits (0xF101): marks a guid as a corpse object for the 5875 client. The
 /// corpse guid is `(HIGHGUID_CORPSE << 48) | owner_guid_low`, so one corpse per player at a time.
@@ -232,13 +231,7 @@ pub(crate) fn apply_reclaim_corpse(
     entities.guid().update(player);
     corpses.guid().delete(corpse_guid);
 
-    // Reclaiming resolves the death outside of accepting a pending resurrect offer — drop any
-    // outstanding `game_resurrect_request` for this player so a stale offer doesn't resurface as a
-    // phantom SMSG_RESURRECT_REQUEST on a future reconnect. Idempotent (no-op if none pending).
-    ctx.db
-        .game_resurrect_request()
-        .target_guid()
-        .delete(player_guid);
+    crate::spell::clear_resurrect_request_and_option(ctx, player_guid);
     Ok(())
 }
 

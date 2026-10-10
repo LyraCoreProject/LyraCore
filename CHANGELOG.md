@@ -22,6 +22,25 @@ and is not reconstructed here.
   under `packages/*/src/` against that list and fails on a path outside it, naming the Package, the
   file, the line and the path. A Package that needs a path off the surface writes
   `// package-api: exempt <reason>` on the line that names it.
+- **Package fixtures.** A Module built with `debug_reducers` adds `crate::package_fixture`, a
+  Package API root for a Package's own debug fixtures. It applies real Core damage, removes a live
+  Character as a logout does, refuses imported content, reads the top threat target, casts through
+  the client cast Gates, declares the next creature movement tick, admits a Character to a party
+  instance and records a finished Transfer in the character-to-shard index. A Package names it
+  only from a file gated on `debug_reducers`, and the lint refuses it anywhere else.
+- **Package tests.** A Module test build adds `crate::package_test`, a Package API root for a
+  Package's own unit tests. It runs shipped Runtime Scripts on a fresh Runtime Script Host and
+  returns their Script Answer, and it gives the source-scan helpers Core's Architecture Tests use. A
+  Package names it only from a file gated on `#![cfg(test)]`, and the lint refuses it anywhere else.
+- **Package-owned Accounts.** `package_account::create_package_character` lets a Package create a
+  Character with no Session. It applies the name, race and class Refusals of client creation, and
+  puts the Character on an Account without credentials. `game_package_account` records which
+  Package owns that Account, and the record stays when the Package is disabled.
+- **Package Teardown.** `teardown_package` stops a Package on one Shard before it leaves the build.
+  It empties the Package's tables, deletes its Package Config and stops its registered code, so the
+  next publish can remove the tables. The Package's Characters become Dormant Characters: offline,
+  with no live entity, and with their Account and Character rows kept. A Package names Characters
+  Core cannot find through ownership with `game_package_characters!`.
 - **Meeting stones.** Using a dungeon's meeting stone puts a Character, or the Party it leads, in one
   realm-wide queue on Realm-core. Five Seekers for one dungeon and team form a Party, and a queued
   Party fills its open tank, healer and damage roles from Seekers on any World Shard.

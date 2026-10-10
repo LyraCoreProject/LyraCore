@@ -1000,8 +1000,8 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     //
     // Each gate is the module's own read, unioned across the shards — EXISTS is a `game_character`
     // row ([`presence::of`]), ONLINE is a `game_world_entity` row ([`presence::live_anywhere`]).
-    // Reading the session flag for the second would silently refuse every playerbot; see
-    // [`presence::live_anywhere`].
+    // Reading the session flag for the second would silently refuse every session-less Character;
+    // see [`presence::live_anywhere`].
     if let Op::Invite(target) = op {
         if let Some(refusal) = invite_gate(store, target)? {
             return Ok(refusal.into());
@@ -1029,7 +1029,7 @@ pub(crate) fn run<St: WorldStore + ?Sized>(
     {
         return Ok(PartyOutcome::Refused(refusal));
     }
-    // Nobody is at the keyboard of a playerbot, so nobody answers its dialog. Done
+    // Nobody is at the keyboard of a session-less Character, so nobody answers its dialog. Done
     // BEFORE the mirror push, so the ONE push that follows already carries the bot as a member —
     // which is what the shard's own party reads (kill-XP split, `/p`, follow-the-leader) need.
     if let Op::Invite(target) = op {
@@ -1175,7 +1175,7 @@ pub(crate) fn run_bot_invite_intent<St: WorldStore>(
     }
 }
 
-/// Run a SERVER-DRIVEN invite with no client behind it — a playerbot's serendipity pick, closing
+/// Run a SERVER-DRIVEN invite with no client behind it — a session-less Character's invite, closing
 /// the gap the group slice opened: the module used to write this shard's LOCAL
 /// `game_group`/`game_group_member` rows directly, which the next `sync_group_mirror` push wiped
 /// because realm-core had never heard of them.

@@ -1192,6 +1192,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // single-database gateway's shared path works too; on realm-core the same subscription
         // additionally feeds the per-session cross-shard twins, unchanged.
         "SELECT * FROM game_resurrect_request",
+        "SELECT * FROM game_self_resurrect_option",
         "SELECT * FROM game_system_message_event",
         "SELECT * FROM game_mail_arrival",
         "SELECT * FROM game_group_event",

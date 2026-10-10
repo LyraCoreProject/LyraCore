@@ -885,6 +885,14 @@ pub(crate) fn apply_effect(
             apply_character_effect(ctx, e, caster_guid, target_guid, points)
         }
         E_TRIGGER | E_SCRIPTED => apply_delegating_effect(ctx, e, caster_guid, target_guid, level),
+        E_SELF_RESURRECT => {
+            // Only `do_self_resurrect` reads this effect; the cast pipeline refuses dead casters.
+            log::info!(
+                "spell {} self-resurrect effect has no cast path (no-op)",
+                e.spell_id
+            );
+            EffectHit::none()
+        }
         E_DISPEL => {
             // The dispelled CATEGORY: the effect's `p0` (the authored override) if set, else the
             // dispelling spell's header `dispel_type`. 0 = strip every foreign aura (the baseline —

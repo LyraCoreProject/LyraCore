@@ -119,6 +119,13 @@ pub(crate) const E_SUMMON_HOSTILE: u8 = 0x24; // temporary ownerless summon; p0 
 /// Start or refresh a Distraction on each idle enemy Creature around the ground point. The effect
 /// amount is its length in seconds; the importer maps raw effect 69 here.
 pub(crate) const E_DISTRACT: u8 = 0x25;
+/// Self-resurrection (vanilla raw effect 94). No cast runs it: [`do_self_resurrect`] reads this row
+/// from the spell a Self-Resurrection Option names. `base_points < 0` restores `-base_points` health and
+/// `p0` ([`P_FLAT_MANA`]) mana. `base_points >= 0` restores that percent of max health and max mana.
+/// `die_sides` is ignored, because every vanilla row carries a one-sided die that would add 1.
+///
+/// [`do_self_resurrect`]: crate::spell::do_self_resurrect
+pub(crate) const E_SELF_RESURRECT: u8 = 0x26;
 
 pub(crate) const E_POWER_BURN: u8 = 0x19; // drain N mana from the target and deal a fraction of it as damage (Mana Burn): MANA-power-type gate read off the target's `unit_bytes_0` byte 3 (same read as `is_rage_user`) — a rage/energy target is a silent no-op (power AND health untouched), matching vanilla's behaviour of skipping the effect entirely. drained = min(base_points, target.power) (floor-at-available; an empty/low pool just burns less, never fails the cast). damage = drained * p1 / 100 (p1 = the effect's ratio in basis-points — vanilla Mana Burn is EffectMultipleValue=0.5 -> p1=50 -> half the drained mana as Shadow damage); `p1<=0` (unauthored data) defaults to 100 (1:1), so a missing p1 never silently zeroes all burn damage. Dealt via the shared `apply_target_damage` (threat/kill/absorb reuse, no new wire work)
 
@@ -196,6 +203,9 @@ pub(crate) const A_MOD_DETECT_RANGE: u8 = 0xB2;
 /// means display 0. A normal cancelable self aura: expiry, `CMSG_CANCEL_AURA`, dispel and `E_DISMOUNT`
 /// all converge on the same recompute.
 pub(crate) const A_MOUNTED: u8 = 0xB3;
+/// Soulstone Resurrection: while this aura is on a Character at death, its `p0` ([`P_SPELL_ID`]) becomes
+/// the Character's Self-Resurrection Option. The aura itself does not survive death.
+pub(crate) const A_SELF_RESURRECT: u8 = 0xB5;
 pub(crate) const A_FLAG: u8 = 0xBE; // passive marker aura (no tick), p0 = flag id
 
 /// Documented tuning approximation for `combat::swing_range_ctx`: a DISARMED creature has no weapon/unarmed
@@ -252,6 +262,8 @@ pub(crate) const P_GAMEOBJECT_ENTRY: u8 = 13; // p0 is a game_gameobject_templat
 /// The importer resolves a mount spell's creature template to its display once, at import, and freezes
 /// the result here; the runtime only reads it.
 pub(crate) const P_DISPLAY_ID: u8 = 14;
+pub(crate) const P_SPELL_ID: u8 = 15; // p0 is a game_spell id (A_SELF_RESURRECT: the Self-Resurrection Option)
+pub(crate) const P_FLAT_MANA: u8 = 16; // p0 is a flat mana amount (E_SELF_RESURRECT with negative base_points)
 pub(crate) const P_RAW: u8 = 255; // scripted / unresolved
 
 // --- TargetKind: who the effect resolves onto ---
@@ -416,6 +428,7 @@ pub(crate) const ALL_INSTANT_KINDS: &[u8] = &[
     E_FEED_PET,
     E_DISMOUNT,
     E_DISTRACT,
+    E_SELF_RESURRECT,
 ];
 
 /// Canonical, ordered list of every AURA (`A_*`) kind — same rationale and same fix as
@@ -448,6 +461,7 @@ pub(crate) const ALL_AURA_KINDS: &[u8] = &[
     A_IMMUNITY,
     A_MOD_DETECT_RANGE,
     A_MOUNTED,
+    A_SELF_RESURRECT,
     A_FLAG,
 ];
 
@@ -458,7 +472,7 @@ pub(crate) const ALL_AURA_KINDS: &[u8] = &[
 // own. A subset of it has no OTHER production call site yet though (only a test-only reference, same as
 // every `E_*`/`A_*` kind before `ALL_INSTANT_KINDS`/`ALL_AURA_KINDS` existed), so it still needs SOME
 // aggregate to keep `dead_code` from tripping on the non-test `lib` build. It holds just the residue,
-// down from `_TAXONOMY`'s ~100 entries to these 18.
+// down from `_TAXONOMY`'s ~100 entries to these 20.
 #[allow(dead_code)]
 const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_NONE,
@@ -473,6 +487,8 @@ const _RESERVED_NON_KIND_TAXONOMY: &[u8] = &[
     P_ENCHANT_ID,
     P_SPELLMOD_OP,
     P_DISPLAY_ID,
+    P_SPELL_ID,
+    P_FLAT_MANA,
     P_RAW,
     T_SCRIPTED,
     SPEED_CAST,

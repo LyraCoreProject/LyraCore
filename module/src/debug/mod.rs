@@ -103,7 +103,7 @@ pub fn debug_teleport(
 }
 
 /// Record a Transfer Intent for `character_guid`: the session-less Shard crossing a Package's
-/// playerbot decides for itself, driven by hand.
+/// bot decides for itself, driven by hand.
 ///
 /// The lever exists because the acceptance test for that crossing must NOT need a Package installed.
 /// It calls the same `transfer::emit_bot_transfer_intent` the Package calls, so what it exercises is
@@ -171,7 +171,7 @@ pub fn debug_apply_damage(
     target_guid: u64,
     amount: u32,
     // The attributed attacker (0 = anonymous): threads through to `on_damage_taken` so
-    // attacker-reactive systems (the playerbots defend hook, Retaliation, the proc pass) see a real
+    // attacker-reactive systems (a Package defend hook, Retaliation, the proc pass) see a real
     // source.
     attacker_guid: u64,
 ) -> Result<(), String> {
@@ -263,6 +263,13 @@ pub fn debug_repop(ctx: &ReducerContext, character_guid: u64) -> Result<(), Stri
 #[reducer]
 pub fn debug_spirit_healer_res(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     crate::actor::spirit_res(ctx, character_guid)
+}
+
+/// Use the Self-Resurrection Option by explicit guid (the `CMSG_SELF_RES` path). Errors if the
+/// Character is alive or holds no option.
+#[reducer]
+pub fn debug_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    crate::actor::self_resurrect(ctx, character_guid)
 }
 
 /// Answer a pending resurrect offer by explicit guid (`CMSG_RESURRECT_RESPONSE` / `resurrect_response`

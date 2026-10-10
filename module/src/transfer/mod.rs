@@ -311,7 +311,7 @@ crate::character_owned!(delete, fn sweep_delete_game_transfer_out(ctx, character
 //  Session-less crossings — the intent a Package writes and the Gateway executes
 // ===========================================================================================
 
-/// A Shard crossing decided for a Character that has no Session: a playerbot whose party walked
+/// A Shard crossing decided for a Character that has no Session: a bot whose party walked
 /// through a dungeon portal, and the same row again when the party walks back out.
 ///
 /// The escrowed transfer needs no client, but it does need a driver, and every driver we had was a
