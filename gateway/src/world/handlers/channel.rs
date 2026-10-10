@@ -330,8 +330,8 @@ fn run_op<St: ChannelActionStore + ?Sized>(
 /// cm:Channel.cpp:678-685). cmangos checks membership, then rights, then the target name, so an
 /// unresolved name still reaches the Module: it goes out as `target_guid` 0, the sentinel no real
 /// Character ever holds, and the op core runs its own NotMember, NotModerator or NotOwner Gate
-/// first and only then answers PLAYER_NOT_FOUND. A failed target read is a Transport Loss and
-/// ends the World Session.
+/// first and only then answers PLAYER_NOT_FOUND. A target whose Realm Presence is unknown goes out
+/// the same way. Any other failed target read ends the World Session.
 fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     store: &St,
     player: ChatActionPlayer,
@@ -342,8 +342,7 @@ fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     let Some((actor, speaker)) = actor_and_speaker(store, player)? else {
         return Ok(Vec::new());
     };
-    let target = store
-        .online_character_by_name(&typed_name)?
+    let target = presence::unknown_as_absent(store.online_character_by_name(&typed_name))?
         .unwrap_or(ResolvedTarget {
             guid: 0,
             race: 0,
@@ -446,6 +445,8 @@ mod tests {
         /// The Module rejects with a tag this Gateway does not know.
         Refused,
         TransportLost,
+        /// Another World Shard cannot vouch for a Character's absence.
+        PresenceUnknown,
     }
 
     impl Failure {
@@ -453,6 +454,10 @@ mod tests {
             match self {
                 Self::Refused => ReducerCallError::refused(op, "mystery").into(),
                 Self::TransportLost => ReducerCallError::transport_lost(op).into(),
+                Self::PresenceUnknown => presence::PresenceUnknown(anyhow::anyhow!(
+                    "World Shard instances has no healthy Coordinator subscription"
+                ))
+                .into(),
             }
         }
     }
@@ -1032,16 +1037,30 @@ mod tests {
         assert_eq!(ops[0].2.target_name, "Ghost");
     }
 
-    /// A failed target lookup is a Transport Loss: no Durable Request goes out.
+    /// A target whose Realm Presence is unknown goes out unresolved, so the Module answers.
     #[test]
-    fn a_failed_target_lookup_ends_the_session() {
+    fn an_unknown_target_presence_goes_out_unresolved() {
+        let store = InMemoryChannelActions {
+            lookup_failure: Some(Failure::PresenceUnknown),
+            ..store(None)
+        };
+        handled(dispatch_channel_action(&store, player(), kick("Raiders", "Ghost")).unwrap());
+        let ops = store.ops.lock().unwrap();
+        assert_eq!(ops.len(), 1);
+        assert_eq!(ops[0].2.target_guid, 0);
+        assert_eq!(ops[0].2.target_name, "Ghost");
+    }
+
+    /// A lost target lookup is a Transport Loss: no Durable Request goes out.
+    #[test]
+    fn a_lost_target_lookup_ends_the_session() {
         let store = InMemoryChannelActions {
             lookup_failure: Some(Failure::TransportLost),
             ..store(None)
         };
         let error = dispatch_channel_action(&store, player(), kick("Raiders", "Ghost"))
             .err()
-            .expect("a failed read is fatal");
+            .expect("a lost read is fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert!(store.ops.lock().unwrap().is_empty());
     }

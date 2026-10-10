@@ -187,7 +187,8 @@ impl CharacterIdentity {
 /// Failing that, a pending Transfer (Realm-core's own signal, or a Shard's between-places match)
 /// answers `InTransit`. Only once neither fires does the answer become a negative claim —
 /// `Offline`, or `None` for a guid no Shard ever named — and a negative claim needs every
-/// configured Shard to vouch first (see the module doc).
+/// configured Shard to vouch first (see the module doc), and fails with [`PresenceUnknown`] when
+/// one cannot.
 pub(crate) fn of<St: ShardRoutingStore + SocialStore + ?Sized>(
     store: &St,
     guid: u64,
@@ -206,7 +207,9 @@ pub(crate) fn of<St: ShardRoutingStore + SocialStore + ?Sized>(
     // Both `InTransit` (via a Shard's own between-places match) and `Offline` are negative claims
     // from here on: no configured Shard may be unreachable, or a stale cache could be hiding the
     // Character.
-    store.every_shard_vouches_for_absence()?;
+    store
+        .every_shard_vouches_for_absence()
+        .map_err(PresenceUnknown)?;
     let between_places = store.character_in_transit(guid)
         || store
             .world_stores()
@@ -219,6 +222,37 @@ pub(crate) fn of<St: ShardRoutingStore + SocialStore + ?Sized>(
         (None, true) => Some(CharacterIdentity::unknown(guid).stationary(Whereabouts::InTransit)),
         (None, false) => None,
     })
+}
+
+/// A negative claim [`of`] could not make: some configured World Shard did not vouch for the
+/// absence. That is another Shard's health, not this World Session's transport, so a caller answers
+/// as it would for a Character it cannot see.
+#[derive(Debug)]
+pub(crate) struct PresenceUnknown(pub(crate) anyhow::Error);
+
+impl std::fmt::Display for PresenceUnknown {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Realm Presence unknown: {:#}", self.0)
+    }
+}
+
+impl std::error::Error for PresenceUnknown {}
+
+/// Is `error`, or any cause it wraps, a [`PresenceUnknown`]?
+pub(crate) fn is_unknown(error: &anyhow::Error) -> bool {
+    error.chain().any(|cause| cause.is::<PresenceUnknown>())
+}
+
+/// `result` with a [`PresenceUnknown`] read as `None`, the answer for a Character nobody can see.
+/// Every other error passes through.
+pub(crate) fn unknown_as_absent<T>(result: Result<Option<T>>) -> Result<Option<T>> {
+    match result {
+        Err(error) if is_unknown(&error) => {
+            log::debug!("world: answering as absent: {error:#}");
+            Ok(None)
+        }
+        other => other,
+    }
 }
 
 /// [`CharacterIdentity`] from whichever connected Shard answers first: this handle, then every

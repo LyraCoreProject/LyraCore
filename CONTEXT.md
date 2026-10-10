@@ -518,7 +518,8 @@ _Avoid_: online status, presence cache
 Realm Presence's own state for where a Character is: in world (with a live entity and an Away
 Status), in transit between two places (a pending Transfer, or a Shard's own row reading online
 with no entity there), or offline. A negative Whereabouts, offline or no Character found at all,
-needs every configured World Shard to vouch that none of them is hiding the Character.
+needs every configured World Shard to vouch that none of them is hiding the Character. When one
+cannot, the Whereabouts is unknown: another Shard's health, not a Transport Loss.
 _Avoid_: presence state, location status
 
 **Away Status**:

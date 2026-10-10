@@ -2,7 +2,6 @@
 //! catalogue, discovery, range, or topology tables and therefore cannot fork module policy.
 
 use super::super::*;
-use crate::stdb::{classify, DurableFailure};
 
 pub(crate) trait TaxiActionStore: Send + Sync {
     fn taxi_node_status(
@@ -41,18 +40,6 @@ pub(crate) enum TaxiActionOutcome {
     PassThrough(ClientOpcodeMessage),
 }
 
-/// A Refusal means the Module said no and nothing changed, so the caller answers with `refused`. A
-/// Transport Loss leaves the outcome unknown and ends the World Session.
-fn or_refused<T>(result: Result<T>, refused: T) -> Result<T> {
-    result.or_else(|error| match classify(&error) {
-        DurableFailure::Refusal { reason } => {
-            log::debug!("world: taxi request refused: {reason}");
-            Ok(refused)
-        }
-        DurableFailure::TransportLoss => Err(error),
-    })
-}
-
 fn status_outbound<St: TaxiActionStore + ?Sized>(
     store: &St,
     actor: Option<Actor>,
@@ -61,7 +48,7 @@ fn status_outbound<St: TaxiActionStore + ?Sized>(
     let Some(actor) = actor else {
         return Ok(Vec::new());
     };
-    match or_refused(store.taxi_node_status(actor, npc_guid), None)? {
+    match store.taxi_node_status(actor, npc_guid)? {
         Some(view) => Ok(vec![Outbound::One(
             ServerOpcodeMessage::SMSG_TAXINODE_STATUS(Box::new(codec::build_taxi_node_status(
                 view,
@@ -80,14 +67,11 @@ fn activate_taxi_outbound<St: TaxiActionStore + ?Sized>(
 ) -> Result<(Vec<Outbound>, bool)> {
     let server_error = codec::TaxiActivationResult::default();
     let result = match actor {
-        Some(actor) => or_refused(
-            store.activate_taxi(
-                actor,
-                npc_guid,
-                source_client_node_id,
-                destination_client_node_id,
-            ),
-            server_error,
+        Some(actor) => store.activate_taxi(
+            actor,
+            npc_guid,
+            source_client_node_id,
+            destination_client_node_id,
         )?,
         None => server_error,
     };
@@ -128,7 +112,7 @@ pub(crate) fn open_taxi_outbound<St: TaxiActionStore + ?Sized>(
     let Some(actor) = actor else {
         return Ok(Vec::new());
     };
-    match or_refused(store.open_taxi(actor, npc_guid), None)? {
+    match store.open_taxi(actor, npc_guid)? {
         Some(view) => Ok(vec![Outbound::One(
             ServerOpcodeMessage::SMSG_SHOWTAXINODES(Box::new(codec::build_show_taxi_nodes(&view))),
         )]),
@@ -363,28 +347,17 @@ pub(super) mod tests {
         }
     }
 
+    /// A taxi answer arrives only after the request commits, so any failure ends the World Session.
     #[test]
-    fn a_refusal_answers_without_arming_and_keeps_the_session() {
+    fn a_refusal_ends_the_world_session() {
         let store = InMemoryTaxiActions {
             fail: Some(refused),
             ..Default::default()
         };
-        let player = TaxiActionPlayer { self_guid: Some(9) };
-
-        let status = dispatch_taxi_action(&store, player, status_query()).unwrap();
-        assert!(matches!(status, TaxiActionOutcome::Handled { outbound } if outbound.is_empty()));
-
-        let (outbound, arm) = match dispatch_taxi_action(&store, player, activate_query()).unwrap()
-        {
-            TaxiActionOutcome::Activated { outbound, arm, .. } => (outbound, arm),
-            _ => panic!("activate must be consumed"),
-        };
-        assert!(!arm);
-        assert!(matches!(
-            outbound.as_slice(),
-            [Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))]
-                if reply.reply == wow_world_messages::vanilla::ActivateTaxiReply::UnspecifiedServerError
-        ));
+        for msg in [status_query(), activate_query()] {
+            let result = dispatch_taxi_action(&store, TaxiActionPlayer { self_guid: Some(9) }, msg);
+            assert!(result.is_err(), "a taxi Refusal ends the world session");
+        }
     }
 
     #[test]
