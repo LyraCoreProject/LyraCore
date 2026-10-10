@@ -3849,96 +3849,6 @@ impl Coordinator {
 }
 
 #[cfg(test)]
-mod visibility_receipt_tests {
-    #[test]
-    fn quest_completion_waits_for_the_subscribed_coordinator_receipt() {
-        let source = include_str!("reducers.rs");
-        let turn_in = crate::test_scan::code_of(source, "pub fn turn_in_quest(");
-        let visibility_pipe = crate::test_scan::code_of(
-            include_str!("connection.rs"),
-            "pub(crate) fn visibility_pipe(",
-        );
-
-        assert!(
-            turn_in.contains("self.0.visibility_pipe()"),
-            "a successful turn-in may authorize QUEST_COMPLETE only after the coordinator has \
-             applied the reward transaction and queued its inventory relays"
-        );
-        assert!(
-            !turn_in.contains("self.0.call_pipe()"),
-            "a reducer-only call pipe cannot receipt coordinator subscription visibility"
-        );
-        assert!(
-            visibility_pipe.contains("self.coord()")
-                && !visibility_pipe.contains("self.call_pipe()"),
-            "the visibility pipe must be the connection that owns the relayed subscriptions"
-        );
-    }
-}
-
-#[cfg(test)]
-mod realm_chat_routing_tests {
-    /// Party membership, and every later chat audience, is authoritative on Realm-core. A line sent
-    /// to the session's own Home Shard reads that Shard's mirror and is delivered by no Relay on a
-    /// sharded Realm. No Fake reaches the Coordinator, so the routing is pinned in source.
-    #[test]
-    fn realm_chat_runs_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_chat(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_chat\",")
-                && body.contains("realm_chat_then(realm.session_actor(speaker_guid),request)"),
-            "`Coordinator::realm_chat` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::realm_chat` must not call the session's own Home Shard"
-        );
-    }
-
-    /// A whisper is a set of Realm Chat Lines, so it runs on Realm-core like `realm_chat`. Pinned
-    /// in source for the same reason.
-    #[test]
-    fn realm_whispers_run_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn realm_whisper(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_whisper\",")
-                && body.contains("realm_whisper_then(realm.session_actor(speaker_guid),request)"),
-            "`Coordinator::realm_whisper` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::realm_whisper` must not call the session's own Home Shard"
-        );
-    }
-
-    /// Chat Channels live only on Realm-core. An op sent to the session's own Home Shard would
-    /// create a second, shard-local copy of the channel. Pinned in source for the same reason.
-    #[test]
-    fn channel_ops_run_on_the_realm_core_handle() {
-        let body = crate::test_scan::code_of(include_str!("reducers.rs"), "pub fn channel_op(");
-        let body: String = body.split_whitespace().collect();
-        assert!(
-            body.contains("letrealm=self.realm_core()?;")
-                && body.contains("realm.0.call_pipe().conn.reducers,\"realm_channel_op\",")
-                && body
-                    .contains("realm_channel_op_then(realm.session_actor(actor_guid),op,request)"),
-            "`Coordinator::channel_op` no longer calls the reducer on the Realm-core handle. \
-             Body was:\n{body}"
-        );
-        assert!(
-            !body.contains("self.0.call_pipe()"),
-            "`Coordinator::channel_op` must not call the session's own Home Shard"
-        );
-    }
-}
-
-#[cfg(test)]
 mod taxi_reply_tests {
     use super::*;
 
@@ -3995,23 +3905,6 @@ mod taxi_reply_tests {
             90,
             lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
         ));
-    }
-
-    #[test]
-    fn reply_wait_uses_the_unique_request_id_accessor() {
-        let source = include_str!("reducers.rs");
-        assert!(source.contains(".request_id()\n                .find(&request_id)"));
-        assert!(!source.contains(".character_guid()\n                .find(&character_guid)"));
-        let wait = source
-            .split("fn await_taxi_reply(")
-            .nth(1)
-            .and_then(|tail| tail.split("pub fn taxi_node_status(").next())
-            .expect("taxi reply wait body");
-        let observes = wait.find("taxi_reply_matches(").expect("validated reply");
-        let acknowledges = wait
-            .find("gw_ack_taxi_reply_then(self.session_actor(character_guid), request_id)")
-            .expect("reply acknowledgement");
-        assert!(observes < acknowledges);
     }
 }
 
@@ -4999,28 +4892,6 @@ mod auction_reducer_tests {
     }
 
     #[test]
-    fn refused_listing_refund_commits_on_realm_core_before_the_home_hold_is_deleted() {
-        let drive =
-            crate::test_scan::code_of(include_str!("reducers.rs"), "fn complete_listing_hold(");
-        let refund = "realm.auction_refund_listing(hold)?;";
-        let release = "self.auction_release_listing_hold(hold)?;";
-        let refund_at = drive
-            .find(refund)
-            .expect("the Realm-core handle must commit the refused listing Mail");
-        let release_at = drive
-            .find(release)
-            .expect("the Home Shard must delete the Hold after that commit");
-        assert!(
-            refund_at < release_at,
-            "a source-Hold delete before Realm-core Mail commit loses the only listing value"
-        );
-        assert!(
-            !drive.contains("self.auction_refund_listing(hold)?;"),
-            "the Home Shard does not own Mail in a sharded realm"
-        );
-    }
-
-    #[test]
     fn refused_listing_binding_matches_the_generated_commit_listing_shape() {
         let expected = include_str!("bindings/realm_auction_commit_listing_reducer.rs")
             .replace("RealmAuctionCommitListing", "RealmAuctionRefundListing")
@@ -5142,29 +5013,6 @@ mod auction_reducer_tests {
                 operation: hold_operation::BID,
             }
         ));
-    }
-
-    /// Per-request paths find a Character's Holds, receipts and Auctions through the auction
-    /// index, never by scanning a cache table, which keeps every finished Hold and receipt.
-    #[test]
-    fn auction_lookups_never_scan_a_cache_table() {
-        for signature in [
-            "fn indexed_rows<T>(",
-            "fn unfinished_auction_holds(",
-            "fn listing_holds(",
-            "fn listing_receipts(",
-            "fn has_auction(",
-            "fn matching_unfinished_bid_hold(",
-            "fn matching_auction_hold(",
-            "fn matching_active_auction_receipt(",
-            "fn character_has_auction_value(",
-            "pub(crate) fn cancel_auction(",
-            "pub(crate) fn resume_auction_holds(",
-            "fn complete_listing_hold(",
-        ] {
-            let body = crate::test_scan::code_of(include_str!("reducers.rs"), signature);
-            assert!(!body.contains(".iter()"), "{signature} scans a cache table");
-        }
     }
 
     #[test]

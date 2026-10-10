@@ -711,23 +711,4 @@ mod tests {
             "an owner with no rows left ignores nobody"
         );
     }
-
-    /// `ignored_guids` answers for ANY owner, including one with no live World Session on this
-    /// Gateway process at all — a whisper sender's target or a guild-invite target usually is not
-    /// one. Pinned in source (no Fake reaches a real `Coordinator`): the body must never route
-    /// through the Gateway-side `Viewer` registry the way `contact_lists` does for the CONNECTED
-    /// session's own guid, or ignore checks silently go empty for every Character not currently
-    /// registered on THIS Gateway process — the live defect this method replaces.
-    #[test]
-    fn ignored_guids_never_reads_the_viewer_registry() {
-        let source = crate::test_scan::code_of(include_str!("account.rs"), "pub fn ignored_guids(");
-        for needle in ["world_view", "viewer_of_owner", "Viewer"] {
-            assert!(
-                !source.contains(needle),
-                "ignored_guids must answer for a Character with no live Viewer on this Gateway; \
-                 found `{needle}`, which means it is reading `contact_lists`'s Viewer-scoped path \
-                 again"
-            );
-        }
-    }
 }

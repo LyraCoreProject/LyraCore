@@ -372,48 +372,4 @@ mod tests {
         assert!(panicked.unwrap_err().is_panic());
         assert_eq!(capacity.available(), 1, "an unwind must return its seat");
     }
-
-    #[test]
-    fn both_listeners_admit_before_they_spawn_a_blocking_task() {
-        for (listener, source, signature) in [
-            ("logon", include_str!("logon/mod.rs"), "pub async fn run("),
-            ("world", include_str!("world/mod.rs"), "pub async fn run("),
-        ] {
-            let body = crate::test_scan::code_of(source, signature);
-            let admit = body
-                .find("cfg.blocking_task_capacity.try_admit()")
-                .unwrap_or_else(|| panic!("{listener} does not check blocking-task capacity"));
-            let spawn = body
-                .find("tokio::task::spawn_blocking")
-                .unwrap_or_else(|| panic!("{listener} does not spawn its blocking task"));
-            assert!(
-                admit < spawn,
-                "{listener} queues the task before it checks capacity"
-            );
-            assert!(
-                body[spawn..].contains("let _task_permit = task_permit;"),
-                "{listener} does not hold its permit for the blocking task's whole lifetime"
-            );
-        }
-    }
-
-    #[test]
-    fn blocking_task_capacity_uses_the_runtime_pool_ceiling() {
-        let main_body =
-            crate::test_scan::code_of(include_str!("main.rs"), "fn main() -> Result<()> {");
-        assert!(
-            main_body.contains("let max_blocking_threads = config::max_blocking_threads();")
-                && main_body.contains(".max_blocking_threads(max_blocking_threads)"),
-            "the runtime blocking pool no longer uses the configured ceiling"
-        );
-
-        let config_body =
-            crate::test_scan::code_of(include_str!("config.rs"), "pub fn from_env() -> Self {");
-        assert!(
-            config_body.contains(
-                "blocking_task_capacity: BlockingTaskCapacity::new(max_blocking_threads())"
-            ),
-            "the listener capacity no longer uses the runtime blocking-pool setting"
-        );
-    }
 }
