@@ -18,7 +18,8 @@ fn a_new_timed_cast_replaces_only_the_casters_pending_rows() {
     let mut standalone = Standalone::start("pending-cast-replacement");
     standalone.publish_module();
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
-    standalone.assert_sql("UPDATE game_spell SET cast_time_ms = 60000 WHERE spell_id = 8129");
+    standalone
+        .assert_sql("UPDATE game_spell SET cast_time_ms = 60000, gcd_ms = 0 WHERE spell_id = 8129");
 
     assert!(pending_casts(&standalone).is_empty());
 

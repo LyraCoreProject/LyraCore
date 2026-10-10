@@ -26,9 +26,9 @@ use crate::script_binding::game_script;
 
 // One argument per field of the cast being resolved; the caller has already split the spell/effect rows, so there is no single row type left to pass.
 #[allow(clippy::too_many_arguments)]
-/// Resolve a cast by explicit caster + explicit target guid: header lookup → GCD gate → cost gate +
-/// deduction → iterate `game_spell_effect` in order, dispatching each to its handler → emit ONE cast
-/// visual → start the GCD. The single source of truth every cast entry point funnels through
+/// Resolve a cast by explicit caster and target guid, check Gates, charge its cost, apply effects,
+/// and emit its cast visual. A timed completion preserves the GCD started by `begin_cast`.
+/// Other direct casts check and start their GCD here. Every direct cast entry point uses this core
 /// (`resolve_cast` self-wraps it; `cast_spell` passes the client target; the debug reducers pass an
 /// explicit pair). A multi-effect spell just runs the loop more than once; adding a behavior is a new
 /// `kind` + handler arm, with zero edits to this cast core.
@@ -122,6 +122,9 @@ pub(crate) fn resolve_cast_at_typed(
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
+    if !is_completion {
+        check_global_cooldown(ctx, caster_guid)?;
+    }
     if effects.iter().any(|e| e.kind == E_DISTRACT) {
         check_distract_destination(ctx, &caster, dest, hdr.range_yd)?;
     }
@@ -215,24 +218,8 @@ pub(crate) fn resolve_cast_at_typed(
         crate::spell::effects::arm_spell_retaliation(ctx, caster_guid, target_guid);
     }
 
-    // Start the GCD (only on a successful cast). A 0-gcd spell sets none.
-    if hdr.gcd_ms > 0 {
-        let ready_at = ctx
-            .timestamp
-            .checked_add(TimeDuration::from_micros((hdr.gcd_ms as i64) * 1000))
-            .unwrap_or(ctx.timestamp);
-        let cooldowns = ctx.db.game_spell_cooldown();
-        if cooldowns.caster_guid().find(caster_guid).is_some() {
-            cooldowns.caster_guid().update(SpellCooldown {
-                caster_guid,
-                ready_at,
-            });
-        } else {
-            cooldowns.insert(SpellCooldown {
-                caster_guid,
-                ready_at,
-            });
-        }
+    if !is_completion {
+        start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     }
 
     // Start the per-spell cooldown (only on a fully successful cast, and only when the spell HAS one).
@@ -768,7 +755,43 @@ fn check_cast_gates_with_admission(
 ) -> Result<(), CastRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    check_global_cooldown(ctx, caster.guid)?;
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+}
+
+fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastRefusal> {
+    if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
+        if is_on_cooldown(
+            ctx.timestamp.to_micros_since_unix_epoch(),
+            cd.ready_at.to_micros_since_unix_epoch(),
+        ) {
+            return Err(CastRefusal::new(
+                CastRefusalKind::Cooldown,
+                "spell not ready (global cooldown)".to_string(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn start_global_cooldown(ctx: &ReducerContext, caster_guid: u64, gcd_ms: u32) {
+    if gcd_ms == 0 {
+        return;
+    }
+    let ready_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros(i64::from(gcd_ms) * 1000))
+        .unwrap_or(ctx.timestamp);
+    let cooldowns = ctx.db.game_spell_cooldown();
+    let cooldown = SpellCooldown {
+        caster_guid,
+        ready_at,
+    };
+    if cooldowns.caster_guid().find(caster_guid).is_some() {
+        cooldowns.caster_guid().update(cooldown);
+    } else {
+        cooldowns.insert(cooldown);
+    }
 }
 
 fn check_cast_gate_prefix(
@@ -1040,21 +1063,7 @@ fn check_cast_gate_suffix(
         )));
     }
 
-    // GCD gate (before cost so an on-cooldown cast spends nothing). The GCD is the per-CASTER row in
-    // `game_spell_cooldown` (one row, any spell).
-    if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
-        if is_on_cooldown(
-            ctx.timestamp.to_micros_since_unix_epoch(),
-            cd.ready_at.to_micros_since_unix_epoch(),
-        ) {
-            return Err(CastRefusal::new(
-                CastRefusalKind::Cooldown,
-                "spell not ready (global cooldown)".to_string(),
-            ));
-        }
-    }
-
-    // Per-spell cooldown gate (the SEPARATE second gate — checked AFTER the GCD, still BEFORE cost/range
+    // Per-spell cooldown gate (distinct from the GCD, checked before cost/range
     // so a still-cooling spell spends nothing). Only relevant when this spell HAS its own cooldown
     // (`cooldown_ms > 0`); a `cooldown_ms == 0` spell never wrote a `game_spell_cd` row, so this scan
     // finds nothing and the gate is a no-op (baseline-safe — the existing seed spells are all 0). The
@@ -1361,8 +1370,8 @@ pub(crate) fn resolve_cast(
 
 /// Begin a cast, honoring the spell's **cast time**: an instant spell (`cast_time_ms == 0`) resolves
 /// synchronously through `resolve_cast_at`; a timed spell schedules a one-shot `PendingCast` whose
-/// `fire_pending_cast` callback applies the effect after the cast bar completes. GCD/cost are enforced
-/// at cast END (the deliberate simplification; cast-START GCD + interrupt is a later slice).
+/// `fire_pending_cast` callback applies the effect after the cast bar completes. The GCD starts when
+/// the cast is accepted. A timed completion rechecks the other Gates and charges the cost.
 pub(crate) fn begin_cast(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -1517,6 +1526,7 @@ pub(crate) fn begin_cast_with_admission(
         dest_y: dy,
         dest_z: dz,
     });
+    start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     // Cast-START event: the gateway relays SMSG_SPELL_START so observers see the cast bar FILL over
     // `cast_time_ms` (the GO event fires later at completion). `game_pending_cast` is non-public, so this
     // public row is the cast-start signal.

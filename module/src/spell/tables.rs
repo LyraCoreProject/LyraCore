@@ -514,9 +514,8 @@ impl SpellCastEvent {
     }
 }
 
-/// Per-caster global-cooldown gate: after a successful cast the caster can't cast again until `ready_at`.
-/// This is the GCD ONLY (one row per caster) — the per-spell cooldown lives in `game_spell_cd`. Schema is
-/// UNCHANGED (the gateway binding for this table stays valid; no regen needed).
+/// Per-caster global cooldown, started when a cast is accepted. It blocks new casts until `ready_at`
+/// but does not block or restart at a timed completion. Per-spell cooldowns live in `game_spell_cd`.
 #[table(accessor = game_spell_cooldown, public)]
 pub struct SpellCooldown {
     #[primary_key]
