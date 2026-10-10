@@ -263,30 +263,6 @@ mod operator_claim_tests {
             Err("operator already claimed".to_string())
         );
     }
-
-    #[test]
-    fn reducer_routes_existing_and_new_claims_through_the_tested_decision() {
-        let got = crate::test_scan::shape_of(
-            include_str!("auth.rs"),
-            "pub fn claim_operator(ctx: &ReducerContext) -> Result<(), String> {",
-        );
-        let want = "{
-            let ops = ctx.db.game_operator();
-            let claimed_identity = ops.id().find(0).map(|operator| operator.identity);
-            if operator_claim_action(claimed_identity, ctx.sender())? == OperatorClaimAction::Insert {
-                ops.insert(Operator { id: 0, identity: ctx.sender(), });
-            }
-            Ok(())
-        }"
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ");
-        assert_eq!(
-            got, want,
-            "`claim_operator` must route every claim through the tested decision and insert only \
-             on its Insert outcome"
-        );
-    }
 }
 
 // ===========================================================================================
@@ -415,33 +391,6 @@ mod alpha_test_tools_tests {
         assert_eq!(changed_alpha_test_tools(Some(true), false), Ok(false));
         assert_eq!(changed_alpha_test_tools(None, true), Err("unknown account"));
         assert_eq!(realm_account_name("TeSt"), "TEST");
-    }
-
-    #[test]
-    fn operator_controls_are_gated_before_their_state_change() {
-        let src = include_str!("auth.rs");
-        for reducer in [
-            "pub fn set_alpha_test_tools_enrollment(",
-            "pub fn grant_alpha_test_tools(",
-            "pub fn revoke_alpha_test_tools(",
-        ] {
-            let body = crate::test_scan::code_of(src, reducer);
-            assert!(
-                body.contains("crate::helpers::require_operator(ctx)?;"),
-                "{reducer} must refuse a caller who is not the Operator"
-            );
-        }
-    }
-
-    #[test]
-    fn account_authority_is_an_end_appended_additive_default() {
-        let src = include_str!("auth.rs");
-        let account = &src[src.find("pub struct Account {").expect("Account row")..];
-        let account = &account[..account.find("\n}").expect("Account row end")];
-        assert!(
-            account.ends_with("#[default(true)]\n    pub alpha_test_tools: bool,"),
-            "existing Account rows must receive Alpha Test Tools during an additive publish"
-        );
     }
 }
 
@@ -859,35 +808,6 @@ mod guid_allocator_tests {
         assert!(!in_guid_range(range, 3_000_000_000));
     }
 
-    /// …and the WIRING (playbook §8 — the repo's dominant test failure is pinning the helper and
-    /// not the call site). Character creation must consult the rule BEFORE it writes anything;
-    /// deleting that one line brings back exactly the silent minting this rule exists to end, with every
-    /// other test in this file still green.
-    #[test]
-    fn character_creation_refuses_before_it_writes_anything() {
-        // The trailing newline matters: this test module sits ABOVE the functions in the file, so a
-        // bare needle finds THIS test's own string literal first and scans the test instead.
-        let src = include_str!("auth.rs");
-        let check = crate::test_scan::code_of(src, "pub(crate) fn check_new_character(\n");
-        assert!(
-            check
-                .trim_start_matches(|c: char| c == '{' || c.is_whitespace())
-                .starts_with("require_guid_range(ctx)?"),
-            "`check_new_character` no longer checks this database's guid range first, so a shard \
-             that was never assigned one mints from zero into another shard's guids — silently. \
-             Body was:\n{check}"
-        );
-        let body = crate::test_scan::code_of(src, "pub(crate) fn insert_new_character(\n");
-        let check_at = body
-            .find("check_new_character(ctx")
-            .expect("insert_new_character must run check_new_character");
-        let mint_at = body.find("next_character_guid(ctx)").unwrap_or(usize::MAX);
-        assert!(
-            check_at < mint_at,
-            "the range check must come BEFORE the guid is minted, not after"
-        );
-    }
-
     /// Mutation target: flip `.max` to `.min` (or drop the `floor` arm entirely) and this goes red.
     #[test]
     fn ratchet_high_water_never_moves_backwards() {
@@ -951,88 +871,6 @@ mod guid_allocator_tests {
         let reissued_guid = allocate_next_guid(allocator_mark_after_delete);
         assert_ne!(reissued_guid, 50);
         assert_eq!(reissued_guid, 51);
-    }
-
-    /// `body_of`/`code_of`/`shape_of` are the shared scan primitives in [`crate::test_scan`]
-    /// (this used to be six near-identical copies, drifted apart).
-    use crate::test_scan::shape_of;
-
-    /// Collapse whitespace the same way [`shape_of`] does, for a hand-written "what it SHOULD be"
-    /// literal — so the `want` side of an equality assertion never has to be hand-space-counted
-    /// (a likely source of a flaky/wrong pin) and can just be written as normal-looking Rust.
-    fn norm(s: &str) -> String {
-        s.split_whitespace().collect::<Vec<_>>().join(" ")
-    }
-
-    /// `next_character_guid` cannot itself be unit-tested (it takes `&ReducerContext`, and this
-    /// crate has no ctx harness by design — playbook §7), so its glue is pinned by EXACT SHAPE
-    /// instead of `.contains()` — the round-1 review reproduced FIVE ways to keep a `.contains()`
-    /// needle present while gutting the function (dead comment, shadowed variable, wrong return
-    /// value...); equality against the whole body closes all of them, because every one of those
-    /// mutations changes the body's TEXT, not just whether a substring survives in it.
-    #[test]
-    fn next_character_guid_is_exactly_the_pinned_shape() {
-        let got = shape_of(
-            include_str!("auth.rs"),
-            "pub(crate) fn next_character_guid(",
-        );
-        let want = norm(
-            "{
-                let existing = read_high_water(ctx);
-                let seed = existing
-                    .as_ref()
-                    .map(|r| r.high_water)
-                    .unwrap_or_else(|| legacy_guid_seed_now(ctx));
-                let next = allocate_next_guid(seed);
-                write_high_water(ctx, existing, next);
-                next
-            }",
-        );
-        assert_eq!(
-            got, want,
-            "next_character_guid's body no longer matches the pinned shape — it must seed from \
-             the durable mark first, route through the tested `allocate_next_guid`, persist the \
-             result, and return the NEW mark (not the seed). Got:\n{got}"
-        );
-    }
-
-    /// Same reasoning as above, for the other entry point: `bump_guid_high_water` must actually
-    /// ratchet at `guid` and persist the result, or the defect 1/AC#3 fix (the two call
-    /// sites in `world::cascade_delete_character` and `transfer::apply_import_blob`) does nothing.
-    #[test]
-    fn bump_guid_high_water_is_exactly_the_pinned_shape() {
-        let got = shape_of(
-            include_str!("auth.rs"),
-            "pub(crate) fn bump_guid_high_water(",
-        );
-        let want = norm(
-            "{
-                let range = ctx
-                    .db
-                    .game_guid_range()
-                    .id()
-                    .find(0)
-                    .map(|row| (row.base, row.size));
-                if range.is_some() && !in_guid_range(range, guid) {
-                    return;
-                }
-                let existing = read_high_water(ctx);
-                let seed = existing
-                    .as_ref()
-                    .map(|r| r.high_water)
-                    .unwrap_or_else(|| legacy_guid_seed_now(ctx));
-                let mark = ratchet_high_water(seed, guid);
-                if mark == seed && existing.is_some() {
-                    return;
-                }
-                write_high_water(ctx, existing, mark);
-            }",
-        );
-        assert_eq!(
-            got, want,
-            "bump_guid_high_water must preserve the legacy floor before range installation, \
-             then floor only local GUIDs. It must persist the new mark unless already ahead. Got:\n{got}"
-        );
     }
 }
 

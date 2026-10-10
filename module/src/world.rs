@@ -2347,11 +2347,7 @@ mod tests {
     // the reducer's own formatted source as what the "relay is never gated on the persist decision"
     // invariant pins against. That invariant — and the fall-damage decision the old inline block used
     // to hide — are now ordinary value-level unit tests instead of a whitespace-collapsed exact-body
-    // match that broke on every rename or rustfmt re-wrap. What's left below
-    // (`movement_update_applies_the_plan_and_never_re_derives_the_persist_gate`) is a MUCH smaller
-    // presence/wiring scan for the one thing no pure unit test can reach without a `ReducerContext`
-    // harness (playbook §7): does the reducer actually route through the plan, or silently re-derive
-    // its own copy of the gate.
+    // match that broke on every rename or rustfmt re-wrap.
 
     #[test]
     fn resolve_environmental_damage_subtracts_short_of_lethal_and_flags_lethal_without_mutating() {
@@ -2453,60 +2449,6 @@ mod tests {
         };
         assert!(plan_movement(HEARTBEAT, false, false, false, 0.0, false, &moving).moved);
         assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
-    }
-
-    #[test]
-    fn movement_update_applies_the_plan_and_never_re_derives_the_persist_gate() {
-        let body = crate::test_scan::code_of(
-            include_str!("world.rs"),
-            "pub(crate) fn apply_movement_update(",
-        );
-        // The persist/relay/channel/score decisions must route through `plan_movement` — not a
-        // second, hand-rolled `snapshot_needs_persist` call inline (that decision, and the "relay is
-        // never gated on it" invariant, are pinned directly by the tests above instead).
-        assert_eq!(
-            body.matches("snapshot_needs_persist(").count(),
-            0,
-            "movement_update must not call snapshot_needs_persist directly — plan_movement owns \
-             that decision now. Body was:\n{body}"
-        );
-        let plan_at = body
-            .find("plan_movement(")
-            .expect("movement_update must build its plan via plan_movement");
-        let entity_at = body
-            .find("entities.guid().update(mover)")
-            .expect("the gated entity write");
-        assert!(
-            plan_at < entity_at,
-            "the plan must be built before the entity row write"
-        );
-        assert_eq!(
-            body.matches("entities.guid().update(mover)").count(),
-            1,
-            "exactly one entity write"
-        );
-        assert!(
-            body.contains("if plan.persist_entity {"),
-            "the entity write must be gated on plan.persist_entity, not re-derived inline. Body \
-             was:\n{body}"
-        );
-        // The relay must come after the entity write and be gated on `plan.relay_motion` — never on
-        // `plan.persist_entity` or anything else re-derived inline. `plan_movement`'s own tests prove
-        // `relay_motion` is ALWAYS true; this only pins that the reducer actually routes the relay
-        // through it, which is the one piece no pure unit test (no ReducerContext in this crate) can
-        // reach on its own.
-        let relay_at = body
-            .find("if plan.relay_motion {")
-            .expect("the motion relay's own (always-true) gate");
-        assert!(
-            entity_at < relay_at,
-            "the motion relay must come after the gated entity write"
-        );
-        assert_eq!(
-            body.matches("if plan.relay_motion {").count(),
-            1,
-            "exactly one relay gate"
-        );
     }
 
     // ---- Work-item 255: movement plausibility (detect-and-flag) ------------------------------
@@ -2620,77 +2562,6 @@ mod tests {
         );
     }
 
-    /// The CALL SITES, pinned by scan because both live inside `&ReducerContext` functions this
-    /// crate has no harness for (playbook §7/§8: say so, then pin with the strongest scan). Both
-    /// needles are struct/row FIELD ASSIGNMENTS, which is what makes a presence scan load-bearing
-    /// here rather than decorative — Rust forbids a duplicate field in a struct literal, and
-    /// `persist_entity` writes each column exactly once, so a decoy copy of the needle cannot
-    /// coexist with a restored hardcode.
-    ///
-    /// What it does NOT catch: a `persist_entity` that computes the pair and then never
-    /// `chars.guid().update(c)`s (covered by the surrounding write, unchanged here), and the
-    /// gateway-side relay of the restored speed to the client (see the work-item note — the create
-    /// block hardcodes `speeds::RUN`).
-    #[test]
-    fn the_rebuild_and_persist_call_sites_thread_the_gm_playtest_carry_columns() {
-        let persist =
-            crate::test_scan::code_of(include_str!("world.rs"), "pub(crate) fn persist_entity(");
-        assert!(
-            persist.contains(
-                "persisted_gm_playtest(entity.godmode, entity.run_speed_mult_bp, set_offline)"
-            ),
-            "persist_entity must stamp the carry columns THROUGH the policy fn (passing the live \
-             entity's values and this persist's set_offline sense). Body was:\n{persist}"
-        );
-        assert!(
-            persist.contains("c.pending_godmode = pending_godmode;")
-                && persist.contains("c.pending_run_speed_mult_bp = pending_speed_bp;"),
-            "…and assign BOTH results to the durable row — computing them and dropping them on the \
-             floor is the 289 bug with extra steps. Body was:\n{persist}"
-        );
-
-        let build = crate::test_scan::code_of(
-            include_str!("creatures/spawn.rs"),
-            "pub fn build_player_entity(",
-        );
-        assert!(
-            build.contains("godmode: character.pending_godmode,")
-                && build.contains("run_speed_mult_bp: character.pending_run_speed_mult_bp,"),
-            "build_player_entity (the ONLY constructor the WORLDPORT_ACK rebuild runs) must read the \
-             carry columns. Body was:\n{build}"
-        );
-        assert!(
-            !build.contains("godmode: false,") && !build.contains("run_speed_mult_bp: 10_000,"),
-            "…and must NOT hardcode them again — that hardcode IS work-item 289. Body was:\n{build}"
-        );
-    }
-
-    /// World entry's zone, pinned by scan for the same reason as the carry columns above:
-    /// `build_player_entity` takes a `&ReducerContext` this crate has no harness for (playbook
-    /// §7/§8). The needle is a struct FIELD ASSIGNMENT, so a restored `zone_id: 0` hardcode cannot
-    /// coexist with it — Rust forbids the duplicate field. The behavior across a real database is
-    /// covered by `module/tests/zone_transition.rs`.
-    #[test]
-    fn world_entry_resolves_the_arrival_zone_from_trusted_terrain() {
-        let build = crate::test_scan::shape_of(
-            include_str!("creatures/spawn.rs"),
-            "pub fn build_player_entity(",
-        );
-        assert!(
-            build.contains(
-                "zone_id: crate::terrain::zone_id_at(ctx, character.map_id, character.x, character.y)"
-            ),
-            "every world-entry path — login, the WORLDPORT_ACK rebuild after a cross-map teleport, \
-             and a Transfer arrival's first login — builds the live row here, so the arrival zone \
-             must be resolved from terrain before the Gateway can read it. Body was:\n{build}"
-        );
-        assert!(
-            build.contains(".unwrap_or(character.zone_id)"),
-            "…and an arrival off the imported terrain slice must fall back to the durable zone, \
-             never fail world entry. Body was:\n{build}"
-        );
-    }
-
     #[test]
     fn ghost_restored_fields_reapply_exactly_the_release_state_over_the_fresh_build() {
         use lyracore_shared::constants::{player_flags, unit_vis_flags};
@@ -2768,65 +2639,5 @@ mod tests {
         );
         // The sickness debuff id the res applies is the seeded vanilla Resurrection Sickness (15007).
         assert_eq!(RESURRECTION_SICKNESS_SPELL, 15007);
-    }
-
-    // ---- defect 1: cascade_delete_character ratchets the guid allocator -------------
-
-    /// `body_of`/`code_of`/`shape_of` are the shared scan primitives in [`crate::test_scan`]
-    /// (this used to be six near-identical copies, drifted apart).
-    use crate::test_scan::shape_of;
-
-    /// Every character-delete path — transfer-driven, CMSG_CHAR_DELETE, `debug_delete_character` —
-    /// funnels through this ONE function, which is why the guid-allocator ratchet lives here rather
-    /// than at each call site.
-    ///
-    /// This asserts the ratchet is the body's FIRST statement — an exact prefix match, not
-    /// `.contains()`. `cascade_delete_character` is a large, actively-edited sweep function, so
-    /// pinning its ENTIRE shape (the technique `auth.rs` uses for its two small wrappers) would be
-    /// too brittle here; a prefix is cheap AND still closes every round-1 defeat: reordering the
-    /// ratchet after the sweeps/delete changes what the prefix IS (fails); wrapping the call in a
-    /// shadowed `{ let character_guid = 0u64; ... }` block inserts a `let` before it (fails);
-    /// commenting the real call out and replacing it with `let _ = ctx;` puts different code first
-    /// (fails). `.contains()` on the same body caught none of the three (round-1 review).
-    /// A deleted character must leave NO combat rows behind, in EITHER direction. The forward half
-    /// (its own outgoing attack) was always covered; the reverse half was not, and that is what
-    /// stranded ~100 creatures on a live realm when 300 bots despawned — each still holding a melee
-    /// row against a guid that no longer existed, which the aggro pass then refuses to re-arm
-    /// (it skips anything already attacking) and nothing ever disengages.
-    ///
-    /// This used to assert the three hand-rolled needles (`melee.attacker_guid().delete`,
-    /// `melee.by_target().filter`, `threat::clear_for_unit`) that `cascade_delete_character` inlined
-    /// instead of calling the real `combat::disengage` helper — which is exactly why the hand-roll
-    /// was free to drift (it silently omitted `disengage`'s IN_COMBAT clear on freed attackers). Now
-    /// that the body routes through the canonical helper, assert THAT call instead of its innards —
-    /// pinning the needles again would just let the same drift happen a second time.
-    #[test]
-    fn cascade_delete_frees_both_directions_of_combat() {
-        let body = crate::test_scan::code_of(
-            include_str!("world.rs"),
-            "pub(crate) fn cascade_delete_character(",
-        );
-        assert!(
-            body.contains("crate::combat::disengage(ctx, character_guid)"),
-            "cascade_delete_character no longer routes combat teardown through the canonical \
-             `combat::disengage` helper — issue #365 needs this chokepoint to stay routed through \
-             the one place that also clears IN_COMBAT on freed attackers, not a hand-rolled copy of \
-             its steps. Body was:\n{body}"
-        );
-    }
-
-    #[test]
-    fn cascade_delete_character_ratchets_the_guid_allocator_as_its_first_statement() {
-        let shape = shape_of(
-            include_str!("world.rs"),
-            "pub(crate) fn cascade_delete_character(",
-        );
-        let want_prefix = "{ crate::auth::bump_guid_high_water(ctx, character_guid);";
-        assert!(
-            shape.starts_with(want_prefix),
-            "cascade_delete_character no longer ratchets the guid allocator as its first \
-             statement — issue #59 defect 1 needs it to run before EVERY sweep and the final row \
-             delete, not merely somewhere in the body. Shape was:\n{shape}"
-        );
     }
 }

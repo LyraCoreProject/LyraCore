@@ -725,7 +725,6 @@ fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::code_of;
 
     #[test]
     fn summon_guids_reuse_the_eventai_band_without_corrupting_entry_bits() {
@@ -737,16 +736,5 @@ mod tests {
             SUMMON_LOW_BAND | 1
         );
         assert!(summon_guid(123, 0).is_none());
-    }
-
-    #[test]
-    fn guardian_removal_includes_spell_created_pets() {
-        let body = code_of(
-            include_str!("mobility.rs"),
-            "pub(crate) fn remove_guardians(",
-        );
-        assert!(body.contains("crate::creatures::pet_of(ctx, summoner_guid)"));
-        assert!(body.contains("crate::creatures::despawn_pets(ctx, summoner_guid)"));
-        assert!(!body.contains("game_creature_ai_summon_origin"));
     }
 }

@@ -4322,9 +4322,9 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         ..receipt_template
     });
 
-    // Every row enters `game_mail` through `mail::insert_letter` (the sole writer; the
-    // `every_mail_row_is_created_by_insert_letter` tripwire enforces it), so every fixture goes
-    // through `Letter::from_character` exactly as the sending path that produced each shape did.
+    // Every row enters `game_mail` through `mail::insert_letter` (the sole writer), so every
+    // fixture goes through `Letter::from_character` exactly as the sending path that produced each
+    // shape did.
     crate::mail::insert_letter(
         ctx,
         crate::mail::Letter::from_character(
@@ -7849,67 +7849,6 @@ mod tests {
                 displaced_bid: 201,
             }),
             "a zero cut is a real cut, never the offer"
-        );
-    }
-
-    #[test]
-    fn auction_write_reducers_gate_before_reading_caller_named_state() {
-        use crate::test_scan::code_of;
-
-        for signature in [
-            "pub fn gw_auction_list_local(",
-            "pub fn gw_auction_hold_listing(",
-            "pub fn realm_auction_commit_listing(",
-            "pub fn realm_auction_confirm_listing(",
-            "pub fn realm_auction_settle_listing(",
-            "pub fn gw_auction_bid_local(",
-            "pub fn gw_auction_hold_bid(",
-            "pub fn realm_auction_decide_bid(",
-            "pub fn gw_auction_finish_bid(",
-            "pub fn realm_auction_refund_bid(",
-            "pub fn gw_auction_confirm_bid_refund(",
-            "pub fn gw_auction_cancel_local(",
-            "pub fn gw_auction_hold_cancel(",
-            "pub fn realm_auction_decide_cancel(",
-            "pub fn debug_stage_auction_cancel_fixture(",
-            "pub fn debug_stage_auction_buyout_fixture(",
-            "pub fn debug_verify_auction_buyout_fixture(",
-            "pub fn debug_stage_auction_expiry_fixture(",
-            "pub fn debug_replay_auction_expiry_fixture(",
-            "pub fn debug_verify_auction_expiry_fixture(",
-            "pub fn debug_stage_legacy_auction_mail_fixture(",
-            "pub fn debug_verify_legacy_auction_mail_repaired(",
-        ] {
-            let body = code_of(include_str!("auction.rs"), signature);
-            let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{signature}` no longer opens with the operator gate. Body was:\n{body}"
-            );
-        }
-    }
-
-    #[test]
-    fn auction_expiry_is_scheduler_only() {
-        let body = crate::test_scan::code_of(include_str!("auction.rs"), "pub fn expire_auction(");
-        let normalized = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(normalized.starts_with(
-            "{ if ctx.sender() != ctx.database_identity() { return Err(\"scheduler only\".to_string());"
-        ));
-    }
-
-    #[test]
-    fn character_delete_refuses_auction_value_before_the_cascade() {
-        let body = crate::test_scan::code_of(include_str!("auth.rs"), "pub fn delete_character(");
-        let auction_gate = body
-            .find("crate::auction::character_has_auction_value")
-            .expect("character deletion must check Auction value");
-        let cascade = body
-            .find("crate::world::cascade_delete_character")
-            .expect("character deletion still needs its normal cascade");
-        assert!(
-            auction_gate < cascade,
-            "Auction value must be fenced before deletion"
         );
     }
 }

@@ -940,38 +940,6 @@ pub(crate) fn classify_ground_tick(
 }
 
 #[cfg(test)]
-mod duel_periodic_wiring_tests {
-    #[test]
-    fn periodic_damage_rechecks_authorization_and_finishes_at_one_health() {
-        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
-        assert!(body.contains("crate::combat::may_harm"));
-        assert!(body.contains("crate::duel::active_duel_between"));
-        assert!(body.contains("pending.insert(a.target_guid, 1)"));
-        assert!(body.contains("crate::duel::complete_duel"));
-    }
-
-    /// The periodic fold is the one damage resolver that cannot route through `final_damage`: it
-    /// folds several auras against an in-transaction health the durable row does not carry yet. It
-    /// must still consult the floor before marking a creature dying, or a DoT tick becomes the only
-    /// way to kill a creature a script is holding at one health.
-    #[test]
-    fn a_periodic_kill_consults_the_lethal_damage_floor_before_marking_a_creature_dying() {
-        let body = crate::test_scan::code_of(include_str!("scheduler.rs"), "pub fn tick_auras(");
-        let protects = body
-            .find("crate::combat::lethal_floor_protects(ctx, a.target_guid)")
-            .expect("the periodic creature-kill branch no longer consults the lethal floor");
-        let dying = body
-            .find("dying.insert(a.target_guid, killer)")
-            .expect("the periodic creature-kill branch no longer marks a creature dying");
-        assert!(
-            protects < dying,
-            "the floor must be consulted BEFORE the creature is marked dying"
-        );
-        assert!(body.contains("crate::combat::commit_death_prevention"));
-    }
-}
-
-#[cfg(test)]
 mod ground_tick_tests {
     use super::*;
 

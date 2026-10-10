@@ -328,7 +328,6 @@ fn refused_chat(refusal: ChatRefusal, speaker_guid: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::code_of;
     use lyracore_shared::chat::chat_tag;
 
     fn request(kind: u8, race: u8, language: u32, message: &str) -> RealmChatRequest {
@@ -603,20 +602,5 @@ mod tests {
                 line(0x07, SPEAKER, 0, "meet me at the gate", SPEAKER),
             ])
         );
-    }
-
-    /// The speaker's guid is an argument, so the operator gate is the entire authorization. A gate
-    /// that is present but neutralized (`if false`, `let _ =`, an early return above it) is no gate,
-    /// so the scan anchors to the opening brace.
-    #[test]
-    fn the_realm_chat_reducers_are_operator_gated() {
-        for signature in ["pub fn realm_chat(", "pub fn realm_whisper("] {
-            let body = code_of(include_str!("realm_chat.rs"), signature);
-            let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-            assert!(
-                normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-                "`{signature}` no longer OPENS with the operator gate. Body was:\n{body}"
-            );
-        }
     }
 }

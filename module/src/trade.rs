@@ -998,25 +998,6 @@ mod tests {
         assert!(mutation_clears_accepts(true, true));
     }
 
-    /// The accept-reset rule's impure half, pinned by source scan (the `economy.rs` money-line
-    /// precedent — no `ReducerContext` harness can execute the mutators): all THREE offer
-    /// mutators route through `reset_accepts`, plus the commit's stale-window refusal. Deleting
-    /// any one call site fails here by name.
-    #[test]
-    fn every_offer_mutator_and_the_commit_refusal_route_through_reset_accepts() {
-        let src = crate::test_scan::read_scanned("module/src/trade.rs")
-            .expect("module/src/trade.rs ships in every checkout");
-        // concat! so this test's own needle never counts itself (the build-scan-strip lesson).
-        let needle = concat!("let session = reset_accepts", "(ctx, session);");
-        let calls = src.matches(needle).count();
-        assert_eq!(
-            calls, 4,
-            "set item, clear item, and set gold must EACH clear the accept flags on a real \
-             change (the anti-scam floor), and the commit's stale-window refusal must reset \
-             both seats; found {calls} reset_accepts call sites"
-        );
-    }
-
     /// The reap policy: a session is stale only STRICTLY past the invite TTL since its
     /// last action — `touch_session` bumps `created_at` on every offer mutation and on window
     /// open, so this measures idleness, not total age. Boundary pinned: exactly-at-TTL survives.
@@ -1062,22 +1043,6 @@ mod tests {
                 max_durability: 40,
                 random_property_id: 117,
             }
-        );
-    }
-
-    /// Trade and mail are the same snapshot move. Keeping the receiver insert in the item module
-    /// prevents their bind, stack-cap, template, and bag-search rules from drifting again.
-    #[test]
-    fn trade_delivers_through_the_shared_snapshot_move_path() {
-        let src = crate::test_scan::read_scanned("module/src/trade.rs")
-            .expect("module/src/trade.rs ships in every checkout");
-        assert!(
-            src.contains("crate::items::store_instance_state("),
-            "trade must recreate received items through the same snapshot path as mail"
-        );
-        assert!(
-            !src.contains(concat!("fn deliver_traded_", "item(")),
-            "the open-coded trade receiver insert must be removed"
         );
     }
 

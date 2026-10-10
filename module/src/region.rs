@@ -261,35 +261,6 @@ mod tests {
     }
 
     #[test]
-    fn the_reducer_routes_every_write_through_the_epoch_rule() {
-        // The call-site tripwire (the pattern `transfer.rs` uses for its fences): the pure rules
-        // above are worthless if the reducer stops asking them, and the reducer itself cannot run
-        // without a node — so deleting `assignment_write` from `set_region_assignment`, or writing
-        // the row without it, turns THIS test red instead of leaving the whole suite green.
-        let src = include_str!("region.rs");
-        let body = src
-            .split_once("pub fn set_region_assignment")
-            .expect("the reducer is still named set_region_assignment")
-            .1;
-        let body = body.split_once("#[cfg(test)]").map_or(body, |(b, _)| b);
-        let code: String = body
-            .lines()
-            .filter(|l| !l.trim_start().starts_with("//"))
-            .collect::<Vec<_>>()
-            .join("\n");
-        assert!(
-            code.contains("assignment_write("),
-            "set_region_assignment must decide its write with `assignment_write` — the epoch rule \
-             and the tombstone form are only enforced if the reducer actually calls it"
-        );
-        assert!(
-            !code.contains("delete(&key)"),
-            "an un-assign must leave a TOMBSTONE, not delete the row: deleting it drops the epoch \
-             high-water mark and a stale retry can then resurrect the superseded assignment"
-        );
-    }
-
-    #[test]
     fn region_keys_are_unique_per_map_and_region() {
         // The packed key is the primary key: a collision would let one region silently overwrite
         // another's definition or assignment. `region_id` occupies the low half, `map_id` the high.

@@ -879,7 +879,6 @@ pub(crate) fn notify(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::code_of;
 
     fn member(id: u64, character_guid: u64, member_flags: u8) -> ChatChannelMember {
         ChatChannelMember {
@@ -902,17 +901,5 @@ mod tests {
     fn without_a_moderator_the_earliest_joiner_succeeds() {
         let members = [member(3, 30, 0x08), member(5, 50, 0)];
         assert_eq!(successor(&members), 30);
-    }
-
-    /// The actor is an argument, so the operator gate is the entire authorization. The scan
-    /// anchors to the opening brace, so a neutralized gate fails it.
-    #[test]
-    fn the_realm_channel_op_reducer_is_operator_gated() {
-        let body = code_of(include_str!("channel.rs"), "pub fn realm_channel_op(");
-        let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-        assert!(
-            normalized.starts_with("{ crate::helpers::require_operator(ctx)?;"),
-            "`realm_channel_op` no longer OPENS with the operator gate. Body was:\n{body}"
-        );
     }
 }

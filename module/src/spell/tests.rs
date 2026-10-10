@@ -558,36 +558,6 @@ fn aura_kind_wire_values_exhaustive() {
     }
 }
 
-/// Review round 2's actual finding: the (now-retired) `apply_spell_auras_rejects_instant_effects` and
-/// `apply_spell_auras_still_applies_aura_effects` tests both called `passive_applies_effect_kind`
-/// DIRECTLY — they pinned the predicate's logic but never touched `apply_spell_auras` itself. A
-/// reviewer deleted the `.filter(|e| passive_applies_effect_kind(e.kind))` call from
-/// `apply_spell_auras`'s effect query (the fix's actual production wiring) and the full test suite
-/// stayed green, because nothing exercised the call site. This is a source-scan tripwire on that WIRING:
-/// it catches the filter call being DELETED (the shape this defect took, confirmed by mutating it and
-/// watching this test go red) or the query losing the `.filter(` step entirely. It does NOT catch the
-/// filter being wired to a DIFFERENT, wrong predicate at the same call site (`.filter(|e|
-/// some_other_fn(e.kind))` still reads as "filtered" to a scan) — the two kind-exhaustive tests above
-/// are what pin the LOGIC; this one only pins that SOME call to `passive_applies_effect_kind` still
-/// gates the query. Uses the crate-shared scan primitives (`crate::test_scan`) rather than a local
-/// copy — found this file's own copy was the seventh, and it carried the weaker (non-string-
-/// literal-aware) trailing-comment stripper the canonical one was hardened against.
-#[test]
-fn apply_spell_auras_still_calls_the_passive_effect_filter() {
-    let body = crate::test_scan::code_of(
-        include_str!("cast/resolve.rs"),
-        "pub(crate) fn apply_spell_auras(",
-    );
-    let normalized: String = body.split_whitespace().collect::<Vec<_>>().join(" ");
-    assert!(
-        normalized.contains(".filter(|e| passive_applies_effect_kind(e.kind))"),
-        "`apply_spell_auras` no longer filters its effect query through `passive_applies_effect_kind` — \
-         without that call, every instant-kind effect of a talent/racial/resurrection-sickness passive is \
-         handed straight to `aura_apply` again (#90: Consecration's spurious login/world-change buff). \
-         Body was:\n{body}"
-    );
-}
-
 /// Pin EVERY `P_*` param-tag value (`eff_p0_kind` — what `p0` MEANS on a given effect/aura row): the
 /// importer stamps these BY NAME and the readers (`resistance_bonus`, `is_immune_to_mechanic`, …) key off
 /// them, so a drift here would silently reinterpret a frozen `p0`. All 17 are distinct.

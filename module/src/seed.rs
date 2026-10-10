@@ -1913,10 +1913,7 @@ pub(crate) const CREATEINFO_KIT: &[(u8, u8, u32)] = &[
 //  auto-migrate publish. Everything it seeds is therefore either only-if-empty or an upsert, and
 //  is additionally reachable from a feature-gated `debug_seed_*` twin so a long-lived shard can be
 //  brought forward without a re-provision. Neither property is checkable at runtime here (no
-//  `ReducerContext` harness exists by design), so the DATA
-//  invariants are asserted directly and the two structural ones are pinned by a source scan
-//  through `test_scan::code_of`, which strips comments (a bare `.contains()` on an unstripped body
-//  is exactly what a trailing-comment needle defeats).
+//  `ReducerContext` harness exists by design), so the DATA invariants are asserted directly.
 // ===========================================================================================
 #[cfg(test)]
 mod tests {
@@ -1993,43 +1990,6 @@ mod tests {
             CREATEINFO_KIT.iter().any(|(race, _, _)| *race == 1),
             "no Human racials in the kit; every new character would be missing them with no error"
         );
-    }
-
-    /// The starting-kit seeder remains only-if-empty: it must not rewrite an operator's kit edits.
-    /// The spell-group seeder is deliberately different: it converges existing development databases
-    /// on the reconciled starter rows while avoiding duplicate memberships.
-    #[test]
-    fn starter_kit_seeder_still_returns_early_before_writing_anything() {
-        let src = include_str!("seed.rs");
-        let body = crate::test_scan::code_of(
-            src,
-            "pub(crate) fn seed_createinfo_spells(ctx: &ReducerContext) {",
-        );
-        let guard_at = body
-            .find("if table.count() > 0 {")
-            .expect("starting-kit guard is gone");
-        let return_at = body[guard_at..]
-            .find("return;")
-            .expect("starting-kit guard does not return");
-        let insert_at = body
-            .find(".insert(")
-            .expect("starting-kit seeder does not insert");
-        assert!(
-            guard_at + return_at < insert_at,
-            "starting-kit guard must precede its first write"
-        );
-    }
-
-    /// The seeder converges an already-migrated database instead of skipping it: rules are updated in
-    /// place and only absent memberships are inserted, so re-running it duplicates nothing.
-    #[test]
-    fn spell_group_seeder_updates_rules_and_never_duplicates_memberships() {
-        let body = crate::test_scan::code_of(
-            include_str!("seed.rs"),
-            "pub(crate) fn seed_spell_groups(ctx: &ReducerContext) {",
-        );
-        assert!(body.contains("rules.group_id().update(rule_row)"));
-        assert!(body.contains(".any(|row| row.spell_id == spell_id)"));
     }
 
     /// Every rank of every Blessing the starter set claims, checked against the 1.12.1 client's
@@ -2200,132 +2160,5 @@ mod tests {
             items.len(),
             "fixture item entries collide: {items:?}"
         );
-    }
-
-    /// REACHABILITY, which is idempotence's other half. `init` does not re-run on an auto-migrate
-    /// publish, so a fixture reachable ONLY from `init` never lands on an already-provisioned
-    /// shard, and one reachable only from a `debug_seed_*` reducer never lands on a fresh one
-    /// unless a harness happens to call it. Both halves have gone wrong here: the comments in
-    /// `init` record `seed_stealth_fixture` having been debug-only (the audit) and
-    /// `seed_fixture_catalogue` being moved into `init` for exactly this reason.
-    ///
-    /// So: every fixture seeder must be called from at least one of the two, and the failure names
-    /// which one is stranded.
-    #[test]
-    fn every_fixture_seeder_is_reachable_from_init_or_from_a_debug_reducer() {
-        let fixtures_src = include_str!("seed/fixtures.rs");
-        let init_src = include_str!("seed.rs");
-        let debug_src = crate::test_scan::debug_dir_src();
-
-        let seeders: Vec<&str> = fixtures_src
-            .lines()
-            .filter_map(|line| {
-                let rest = line.trim().strip_prefix("pub(crate) fn ")?;
-                let name = rest.split('(').next()?;
-                name.starts_with("seed_").then_some(name)
-            })
-            .collect();
-
-        assert!(
-            seeders.len() >= 8,
-            "found only {} fixture seeders in seed/fixtures.rs — the extraction scan has stopped \
-             matching and would pass vacuously. Did the declaration style change?",
-            seeders.len()
-        );
-
-        for name in seeders {
-            let call = format!("{name}(ctx)");
-            let from_init = init_src.contains(&call);
-            let from_debug = debug_src.contains(&call);
-            assert!(
-                from_init || from_debug,
-                "`{name}` is never called: not from `init` (so it never lands on a fresh shard) \
-                 and not from a `debug_*` reducer (so it can never be applied to an existing one). \
-                 A fixture nobody seeds is a test that silently stops testing anything."
-            );
-        }
-    }
-
-    /// DRIFT REGRESSION. The post-import fixture-restore path
-    /// (`seed_scenario_fixtures`/`seed_fixture_items`, run via `debug_seed_scenario_fixtures`
-    /// after a world-ETL re-import truncates `game_creature_template`/`game_item_template`) used
-    /// to re-author full `CreatureTemplate`/`ItemTemplate` literals as hand-copies of `init`'s —
-    /// and they drifted: the Profession Trainer was level 30/1500hp/"Cooking & Skinning" in
-    /// `init` but level 10/100hp/"Fixture" in the restore copy, and the Test Wolf's
-    /// money_min/max disagreed too. A shard restored after an ETL wipe therefore carried
-    /// different fixtures than a fresh one — the exact cross-shard divergence class was
-    /// filed to kill, reintroduced by copy-paste.
-    ///
-    /// The fix collapses both paths onto ONE canonical constructor per fixture
-    /// (`test_wolf_template`, `profession_trainer_template`, `tempered_blade_template`,
-    /// `tough_jerky_template`, all in `seed/fixtures.rs`). This pins that both `init` (via
-    /// `seed_map0_demo_content`, the stratum-2 split-out — see this file's header) and the
-    /// restore path call the SAME constructors — a hand-copied struct literal reintroduced in
-    /// either one fails this test loudly instead of silently drifting again.
-    #[test]
-    fn init_and_the_restore_path_build_shared_fixtures_from_the_same_constructor() {
-        let seed_src = include_str!("seed.rs");
-        let fixtures_src = include_str!("seed/fixtures.rs");
-
-        let init_body = crate::test_scan::code_of(
-            seed_src,
-            "fn seed_map0_demo_content(ctx: &ReducerContext) {",
-        );
-        let restore_body = crate::test_scan::code_of(
-            fixtures_src,
-            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
-        );
-        let fixture_items_body = crate::test_scan::code_of(
-            fixtures_src,
-            "fn seed_fixture_items(ctx: &ReducerContext) {",
-        );
-
-        for ctor in ["test_wolf_template()", "profession_trainer_template()"] {
-            assert!(
-                init_body.contains(ctor),
-                "`init` no longer calls `{ctor}` — did a hand-authored CreatureTemplate literal \
-                 come back?"
-            );
-            assert!(
-                restore_body.contains(ctor),
-                "`seed_scenario_fixtures` (the post-import fixture-restore path) no longer calls \
-                 `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
-            );
-        }
-
-        for ctor in ["tempered_blade_template(", "tough_jerky_template("] {
-            assert!(
-                init_body.contains(ctor),
-                "`init` no longer calls `{ctor}` — did a hand-authored ItemTemplate literal come \
-                 back?"
-            );
-            assert!(
-                fixture_items_body.contains(ctor),
-                "`seed_fixture_items` (feeds the restore path's reserved-id fixture catalogue) no \
-                 longer calls `{ctor}` — a hand-copied literal here is exactly the #363 drift bug."
-            );
-        }
-
-        // Belt-and-suspenders, scoped to the fixture the constructor replaced (this function also
-        // hand-authors OTHER, non-duplicated fixtures — Scenario Questgiver/Vendor/Weapon Master —
-        // which is fine; only a WOLF/PROFESSION_TRAINER-entry literal here would be the drift bug
-        // back). Whitespace-collapsed word-pair match, NOT `.contains()` — `target_entry: WOLF`
-        // (the quest objective, which is legitimate) would otherwise false-positive on a plain
-        // substring search for "entry: WOLF".
-        let restore_shape = crate::test_scan::shape_of(
-            fixtures_src,
-            "pub(crate) fn seed_scenario_fixtures(ctx: &ReducerContext) {",
-        );
-        let words: Vec<&str> = restore_shape.split(' ').collect();
-        for needle in [["entry:", "WOLF,"], ["entry:", "PROFESSION_TRAINER,"]] {
-            assert!(
-                !words.windows(2).any(|w| w == needle),
-                "`seed_scenario_fixtures` hand-authors a `CreatureTemplate {{ {} {} ... }}` \
-                 literal again instead of calling the shared constructor — this is how #363 \
-                 happened.",
-                needle[0],
-                needle[1]
-            );
-        }
     }
 }

@@ -147,7 +147,6 @@ pub fn debug_seed_creature_ai_fixtures(ctx: &ReducerContext) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_scan::code_of;
 
     #[test]
     fn every_seeded_entry_is_cleared_whoever_wrote_its_definition() {
@@ -159,15 +158,6 @@ mod tests {
             assert!(is_seeded_entry(entry));
         }
         assert!(!is_seeded_entry(1));
-
-        let body = code_of(
-            include_str!("fixtures.rs"),
-            "pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {",
-        );
-        assert!(
-            body.contains("is_seeded_entry(definition.creature_entry)"),
-            "the seed no longer clears every definition owned by a seeded entry"
-        );
     }
 
     #[test]

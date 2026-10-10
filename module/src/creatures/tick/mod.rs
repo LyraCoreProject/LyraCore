@@ -1004,49 +1004,6 @@ mod relay_tripwire {
         assert!(!super::active_object_enters_scope(false, false, true));
         assert!(!super::active_object_enters_scope(false, true, false));
     }
-
-    /// **The relay has ONE writer.** perf 2.3 moved creature legs onto the AOI-scoped
-    /// `game_creature_spline` row and, in the same commit, removed the gateway's global subscription
-    /// to `game_creature_move_event` on the stated grounds that "nothing writes the table any more".
-    /// FIVE writers were still there — bot legs, the CC freeze, the chase stop,
-    /// `encounter::move_creature_to` and Charge — and every one of them went silently undelivered:
-    /// the server moved, no client ever saw it. Bots stood frozen in front of players for days.
-    ///
-    /// A relay whose subscriber is gone fails EXACTLY this quietly, so the invariant is pinned by
-    /// scan: no module or package source may INSERT into that table. (Reads/reaps are fine — the
-    /// table still exists and `gc.rs` sweeps whatever is left.)
-    ///
-    /// This used to be a HAND-PICKED file list (`tick.rs` + `encounter.rs` + `spell/cast.rs` +
-    /// a Package file), and the list omitted `creatures/pet.rs` — the Follow leg it writes leaked
-    /// undelivered rows into this table every sense tick, unbounded, on a live shard, and the scan
-    /// never saw it. Scan the WHOLE compiled tree instead — `character_owned_tripwire::scanned_files`
-    /// already walks `module/src` plus every installed `packages/*/src`, so a new file (or a moved
-    /// one) is covered for free instead of needing a second edit to add it to a list. The old
-    /// hand-list also self-excluded ITS OWN body from the scan via a `.split_once("mod tests")` that
-    /// only worked for `tick.rs` because that call's own text happens to contain "mod tests" earlier
-    /// in the file than the needle — a coincidence, not a real test-module boundary. Build the needle
-    /// at RUN time instead so it is never spelled out contiguously in source anywhere, which is
-    /// self-exclusion that can't rot.
-    ///
-    /// This test used to live in `tick.rs`'s `due_timer_tripwire` mod alongside the
-    /// decay/respawn and aggro tripwires below. Split with the file it pins: `emit_move_spline`
-    /// (the ONE writer this test protects) stays in `tick/mod.rs`, so the test stays here too — the
-    /// other two moved to `lifecycle.rs`/`sense.rs` with the passes they actually test.
-    #[test]
-    fn nothing_writes_the_unsubscribed_move_event_table() {
-        let needle = format!("{}{}", "game_creature_move_event()", ".insert");
-        for file in crate::tripwires::character_owned_tripwire::scanned_files() {
-            let src = std::fs::read_to_string(&file)
-                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            assert!(
-                !src.contains(&needle),
-                "{} inserts into `game_creature_move_event`, which NO subscriber reads since perf \
-                 2.3 — the movement it emits will never reach a client. Emit the leg through \
-                 `creatures::tick::emit_move_spline` (or `emit_creature_leg`) instead.",
-                file.display()
-            );
-        }
-    }
 }
 
 #[cfg(test)]

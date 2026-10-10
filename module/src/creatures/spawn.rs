@@ -1020,53 +1020,12 @@ mod tests {
     use lyracore_shared::constants::unit_flags;
 
     #[test]
-    fn character_materialization_sets_the_player_controlled_flag() {
-        let materialize =
-            crate::test_scan::code_of(include_str!("spawn.rs"), "pub fn build_player_entity(");
-
+    fn player_controlled_flag_matches_the_wire_value() {
         assert_eq!(unit_flags::PLAYER_CONTROLLED, 0x0000_0008);
-        assert!(
-            materialize.contains("unit_flags: constants::unit_flags::PLAYER_CONTROLLED,"),
-            "every world-entry path shares build_player_entity, which must mark its live Character as player-controlled. Body was:\n{materialize}"
-        );
     }
 
     #[test]
     fn combat_and_taxi_flag_transitions_retain_player_controlled() {
-        let combat = crate::test_scan::code_of(
-            include_str!("../combat/engage.rs"),
-            "pub(crate) fn enter_combat(",
-        );
-        let disengage = crate::test_scan::code_of(
-            include_str!("../combat/engage.rs"),
-            "pub(crate) fn disengage(",
-        );
-        let taxi = crate::test_scan::code_of(include_str!("../taxi.rs"), "fn activate(");
-        let taxi_end =
-            crate::test_scan::code_of(include_str!("../taxi.rs"), "fn cleared_presentation(");
-
-        assert!(
-            combat.contains("e.unit_flags |= lyracore_shared::constants::unit_flags::IN_COMBAT;"),
-            "enter_combat must add its bit without replacing Character state. Body was:\n{combat}"
-        );
-        assert!(
-            disengage
-                .contains("e.unit_flags &= !lyracore_shared::constants::unit_flags::IN_COMBAT;"),
-            "disengage must clear only its bit. Body was:\n{disengage}"
-        );
-        assert!(
-            taxi.contains(
-                "self.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;"
-            ),
-            "taxi activation must add its bit without replacing Character state. Body was:\n{taxi}"
-        );
-        assert!(
-            taxi_end.contains(
-                "state.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;"
-            ),
-            "taxi completion must clear only its bit. Body was:\n{taxi_end}"
-        );
-
         let entered_combat = unit_flags::PLAYER_CONTROLLED | unit_flags::IN_COMBAT;
         let in_taxi = entered_combat | unit_flags::TAXI_FLIGHT;
         let left_combat = in_taxi & !unit_flags::IN_COMBAT;

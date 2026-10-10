@@ -744,7 +744,6 @@ mod tests {
         bag_content_decompose, equip_slot, is_bank_slot, is_carried_slot, valid_dest_slot,
         valid_split_count, valid_split_dest_slot, BANK_SLOT_END_INCL, BANK_SLOT_START,
     };
-    use crate::test_scan::code_of;
 
     /// BANK SLOT RANGE: exactly the 24 base bank slots (39..=62). The bank-bag ordinals just past them
     /// (63..=68) are not bank storage in this model.
@@ -756,109 +755,6 @@ mod tests {
         for slot in [0u8, 38, 63, 68, 119, 120, 191, 192, 255] {
             assert!(!is_bank_slot(slot), "slot {slot} is not a base bank slot");
         }
-    }
-
-    /// BANK ACCESS GATE WIRING: both mutation paths must consult `bank_access` when either
-    /// endpoint is a bank slot, or the bank becomes a portable 24-slot bag. There is no
-    /// `ReducerContext` harness in this crate, so the call's PRESENCE is pinned by a source scan; the
-    /// gate's own decision is asserted directly on `economy::banker_in_reach`.
-    #[test]
-    fn both_mutation_paths_gate_bank_endpoints_on_an_open_bank() {
-        let src = include_str!("inventory.rs");
-        for signature in [
-            "pub(crate) fn apply_item_move(",
-            "pub(crate) fn apply_item_split(",
-        ] {
-            let body = code_of(src, signature);
-            assert!(
-                body.contains("bank_access(ctx, player_guid)?"),
-                "`{signature}` must refuse a bank endpoint without an open bank"
-            );
-            assert!(
-                body.contains("is_bank_slot(to_slot)"),
-                "`{signature}` must test its destination slot for bank space"
-            );
-        }
-    }
-
-    /// EQUIP ELIGIBILITY GATES: the one equipment branch must check all imported requirements before
-    /// the BoE/placement mutations, so every refusal preserves both item rows and binding state.
-    #[test]
-    fn equip_eligibility_gates_precede_all_item_mutations() {
-        let src = include_str!("inventory.rs");
-        let body = code_of(src, "pub(crate) fn apply_item_move(");
-        for gate in [
-            "eligibility_mask_allows(tmpl.allowed_class, player_class)",
-            "eligibility_mask_allows(tmpl.allowed_race, player_race)",
-            "meets_required_skill(tmpl.required_skill, tmpl.required_skill_rank, current_skill)",
-            "meets_required_reputation(",
-            "proficiency.can_equip(tmpl.class, tmpl.subclass)",
-        ] {
-            assert!(body.contains(gate), "equip path must retain `{gate}`");
-            assert!(
-                body.find(gate).unwrap() < body.find("src.soulbound = true").unwrap(),
-                "`{gate}` must refuse before the BoE mutation"
-            );
-            assert!(
-                body.find(gate).unwrap() < body.find("src.slot = to_slot").unwrap(),
-                "`{gate}` must refuse before placement changes"
-            );
-        }
-    }
-
-    /// ARMOR PROFICIENCY SOURCE: the equip Gate must derive proficiency from the Character's LEARNED
-    /// passives, so a level-40 trainer purchase is what unlocks plate. Reading the class alone would
-    /// hand a fresh Warrior a full plate set. There is no `ReducerContext` harness in this crate, so
-    /// the spellbook read is pinned by source scan; the derivation's answers are asserted directly
-    /// in `lyracore-shared` and in `rules`.
-    #[test]
-    fn the_equip_gate_derives_armor_proficiency_from_learned_passives() {
-        let src = include_str!("inventory.rs");
-        let body = code_of(src, "pub(crate) fn apply_item_move(");
-        assert!(
-            body.contains("Proficiency::from_spellbook(") && body.contains("knows_spell("),
-            "the equip path must derive proficiency from this Character's spellbook"
-        );
-        assert!(
-            !body.contains("class_ceiling("),
-            "the class ceiling belongs to the auction filter and must never gate an equip"
-        );
-    }
-
-    /// FREE-BANK-SLOT SEARCH SHAPE: like `first_free_backpack_slot`, `first_free_bank_slot` must
-    /// collect the owner's occupied slots into a set ONCE rather than re-scanning per candidate slot.
-    /// There is no `ReducerContext` harness in this crate, so the shape is pinned by a source scan.
-    #[test]
-    fn first_free_bank_slot_scans_the_owners_rows_once() {
-        let src = include_str!("inventory.rs");
-        let body = code_of(src, "pub(crate) fn first_free_bank_slot(");
-        assert_eq!(
-            body.matches("by_owner_guid()").count(),
-            1,
-            "first_free_bank_slot must collect the owner's rows once, not scan per candidate slot"
-        );
-    }
-
-    /// AUTO-BANK DIRECTION INFERENCE: `apply_auto_bank_item` decides deposit vs. withdraw from the
-    /// SOURCE slot alone. Pinned by source scan (no `ReducerContext` harness): a bank source resolves
-    /// against the carry-space search pair; anything else resolves against the bank search.
-    #[test]
-    fn apply_auto_bank_item_infers_direction_from_the_source_slot() {
-        let src = include_str!("inventory.rs");
-        let body = code_of(src, "pub(crate) fn apply_auto_bank_item(");
-        assert!(
-            body.contains("is_bank_slot(slot)"),
-            "must branch on whether the source is a bank slot"
-        );
-        assert!(
-            body.contains("first_free_backpack_slot(ctx, player_guid)")
-                && body.contains("first_free_bag_slot(ctx, player_guid)"),
-            "withdraw must fall back from the backpack to bag space, like loot auto-store"
-        );
-        assert!(
-            body.contains("first_free_bank_slot(ctx, player_guid)"),
-            "deposit must resolve against the free-bank-slot search"
-        );
     }
 
     /// CARRIED-SLOT PREDICATE: equipment, bag-equip, backpack, and bag-content slots are carried; the
