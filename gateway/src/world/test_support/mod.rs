@@ -1,9 +1,11 @@
 //! Shared test support for World Session tests: [`WorldFake`], the multi-shard Fake every Store
 //! family is implemented on, and its shard topology.
 
+mod entry;
 mod topology;
 mod world_fake;
 
+pub(crate) use self::entry::*;
 pub(crate) use self::topology::*;
 pub(crate) use self::world_fake::*;
 

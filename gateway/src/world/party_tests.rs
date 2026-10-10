@@ -2019,15 +2019,14 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
 
-    // The realm-wide party slice appends the party frame right after world entry.
+    // The realm-wide party slice appends the party frame right after world entry. A frame that
+    // times out or does not decode is missing; the assertions below say what.
+    let mut frames = drain_world_entry(&mut client, &mut c_dec);
+    frames.extend(ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).ok());
     let mut roster_named: Option<String> = None;
-    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
-            Ok(ServerOpcodeMessage::SMSG_GROUP_LIST(list)) => {
-                roster_named = list.members.first().map(|m| m.name.clone());
-            }
-            Ok(_) => {}
-            Err(_) => break, // timed out or undecodable — the assertions below say what was missing
+    for message in frames {
+        if let ServerOpcodeMessage::SMSG_GROUP_LIST(list) = message {
+            roster_named = list.members.first().map(|m| m.name.clone());
         }
     }
     assert_eq!(
@@ -2085,7 +2084,7 @@ fn a_real_session_syncs_its_party_at_login_and_routes_an_invite_to_realm_core() 
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
+    loop {
         match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec) {
             Ok(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(r)) if r.member == "Nobodyatall" => {
                 break;

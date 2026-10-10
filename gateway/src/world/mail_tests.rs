@@ -296,9 +296,7 @@ fn an_empty_mailbox_is_answered_with_an_empty_list_packet() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
         mailbox: Guid::new(MAILBOX),
@@ -329,9 +327,7 @@ fn a_seeded_mail_reaches_the_client_as_a_mail_list_row() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
         mailbox: Guid::new(MAILBOX),
@@ -657,9 +653,7 @@ fn return_acks_with_send_mail_result_and_the_next_list_is_empty() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_RETURN_TO_SENDER {
         mailbox_id: Guid::new(MAILBOX),
@@ -714,9 +708,7 @@ fn a_refused_return_still_acks_and_never_kills_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_RETURN_TO_SENDER {
         mailbox_id: Guid::new(MAILBOX),
@@ -764,9 +756,7 @@ fn mark_as_read_sends_no_reply_but_the_next_list_shows_it() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_MARK_AS_READ {
         mailbox: Guid::new(MAILBOX),
@@ -806,9 +796,7 @@ fn delete_acks_with_send_mail_result_and_the_next_list_is_empty() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_DELETE {
         mailbox_id: Guid::new(MAILBOX),
@@ -863,9 +851,7 @@ fn a_refused_delete_still_acks_and_never_kills_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_DELETE {
         mailbox_id: Guid::new(MAILBOX),
@@ -1363,9 +1349,7 @@ fn send_over_the_wire(
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_SEND_MAIL {
         mailbox: Guid::new(MAILBOX),
@@ -1522,9 +1506,7 @@ fn a_refused_mail_opcode_costs_a_packet_and_never_the_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     wow_world_messages::vanilla::CMSG_GET_MAIL_LIST {
         mailbox: Guid::new(FAR_MAILBOX),
     }
@@ -1979,9 +1961,7 @@ fn taking_money_over_the_wire_acks_and_credits_the_purse() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_TAKE_MONEY {
         mailbox: Guid::new(MAILBOX),
@@ -2966,9 +2946,7 @@ fn a_refused_priced_take_reaches_the_client_as_not_enough_money() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_TAKE_ITEM {
         mailbox: Guid::new(MAILBOX),
@@ -3298,9 +3276,7 @@ fn deleting_a_priced_mail_answers_the_internal_error_and_keeps_the_mail() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_DELETE {
         mailbox_id: Guid::new(MAILBOX),
@@ -3724,9 +3700,7 @@ fn a_letter_copy_over_the_wire_acks_made_permanent_ok() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
         mailbox: Guid::new(MAILBOX),
@@ -3773,9 +3747,7 @@ fn a_letter_copy_into_a_full_bag_over_the_wire_answers_equip_error() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     wow_world_messages::vanilla::CMSG_MAIL_CREATE_TEXT_ITEM {
         mailbox: Guid::new(MAILBOX),

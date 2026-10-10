@@ -146,9 +146,7 @@ pub(super) fn drive_routed_session(
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     // In-world traffic: a movement heartbeat (flushed by the following non-movement opcode) and a
     // melee swing — one subscription-driven path and one reducer path.
@@ -380,15 +378,11 @@ fn a_world_port_keeps_the_pin_when_the_home_shard_still_owns_the_new_map() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_REENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     drop(client);
     server.join().unwrap();
 
@@ -469,9 +463,7 @@ fn a_spurious_worldport_ack_is_ignored_on_a_session_pinned_off_the_default_shard
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     // The stray ack: no teleport despawned the entity — it must be dropped, not answered.
     MSG_MOVE_WORLDPORT_ACK {}
@@ -518,9 +510,7 @@ fn a_spurious_worldport_ack_is_ignored_on_the_default_shard() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -551,9 +541,7 @@ fn a_logout_to_character_select_releases_the_home_shard_pin() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     CMSG_LOGOUT_REQUEST {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -662,9 +650,7 @@ fn a_freshly_created_characters_first_login_transfers_off_the_default_shard() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     drop(client);
     server.join().unwrap();
 

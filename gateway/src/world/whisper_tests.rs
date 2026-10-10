@@ -400,9 +400,7 @@ fn a_real_session_whispers_across_shards_as_its_own_character() {
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     CMSG_MESSAGECHAT {
         chat_type: CMSG_MESSAGECHAT_ChatType::Whisper {

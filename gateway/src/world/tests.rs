@@ -1,6 +1,6 @@
 use super::handlers::{
-    AuctionInteraction, CastStore, ChannelOutcome, ChatOutcome, LootWindowRefusal,
-    RealmChatRequest, SpeakerFacts, WhisperRequest, WhisperTargetFacts,
+    AuctionInteraction, ChannelOutcome, ChatOutcome, LootWindowRefusal, RealmChatRequest,
+    SpeakerFacts, WhisperRequest, WhisperTargetFacts,
 };
 use super::party::PartyOutcome;
 use super::test_support::*;
@@ -276,17 +276,6 @@ const K: [u8; 40] = [
     0xBE, 0x9C, 0xAD, 0x14, 0xBF, 0x8B, 0x54, 0xBB, 0x5A, 0x86, 0xFB, 0xF8, 0x1F, 0x6D, 0x42, 0x4A,
     0xA2, 0x3C, 0xC9, 0xA3, 0x14, 0x9F, 0xB1, 0x75,
 ];
-
-/// How many messages one world entry puts on the wire before anything else can: the eleven
-/// login-sequence packets, the self CREATE_OBJECT2, and the zone's SMSG_WEATHER. Tests that are
-/// about what comes AFTER world entry drain exactly this many.
-///
-/// `player_login_emits_sequence_then_self_create` is the one test that reads the sequence itself,
-/// and its tag vector is the authority on the order.
-pub(super) const WORLD_ENTRY_PACKETS: usize = 13;
-
-/// A world-port re-entry skips SMSG_LOGIN_VERIFY_WORLD because the client has loaded the map.
-pub(super) const WORLD_REENTRY_PACKETS: usize = WORLD_ENTRY_PACKETS - 1;
 
 fn ns(s: &str) -> NormalizedString {
     NormalizedString::new(s).unwrap()
@@ -981,8 +970,8 @@ fn guild_query_answers_at_character_select() {
 }
 
 /// Write one request that answers its actor nothing, then a sentinel request with a guaranteed
-/// reply, and block for that reply. This is more than pacing: `enter_world` drains a FIXED packet
-/// count that knows nothing about the Guild MOTD event `guild_world_entry` sends a fresh-login
+/// reply, and block for that reply. This is more than pacing: `enter_world` drains the world entry
+/// batch, which ends before the Guild MOTD event `guild_world_entry` sends a fresh-login
 /// Guild member (see its own doc comment), so one packet can still be unread in the client's
 /// kernel buffer. Reading for a sentinel discards it along the way. Dropping the client with it
 /// still queued would close with unread bytes, which the kernel reports to the server as a reset,
@@ -1063,10 +1052,8 @@ fn a_member_enters_the_world_with_its_guild_on_the_self_create_and_signs_on() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     let mut guild = None;
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) =
-            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
-        {
+    for message in drain_world_entry(&mut client, &mut c_dec) {
+        if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) = message {
             if let [Object::CreateObject2 {
                 mask2: wow_world_messages::vanilla::UpdateMask::Player(player),
                 ..
@@ -1407,9 +1394,7 @@ fn a_world_port_that_fails_after_sign_on_still_signs_off() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -1877,9 +1862,7 @@ fn login_replays_a_pending_package_system_message() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     let replay = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
     let ServerOpcodeMessage::SMSG_MESSAGECHAT(actual) = replay else {
         panic!("expected the parked System Message after the entry sequence, got {replay:?}");
@@ -1935,8 +1918,8 @@ fn player_login_emits_sequence_then_self_create() {
     let mut tags = Vec::new();
     let mut create_guid = None;
     let mut weather = None;
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+    for message in drain_world_entry(&mut client, &mut c_dec) {
+        match message {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(m) => {
                 tags.push("verify_world");
                 assert_eq!(m.map, Map::EasternKingdoms);
@@ -2014,10 +1997,8 @@ fn world_entry_weather(store: std::sync::Arc<WorldFake>) -> SMSG_WEATHER {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     let mut weather = None;
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        if let ServerOpcodeMessage::SMSG_WEATHER(m) =
-            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
-        {
+    for message in drain_world_entry(&mut client, &mut c_dec) {
+        if let ServerOpcodeMessage::SMSG_WEATHER(m) = message {
             weather = Some(*m);
         }
     }
@@ -2084,9 +2065,7 @@ fn world_session_in_world(
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     (client, c_dec, server)
 }
 
@@ -2232,9 +2211,7 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
     // Drain world entry (map 0 — not the point of this test).
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     let _ = open_loot_window(&mut client, &mut c_enc, &mut c_dec, 60);
 
@@ -2244,8 +2221,8 @@ fn worldport_ack_reenters_with_fresh_subscription_and_empty_loot_state() {
 
     // Re-entry skips SMSG_LOGIN_VERIFY_WORLD because resending it reloads the current map.
     let mut create_guid = None;
-    for _ in 0..WORLD_REENTRY_PACKETS {
-        match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+    for message in drain_world_entry(&mut client, &mut c_dec) {
+        match message {
             ServerOpcodeMessage::SMSG_LOGIN_VERIFY_WORLD(_) => {
                 panic!(
                     "the re-entry sequence must NOT resend SMSG_LOGIN_VERIFY_WORLD — it makes the \
@@ -2333,9 +2310,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     let source_session = view
         .viewer_of_owner(crate::stdb::world_view::OwnerGuid(1))
         .expect("login registers the source viewer")
@@ -2344,9 +2319,7 @@ fn worldport_removes_the_source_viewer_before_routing_and_registers_a_replacemen
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_REENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     assert_eq!(
         store
@@ -2405,13 +2378,10 @@ fn login_initialize_factions_carries_persisted_standing_at_its_reputation_index(
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // Drain the full login sequence + self CREATE_OBJECT2 (mirrors the message count in
-    // player_login_emits_sequence_then_self_create) so the server side doesn't see a broken pipe.
+    // Drain the whole world entry so the server side doesn't see a broken pipe.
     let mut factions = None;
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        if let ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(m) =
-            ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap()
-        {
+    for message in drain_world_entry(&mut client, &mut c_dec) {
+        if let ServerOpcodeMessage::SMSG_INITIALIZE_FACTIONS(m) = message {
             factions = Some(m.factions);
         }
     }
@@ -2477,10 +2447,9 @@ fn login_with_resident_items_and_reputation_emits_no_gain_feedback() {
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // World entry plus the resident item's CREATE. The item and standing are snapshots in those
-    // frames, not live insert callbacks, so neither feedback packet is lawful.
-    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
-        let message = ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
+    // World entry, which carries the resident item's CREATE. The item and standing are snapshots
+    // in those frames, not live insert callbacks, so neither feedback packet is lawful.
+    for message in drain_world_entry(&mut client, &mut c_dec) {
         assert!(
             !matches!(
                 message,
@@ -2539,10 +2508,9 @@ fn login_fills_a_resident_suffix_items_enchantment_slots_after_the_entry_batch()
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
 
-    // World entry plus the item's CREATE, then the raw update gtker's typed reader rejects.
-    for _ in 0..WORLD_ENTRY_PACKETS + 1 {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    // World entry, which carries the item's CREATE, then the raw update gtker's typed reader
+    // rejects.
+    drain_world_entry(&mut client, &mut c_dec);
     let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
     assert_eq!(opcode, 0x00A9);
     let updates = lyracore_shared::values_mask::parse_values_updates(&body);
@@ -2932,9 +2900,7 @@ fn a_world_port_whose_transfer_cannot_be_driven_aborts_the_clients_loading_scree
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     // The client finished loading the dungeon map and acks — this is where the transfer runs.
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
@@ -3012,9 +2978,7 @@ fn a_world_port_whose_world_entry_fails_also_aborts_the_clients_loading_screen()
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     MSG_MOVE_WORLDPORT_ACK {}
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
@@ -3277,9 +3241,7 @@ fn eval(quest_id: u32, role: u8, active: bool, complete: bool) -> codec::GiverQu
 }
 
 /// Spin up a world session over a socket pair, handshake as TESTER, enter the world as `guid`, and
-/// drain the login sequence — 10 fixed messages (LYRACORE_QUEST_LOG off in tests → no quest-log update
-/// appended) plus one SMSG_UPDATE_OBJECT CREATE per `player_items()` row (`enter_world` inserts
-/// one per owned item BEFORE the self-spawn CREATE — see its doc comment in `mod.rs`). Draining one
+/// drain the world entry batch, then the quest-log update when the player has quests. Draining one
 /// message too few manifests as the CLIENT closing with unread bytes still queued — which the kernel
 /// reports back to the SERVER thread's next read as ECONNRESET, not a clean EOF.
 /// Returns the client socket + encrypted halves + the server join handle for the test to drive.
@@ -3296,7 +3258,6 @@ fn enter_world(
     // The login sequence ends with the quest-log VALUES packet IFF the player has quests (mirrors
     // `send_quest_log`'s skip-when-empty). Checked before `store` is moved into the server thread.
     let has_quest_log = !store.quest.quest_log_slots.is_empty();
-    let item_creates = store.player_items(guid).map(|v| v.len()).unwrap_or(0);
     let server_store = store;
     let server = std::thread::spawn(move || {
         run_world_session(server_end, server_store.clone()).unwrap();
@@ -3307,10 +3268,7 @@ fn enter_world(
     }
     .write_encrypted_client(&mut client, &mut c_enc)
     .unwrap();
-    // 10 login-sequence packets, plus the weapon and armor SMSG_SET_PROFICIENCY pair.
-    for _ in 0..WORLD_ENTRY_PACKETS + item_creates {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     if has_quest_log {
         // The quest-log packet is a PARTIAL VALUES update with OBJECT_FIELD_TYPE stripped (so the real
         // 5875 client doesn't crash — see the health-VALUES note). gtker's DECODER rejects that ("Missing
@@ -3533,9 +3491,7 @@ fn a_group_invite_timeout_is_not_answered_as_a_refusal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     wow_world_messages::vanilla::CMSG_GROUP_INVITE {
         name: "Buddy".into(),
     }
@@ -3995,9 +3951,7 @@ fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     CMSG_ADD_FRIEND {
         name: "Buddy".into(),
     }
@@ -4164,9 +4118,7 @@ fn login_sends_the_quest_log_descriptor_raw_update_after_the_create_packet() {
         .unwrap();
 
     // World entry — discarded, this test is about what comes right after.
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     // gtker's typed reader rejects this raw partial VALUES body (no OBJECT_FIELD_TYPE), so read it
     // RAW and compare it against the same builder the seam's `quest_log_update` calls.
     let (opcode, body) = read_raw_frame(&mut client, &mut c_dec);
@@ -4641,9 +4593,7 @@ fn item_reducer_transport_loss_ends_the_world_session() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     CMSG_AUTOEQUIP_ITEM {
         source_bag: 255,
@@ -5934,9 +5884,7 @@ fn attackswing_desync_error_is_session_fatal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     CMSG_ATTACKSWING {
         guid: Guid::new(90),
     }
@@ -6354,9 +6302,7 @@ fn a_trainer_reducer_timeout_is_not_answered_as_a_refusal() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
 
     CMSG_TRAINER_BUY_SPELL {
         guid: Guid::new(70),
@@ -8312,9 +8258,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
     CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
         .write_encrypted_client(&mut client, &mut c_enc)
         .unwrap();
-    for _ in 0..WORLD_ENTRY_PACKETS {
-        ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap();
-    }
+    drain_world_entry(&mut client, &mut c_dec);
     assert_eq!(
         queue.active(),
         1,
