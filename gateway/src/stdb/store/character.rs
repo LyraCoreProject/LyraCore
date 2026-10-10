@@ -8,7 +8,8 @@ use crate::stdb::bindings::*;
 use crate::stdb::connection::{call_reducer, CharacterPresenceSnapshot, Coordinator};
 use crate::stdb::reads::spell_ranks_stack_in_book;
 use crate::stdb::views::character_view;
-use crate::world::CharacterStore;
+use crate::stdb::{classify, DurableFailure};
+use crate::world::{Actor, CharacterStore};
 
 fn stable_character_absence(
     first: &[CharacterPresenceSnapshot],
@@ -89,6 +90,9 @@ impl CharacterStore for Coordinator {
     /// end-to-end rather than merely reusing already-tested machinery by assumption:
     /// `a_freshly_created_characters_first_login_transfers_off_the_default_shard`
     /// (`world/shard_routing_tests.rs`).
+    ///
+    /// The `create_character` reducer runs on the owner connection. A Refusal maps to a game
+    /// outcome; a Transport Loss is `Err`.
     fn create_character(
         &self,
         account_id: u64,
@@ -98,7 +102,25 @@ impl CharacterStore for Coordinator {
         gender: u8,
         appearance: codec::Appearance,
     ) -> Result<codec::CharCreateOutcome> {
-        self.create_character(account_id, name, race, class, gender, appearance)
+        // The SpacetimeDB-generated reducer binding takes the five appearance bytes positionally;
+        // unbundle `Appearance` here, at the single generated-boundary call.
+        let result = call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "create_character",
+            create_character_then(
+                account_id,
+                name.to_string(),
+                race,
+                class,
+                gender,
+                appearance.skin,
+                appearance.face,
+                appearance.hair_style,
+                appearance.hair_color,
+                appearance.facial_hair
+            )
+        );
+        create_outcome(result, self.shard_name())
     }
 
     /// Delete a character wherever it actually LIVES, not only on `self`.
@@ -129,11 +151,11 @@ impl CharacterStore for Coordinator {
     fn delete_character(
         &self,
         account_id: u64,
-        character_guid: u64,
+        character: Actor,
     ) -> Result<codec::CharDeleteOutcome> {
-        match crate::realm_core::resolve_delete_shard(self, character_guid) {
-            Ok(Some(owner)) => owner.delete_character(account_id, character_guid),
-            Ok(None) => self.delete_character(account_id, character_guid),
+        match crate::realm_core::resolve_delete_shard(self, character.guid()) {
+            Ok(Some(owner)) => owner.delete_here(account_id, character),
+            Ok(None) => self.delete_here(account_id, character),
             Err(e) => {
                 log::warn!("world: {e:#}");
                 Ok(codec::CharDeleteOutcome::Failed)
@@ -175,20 +197,98 @@ impl CharacterStore for Coordinator {
         self.effective_magic_resistances(guid)
     }
 
+    /// The character's active SPELL-MODIFIER auras as raw `(family_mask, op, amount, is_pct)`
+    /// rows — the client-mirror source for SMSG_SET_FLAT/PCT_SPELL_MODIFIER (aggregation by
+    /// (op, mask-bit) happens in the codec helper; mangos sends the TOTAL per bit).
     fn spell_modifiers(&self, character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
-        self.spell_modifiers(character_guid)
+        const A_SPELLMOD_FLAT: u8 = 0xAC; // lockstep with module taxonomy
+        const A_SPELLMOD_PCT: u8 = 0xAD;
+        self.0
+            .coord()
+            .conn
+            .db
+            .game_aura()
+            .iter()
+            .filter(|a| {
+                a.target_guid == character_guid
+                    && (a.eff_kind == A_SPELLMOD_FLAT || a.eff_kind == A_SPELLMOD_PCT)
+            })
+            .map(|a| {
+                (
+                    a.eff_p1 as u32,
+                    a.eff_p0 as u8,
+                    a.amount,
+                    a.eff_kind == A_SPELLMOD_PCT,
+                )
+            })
+            .collect()
     }
 
+    /// The player's LEARNED spells — `game_player_spell` rows for this character (the coordinator
+    /// bypasses RLS so it reads any player's). Chained into the login spellbook so a taught ability
+    /// (Auto Shot) reaches the client and `CastSpellByName` can fire it.
     fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>> {
-        self.player_learned_spells(player_guid)
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        let known: Vec<u32> = db
+            .game_player_spell()
+            .iter()
+            .filter(|s| s.character_guid == player_guid)
+            .map(|s| s.spell_id)
+            .collect();
+        // 258 rank collapse: drop a known rank that another KNOWN spell supersedes (a game_spell_chain
+        // row whose prev_spell is this id) — GATED on the same cmangos stacking rule as
+        // superseded_old_rank (operator-corrected): MANA spells keep every rank in the book
+        // (downranking Holy Light is a real thing); only non-mana/passive chains collapse
+        // (Heroic Strike). One pass suffices: each superseded rank is prev of its own successor.
+        let known_set: std::collections::HashSet<u32> = known.iter().copied().collect();
+        let superseded: std::collections::HashSet<u32> = db
+            .game_spell_chain()
+            .iter()
+            .filter(|c| {
+                c.prev_spell != 0
+                    && known_set.contains(&c.prev_spell)
+                    && known_set.contains(&c.spell_id)
+                    && !spell_ranks_stack_in_book(db, c.spell_id)
+            })
+            .map(|c| c.prev_spell)
+            .collect();
+        Ok(known
+            .into_iter()
+            .filter(|id| !superseded.contains(id))
+            .collect())
     }
 
-    fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
-        self.player_reputations(player_guid)
-    }
-
+    /// The player's IMPORTED action-bar rows as `(button, action, action_type)` triples —
+    /// `game_player_action` rows copied at character creation from `game_createinfo_action` (empty when
+    /// no dump has been imported, the common case today). Chained into the login codec
+    /// (`login_sequence_messages`), which builds the bar from these when non-empty and falls back to
+    /// the spellbook synth otherwise. RLS-bypassed read, like `player_learned_spells`.
     fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
-        self.player_actions(player_guid)
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        Ok(db
+            .game_player_action()
+            .iter()
+            .filter(|a| a.character_guid == player_guid)
+            .map(|a| (a.button, a.action, a.action_type))
+            .collect())
+    }
+
+    /// The player's persisted reputation standings as `(reputation_index, standing,
+    /// at_war)` triples — chained into the login `SMSG_INITIALIZE_FACTIONS` so a relog carries the
+    /// real standing + the At-War checkbox instead of the all-neutral stub. Rows with
+    /// `reputation_index < 0` (stale pre-migration filler) are skipped — there is no slot to
+    /// address. RLS-bypassed read, like `player_learned_spells`.
+    fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
+        let guard = self.0.coord();
+        let db = &guard.conn.db;
+        Ok(db
+            .game_player_reputation()
+            .iter()
+            .filter(|r| r.character_guid == player_guid && r.reputation_index >= 0)
+            .map(|r| (r.reputation_index, r.standing, r.at_war))
+            .collect())
     }
 }
 
@@ -259,100 +359,6 @@ impl Coordinator {
         super::super::armor::effective_magic_resistances(&guard.conn.db, guid)
     }
 
-    /// The character's active SPELL-MODIFIER auras as raw `(family_mask, op, amount, is_pct)`
-    /// rows — the client-mirror source for SMSG_SET_FLAT/PCT_SPELL_MODIFIER (aggregation by
-    /// (op, mask-bit) happens in the codec helper; mangos sends the TOTAL per bit).
-    pub fn spell_modifiers(&self, character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
-        const A_SPELLMOD_FLAT: u8 = 0xAC; // lockstep with module taxonomy
-        const A_SPELLMOD_PCT: u8 = 0xAD;
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_aura()
-            .iter()
-            .filter(|a| {
-                a.target_guid == character_guid
-                    && (a.eff_kind == A_SPELLMOD_FLAT || a.eff_kind == A_SPELLMOD_PCT)
-            })
-            .map(|a| {
-                (
-                    a.eff_p1 as u32,
-                    a.eff_p0 as u8,
-                    a.amount,
-                    a.eff_kind == A_SPELLMOD_PCT,
-                )
-            })
-            .collect()
-    }
-
-    /// The player's LEARNED spells — `game_player_spell` rows for this character (the coordinator
-    /// bypasses RLS so it reads any player's). Chained into the login spellbook so a taught ability
-    /// (Auto Shot) reaches the client and `CastSpellByName` can fire it.
-    pub fn player_learned_spells(&self, player_guid: u64) -> Result<Vec<u32>> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        let known: Vec<u32> = db
-            .game_player_spell()
-            .iter()
-            .filter(|s| s.character_guid == player_guid)
-            .map(|s| s.spell_id)
-            .collect();
-        // 258 rank collapse: drop a known rank that another KNOWN spell supersedes (a game_spell_chain
-        // row whose prev_spell is this id) — GATED on the same cmangos stacking rule as
-        // superseded_old_rank (operator-corrected): MANA spells keep every rank in the book
-        // (downranking Holy Light is a real thing); only non-mana/passive chains collapse
-        // (Heroic Strike). One pass suffices: each superseded rank is prev of its own successor.
-        let known_set: std::collections::HashSet<u32> = known.iter().copied().collect();
-        let superseded: std::collections::HashSet<u32> = db
-            .game_spell_chain()
-            .iter()
-            .filter(|c| {
-                c.prev_spell != 0
-                    && known_set.contains(&c.prev_spell)
-                    && known_set.contains(&c.spell_id)
-                    && !spell_ranks_stack_in_book(db, c.spell_id)
-            })
-            .map(|c| c.prev_spell)
-            .collect();
-        Ok(known
-            .into_iter()
-            .filter(|id| !superseded.contains(id))
-            .collect())
-    }
-
-    /// The player's IMPORTED action-bar rows as `(button, action, action_type)` triples —
-    /// `game_player_action` rows copied at character creation from `game_createinfo_action` (empty when
-    /// no dump has been imported, the common case today). Chained into the login codec
-    /// (`login_sequence_messages`), which builds the bar from these when non-empty and falls back to
-    /// the spellbook synth otherwise. RLS-bypassed read, like `player_learned_spells`.
-    pub fn player_actions(&self, player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        Ok(db
-            .game_player_action()
-            .iter()
-            .filter(|a| a.character_guid == player_guid)
-            .map(|a| (a.button, a.action, a.action_type))
-            .collect())
-    }
-
-    /// The player's persisted reputation standings as `(reputation_index, standing,
-    /// at_war)` triples — chained into the login `SMSG_INITIALIZE_FACTIONS` so a relog carries the
-    /// real standing + the At-War checkbox instead of the all-neutral stub. Rows with
-    /// `reputation_index < 0` (stale pre-migration filler) are skipped — there is no slot to
-    /// address. RLS-bypassed read, like `player_learned_spells`.
-    pub fn player_reputations(&self, player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
-        let guard = self.0.coord();
-        let db = &guard.conn.db;
-        Ok(db
-            .game_player_reputation()
-            .iter()
-            .filter(|r| r.character_guid == player_guid && r.reputation_index >= 0)
-            .map(|r| (r.reputation_index, r.standing, r.at_war))
-            .collect())
-    }
-
     /// Does `character_guid` sell, or lead the bidding on, an Auction on THIS handle?
     fn has_auction(&self, character_guid: u64) -> bool {
         let auctions = self.auction_keys(|index| &index.auctions, character_guid);
@@ -368,64 +374,17 @@ impl Coordinator {
         })
     }
 
-    /// Create a character via the `create_character` reducer (owner connection), mapping the
-    /// reducer result to a game outcome. A distinguished `NAME_IN_USE` error → `NameInUse`; any
-    /// other reducer/transport error → `Failed` (never propagated as a hard error, so a bad
-    /// creation can't drop the world session).
-    pub fn create_character(
+    /// Delete `character` on THIS handle via the `delete_character` reducer (owner connection — the
+    /// reducer is operator-gated, mirroring `create_character`). Ownership is enforced module-side
+    /// (`NOT_OWNER` if `character` isn't `account_id`'s), so a malicious/buggy client can't delete
+    /// another account's character. A Refusal maps to `Failed`; a Transport Loss is `Err`.
+    fn delete_here(
         &self,
         account_id: u64,
-        name: &str,
-        race: u8,
-        class: u8,
-        gender: u8,
-        appearance: crate::codec::Appearance,
-    ) -> Result<crate::codec::CharCreateOutcome> {
-        use crate::codec::CharCreateOutcome;
-        // The SpacetimeDB-generated reducer binding takes the five appearance bytes positionally;
-        // unbundle `Appearance` here, at the single generated-boundary call.
-        let result = call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "create_character",
-            create_character_then(
-                account_id,
-                name.to_string(),
-                race,
-                class,
-                gender,
-                appearance.skin,
-                appearance.face,
-                appearance.hair_style,
-                appearance.hair_color,
-                appearance.facial_hair
-            )
-        );
-        Ok(match result {
-            Ok(()) => CharCreateOutcome::Success,
-            Err(e) if e.to_string().contains("NAME_IN_USE") => CharCreateOutcome::NameInUse,
-            Err(e) if e.to_string().contains("SERVER_LIMIT") => CharCreateOutcome::ServerLimit,
-            // The 5875 client has no code for "this database may not mint guids", so the outcome is
-            // the generic failure — but the REASON must not be swallowed: the whole point of
-            // guid-range licensing is that an unlicensed shard fails loudly instead of minting
-            // into someone else's range.
-            Err(e) => {
-                log::warn!("create_character on {} failed: {e:#}", self.shard_name());
-                CharCreateOutcome::Failed
-            }
-        })
-    }
-
-    /// Delete a character via the `delete_character` reducer (owner connection — the reducer is
-    /// operator-gated, mirroring `create_character`). Ownership is enforced module-side (`NOT_OWNER`
-    /// if `character_guid` isn't `account_id`'s), so a malicious/buggy client can't delete another
-    /// account's character. Maps to a game outcome the same way `create_character` does: never
-    /// propagated as a hard error, so a bad delete can't drop the world session.
-    pub fn delete_character(
-        &self,
-        account_id: u64,
-        character_guid: u64,
+        character: Actor,
     ) -> Result<crate::codec::CharDeleteOutcome> {
         use crate::codec::CharDeleteOutcome;
+        let character_guid = character.guid();
         match self.character_has_auction_value(character_guid) {
             Ok(true) => return Ok(CharDeleteOutcome::Failed),
             Ok(false) => {}
@@ -436,21 +395,14 @@ impl Coordinator {
                 return Ok(CharDeleteOutcome::Failed);
             }
         }
-        let result = call_reducer!(
-            self.0.call_pipe().conn.reducers,
-            "delete_character",
-            delete_character_then(account_id, self.actor_or_owner(character_guid))
-        );
-        Ok(match result {
-            Ok(()) => CharDeleteOutcome::Success,
-            // The 1.12 client has one reason for every refusal, so the reason goes to the log:
-            // CHAR_HAS_GUILD_FEE_HOLD clears when the Character next enters the world and the
-            // Gateway finishes its Fee Hold.
-            Err(error) => {
-                log::info!("delete_character: {character_guid} not deleted: {error:#}");
-                CharDeleteOutcome::Failed
-            }
-        })
+        delete_outcome(
+            call_reducer!(
+                self.0.call_pipe().conn.reducers,
+                "delete_character",
+                delete_character_then(account_id, self.session_actor(character))
+            ),
+            character_guid,
+        )
     }
 
     fn character_has_auction_value(&self, character_guid: u64) -> Result<bool> {
@@ -465,6 +417,77 @@ impl Coordinator {
             }
         }
         Ok(self.realm_core()?.has_auction(character_guid))
+    }
+}
+
+/// A create Refusal is an outcome the client renders; a Transport Loss stays `Err`.
+fn create_outcome(result: Result<()>, shard_name: &str) -> Result<codec::CharCreateOutcome> {
+    use codec::CharCreateOutcome;
+    let Err(error) = result else {
+        return Ok(CharCreateOutcome::Success);
+    };
+    match classify(&error) {
+        DurableFailure::TransportLoss => Err(error),
+        DurableFailure::Refusal { reason } if reason.contains("NAME_IN_USE") => {
+            Ok(CharCreateOutcome::NameInUse)
+        }
+        DurableFailure::Refusal { reason } if reason.contains("SERVER_LIMIT") => {
+            Ok(CharCreateOutcome::ServerLimit)
+        }
+        // The 5875 client has no code for "this database may not mint guids", so the outcome is
+        // the generic failure — but the REASON must not be swallowed: the whole point of
+        // guid-range licensing is that an unlicensed shard fails loudly instead of minting
+        // into someone else's range.
+        DurableFailure::Refusal { .. } => {
+            log::warn!("create_character on {shard_name} failed: {error:#}");
+            Ok(CharCreateOutcome::Failed)
+        }
+    }
+}
+
+/// A delete Refusal answers `Failed`; a Transport Loss stays `Err`.
+fn delete_outcome(result: Result<()>, character_guid: u64) -> Result<codec::CharDeleteOutcome> {
+    let Err(error) = result else {
+        return Ok(codec::CharDeleteOutcome::Success);
+    };
+    match classify(&error) {
+        // The 1.12 client has one reason for every refusal, so the reason goes to the log:
+        // CHAR_HAS_GUILD_FEE_HOLD clears when the Character next enters the world and the
+        // Gateway finishes its Fee Hold.
+        DurableFailure::Refusal { .. } => {
+            log::info!("delete_character: {character_guid} not deleted: {error:#}");
+            Ok(codec::CharDeleteOutcome::Failed)
+        }
+        DurableFailure::TransportLoss => Err(error),
+    }
+}
+
+#[cfg(test)]
+mod outcome_tests {
+    use super::{create_outcome, delete_outcome};
+    use crate::codec::{CharCreateOutcome, CharDeleteOutcome};
+    use crate::stdb::ReducerCallError;
+
+    #[test]
+    fn a_create_refusal_is_an_outcome_and_a_transport_loss_is_an_error() {
+        let refused = ReducerCallError::refused("create_character", "NAME_IN_USE");
+        assert!(matches!(
+            create_outcome(Err(refused.into()), "world"),
+            Ok(CharCreateOutcome::NameInUse)
+        ));
+        let lost = ReducerCallError::transport_lost("create_character");
+        assert!(create_outcome(Err(lost.into()), "world").is_err());
+    }
+
+    #[test]
+    fn a_delete_refusal_fails_and_a_transport_loss_is_an_error() {
+        let refused = ReducerCallError::refused("delete_character", "NOT_OWNER");
+        assert!(matches!(
+            delete_outcome(Err(refused.into()), 7),
+            Ok(CharDeleteOutcome::Failed)
+        ));
+        let lost = ReducerCallError::transport_lost("delete_character");
+        assert!(delete_outcome(Err(lost.into()), 7).is_err());
     }
 }
 

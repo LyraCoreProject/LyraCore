@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::stdb::ReducerCallError;
 
 /// One recorded `movement_update`: (opcode, x, y, z, orientation, timestamp).
 pub(crate) type MoveRecord = (u32, f32, f32, f32, f32, u32);
@@ -15,7 +16,10 @@ pub(crate) struct SessionState {
     pub(crate) session: Option<WorldSession>,
     pub(crate) login_entity: Option<codec::EntityView>,
     pub(crate) moves: std::sync::Mutex<Vec<MoveRecord>>,
-    pub(crate) client_commands: std::sync::Mutex<Vec<(u64, u64, String, String)>>,
+    /// Recorded `client_command` calls: (actor guid, command, payload).
+    pub(crate) client_commands: std::sync::Mutex<Vec<(u64, String, String)>>,
+    /// When set, every `client_command` fails with the error this builds from the reducer name.
+    pub(crate) client_command_error: Option<fn(&str) -> ReducerCallError>,
     /// Optional item row whose subscribed relay is queued during a successful turn-in. The paired
     /// sender is retained only for that test and consumed by `turn_in_quest`, so it cannot keep the
     /// session writer alive during teardown.
@@ -26,9 +30,9 @@ pub(crate) struct SessionState {
     pub(crate) combat_until_ms: u64,
     /// Tracks whether `logout` was called (entity removal path taken).
     pub(crate) logout_called: std::sync::atomic::AtomicBool,
-    /// When set, teardown cannot reach the database after a session-fatal transport loss.
+    /// When set, teardown cannot reach the database after a session-fatal Transport Loss.
     /// The world session must still close and relinquish its admission seat.
-    pub(crate) logout_error: Option<String>,
+    pub(crate) logout_transport_lost: bool,
     /// The `WorldEntry` of every `player_login`, in order.
     pub(crate) login_entries: std::sync::Mutex<Vec<codec::WorldEntry>>,
     /// Parked private System Messages world entry replays (a Package `on_login` hook's output).
@@ -61,10 +65,8 @@ pub(crate) struct SessionState {
     /// realm-wide party frame's online flags are built from. Empty = the single `entity_in_world`
     /// flag above decides, as it did before.
     pub(crate) live_guids: Vec<u64>,
-    /// When set, every `movement_update` fails with this message. The case that matters is
-    /// `"mover not in world"` — the module's answer for a packet that arrives after
-    /// `teleport_player` despawned the entity, i.e. the tail of every cross-map port.
-    pub(crate) movement_error: Option<String>,
+    /// When set, every `movement_update` fails with a Transport Loss.
+    pub(crate) movement_transport_lost: bool,
     /// Optional real shared view used by world-port ordering tests.
     pub(crate) relay_view: Option<std::sync::Arc<crate::stdb::world_view::WorldView>>,
     /// With `relay_view`, the Member Stats a Relay tick delivered between viewer registration and
@@ -86,7 +88,7 @@ impl SessionStore for WorldFake {
     fn player_login(
         &self,
         _account_id: u64,
-        _character_guid: u64,
+        _character: Actor,
         entry: codec::WorldEntry,
     ) -> Result<codec::EntityView> {
         self.rec("player_login");
@@ -109,16 +111,10 @@ impl SessionStore for WorldFake {
             .ok_or_else(|| anyhow!("no login entity configured"))
     }
 
-    fn movement_update(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        opcode: u32,
-        info: &MovementInfo,
-    ) -> Result<()> {
+    fn movement_update(&self, _actor: Actor, opcode: u32, info: &MovementInfo) -> Result<()> {
         self.rec("movement_update");
-        if let Some(e) = &self.session.movement_error {
-            return Err(anyhow!("movement_update reducer failed: {e}"));
+        if self.session.movement_transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_movement_batch").into());
         }
         self.session.moves.lock().unwrap().push((
             opcode,
@@ -165,18 +161,15 @@ impl SessionStore for WorldFake {
         Ok(subs)
     }
 
-    fn client_command(
-        &self,
-        account_id: u64,
-        self_guid: u64,
-        cmd: String,
-        payload: String,
-    ) -> Result<()> {
+    fn client_command(&self, actor: Actor, cmd: String, payload: String) -> Result<()> {
+        if let Some(error) = self.session.client_command_error {
+            return Err(error("gw_client_command").into());
+        }
         self.session
             .client_commands
             .lock()
             .unwrap()
-            .push((account_id, self_guid, cmd, payload));
+            .push((actor.guid(), cmd, payload));
         Ok(())
     }
 
@@ -217,10 +210,10 @@ impl SessionStore for WorldFake {
         self.session
             .logout_called
             .store(true, std::sync::atomic::Ordering::SeqCst);
-        match &self.session.logout_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+        if self.session.logout_transport_lost {
+            return Err(ReducerCallError::transport_lost("logout").into());
         }
+        Ok(())
     }
 
     fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {

@@ -84,13 +84,13 @@ impl CharacterStore for WorldFake {
     fn delete_character(
         &self,
         account_id: u64,
-        character_guid: u64,
+        character: Actor,
     ) -> Result<codec::CharDeleteOutcome> {
         self.character
             .deleted
             .lock()
             .unwrap()
-            .push((account_id, character_guid));
+            .push((account_id, character.guid()));
         Ok(self
             .character
             .delete_outcome

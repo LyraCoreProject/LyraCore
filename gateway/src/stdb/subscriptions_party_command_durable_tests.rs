@@ -8,7 +8,7 @@ use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::stdb::bindings::GamePartyCommandIntentTableAccess;
 use crate::world::party::{self, AdmittedCompanionCommand, CompanionCommandOutcome};
-use crate::world::TransferStore;
+use crate::world::{Actor, PartyStore, SessionStore, TransferStore};
 use spacetimedb_sdk::Table;
 use std::collections::BTreeMap;
 use std::ffi::OsString;
@@ -525,7 +525,7 @@ fn enter_transferred_actor(
     bound
         .player_login(
             account_id,
-            character_guid,
+            Actor::new(character_guid).unwrap(),
             crate::codec::WorldEntry::FreshLogin,
         )
         .unwrap();

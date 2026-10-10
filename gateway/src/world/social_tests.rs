@@ -400,9 +400,9 @@ fn every_contact_refusal_reaches_the_client_as_one_friend_result() {
     }
 }
 
-/// The contact half of the same rule: a timed-out add left the list in an unknown state.
+/// The contact half of the same rule: a Transport Loss left the list in an unknown state.
 #[test]
-fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
+fn an_add_friend_transport_loss_is_not_answered_as_a_refusal() {
     let mut s = quest_store();
     s.characters = vec![codec::CharacterView {
         guid: 2,
@@ -410,7 +410,7 @@ fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
         ..Default::default()
     }];
     s.session.login_entity = Some(warrior_entity());
-    s.trade_error = Some("gw_add_friend reducer timed out after 10s".into());
+    s.trade_error = Some("transport lost".into());
     let store = std::sync::Arc::new(s);
     let (mut client, server_end) = world_session_socket_pair();
     let server_store = store.clone();
@@ -433,8 +433,8 @@ fn an_add_friend_timeout_is_not_answered_as_a_refusal() {
     let error = result_rx
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("an unknown contact outcome must end the session promptly")
-        .expect_err("a timed-out contact reducer must be session-fatal");
-    assert!(format!("{error:#}").contains("timed out"));
+        .expect_err("a contact Transport Loss must be session-fatal");
+    assert!(format!("{error:#}").contains("transport disconnected"));
 }
 
 #[test]

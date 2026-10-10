@@ -1831,8 +1831,7 @@ fn the_bots_arrival_fence_survives_a_party_mirror_failure_and_retry() {
     }
     super::party::run(
         world.as_ref(),
-        7,
-        GINGER,
+        Actor::new(GINGER).unwrap(),
         super::party::Op::Invite(BOT_GUID),
     )
     .expect("the bot joins the leader's party");

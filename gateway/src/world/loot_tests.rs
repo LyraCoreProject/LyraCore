@@ -355,7 +355,12 @@ fn a_leave_flushes_every_connected_shards_pending_rolls_before_the_disband_reach
 
     // Vim leaving a 2-member party disbands it (vanilla: a party of one is no party) — the exact
     // shape `remove_member`'s disband branch, and therefore `force_resolve_rolls_for_disband`, needs.
-    party::run(instances.as_ref(), 8, VIM, party::Op::Leave).expect("Vim leaves");
+    party::run(
+        instances.as_ref(),
+        Actor::new(VIM).unwrap(),
+        party::Op::Leave,
+    )
+    .expect("Vim leaves");
 
     assert_eq!(
         realm.loot_roll.realm_loot_ops.lock().unwrap().clone(),
@@ -416,7 +421,12 @@ fn a_non_disband_capable_op_never_flushes_pending_rolls() {
         recipients: vec![GINGER],
         random_property_id: 0,
     }];
-    party::run(world.as_ref(), 7, GINGER, party::Op::Invite(TRIN)).expect("the invite runs");
+    party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Invite(TRIN),
+    )
+    .expect("the invite runs");
     assert!(
         realm.loot_roll.realm_loot_ops.lock().unwrap().is_empty(),
         "an op that cannot shrink a group must not trigger a flush"

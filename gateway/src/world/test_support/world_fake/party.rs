@@ -80,10 +80,10 @@ pub(crate) struct PartyState {
 
 /// The Fake's reducer edge for a party op: the Module answers a Refusal as the bare tag, and
 /// anything else — a timeout, a dead transport — is a failure with an unknown durable outcome.
-pub(crate) fn faked_party(error: &str) -> Result<PartyOutcome> {
+pub(crate) fn faked_party(operation: &str, error: &str) -> Result<PartyOutcome> {
     match lyracore_shared::group::GroupRefusal::parse_tag(error) {
         Some(refusal) => Ok(refusal.into()),
-        None => Err(anyhow!("{error}")),
+        None => Err(crate::stdb::ReducerCallError::transport_lost(operation).into()),
     }
 }
 
@@ -140,46 +140,40 @@ impl PartyStore for WorldFake {
     // Each of these records the SHARD it ran on (`rec`), so a test can tell the
     // single-database path (the op lands on the player's own shard, here) apart from the realm-core
     // one (it lands in `FakeParty::ops` and never reaches these at all).
-    fn group_invite(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        target_guid: u64,
-    ) -> Result<PartyOutcome> {
+    fn group_invite(&self, _actor: Actor, target_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_invite");
         if let Some(e) = &self.trade_error {
-            return faked_party(e);
+            return faked_party("gw_group_invite", e);
         }
         self.party.group_invites.lock().unwrap().push(target_guid);
         Ok(PartyOutcome::Ran)
     }
 
-    fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
+    fn group_accept(&self, _actor: Actor) -> Result<PartyOutcome> {
         self.rec("group_accept");
         Ok(PartyOutcome::Ran)
     }
 
-    fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
+    fn group_decline(&self, _actor: Actor) -> Result<PartyOutcome> {
         self.rec("group_decline");
         Ok(PartyOutcome::Ran)
     }
 
-    fn group_leave(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
+    fn group_leave(&self, _actor: Actor) -> Result<PartyOutcome> {
         self.rec("group_leave");
         Ok(PartyOutcome::Ran)
     }
 
     fn group_loot_method(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         loot_setting: u8,
         master_guid: u64,
         loot_threshold: u8,
     ) -> Result<PartyOutcome> {
         self.rec("group_loot_method");
         if let Some(e) = &self.trade_error {
-            return faked_party(e);
+            return faked_party("gw_group_loot_method", e);
         }
         self.party.group_loot_methods.lock().unwrap().push((
             loot_setting,
@@ -397,7 +391,7 @@ impl PartyStore for WorldFake {
     fn realm_group_op(
         &self,
         op: u8,
-        actor_guid: u64,
+        actor: Actor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
@@ -405,6 +399,7 @@ impl PartyStore for WorldFake {
     ) -> Result<PartyOutcome> {
         use lyracore_shared::group::{event_kind as kind, realm_op, GroupRefusal};
         self.rec("realm_group_op");
+        let actor_guid = actor.guid();
         let mut p = self.party.party.lock().unwrap();
         if self
             .party
@@ -437,7 +432,7 @@ impl PartyStore for WorldFake {
             }
             realm_op::ACCEPT => {
                 if let Some(e) = &self.party.party_accept_error {
-                    return faked_party(e);
+                    return faked_party("realm_group_op", e);
                 }
                 let Some(inviter) = p
                     .invites
@@ -617,24 +612,24 @@ impl PartyStore for WorldFake {
     fn realm_group_op_visible(
         &self,
         op: u8,
-        actor_guid: u64,
+        actor: Actor,
         target_guid: u64,
         arg_a: u8,
         arg_b: u8,
         arg_c: u64,
     ) -> Result<PartyOutcome> {
-        let outcome = self.realm_group_op(op, actor_guid, target_guid, arg_a, arg_b, arg_c);
+        let outcome = self.realm_group_op(op, actor, target_guid, arg_a, arg_b, arg_c);
         *self.party.stale_party.lock().unwrap() = None;
         outcome
     }
 
     fn deleted_character_party_leave(
         &self,
-        character_guid: u64,
+        character: Actor,
     ) -> Result<crate::world::party::PartyOutcome> {
         self.realm_group_op(
             lyracore_shared::group::realm_op::LEAVE,
-            character_guid,
+            character,
             0,
             lyracore_shared::group::leave_cause::CHARACTER_DELETED,
             0,
@@ -796,12 +791,7 @@ impl PartyStore for WorldFake {
         Ok(())
     }
 
-    fn group_uninvite(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _target_guid: u64,
-    ) -> Result<PartyOutcome> {
+    fn group_uninvite(&self, _actor: Actor, _target_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_uninvite");
         Ok(PartyOutcome::Ran)
     }

@@ -3,6 +3,7 @@ use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::world::party::PartyOutcome;
+use crate::world::{Actor, PartyStore};
 use lyracore_shared::group::realm_op;
 
 /// Holds the process-wide topology variables for the whole test, then restores them.
@@ -102,13 +103,20 @@ fn a_roster_change_made_only_on_realm_core_reaches_every_world_shard_mirror() {
     // Straight to Realm-core: no `party::run`, so only the relay can update the mirrors.
     assert_eq!(
         realm
-            .realm_group_op(realm_op::INVITE, LEADER, MEMBER, 0, 0, 0)
+            .realm_group_op(
+                realm_op::INVITE,
+                Actor::new(LEADER).unwrap(),
+                MEMBER,
+                0,
+                0,
+                0
+            )
             .unwrap(),
         PartyOutcome::Ran
     );
     assert_eq!(
         realm
-            .realm_group_op(realm_op::ACCEPT, MEMBER, 0, 1, 0, 0)
+            .realm_group_op(realm_op::ACCEPT, Actor::new(MEMBER).unwrap(), 0, 1, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
@@ -132,7 +140,7 @@ fn a_roster_change_made_only_on_realm_core_reaches_every_world_shard_mirror() {
     // A party of one disbands, so the mirrors get the tombstone and forget the party.
     assert_eq!(
         realm
-            .realm_group_op(realm_op::LEAVE, MEMBER, 0, 0, 0, 0)
+            .realm_group_op(realm_op::LEAVE, Actor::new(MEMBER).unwrap(), 0, 0, 0, 0)
             .unwrap(),
         PartyOutcome::Ran
     );
