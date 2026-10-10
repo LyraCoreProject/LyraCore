@@ -1410,8 +1410,8 @@ fn party_membership_does_not_ride_the_export_blob() {
     );
     assert!(
             crate::CHARACTER_OWNED_NOT_TRANSPORTED.contains(&"game_group_member"),
-            "`game_group_member` transports again. Party membership is authoritative on realm-core \
-             the gateway re-pushes the roster onto the destination at world entry, and a \
+            "`game_group_member` transports again. Party membership is authoritative on Realm-core; \
+             the Gateway re-pushes the roster onto the destination at world entry, and a \
              blob snapshot taken back at `begin_transfer` would overwrite it with the membership the \
              character had when it stepped into the portal."
         );
