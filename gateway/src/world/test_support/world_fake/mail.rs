@@ -1,5 +1,10 @@
 use super::super::*;
 
+/// The Module refusing a mail reducer with `reason`, as the Fake's reducer edge reports it.
+fn refused(reason: impl std::fmt::Display) -> anyhow::Error {
+    crate::stdb::ReducerCallError::refused("mail", &reason.to_string()).into()
+}
+
 /// The Module's Delivery Delay rule (`module/src/mail.rs::delivery_delay_secs`): an item sent to
 /// another Realm Account waits one hour, and everything else arrives at once.
 pub(crate) fn delivery_delay_secs(has_item: bool, same_account: bool) -> u32 {
@@ -124,7 +129,8 @@ impl MailStore for WorldFake {
     /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
     /// authorization, so a mail that exists but belongs to someone else, or has not arrived yet,
     /// fails the same way a nonexistent id does.
-    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_mark_read(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_mark_read");
         let mut mails = self.mail.mails.lock().unwrap();
         let now = crate::world::mail::now_secs();
@@ -136,13 +142,14 @@ impl MailStore for WorldFake {
                 m.was_read = true;
                 Ok(())
             }
-            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+            None => Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL)),
         }
     }
 
     /// Models the module's `apply_delete`: same merged not-found/not-yours/not-arrived refusal as
     /// mark-read, and a priced mail is refused.
-    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_delete(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_delete");
         let mut mails = self.mail.mails.lock().unwrap();
         let now = crate::world::mail::now_secs();
@@ -150,10 +157,10 @@ impl MailStore for WorldFake {
             .iter()
             .position(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
         else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
         };
         if mails[at].1.cod > 0 {
-            return Err(anyhow!(lyracore_shared::mail::COD_MAIL_UNDELETABLE));
+            return Err(refused(lyracore_shared::mail::COD_MAIL_UNDELETABLE));
         }
         mails.remove(at);
         Ok(())
@@ -164,7 +171,8 @@ impl MailStore for WorldFake {
     /// price, which is dropped, because the row is going back to whoever set it. Only a delivered
     /// Character mail with a sender goes back, and only once. An item going back to another
     /// Account waits its Delivery Delay.
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
+    fn mail_return(&self, recipient: Actor, mail_id: u64, same_account: bool) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_return");
         self.saw_same_account("mail_return", same_account);
         let mut mails = self.mail.mails.lock().unwrap();
@@ -173,13 +181,13 @@ impl MailStore for WorldFake {
             .iter_mut()
             .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
         else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
         };
         let lyracore_shared::mail::MailSender::Character(sender @ 1..) = m.sender() else {
-            return Err(anyhow!(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO));
+            return Err(refused(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO));
         };
         if m.check_flags & lyracore_shared::mail::CHECK_MASK_RETURNED != 0 {
-            return Err(anyhow!(lyracore_shared::mail::ALREADY_RETURNED));
+            return Err(refused(lyracore_shared::mail::ALREADY_RETURNED));
         }
         m.sender_guid = recipient_guid;
         m.was_read = false;
@@ -196,7 +204,7 @@ impl MailStore for WorldFake {
     #[allow(clippy::too_many_arguments)]
     fn mail_send(
         &self,
-        sender_guid: u64,
+        sender: Actor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -205,6 +213,7 @@ impl MailStore for WorldFake {
         item_guid: u64,
         same_account: bool,
     ) -> Result<()> {
+        let sender_guid = sender.guid();
         self.rec("mail_send");
         self.saw_same_account("mail_send", same_account);
         let item = self.detach(sender_guid, item_guid)?;
@@ -233,7 +242,8 @@ impl MailStore for WorldFake {
     /// Models the module's `apply_take_item`: the COD debit, the grant, the clear and the seller's
     /// payout row are ONE transaction, so a full bag or a price the taker cannot pay leaves the
     /// letter exactly as it was, and a second take finds an empty one.
-    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_take_item(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         let (item, settlement) = {
             let mails = self.mail.mails.lock().unwrap();
             let now = crate::world::mail::now_secs();
@@ -241,10 +251,10 @@ impl MailStore for WorldFake {
                 .iter()
                 .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
             else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+                return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
             if m.item_entry == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+                return Err(refused(lyracore_shared::mail::NOTHING_TO_TAKE));
             }
             (
                 crate::world::mail::AttachedItem {
@@ -267,7 +277,7 @@ impl MailStore for WorldFake {
         self.rec("mail_take_item");
         if let Some(s) = &settlement {
             self.debit(s.payer_guid, s.copper)
-                .map_err(|_| anyhow!(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
+                .map_err(|_| refused(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
         }
         if let Err(e) = self.store_snapshot(recipient_guid, &item) {
             // The fake cannot roll back, so it undoes the one write it made — the real module gets
@@ -307,14 +317,14 @@ impl MailStore for WorldFake {
         Ok(())
     }
 
-    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
+    fn mail_item_room(&self, _payee: Actor) -> Result<()> {
         self.rec("mail_item_room");
         if self
             .mail
             .bags_full
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+            return Err(refused(lyracore_shared::mail::INVENTORY_FULL));
         }
         Ok(())
     }
@@ -324,7 +334,8 @@ impl MailStore for WorldFake {
     /// delivered, has no body, or is already GRANTED — the same Gates the plan function pins. A
     /// replay before GRANTED is set is `Ok`, and the text insert is skipped when the id already has
     /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
-    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_copy_text(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_copy_text");
         let mut mails = self.mail.mails.lock().unwrap();
         let now = crate::world::mail::now_secs();
@@ -332,13 +343,13 @@ impl MailStore for WorldFake {
             .iter_mut()
             .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
         else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
         };
         if m.body.is_empty() {
-            return Err(anyhow!("mail: this mail has no text to copy"));
+            return Err(refused("mail: this mail has no text to copy"));
         }
         if m.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
-            return Err(anyhow!("mail: this letter was already made permanent"));
+            return Err(refused("mail: this letter was already made permanent"));
         }
         m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
         let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
@@ -356,7 +367,8 @@ impl MailStore for WorldFake {
     /// — the crash-window guard for a retry between this call landing and `mail_mark_letter_granted`
     /// recording that it did, not the durable "already got one" record (that is GRANTED, on the mail
     /// row).
-    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
+    fn mail_grant_letter(&self, payee: Actor, item_text_id: u32) -> Result<()> {
+        let payee_guid = payee.guid();
         self.rec("mail_grant_letter");
         if self
             .mail
@@ -373,7 +385,7 @@ impl MailStore for WorldFake {
             .bags_full
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+            return Err(refused(lyracore_shared::mail::INVENTORY_FULL));
         }
         self.mail
             .granted_letters
@@ -385,14 +397,15 @@ impl MailStore for WorldFake {
 
     /// Models `mail_text::apply_mark_letter_granted`: sets GRANTED on the mail row. Once this lands,
     /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
-    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_mark_letter_granted(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_mark_letter_granted");
         let mut mails = self.mail.mails.lock().unwrap();
         let Some((_, m)) = mails
             .iter_mut()
             .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
         else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
         };
         m.check_flags |= lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED;
         Ok(())
@@ -433,7 +446,8 @@ impl MailStore for WorldFake {
 
     /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
     /// second take finds an empty row.
-    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+    fn mail_take_money(&self, recipient: Actor, mail_id: u64) -> Result<()> {
+        let recipient_guid = recipient.guid();
         self.rec("mail_take_money");
         let money = {
             let mut mails = self.mail.mails.lock().unwrap();
@@ -442,10 +456,10 @@ impl MailStore for WorldFake {
                 .iter_mut()
                 .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
             else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+                return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
             if m.money == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+                return Err(refused(lyracore_shared::mail::NOTHING_TO_TAKE));
             }
             std::mem::take(&mut m.money)
         };
@@ -457,7 +471,7 @@ impl MailStore for WorldFake {
     fn mail_fence(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
+        sender: Actor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -468,6 +482,7 @@ impl MailStore for WorldFake {
         cod_source_mail_id: u64,
         same_account: bool,
     ) -> Result<()> {
+        let sender_guid = sender.guid();
         self.rec("mail_fence");
         self.saw_same_account("mail_fence", same_account);
         self.mail_kill("mail_fence")?;
@@ -506,7 +521,7 @@ impl MailStore for WorldFake {
     fn mail_commit(
         &self,
         escrow_id: u64,
-        sender_guid: u64,
+        sender: Actor,
         recipient_guid: u64,
         subject: String,
         body: String,
@@ -517,6 +532,7 @@ impl MailStore for WorldFake {
         delivery_delay_secs: u32,
         reward: Option<lyracore_shared::mail::RewardHeader>,
     ) -> Result<()> {
+        let sender_guid = sender.guid();
         self.rec("mail_commit");
         self.mail_kill("mail_commit")?;
         let mut receipts = self.mail.mail_receipts.lock().unwrap();
@@ -530,9 +546,9 @@ impl MailStore for WorldFake {
                 m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
             });
             if !owed {
-                return Err(anyhow!(
+                return Err(refused(format!(
                     "mail {cod_source_mail_id} owes {sender_guid} no delivered price"
-                ));
+                )));
             }
         }
         receipts.push((escrow_id, recipient_guid));
@@ -594,10 +610,11 @@ impl MailStore for WorldFake {
     fn mail_take_money_fence(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        payee: Actor,
         mail_id: u64,
         expect_money: u32,
     ) -> Result<()> {
+        let payee_guid = payee.guid();
         self.rec("mail_take_money_fence");
         self.mail_kill("mail_take_money_fence")?;
         if self
@@ -617,14 +634,14 @@ impl MailStore for WorldFake {
                 .iter_mut()
                 .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
             else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+                return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
             if m.money == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+                return Err(refused(lyracore_shared::mail::NOTHING_TO_TAKE));
             }
             if m.money != expect_money {
-                return Err(anyhow!(
-                    "refusing to fence an amount the payout would not match"
+                return Err(refused(
+                    "refusing to fence an amount the payout would not match",
                 ));
             }
             std::mem::take(&mut m.money)
@@ -654,10 +671,11 @@ impl MailStore for WorldFake {
     fn mail_take_item_fence(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        payee: Actor,
         mail_id: u64,
         expect_entry: u32,
     ) -> Result<()> {
+        let payee_guid = payee.guid();
         self.rec("mail_take_item_fence");
         self.mail_kill("mail_take_item_fence")?;
         if self
@@ -677,14 +695,14 @@ impl MailStore for WorldFake {
                 .iter_mut()
                 .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
             else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+                return Err(refused(lyracore_shared::mail::NOT_YOUR_MAIL));
             };
             if m.item_entry == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+                return Err(refused(lyracore_shared::mail::NOTHING_TO_TAKE));
             }
             if m.item_entry != expect_entry {
-                return Err(anyhow!(
-                    "refusing to fence an item the grant would not match"
+                return Err(refused(
+                    "refusing to fence an item the grant would not match",
                 ));
             }
             let item = crate::world::mail::AttachedItem {
@@ -729,10 +747,11 @@ impl MailStore for WorldFake {
     fn mail_item_payout(
         &self,
         escrow_id: u64,
-        payee_guid: u64,
+        payee: Actor,
         _mail_id: u64,
         item: crate::world::mail::AttachedItem,
     ) -> Result<()> {
+        let payee_guid = payee.guid();
         self.rec("mail_item_payout");
         self.mail_kill("mail_item_payout")?;
         let receipts = self.mail.mail_receipts.lock().unwrap();
@@ -750,13 +769,8 @@ impl MailStore for WorldFake {
     }
 
     /// Models `mail_escrow::apply_payout`: the credit plus a receipt, idempotent on the escrow id.
-    fn mail_payout(
-        &self,
-        escrow_id: u64,
-        payee_guid: u64,
-        _mail_id: u64,
-        amount: u32,
-    ) -> Result<()> {
+    fn mail_payout(&self, escrow_id: u64, payee: Actor, _mail_id: u64, amount: u32) -> Result<()> {
+        let payee_guid = payee.guid();
         self.rec("mail_payout");
         self.mail_kill("mail_payout")?;
         let mut receipts = self.mail.mail_receipts.lock().unwrap();
@@ -771,7 +785,7 @@ impl MailStore for WorldFake {
             .iter()
             .any(|(g, _)| *g == payee_guid)
         {
-            return Err(anyhow!(lyracore_shared::mail::NOT_IN_WORLD));
+            return Err(refused(lyracore_shared::mail::NOT_IN_WORLD));
         }
         receipts.push((escrow_id, payee_guid));
         drop(receipts);
@@ -788,7 +802,9 @@ impl MailStore for WorldFake {
                 *done = true;
                 Ok(())
             }
-            None => Err(anyhow!("mail escrow {escrow_id}: nothing fenced here")),
+            None => Err(refused(format!(
+                "mail escrow {escrow_id}: nothing fenced here"
+            ))),
         }
     }
 
@@ -806,9 +822,9 @@ impl MailStore for WorldFake {
             .map(|(_, done)| *done);
         match attested {
             None => Ok(()), // already settled, or this call reached the wrong database
-            Some(false) => Err(anyhow!(
+            Some(false) => Err(refused(format!(
                 "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
-            )),
+            ))),
             Some(true) => {
                 self.mail
                     .mail_escrows
@@ -856,10 +872,11 @@ impl WorldFake {
     /// call never lands, and nothing after it in the drive runs either.
     pub(crate) fn mail_kill(&self, step: &str) -> Result<()> {
         if self.mail.mail_kill_at.lock().unwrap().as_deref() == Some(step) {
-            anyhow::bail!(
+            log::info!(
                 "injected: the gateway died before {step} on {}",
                 self.topology.shard
             );
+            return Err(crate::stdb::ReducerCallError::transport_lost(step).into());
         }
         Ok(())
     }
@@ -873,7 +890,7 @@ impl WorldFake {
                 *money -= copper;
                 Ok(())
             }
-            _ => Err(anyhow!(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
+            _ => Err(refused(lyracore_shared::mail::NOT_ENOUGH_MONEY)),
         }
     }
 
@@ -899,9 +916,9 @@ impl WorldFake {
             .iter()
             .position(|(g, owner, _)| *g == item_guid && *owner == sender_guid)
         {
-            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_ITEM)),
+            None => Err(refused(lyracore_shared::mail::NOT_YOUR_ITEM)),
             Some(i) if items[i].2.soulbound => {
-                Err(anyhow!(lyracore_shared::mail::ITEM_IS_SOULBOUND))
+                Err(refused(lyracore_shared::mail::ITEM_IS_SOULBOUND))
             }
             Some(i) => Ok(items.remove(i).2),
         }
@@ -919,7 +936,7 @@ impl WorldFake {
             .bags_full
             .load(std::sync::atomic::Ordering::Relaxed)
         {
-            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+            return Err(refused(lyracore_shared::mail::INVENTORY_FULL));
         }
         let mut items = self.mail.mail_items.lock().unwrap();
         let guid = items.iter().map(|(g, _, _)| *g).max().unwrap_or(0) + 1;
