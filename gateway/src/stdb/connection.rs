@@ -1073,6 +1073,16 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         // RECOVERY: a restarted gateway re-derives an in-flight transfer's id, destination and
         // payload from this row alone.
         //
+        // Escrows, arrival fences and source instance leases are base subscriptions on every
+        // topology. Private Transfer state is read with the Owner Token.
+        "SELECT * FROM game_transfer_out",
+        "SELECT * FROM game_transfer_in",
+        "SELECT * FROM game_instance",
+        // Stable Coordinator relays keep addressed events available across player subscription
+        // changes. Callbacks route them through the World View's owner and identity indexes.
+        "SELECT * FROM game_teleport_event",
+        "SELECT * FROM game_xp_event",
+        "SELECT * FROM game_levelup_event",
         // Session-less Group Intents run on every topology, including a single database.
         "SELECT * FROM game_bot_invite_intent",
         "SELECT * FROM game_party_command_intent WHERE pending = true",
