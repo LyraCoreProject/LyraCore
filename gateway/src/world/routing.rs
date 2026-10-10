@@ -74,9 +74,7 @@ pub(crate) fn owner(msg: &M) -> Option<Family> {
         | M::CMSG_AUTOSTORE_LOOT_ITEM(_)
         | M::CMSG_LOOT_RELEASE(_)
         | M::CMSG_LOOT_ROLL(_)
-        | M::CMSG_LOOT_MASTER_GIVE(_)
-        | M::CMSG_AREATRIGGER(_)
-        | M::CMSG_GAMEOBJECT_QUERY(_) => Family::Loot,
+        | M::CMSG_LOOT_MASTER_GIVE(_) => Family::Loot,
 
         M::CMSG_REPOP_REQUEST
         | M::MSG_CORPSE_QUERY
@@ -96,7 +94,9 @@ pub(crate) fn owner(msg: &M) -> Option<Family> {
         | M::CMSG_GOSSIP_SELECT_OPTION(_)
         | M::CMSG_ITEM_QUERY_SINGLE(_)
         | M::CMSG_TEXT_EMOTE(_)
-        | M::MSG_RANDOM_ROLL(_) => Family::Npc,
+        | M::MSG_RANDOM_ROLL(_)
+        | M::CMSG_AREATRIGGER(_)
+        | M::CMSG_GAMEOBJECT_QUERY(_) => Family::Npc,
 
         // The read loop answers `CMSG_AUCTION_LIST_ITEMS` from its raw body first.
         M::MSG_AUCTION_HELLO(_)

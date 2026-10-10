@@ -22,9 +22,8 @@ pub(crate) trait NpcStore: Send + Sync {
     /// Look up a gameobject template by entry to answer `CMSG_GAMEOBJECT_QUERY`.
     fn gameobject_template(&self, entry: u32) -> Result<Option<codec::GameObjectTemplateView>>;
 
-    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends questgivers
-    /// to the quest window, chests to the loot-window lifecycle, and every other type to the general
-    /// use path.
+    /// The `type_id` of a spawned GameObject by its live guid. `CMSG_GAMEOBJ_USE` sends quest givers
+    /// to the quest window and every other type to the Loot Window use.
     fn gameobject_type(&self, go_guid: u64) -> Result<Option<u8>>;
 
     /// Enter an area trigger (`CMSG_AREATRIGGER`): credit any active "explore" quest tied to it.
@@ -119,8 +118,8 @@ fn filtered_gossip_options<
         .collect())
 }
 
-/// Npc family: name, pet, creature and item lookups, the gossip and npc-text round trips, the
-/// innkeeper bind and talent wipe, inspect, text emotes and `/roll`.
+/// Npc family: name, pet, creature, item and gameobject lookups, the gossip and npc-text round
+/// trips, the innkeeper bind and talent wipe, inspect, area triggers, text emotes and `/roll`.
 #[allow(clippy::too_many_lines)] // One arm per Npc opcode.
 pub(crate) fn handle_query<
     St: CastStore
@@ -445,6 +444,32 @@ pub(crate) fn handle_query<
                 max: r.maximum,
             };
             social::run_group_broadcast(store, conn, op);
+        }
+        // Enter an area trigger (CMSG_AREATRIGGER): the client fires this when the player physically
+        // walks into a trigger zone (e.g. a mine for an "explore" quest). The module credits any active
+        // explore quest tied to the trigger id. A transient/no-match result is logged + ignored.
+        ClientOpcodeMessage::CMSG_AREATRIGGER(a) => {
+            if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
+                settle_per_action(
+                    "enter_areatrigger",
+                    conn.account_id,
+                    store.enter_areatrigger(actor, a.trigger_id),
+                )?;
+            }
+        }
+        // Gameobject template query (CMSG_GAMEOBJECT_QUERY): the client asks for a GO's name/type/display
+        // before it renders/interacts. Reply with the template, or the not-found form.
+        ClientOpcodeMessage::CMSG_GAMEOBJECT_QUERY(q) => {
+            let tmpl = store.gameobject_template(q.entry_id)?;
+            send(
+                tx,
+                Outbound::One(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
+                    Box::new(codec::build_gameobject_query_response(
+                        q.entry_id,
+                        tmpl.as_ref(),
+                    )),
+                )),
+            )?;
         }
         other => return Ok(Some(other)),
     }

@@ -1,7 +1,6 @@
-//! Loot-window action dispatch plus the remaining corpse, GameObject, and group-loot handler.
+//! Loot family: the Loot Window lifecycle, GameObject use, and Loot Roll votes.
 
 use super::super::*;
-use super::combat::ignore_refusal;
 use lyracore_shared::loot::LootRefusal;
 use wow_world_messages::vanilla::LootMethodError;
 
@@ -316,14 +315,11 @@ pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
     }
 }
 
-/// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
-/// a focused action interface.
-pub(crate) fn handle_loot<
-    St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
->(
-    tx: &SessionTx,
+/// Loot Roll votes and the master looter's assignment. Each Refusal is logged and dropped; the
+/// roll packets ride the `game_group_event` relay.
+pub(crate) fn handle_loot<St: LootRollStore + ShardRoutingStore + ?Sized>(
     store: &St,
-    conn: &mut WorldConn,
+    conn: &WorldConn,
     msg: ClientOpcodeMessage,
 ) -> Result<Option<ClientOpcodeMessage>> {
     let actor = social::self_guid(conn).and_then(Actor::new);
@@ -358,138 +354,6 @@ pub(crate) fn handle_loot<
                 c.slot_id,
                 target_guid,
             )?);
-        }
-        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
-            let Some(actor) = actor else {
-                return Ok(None);
-            };
-            let target_guid = request.guid.guid();
-            match store.use_gameobject(actor, target_guid)? {
-                LootWindowRequestStatus::Applied => {
-                    let items = store.loot_target_items(target_guid, actor.guid())?;
-                    if !items.is_empty() {
-                        if let WorldState::InWorld(iw) = &mut conn.state {
-                            iw.open_loot = OpenLootState {
-                                target_guid: Some(target_guid),
-                            };
-                        }
-                        let (opcode, body) = codec::build_loot_response_raw(target_guid, 0, &items);
-                        send(tx, Outbound::Raw { opcode, body })?;
-                    }
-                }
-                LootWindowRequestStatus::Refused(refusal) => {
-                    if refusal.loot_error().is_some() {
-                        if let WorldState::InWorld(iw) = &mut conn.state {
-                            iw.open_loot = OpenLootState::default();
-                        }
-                    }
-                    for outbound in refusal_outbound(refusal, target_guid) {
-                        send(tx, outbound)?;
-                    }
-                }
-            }
-        }
-        // Enter an area trigger (CMSG_AREATRIGGER): the client fires this when the player physically
-        // walks into a trigger zone (e.g. a mine for an "explore" quest). The module credits any active
-        // explore quest tied to the trigger id. A transient/no-match result is logged + ignored.
-        ClientOpcodeMessage::CMSG_AREATRIGGER(a) => {
-            if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
-                super::trainer::settle_per_action(
-                    "enter_areatrigger",
-                    conn.account_id,
-                    store.enter_areatrigger(actor, a.trigger_id),
-                )?;
-            }
-        }
-        // Gameobject template query (CMSG_GAMEOBJECT_QUERY): the client asks for a GO's name/type/display
-        // before it renders/interacts. Reply with the template, or the not-found form.
-        ClientOpcodeMessage::CMSG_GAMEOBJECT_QUERY(q) => {
-            let tmpl = store.gameobject_template(q.entry_id)?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
-                    Box::new(codec::build_gameobject_query_response(
-                        q.entry_id,
-                        tmpl.as_ref(),
-                    )),
-                )),
-            )?;
-        }
-        // Release Spirit after death. The client sends this (empty body) when the player
-        // clicks Release on the death screen. Revive in place at full health; the restored health
-        // replicates via the on_update VALUES relay and the client leaves the death screen.
-        // SMSG_CORPSE_RECLAIM_DELAY is now relay-driven (the escalated per-corpse
-        // delay, not a flat 30s) — see `on_corpse_insert` in `stdb/subscriptions.rs`, which fires off
-        // the SAME `game_corpse` insert `repop`'s reducer call just caused, so no explicit send here.
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST => {
-            if let Some(actor) = actor {
-                ignore_refusal("repop", conn.account_id, store.repop(actor))?;
-            }
-        }
-        // Corpse location query: the client asks where the player's corpse is to draw the
-        // map marker + offer "Reclaim Corpse" near it. Reply with the corpse's position, or NotFound.
-        ClientOpcodeMessage::MSG_CORPSE_QUERY => {
-            if let WorldState::InWorld(iw) = &conn.state {
-                let loc = store.corpse_location(iw.self_guid)?;
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(
-                        codec::build_corpse_query_response(loc)?,
-                    ))),
-                )?;
-            }
-        }
-        // Reclaim your corpse: the ghost, near its corpse and past the 30s delay, resurrects
-        // at 50%. The module validates ownership/ghost/range/delay; a failure (too far, too soon, not
-        // a ghost) is expected and silently ignored — the client just stays a ghost.
-        ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(r) => {
-            if let Some(actor) = actor {
-                let result = store.reclaim_corpse(actor, r.guid.guid());
-                ignore_refusal("reclaim_corpse", conn.account_id, result)?;
-            }
-        }
-        // Resurrection accept-prompt response: the dead player answered the SMSG_RESURRECT_REQUEST
-        // offer. `status` is vanilla's accept(1)/decline(0) byte; the offer's guid is ignored (mirrors
-        // `reclaim_corpse`'s own-corpse derivation — the module resolves the pending offer from the
-        // CALLER via `ctx.sender()`, never the wire guid). A failure (no pending offer — already
-        // answered/lapsed) is expected and silently ignored.
-        ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(r) => {
-            if let Some(actor) = actor {
-                let result = store.resurrect_response(actor, r.status != 0);
-                ignore_refusal("resurrect_response", conn.account_id, result)?;
-            }
-        }
-        // The death dialog's second button: use the Self-Resurrection Option the Module wrote into
-        // PLAYER_SELF_RES_SPELL. The revive replicates through the entity VALUES relay. A Refusal
-        // (already used, already alive) is expected after a race and sends nothing.
-        ClientOpcodeMessage::CMSG_SELF_RES => {
-            if let Some(actor) = actor {
-                ignore_refusal(
-                    "self_resurrect",
-                    conn.account_id,
-                    store.self_resurrect(actor),
-                )?;
-            }
-        }
-        // Spirit-Healer resurrection: a ghost activated the graveyard Spirit Healer (npc_flags
-        // SPIRITHEALER). The module res's in place at 50% + applies Resurrection Sickness; on success
-        // reply with SMSG_SPIRIT_HEALER_CONFIRM (echoing the healer's guid) so the client closes the
-        // dialog. The res itself replicates via the entity VALUES relay (health > 0 + cleared ghost
-        // bits), exactly like reclaim_corpse. A failure (not a ghost) is per-action — log + ignore.
-        ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(s) => {
-            if let Some(actor) = actor {
-                let result = store.spirit_healer_res(actor, s.guid.guid());
-                let revived = result.is_ok();
-                ignore_refusal("spirit_healer_res", conn.account_id, result)?;
-                if revived {
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(
-                            SMSG_SPIRIT_HEALER_CONFIRM { guid: s.guid },
-                        )),
-                    )?;
-                }
-            }
         }
         other => return Ok(Some(other)),
     }

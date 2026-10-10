@@ -59,7 +59,7 @@ pub(crate) use chat::{
     ChatOutcome, RealmChatRequest, SpeakerFacts, SpeechStore, WhisperRequest, WhisperTargetFacts,
 };
 pub(crate) use combat::{handle_combat, CombatStore};
-pub(crate) use death::DeathStore;
+pub(crate) use death::{handle_death, DeathStore};
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};
 pub(crate) use guild::{
     character_facts, destroy_inert_charters, dispatch_guild_action, guild_projection,

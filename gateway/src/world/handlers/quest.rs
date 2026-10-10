@@ -264,8 +264,8 @@ fn quest_reward_screen<St: QuestActionStore + ?Sized>(
     })
 }
 
-/// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
-/// before world entry — passes through to the next family in the dispatch chain.
+/// The quest opcodes that own their whole protocol round trip. Anything else, and anything at all
+/// before world entry, passes through and is ignored.
 pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
     store: &St,
     player: QuestActionPlayer,
@@ -855,7 +855,7 @@ mod tests {
 
     #[test]
     fn a_gameobject_giver_opens_the_same_screen_as_a_creature_giver() {
-        // The client never sends HELLO for a gameobject giver, so `handle_loot` calls the menu
+        // The client never sends HELLO for a gameobject giver, so the loot family calls the menu
         // directly. Same state, same screen — only the giver guid in the body differs.
         let actions = one_quest(codec::ROLE_START, false, false);
 

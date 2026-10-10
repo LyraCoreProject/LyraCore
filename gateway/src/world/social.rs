@@ -1,6 +1,4 @@
-//! Social-family dispatch: the /who panel, the friends/ignore lists, and party/group management,
-//! carved out of `handle_query` in `world/mod.rs` — pure code-motion, same per-family `handle_*`
-//! shape as the rest of the dispatch chain.
+//! Social family: the /who panel, the friends and ignore lists, and party and group management.
 
 use super::party::PartyOutcome;
 use super::{party, presence, send, who, Actor, Outbound, SessionTx, WorldConn, WorldState};

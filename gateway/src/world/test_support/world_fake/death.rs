@@ -1,6 +1,6 @@
 use super::super::*;
 
-/// Death requests are tested against `HandleLootFake`. A World Session on this Fake answers
+/// Death requests are tested against `DeathFake`. A World Session on this Fake answers
 /// every one with success and no effect.
 impl DeathStore for WorldFake {
     fn repop(&self, _actor: Actor) -> Result<()> {

@@ -1238,7 +1238,7 @@ _Avoid_: client patch, distribution, release bundle, player package
 The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
 
 **Protocol Family**:
-A group of client opcodes one Gateway handler owns, with the Store trait that handler calls (for example the vendor family and `VendorActionStore`). `WorldStore` is the umbrella over every family; a handler takes only its family's Store.
+A group of client opcodes one Gateway handler owns, with the Store trait that handler calls (for example the vendor family and `VendorActionStore`). `routing::owner` names the one family of each opcode. `WorldStore` is the umbrella over every family; a handler takes only its family's Store.
 _Avoid_: family (unqualified), domain
 
 **Store**:

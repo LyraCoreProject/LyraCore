@@ -1,16 +1,16 @@
 //! Death and resurrection requests, handled against a Fake that models only who is alive.
 
 use super::*;
-use handle_loot_fake::{HandleLootFake, Life};
+use death_fake::{DeathFake, Life};
 
-#[path = "handle_loot_fake.rs"]
-pub(crate) mod handle_loot_fake;
+#[path = "death_fake.rs"]
+mod death_fake;
 
-pub(crate) const SELF_GUID: u64 = 1;
+const SELF_GUID: u64 = 1;
 
-/// A World Session connection in the world as `SELF_GUID`. `handle_loot` never reads the
+/// A World Session connection in the world as `SELF_GUID`. `handle_death` never reads the
 /// connection's Store, but `WorldConn` needs one.
-pub(crate) fn in_world_conn() -> WorldConn {
+fn in_world_conn() -> WorldConn {
     let (_, crypto) = ProofSeed::new().into_client_header_crypto(&ns("TESTER"), K, 0);
     let (_, decrypt) = crypto.split();
     WorldConn {
@@ -40,13 +40,9 @@ pub(crate) fn in_world_conn() -> WorldConn {
 
 /// Handle one request and return what the client is sent. Fails when the handler ends the session
 /// or passes the request on.
-pub(crate) fn run(
-    store: &HandleLootFake,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Vec<Outbound> {
+fn run(store: &DeathFake, conn: &mut WorldConn, msg: ClientOpcodeMessage) -> Vec<Outbound> {
     let (tx, rx) = SessionTx::with_depth(0);
-    let passed_on = handle_loot(&tx, store, conn, msg).expect("the request ends the session");
+    let passed_on = handle_death(&tx, store, conn, msg).expect("the request ends the session");
     assert!(passed_on.is_none(), "the request was passed on");
     drop(tx);
     rx.try_iter().collect()
@@ -54,7 +50,7 @@ pub(crate) fn run(
 
 #[test]
 fn repop_revives_the_caller_and_no_one_else() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_life(2, Life::Dead);
 
@@ -72,7 +68,7 @@ fn repop_revives_the_caller_and_no_one_else() {
 
 #[test]
 fn reclaim_corpse_uses_the_corpse_guid_from_the_wire() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Ghost)
         .with_corpse(SELF_GUID, 777);
     let mut conn = in_world_conn();
@@ -91,7 +87,7 @@ fn reclaim_corpse_uses_the_corpse_guid_from_the_wire() {
 
 #[test]
 fn accepting_a_resurrect_offer_revives_the_caller() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_res_offer(SELF_GUID);
 
@@ -102,7 +98,7 @@ fn accepting_a_resurrect_offer_revives_the_caller() {
 
 #[test]
 fn declining_a_resurrect_offer_leaves_the_caller_dead_and_spends_the_offer() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_res_offer(SELF_GUID);
 
@@ -114,7 +110,7 @@ fn declining_a_resurrect_offer_leaves_the_caller_dead_and_spends_the_offer() {
 
 #[test]
 fn self_res_revives_the_caller_and_spends_the_option() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_self_res_option(SELF_GUID);
 
@@ -132,7 +128,7 @@ fn self_res_revives_the_caller_and_spends_the_option() {
 
 #[test]
 fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
-    let store = HandleLootFake::default().with_life(SELF_GUID, Life::Dead);
+    let store = DeathFake::default().with_life(SELF_GUID, Life::Dead);
 
     // `run` fails the test when the handler ends the session.
     let sent = run(
@@ -147,7 +143,7 @@ fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
 
 #[test]
 fn spirit_healer_revives_the_ghost_and_confirms_the_healer_guid() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Ghost)
         .with_spirit_healer(888);
 
@@ -176,15 +172,15 @@ fn resurrect_response(status: u8) -> ClientOpcodeMessage {
 
 #[test]
 fn transport_loss_ends_the_world_session() {
-    let store = HandleLootFake::default()
+    let store = DeathFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_transport_loss();
     let (tx, _rx) = SessionTx::with_depth(0);
 
-    let result = handle_loot(
+    let result = handle_death(
         &tx,
         &store,
-        &mut in_world_conn(),
+        &in_world_conn(),
         ClientOpcodeMessage::CMSG_REPOP_REQUEST,
     );
 

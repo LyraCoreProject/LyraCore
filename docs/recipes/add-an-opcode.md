@@ -113,15 +113,16 @@ family's dispatcher and skip to step 10.
 - File: `gateway/src/world/test_support/world_fake/<family>.rs`. Implement the trait for `WorldFake`,
   the shared Fake that implements every family, and keep the family's state in its own struct there.
 
-## 9. Link the dispatcher into the chain
+## 9. Route the opcode to its family
 
-File: `gateway/src/world/mod.rs`. In `dispatch`, add a `match dispatch_<family>_action(...)` link
-that sends `Handled` messages and returns, and passes `PassThrough` on. Re-export the family's items
-in the `pub(crate) use handlers::{...}` list.
+File: `gateway/src/world/routing.rs`. Add the opcode to its family's arm in `owner()`. Each opcode
+has one owner: a second owner is an unreachable pattern, and the build fails. A new family adds a
+`Family` variant, an arm in `owner()`, and a representative opcode in the routing tests.
 
-The order of the links matters. The first dispatcher that matches an opcode consumes it, and the
-links before yours must not claim your opcodes. A message no link takes reaches the debug log
-`world: ignoring`.
+File: `gateway/src/world/mod.rs`. A new family adds one arm to the `match family` in `dispatch`. The
+arm calls `dispatch_<family>_action(...)`, sends the `Handled` messages, and ignores a
+`PassThrough`. Re-export the family's items in the `pub(crate) use handlers::{...}` list. A message
+no family owns reaches the debug log `world: ignoring`.
 
 ## 10. Build the packet
 

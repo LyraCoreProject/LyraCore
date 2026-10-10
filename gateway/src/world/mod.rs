@@ -64,8 +64,8 @@ use handlers::{
     dispatch_channel_action, dispatch_chat_action, dispatch_duel_action, dispatch_guild_action,
     dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_member_stats,
     dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
-    handle_combat, handle_loot, handle_mail, handle_query, handle_speech, handle_trade,
-    handle_trainer, handle_unavailable, quest_giver_menu, queue_reply_then_arm,
+    handle_combat, handle_death, handle_loot, handle_mail, handle_query, handle_speech,
+    handle_trade, handle_trainer, handle_unavailable, quest_giver_menu, queue_reply_then_arm,
     AuctionActionOutcome, AuctionActionPlayer, CastOutcome, CastPlayer, CastTransition,
     ChannelActionOutcome, ChatActionOutcome, ChatActionPlayer, DuelActionOutcome, DuelActionPlayer,
     GuildActionOutcome, GuildActionPlayer, ItemActionOutcome, ItemActionPlayer, LootWindowOutcome,
@@ -1360,22 +1360,16 @@ fn dispatch(
         },
         Family::Combat => pass_on(handle_combat(store, conn, msg)?, conn),
         Family::Loot => {
-            let dispatches_to_loot_window =
-                if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
-                    let target_guid = request.guid.guid();
-                    match store.gameobject_type(target_guid)? {
-                        Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
-                            let self_guid = social::self_guid(conn).unwrap_or(0);
-                            return send_all(tx, quest_giver_menu(store, target_guid, self_guid)?);
-                        }
-                        Some(lyracore_shared::constants::go_type::CHEST) => true,
-                        _ => false,
-                    }
-                } else {
-                    true
-                };
-            if !dispatches_to_loot_window {
-                return pass_on(handle_loot(tx, store, conn, msg)?, conn);
+            // A quest giver opens its quest menu; every other GameObject type is a Loot Window use.
+            // A failed type read ends the World Session.
+            if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
+                let target_guid = request.guid.guid();
+                if store.gameobject_type(target_guid)?
+                    == Some(lyracore_shared::constants::go_type::QUESTGIVER)
+                {
+                    let self_guid = social::self_guid(conn).unwrap_or(0);
+                    return send_all(tx, quest_giver_menu(store, target_guid, self_guid)?);
+                }
             }
             let current_loot_state = match &conn.state {
                 WorldState::InWorld(iw) => iw.open_loot,
@@ -1401,11 +1395,11 @@ fn dispatch(
                     send_all(tx, outbound)
                 }
                 LootWindowOutcome::PassThrough(msg) => {
-                    pass_on(handle_loot(tx, store, conn, msg)?, conn)
+                    pass_on(handle_loot(store, conn, msg)?, conn)
                 }
             }
         }
-        Family::Death => pass_on(handle_loot(tx, store, conn, msg)?, conn),
+        Family::Death => pass_on(handle_death(tx, store, conn, msg)?, conn),
         Family::Npc => pass_on(handle_query(tx, store, conn, msg)?, conn),
         Family::Auction => match dispatch_auction_action(
             store,
