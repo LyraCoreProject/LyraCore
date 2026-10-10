@@ -398,7 +398,7 @@ pub(super) mod tests {
         pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
         pub(crate) item_target_casts: Mutex<Vec<(u64, u64, u32, u8)>>,
         pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
-        pub(crate) stop_attacks: Mutex<Vec<(u64, u64)>>,
+        pub(crate) stop_attacks: Mutex<Vec<u64>>,
         pub(crate) disenchant_calls: Mutex<Vec<u8>>,
         pub(crate) enchant_calls: Mutex<Vec<EnchantCall>>,
         pub(crate) fish_calls: Mutex<Vec<FishCall>>,
@@ -624,24 +624,16 @@ pub(super) mod tests {
     /// The ranged teardown the cast module shares with the melee seam. `start_attack` is never
     /// reached from a cast route; it exists because the two share one durable engagement row.
     impl MeleeActionStore for InMemoryCasts {
-        fn start_attack(
-            &self,
-            _account_id: u64,
-            _actor_guid: u64,
-            _target_guid: u64,
-        ) -> Result<()> {
+        fn start_attack(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
             unreachable!("no cast route arms a melee engagement")
         }
 
-        fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
-            self.stop_attacks
-                .lock()
-                .unwrap()
-                .push((account_id, actor_guid));
+        fn stop_attack(&self, actor: Actor) -> Result<()> {
+            self.stop_attacks.lock().unwrap().push(actor.guid());
             self.engaged
                 .lock()
                 .unwrap()
-                .retain(|&guid| guid != actor_guid);
+                .retain(|&guid| guid != actor.guid());
             Ok(())
         }
     }

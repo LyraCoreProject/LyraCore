@@ -123,7 +123,10 @@ pub(super) fn cancel<St: CastStore + ?Sized>(store: &St, player: CastPlayer) -> 
 /// Ask the module to tear the engagement down. Best effort: a refused stop (nothing armed, a race
 /// with the swing tick) must not end the session or reach the client.
 fn stop_loop<St: CastStore + ?Sized>(store: &St, player: CastPlayer, context: &str) {
-    if let Err(e) = store.stop_attack(player.account_id, player.self_guid.unwrap_or(0)) {
+    let Some(actor) = player.self_guid.and_then(Actor::new) else {
+        return;
+    };
+    if let Err(e) = store.stop_attack(actor) {
         log::debug!(
             "world: {context} stop_attack ignored (account {}): {e}",
             player.account_id
@@ -321,7 +324,7 @@ mod tests {
         );
         assert_eq!(
             store.stop_attacks.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)],
+            &[CASTER],
             "the client dropped its toggle, so the still-firing old loop must go too"
         );
     }
@@ -357,10 +360,7 @@ mod tests {
                 ranged_repeat: Some(false)
             }
         );
-        assert_eq!(
-            store.stop_attacks.lock().unwrap().as_slice(),
-            &[(ACCOUNT, CASTER)]
-        );
+        assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[CASTER]);
         assert!(
             outbound.is_empty(),
             "the engagement's on_delete relay is the one sender of the cancel signal"

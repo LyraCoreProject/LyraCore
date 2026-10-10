@@ -101,15 +101,14 @@ fn attackswing_ok_replies_attackstart_and_stop_echoes_then_clears() {
 #[test]
 fn melee_opcodes_at_character_select_answer_nothing_and_do_not_fail() {
     // No WorldEntity yet, so the seam has no attacker guid to name and no combat state to change.
-    // The durable calls still go out under the legacy zero actor, which the stop shows: it clears
-    // the engagement the swing left on actor 0.
+    // It makes no durable request.
     let actions = InMemoryMeleeActions::default();
     let mut session = Session::at_character_select();
 
     assert!(run(&actions, &mut session, swing(90)).is_empty());
-    assert_eq!(actions.engaged.lock().unwrap().as_slice(), &[0]);
     assert!(run(&actions, &mut session, CMSG_ATTACKSTOP {}).is_empty());
-    assert!(actions.engaged.lock().unwrap().is_empty());
+    assert!(actions.start_requests.lock().unwrap().is_empty());
+    assert!(actions.stop_requests.lock().unwrap().is_empty());
 }
 
 #[test]

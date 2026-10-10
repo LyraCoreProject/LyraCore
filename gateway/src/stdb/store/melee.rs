@@ -1,28 +1,16 @@
 //! `Coordinator`'s [`MeleeActionStore`] adapter.
 
-use anyhow::{anyhow, Result};
+use anyhow::Result;
 
 use crate::stdb::bindings::*;
 use crate::stdb::connection::call_reducer;
 use crate::stdb::Coordinator;
 use crate::world::{Actor, MeleeActionStore};
 
-impl MeleeActionStore for crate::stdb::Coordinator {
-    fn start_attack(&self, account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::start_attack(self, account_id, actor_guid, target_guid)
-    }
-
-    fn stop_attack(&self, account_id: u64, actor_guid: u64) -> Result<()> {
-        crate::stdb::Coordinator::stop_attack(self, account_id, actor_guid)
-    }
-}
-
-impl Coordinator {
+impl MeleeActionStore for Coordinator {
     /// Start the player's melee auto-attack on `target_guid` (`CMSG_ATTACKSWING`, combat C1) over
     /// the coordinator connection so the module attributes the swing to the caller.
-    pub fn start_attack(&self, _account_id: u64, actor_guid: u64, target_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("start_attack: actor_guid unresolved"))?;
+    fn start_attack(&self, actor: Actor, target_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
@@ -32,9 +20,7 @@ impl Coordinator {
     }
 
     /// Stop the player's melee auto-attack (`CMSG_ATTACKSTOP`, combat C1).
-    pub fn stop_attack(&self, _account_id: u64, actor_guid: u64) -> Result<()> {
-        let actor =
-            Actor::new(actor_guid).ok_or_else(|| anyhow!("stop_attack: actor_guid unresolved"))?;
+    fn stop_attack(&self, actor: Actor) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
