@@ -582,6 +582,24 @@ pub(crate) fn classify(error: &anyhow::Error) -> DurableFailure<'_> {
     }
 }
 
+/// A per-action Durable Request whose Refusal the client never sees: log the Refusal and answer
+/// `None`; a Transport Loss stays an error and ends the World Session.
+pub(crate) fn ignore_refusal<T>(
+    what: &str,
+    result: anyhow::Result<T>,
+) -> anyhow::Result<Option<T>> {
+    match result {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => match classify(&error) {
+            DurableFailure::Refusal { reason } => {
+                log::debug!("world: {what} refused: {reason}");
+                Ok(None)
+            }
+            DurableFailure::TransportLoss => Err(error),
+        },
+    }
+}
+
 /// The Module's unwrapped refusal reason, preserving its stable gameplay prefix.
 pub(crate) fn reducer_refusal_reason(error: &anyhow::Error) -> Option<&str> {
     error.chain().find_map(|cause| {
@@ -2257,7 +2275,16 @@ mod pump_tests {
 
 #[cfg(test)]
 mod classify_tests {
-    use super::{classify, recv_reducer, DurableFailure, ReducerCallError};
+    use super::{classify, ignore_refusal, recv_reducer, DurableFailure, ReducerCallError};
+
+    #[test]
+    fn ignore_refusal_drops_a_refusal_and_keeps_a_transport_loss() {
+        let refused = Err::<(), _>(ReducerCallError::refused("gw_inspect", "no_target").into());
+        assert!(ignore_refusal("inspect", refused).unwrap().is_none());
+        let lost = Err::<(), _>(ReducerCallError::transport_lost("gw_inspect").into());
+        assert!(ignore_refusal("inspect", lost).is_err());
+        assert_eq!(ignore_refusal("inspect", Ok(7)).unwrap(), Some(7));
+    }
 
     #[test]
     fn a_rejected_reducer_is_a_refusal_with_the_module_reason() {

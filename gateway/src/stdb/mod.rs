@@ -42,7 +42,7 @@ pub(crate) mod world_view; // shared per-shard spatial, broadcast, private, and 
 
 pub use connection::Coordinator;
 pub(crate) use connection::ReducerCallError;
-pub(crate) use connection::{classify, DurableFailure};
+pub(crate) use connection::{classify, ignore_refusal, DurableFailure};
 pub use subscriptions::PlayerSubscriptions;
 // Re-exported so `crate::stdb::{RealmRow, AccountRow}` resolves (they are the return types of
 // `Coordinator::realm` / `account_by_username`). `allow(unused_imports)` because in this *binary*

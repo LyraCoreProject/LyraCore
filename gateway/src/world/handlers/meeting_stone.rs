@@ -5,7 +5,7 @@
 //! the group event relay; only a refused party JOIN is answered here.
 
 use super::super::*;
-use crate::stdb::{classify, DurableFailure};
+use crate::stdb::ignore_refusal;
 use lyracore_shared::group::GROUP_MAX_MEMBERS;
 use lyracore_shared::meeting_stone::{
     join_failure_for, queue_status, realm_op, MeetingStoneRefusal,
@@ -91,7 +91,7 @@ pub(crate) fn dispatch_meeting_stone_action<St: MeetingStoneActionStore + ?Sized
             )?;
             Vec::new()
         }
-        Action::Info => info(store, player.account_id, actor)?,
+        Action::Info => info(store, actor)?,
         Action::LookingForGroup => vec![Outbound::One(ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(
             codec::build_looking_for_group(),
         ))],
@@ -106,21 +106,6 @@ enum Action {
     LookingForGroup,
 }
 
-/// Only a Transport Loss ends the World Session. A Refusal is logged and answered with nothing,
-/// because the client has no message for it.
-fn recoverable<T>(what: &str, account_id: u64, result: Result<T>) -> Result<Option<T>> {
-    match result {
-        Ok(value) => Ok(Some(value)),
-        Err(error) => match classify(&error) {
-            DurableFailure::Refusal { reason } => {
-                log::debug!("world: meeting stone {what} refused (account {account_id}): {reason}");
-                Ok(None)
-            }
-            DurableFailure::TransportLoss => Err(error),
-        },
-    }
-}
-
 /// Every failure before the queue is silent, as in both cores. A refused party JOIN answers
 /// `SMSG_MEETINGSTONE_JOINFAILED`.
 fn join<St: MeetingStoneActionStore + ?Sized>(
@@ -129,9 +114,8 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
     actor: Actor,
     go_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    match recoverable(
-        "admission",
-        account_id,
+    match ignore_refusal(
+        "meeting stone admission",
         store.admit_meeting_stone(actor, go_guid),
     )? {
         Some(MeetingStoneOutcome::Ran) => {}
@@ -144,11 +128,8 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
         }
         None => return Ok(Vec::new()),
     }
-    let Some(Some(area_id)) = recoverable(
-        "stone area read",
-        account_id,
-        store.meeting_stone_area(go_guid),
-    )?
+    let Some(Some(area_id)) =
+        ignore_refusal("meeting stone area read", store.meeting_stone_area(go_guid))?
     else {
         return Ok(Vec::new());
     };
@@ -157,9 +138,8 @@ fn join<St: MeetingStoneActionStore + ?Sized>(
         log::debug!("world: meeting stone {go_guid} names unknown area {area_id}");
         return Ok(Vec::new());
     }
-    let Some(seekers) = recoverable(
-        "seeker facts read",
-        account_id,
+    let Some(seekers) = ignore_refusal(
+        "meeting stone seeker facts read",
         facts_for_join(store, actor),
     )?
     else {
@@ -203,9 +183,8 @@ fn run_op<St: MeetingStoneActionStore + ?Sized>(
     area_id: u32,
     seekers: Vec<SeekerFacts>,
 ) -> Result<Option<MeetingStoneOutcome>> {
-    let outcome = recoverable(
-        "op",
-        account_id,
+    let outcome = ignore_refusal(
+        "meeting stone op",
         store.meeting_stone_op(actor, op, area_id, seekers),
     )?;
     if let Some(MeetingStoneOutcome::Refused(refusal)) = outcome {
@@ -219,12 +198,9 @@ fn run_op<St: MeetingStoneActionStore + ?Sized>(
 
 /// `CMSG_MEETINGSTONE_INFO`, sent after a loading screen: JOINED for a Seeker's area, else NONE.
 /// Both cores read a restore map nothing fills; this reports the real state.
-fn info<St: MeetingStoneActionStore + ?Sized>(
-    store: &St,
-    account_id: u64,
-    actor: Actor,
-) -> Result<Vec<Outbound>> {
-    let Some(queued) = recoverable("status read", account_id, store.queued_area(actor.guid()))?
+fn info<St: MeetingStoneActionStore + ?Sized>(store: &St, actor: Actor) -> Result<Vec<Outbound>> {
+    let Some(queued) =
+        ignore_refusal("meeting stone status read", store.queued_area(actor.guid()))?
     else {
         return Ok(Vec::new());
     };
