@@ -3,7 +3,7 @@ use super::super::*;
 impl ChannelActionStore for WorldFake {
     fn channel_op(
         &self,
-        _actor_guid: u64,
+        _actor: Actor,
         _op: u8,
         _request: ChannelRequest,
     ) -> Result<ChannelOutcome> {
