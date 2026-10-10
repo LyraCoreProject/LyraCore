@@ -216,7 +216,7 @@ fn an_escrow_row_that_lags_the_reducer_reply_is_waited_for_not_refused() {
 ///
 /// Before this, `set_character_shard` had exactly one caller in the whole gateway — the login
 /// self-heal — so a completed cross-database transfer updated the SOURCE database's copy of the
-/// index (transactionally, inside `finish_transfer`) and nothing else. The copy `home_shard`
+/// index (transactionally, inside `finish_transfer`) and nothing else. The copy world entry
 /// actually reads is realm-core's, and it learned about the move at the character's next login, by
 /// probing every shard. The requirement that realm-core's index be correct without relying on that
 /// probe was unmet, and looked correct only because the probe masked it.

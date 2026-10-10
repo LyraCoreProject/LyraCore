@@ -82,6 +82,37 @@ pub(crate) trait ChatActionStore: Send + Sync {
     /// The speaker's GM level, read on its Home Shard. The Chat Flood Limiter never mutes a
     /// Character above 0.
     fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8>;
+
+    /// Speak (`CMSG_MESSAGECHAT`, social tier): broadcast a say, yell or `/e` line
+    /// (`lyracore_shared::chat::broadcast_chat`). A language the speaker's race does not know is a
+    /// Refusal.
+    fn send_chat(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        chat_type: u8,
+        language: u8,
+        message: String,
+    ) -> Result<ChatOutcome>;
+
+    /// Perform an emote (`CMSG_TEXT_EMOTE`, social tier): broadcast the "X dances." line + animation.
+    /// `target_guid` (0 = untargeted) is the client's selected target — the gateway resolves it to a
+    /// name so the chat line reads "X waves at <target>."
+    fn send_emote(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        text_emote: u32,
+        emote_anim: u32,
+        target_guid: u64,
+    ) -> Result<()>;
+
+    /// GM playtest dot-command for the proof-validated, realm-wide `account_name`: `text` is the
+    /// raw Say line, STILL carrying its
+    /// leading `.` — the Say handler intercepts it BEFORE any chat relay/insert and forwards it here
+    /// verbatim (module-side parsing keeps the command set data-free). `Err`'s message is relayed back
+    /// to the SENDER ONLY as a system chat line (never broadcast, never a `game_chat_event` row).
+    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()>;
 }
 
 impl ChatActionStore for crate::stdb::Coordinator {
@@ -111,6 +142,32 @@ impl ChatActionStore for crate::stdb::Coordinator {
 
     fn speaker_gm_level(&self, speaker_guid: u64) -> Result<u8> {
         Ok(crate::stdb::Coordinator::home_gm_level(self, speaker_guid))
+    }
+
+    fn send_chat(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        chat_type: u8,
+        language: u8,
+        message: String,
+    ) -> Result<crate::world::ChatOutcome> {
+        self.send_chat(account_id, self_guid, chat_type, language, message)
+    }
+
+    fn send_emote(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        text_emote: u32,
+        emote_anim: u32,
+        target_guid: u64,
+    ) -> Result<()> {
+        self.send_emote(account_id, self_guid, text_emote, emote_anim, target_guid)
+    }
+
+    fn gm_command(&self, account_name: &str, self_guid: u64, text: String) -> Result<()> {
+        self.gm_command(account_name, self_guid, text)
     }
 }
 
@@ -480,6 +537,32 @@ mod tests {
 
         fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
             Ok(0)
+        }
+
+        fn send_chat(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _chat_type: u8,
+            _language: u8,
+            _message: String,
+        ) -> Result<ChatOutcome> {
+            unreachable!("the chat action dispatcher never speaks a say, yell or emote line")
+        }
+
+        fn send_emote(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _text_emote: u32,
+            _emote_anim: u32,
+            _target_guid: u64,
+        ) -> Result<()> {
+            unreachable!("the chat action dispatcher never performs a text emote")
+        }
+
+        fn gm_command(&self, _account_name: &str, _self_guid: u64, _text: String) -> Result<()> {
+            unreachable!("the chat action dispatcher never runs a GM command")
         }
     }
 

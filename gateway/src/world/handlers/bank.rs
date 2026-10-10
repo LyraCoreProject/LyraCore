@@ -4,6 +4,19 @@
 use super::super::*;
 use super::send_show_bank;
 
+/// Bank Durable Requests.
+pub(crate) trait BankStore: Send + Sync {
+    /// Auto-bank/auto-store-bank the item in `slot` (`CMSG_AUTOBANK_ITEM`/`CMSG_AUTOSTORE_BANK_ITEM`
+    /// — right-click to bank, right-click to withdraw). The module infers the direction from `slot`
+    /// and resolves the receiving free slot itself; a full destination (bank or carry space) is a
+    /// per-action `Err`.
+    fn auto_bank_item(&self, account_id: u64, self_guid: u64, slot: u8) -> Result<()>;
+
+    /// Buy the next bank bag slot from `banker_guid` (`CMSG_BUY_BANK_SLOT`). A refusal `Err` leads
+    /// with its `SMSG_BUY_BANK_SLOT_RESULT` code in brackets (the trainer `[N]` precedent).
+    fn buy_bank_slot(&self, account_id: u64, self_guid: u64, banker_guid: u64) -> Result<()>;
+}
+
 /// Bank family: `CMSG_BANKER_ACTIVATE` opens the bank window (a standing-refusing banker gets no
 /// reply at all, matching the vendor `CMSG_LIST_INVENTORY` gate); `CMSG_AUTOBANK_ITEM` deposits a
 /// carried item into the first free bank slot, `CMSG_AUTOSTORE_BANK_ITEM` withdraws a banked item

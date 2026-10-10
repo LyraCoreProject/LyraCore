@@ -4,6 +4,28 @@
 
 use super::super::*;
 
+/// Selection, pet commands and sheathing.
+pub(crate) trait CombatStore: Send + Sync {
+    /// Record the player's current target (`CMSG_SET_SELECTION`, Tier 2 / N3). 0 clears it.
+    fn set_target(&self, account_id: u64, self_guid: u64, target_guid: u64) -> Result<()>;
+
+    /// Relay a pet command-bar action (`CMSG_PET_ACTION`). `data` is the raw packed action
+    /// (flag<<24 | id): flag 0x07 = command (Stay/Follow/Attack/Dismiss), flag 0x06 = react state
+    /// (Passive/Defensive/Aggressive). The module decodes + validates (all pet policy lives there).
+    fn pet_command(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        data: u32,
+        target_guid: u64,
+    ) -> Result<()>;
+
+    /// Draw or stow the player's weapons (`CMSG_SETSHEATHED`, the `Z` key). `state` is 0 stowed /
+    /// 1 melee / 2 ranged; the module range-checks it. Writes `UNIT_FIELD_BYTES_2` byte 0, which is
+    /// what makes a drawn or stowed weapon visible to OTHER players.
+    fn set_sheathed(&self, account_id: u64, self_guid: u64, state: u8) -> Result<()>;
+}
+
 /// Combat family leftovers: selection, pet commands, the run-speed ack and sheathing. Each arm is
 /// best-effort. The session-fatal desync exits went to the melee seam with the two melee opcodes
 /// that owned them.

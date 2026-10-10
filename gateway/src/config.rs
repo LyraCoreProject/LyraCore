@@ -331,8 +331,8 @@ impl ShardMap {
     /// Every distinct WORLD SHARD this map can resolve to, default first. These are the databases
     /// that hold characters, so these — and only these — are what a character-location probe walks.
     /// Realm-core is deliberately not here: it holds no characters, so probing it is pure waste.
-    /// ⚠ **Default stays FIRST.** `resolve_home_shard`'s fallback probe walks the connected set in
-    /// this order and must try the default database before any rule shard.
+    /// ⚠ **Default stays FIRST.** The fallback census walks the connected set in this order and
+    /// must try the default database before any rule shard.
     pub fn shards(&self) -> Vec<String> {
         let mut dbs = vec![self.default_db.clone()];
         for r in &self.rules {
@@ -531,66 +531,6 @@ impl InstanceHosting {
             Self::NoHost(msg) => Err(msg),
         }
     }
-}
-
-/// Where the realm believes a character lives, and whether the realm-core index needs correcting.
-#[derive(Clone, Debug, PartialEq)]
-pub struct HomeShard {
-    /// The database that owns the character.
-    pub db: String,
-    /// The `(map_id, instance_id)` that resolved it — the value written back on a heal.
-    pub location: (u32, u64),
-    /// The realm-core index disagreed (or had nothing) — write `location` back to it.
-    pub heal: bool,
-}
-
-/// Resolve which database owns `character_guid`, from the realm-core index hint plus a probe of the
-/// connected world shards. Pure, so the whole self-heal rule is unit-testable without a
-/// node — deliberately, because an earlier shard-routing change shipped a bug hidden by a mock that
-/// hardcoded exactly the answer under test.
-///
-/// - `hint` — the realm-core `game_character_shard` entry, or `None` when the index has no idea.
-/// - `connected` — the world shards that actually connected, DEFAULT FIRST (probe order).
-/// - `probe(db)` — "does `db` hold this character, and at what location" (the coordinator's
-///   `character_location` against that shard's cache; an in-memory lookup, not a round trip).
-///
-/// The rule: **the index is a hint, the row is the truth.** A hint is accepted only when the shard it
-/// names actually holds the character; anything else falls through to walking the shards, and the
-/// answer is marked for write-back. With ONE connected shard this degenerates to "probe the default
-/// shard and resolve its location through the map" — i.e. the original shard-routing behavior, byte
-/// for byte.
-pub fn resolve_home_shard(
-    map: &ShardMap,
-    connected: &[String],
-    hint: Option<(u32, u64)>,
-    probe: impl Fn(&str) -> Option<(u32, u64)>,
-) -> Option<HomeShard> {
-    let is_connected = |d: &str| connected.iter().any(|c| c == d);
-    let settle = |location: (u32, u64)| HomeShard {
-        db: map
-            .resolve_connected(location.0, location.1, is_connected)
-            .to_string(),
-        location,
-        heal: hint != Some(location),
-    };
-
-    // 1. Fast path: trust the hint only far enough to know WHICH shard to ask, then confirm with
-    //    that shard's own row. A wrong hint therefore costs one extra probe, never a wrong route.
-    if let Some((map_id, instance_id)) = hint {
-        let hinted = map.resolve_connected(map_id, instance_id, is_connected);
-        if let Some(location) = probe(hinted) {
-            return Some(settle(location));
-        }
-        log::info!(
-            "realm-core index points at map {map_id}/instance {instance_id} (shard {hinted}), but \
-             that shard does not hold the character — probing; the index will self-heal"
-        );
-    }
-
-    // 2. Fallback probe (the self-heal): ask every connected shard, default first, and route by the
-    //    location the owning shard reports — exactly how the shard map routes, just sourced by
-    //    probe rather than by assuming the default shard still holds the row.
-    connected.iter().find_map(|db| probe(db)).map(settle)
 }
 
 /// `<map_id|*>[:<bucket|*>]=<db>` → a rule, or `None` if it doesn't parse.
@@ -1546,103 +1486,6 @@ mod shard_map_tests {
         // Surrounding whitespace is trimmed, not treated as part of the name.
         let m = ShardMap::parse("world", "").with_realm_core(Some(" lyracore-realm "));
         assert_eq!(m.realm_core_db(), Some("lyracore-realm"));
-    }
-
-    #[test]
-    fn one_shard_resolves_home_from_the_probe_alone_exactly_like_before_realm_core() {
-        // Backward compatibility, stated as a test: single shard, no index entry → "ask the default
-        // shard where the character is, resolve that through the map" verbatim.
-        let m = ShardMap::parse("world", "");
-        let connected = vec!["world".to_string()];
-        let got = resolve_home_shard(&m, &connected, None, |db| (db == "world").then_some((0, 0)));
-        assert_eq!(
-            got,
-            Some(HomeShard {
-                db: "world".into(),
-                location: (0, 0),
-                heal: true
-            })
-        );
-        // Nobody holds the character → no answer at all (the caller keeps its current handle).
-        assert_eq!(resolve_home_shard(&m, &connected, None, |_| None), None);
-    }
-
-    #[test]
-    fn a_matching_index_entry_routes_without_a_heal() {
-        let m = ShardMap::parse("world", "389:*=instances");
-        let connected = vec!["world".to_string(), "instances".to_string()];
-        let got = resolve_home_shard(&m, &connected, Some((389, 12)), |db| {
-            (db == "instances").then_some((389, 12))
-        });
-        assert_eq!(
-            got,
-            Some(HomeShard {
-                db: "instances".into(),
-                location: (389, 12),
-                heal: false
-            }),
-            "an index entry the owning shard confirms is used as-is, with no write-back"
-        );
-    }
-
-    #[test]
-    fn a_deliberately_stale_index_entry_self_heals_via_the_fallback_probe() {
-        // The index says the character is in a Deadmines instance; it actually walked out and
-        // is standing in the open world. The hinted shard doesn't hold it, so the probe walks the
-        // shards, finds it on `world`, routes there, and flags the entry for correction.
-        let m = ShardMap::parse("world", "389:*=instances");
-        let connected = vec!["world".to_string(), "instances".to_string()];
-        let got = resolve_home_shard(&m, &connected, Some((389, 12)), |db| {
-            (db == "world").then_some((0, 0))
-        });
-        assert_eq!(
-            got,
-            Some(HomeShard {
-                db: "world".into(),
-                location: (0, 0),
-                heal: true
-            }),
-            "a stale entry must route by the row that actually exists, and mark itself for repair"
-        );
-    }
-
-    #[test]
-    fn an_index_entry_naming_a_shard_that_lies_about_the_location_still_routes_by_the_row() {
-        // The hinted shard DOES hold the character, but at a location that belongs to a different
-        // shard (mid-transfer, or a shard-map edit since the entry was written). The location the
-        // row reports is the authority for routing, and the entry gets corrected.
-        let m = ShardMap::parse("world", "389:*=instances");
-        let connected = vec!["world".to_string(), "instances".to_string()];
-        let got = resolve_home_shard(&m, &connected, Some((0, 0)), |db| {
-            (db == "world").then_some((389, 3))
-        });
-        assert_eq!(
-            got,
-            Some(HomeShard {
-                db: "instances".into(),
-                location: (389, 3),
-                heal: true
-            })
-        );
-    }
-
-    #[test]
-    fn an_index_entry_pointing_at_a_disconnected_shard_degrades_to_the_default_then_probes() {
-        // `resolve_connected` sends the hint to the default database when the named shard is down;
-        // if the default doesn't hold the character either, the probe still walks the rest.
-        let m = ShardMap::parse("world", "389:*=instances, 1:*=pool-b");
-        let connected = vec!["world".to_string(), "instances".to_string()]; // pool-b never connected
-        let got = resolve_home_shard(&m, &connected, Some((1, 0)), |db| {
-            (db == "instances").then_some((389, 7))
-        });
-        assert_eq!(
-            got,
-            Some(HomeShard {
-                db: "instances".into(),
-                location: (389, 7),
-                heal: true
-            })
-        );
     }
 
     // ==========================================================================================

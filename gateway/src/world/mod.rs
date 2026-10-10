@@ -79,11 +79,21 @@ pub(crate) use handlers::{
     MemberStatsStore, PlaceBidOutcome, PlaceBidRequest, RealmChatRequest, SeekerFacts,
     SpeakerFacts, TrainerBuyOutcome, WeatherStore, WhisperRequest, WhisperTargetFacts,
 };
+pub(crate) use handlers::{
+    AuctionActionStore, BankStore, CastStore, ChannelActionStore, CharacterStore, ChatActionStore,
+    CombatStore, DeathStore, DuelActionStore, GuildActionStore, ItemActionStore, LootWindowStore,
+    MeetingStoneActionStore, MeleeActionStore, NpcStore, QuestActionStore, TaxiActionStore,
+    TradeStore, TrainerStore, VendorActionStore,
+};
 use login_queue::{Admission, LoginQueue};
+pub(crate) use mail::MailStore;
+pub(crate) use party::PartyStore;
 use social::handle_social;
 pub(crate) use social::ContactOutcome;
+pub(crate) use social::SocialStore;
+pub(crate) use store::{SessionStore, ShardRoutingStore};
 pub use store::{WorldSessionToken, WorldStore};
-use transfer::{EscrowedTransfer, TransferPlan};
+pub(crate) use transfer::TransferStore;
 
 /// One unit of outbound traffic for the single writer thread. A `Batch` is written contiguously so
 /// the login sequence + self-spawn can never be spliced by an async peer event mid-sequence.

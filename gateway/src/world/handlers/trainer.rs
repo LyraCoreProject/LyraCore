@@ -5,6 +5,93 @@ use super::super::*;
 use lyracore_shared::trainer::TrainerRefusal;
 use wow_world_messages::vanilla::TrainingFailureReason;
 
+/// Trainer windows, talents, and the action-bar and reputation settings.
+pub(crate) trait TrainerStore: Send + Sync {
+    /// Does this trainer serve `player_guid`'s class? Gates the window and the "train" gossip
+    /// option through the same predicate the module buys with. Fail-open on missing data.
+    fn trainer_serves(&self, player_guid: u64, trainer_guid: u64) -> Result<bool>;
+
+    /// The spells a class trainer (`trainer_guid`) teaches, each pre-folded with the player's level +
+    /// known-state for the `SMSG_TRAINER_LIST` Green/Red/Gray rendering (`CMSG_TRAINER_LIST`).
+    fn trainer_list(
+        &self,
+        player_guid: u64,
+        trainer_guid: u64,
+    ) -> Result<Vec<codec::TrainerSpellView>>;
+
+    /// Buy/learn `spell_id` from trainer `trainer_guid` (`CMSG_TRAINER_BUY_SPELL`). The module gates it
+    /// (range / level / cost / not-already-known) and a Refusal comes back as an outcome; `Err` means
+    /// the durable result is unknown.
+    fn buy_trainer_spell(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        trainer_guid: u64,
+        spell_id: u32,
+    ) -> Result<TrainerBuyOutcome>;
+
+    /// The skill line a trainer offering teaches (`game_trainer_spell.learn_skill_line`), or 0 for an
+    /// ordinary spell offering. The buy path reads it to tell a SKILL purchase from a SPELL purchase:
+    /// a riding offering's id is a marker with no Spell.dbc row, so echoing it as a learned spell would
+    /// push the client something it cannot resolve. 0 on any missing read (fail toward the spell echo,
+    /// which is the pre-existing behaviour).
+    fn trainer_offer_skill_line(&self, trainer_guid: u64, spell_id: u32) -> u32;
+
+    /// Return the `grant_spell_id` for `talent_id` (0 = passive, no ability granted), so the gateway
+    /// can push `SMSG_LEARNED_SPELL` for ability talents after a successful `learn_talent`.
+    fn talent_grant_spell(&self, talent_id: u32) -> u32;
+
+    /// Persist one action-bar button (`CMSG_SET_ACTION_BUTTON`); action 0 clears the slot.
+    fn set_action_button(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        button: u8,
+        action: u32,
+        action_type: u8,
+    ) -> Result<()>;
+
+    /// Persist the rep pane's At-War checkbox (`CMSG_SET_FACTION_ATWAR`, 195 slice B).
+    /// `reputation_index` is the client's 0..63 rep-array slot, NOT a faction id.
+    fn set_faction_at_war(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        reputation_index: u32,
+        at_war: bool,
+    ) -> Result<()>;
+
+    /// Talent-pane sync after a successful `learn_talent`: `(teach_spell, superseded_prev,
+    /// points_remaining)` — the rank-spell to relay as LEARNED/SUPERCEDED (the 1.12 TalentFrame
+    /// derives shown ranks from known rank-spells) and the live PLAYER_CHARACTER_POINTS1 value
+    /// (earned − spent). `talent_id = 0` → just the points.
+    fn talent_pane_sync(&self, character_guid: u64, talent_id: u32) -> (u32, u32, u32);
+
+    /// Sum of the character's spent talent ranks — non-zero gates the login points correction.
+    fn talent_points_spent(&self, character_guid: u64) -> u32;
+
+    /// Spend a talent point on `talent_id` (`CMSG_LEARN_TALENT`). The module gates it (points available
+    /// / max rank / prerequisites); a gameplay `Err` is per-action, not session-fatal.
+    fn learn_talent(&self, account_id: u64, self_guid: u64, talent_id: u32) -> Result<()>;
+
+    /// Respec at `trainer_guid` (the "I wish to unlearn my talents." gossip option, gated to level
+    /// 10+ by `filtered_gossip_options`). Errors (out of range / not enough gold) are
+    /// per-action; the caller just closes the gossip window either way.
+    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()>;
+
+    /// The rank a trainer offering actually teaches (LearnSpell wrapper → its trigger; a
+    /// self-contained rank resolves to itself). Mirrors the module's buy-time resolution so
+    /// SMSG_LEARNED_SPELL books the granted spell, never the wrapper.
+    fn resolve_learn_target(&self, spell_id: u32) -> u32;
+
+    /// The KNOWN rank `new_spell` supersedes — Some(prev) drives SMSG_SUPERCEDED_SPELL on a buy.
+    fn superseded_old_rank(&self, new_spell: u32, player_guid: u64) -> Option<u32>;
+
+    /// A character's live presence `(online, level, class, zone_id)` on THIS Shard only. `None` if
+    /// the guid doesn't resolve to any character here.
+    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>>;
+}
+
 /// How the Module answered a trainer purchase. A Refusal is a gameplay answer the client can render;
 /// a failed Durable Request is not, so it never reaches here.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

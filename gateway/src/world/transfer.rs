@@ -2,7 +2,127 @@
 
 use anyhow::{anyhow, Result};
 
-use super::WorldStore;
+use super::{party, WorldStore};
+
+/// The escrowed cross-shard Transfer steps, and the instance lease a crossing needs.
+pub(crate) trait TransferStore: Send + Sync {
+    /// The escrow row this shard holds for `character_guid`, if any — the transfer's identity, its
+    /// destination and the serialized character. `None` = not mid-transfer here.
+    fn escrowed_transfer(&self, character_guid: u64) -> Option<EscrowedTransfer>;
+
+    /// Where this shard's durable row says the character is going (`world::teleport_player` wrote
+    /// the destination there before despawning the entity). `None` = this shard has no row for it.
+    fn character_destination(&self, character_guid: u64) -> Option<TransferPlan>;
+
+    /// `begin_transfer` — freeze + serialize + delete the live entity, in one transaction.
+    fn begin_transfer(&self, plan: &TransferPlan) -> Result<()>;
+
+    /// Materialise the arrival copy from the carried blob. A session-less crossing binds its exact
+    /// source intent identity to the destination fence in the same transaction as the import.
+    fn import_character_blob(
+        &self,
+        transfer_id: u64,
+        blob: &[u8],
+        source: RealmLocatorPredecessor,
+        bot_arrival: Option<&BotTransferIntent>,
+    ) -> Result<()>;
+
+    /// `confirm_import` — attest, on the SOURCE, that the destination copy is durable.
+    fn confirm_import(&self, transfer_id: u64) -> Result<()>;
+
+    /// `finish_transfer` — delete-last: destroy the source copy and clear the escrow.
+    fn finish_transfer(&self, transfer_id: u64) -> Result<()>;
+
+    /// `release_transfer` — drop a migrated blank arrival fence. New human and session-less
+    /// arrivals refuse because their exact crossing-specific reducer owns release.
+    fn release_transfer(&self, transfer_id: u64) -> Result<()>;
+
+    /// Release one exact human arrival fence.
+    fn release_player_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        character_guid: u64,
+        source: RealmLocatorPredecessor,
+    ) -> Result<()>;
+
+    /// Exact destination fence identity used by the Realm locator recovery compare-and-set.
+    fn transfer_arrival(&self, transfer_id: u64) -> Option<TransferArrival>;
+
+    /// Reconcile the arriving Character's authoritative party mirror before its destination fence
+    /// drops. A single-database store and a test store without realm-wide parties have no work.
+    fn sync_transfer_arrival(&self, character_guid: u64) -> Result<()>;
+
+    /// Publish Realm's pending partition before the source is frozen.
+    fn sync_transfer_pending(&self, character_guid: u64) -> Result<()>;
+
+    /// Record Realm-core's pending phase before the source is frozen and return its predecessor
+    /// locator revision. Single-database stores have no remote phase.
+    fn begin_shard_index_transfer(
+        &self,
+        plan: &TransferPlan,
+        bot_intent: Option<(&BotTransferIntent, u64)>,
+    ) -> Result<party::RealmCharacterPartition>;
+
+    /// Settle a player crossing against the predecessor returned by
+    /// [`begin_shard_index_transfer`](Self::begin_shard_index_transfer).
+    fn finish_player_shard_index_transfer(
+        &self,
+        plan: &TransferPlan,
+        source_map: u32,
+        source_instance: u64,
+        source_revision: u64,
+    ) -> Result<()>;
+
+    /// Resume a Realm pending phase from the destination Character after source finish.
+    fn finish_pending_shard_index_transfer(
+        &self,
+        character_guid: u64,
+        destination_map: u32,
+        destination_instance: u64,
+        arrival: &TransferArrival,
+    ) -> Result<()>;
+
+    /// Bind this claimed intent to the Realm locator it is about to move from.
+    fn bind_bot_transfer_locator(
+        &self,
+        intent: &BotTransferIntent,
+        source_revision: u64,
+        claim_token: u64,
+    ) -> Result<()>;
+
+    /// Compare-and-set Realm-core's locator for one exact session-less crossing.
+    fn publish_bot_shard_index(&self, intent: &BotTransferIntent) -> Result<()>;
+
+    /// The source-side lease for a named instance: its map and owning party. Portal admission
+    /// creates this before a cross-Shard Transfer, so it remains the authority if party membership
+    /// changes while the Character is in Escrow.
+    fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)>;
+
+    /// `ensure_instance` — mirror an instance id onto this shard, spawning its population once.
+    fn ensure_instance(&self, instance_id: u64, map_id: u32, party_id: u64) -> Result<()>;
+
+    /// `evict_instance_population` — drop an instance's population here, keeping the lease row.
+    fn evict_instance_population(&self, instance_id: u64) -> Result<()>;
+
+    /// Persist the exact claimed intent's destination-ready witness before release.
+    fn mark_bot_transfer_arrival_ready(
+        &self,
+        intent_id: u64,
+        bot_guid: u64,
+        controller_generation: u64,
+        claim_token: u64,
+    ) -> Result<()>;
+
+    /// Whether the current destination fence belongs to this exact source intent.
+    fn bot_transfer_arrival_matches(&self, transfer_id: u64, intent: &BotTransferIntent) -> bool;
+
+    /// Release only the destination fence identified by this intent. A newer fence is untouched.
+    fn release_bot_transfer_arrival(
+        &self,
+        transfer_id: u64,
+        intent: &BotTransferIntent,
+    ) -> Result<()>;
+}
 
 /// Where a character is going. Derived from the character's own durable row on the source shard —
 /// `world::teleport_player` writes the DESTINATION map/instance/position there before it despawns

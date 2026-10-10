@@ -1134,9 +1134,7 @@ impl InMemoryStore {
         self.rec(what);
         Ok(db)
     }
-}
 
-impl WorldStore for InMemoryStore {
     fn home_shard(&self, _character_guid: u64) -> Option<std::sync::Arc<dyn WorldStore>> {
         let nth = self
             .home_shard_calls
@@ -1147,9 +1145,32 @@ impl WorldStore for InMemoryStore {
         };
         resolved.map(|h| h as std::sync::Arc<dyn WorldStore>)
     }
-    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
-        self.pending_system_messages.clone()
+
+    /// The realm-core index publish. Recorded in the shared call log so its POSITION in the
+    /// drive is assertable, not just its effect.
+    fn publish_shard_index(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<()> {
+        if let Some(e) = &self.publish_error {
+            return Err(anyhow!("{e}"));
+        }
+        // Through `xstep`, like every other step of the drive — NOT a bare `rec`. Every other
+        // transfer method routes its "gateway killed here" injection through it, and this one
+        // originally did not, so `kill_at = "publish_shard_index"` was silently inert and the
+        // crash matrix reported a PASS for a boundary it never killed at.
+        self.xstep("publish_shard_index")?;
+        self.realm_index
+            .lock()
+            .unwrap()
+            .push((character_guid, map_id, instance_id));
+        Ok(())
     }
+}
+
+impl ShardRoutingStore for InMemoryStore {
     fn shard_name(&self) -> &str {
         &self.shard
     }
@@ -1192,6 +1213,316 @@ impl WorldStore for InMemoryStore {
         (*m == map_id && *i == instance_id).then(|| shard.clone() as std::sync::Arc<dyn WorldStore>)
     }
 
+    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
+        self.realm
+            .clone()
+            .map(|r| r as std::sync::Arc<dyn WorldStore>)
+    }
+
+    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.party_cleanup_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.party_command_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.transfer_realm_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.realm_store())
+    }
+
+    fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
+        self.peers
+            .lock()
+            .unwrap()
+            .iter()
+            .map(|p| p.clone() as std::sync::Arc<dyn WorldStore>)
+            .collect()
+    }
+
+    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.world_stores())
+    }
+}
+
+impl SessionStore for InMemoryStore {
+    fn pending_system_messages(&self, _self_guid: u64) -> Vec<String> {
+        self.pending_system_messages.clone()
+    }
+
+    fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>> {
+        Ok((account_name == self.username)
+            .then(|| self.session.clone())
+            .flatten())
+    }
+
+    fn player_login(
+        &self,
+        _account_id: u64,
+        _character_guid: u64,
+        entry: codec::WorldEntry,
+    ) -> Result<codec::EntityView> {
+        self.rec("player_login");
+        self.login_entries.lock().unwrap().push(entry);
+        let call = self
+            .login_calls
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if call > 0 {
+            if let Some(e) = &self.worldport_login_error {
+                return Err(anyhow!("{e}"));
+            }
+            if let Some(e) = self.worldport_entity.clone() {
+                return Ok(e);
+            }
+        }
+        self.login_entity
+            .clone()
+            .ok_or_else(|| anyhow!("no login entity configured"))
+    }
+
+    fn movement_update(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        opcode: u32,
+        info: &MovementInfo,
+    ) -> Result<()> {
+        self.rec("movement_update");
+        if let Some(e) = &self.movement_error {
+            return Err(anyhow!("movement_update reducer failed: {e}"));
+        }
+        self.moves.lock().unwrap().push((
+            opcode,
+            info.position.x,
+            info.position.y,
+            info.position.z,
+            info.orientation,
+            info.timestamp,
+        ));
+        Ok(())
+    }
+
+    fn subscribe_player_events(
+        &self,
+        _account_id: u64,
+        self_guid: u64,
+        arrival: &codec::EntityView,
+        tx: SessionTx,
+    ) -> Result<PlayerSubscriptions> {
+        self.rec("subscribe_player_events");
+        self.subscribed
+            .lock()
+            .unwrap()
+            .push((self_guid, arrival.map_id, arrival.x, arrival.y));
+        *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
+        if self.turn_in_reward_item.is_some() {
+            *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
+        }
+        let Some(view) = &self.relay_view else {
+            return Ok(PlayerSubscriptions::empty());
+        };
+        let subs = PlayerSubscriptions::registered_for_test(view.clone(), self_guid, arrival, tx);
+        if let (Some(mate), Some(record)) = (
+            self.member_stats_before_party_frame,
+            subs.member_stats_record(),
+        ) {
+            let delivered = codec::MemberStats::default();
+            record
+                .lock()
+                .insert(mate, MemberSnapshot::Live(Box::new(delivered)));
+        }
+        Ok(subs)
+    }
+
+    fn client_command(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        cmd: String,
+        payload: String,
+    ) -> Result<()> {
+        self.client_commands
+            .lock()
+            .unwrap()
+            .push((account_id, self_guid, cmd, payload));
+        Ok(())
+    }
+
+    fn entity_in_world(&self, guid: u64) -> bool {
+        self.entity_presence_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(present) = &self.entity_presence {
+            return present.load(std::sync::atomic::Ordering::SeqCst);
+        }
+        // `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
+        // live on THIS shard"). Empty by default, so the single flag above is still the answer
+        // every test written before realm-wide party routing set.
+        self.entity_in_world || self.live_guids.contains(&guid)
+    }
+
+    fn entity_max_health(&self, _guid: u64) -> u32 {
+        100
+    }
+
+    fn claim_session(&self, account_id: u64, _character_guid: u64) -> Result<WorldSessionToken> {
+        Ok(WorldSessionToken {
+            account_id,
+            generation: 1,
+            request_nonce: 1,
+        })
+    }
+
+    fn bind_session(
+        &self,
+        _token: WorldSessionToken,
+    ) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        Ok(None)
+    }
+
+    fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
+        self.rec("logout");
+        self.logout_called
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        match &self.logout_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
+        self.combat_until_ms
+    }
+}
+
+impl CharacterStore for InMemoryStore {
+    fn characters(&self, _account_id: u64) -> Result<Vec<codec::CharacterView>> {
+        self.rec("characters");
+        let mut out = self.characters.clone();
+        out.extend(self.created_characters.lock().unwrap().iter().cloned());
+        Ok(out)
+    }
+
+    fn create_character(
+        &self,
+        _account_id: u64,
+        name: &str,
+        race: u8,
+        class: u8,
+        _gender: u8,
+        _appearance: codec::Appearance,
+    ) -> Result<codec::CharCreateOutcome> {
+        if self.characters.iter().any(|c| c.name == name)
+            || self
+                .created_characters
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|c| c.name == name)
+        {
+            return Ok(codec::CharCreateOutcome::NameInUse);
+        }
+        let guid = 500
+            + self
+                .next_created_guid
+                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        self.created_characters
+            .lock()
+            .unwrap()
+            .push(codec::CharacterView {
+                guid,
+                name: name.to_string(),
+                race,
+                class,
+                level: 1,
+                ..Default::default()
+            });
+        Ok(codec::CharCreateOutcome::Success)
+    }
+
+    fn delete_character(
+        &self,
+        account_id: u64,
+        character_guid: u64,
+    ) -> Result<codec::CharDeleteOutcome> {
+        self.deleted
+            .lock()
+            .unwrap()
+            .push((account_id, character_guid));
+        Ok(self
+            .delete_outcome
+            .unwrap_or(codec::CharDeleteOutcome::Success))
+    }
+
+    fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
+        if let Some(error) = &self.character_read_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self.characters.iter().find(|c| c.guid == guid).cloned())
+    }
+
+    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
+        self.durable_absence_checks
+            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        if self.character_by_guid(guid)?.is_some() {
+            return Ok(true);
+        }
+        for shard in self.peers.lock().unwrap().iter() {
+            if shard.character_by_guid(guid)?.is_some() {
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
+        Ok(Vec::new())
+    }
+
+    fn effective_armor(&self, _guid: u64) -> u32 {
+        // No gear/auras in the test store → effective == the login entity's armor.
+        self.login_entity
+            .as_ref()
+            .map(|e| e.effective_armor)
+            .unwrap_or(0)
+    }
+
+    fn effective_magic_resistances(&self, _guid: u64) -> [u32; 6] {
+        [0; 6]
+    }
+
+    fn spell_modifiers(&self, _character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
+        Vec::new() // no modifier packets in the harness (login stays byte-identical)
+    }
+
+    fn player_learned_spells(&self, _player_guid: u64) -> Result<Vec<u32>> {
+        Ok(self.learned_spells.clone())
+    }
+
+    fn player_reputations(&self, _player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
+        Ok(self.reputations.clone())
+    }
+
+    fn player_actions(&self, _player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
+        Ok(self.player_actions.clone())
+    }
+}
+
+impl TransferStore for InMemoryStore {
     fn escrowed_transfer(&self, character_guid: u64) -> Option<super::transfer::EscrowedTransfer> {
         let db = self.xdb.as_ref()?;
         if self
@@ -1456,36 +1787,6 @@ impl WorldStore for InMemoryStore {
             bot_transfer_intent_id: intent_id,
             bot_controller_generation: generation,
         })
-    }
-
-    fn realm_character_partition(
-        &self,
-        character_guid: u64,
-    ) -> Result<Option<super::party::RealmCharacterPartition>> {
-        // `members_in_transit` is Member Stats' own per-guid fixture (`presence::of`'s
-        // `realm_transfer_pending` reads this trait method on the realm handle, same as
-        // `Coordinator::member_presence` did before the two merged). Checked first so it can name
-        // one guid as pending without disturbing `realm_partition`, which every other test that
-        // exercises a real Transfer already drives.
-        if self
-            .members_in_transit
-            .lock()
-            .unwrap()
-            .contains(&character_guid)
-        {
-            return Ok(Some(super::party::RealmCharacterPartition {
-                map_id: 0,
-                instance_id: 0,
-                revision: 1,
-                transfer_pending: true,
-                pending_destination_map: 0,
-                pending_destination_instance: 0,
-                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
-                bot_transfer_intent_id: 0,
-                bot_controller_generation: 0,
-            }));
-        }
-        Ok(*self.realm_partition.lock().unwrap())
     }
 
     fn begin_shard_index_transfer(
@@ -1815,29 +2116,6 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    /// The realm-core index publish. Recorded in the shared call log so its POSITION in the
-    /// drive is assertable, not just its effect.
-    fn publish_shard_index(
-        &self,
-        character_guid: u64,
-        map_id: u32,
-        instance_id: u64,
-    ) -> Result<()> {
-        if let Some(e) = &self.publish_error {
-            return Err(anyhow!("{e}"));
-        }
-        // Through `xstep`, like every other step of the drive — NOT a bare `rec`. Every other
-        // transfer method routes its "gateway killed here" injection through it, and this one
-        // originally did not, so `kill_at = "publish_shard_index"` was silently inert and the
-        // crash matrix reported a PASS for a boundary it never killed at.
-        self.xstep("publish_shard_index")?;
-        self.realm_index
-            .lock()
-            .unwrap()
-            .push((character_guid, map_id, instance_id));
-        Ok(())
-    }
-
     fn instance_partition(&self, instance_id: u64) -> Option<(u32, u64)> {
         self.xdb
             .as_ref()
@@ -1883,1346 +2161,54 @@ impl WorldStore for InMemoryStore {
         lk(&db.evicted).push(instance_id);
         Ok(())
     }
+}
 
-    fn lookup_session(&self, account_name: &str) -> Result<Option<WorldSession>> {
-        Ok((account_name == self.username)
-            .then(|| self.session.clone())
-            .flatten())
-    }
-    fn characters(&self, _account_id: u64) -> Result<Vec<codec::CharacterView>> {
-        self.rec("characters");
-        let mut out = self.characters.clone();
-        out.extend(self.created_characters.lock().unwrap().iter().cloned());
-        Ok(out)
-    }
-    fn create_character(
+impl PartyStore for InMemoryStore {
+    fn realm_character_partition(
         &self,
-        _account_id: u64,
-        name: &str,
-        race: u8,
-        class: u8,
-        _gender: u8,
-        _appearance: codec::Appearance,
-    ) -> Result<codec::CharCreateOutcome> {
-        if self.characters.iter().any(|c| c.name == name)
-            || self
-                .created_characters
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|c| c.name == name)
-        {
-            return Ok(codec::CharCreateOutcome::NameInUse);
-        }
-        let guid = 500
-            + self
-                .next_created_guid
-                .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        self.created_characters
-            .lock()
-            .unwrap()
-            .push(codec::CharacterView {
-                guid,
-                name: name.to_string(),
-                race,
-                class,
-                level: 1,
-                ..Default::default()
-            });
-        Ok(codec::CharCreateOutcome::Success)
-    }
-    fn delete_character(
-        &self,
-        account_id: u64,
         character_guid: u64,
-    ) -> Result<codec::CharDeleteOutcome> {
-        self.deleted
+    ) -> Result<Option<super::party::RealmCharacterPartition>> {
+        // `members_in_transit` is Member Stats' own per-guid fixture (`presence::of`'s
+        // `realm_transfer_pending` reads this trait method on the realm handle, same as
+        // `Coordinator::member_presence` did before the two merged). Checked first so it can name
+        // one guid as pending without disturbing `realm_partition`, which every other test that
+        // exercises a real Transfer already drives.
+        if self
+            .members_in_transit
             .lock()
             .unwrap()
-            .push((account_id, character_guid));
-        Ok(self
-            .delete_outcome
-            .unwrap_or(codec::CharDeleteOutcome::Success))
-    }
-    fn player_login(
-        &self,
-        _account_id: u64,
-        _character_guid: u64,
-        entry: codec::WorldEntry,
-    ) -> Result<codec::EntityView> {
-        self.rec("player_login");
-        self.login_entries.lock().unwrap().push(entry);
-        let call = self
-            .login_calls
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if call > 0 {
-            if let Some(e) = &self.worldport_login_error {
-                return Err(anyhow!("{e}"));
-            }
-            if let Some(e) = self.worldport_entity.clone() {
-                return Ok(e);
-            }
+            .contains(&character_guid)
+        {
+            return Ok(Some(super::party::RealmCharacterPartition {
+                map_id: 0,
+                instance_id: 0,
+                revision: 1,
+                transfer_pending: true,
+                pending_destination_map: 0,
+                pending_destination_instance: 0,
+                bot_source_identity: spacetimedb_sdk::Identity::ZERO,
+                bot_transfer_intent_id: 0,
+                bot_controller_generation: 0,
+            }));
         }
-        self.login_entity
-            .clone()
-            .ok_or_else(|| anyhow!("no login entity configured"))
-    }
-    fn movement_update(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        opcode: u32,
-        info: &MovementInfo,
-    ) -> Result<()> {
-        self.rec("movement_update");
-        if let Some(e) = &self.movement_error {
-            return Err(anyhow!("movement_update reducer failed: {e}"));
-        }
-        self.moves.lock().unwrap().push((
-            opcode,
-            info.position.x,
-            info.position.y,
-            info.position.z,
-            info.orientation,
-            info.timestamp,
-        ));
-        Ok(())
-    }
-    fn subscribe_player_events(
-        &self,
-        _account_id: u64,
-        self_guid: u64,
-        arrival: &codec::EntityView,
-        tx: SessionTx,
-    ) -> Result<PlayerSubscriptions> {
-        self.rec("subscribe_player_events");
-        self.subscribed
-            .lock()
-            .unwrap()
-            .push((self_guid, arrival.map_id, arrival.x, arrival.y));
-        *self.session_depth.lock().unwrap() = Some(tx.depth_handle());
-        if self.turn_in_reward_item.is_some() {
-            *self.turn_in_tx.lock().unwrap() = Some(tx.clone());
-        }
-        let Some(view) = &self.relay_view else {
-            return Ok(PlayerSubscriptions::empty());
-        };
-        let subs = PlayerSubscriptions::registered_for_test(view.clone(), self_guid, arrival, tx);
-        if let (Some(mate), Some(record)) = (
-            self.member_stats_before_party_frame,
-            subs.member_stats_record(),
-        ) {
-            let delivered = codec::MemberStats::default();
-            record
-                .lock()
-                .insert(mate, MemberSnapshot::Live(Box::new(delivered)));
-        }
-        Ok(subs)
-    }
-    fn character_by_guid(&self, guid: u64) -> Result<Option<codec::CharacterView>> {
-        if let Some(error) = &self.character_read_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.characters.iter().find(|c| c.guid == guid).cloned())
+        Ok(*self.realm_partition.lock().unwrap())
     }
 
-    fn character_exists_on_any_world_shard(&self, guid: u64) -> Result<bool> {
-        self.durable_absence_checks
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some(error) = &self.world_shard_set_error {
-            return Err(anyhow!(error.clone()));
-        }
-        if self.character_by_guid(guid)?.is_some() {
-            return Ok(true);
-        }
-        for shard in self.peers.lock().unwrap().iter() {
-            if shard.character_by_guid(guid)?.is_some() {
-                return Ok(true);
-            }
-        }
-        Ok(false)
-    }
-    fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
-        Ok(None)
-    }
-    fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
-        Ok(None)
-    }
-    fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
-        Ok(self.gameobject_type)
-    }
-    fn client_command(
+    fn party_holder_observation(
         &self,
-        account_id: u64,
-        self_guid: u64,
-        cmd: String,
-        payload: String,
-    ) -> Result<()> {
-        self.client_commands
-            .lock()
-            .unwrap()
-            .push((account_id, self_guid, cmd, payload));
-        Ok(())
-    }
-
-    fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
-        Ok(())
-    }
-    fn player_skills(&self, _character_guid: u64) -> Result<Vec<(u32, u16, u16)>> {
-        Ok(Vec::new())
-    }
-    fn effective_armor(&self, _guid: u64) -> u32 {
-        // No gear/auras in the test store → effective == the login entity's armor.
-        self.login_entity
-            .as_ref()
-            .map(|e| e.effective_armor)
-            .unwrap_or(0)
-    }
-    fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
-        Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
-    }
-    fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
-        self.rec("mail_list");
-        Ok(self
-            .mails
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(to, _)| *to == recipient_guid)
-            .map(|(_, m)| m.clone())
-            .collect())
-    }
-    fn mail_by_id(&self, mail_id: u64) -> Result<Option<codec::MailView>> {
-        Ok(self
-            .mails
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(_, m)| m.id == mail_id)
-            .map(|(_, m)| m.clone()))
-    }
-    fn realm_account_name(&self, character_guid: u64) -> Result<Option<String>> {
-        Ok(self
-            .realm_accounts
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(guid, _)| *guid == character_guid)
-            .map(|(_, name)| name.clone()))
-    }
-    fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
-        self.rec("mailbox_in_range");
-        Ok(self.mailboxes.contains(&mailbox_guid))
-    }
-    /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
-    /// authorization, so a mail that exists but belongs to someone else, or has not arrived yet,
-    /// fails the same way a nonexistent id does.
-    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_mark_read");
-        let mut mails = self.mails.lock().unwrap();
-        let now = mail::now_secs();
-        match mails
-            .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-        {
-            Some((_, m)) => {
-                m.was_read = true;
-                Ok(())
-            }
-            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
-        }
-    }
-    /// Models the module's `apply_delete`: same merged not-found/not-yours/not-arrived refusal as
-    /// mark-read, and a priced mail is refused.
-    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_delete");
-        let mut mails = self.mails.lock().unwrap();
-        let now = mail::now_secs();
-        let Some(at) = mails
-            .iter()
-            .position(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-        else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-        };
-        if mails[at].1.cod > 0 {
-            return Err(anyhow!(lyracore_shared::mail::COD_MAIL_UNDELETABLE));
-        }
-        mails.remove(at);
-        Ok(())
-    }
-    /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
-    /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
-    /// price, which is dropped, because the row is going back to whoever set it. Only a delivered
-    /// Character mail with a sender goes back, and only once. An item going back to another
-    /// Account waits its Delivery Delay.
-    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
-        self.rec("mail_return");
-        self.saw_same_account("mail_return", same_account);
-        let mut mails = self.mails.lock().unwrap();
-        let now = mail::now_secs();
-        let Some((to, m)) = mails
-            .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-        else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-        };
-        let lyracore_shared::mail::MailSender::Character(sender @ 1..) = m.sender() else {
-            return Err(anyhow!(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO));
-        };
-        if m.check_flags & lyracore_shared::mail::CHECK_MASK_RETURNED != 0 {
-            return Err(anyhow!(lyracore_shared::mail::ALREADY_RETURNED));
-        }
-        m.sender_guid = recipient_guid;
-        m.was_read = false;
-        m.cod = 0;
-        m.check_flags = lyracore_shared::mail::CHECK_MASK_RETURNED;
-        m.deliver_secs = now + i64::from(delivery_delay_secs(m.item_entry != 0, same_account));
-        *to = sender;
-        Ok(())
-    }
-    /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
-    /// row is written, in ONE call — the single-database plane's one transaction. The id is
-    /// per-database, as the module's `auto_inc` is.
-    #[allow(clippy::too_many_arguments)]
-    fn mail_send(
-        &self,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
-        cod: u32,
-        item_guid: u64,
-        same_account: bool,
-    ) -> Result<()> {
-        self.rec("mail_send");
-        self.saw_same_account("mail_send", same_account);
-        let item = self.detach(sender_guid, item_guid)?;
-        self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
-        self.sent_mail.lock().unwrap().push((
-            sender_guid,
-            recipient_guid,
-            subject.clone(),
-            body.clone(),
-            money,
-        ));
-        self.write_mail(
-            sender_guid,
-            recipient_guid,
-            subject,
-            body,
-            money,
-            cod,
-            &item,
-            false,
-            delivery_delay_secs(!item.is_empty(), same_account),
-        );
-        Ok(())
-    }
-
-    /// Models the module's `apply_take_item`: the COD debit, the grant, the clear and the seller's
-    /// payout row are ONE transaction, so a full bag or a price the taker cannot pay leaves the
-    /// letter exactly as it was, and a second take finds an empty one.
-    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        let (item, settlement) = {
-            let mails = self.mails.lock().unwrap();
-            let now = mail::now_secs();
-            let Some((_, m)) = mails
-                .iter()
-                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-            else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-            };
-            if m.item_entry == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
-            }
-            (
-                mail::AttachedItem {
-                    entry: m.item_entry,
-                    stack_count: m.item_stack_count,
-                    durability: m.item_durability,
-                    enchant_id: m.item_enchant_id,
-                    soulbound: m.item_soulbound,
-                    random_property_id: m.random_property_id,
-                    item_text_id: self.attached_text_id(mail_id),
-                },
-                lyracore_shared::mail::cod_settlement(
-                    m.cod,
-                    m.sender_guid,
-                    &m.subject,
-                    recipient_guid,
-                ),
-            )
-        };
-        self.rec("mail_take_item");
-        if let Some(s) = &settlement {
-            self.debit(s.payer_guid, s.copper)
-                .map_err(|_| anyhow!(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
-        }
-        if let Err(e) = self.store_snapshot(recipient_guid, &item) {
-            // The fake cannot roll back, so it undoes the one write it made — the real module gets
-            // this from the transaction, and asserting on it is the point of the full-bag test.
-            if let Some(s) = &settlement {
-                self.credit(s.payer_guid, s.copper);
-            }
-            return Err(e);
-        }
-        let mut mails = self.mails.lock().unwrap();
-        if let Some((_, m)) = mails
-            .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
-        {
-            m.item_entry = 0;
-            m.item_stack_count = 0;
-            m.item_durability = 0;
-            m.item_enchant_id = 0;
-            m.item_soulbound = false;
-            m.cod = 0;
-        }
-        drop(mails);
-        self.take_attached_text_id(mail_id);
-        if let Some(s) = settlement {
-            self.write_mail(
-                s.payer_guid,
-                s.payee_guid,
-                s.subject,
-                String::new(),
-                s.copper,
-                0,
-                &mail::AttachedItem::default(),
-                true,
-                0,
-            );
-        }
-        Ok(())
-    }
-
-    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
-        self.rec("mail_item_room");
-        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
-        }
-        Ok(())
-    }
-    /// Models `mail_text::apply_copy_text`: sets COPIED and files the body as item text, on the
-    /// database that owns the mail row. Refused for a mail that is not the caller's, is not
-    /// delivered, has no body, or is already GRANTED — the same Gates the plan function pins. A
-    /// replay before GRANTED is set is `Ok`, and the text insert is skipped when the id already has
-    /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
-    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_copy_text");
-        let mut mails = self.mails.lock().unwrap();
-        let now = mail::now_secs();
-        let Some((_, m)) = mails
-            .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-        else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-        };
-        if m.body.is_empty() {
-            return Err(anyhow!("mail: this mail has no text to copy"));
-        }
-        if m.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
-            return Err(anyhow!("mail: this letter was already made permanent"));
-        }
-        m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
-        let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
-        let text = m.body.clone();
-        drop(mails);
-        let mut texts = self.item_texts.lock().unwrap();
-        if !texts.iter().any(|(id, _)| *id == text_id) {
-            texts.push((text_id, text));
-        }
-        Ok(())
-    }
-    /// Models `items::grant_letter_item`: one Plain Letter, refused by the same full-bag fixture
-    /// every other grant uses. A no-op when the payee already holds an item carrying `item_text_id`
-    /// — the crash-window guard for a retry between this call landing and `mail_mark_letter_granted`
-    /// recording that it did, not the durable "already got one" record (that is GRANTED, on the mail
-    /// row).
-    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
-        self.rec("mail_grant_letter");
-        if self
-            .granted_letters
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|&(guid, id)| guid == payee_guid && id == item_text_id)
-        {
-            return Ok(());
-        }
-        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
-            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
-        }
-        self.granted_letters
-            .lock()
-            .unwrap()
-            .push((payee_guid, item_text_id));
-        Ok(())
-    }
-    /// Models `mail_text::apply_mark_letter_granted`: sets GRANTED on the mail row. Once this lands,
-    /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
-    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_mark_letter_granted");
-        let mut mails = self.mails.lock().unwrap();
-        let Some((_, m)) = mails
-            .iter_mut()
-            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
-        else {
-            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-        };
-        m.check_flags |= lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED;
-        Ok(())
-    }
-    /// Models the Coordinator's `item_text`: a PK read of `game_item_text` on THIS database.
-    fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
-        self.rec("item_text");
-        Ok(self
-            .item_texts
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(id, _)| *id == item_text_id)
-            .map(|(_, text)| text.clone()))
-    }
-    /// Models the Coordinator's `owns_item_with_text`: does `owner_guid` hold a granted letter
-    /// carrying `item_text_id`? The fake has no item-guid fixture to answer `hint_item_guid`'s fast
-    /// path distinctly, so both routes resolve through the same `granted_letters` lookup.
-    fn owns_item_with_text(
-        &self,
-        owner_guid: u64,
-        item_text_id: u32,
-        _hint_item_guid: u64,
-    ) -> Result<bool> {
-        self.rec("owns_item_with_text");
-        Ok(item_text_id != 0
-            && self
-                .granted_letters
-                .lock()
-                .unwrap()
-                .iter()
-                .any(|&(guid, id)| guid == owner_guid && id == item_text_id))
-    }
-    /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
-    /// second take finds an empty row.
-    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
-        self.rec("mail_take_money");
-        let money = {
-            let mut mails = self.mails.lock().unwrap();
-            let now = mail::now_secs();
-            let Some((_, m)) = mails
-                .iter_mut()
-                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
-            else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-            };
-            if m.money == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
-            }
-            std::mem::take(&mut m.money)
-        };
-        self.credit(recipient_guid, money);
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_fence`: the whole cost leaves the purse into a fence row here.
-    fn mail_fence(
-        &self,
-        escrow_id: u64,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
-        postage: u32,
-        item_guid: u64,
-        cod: u32,
-        cod_source_mail_id: u64,
-        same_account: bool,
-    ) -> Result<()> {
-        self.rec("mail_fence");
-        self.saw_same_account("mail_fence", same_account);
-        self.mail_kill("mail_fence")?;
-        let escrows = self.mail_escrows.lock().unwrap();
-        if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
-            return Ok(()); // replay — the purse must not be debited twice for one letter
-        }
-        drop(escrows);
-        // The attachment before the debit: it is the refusal that can still fire, and nothing has
-        // been written when it does.
-        let item = self.detach(sender_guid, item_guid)?;
-        self.debit(sender_guid, money.saturating_add(postage))?;
-        let delivery_delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
-        self.mail_escrows.lock().unwrap().push((
-            sender_guid,
-            mail::HeldEscrow {
-                escrow_id,
-                recipient_guid,
-                subject,
-                body,
-                money,
-                postage,
-                payout: false,
-                mail_id: cod_source_mail_id,
-                item,
-                cod,
-                delivery_delay_secs,
-                reward: None,
-            },
-        ));
-        self.attested.lock().unwrap().push((escrow_id, false));
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_commit`: the row plus a receipt, idempotent on the escrow id.
-    fn mail_commit(
-        &self,
-        escrow_id: u64,
-        sender_guid: u64,
-        recipient_guid: u64,
-        subject: String,
-        body: String,
-        money: u32,
-        item: mail::AttachedItem,
-        cod: u32,
-        cod_source_mail_id: u64,
-        delivery_delay_secs: u32,
-        reward: Option<lyracore_shared::mail::RewardHeader>,
-    ) -> Result<()> {
-        self.rec("mail_commit");
-        self.mail_kill("mail_commit")?;
-        let mut receipts = self.mail_receipts.lock().unwrap();
-        if receipts.iter().any(|(id, _)| *id == escrow_id) {
-            return Ok(());
-        }
-        // A COD payment pays only a price its payer still owes on a delivered mail.
-        if cod_source_mail_id != 0 {
-            let now = mail::now_secs();
-            let owed = self.mails.lock().unwrap().iter().any(|(to, m)| {
-                m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
-            });
-            if !owed {
-                return Err(anyhow!(
-                    "mail {cod_source_mail_id} owes {sender_guid} no delivered price"
-                ));
-            }
-        }
-        receipts.push((escrow_id, recipient_guid));
-        drop(receipts);
-        self.sent_mail.lock().unwrap().push((
-            sender_guid,
-            recipient_guid,
-            subject.clone(),
-            body.clone(),
-            money,
-        ));
-        self.write_mail(
-            sender_guid,
-            recipient_guid,
-            subject,
-            body,
-            money,
-            cod,
-            &item,
-            cod_source_mail_id != 0,
-            // A payment arrives at once whatever the commit carries.
-            if cod_source_mail_id != 0 {
-                0
-            } else {
-                delivery_delay_secs
-            },
-        );
-        if let Some(header) = reward {
-            // Models `mail::Letter::reward`: from the quest giver, naming its Mail Template.
-            let (sender_kind, sender_guid, sender_entry) = header.giver.sender().columns();
-            let mut mails = self.mails.lock().unwrap();
-            if let Some((_, m)) = mails.iter_mut().max_by_key(|(_, m)| m.id) {
-                m.sender_guid = sender_guid;
-                m.sender_kind = sender_kind;
-                m.sender_entry = sender_entry;
-                m.mail_template_id = header.mail_template_id;
-                m.check_flags = lyracore_shared::mail::CHECK_MASK_HAS_BODY;
-            }
-        }
-        // The price stops being owed in the SAME call that delivers the payment for it — the
-        // module clears it inside the commit's transaction, which is what makes a COD take charge
-        // once however the drive is interrupted.
-        if cod_source_mail_id != 0 {
-            if let Some((_, m)) = self
-                .mails
-                .lock()
-                .unwrap()
-                .iter_mut()
-                .find(|(_, m)| m.id == cod_source_mail_id)
-            {
-                m.cod = 0;
-            }
-        }
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_take_fence`: the copper leaves the ROW into a fence here.
-    fn mail_take_money_fence(
-        &self,
-        escrow_id: u64,
-        payee_guid: u64,
-        mail_id: u64,
-        expect_money: u32,
-    ) -> Result<()> {
-        self.rec("mail_take_money_fence");
-        self.mail_kill("mail_take_money_fence")?;
-        if self
-            .mail_escrows
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, e)| e.escrow_id == escrow_id)
-        {
-            return Ok(());
-        }
-        let money = {
-            let mut mails = self.mails.lock().unwrap();
-            let now = mail::now_secs();
-            let Some((_, m)) = mails
-                .iter_mut()
-                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
-            else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-            };
-            if m.money == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
-            }
-            if m.money != expect_money {
-                return Err(anyhow!(
-                    "refusing to fence an amount the payout would not match"
-                ));
-            }
-            std::mem::take(&mut m.money)
-        };
-        self.mail_escrows.lock().unwrap().push((
-            payee_guid,
-            mail::HeldEscrow {
-                escrow_id,
-                recipient_guid: payee_guid,
-                subject: String::new(),
-                body: String::new(),
-                money,
-                postage: 0,
-                payout: true,
-                mail_id,
-                item: mail::AttachedItem::default(),
-                cod: 0,
-                delivery_delay_secs: 0,
-                reward: None,
-            },
-        ));
-        self.attested.lock().unwrap().push((escrow_id, false));
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_take_item_fence`: the ATTACHMENT leaves the row into a fence.
-    fn mail_take_item_fence(
-        &self,
-        escrow_id: u64,
-        payee_guid: u64,
-        mail_id: u64,
-        expect_entry: u32,
-    ) -> Result<()> {
-        self.rec("mail_take_item_fence");
-        self.mail_kill("mail_take_item_fence")?;
-        if self
-            .mail_escrows
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(_, e)| e.escrow_id == escrow_id)
-        {
-            return Ok(());
-        }
-        let item = {
-            let mut mails = self.mails.lock().unwrap();
-            let now = mail::now_secs();
-            let Some((_, m)) = mails
-                .iter_mut()
-                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
-            else {
-                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
-            };
-            if m.item_entry == 0 {
-                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
-            }
-            if m.item_entry != expect_entry {
-                return Err(anyhow!(
-                    "refusing to fence an item the grant would not match"
-                ));
-            }
-            let item = mail::AttachedItem {
-                entry: m.item_entry,
-                stack_count: m.item_stack_count,
-                durability: m.item_durability,
-                enchant_id: m.item_enchant_id,
-                soulbound: m.item_soulbound,
-                random_property_id: m.random_property_id,
-                item_text_id: self.take_attached_text_id(mail_id),
-            };
-            m.item_entry = 0;
-            m.item_stack_count = 0;
-            m.item_durability = 0;
-            m.item_enchant_id = 0;
-            m.item_soulbound = false;
-            item
-        };
-        self.mail_escrows.lock().unwrap().push((
-            payee_guid,
-            mail::HeldEscrow {
-                escrow_id,
-                recipient_guid: payee_guid,
-                subject: String::new(),
-                body: String::new(),
-                money: 0,
-                postage: 0,
-                payout: true,
-                mail_id,
-                item,
-                cod: 0,
-                delivery_delay_secs: 0,
-                reward: None,
-            },
-        ));
-        self.attested.lock().unwrap().push((escrow_id, false));
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_item_payout`: the grant plus a receipt, idempotent on the escrow
-    /// id, and refused by a full bag — which leaves the fence holding the item.
-    fn mail_item_payout(
-        &self,
-        escrow_id: u64,
-        payee_guid: u64,
-        _mail_id: u64,
-        item: mail::AttachedItem,
-    ) -> Result<()> {
-        self.rec("mail_item_payout");
-        self.mail_kill("mail_item_payout")?;
-        let receipts = self.mail_receipts.lock().unwrap();
-        if receipts.iter().any(|(id, _)| *id == escrow_id) {
-            return Ok(());
-        }
-        drop(receipts);
-        self.store_snapshot(payee_guid, &item)?;
-        self.mail_receipts
-            .lock()
-            .unwrap()
-            .push((escrow_id, payee_guid));
-        Ok(())
-    }
-    /// Models `mail_escrow::apply_payout`: the credit plus a receipt, idempotent on the escrow id.
-    fn mail_payout(
-        &self,
-        escrow_id: u64,
-        payee_guid: u64,
-        _mail_id: u64,
-        amount: u32,
-    ) -> Result<()> {
-        self.rec("mail_payout");
-        self.mail_kill("mail_payout")?;
-        let mut receipts = self.mail_receipts.lock().unwrap();
-        if receipts.iter().any(|(id, _)| *id == escrow_id) {
-            return Ok(());
-        }
-        if !self
-            .purses
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|(g, _)| *g == payee_guid)
-        {
-            return Err(anyhow!(lyracore_shared::mail::NOT_IN_WORLD));
-        }
-        receipts.push((escrow_id, payee_guid));
-        drop(receipts);
-        self.credit(payee_guid, amount);
-        Ok(())
-    }
-    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
-        self.rec("mail_confirm_delivery");
-        self.mail_kill("mail_confirm_delivery")?;
-        let mut attested = self.attested.lock().unwrap();
-        match attested.iter_mut().find(|(id, _)| *id == escrow_id) {
-            Some((_, done)) => {
-                *done = true;
-                Ok(())
-            }
-            None => Err(anyhow!("mail escrow {escrow_id}: nothing fenced here")),
-        }
-    }
-    /// Models `mail_escrow::apply_settle`, delete-last included: it REFUSES while unattested.
-    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
-        self.rec("mail_settle");
-        self.mail_kill("mail_settle")?;
-        let attested = self
-            .attested
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(id, _)| *id == escrow_id)
-            .map(|(_, done)| *done);
-        match attested {
-            None => Ok(()), // already settled, or this call reached the wrong database
-            Some(false) => Err(anyhow!(
-                "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
-            )),
-            Some(true) => {
-                self.mail_escrows
-                    .lock()
-                    .unwrap()
-                    .retain(|(_, e)| e.escrow_id != escrow_id);
-                self.attested
-                    .lock()
-                    .unwrap()
-                    .retain(|(id, _)| *id != escrow_id);
-                Ok(())
-            }
-        }
-    }
-    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
-        self.rec("mail_escrows_of");
-        if self
-            .mail_escrow_reads_before_visible
-            .fetch_update(
-                std::sync::atomic::Ordering::SeqCst,
-                std::sync::atomic::Ordering::SeqCst,
-                |left| left.checked_sub(1),
-            )
-            .is_ok()
-        {
-            return Ok(Vec::new()); // the coordinator cache has not caught up yet
-        }
-        Ok(self
-            .mail_escrows
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|(owner, _)| *owner == sender_guid)
-            .map(|(_, e)| e.clone())
-            .collect())
-    }
-    fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
-        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
-    }
-    fn trainer_list(
-        &self,
-        _player_guid: u64,
-        _trainer_guid: u64,
-    ) -> Result<Vec<codec::TrainerSpellView>> {
-        Ok(self.trainer_spells.clone())
-    }
-    fn buy_trainer_spell(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _trainer_guid: u64,
-        _spell_id: u32,
-    ) -> Result<crate::world::TrainerBuyOutcome> {
-        if let Some(refusal) = self.trainer_buy_refusal {
-            return Ok(refusal.into());
-        }
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(crate::world::TrainerBuyOutcome::Learned),
-        }
-    }
-    fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
-        self.talent_grant
-    }
-    fn set_faction_at_war(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _reputation_index: u32,
-        _at_war: bool,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn set_action_button(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _button: u8,
-        _action: u32,
-        _action_type: u8,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32) {
-        self.talent_pane
-    }
-    fn talent_points_spent(&self, _character_guid: u64) -> u32 {
-        0 // login stays byte-identical in every existing harness test
-    }
-    fn spell_modifiers(&self, _character_guid: u64) -> Vec<(u32, u8, i32, bool)> {
-        Vec::new() // no modifier packets in the harness (login stays byte-identical)
-    }
-    fn learn_talent(&self, _account_id: u64, _self_guid: u64, _talent_id: u32) -> Result<()> {
-        match &self.trade_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
-        self.home_bound
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        Ok(())
-    }
-    fn npc_is_innkeeper(&self, _guid: u64) -> Result<bool> {
-        Ok(self.innkeeper)
-    }
-    fn npc_gossip_text_id(&self, _npc_guid: u64) -> u32 {
-        1 // generic fallback for tests
-    }
-    fn npc_text_for_id(&self, _text_id: u32) -> Option<codec::NpcTextView> {
-        self.npc_text_view.clone()
-    }
-    fn gossip_options(&self, _npc_guid: u64) -> Result<Vec<codec::GossipOptionView>> {
-        Ok(self.gossip_opts.clone())
-    }
-    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
-        if let Some(e) = &self.reset_talents_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.reset_talents_calls
-            .lock()
-            .unwrap()
-            .push((account_id, self_guid, trainer_guid));
-        Ok(())
-    }
-    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.auto_banked_items.lock().unwrap().push(slot);
-        Ok(())
-    }
-    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.bought_bank_slots.lock().unwrap().push(banker_guid);
-        Ok(())
-    }
-    fn player_learned_spells(&self, _player_guid: u64) -> Result<Vec<u32>> {
-        Ok(self.learned_spells.clone())
-    }
-    fn player_reputations(&self, _player_guid: u64) -> Result<Vec<(i32, i32, bool)>> {
-        Ok(self.reputations.clone())
-    }
-    fn player_actions(&self, _player_guid: u64) -> Result<Vec<(u8, u32, u8)>> {
-        Ok(self.player_actions.clone())
-    }
-    fn resolve_learn_target(&self, spell_id: u32) -> u32 {
-        spell_id // mock: self-contained ranks (no wrapper table in the mock store)
-    }
-    fn trainer_offer_skill_line(&self, _trainer_guid: u64, spell_id: u32) -> u32 {
-        // The mock's offerings are spell rows unless a test stages a skill-teaching one.
-        self.trainer_offer_skill_lines
-            .get(&spell_id)
-            .copied()
-            .unwrap_or(0)
-    }
-    fn entity_in_world(&self, guid: u64) -> bool {
-        self.entity_presence_checks
-            .fetch_add(1, std::sync::atomic::Ordering::SeqCst);
-        if let Some(present) = &self.entity_presence {
-            return present.load(std::sync::atomic::Ordering::SeqCst);
-        }
-        // `live_guids` is the per-guid answer the realm-wide party frame needs ("is this member
-        // live on THIS shard"). Empty by default, so the single flag above is still the answer
-        // every test written before realm-wide party routing set.
-        self.entity_in_world || self.live_guids.contains(&guid)
-    }
-    fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        self.rec("set_target");
-        if let Some(e) = &self.set_target_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.selected_targets.lock().unwrap().push(target_guid);
-        Ok(())
-    }
-    fn inspect(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
-        if let Some(e) = &self.trade_error {
-            return Err(anyhow!("{e}"));
-        }
-        // Mirrors the module gate's own-map/in-range/friendly checks with a fixed stub: any nonzero
-        // guid "passes" (in range + friendly) so a test can drive both the ack and the ignore path via
-        // `trade_error`; a 0 guid stands in for "no such target".
-        if target_guid == 0 {
-            return Err(anyhow!("no such inspect target"));
-        }
-        Ok(())
-    }
-    fn pet_command(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _data: u32,
-        _target_guid: u64,
-    ) -> Result<()> {
-        Ok(())
-    }
-    fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
-        self.sheathed.lock().unwrap().push((self_guid, state));
-        Ok(())
-    }
-    fn entity_max_health(&self, _guid: u64) -> u32 {
-        100
-    }
-    fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
-        self.trainer_superseded
-    }
-    fn send_chat(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        chat_type: u8,
-        language: u8,
-        message: String,
-    ) -> Result<ChatOutcome> {
-        // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
-        // yell stay shard-local and range-scoped) is assertable rather than merely stated.
-        self.rec("send_chat");
-        self.chats
-            .lock()
-            .unwrap()
-            .push((chat_type, language, message));
-        Ok(self.send_chat_outcome.unwrap_or(ChatOutcome::Delivered))
-    }
-    fn send_emote(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _text_emote: u32,
-        _emote_anim: u32,
-        _target_guid: u64,
-    ) -> Result<()> {
-        self.rec("send_emote");
-        Ok(())
-    }
-    fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
-        if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
-            let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
-            self.gm_commands
-                .lock()
-                .unwrap()
-                .push((account_name.to_string(), text.clone()));
-            self.gm_authority_results.lock().unwrap().push(authorized);
-            if authorized && (text.starts_with(".speed") || text.starts_with(".tele")) {
-                self.gm_gameplay_changes.lock().unwrap().push(text);
-                return Ok(());
-            }
-            return Err(anyhow!("permission denied"));
-        }
-        match &self.gm_command_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => {
-                self.gm_commands
-                    .lock()
-                    .unwrap()
-                    .push((account_name.to_string(), text));
-                Ok(())
-            }
-        }
-    }
-    fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.repopped.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn claim_session(&self, account_id: u64, _character_guid: u64) -> Result<WorldSessionToken> {
-        Ok(WorldSessionToken {
-            account_id,
-            generation: 1,
-            request_nonce: 1,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<super::party::PartyHolderObservation> {
+        Ok(super::party::PartyHolderObservation {
+            serves_locator: self.shard_for_location(map_id, instance_id).is_none(),
+            has_escrow: self.escrowed_transfer(character_guid).is_some(),
+            character_partition: self
+                .character_destination(character_guid)
+                .map(|character| (character.dest_map_id, character.dest_instance_id)),
         })
     }
-    fn release_session(&self, _token: WorldSessionToken) -> Result<()> {
-        self.rec("logout");
-        self.logout_called
-            .store(true, std::sync::atomic::Ordering::SeqCst);
-        match &self.logout_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
-        self.reclaimed_corpses
-            .lock()
-            .unwrap()
-            .push((self_guid, corpse_guid));
-        Ok(())
-    }
-    fn resurrect_response(&self, _account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
-        self.resurrect_responses
-            .lock()
-            .unwrap()
-            .push((self_guid, accept));
-        Ok(())
-    }
-    fn self_resurrect(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.self_resurrects.lock().unwrap().push(self_guid);
-        match &self.self_resurrect_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
-        }
-    }
-    fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
-        self.spirit_healer_calls
-            .lock()
-            .unwrap()
-            .push((self_guid, healer_guid));
-        Ok(())
-    }
-    fn corpse_location(&self, _owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
-        Ok(None)
-    }
-    fn player_combat_until_ms(&self, _player_guid: u64) -> u64 {
-        self.combat_until_ms
-    }
-    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>> {
-        Ok(self.characters.iter().find(|c| c.guid == guid).map(|c| {
-            presence::CharacterIdentity {
-                guid: c.guid,
-                name: c.name.clone(),
-                race: c.race,
-                class: c.class,
-                level: c.level,
-                zone_id: c.zone_id,
-                // `offline_guids` drives the invite gate's "player not online" arm; a seeded
-                // character is session-online unless listed there, mirroring `character_presence`.
-                session_online: !self.offline_guids.contains(&guid),
-            }
-        }))
-    }
-    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
-        // `member_entities` alone: Member Stats' own tests despawn a guid here while it stays in
-        // `live_guids` (a party-eligibility signal, not a Member Stats one) to pin the case where a
-        // group mate's entity is gone but the party frame's own bookkeeping has not caught up —
-        // falling back to `live_guids` or the blanket `entity_in_world` flag would read that guid
-        // live again and silently defeat the pin. `in_world_players`'s bulk /who scan has its own,
-        // separate fallback for a guid this fixture never gave a precise entity to.
-        self.member_entities
-            .lock()
-            .unwrap()
-            .iter()
-            .find(|(g, _)| *g == guid)
-            .map(|(_, e)| e.clone())
-    }
-    fn character_in_transit(&self, guid: u64) -> bool {
-        self.members_between_places.lock().unwrap().contains(&guid)
-    }
-    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>> {
-        Ok(self.auto_replies.lock().unwrap().get(&guid).cloned())
-    }
-    fn every_shard_vouches_for_absence(&self) -> Result<()> {
-        // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
-        // Fake instance models one Shard's own connection, so the peer set is checked too, the
-        // same reach `Coordinator::world_shards_for_absence` has from any one of its own handles.
-        for peer in self.peers.lock().unwrap().iter() {
-            if let Some(error) = &peer.world_shard_set_error {
-                return Err(anyhow!(error.clone()));
-            }
-        }
-        if let Some(error) = &self.world_shard_set_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(())
-    }
-    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
-        // Test store: every seeded character the fake considers in-world (`entity_in_world`,
-        // the BLANKET flag included) is listed, so CMSG_WHO tests can assert a response without
-        // wiring `live_guids` by hand — unlike `live_entity`, which `presence::of` uses for one
-        // guid at a time and which deliberately does not trust that blanket flag.
-        // `live_entity` supplies level/zone from `member_entities`/`live_guids` when a test seeded
-        // one for this guid, else the durable row stands in.
-        Ok(self
-            .characters
-            .iter()
-            .filter(|c| self.entity_in_world(c.guid))
-            .map(|c| {
-                let entity = self.live_entity(c.guid).unwrap_or(codec::MemberEntity {
-                    level: u32::from(c.level),
-                    zone_id: c.zone_id,
-                    player_flags: self.away_flags.get(&c.guid).copied().unwrap_or(0),
-                    ..Default::default()
-                });
-                presence::RealmPresence {
-                    guid: c.guid,
-                    name: c.name.clone(),
-                    race: c.race,
-                    class: c.class,
-                    level: u8::try_from(entity.level).unwrap_or(u8::MAX),
-                    zone_id: entity.zone_id,
-                    session_online: !self.offline_guids.contains(&c.guid),
-                    whereabouts: presence::Whereabouts::InWorld {
-                        away: self.away(c.guid),
-                        entity,
-                        shard_name: self.shard.clone(),
-                    },
-                }
-            })
-            .collect())
-    }
-    fn zone_name(&self, zone_id: u32) -> String {
-        self.zone_names.get(&zone_id).cloned().unwrap_or_default()
-    }
-    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)> {
-        if let Some(e) = &self.contact_lists_error {
-            return Err(anyhow!("{e}"));
-        }
-        let contacts = self.contacts.lock().unwrap();
-        let mut friends = Vec::new();
-        let mut ignored = Vec::new();
-        for &(owner, target, is_ignore) in contacts.iter() {
-            if owner != self_guid {
-                continue;
-            }
-            if is_ignore {
-                ignored.push(target);
-            } else {
-                friends.push(target);
-            }
-        }
-        Ok((friends, ignored))
-    }
-    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
-        if let Some(e) = &self.contact_lists_error {
-            return Err(anyhow!("{e}"));
-        }
-        Ok(self
-            .contacts
-            .lock()
-            .unwrap()
-            .iter()
-            .filter(|&&(owner, _, is_ignore)| owner == owner_guid && is_ignore)
-            .map(|&(_, target, _)| target)
-            .collect())
-    }
-    fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
-        Ok(self
-            .characters
-            .iter()
-            .find(|c| c.name.eq_ignore_ascii_case(name))
-            .map(|c| c.guid))
-    }
-    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
-        Ok(self
-            .characters
-            .iter()
-            .find(|c| c.guid == guid)
-            // `offline_guids` drives the invite gate's "player not online" arm. Empty by
-            // default, so a seeded character is online exactly as it always was.
-            .map(|c| {
-                (
-                    !self.offline_guids.contains(&guid),
-                    c.level,
-                    c.class,
-                    c.zone_id,
-                )
-            }))
-    }
+
     // Group: a minimal in-memory party — enough for the dispatch tests to drive
     // invite-result mapping and the GROUP_LIST build without a live module.
     //
@@ -3242,88 +2228,22 @@ impl WorldStore for InMemoryStore {
         self.group_invites.lock().unwrap().push(target_guid);
         Ok(PartyOutcome::Ran)
     }
+
     fn group_accept(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_accept");
         Ok(PartyOutcome::Ran)
     }
-    // Trade: pure recorders, the module owns every gate, so the fake just proves which
-    // verb the dispatch chose and which args survived the wire.
-    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
-        self.rec("initiate_trade");
-        self.initiated_trades
-            .lock()
-            .unwrap()
-            .push((self_guid, target_guid));
-        Ok(())
-    }
-    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("begin_trade");
-        self.begun_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("cancel_trade");
-        self.cancelled_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn set_trade_item(
-        &self,
-        _account_id: u64,
-        self_guid: u64,
-        trade_slot: u8,
-        inv_slot: u8,
-    ) -> Result<()> {
-        self.rec("set_trade_item");
-        self.set_trade_items
-            .lock()
-            .unwrap()
-            .push((self_guid, trade_slot, inv_slot));
-        Ok(())
-    }
-    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
-        self.rec("clear_trade_item");
-        self.cleared_trade_items
-            .lock()
-            .unwrap()
-            .push((self_guid, trade_slot));
-        Ok(())
-    }
-    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
-        self.rec("set_trade_gold");
-        self.set_trade_golds
-            .lock()
-            .unwrap()
-            .push((self_guid, copper));
-        Ok(())
-    }
-    fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("accept_trade");
-        self.accepted_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("unaccept_trade");
-        self.unaccepted_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("busy_trade");
-        self.busy_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
-    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
-        self.rec("ignore_trade");
-        self.ignore_trades.lock().unwrap().push(self_guid);
-        Ok(())
-    }
+
     fn group_decline(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_decline");
         Ok(PartyOutcome::Ran)
     }
+
     fn group_leave(&self, _account_id: u64, _self_guid: u64) -> Result<PartyOutcome> {
         self.rec("group_leave");
         Ok(PartyOutcome::Ran)
     }
+
     fn group_loot_method(
         &self,
         _account_id: u64,
@@ -3341,35 +2261,6 @@ impl WorldStore for InMemoryStore {
             .unwrap()
             .push((loot_setting, master_guid, loot_threshold));
         Ok(PartyOutcome::Ran)
-    }
-
-    // --- The realm-core plane (party/group routing) ---
-
-    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
-        self.realm
-            .clone()
-            .map(|r| r as std::sync::Arc<dyn WorldStore>)
-    }
-
-    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.party_cleanup_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
-    }
-
-    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.party_command_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
-    }
-
-    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.transfer_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
     }
 
     fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()> {
@@ -3493,22 +2384,6 @@ impl WorldStore for InMemoryStore {
             .iter()
             .find(|(candidate, _, _)| *candidate == guid)
             .map(|(_, map, instance)| (*map, *instance))
-    }
-
-    fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {
-        self.peers
-            .lock()
-            .unwrap()
-            .iter()
-            .map(|p| p.clone() as std::sync::Arc<dyn WorldStore>)
-            .collect()
-    }
-
-    fn party_command_worlds(&self) -> Result<Vec<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.world_shard_set_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.world_stores())
     }
 
     fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome> {
@@ -3796,6 +2671,20 @@ impl WorldStore for InMemoryStore {
         outcome
     }
 
+    fn deleted_character_party_leave(
+        &self,
+        character_guid: u64,
+    ) -> Result<super::party::PartyOutcome> {
+        self.realm_group_op(
+            lyracore_shared::group::realm_op::LEAVE,
+            character_guid,
+            0,
+            lyracore_shared::group::leave_cause::CHARACTER_DELETED,
+            0,
+            0,
+        )
+    }
+
     fn group_roster(&self, character_guid: u64) -> Result<Option<super::party::GroupRoster>> {
         let read = self
             .group_roster_reads
@@ -3818,6 +2707,20 @@ impl WorldStore for InMemoryStore {
             .cloned())
     }
 
+    fn party_command_group_roster(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<super::party::GroupRoster>> {
+        let roster = self.group_roster(character_guid)?;
+        if roster
+            .as_ref()
+            .is_some_and(|roster| roster.members.len() > lyracore_shared::group::RAID_MAX_MEMBERS)
+        {
+            anyhow::bail!("party command roster exceeds the member limit");
+        }
+        Ok(roster)
+    }
+
     fn group_roster_by_id(&self, group_id: u64) -> Result<Option<super::party::GroupRoster>> {
         if self.is_realm {
             return Ok(self.realm_cache(|p| p.roster(group_id)));
@@ -3829,6 +2732,13 @@ impl WorldStore for InMemoryStore {
             .iter()
             .find(|r| r.group_id == group_id)
             .cloned())
+    }
+
+    fn party_cleanup_group_roster_by_id(
+        &self,
+        group_id: u64,
+    ) -> Result<Option<super::party::GroupRoster>> {
+        self.group_roster_by_id(group_id)
     }
 
     fn group_roster_revision(&self, group_id: u64) -> Result<u64> {
@@ -3914,150 +2824,6 @@ impl WorldStore for InMemoryStore {
         Ok(())
     }
 
-    fn loot_roll(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u32,
-        vote: u8,
-    ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
-        }
-        if let Some(refusal) = self.loot_action_refusal {
-            return Ok(LootActionStatus::Refused(refusal));
-        }
-        self.loot_rolls
-            .lock()
-            .unwrap()
-            .push((corpse_guid, loot_slot, vote));
-        Ok(LootActionStatus::Applied)
-    }
-    fn loot_master_give(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        corpse_guid: u64,
-        loot_slot: u8,
-        target_guid: u64,
-    ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
-        }
-        if let Some(refusal) = self.loot_action_refusal {
-            return Ok(LootActionStatus::Refused(refusal));
-        }
-        self.loot_master_gives
-            .lock()
-            .unwrap()
-            .push((corpse_guid, loot_slot, target_guid));
-        Ok(LootActionStatus::Applied)
-    }
-
-    // --- Realm-wide loot rolls ---
-
-    #[allow(clippy::too_many_arguments)]
-    fn realm_loot_op(
-        &self,
-        op: u8,
-        corpse_guid: u64,
-        slot: u8,
-        item_entry: u32,
-        actor_guid: u64,
-        vote: u8,
-        deadline_micros: i64,
-        recipients: Vec<u64>,
-        random_property_id: u32,
-        promotion_source: spacetimedb_sdk::Identity,
-        source_roll_id: u64,
-    ) -> Result<()> {
-        self.rec("realm_loot_op");
-        self.realm_loot_ops.lock().unwrap().push((
-            op,
-            corpse_guid,
-            slot,
-            item_entry,
-            actor_guid,
-            vote,
-            deadline_micros,
-            recipients,
-            random_property_id,
-            promotion_source,
-            source_roll_id,
-        ));
-        if let Some(e) = &self.realm_loot_op_error {
-            return Err(anyhow!("{e}"));
-        }
-        Ok(())
-    }
-
-    fn realm_loot_vote(
-        &self,
-        corpse_guid: u64,
-        slot: u8,
-        actor_guid: u64,
-        vote: u8,
-    ) -> Result<LootActionStatus> {
-        self.realm_loot_op(
-            lyracore_shared::loot_roll::loot_op::VOTE,
-            corpse_guid,
-            slot,
-            0,
-            actor_guid,
-            vote,
-            0,
-            Vec::new(),
-            0,
-            spacetimedb_sdk::Identity::ZERO,
-            0,
-        )?;
-        if let Some(failure) = &self.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
-        }
-        Ok(self
-            .loot_action_refusal
-            .map_or(LootActionStatus::Applied, LootActionStatus::Refused))
-    }
-
-    fn pending_local_rolls(&self) -> Result<Vec<super::loot::PendingLootRoll>> {
-        Ok(self.pending_rolls.lock().unwrap().clone())
-    }
-
-    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
-        self.rec("settle_loot_roll");
-        if let Some(e) = &self.settle_loot_roll_error {
-            return Err(anyhow!("{e}"));
-        }
-        self.settled_rolls
-            .lock()
-            .unwrap()
-            .push((corpse_guid, slot, winner_guid));
-        Ok(())
-    }
-
-    fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
-        self.rec("clear_promoted_loot_roll");
-        self.cleared_rolls.lock().unwrap().push(roll_id);
-        self.pending_rolls
-            .lock()
-            .unwrap()
-            .retain(|r| r.roll_id != roll_id);
-        Ok(())
-    }
-
-    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
-        let events = self.won_events.lock().unwrap();
-        let watermark = events.len() as u64;
-        let wins = events
-            .iter()
-            .enumerate()
-            .filter(|(i, _)| (*i as u64 + 1) > after_id)
-            .map(|(_, w)| *w)
-            .collect();
-        Ok((watermark, wins))
-    }
-
     fn group_uninvite(
         &self,
         _account_id: u64,
@@ -4067,20 +2833,891 @@ impl WorldStore for InMemoryStore {
         self.rec("group_uninvite");
         Ok(PartyOutcome::Ran)
     }
-    fn gossip_select(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _npc_guid: u64,
-        option_id: u32,
-        option_row_id: u32,
-    ) -> Result<()> {
-        self.gossip_selects
+}
+
+impl MailStore for InMemoryStore {
+    fn mail_list(&self, recipient_guid: u64) -> Result<Vec<codec::MailView>> {
+        self.rec("mail_list");
+        Ok(self
+            .mails
             .lock()
             .unwrap()
-            .push((option_id, option_row_id));
+            .iter()
+            .filter(|(to, _)| *to == recipient_guid)
+            .map(|(_, m)| m.clone())
+            .collect())
+    }
+
+    fn mail_by_id(&self, mail_id: u64) -> Result<Option<codec::MailView>> {
+        Ok(self
+            .mails
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, m)| m.id == mail_id)
+            .map(|(_, m)| m.clone()))
+    }
+
+    fn realm_account_name(&self, character_guid: u64) -> Result<Option<String>> {
+        Ok(self
+            .realm_accounts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(guid, _)| *guid == character_guid)
+            .map(|(_, name)| name.clone()))
+    }
+
+    fn mailbox_in_range(&self, mailbox_guid: u64, _player_guid: u64) -> Result<bool> {
+        self.rec("mailbox_in_range");
+        Ok(self.mailboxes.contains(&mailbox_guid))
+    }
+
+    /// Models the module's `apply_mark_read`: the row lookup scoped to `recipient_guid` IS the
+    /// authorization, so a mail that exists but belongs to someone else, or has not arrived yet,
+    /// fails the same way a nonexistent id does.
+    fn mail_mark_read(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_read");
+        let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
+        match mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        {
+            Some((_, m)) => {
+                m.was_read = true;
+                Ok(())
+            }
+            None => Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL)),
+        }
+    }
+
+    /// Models the module's `apply_delete`: same merged not-found/not-yours/not-arrived refusal as
+    /// mark-read, and a priced mail is refused.
+    fn mail_delete(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_delete");
+        let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
+        let Some(at) = mails
+            .iter()
+            .position(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        if mails[at].1.cod > 0 {
+            return Err(anyhow!(lyracore_shared::mail::COD_MAIL_UNDELETABLE));
+        }
+        mails.remove(at);
         Ok(())
     }
+
+    /// Models the module's `apply_return`: the SAME row, re-addressed to whoever sent it, with
+    /// whatever it still carries (or nothing) travelling unchanged — except the cash-on-delivery
+    /// price, which is dropped, because the row is going back to whoever set it. Only a delivered
+    /// Character mail with a sender goes back, and only once. An item going back to another
+    /// Account waits its Delivery Delay.
+    fn mail_return(&self, recipient_guid: u64, mail_id: u64, same_account: bool) -> Result<()> {
+        self.rec("mail_return");
+        self.saw_same_account("mail_return", same_account);
+        let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
+        let Some((to, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        let lyracore_shared::mail::MailSender::Character(sender @ 1..) = m.sender() else {
+            return Err(anyhow!(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO));
+        };
+        if m.check_flags & lyracore_shared::mail::CHECK_MASK_RETURNED != 0 {
+            return Err(anyhow!(lyracore_shared::mail::ALREADY_RETURNED));
+        }
+        m.sender_guid = recipient_guid;
+        m.was_read = false;
+        m.cod = 0;
+        m.check_flags = lyracore_shared::mail::CHECK_MASK_RETURNED;
+        m.deliver_secs = now + i64::from(delivery_delay_secs(m.item_entry != 0, same_account));
+        *to = sender;
+        Ok(())
+    }
+
+    /// Models the module's `apply_send`: the postage plus the attached coin leave the purse and the
+    /// row is written, in ONE call — the single-database plane's one transaction. The id is
+    /// per-database, as the module's `auto_inc` is.
+    #[allow(clippy::too_many_arguments)]
+    fn mail_send(
+        &self,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        cod: u32,
+        item_guid: u64,
+        same_account: bool,
+    ) -> Result<()> {
+        self.rec("mail_send");
+        self.saw_same_account("mail_send", same_account);
+        let item = self.detach(sender_guid, item_guid)?;
+        self.debit(sender_guid, lyracore_shared::mail::total_cost(money))?;
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            money,
+        ));
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+            false,
+            delivery_delay_secs(!item.is_empty(), same_account),
+        );
+        Ok(())
+    }
+
+    /// Models the module's `apply_take_item`: the COD debit, the grant, the clear and the seller's
+    /// payout row are ONE transaction, so a full bag or a price the taker cannot pay leaves the
+    /// letter exactly as it was, and a second take finds an empty one.
+    fn mail_take_item(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        let (item, settlement) = {
+            let mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
+            let Some((_, m)) = mails
+                .iter()
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.item_entry == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            (
+                mail::AttachedItem {
+                    entry: m.item_entry,
+                    stack_count: m.item_stack_count,
+                    durability: m.item_durability,
+                    enchant_id: m.item_enchant_id,
+                    soulbound: m.item_soulbound,
+                    random_property_id: m.random_property_id,
+                    item_text_id: self.attached_text_id(mail_id),
+                },
+                lyracore_shared::mail::cod_settlement(
+                    m.cod,
+                    m.sender_guid,
+                    &m.subject,
+                    recipient_guid,
+                ),
+            )
+        };
+        self.rec("mail_take_item");
+        if let Some(s) = &settlement {
+            self.debit(s.payer_guid, s.copper)
+                .map_err(|_| anyhow!(lyracore_shared::mail::COD_NOT_AFFORDABLE))?;
+        }
+        if let Err(e) = self.store_snapshot(recipient_guid, &item) {
+            // The fake cannot roll back, so it undoes the one write it made — the real module gets
+            // this from the transaction, and asserting on it is the point of the full-bag test.
+            if let Some(s) = &settlement {
+                self.credit(s.payer_guid, s.copper);
+            }
+            return Err(e);
+        }
+        let mut mails = self.mails.lock().unwrap();
+        if let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        {
+            m.item_entry = 0;
+            m.item_stack_count = 0;
+            m.item_durability = 0;
+            m.item_enchant_id = 0;
+            m.item_soulbound = false;
+            m.cod = 0;
+        }
+        drop(mails);
+        self.take_attached_text_id(mail_id);
+        if let Some(s) = settlement {
+            self.write_mail(
+                s.payer_guid,
+                s.payee_guid,
+                s.subject,
+                String::new(),
+                s.copper,
+                0,
+                &mail::AttachedItem::default(),
+                true,
+                0,
+            );
+        }
+        Ok(())
+    }
+
+    fn mail_item_room(&self, _payee_guid: u64) -> Result<()> {
+        self.rec("mail_item_room");
+        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+        }
+        Ok(())
+    }
+
+    /// Models `mail_text::apply_copy_text`: sets COPIED and files the body as item text, on the
+    /// database that owns the mail row. Refused for a mail that is not the caller's, is not
+    /// delivered, has no body, or is already GRANTED — the same Gates the plan function pins. A
+    /// replay before GRANTED is set is `Ok`, and the text insert is skipped when the id already has
+    /// a row (a returned mail keeps its id, so a second recipient's copy can reuse it).
+    fn mail_copy_text(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_copy_text");
+        let mut mails = self.mails.lock().unwrap();
+        let now = mail::now_secs();
+        let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        if m.body.is_empty() {
+            return Err(anyhow!("mail: this mail has no text to copy"));
+        }
+        if m.check_flags & lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED != 0 {
+            return Err(anyhow!("mail: this letter was already made permanent"));
+        }
+        m.check_flags |= lyracore_shared::mail::CHECK_MASK_COPIED;
+        let text_id = lyracore_shared::mail::item_text_id_for(m.id, &m.body);
+        let text = m.body.clone();
+        drop(mails);
+        let mut texts = self.item_texts.lock().unwrap();
+        if !texts.iter().any(|(id, _)| *id == text_id) {
+            texts.push((text_id, text));
+        }
+        Ok(())
+    }
+
+    /// Models `items::grant_letter_item`: one Plain Letter, refused by the same full-bag fixture
+    /// every other grant uses. A no-op when the payee already holds an item carrying `item_text_id`
+    /// — the crash-window guard for a retry between this call landing and `mail_mark_letter_granted`
+    /// recording that it did, not the durable "already got one" record (that is GRANTED, on the mail
+    /// row).
+    fn mail_grant_letter(&self, payee_guid: u64, item_text_id: u32) -> Result<()> {
+        self.rec("mail_grant_letter");
+        if self
+            .granted_letters
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|&(guid, id)| guid == payee_guid && id == item_text_id)
+        {
+            return Ok(());
+        }
+        if self.bags_full.load(std::sync::atomic::Ordering::Relaxed) {
+            return Err(anyhow!(lyracore_shared::mail::INVENTORY_FULL));
+        }
+        self.granted_letters
+            .lock()
+            .unwrap()
+            .push((payee_guid, item_text_id));
+        Ok(())
+    }
+
+    /// Models `mail_text::apply_mark_letter_granted`: sets GRANTED on the mail row. Once this lands,
+    /// `mail_copy_text` refuses for good, whether or not the granted item still exists.
+    fn mail_mark_letter_granted(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_mark_letter_granted");
+        let mut mails = self.mails.lock().unwrap();
+        let Some((_, m)) = mails
+            .iter_mut()
+            .find(|(to, m)| *to == recipient_guid && m.id == mail_id)
+        else {
+            return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+        };
+        m.check_flags |= lyracore_shared::mail::CHECK_FLAG_LETTER_GRANTED;
+        Ok(())
+    }
+
+    /// Models the Coordinator's `item_text`: a PK read of `game_item_text` on THIS database.
+    fn item_text(&self, item_text_id: u32) -> Result<Option<String>> {
+        self.rec("item_text");
+        Ok(self
+            .item_texts
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == item_text_id)
+            .map(|(_, text)| text.clone()))
+    }
+
+    /// Models the Coordinator's `owns_item_with_text`: does `owner_guid` hold a granted letter
+    /// carrying `item_text_id`? The fake has no item-guid fixture to answer `hint_item_guid`'s fast
+    /// path distinctly, so both routes resolve through the same `granted_letters` lookup.
+    fn owns_item_with_text(
+        &self,
+        owner_guid: u64,
+        item_text_id: u32,
+        _hint_item_guid: u64,
+    ) -> Result<bool> {
+        self.rec("owns_item_with_text");
+        Ok(item_text_id != 0
+            && self
+                .granted_letters
+                .lock()
+                .unwrap()
+                .iter()
+                .any(|&(guid, id)| guid == owner_guid && id == item_text_id))
+    }
+
+    /// Models the module's `apply_take_money`: the credit and the clear are one transaction, so a
+    /// second take finds an empty row.
+    fn mail_take_money(&self, recipient_guid: u64, mail_id: u64) -> Result<()> {
+        self.rec("mail_take_money");
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == recipient_guid && m.id == mail_id && m.is_delivered(now))
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.credit(recipient_guid, money);
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_fence`: the whole cost leaves the purse into a fence row here.
+    fn mail_fence(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        postage: u32,
+        item_guid: u64,
+        cod: u32,
+        cod_source_mail_id: u64,
+        same_account: bool,
+    ) -> Result<()> {
+        self.rec("mail_fence");
+        self.saw_same_account("mail_fence", same_account);
+        self.mail_kill("mail_fence")?;
+        let escrows = self.mail_escrows.lock().unwrap();
+        if escrows.iter().any(|(_, e)| e.escrow_id == escrow_id) {
+            return Ok(()); // replay — the purse must not be debited twice for one letter
+        }
+        drop(escrows);
+        // The attachment before the debit: it is the refusal that can still fire, and nothing has
+        // been written when it does.
+        let item = self.detach(sender_guid, item_guid)?;
+        self.debit(sender_guid, money.saturating_add(postage))?;
+        let delivery_delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
+        self.mail_escrows.lock().unwrap().push((
+            sender_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid,
+                subject,
+                body,
+                money,
+                postage,
+                payout: false,
+                mail_id: cod_source_mail_id,
+                item,
+                cod,
+                delivery_delay_secs,
+                reward: None,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_commit`: the row plus a receipt, idempotent on the escrow id.
+    fn mail_commit(
+        &self,
+        escrow_id: u64,
+        sender_guid: u64,
+        recipient_guid: u64,
+        subject: String,
+        body: String,
+        money: u32,
+        item: mail::AttachedItem,
+        cod: u32,
+        cod_source_mail_id: u64,
+        delivery_delay_secs: u32,
+        reward: Option<lyracore_shared::mail::RewardHeader>,
+    ) -> Result<()> {
+        self.rec("mail_commit");
+        self.mail_kill("mail_commit")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        // A COD payment pays only a price its payer still owes on a delivered mail.
+        if cod_source_mail_id != 0 {
+            let now = mail::now_secs();
+            let owed = self.mails.lock().unwrap().iter().any(|(to, m)| {
+                m.id == cod_source_mail_id && *to == sender_guid && m.cod > 0 && m.is_delivered(now)
+            });
+            if !owed {
+                return Err(anyhow!(
+                    "mail {cod_source_mail_id} owes {sender_guid} no delivered price"
+                ));
+            }
+        }
+        receipts.push((escrow_id, recipient_guid));
+        drop(receipts);
+        self.sent_mail.lock().unwrap().push((
+            sender_guid,
+            recipient_guid,
+            subject.clone(),
+            body.clone(),
+            money,
+        ));
+        self.write_mail(
+            sender_guid,
+            recipient_guid,
+            subject,
+            body,
+            money,
+            cod,
+            &item,
+            cod_source_mail_id != 0,
+            // A payment arrives at once whatever the commit carries.
+            if cod_source_mail_id != 0 {
+                0
+            } else {
+                delivery_delay_secs
+            },
+        );
+        if let Some(header) = reward {
+            // Models `mail::Letter::reward`: from the quest giver, naming its Mail Template.
+            let (sender_kind, sender_guid, sender_entry) = header.giver.sender().columns();
+            let mut mails = self.mails.lock().unwrap();
+            if let Some((_, m)) = mails.iter_mut().max_by_key(|(_, m)| m.id) {
+                m.sender_guid = sender_guid;
+                m.sender_kind = sender_kind;
+                m.sender_entry = sender_entry;
+                m.mail_template_id = header.mail_template_id;
+                m.check_flags = lyracore_shared::mail::CHECK_MASK_HAS_BODY;
+            }
+        }
+        // The price stops being owed in the SAME call that delivers the payment for it — the
+        // module clears it inside the commit's transaction, which is what makes a COD take charge
+        // once however the drive is interrupted.
+        if cod_source_mail_id != 0 {
+            if let Some((_, m)) = self
+                .mails
+                .lock()
+                .unwrap()
+                .iter_mut()
+                .find(|(_, m)| m.id == cod_source_mail_id)
+            {
+                m.cod = 0;
+            }
+        }
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_take_fence`: the copper leaves the ROW into a fence here.
+    fn mail_take_money_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_money: u32,
+    ) -> Result<()> {
+        self.rec("mail_take_money_fence");
+        self.mail_kill("mail_take_money_fence")?;
+        if self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e)| e.escrow_id == escrow_id)
+        {
+            return Ok(());
+        }
+        let money = {
+            let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.money == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            if m.money != expect_money {
+                return Err(anyhow!(
+                    "refusing to fence an amount the payout would not match"
+                ));
+            }
+            std::mem::take(&mut m.money)
+        };
+        self.mail_escrows.lock().unwrap().push((
+            payee_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid: payee_guid,
+                subject: String::new(),
+                body: String::new(),
+                money,
+                postage: 0,
+                payout: true,
+                mail_id,
+                item: mail::AttachedItem::default(),
+                cod: 0,
+                delivery_delay_secs: 0,
+                reward: None,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_take_item_fence`: the ATTACHMENT leaves the row into a fence.
+    fn mail_take_item_fence(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        mail_id: u64,
+        expect_entry: u32,
+    ) -> Result<()> {
+        self.rec("mail_take_item_fence");
+        self.mail_kill("mail_take_item_fence")?;
+        if self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(_, e)| e.escrow_id == escrow_id)
+        {
+            return Ok(());
+        }
+        let item = {
+            let mut mails = self.mails.lock().unwrap();
+            let now = mail::now_secs();
+            let Some((_, m)) = mails
+                .iter_mut()
+                .find(|(to, m)| *to == payee_guid && m.id == mail_id && m.is_delivered(now))
+            else {
+                return Err(anyhow!(lyracore_shared::mail::NOT_YOUR_MAIL));
+            };
+            if m.item_entry == 0 {
+                return Err(anyhow!(lyracore_shared::mail::NOTHING_TO_TAKE));
+            }
+            if m.item_entry != expect_entry {
+                return Err(anyhow!(
+                    "refusing to fence an item the grant would not match"
+                ));
+            }
+            let item = mail::AttachedItem {
+                entry: m.item_entry,
+                stack_count: m.item_stack_count,
+                durability: m.item_durability,
+                enchant_id: m.item_enchant_id,
+                soulbound: m.item_soulbound,
+                random_property_id: m.random_property_id,
+                item_text_id: self.take_attached_text_id(mail_id),
+            };
+            m.item_entry = 0;
+            m.item_stack_count = 0;
+            m.item_durability = 0;
+            m.item_enchant_id = 0;
+            m.item_soulbound = false;
+            item
+        };
+        self.mail_escrows.lock().unwrap().push((
+            payee_guid,
+            mail::HeldEscrow {
+                escrow_id,
+                recipient_guid: payee_guid,
+                subject: String::new(),
+                body: String::new(),
+                money: 0,
+                postage: 0,
+                payout: true,
+                mail_id,
+                item,
+                cod: 0,
+                delivery_delay_secs: 0,
+                reward: None,
+            },
+        ));
+        self.attested.lock().unwrap().push((escrow_id, false));
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_item_payout`: the grant plus a receipt, idempotent on the escrow
+    /// id, and refused by a full bag — which leaves the fence holding the item.
+    fn mail_item_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        _mail_id: u64,
+        item: mail::AttachedItem,
+    ) -> Result<()> {
+        self.rec("mail_item_payout");
+        self.mail_kill("mail_item_payout")?;
+        let receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        drop(receipts);
+        self.store_snapshot(payee_guid, &item)?;
+        self.mail_receipts
+            .lock()
+            .unwrap()
+            .push((escrow_id, payee_guid));
+        Ok(())
+    }
+
+    /// Models `mail_escrow::apply_payout`: the credit plus a receipt, idempotent on the escrow id.
+    fn mail_payout(
+        &self,
+        escrow_id: u64,
+        payee_guid: u64,
+        _mail_id: u64,
+        amount: u32,
+    ) -> Result<()> {
+        self.rec("mail_payout");
+        self.mail_kill("mail_payout")?;
+        let mut receipts = self.mail_receipts.lock().unwrap();
+        if receipts.iter().any(|(id, _)| *id == escrow_id) {
+            return Ok(());
+        }
+        if !self
+            .purses
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|(g, _)| *g == payee_guid)
+        {
+            return Err(anyhow!(lyracore_shared::mail::NOT_IN_WORLD));
+        }
+        receipts.push((escrow_id, payee_guid));
+        drop(receipts);
+        self.credit(payee_guid, amount);
+        Ok(())
+    }
+
+    fn mail_confirm_delivery(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_confirm_delivery");
+        self.mail_kill("mail_confirm_delivery")?;
+        let mut attested = self.attested.lock().unwrap();
+        match attested.iter_mut().find(|(id, _)| *id == escrow_id) {
+            Some((_, done)) => {
+                *done = true;
+                Ok(())
+            }
+            None => Err(anyhow!("mail escrow {escrow_id}: nothing fenced here")),
+        }
+    }
+
+    /// Models `mail_escrow::apply_settle`, delete-last included: it REFUSES while unattested.
+    fn mail_settle(&self, escrow_id: u64) -> Result<()> {
+        self.rec("mail_settle");
+        self.mail_kill("mail_settle")?;
+        let attested = self
+            .attested
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(id, _)| *id == escrow_id)
+            .map(|(_, done)| *done);
+        match attested {
+            None => Ok(()), // already settled, or this call reached the wrong database
+            Some(false) => Err(anyhow!(
+                "mail escrow {escrow_id}: delivery not attested — refusing to destroy the fence"
+            )),
+            Some(true) => {
+                self.mail_escrows
+                    .lock()
+                    .unwrap()
+                    .retain(|(_, e)| e.escrow_id != escrow_id);
+                self.attested
+                    .lock()
+                    .unwrap()
+                    .retain(|(id, _)| *id != escrow_id);
+                Ok(())
+            }
+        }
+    }
+
+    fn mail_escrows_of(&self, sender_guid: u64) -> Result<Vec<mail::HeldEscrow>> {
+        self.rec("mail_escrows_of");
+        if self
+            .mail_escrow_reads_before_visible
+            .fetch_update(
+                std::sync::atomic::Ordering::SeqCst,
+                std::sync::atomic::Ordering::SeqCst,
+                |left| left.checked_sub(1),
+            )
+            .is_ok()
+        {
+            return Ok(Vec::new()); // the coordinator cache has not caught up yet
+        }
+        Ok(self
+            .mail_escrows
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(owner, _)| *owner == sender_guid)
+            .map(|(_, e)| e.clone())
+            .collect())
+    }
+}
+
+impl SocialStore for InMemoryStore {
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>> {
+        Ok(self.characters.iter().find(|c| c.guid == guid).map(|c| {
+            presence::CharacterIdentity {
+                guid: c.guid,
+                name: c.name.clone(),
+                race: c.race,
+                class: c.class,
+                level: c.level,
+                zone_id: c.zone_id,
+                // `offline_guids` drives the invite gate's "player not online" arm; a seeded
+                // character is session-online unless listed there, mirroring `character_presence`.
+                session_online: !self.offline_guids.contains(&guid),
+            }
+        }))
+    }
+
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity> {
+        // `member_entities` alone: Member Stats' own tests despawn a guid here while it stays in
+        // `live_guids` (a party-eligibility signal, not a Member Stats one) to pin the case where a
+        // group mate's entity is gone but the party frame's own bookkeeping has not caught up —
+        // falling back to `live_guids` or the blanket `entity_in_world` flag would read that guid
+        // live again and silently defeat the pin. `in_world_players`'s bulk /who scan has its own,
+        // separate fallback for a guid this fixture never gave a precise entity to.
+        self.member_entities
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(g, _)| *g == guid)
+            .map(|(_, e)| e.clone())
+    }
+
+    fn character_in_transit(&self, guid: u64) -> bool {
+        self.members_between_places.lock().unwrap().contains(&guid)
+    }
+
+    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>> {
+        Ok(self.auto_replies.lock().unwrap().get(&guid).cloned())
+    }
+
+    fn every_shard_vouches_for_absence(&self) -> Result<()> {
+        // A Realm Presence "gone" claim spans every configured Shard, not just this handle — each
+        // Fake instance models one Shard's own connection, so the peer set is checked too, the
+        // same reach `Coordinator::world_shards_for_absence` has from any one of its own handles.
+        for peer in self.peers.lock().unwrap().iter() {
+            if let Some(error) = &peer.world_shard_set_error {
+                return Err(anyhow!(error.clone()));
+            }
+        }
+        if let Some(error) = &self.world_shard_set_error {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(())
+    }
+
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>> {
+        // Test store: every seeded character the fake considers in-world (`entity_in_world`,
+        // the BLANKET flag included) is listed, so CMSG_WHO tests can assert a response without
+        // wiring `live_guids` by hand — unlike `live_entity`, which `presence::of` uses for one
+        // guid at a time and which deliberately does not trust that blanket flag.
+        // `live_entity` supplies level/zone from `member_entities`/`live_guids` when a test seeded
+        // one for this guid, else the durable row stands in.
+        Ok(self
+            .characters
+            .iter()
+            .filter(|c| self.entity_in_world(c.guid))
+            .map(|c| {
+                let entity = self.live_entity(c.guid).unwrap_or(codec::MemberEntity {
+                    level: u32::from(c.level),
+                    zone_id: c.zone_id,
+                    player_flags: self.away_flags.get(&c.guid).copied().unwrap_or(0),
+                    ..Default::default()
+                });
+                presence::RealmPresence {
+                    guid: c.guid,
+                    name: c.name.clone(),
+                    race: c.race,
+                    class: c.class,
+                    level: u8::try_from(entity.level).unwrap_or(u8::MAX),
+                    zone_id: entity.zone_id,
+                    session_online: !self.offline_guids.contains(&c.guid),
+                    whereabouts: presence::Whereabouts::InWorld {
+                        away: self.away(c.guid),
+                        entity,
+                        shard_name: self.shard.clone(),
+                    },
+                }
+            })
+            .collect())
+    }
+
+    fn zone_name(&self, zone_id: u32) -> String {
+        self.zone_names.get(&zone_id).cloned().unwrap_or_default()
+    }
+
+    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)> {
+        if let Some(e) = &self.contact_lists_error {
+            return Err(anyhow!("{e}"));
+        }
+        let contacts = self.contacts.lock().unwrap();
+        let mut friends = Vec::new();
+        let mut ignored = Vec::new();
+        for &(owner, target, is_ignore) in contacts.iter() {
+            if owner != self_guid {
+                continue;
+            }
+            if is_ignore {
+                ignored.push(target);
+            } else {
+                friends.push(target);
+            }
+        }
+        Ok((friends, ignored))
+    }
+
+    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>> {
+        if let Some(e) = &self.contact_lists_error {
+            return Err(anyhow!("{e}"));
+        }
+        Ok(self
+            .contacts
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|&&(owner, _, is_ignore)| owner == owner_guid && is_ignore)
+            .map(|&(_, target, _)| target)
+            .collect())
+    }
+
+    fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>> {
+        Ok(self
+            .characters
+            .iter()
+            .find(|c| c.name.eq_ignore_ascii_case(name))
+            .map(|c| c.guid))
+    }
+
     fn add_friend(
         &self,
         _account_id: u64,
@@ -4098,6 +3735,7 @@ impl WorldStore for InMemoryStore {
             .push((owner, target_guid, false));
         Ok(ContactOutcome::Done)
     }
+
     fn del_friend(
         &self,
         _account_id: u64,
@@ -4106,6 +3744,7 @@ impl WorldStore for InMemoryStore {
     ) -> Result<ContactOutcome> {
         self.remove_contact(target_guid, false)
     }
+
     fn add_ignore(
         &self,
         _account_id: u64,
@@ -4122,6 +3761,7 @@ impl WorldStore for InMemoryStore {
             .push((owner, target_guid, true));
         Ok(ContactOutcome::Done)
     }
+
     fn del_ignore(
         &self,
         _account_id: u64,
@@ -4129,6 +3769,370 @@ impl WorldStore for InMemoryStore {
         target_guid: u64,
     ) -> Result<ContactOutcome> {
         self.remove_contact(target_guid, true)
+    }
+}
+
+impl NpcStore for InMemoryStore {
+    fn creature_template(&self, _entry: u32) -> Result<Option<codec::CreatureView>> {
+        Ok(None)
+    }
+
+    fn pet_name(
+        &self,
+        _requester_guid: u64,
+        _pet_number: u32,
+        _pet_guid: u64,
+    ) -> Result<Option<codec::PetNameView>> {
+        Ok(None)
+    }
+
+    fn gameobject_template(&self, _entry: u32) -> Result<Option<codec::GameObjectTemplateView>> {
+        Ok(None)
+    }
+
+    fn gameobject_type(&self, _go_guid: u64) -> Result<Option<u8>> {
+        Ok(self.gameobject_type)
+    }
+
+    fn enter_areatrigger(&self, _account_id: u64, _self_guid: u64, _trigger_id: u32) -> Result<()> {
+        Ok(())
+    }
+
+    fn npc_refuses_interaction(&self, _npc_guid: u64, _player_guid: u64) -> Result<bool> {
+        Ok(self.npc_refuses) // default false — every existing fixture NPC keeps interacting
+    }
+
+    fn bind_home(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+        self.home_bound
+            .store(true, std::sync::atomic::Ordering::SeqCst);
+        Ok(())
+    }
+
+    fn npc_is_innkeeper(&self, _guid: u64) -> Result<bool> {
+        Ok(self.innkeeper)
+    }
+
+    fn npc_gossip_text_id(&self, _npc_guid: u64) -> u32 {
+        1 // generic fallback for tests
+    }
+
+    fn npc_text_for_id(&self, _text_id: u32) -> Option<codec::NpcTextView> {
+        self.npc_text_view.clone()
+    }
+
+    fn gossip_options(&self, _npc_guid: u64) -> Result<Vec<codec::GossipOptionView>> {
+        Ok(self.gossip_opts.clone())
+    }
+
+    fn inspect(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        // Mirrors the module gate's own-map/in-range/friendly checks with a fixed stub: any nonzero
+        // guid "passes" (in range + friendly) so a test can drive both the ack and the ignore path via
+        // `trade_error`; a 0 guid stands in for "no such target".
+        if target_guid == 0 {
+            return Err(anyhow!("no such inspect target"));
+        }
+        Ok(())
+    }
+
+    fn gossip_select(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _npc_guid: u64,
+        option_id: u32,
+        option_row_id: u32,
+    ) -> Result<()> {
+        self.gossip_selects
+            .lock()
+            .unwrap()
+            .push((option_id, option_row_id));
+        Ok(())
+    }
+}
+
+impl TrainerStore for InMemoryStore {
+    fn trainer_serves(&self, _player_guid: u64, _trainer_guid: u64) -> Result<bool> {
+        Ok(!self.trainer_refuses_class) // default true — every existing fixture trainer serves
+    }
+
+    fn trainer_list(
+        &self,
+        _player_guid: u64,
+        _trainer_guid: u64,
+    ) -> Result<Vec<codec::TrainerSpellView>> {
+        Ok(self.trainer_spells.clone())
+    }
+
+    fn buy_trainer_spell(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _trainer_guid: u64,
+        _spell_id: u32,
+    ) -> Result<crate::world::TrainerBuyOutcome> {
+        if let Some(refusal) = self.trainer_buy_refusal {
+            return Ok(refusal.into());
+        }
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(crate::world::TrainerBuyOutcome::Learned),
+        }
+    }
+
+    fn talent_grant_spell(&self, _talent_id: u32) -> u32 {
+        self.talent_grant
+    }
+
+    fn set_faction_at_war(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _reputation_index: u32,
+        _at_war: bool,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_action_button(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _button: u8,
+        _action: u32,
+        _action_type: u8,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn talent_pane_sync(&self, _character_guid: u64, _talent_id: u32) -> (u32, u32, u32) {
+        self.talent_pane
+    }
+
+    fn talent_points_spent(&self, _character_guid: u64) -> u32 {
+        0 // login stays byte-identical in every existing harness test
+    }
+
+    fn learn_talent(&self, _account_id: u64, _self_guid: u64, _talent_id: u32) -> Result<()> {
+        match &self.trade_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn reset_talents(&self, account_id: u64, self_guid: u64, trainer_guid: u64) -> Result<()> {
+        if let Some(e) = &self.reset_talents_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.reset_talents_calls
+            .lock()
+            .unwrap()
+            .push((account_id, self_guid, trainer_guid));
+        Ok(())
+    }
+
+    fn resolve_learn_target(&self, spell_id: u32) -> u32 {
+        spell_id // mock: self-contained ranks (no wrapper table in the mock store)
+    }
+
+    fn trainer_offer_skill_line(&self, _trainer_guid: u64, spell_id: u32) -> u32 {
+        // The mock's offerings are spell rows unless a test stages a skill-teaching one.
+        self.trainer_offer_skill_lines
+            .get(&spell_id)
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn superseded_old_rank(&self, _new_spell: u32, _player_guid: u64) -> Option<u32> {
+        self.trainer_superseded
+    }
+
+    fn character_presence(&self, guid: u64) -> Result<Option<(bool, u8, u8, u32)>> {
+        Ok(self
+            .characters
+            .iter()
+            .find(|c| c.guid == guid)
+            // `offline_guids` drives the invite gate's "player not online" arm. Empty by
+            // default, so a seeded character is online exactly as it always was.
+            .map(|c| {
+                (
+                    !self.offline_guids.contains(&guid),
+                    c.level,
+                    c.class,
+                    c.zone_id,
+                )
+            }))
+    }
+}
+
+impl BankStore for InMemoryStore {
+    fn auto_bank_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.auto_banked_items.lock().unwrap().push(slot);
+        Ok(())
+    }
+
+    fn buy_bank_slot(&self, _account_id: u64, _self_guid: u64, banker_guid: u64) -> Result<()> {
+        if let Some(e) = &self.trade_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.bought_bank_slots.lock().unwrap().push(banker_guid);
+        Ok(())
+    }
+}
+
+impl CombatStore for InMemoryStore {
+    fn set_target(&self, _account_id: u64, _self_guid: u64, target_guid: u64) -> Result<()> {
+        self.rec("set_target");
+        if let Some(e) = &self.set_target_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.selected_targets.lock().unwrap().push(target_guid);
+        Ok(())
+    }
+
+    fn pet_command(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _data: u32,
+        _target_guid: u64,
+    ) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_sheathed(&self, _account_id: u64, self_guid: u64, state: u8) -> Result<()> {
+        self.sheathed.lock().unwrap().push((self_guid, state));
+        Ok(())
+    }
+}
+
+impl DeathStore for InMemoryStore {
+    fn repop(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.repopped.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn reclaim_corpse(&self, _account_id: u64, self_guid: u64, corpse_guid: u64) -> Result<()> {
+        self.reclaimed_corpses
+            .lock()
+            .unwrap()
+            .push((self_guid, corpse_guid));
+        Ok(())
+    }
+
+    fn resurrect_response(&self, _account_id: u64, self_guid: u64, accept: bool) -> Result<()> {
+        self.resurrect_responses
+            .lock()
+            .unwrap()
+            .push((self_guid, accept));
+        Ok(())
+    }
+
+    fn self_resurrect(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.self_resurrects.lock().unwrap().push(self_guid);
+        match &self.self_resurrect_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => Ok(()),
+        }
+    }
+
+    fn spirit_healer_res(&self, _account_id: u64, self_guid: u64, healer_guid: u64) -> Result<()> {
+        self.spirit_healer_calls
+            .lock()
+            .unwrap()
+            .push((self_guid, healer_guid));
+        Ok(())
+    }
+
+    fn corpse_location(&self, _owner_guid: u64) -> Result<Option<(u32, f32, f32, f32)>> {
+        Ok(None)
+    }
+}
+
+impl TradeStore for InMemoryStore {
+    // Trade : pure recorders, the module owns every gate, so the fake just proves which
+    // verb the dispatch chose and which args survived the wire.
+    fn initiate_trade(&self, _account_id: u64, self_guid: u64, target_guid: u64) -> Result<()> {
+        self.rec("initiate_trade");
+        self.initiated_trades
+            .lock()
+            .unwrap()
+            .push((self_guid, target_guid));
+        Ok(())
+    }
+
+    fn begin_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("begin_trade");
+        self.begun_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn cancel_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("cancel_trade");
+        self.cancelled_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn set_trade_item(
+        &self,
+        _account_id: u64,
+        self_guid: u64,
+        trade_slot: u8,
+        inv_slot: u8,
+    ) -> Result<()> {
+        self.rec("set_trade_item");
+        self.set_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot, inv_slot));
+        Ok(())
+    }
+
+    fn clear_trade_item(&self, _account_id: u64, self_guid: u64, trade_slot: u8) -> Result<()> {
+        self.rec("clear_trade_item");
+        self.cleared_trade_items
+            .lock()
+            .unwrap()
+            .push((self_guid, trade_slot));
+        Ok(())
+    }
+
+    fn set_trade_gold(&self, _account_id: u64, self_guid: u64, copper: u32) -> Result<()> {
+        self.rec("set_trade_gold");
+        self.set_trade_golds
+            .lock()
+            .unwrap()
+            .push((self_guid, copper));
+        Ok(())
+    }
+
+    fn accept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("accept_trade");
+        self.accepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn unaccept_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("unaccept_trade");
+        self.unaccepted_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn busy_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("busy_trade");
+        self.busy_trades.lock().unwrap().push(self_guid);
+        Ok(())
+    }
+
+    fn ignore_trade(&self, _account_id: u64, self_guid: u64) -> Result<()> {
+        self.rec("ignore_trade");
+        self.ignore_trades.lock().unwrap().push(self_guid);
+        Ok(())
     }
 }
 
@@ -4369,6 +4373,62 @@ impl ChatActionStore for InMemoryStore {
 
     fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
         Ok(self.gm_level)
+    }
+
+    fn send_chat(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        chat_type: u8,
+        language: u8,
+        message: String,
+    ) -> Result<ChatOutcome> {
+        // Recorded per SHARD like every other player-scoped call, so the partition rule (say/
+        // yell stay shard-local and range-scoped) is assertable rather than merely stated.
+        self.rec("send_chat");
+        self.chats
+            .lock()
+            .unwrap()
+            .push((chat_type, language, message));
+        Ok(self.send_chat_outcome.unwrap_or(ChatOutcome::Delivered))
+    }
+
+    fn send_emote(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        _text_emote: u32,
+        _emote_anim: u32,
+        _target_guid: u64,
+    ) -> Result<()> {
+        self.rec("send_emote");
+        Ok(())
+    }
+
+    fn gm_command(&self, account_name: &str, _self_guid: u64, text: String) -> Result<()> {
+        if let Some(alpha_test_tools) = &self.gm_alpha_test_tools {
+            let authorized = alpha_test_tools.load(std::sync::atomic::Ordering::SeqCst);
+            self.gm_commands
+                .lock()
+                .unwrap()
+                .push((account_name.to_string(), text.clone()));
+            self.gm_authority_results.lock().unwrap().push(authorized);
+            if authorized && (text.starts_with(".speed") || text.starts_with(".tele")) {
+                self.gm_gameplay_changes.lock().unwrap().push(text);
+                return Ok(());
+            }
+            return Err(anyhow!("permission denied"));
+        }
+        match &self.gm_command_error {
+            Some(e) => Err(anyhow!("{e}")),
+            None => {
+                self.gm_commands
+                    .lock()
+                    .unwrap()
+                    .push((account_name.to_string(), text));
+                Ok(())
+            }
+        }
     }
 }
 
@@ -5085,6 +5145,149 @@ impl LootWindowStore for InMemoryStore {
             .unwrap()
             .push((target_guid, loot_slot));
         Ok(LootWindowRequestStatus::Applied)
+    }
+
+    fn loot_roll(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u32,
+        vote: u8,
+    ) -> Result<LootActionStatus> {
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        if let Some(refusal) = self.loot_action_refusal {
+            return Ok(LootActionStatus::Refused(refusal));
+        }
+        self.loot_rolls
+            .lock()
+            .unwrap()
+            .push((corpse_guid, loot_slot, vote));
+        Ok(LootActionStatus::Applied)
+    }
+
+    fn loot_master_give(
+        &self,
+        _account_id: u64,
+        _self_guid: u64,
+        corpse_guid: u64,
+        loot_slot: u8,
+        target_guid: u64,
+    ) -> Result<LootActionStatus> {
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        if let Some(refusal) = self.loot_action_refusal {
+            return Ok(LootActionStatus::Refused(refusal));
+        }
+        self.loot_master_gives
+            .lock()
+            .unwrap()
+            .push((corpse_guid, loot_slot, target_guid));
+        Ok(LootActionStatus::Applied)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn realm_loot_op(
+        &self,
+        op: u8,
+        corpse_guid: u64,
+        slot: u8,
+        item_entry: u32,
+        actor_guid: u64,
+        vote: u8,
+        deadline_micros: i64,
+        recipients: Vec<u64>,
+        random_property_id: u32,
+        promotion_source: spacetimedb_sdk::Identity,
+        source_roll_id: u64,
+    ) -> Result<()> {
+        self.rec("realm_loot_op");
+        self.realm_loot_ops.lock().unwrap().push((
+            op,
+            corpse_guid,
+            slot,
+            item_entry,
+            actor_guid,
+            vote,
+            deadline_micros,
+            recipients,
+            random_property_id,
+            promotion_source,
+            source_roll_id,
+        ));
+        if let Some(e) = &self.realm_loot_op_error {
+            return Err(anyhow!("{e}"));
+        }
+        Ok(())
+    }
+
+    fn realm_loot_vote(
+        &self,
+        corpse_guid: u64,
+        slot: u8,
+        actor_guid: u64,
+        vote: u8,
+    ) -> Result<LootActionStatus> {
+        self.realm_loot_op(
+            lyracore_shared::loot_roll::loot_op::VOTE,
+            corpse_guid,
+            slot,
+            0,
+            actor_guid,
+            vote,
+            0,
+            Vec::new(),
+            0,
+            spacetimedb_sdk::Identity::ZERO,
+            0,
+        )?;
+        if let Some(failure) = &self.loot_action_failure {
+            return Err(anyhow!(failure.clone()));
+        }
+        Ok(self
+            .loot_action_refusal
+            .map_or(LootActionStatus::Applied, LootActionStatus::Refused))
+    }
+
+    fn pending_local_rolls(&self) -> Result<Vec<super::loot::PendingLootRoll>> {
+        Ok(self.pending_rolls.lock().unwrap().clone())
+    }
+
+    fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
+        self.rec("settle_loot_roll");
+        if let Some(e) = &self.settle_loot_roll_error {
+            return Err(anyhow!("{e}"));
+        }
+        self.settled_rolls
+            .lock()
+            .unwrap()
+            .push((corpse_guid, slot, winner_guid));
+        Ok(())
+    }
+
+    fn clear_promoted_loot_roll(&self, roll_id: u64) -> Result<()> {
+        self.rec("clear_promoted_loot_roll");
+        self.cleared_rolls.lock().unwrap().push(roll_id);
+        self.pending_rolls
+            .lock()
+            .unwrap()
+            .retain(|r| r.roll_id != roll_id);
+        Ok(())
+    }
+
+    fn loot_won_since(&self, after_id: u64) -> Result<(u64, Vec<(u64, u8, u64)>)> {
+        let events = self.won_events.lock().unwrap();
+        let watermark = events.len() as u64;
+        let wins = events
+            .iter()
+            .enumerate()
+            .filter(|(i, _)| (*i as u64 + 1) > after_id)
+            .map(|(_, w)| *w)
+            .collect();
+        Ok((watermark, wins))
     }
 }
 

@@ -13,6 +13,105 @@ use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMess
 use wow_world_messages::vanilla::{MSG_RAID_TARGET_UPDATE_Client, PartyOperation, PartyResult};
 use wow_world_messages::Guid;
 
+/// Per-Shard presence reads and contact lists, behind presence, `/who` and whispers.
+pub(crate) trait SocialStore: Send + Sync {
+    /// This Shard's durable Character row for `guid`: identity plus the session flag. `None` if
+    /// this Shard holds no `game_character` row for it.
+    /// [`presence::of`](super::presence::of) unions it across every connected Shard.
+    fn character_identity(&self, guid: u64) -> Result<Option<presence::CharacterIdentity>>;
+
+    /// This Shard's live `game_world_entity` row for `guid`, if any — the Member Stats columns,
+    /// plus level and zone, current unlike the durable row (`persist_entity` only refreshes it on
+    /// logout, cross-map teleport or Transfer). `None` if `guid` has no live entity here.
+    fn live_entity(&self, guid: u64) -> Option<codec::MemberEntity>;
+
+    /// Does this Shard show `guid` between two places: its own Character row reading online with
+    /// no live entity here (a map-change loading screen, or a human Transfer's frozen source
+    /// copy — `begin_transfer` persists with `set_offline: false`), or a Transfer Intent naming a
+    /// session-less bot mid-crossing.
+    fn character_in_transit(&self, guid: u64) -> bool;
+
+    /// This Shard's stored Auto-Reply for `guid`. `None` when this Shard holds none.
+    /// [`presence::auto_reply`] asks the Shard that holds the live entity.
+    fn auto_reply_text(&self, guid: u64) -> Result<Option<String>>;
+
+    /// Does every configured World Shard vouch that it is reachable and healthy enough to trust a
+    /// negative read from? [`presence::of`] asks this before answering `Whereabouts::Offline` or
+    /// `None` — an unreachable or stale-cached Shard could be hiding the Character. A Store
+    /// without a Shard topology answers `Ok(())`.
+    fn every_shard_vouches_for_absence(&self) -> Result<()>;
+
+    /// Every in-world player Character on this Shard — the per-Shard input
+    /// [`presence::in_world_characters`](super::presence::in_world_characters) unions, and `/who`'s
+    /// ultimate source. A player is "in world" iff their guid appears in `game_world_entity` with
+    /// `entry == 0` (player entity); dead players are included (ghosts are in world). Bots are
+    /// included: they have no session, but they do have a live entity.
+    fn in_world_players(&self) -> Result<Vec<presence::RealmPresence>>;
+
+    /// `game_area.name` for `zone_id` — `/who`'s search-string match against a zone name. Empty
+    /// when the catalogue holds no row for it (unimported, or an id the client sends that the
+    /// imported DBC lacks).
+    fn zone_name(&self, zone_id: u32) -> String;
+
+    /// `self_guid`'s friend guids and ignore guids for `CMSG_FRIEND_LIST`. `self_guid` is always
+    /// the CALLING World Session's own guid, never a peer's, so a Store may answer this from
+    /// whatever cheap per-connection state it keeps for its own connected sessions (the Coordinator
+    /// reads its Gateway-side `Viewer`). A caller that needs a friend's PRESENCE composes it
+    /// separately with `world::social::friend_views`, over `presence::of`; a caller that needs to
+    /// know whether an ARBITRARY (possibly unconnected) Character ignores another uses
+    /// [`SocialStore::ignored_guids`] instead, never this method.
+    fn contact_lists(&self, self_guid: u64) -> Result<(Vec<u64>, Vec<u64>)>;
+
+    /// `owner_guid`'s ignore guids, read directly off this Shard's durable contact rows — realm-wide
+    /// safe for ANY owner, including one with no live World Session on this Gateway process at all
+    /// (a whisper sender or a guild-invite target usually is not). `whisper::ignored_anywhere` fans
+    /// this out across every connected Shard. Unlike `contact_lists`, this never reads a `Viewer`.
+    fn ignored_guids(&self, owner_guid: u64) -> Result<Vec<u64>>;
+
+    /// Resolve a typed contact name to a character guid on THIS Shard (case-insensitive, like the
+    /// Module's `character_by_name`): `presence::resolve_by_name`'s per-Shard primitive. `None`
+    /// if this Shard has no character with that name.
+    fn character_guid_by_name(&self, name: &str) -> Result<Option<u64>>;
+
+    // Contact ops answer a [`ContactOutcome`]: a typed Refusal is a gameplay answer the
+    // client renders, and only a failure with an unknown durable result stays `Err`.
+
+    /// `CMSG_ADD_FRIEND` (the name is already resolved to `target_guid` by the gateway).
+    /// `target_race` is the target's own Speaker Fact, read realm-wide by the gateway: the Module's
+    /// Enemy Gate needs it and holds no Characters of its own to read it from.
+    fn add_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+        target_race: u8,
+    ) -> Result<ContactOutcome>;
+
+    /// `CMSG_DEL_FRIEND`.
+    fn del_friend(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome>;
+
+    /// `CMSG_ADD_IGNORE` (the name is already resolved to `target_guid` by the gateway).
+    fn add_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome>;
+
+    /// `CMSG_DEL_IGNORE`.
+    fn del_ignore(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<ContactOutcome>;
+}
+
 /// What one contact-list op answered. A [`ContactRefusal`] is a gameplay answer `SMSG_FRIEND_STATUS`
 /// renders; a timeout, transport failure, or untagged reducer error stays `Err` and ends the
 /// session, because the durable outcome is then unknown.

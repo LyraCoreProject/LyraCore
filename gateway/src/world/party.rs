@@ -49,6 +49,172 @@ use lyracore_shared::group::{
     COMMAND_RESULT_WINDOW_MICROS,
 };
 
+/// Party membership: Realm-core group ops, roster reads, World Shard mirrors and companion commands.
+pub(crate) trait PartyStore: Send + Sync {
+    /// Admit and claim one Group Intent against current World Shard state. Refusals include a
+    /// consumed intent or suppressed action. Transport failures remain distinct.
+    fn claim_bot_invite_intent(&self, intent_id: u64) -> Result<PartyOutcome>;
+
+    fn claim_party_command_intent(&self, intent_id: u64, claim_token: u64) -> Result<()>;
+
+    fn admit_party_command_authority(
+        &self,
+        group_id: u64,
+        leader_guid: u64,
+        bot_guid: u64,
+        authority_member_guid: u64,
+        expected_members: Vec<u64>,
+    ) -> Result<CompanionCommandOutcome>;
+
+    fn apply_admitted_party_command(
+        &self,
+        command: &AdmittedCompanionCommand,
+    ) -> Result<CompanionCommandOutcome>;
+
+    fn finish_party_command_intent(
+        &self,
+        intent_id: u64,
+        claim_token: u64,
+        outcome: CompanionCommandOutcome,
+    ) -> Result<()>;
+
+    fn confirm_party_command_receipt(
+        &self,
+        source_identity: spacetimedb_sdk::Identity,
+        intent_id: u64,
+    ) -> Result<Option<CompanionCommandOutcome>>;
+
+    fn confirm_party_command_holder(&self, bot_guid: u64) -> Result<PartyCommandHolder>;
+
+    fn entity_partition(&self, guid: u64) -> Option<(u32, u64)>;
+
+    /// Acknowledged World Shard admission for one automatic group action. A later controller
+    /// selection cannot undo admission or membership already committed on Realm-core.
+    fn admit_sessionless_group_action(&self, character_guid: u64) -> Result<PartyOutcome>;
+
+    /// `realm_group_op` — run one party op against the database this handle names: realm-core
+    /// when sharded, the only shard otherwise. The op byte and argument slots are
+    /// `lyracore_shared::group::realm_op`.
+    fn realm_group_op(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u8,
+        arg_b: u8,
+        arg_c: u64,
+    ) -> Result<PartyOutcome>;
+
+    /// [`Self::realm_group_op`] that returns only after this handle's Coordinator cache holds the
+    /// commit, so a roster read right after it sees the op. It waits on the Coordinator pump, so its
+    /// caller must run on another thread. Fakes may reuse the ordinary op.
+    fn realm_group_op_visible(
+        &self,
+        op: u8,
+        actor_guid: u64,
+        target_guid: u64,
+        arg_a: u8,
+        arg_b: u8,
+        arg_c: u64,
+    ) -> Result<PartyOutcome>;
+
+    /// Realm-core LEAVE for a deleted Character. Production returns after its Coordinator cache
+    /// has the committed roster; Fakes may reuse the ordinary party operation.
+    fn deleted_character_party_leave(&self, character_guid: u64) -> Result<PartyOutcome>;
+
+    /// The party `character_guid` is in, as THIS handle's database sees it: authoritative on
+    /// realm-core, a mirror on a world shard. `None` = not in a party there.
+    fn group_roster(&self, character_guid: u64) -> Result<Option<GroupRoster>>;
+
+    /// Bounded party projection used by companion-command authority. A roster longer than a Raid,
+    /// or an otherwise unreadable projection, is an infrastructure failure, never proof of
+    /// membership.
+    fn party_command_group_roster(&self, character_guid: u64) -> Result<Option<GroupRoster>>;
+
+    /// [`group_roster`](Self::group_roster) keyed by the group — the read the mirror push needs for a
+    /// party the acting character has just left.
+    fn group_roster_by_id(&self, group_id: u64) -> Result<Option<GroupRoster>>;
+
+    /// Realm-core's durable order for a complete party roster, including a disbanded party.
+    fn group_roster_revision(&self, group_id: u64) -> Result<u64>;
+
+    /// The Roster Revision this database holds for one party, or `None` when it holds no row. On a
+    /// World Shard it is the mirror's revision, kept after a disband; on Realm-core it is the
+    /// authoritative one.
+    fn held_roster_revision(&self, group_id: u64) -> Result<Option<u64>>;
+
+    /// Realm-core's ordered locator for one Character. World Shards never supply this fact.
+    fn realm_character_partition(
+        &self,
+        character_guid: u64,
+    ) -> Result<Option<RealmCharacterPartition>>;
+
+    fn party_holder_observation(
+        &self,
+        character_guid: u64,
+        map_id: u32,
+        instance_id: u64,
+    ) -> Result<PartyHolderObservation>;
+
+    fn party_cleanup_group_roster_by_id(&self, group_id: u64) -> Result<Option<GroupRoster>>;
+
+    /// Every Character with authoritative Realm-core party membership.
+    fn party_member_guids(&self) -> Result<Vec<u64>>;
+
+    /// Every party id held by this store. Realm-core rows are authoritative; World Shard rows are
+    /// mirrors that reconnect reconciliation must also inspect for stale parties.
+    fn party_group_ids(&self) -> Result<Vec<u64>>;
+
+    /// `sync_group_mirror` — replace this shard's mirror of one party with realm-core's roster.
+    /// An empty `roster.members` is the disband tombstone.
+    fn sync_group_mirror(&self, roster: &GroupRoster) -> Result<()>;
+
+    // The SINGLE-DATABASE party path (`world::party::run`'s `None` arm). Each takes the caller's
+    // `self_guid` as well as its account: the account is what identifies the player CONNECTION these
+    // reducers run on, and the guid is what identifies the CHARACTER to realm-core on the other arm.
+    // Both are threaded through one call site (`world::social`), so the two planes take the same
+    // arguments and a mock sees which character the op was for either way.
+
+    /// `CMSG_GROUP_INVITE` (name gateway-resolved). A `GroupRefusal` arrives as an outcome.
+    fn group_invite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<PartyOutcome>;
+
+    /// `CMSG_GROUP_ACCEPT`.
+    fn group_accept(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+
+    /// `CMSG_GROUP_DECLINE`.
+    fn group_decline(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+
+    /// `CMSG_GROUP_DISBAND` (the client's "Leave Party").
+    fn group_leave(&self, account_id: u64, self_guid: u64) -> Result<PartyOutcome>;
+
+    /// `CMSG_GROUP_UNINVITE` (name gateway-resolved) or `CMSG_GROUP_UNINVITE_GUID` — the leader or
+    /// an Assistant kicks a member.
+    fn group_uninvite(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        target_guid: u64,
+    ) -> Result<PartyOutcome>;
+
+    /// `CMSG_LOOT_METHOD` — the leader sets the party's loot method/
+    /// threshold/master. `loot_setting`/`loot_threshold` are the gateway-decoded `GroupLootSetting`/
+    /// `ItemQuality` wire bytes, passed straight through (the module adopted the wire ordering
+    /// verbatim — zero translation).
+    fn group_loot_method(
+        &self,
+        account_id: u64,
+        self_guid: u64,
+        loot_setting: u8,
+        master_guid: u64,
+        loot_threshold: u8,
+    ) -> Result<PartyOutcome>;
+}
+
 /// One group, as the database that holds it sees it. Read from realm-core it is the authority; read
 /// from a world shard it is that shard's mirror. Names and online flags are deliberately NOT in it —
 /// realm-core has no character rows to resolve either from, so they are filled at render time from

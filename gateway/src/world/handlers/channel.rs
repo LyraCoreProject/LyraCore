@@ -575,6 +575,32 @@ mod tests {
         fn speaker_gm_level(&self, _speaker_guid: u64) -> Result<u8> {
             Ok(0)
         }
+
+        fn send_chat(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _chat_type: u8,
+            _language: u8,
+            _message: String,
+        ) -> Result<ChatOutcome> {
+            unreachable!("the channel dispatcher never speaks a say, yell or emote line")
+        }
+
+        fn send_emote(
+            &self,
+            _account_id: u64,
+            _self_guid: u64,
+            _text_emote: u32,
+            _emote_anim: u32,
+            _target_guid: u64,
+        ) -> Result<()> {
+            unreachable!("the channel dispatcher never performs a text emote")
+        }
+
+        fn gm_command(&self, _account_name: &str, _self_guid: u64, _text: String) -> Result<()> {
+            unreachable!("the channel dispatcher never runs a GM command")
+        }
     }
 
     impl ChannelActionStore for InMemoryChannelActions {

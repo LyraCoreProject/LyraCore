@@ -17,6 +17,7 @@ mod channel;
 mod char;
 mod chat;
 mod combat;
+mod death;
 mod duel;
 mod guild;
 mod item;
@@ -41,7 +42,7 @@ pub(crate) use auction::{
 };
 #[cfg(test)]
 pub(crate) use auction::{AuctionHousePolicy, AuctionInteraction};
-pub(crate) use bank::handle_bank;
+pub(crate) use bank::{handle_bank, BankStore};
 pub(crate) use cast::{dispatch_cast, CastOutcome, CastPlayer, CastStore, CastTransition};
 pub(crate) use channel::{
     dispatch_channel_action, ChannelActionOutcome, ChannelActionStore, ChannelOutcome,
@@ -49,12 +50,13 @@ pub(crate) use channel::{
 };
 #[cfg(test)]
 pub(crate) use channel::{resolve_online_character, ResolvedTarget};
-pub(crate) use char::handle_char;
+pub(crate) use char::{handle_char, CharacterStore};
 pub(crate) use chat::{
     dispatch_chat_action, ChatActionOutcome, ChatActionPlayer, ChatActionStore, ChatOutcome,
     RealmChatRequest, SpeakerFacts, WhisperRequest, WhisperTargetFacts,
 };
-pub(crate) use combat::handle_combat;
+pub(crate) use combat::{handle_combat, CombatStore};
+pub(crate) use death::DeathStore;
 pub(crate) use duel::{dispatch_duel_action, DuelActionOutcome, DuelActionPlayer, DuelActionStore};
 pub(crate) use guild::{
     character_facts, destroy_inert_charters, dispatch_guild_action, guild_projection,
@@ -84,7 +86,7 @@ pub(crate) use member_stats::{
     dispatch_member_stats, member_stats_tick, MemberPresence, MemberStatsOutcome,
     MemberStatsPlayer, MemberStatsRecord, MemberStatsStore,
 };
-pub(crate) use query::handle_query;
+pub(crate) use query::{handle_query, NpcStore};
 pub(crate) use quest::{
     dispatch_quest_action, quest_giver_menu, QuestActionOutcome, QuestActionPlayer,
     QuestActionStore,
@@ -93,8 +95,8 @@ pub(crate) use taxi::{
     dispatch_taxi_action, queue_reply_then_arm, TaxiActionOutcome, TaxiActionPlayer,
     TaxiActionStore,
 };
-pub(crate) use trade::handle_trade;
-pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome};
+pub(crate) use trade::{handle_trade, TradeStore};
+pub(crate) use trainer::{handle_trainer, TrainerBuyOutcome, TrainerStore};
 pub(crate) use vendor::{
     dispatch_vendor_action, VendorActionOutcome, VendorActionPlayer, VendorActionStore,
 };

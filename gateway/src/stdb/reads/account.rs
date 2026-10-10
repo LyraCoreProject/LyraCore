@@ -164,7 +164,7 @@ impl Coordinator {
     }
 
     /// The realm-core character→shard index entry for `guid`: the `(map_id, instance_id)` the realm
-    /// believes the character is at. A HINT — `config::resolve_home_shard` confirms it against
+    /// believes the character is at. A HINT — `realm_core::locate_home_shard` confirms it against
     /// the shard that actually holds the row before routing anything to it.
     pub fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
         self.0
