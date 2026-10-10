@@ -37,6 +37,26 @@ pub fn wolves(shard: &mut Standalone, offsets: &[f32]) -> Vec<Row> {
     wolves
 }
 
+/// Replace every wolf (entry 51000) with one per offset, in yards ahead of the live `character`.
+/// Needs `debug_seed_scenario_fixtures`. Returns their guids in spawn order.
+pub fn wolves_beside(shard: &Standalone, character: &str, offsets: &[f32]) -> Vec<String> {
+    shard.assert_sql("DELETE FROM game_world_entity WHERE entry = 51000");
+    for offset in offsets {
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &[character, "51000", &offset.to_string()],
+        );
+    }
+    let mut guids: Vec<u64> = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .iter()
+        .map(|wolf| number(wolf, "guid"))
+        .collect();
+    assert_eq!(guids.len(), offsets.len(), "{guids:?}");
+    guids.sort_unstable();
+    guids.iter().map(u64::to_string).collect()
+}
+
 pub fn lone_wolf(shard: &mut Standalone) -> Row {
     wolves(shard, &[5.0]).remove(0)
 }
