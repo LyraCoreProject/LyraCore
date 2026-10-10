@@ -156,7 +156,7 @@ const HOOK_EVENTS: &[HookEvent] = &[
         "payload.character_guid",
         "payload.npc_guid",
     ),
-    // Work-item 228 (encounter kernel): entry-keyed creature death, once-per-instance HP-threshold
+    // Encounter kernel: entry-keyed creature death, once-per-instance HP-threshold
     // crossings (fired by encounter::encounter_hp_probe, not a new core chokepoint), and GO use.
     hook(
         "on_creature_death",

@@ -755,7 +755,7 @@ fn roll_corpse_loot(
     target_guid: u64,
     entitlement: Option<&crate::loot::tag::DeathEntitlement>,
 ) {
-    // STALE-SNAPSHOT PURGE (267, found live; widened by 358): corpse guids can be REUSED —
+    // STALE-SNAPSHOT PURGE: corpse guids can be REUSED —
     // `debug_spawn_at_feet` allocates max+1 per entry, and a harness SQL teardown deletes the entity
     // WITHOUT running the decay reaper — so a fresh kill on a reused guid inherited a long-dead
     // group's `game_corpse_loot_eligible` rows and split the solo looter's purse with departed
@@ -989,7 +989,7 @@ pub(crate) fn is_lethal(health: u32, dmg: u32) -> bool {
 ///  2. the TARGET's incoming % — `A_MOD_DAMAGE_TAKEN` (Shield Wall, a vulnerability debuff);
 ///  3. absorb shields (`A_ABSORB`, e.g. Power Word: Shield) — BEFORE the lethal check, so a
 ///     fully-absorbed hit can't kill and drains the shield instead of health;
-///  4. the GM playtest godmode zero (223's `.god`) — keyed on the TARGET only, so a godmode unit's
+///  4. the GM playtest godmode zero (the `.god` command) — keyed on the TARGET only, so a godmode unit's
 ///     OUTGOING damage is untouched. Applied AFTER absorb, so a godmode target's shield still drains
 ///     exactly as it did before (and the zeroed remainder reads as "absorbed").
 ///

@@ -145,7 +145,7 @@ pub fn build_gameobject_query_response(
     }
 }
 
-/// A ground-area spell's DYNAMICOBJECT CREATE (118, Consecration's swirl): the 5875 client renders
+/// A ground-area spell's DYNAMICOBJECT CREATE (Consecration's swirl): the 5875 client renders
 /// the persistent ground effect from `DYNAMICOBJECT_SPELLID`'s SpellVisual, sized by RADIUS at
 /// POS — it never draws it from the cast packets alone (live find). Same stationary
 /// `CreateObject2` + `HasPosition` shape as the gameobject CREATE above; entry = the spell id and

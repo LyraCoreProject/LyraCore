@@ -6,7 +6,7 @@
 //! [`client_command`] reducer AS the player — a command handler has exactly a reducer's authority.
 //!
 //! Server→client: [`send`] inserts a [`AddonMessage`] row; the gateway relays it (COORDINATOR
-//! connection — the 279 delivery law: addon UI state must survive fat transactions) as an
+//! connection — the delivery law: addon UI state must survive fat transactions) as an
 //! addon-language whisper the client surfaces to addons as `CHAT_MSG_ADDON`.
 //!
 //! Core owns `ping`; one installed Package may register a parser, an admitted apply operation and a

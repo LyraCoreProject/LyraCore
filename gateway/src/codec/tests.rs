@@ -2244,7 +2244,7 @@ fn cast_result_failed_body_and_reason_map() {
 #[test]
 fn spell_damage_log_renders_crit_and_breakdown() {
     // A crit cast → hit_info encodes 0x2 (SPELL_HIT_TYPE_CRIT — gtker's AffectsVictim variant; the
-    // MELEE-named CriticalHit encodes 0x80, which the client ignores in THIS packet — the 114 live
+    // MELEE-named CriticalHit encodes 0x80, which the client ignores in THIS packet — the live
     // find: a 22-damage Heroic Strike crit rendered plain). Breakdown fields propagate unchanged.
     let crit = build_spell_non_melee_damage_log(0x42, 0x7, 133, 30, 4, true, 5, 3);
     assert_eq!(crit.hit_info, HitInfo::AffectsVictim);

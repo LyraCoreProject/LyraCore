@@ -296,7 +296,7 @@ pub struct GossipOption {
     pub icon: u32,         // cmangos OptionIcon (gossip icon glyph); truncated to u8 on the wire
     pub text: String, // resolved option label (direct npc_text-style string, or via broadcast_text)
     pub action: u32, // cmangos OptionType/option_id — see `lyracore_shared::constants::gossip_option`
-    pub action_menu_id: u32, // cmangos ActionMenuId (submenu target) — stored INERT, never navigated (217 scope)
+    pub action_menu_id: u32, // cmangos ActionMenuId (submenu target) — stored INERT, never navigated
     pub cond_type: u32,      // see `lyracore_shared::constants::gossip_condition` (0 = always show)
     pub cond_value1: u32,    // cond_type's primary operand (a quest id for the QUEST_* conditions)
     pub cond_value2: u32,    // reserved (unused by the current minimal condition set)

@@ -122,7 +122,7 @@ pub struct ItemTemplate {
     #[default(0)]
     pub arcane_res: i32,
     /// On-use/on-equip spell slots 3-5 (vanilla items carry up to 5; slots 1-2 already cover every
-    /// 1-10 consumable). Completes the 191 proc engine's item half — no consumer reads these yet
+    /// 1-10 consumable). Completes the proc engine's item half — no consumer reads these yet
     /// (data plumbing only). Same shape as `spellid_1`/`spelltrigger_1`: `u32` id,
     /// `u8` `ItemSpellTriggerType`. END-appended + `#[default(0)]` → additive auto-migration.
     /// [reference]

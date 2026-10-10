@@ -109,7 +109,7 @@ mod tests {
 // =============================================================================================
 //  Runtime queries, pure algorithms over fetched chunks. The chunk source is
 //  a closure (module: one PK find per cell; tests: synthetic chunks) so ALL pathing/LoS logic
-//  unit-tests here without a database. Missing chunk = "no obstacles known" (the 241 contract:
+//  unit-tests here without a database. Missing chunk = "no obstacles known" (the sparse-chunk contract:
 //  fully-clear cells emit no row), so every query degrades to today's straight-line behavior
 //  off-slice.
 // =============================================================================================
@@ -356,7 +356,7 @@ pub fn find_leg(
     find_leg_ex(fetch, from, to, max_expansions).map(|(path, _, _)| path)
 }
 
-/// `find_leg` + the expansion count + completeness (exposed for tests and the 244 benchmark).
+/// `find_leg` + the expansion count + completeness (exposed for tests and the benchmark).
 /// When the expansion budget exhausts before reaching the goal, returns the BEST-EFFORT path —
 /// to the explored node nearest the goal (complete=false) — so a per-tick chase leg still makes
 /// real progress around large obstacles and re-plans next tick, instead of falling back to a
@@ -665,7 +665,7 @@ mod runtime_tests {
     /// One synthetic chunk at the Northshire cell: a full-height wall along nx=32 (obs ox=16)
     /// with a 4-sub-cell doorway at ny 30..34 (obs oy 15..17), plus a sealed 4-wall pocket in
     /// the corner (nx 4..12, ny 4..12 ring). Every other cell in the world is "missing" (all
-    /// clear) — exactly the 241 skip-all-clear contract.
+    /// clear) — exactly the skip-all-clear contract.
     fn walled_cell() -> ((u16, u16), NavCellData) {
         let (cx, cy) = (cell_index(-8913.0).unwrap(), cell_index(-184.0).unwrap());
         let mut walk = vec![0xFFu8; WALK_BYTES];

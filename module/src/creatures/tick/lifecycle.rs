@@ -244,7 +244,7 @@ pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
     // Perf catalog 1.21: `by_respawn_at` range-scans ARMED-and-elapsed rows only (`0` = not armed, so
     // the `1..=now` range skips every ready node and every non-gather GO for free). `respawn_due` stays
     // as the post-filter, so the predicate — and the result set — are unchanged. `visited` now counts
-    // the index candidates rather than the whole table; that IS the 230-style evidence number.
+    // the index candidates rather than the whole table; that IS the evidence number.
     let mut visited = 0usize;
     let due: Vec<u64> = gos
         .by_respawn_at()

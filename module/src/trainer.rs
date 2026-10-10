@@ -623,7 +623,7 @@ pub(crate) fn apply_trainer_buy(
                 }
                 // Trainer-path only: `learn_spell_with_dependents` also auto-teaches this rank's
                 // ONE-LEVEL `game_spell_learn` dependents (see its doc for why NOT plain `learn_spell`
-                // universally — it would change createinfo's spell COUNT and break 212's provenance
+                // universally — it would change createinfo's spell COUNT and break the provenance
                 // count-parity runbook).
                 BuyGrant::Spell(id) => {
                     crate::spell::learn_spell_with_dependents(ctx, caster_guid, owner, id)

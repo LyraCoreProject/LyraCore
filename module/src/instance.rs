@@ -81,7 +81,7 @@ pub(crate) fn entrance_fallback(map_id: u32) -> Option<(u32, f32, f32, f32, f32)
     dungeon(map_id).map(|d| d.entrance)
 }
 
-/// Reap an instance after it has been EMPTY this long (30min const, per the 190 design). Vanilla
+/// Reap an instance after it has been EMPTY this long (30min const). Vanilla
 /// keeps an untouched instance alive ~1h; 30min is the item's chosen constant (deviation noted).
 pub(crate) const INSTANCE_EMPTY_REAP_MICROS: i64 = 30 * 60 * 1_000_000;
 
@@ -330,7 +330,7 @@ pub(crate) fn occupancy_action(
 
 /// Where a login whose `pending_instance_id` was reaped lands (NEVER strand, design trap).
 /// Pure over the two facts the caller derives ([`entrance_fallback`], [`is_dungeon_map`]);
-/// alive-or-ghost is orthogonal and preserved per 226's `pending_ghost` rules at the call site.
+/// alive-or-ghost is orthogonal and preserved per the `pending_ghost` rules at the call site.
 #[derive(Debug, PartialEq)]
 pub(crate) enum StrandingFallback {
     /// A known dungeon map → its entrance const, instance 0.
@@ -386,7 +386,7 @@ pub(crate) fn instance_removal_due(
 }
 
 // ===========================================================================================
-//  Entry: resolve-or-create (the 225 areatrigger hook's target)
+//  Entry: resolve-or-create (the areatrigger hook's target)
 // ===========================================================================================
 
 /// A binding/party instance is LIVE for resolution iff its row still exists, is for the right
@@ -922,8 +922,8 @@ pub(crate) fn occupied_instances(ctx: &ReducerContext) -> HashSet<u64> {
 }
 
 /// Tear one instance down, in the design's order: population (entities + their combat/threat/leg/
-/// loot state, player corpses, GO copies + chest loot) → the 228 encounter-kernel sweep splice →
-/// the 229 tick row → bindings → the `game_instance` row itself. Refuses instance 0 (the open
+/// loot state, player corpses, GO copies + chest loot) → the encounter-kernel sweep splice →
+/// the tick row → bindings → the `game_instance` row itself. Refuses instance 0 (the open
 /// world) and any instance with a live player inside (belt over the caller's occupancy check —
 /// same-transaction, so no race). Shared by the reaper and `debug_reap_instance`.
 pub(crate) fn teardown_instance(ctx: &ReducerContext, instance_id: u64) {
@@ -1004,7 +1004,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id);
     crate::encounter::sweep_encounter_state(ctx, instance_id);
 
-    // 5. The dedicated 229 tick row (debug_disarm_instance_tick's body) — coverage of the (now
+    // 5. The dedicated tick row (debug_disarm_instance_tick's body) — coverage of the (now
     //    empty) id falls back to the catch-all, which is a no-op for a population of zero.
     let sched = ctx.db.game_creature_move_schedule();
     let ticks: Vec<u64> = sched

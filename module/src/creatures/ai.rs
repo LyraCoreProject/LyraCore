@@ -488,7 +488,7 @@ pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
 ///     proven by `tick_scope_partitions_every_instance_exactly_once`).
 ///
 /// ANTI-STRANDING GUARANTEE: an entity can sit in an instance with NO `game_instance` row and NO
-/// dedicated tick row (224's `teleport_player` accepts an arbitrary `instance_id` today) — the
+/// dedicated tick row (`teleport_player` accepts an arbitrary `instance_id` today) — the
 /// catch-all's "everything not dedicated" rule means such an entity is ALWAYS covered; a
 /// strictly-enumerated instance list would freeze it forever.
 pub(crate) enum TickScope {
@@ -862,7 +862,7 @@ mod tests {
     /// the_documented_shape` convention): `game_creature_family` constructs with named fields exactly
     /// like the importer's positional SQL INSERT column list (`family_id,name,pet_food_mask,
     /// pet_talent_type,category`) — a compile-time guard against a silently reordered/renamed column.
-    /// Purely compile-time: the runtime gates (188's feeding + tameable) don't exist yet, so there is
+    /// Purely compile-time: the runtime gates (feeding + tameable) don't exist yet, so there is
     /// nothing behavioral to assert.
     #[test]
     fn new_creature_family_table_constructs_with_the_documented_shape() {

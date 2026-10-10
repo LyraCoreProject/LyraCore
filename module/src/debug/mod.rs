@@ -495,7 +495,7 @@ pub fn debug_clear_creatures(ctx: &ReducerContext, map_id: u32) -> Result<(), St
     Ok(())
 }
 
-/// Stamp a `game_ground_area` at `caster_guid`'s position from `spell_id`'s area effect (118 test hook):
+/// Stamp a `game_ground_area` at `caster_guid`'s position from `spell_id`'s area effect (test hook):
 /// looks up the spell header + its periodic-area effect (the one with a radius + period) and inserts the
 /// zone, exactly as an `E_PERSISTENT_AREA` cast would — so the tick engine can be verified server-side
 /// without a live client cast. `tick_ground_areas` then damages hostiles inside for `duration_ms`.
@@ -1376,7 +1376,7 @@ pub fn debug_accept_quest(
     crate::actor::accept_quest(ctx, character_guid, giver_guid, quest_entry)
 }
 
-/// 279 relay-stress: ONE transaction shaped like the 277 killer — the relay-carried rows (a quest
+/// Relay-stress: ONE transaction — the relay-carried rows (a quest
 /// kill credit for `victim_entry` and an item grant). The wire test asserts the client still
 /// receives SMSG_QUESTUPDATE_ADD_KILL and SMSG_ITEM_PUSH_RESULT out of this fat transaction — the
 /// delivery guarantee the coordinator relay migration exists to provide.

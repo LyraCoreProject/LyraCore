@@ -62,8 +62,8 @@ const E_HEAL_MAX_HEALTH: u8 = 0x16; // heal the target to FULL max health (Lay o
 const E_TAME_CREATURE: u8 = 0x20; // completed Hunter tame; raw vanilla TameCreature effect (55), lockstep with module taxonomy
 const E_FEED_PET: u8 = 0x21; // feed a Hunter pet from the explicit item target; raw effect 101
 const E_POWER_BURN: u8 = 0x19;
-const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink, 116); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
-const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (118, Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
+const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
+const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
 const E_OPEN_LOCK: u8 = 0x1D;
 const E_DUEL: u8 = 0x22; // Duel (raw effect 83): p0 is the duel-flag gameobject template entry
 const E_DISENCHANT: u8 = 0x18;
@@ -415,7 +415,7 @@ fn power_word_shield_p1_override(spell_id: u32, name: &str, kind: u8, p1: i32) -
     p1
 }
 
-/// `p1` for an `E_POWER_BURN` effect (117, Mana Burn): the DBC `EffectMultipleValue` (a fraction, 0.5
+/// `p1` for an `E_POWER_BURN` effect (Mana Burn): the DBC `EffectMultipleValue` (a fraction, 0.5
 /// for vanilla Mana Burn) carried onto the effect row as basis-points (0.5 -> 50), since `p1` is a
 /// plain `i32`. The module's `mana_burn_damage` treats `<=0` as 100 (1:1) — so a spell whose
 /// `EffectMultipleValue` genuinely reads 0 in the DBC (unauthored/placeholder) still deals full
@@ -1479,7 +1479,7 @@ fn push_spell_effect_rows(
             power_word_shield_p1_override(spell_id, name, kind, 0i32)
         };
         let script_id = 0u32;
-        // [093] data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
+        // Data-driven "this energize enters/holds combat": set on Bloodrage (cast 2687 + trickle
         // 29131, BOTH named "Bloodrage") so the E_ENERGIZE / A_PERIODIC_ENERGIZE arms read the flag, not
         // a spell id. Any energize can opt in by adding the name.
         let enters_combat = name == "Bloodrage";
@@ -1879,7 +1879,7 @@ fn assemble_spell_sql(
         ));
     }
 
-    // Trainer offerings (259 INVERSION): the --dump ETL's npc_trainer import is now the PRIMARY
+    // Trainer offerings: the --dump ETL's npc_trainer import is now the PRIMARY
     // source of class offerings (full per-class trees, the dump's real costs/reqlevels — an
     // operator-local.import read like every other --dump field); this curated pass is the
     // OVERRIDE layer for the "specials" cmangos delivers outside npc_trainer (Consecration,

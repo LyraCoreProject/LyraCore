@@ -433,7 +433,7 @@ pub struct GroupEvent {
     /// from in the first place. A guid is the one realm-wide name a character has. The identity
     /// column stays exactly as it was and still drives the per-player RLS on a world shard; this
     /// column is what the gateway's realm-core relay filters on (it reads through the owner token,
-    /// which bypasses RLS, and self-filters per session — the coordinator-relay law of 277/279).
+    /// which bypasses RLS, and self-filters per session — the coordinator-relay law).
     // The u64 default MUST be typed: a bare `0` encodes as 4 bytes and `publish` rejects the
     // migration with "data too short for u64: Expected 8, given 4" (world.rs:127 records the same
     // rule). Nothing in `cargo test`/`cargo check` validates default-value encoding — only a real

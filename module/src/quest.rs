@@ -3201,7 +3201,7 @@ fn evaluate_share(
     // never grant a quest the member doesn't qualify for. An offline member has no entity to ask, and
     // [`lyracore_shared::quest::share_result`] answers TOO_FAR for one before it reads this at all.
     // The already-held Gate is answered ahead of this line as well, by HAVE_QUEST/FINISH_QUEST.
-    // ExclusiveGroup + reputation-requirement gates are OUT of scope (194 cuts).
+    // ExclusiveGroup + reputation-requirement gates are OUT of scope.
     let gates_ok = member_entity
         .as_ref()
         .is_some_and(|e| accept_gates(ctx, e, tmpl).is_ok());

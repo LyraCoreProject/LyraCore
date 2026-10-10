@@ -1,4 +1,4 @@
-//! Encounter kernel levers, operator stand-ins until 227's Deadmines package
+//! Encounter kernel levers, operator stand-ins until the Deadmines package
 //! consumes the primitives for real. Each is a thin `?`-wrapper over the `crate::encounter` fn it
 //! names, so the runbook can exercise every primitive on a live node without an encounter package.
 

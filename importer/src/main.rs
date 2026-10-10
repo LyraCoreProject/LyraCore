@@ -992,8 +992,8 @@ pub(crate) struct Args {
     dump: Option<String>,               // cmangos creature ETL input (.sql[.gz])
     dbc: Option<String>,                // client Data/ dir for the DBC stream
     pub(crate) terrain: Option<String>, // client Data/ dir for the ADT heightmap stream (see terrain.rs)
-    pub(crate) dump_collision: Option<String>, // client Data/ dir: 240 spike, WMO/M2 collision dry-run (see collision.rs)
-    pub(crate) nav: Option<String>, // client Data/ dir: 241 nav-grid rasterizer (see nav.rs)
+    pub(crate) dump_collision: Option<String>, // client Data/ dir: spike, WMO/M2 collision dry-run (see collision.rs)
+    pub(crate) nav: Option<String>,            // client Data/ dir: nav-grid rasterizer (see nav.rs)
     pub(crate) vmap: Option<String>, // Client geometry input for the per-cell collision catalogue.
     pub(crate) vmap_status: bool, // print active-generation provenance/status without opening client data
     pub(crate) vmap_prepare_coverage: Option<u64>, // generation id: derive path-grid coverage from an already-staged generation (see vmap.rs::run_coverage)
@@ -1741,7 +1741,7 @@ fn distinct_race_class_combos(rows: &[(u32, u32)]) -> usize {
 /// the hand-authored `CREATEINFO_KIT` rows if the table is EMPTY (the `game_start_position` / Talent.dbc
 /// precedent — an importer clear+reload REPLACES whatever is there, seed or a prior import; it
 /// does not merge or coexist with it). The `id >= 0` DELETE is a tautology on the unsigned PK (mirrors
-/// 207's own phrasing) — it's a wholesale wipe, not a conditional one. A character created BEFORE this
+/// the sibling loaders) — it's a wholesale wipe, not a conditional one. A character created BEFORE this
 /// import keeps the `game_player_spell` rows ITS creation already copied (durable, per-character); only
 /// characters created AFTER the import see the real dump-sourced kit. `race`/`class` are NOT
 /// re-validated as wildcards here — a dump row's own 0 (if any) passes through verbatim and
@@ -2760,7 +2760,7 @@ fn creature_drop_item_set(
 
 /// Items lootable from IN-SLICE gameobjects (chests): `gameobject_template` type 3 rows among
 /// `used_go` carry their `gameobject_loot_template` lootId in DATA1; union those pools' items.
-/// Extends the 042 obtainability gate — the grape/crate/wood collect quests want items that only
+/// Extends the obtainability gate — the grape/crate/wood collect quests want items that only
 /// GO loot drops, and skipping their objectives made the quests auto-complete for a free reward.
 /// Same `parse_loot_family` the GO-loot builder uses, so the two never disagree.
 fn gameobject_loot_item_set(
@@ -2788,7 +2788,7 @@ fn gameobject_loot_item_set(
 }
 
 /// Items sold by IN-SLICE vendors (direct `npc_vendor` rows + the `npc_vendor_template`
-/// indirection via creature_template col 76) — the third leg of the 042 obtainability gate
+/// indirection via creature_template col 76) — the third leg of the obtainability gate
 /// (q3861's kodo feed is vendor-only). A trimmed twin of the canonical vendor ETL in
 /// `build_items_and_loot` (which also carries slots/maxcount); only the ITEM SET matters here.
 fn vendor_stock_item_set(
@@ -3084,7 +3084,7 @@ fn build_quests(
             }
             // ZERO-STUCK-QUESTS: emit a COLLECT objective ONLY for an OBTAINABLE item — one that drops
             // from an in-slice creature, drops from an in-slice CHEST, is sold by an in-slice VENDOR
-            // (042 — the drops-only gate skipped GO/vendor ReqItems → empty objective set → free
+            // (the drops-only gate skipped GO/vendor ReqItems → empty objective set → free
             // turn-in on accept), or is the quest's SrcItem (handed over on accept). A genuinely
             // unobtainable ReqItem (mining/out-of-slice) still gets NO objective → the quest stays
             // completable on its obtainable subset instead of soft-locking.
@@ -3330,7 +3330,7 @@ fn build_items_and_loot(
         }
     }
     // creature_template.VendorTemplateId — column 76 of 87, read off the dump's own CREATE TABLE
-    // (247; same dump-verified confidence as the `at::` fix).
+    // (same dump-verified confidence as the `at::` fix).
     const CT_VENDOR_TEMPLATE_ID: usize = 76;
     for row in parse_table(dump, "creature_template") {
         let entry: u64 = field(&row, ct::ENTRY).parse().unwrap_or(0);
@@ -3427,7 +3427,7 @@ fn build_items_and_loot(
         if holy != 0 || fire != 0 || nature != 0 || frost != 0 || shadow != 0 || arcane != 0 {
             resist_nonzero_count += 1;
         }
-        // Spell slots 3-5, completes the 191 proc engine's item half; data plumbing
+        // Spell slots 3-5, completes the proc engine's item half; data plumbing
         // only, same id+trigger shape as slots 1-2 above.
         let sp3: u32 = field(&row, it::SPELLID_3).parse().unwrap_or(0);
         let spt3: u8 = field(&row, it::SPELLTRIGGER_3).parse().unwrap_or(0);
@@ -5605,7 +5605,7 @@ fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> R
     // Family "globals": not box-scoped, but its own clear+reload — gated too, so `--family quests`
     // reloads QUESTS ALONE (not quests-plus-globals). No other family's builder reads these outputs, so
     // gating their compute too (not just the push) is safe — unlike the entangled quests/items pair.
-    // "globals" rode by 225 rather than a new dedicated family: `game_areatrigger_teleport` is a small
+    // Area-trigger teleports ride "globals" rather than a new dedicated family: `game_areatrigger_teleport` is a small
     // world-wide reference table with the exact same shape as `game_graveyard_zone` right next to it
     // (global, own clear+reload, nothing else in this function reads its output) — no new family value
     // earns its keep for one more small table.
@@ -5779,12 +5779,12 @@ fn main() -> Result<()> {
         return terrain::run(&args);
     }
 
-    // `--dump-collision` → the 240 spike: WMO/M2 collision-geometry dry-run (see collision.rs).
+    // `--dump-collision` → the spike: WMO/M2 collision-geometry dry-run (see collision.rs).
     if args.dump_collision.is_some() {
         return collision::run(&args);
     }
 
-    // `--nav` → the 241 nav-grid rasterizer (see nav.rs).
+    // `--nav` → the nav-grid rasterizer (see nav.rs).
     if args.nav.is_some() {
         return nav::run(&args);
     }

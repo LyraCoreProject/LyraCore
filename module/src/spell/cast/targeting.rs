@@ -643,7 +643,7 @@ pub(crate) fn aura_apply(
         crate::combo::spend_combo(ctx, caster_guid, cast_target_guid);
     }
 
-    // DEBUFF-APPLICATION THREAT (266/276): landing a hostile aura on a CREATURE adds flat,
+    // DEBUFF-APPLICATION THREAT: landing a hostile aura on a CREATURE adds flat,
     // caster-level-scaled threat — the vanilla mechanic that makes Sunder Armor a threat BUILDER
     // (its armor debuff deals no damage, and threat here was damage-only, so a warrior tank had
     // nothing but white swings between taunt pins). Uniform over `is_negative`: a debuff that
@@ -1611,7 +1611,7 @@ fn convert_health_to_power(ctx: &ReducerContext, caster_guid: u64, amount: i32) 
     }
 }
 
-/// E_POWER_BURN drain math (117, Mana Burn): floor-at-available — never drains more than the target
+/// E_POWER_BURN drain math (Mana Burn): floor-at-available — never drains more than the target
 /// actually has, and never fails/refuses the cast on a low/empty pool (vanilla drains
 /// `min(available, requested)`). Pure, unit-tested.
 fn mana_burn_drain(power: u32, points: i32) -> u32 {

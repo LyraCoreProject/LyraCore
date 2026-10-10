@@ -261,7 +261,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let autolearn_count = skill_abilities
         .rows()
         .iter()
-        // real AcquireMethod lives in the mis-named `trivial_skill_line_rank_high` (282, see skill_ability_sql).
+        // real AcquireMethod lives in the mis-named `trivial_skill_line_rank_high` (see skill_ability_sql).
         .filter(|r| r.trivial_skill_line_rank_high == AUTOLEARN_ACQUIRE_METHOD)
         .count();
     let (sl_stmts, sl_count) = skill_line_sql(&skill_lines);
@@ -783,7 +783,7 @@ fn faction_template_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> 
 /// Clear+reload SQL for `game_area` from `AreaTable.dbc`: every zone AND subzone row
 /// (id, map, parent, area_bit, flags, exploration level, faction group, name). `flags` is the raw
 /// `AreaFlags` bitmask reinterpreted as `u32` (`as_int()` widened) — undecoded here, a consumer
-/// decodes what it needs (rest-state city detection is 196's job). Name via `.en_gb` + `sql_text`
+/// decodes what it needs (rest-state city detection is left to the consumer). Name via `.en_gb` + `sql_text`
 /// (apostrophe-escaping), matching `skill_line_sql`'s convention. Loads ALL rows (small table — map
 /// filtering is a verify-time concern, not an import-time one). No Timestamp → plain SQL.
 fn area_sql(table: &DbcAreaTable) -> (Vec<String>, usize) {
@@ -2253,7 +2253,7 @@ mod tests {
     }
 
     // Params are REAL SkillLineAbility semantics; they're placed into the wow_dbc fields the
-    // corrected `skill_ability_sql` reads for each (see the off-by-one remap there, 282): real
+    // corrected `skill_ability_sql` reads for each (see the off-by-one remap there): real
     // min_skill → superseded_by, real acquire_method → trivial_high, real gray → trivial_low,
     // real green → character_points[0].
     #[allow(clippy::too_many_arguments)]

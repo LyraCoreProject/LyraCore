@@ -546,7 +546,7 @@ pub(crate) fn settle_roll_grant(
 /// collide vanishingly rarely, `MAX_TIE_REROLLS` is generous headroom) and announces once; all-pass
 /// unlocks the row FFA-in-group (no `ROLL_WON` — vanilla shows no "won" line either). The winner is
 /// granted via `items::grant_item`; on `Err` (inventory full) the row is LEFT, `reserved_for` stamped
-/// to the winner (documented winner-locked fallback — 068's mail delivery is the eventual fix).
+/// to the winner (documented winner-locked fallback — mail delivery is the eventual fix).
 /// `votes`/`recipients` are the FULL snapshot (already auto-passed by the caller where needed).
 fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], recipients: &[u64]) {
     if roll.resolved {

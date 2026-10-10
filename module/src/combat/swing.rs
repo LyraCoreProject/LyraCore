@@ -37,7 +37,7 @@ use super::*;
 /// aggro/assist/pet passes pair within one instance. So this tick's cost is O(active
 /// engagements) — it scales with combat, NOT with instance count, and scoping it per instance would
 /// divide an already-small table while adding a per-row entity fetch. (Known pre-existing edge, not
-/// widened here: 224's `teleport_player` can move one side of a live pair cross-instance AFTER
+/// widened here: `teleport_player` can move one side of a live pair cross-instance AFTER
 /// arming; the leash pass then evades the creature on raw coordinate distance.) The tick_ms
 /// smoothing knob is `tick_creatures`'s per-instance row; melee swing timing is already 100ms
 /// globally.
@@ -149,7 +149,7 @@ fn aggro_pass(ctx: &ReducerContext) {
         // the player closes: their first in-range swing lands the same tick this pass fires.
         // A RANGED auto-repeat (Auto Shot / Shoot) retaliates at any distance — but only once a
         // shot has actually FIRED (the swing tick's `enter_combat` stamped the target IN_COMBAT).
-        // Arming alone is NOT a hit (097 rev.2): the first shot is seeded ~500ms out and can be
+        // Arming alone is NOT a hit: the first shot is seeded ~500ms out and can be
         // rejected/suppressed, and retaliating at arm time let the wolf aggro-then-instantly-evade
         // on a pull whose first shot never fired ("enters combat, leaves combat immediately").
         let is_ranged = atk.ranged_spell_id != 0;
@@ -357,7 +357,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             None
         };
 
-        // (097/vanilla) A RANGED engagement whose shot comes DUE against a hard blocker (out of range /
+        // (vanilla) A RANGED engagement whose shot comes DUE against a hard blocker (out of range /
         // too close / no LoS / not facing) is TORN DOWN, not silently suppressed — the vanilla
         // auto-repeat rule is that a failed check on a DUE ranged shot interrupts
         // the loop, and the row's delete relays the server-initiated SMSG_CANCEL_AUTO_REPEAT that
@@ -367,7 +367,7 @@ fn resolve_swing(ctx: &ReducerContext) {
         let ranged_due =
             ranged.is_some_and(|(_, _, delay, _)| now_ms.wrapping_sub(atk.last_swing_ms) >= delay);
 
-        // (097/vanilla) Realtime movement rule — vanilla applies this BEFORE any castability
+        // (vanilla) Realtime movement rule — vanilla applies this BEFORE any castability
         // check: a PLAYER who is actually TRANSLATING (MOVE_MASK_MOVING — turning in place does
         // not count) CANCELS a wand loop outright, and DEFERS an Auto Shot loop: the due shot
         // re-arms RANGED_INITIAL_SHOT_MS out, over and over while moving, so the first shot after
@@ -457,7 +457,7 @@ fn resolve_swing(ctx: &ReducerContext) {
 /// deliberately SIDE-EFFECT-FREE, because a block means different things to the two swing kinds and
 /// that decision belongs to the caller: a melee row silently waits for the next tick, while a DUE
 /// ranged row is torn down (vanilla's auto-repeat interrupt, whose row delete relays the
-/// server-initiated SMSG_CANCEL_AUTO_REPEAT that drops the client's toggle). [097]/[243]
+/// server-initiated SMSG_CANCEL_AUTO_REPEAT that drops the client's toggle).
 fn swing_blocked(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -495,7 +495,7 @@ fn swing_blocked(
     }
     // Auto Shot / wand Shoot have a MINIMUM range (~5 yd): a target in melee range is "too close"
     // (vanilla SPELL_FAILED_TOO_CLOSE → InterruptSpell, so the player's next melee press is a clean
-    // single-press swap). Melee has no minimum. [097]
+    // single-press swap). Melee has no minimum.
     if is_ranged && dist_sq < MELEE_RANGE_SQ {
         return true;
     }
@@ -767,7 +767,7 @@ fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
 /// carries `impact_delay_ms`, while the scheduled `ranged_impact` applies the frozen damage through
 /// the SAME [`apply_hit`] pipeline when the arrow actually lands — so the number, the health drop and
 /// the projectile arrive together (user bug: "damage lands earlier than the projectile"). Lethality is
-/// therefore decided AT IMPACT, which is why this event never claims `killing_blow`. [097]
+/// therefore decided AT IMPACT, which is why this event never claims `killing_blow`.
 ///
 /// Out of ammo ends the engagement: the row delete relays the server-initiated
 /// SMSG_CANCEL_AUTO_REPEAT that drops the client's toggle.
@@ -886,7 +886,7 @@ fn fire_ranged_shot(
     }
 }
 
-/// Scheduled RANGED-projectile impact (097; scheduler-only): the arrow/bullet/bolt lands — apply the
+/// Scheduled RANGED-projectile impact (scheduler-only): the arrow/bullet/bolt lands — apply the
 /// launch-frozen post-mitigation damage through the SAME shared [`apply_hit`] pipeline the melee swing
 /// uses (health/lethal via the shared kill helpers, rage both ways, weapon/defense skill-ups,
 /// break-on-damage, threat), then stamp IN_COMBAT on both sides. Guards re-checked at landing: either

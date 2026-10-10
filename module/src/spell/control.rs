@@ -1,5 +1,5 @@
 //! Crowd-control model — the composable CC predicate lattice over one shared `has_control_mechanic`
-//! scanner, PLUS (381 split) the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
+//! scanner, PLUS the cast-bar teardown family (`pushback_cast` / `interrupt_cast` /
 //! `break_channel` / `interrupt_cast_and_lock`), moved here from the old flat `cast.rs`: this file
 //! already called `pushback_cast` from `break_auras_on_damage` below, so co-locating the teardown with
 //! the rest of the crowd-control model removes a cross-module callback instead of adding one. `mod.rs`
@@ -415,7 +415,7 @@ pub(crate) fn is_immune_to_mechanic(ctx: &ReducerContext, unit_guid: u64, mechan
 }
 
 // ===========================================================================================
-//  Cast-bar teardown (381 split, moved from the old flat `cast.rs`) — pushback / interrupt / channel
+//  Cast-bar teardown (moved from the old flat `cast.rs`) — pushback / interrupt / channel
 //  break / Kick-style interrupt-and-lock. `break_auras_on_damage` above already calls `pushback_cast`.
 // ===========================================================================================
 

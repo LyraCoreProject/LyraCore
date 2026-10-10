@@ -737,7 +737,7 @@ pub(crate) fn apply_start_ranged_attack(
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
     let target = validate_attack_target(ctx, &attacker, target_guid)?;
-    // Activation CheckCast (097/vanilla): vmangos REJECTS the auto-repeat activation for any hard
+    // Activation CheckCast (vanilla): vmangos REJECTS the auto-repeat activation for any hard
     // cast failure — the gateway relays the reason as SMSG_CAST_RESULT and the client drops its
     // toggle, so the client's auto-repeat state never outlives a loop that could not start. Without
     // these gates the row armed silently, every shot was suppressed by the same checks in the swing

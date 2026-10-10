@@ -47,7 +47,7 @@ pub struct Talent {
     pub tab_id: u32,
     /// Rank 2's passive spell id (Talent.dbc `spell_rank[1]`); 0 if this talent has fewer than 2 ranks.
     /// Applied by `apply_talent_rank` at pick/login (which also SUPERSEDES the lower rank's spell +
-    /// aura, 031 residual). END-appended `#[default(0)]`.
+    /// aura). END-appended `#[default(0)]`.
     #[default(0)]
     pub rank_spell_2: u32,
     /// Rank 3's passive spell id (Talent.dbc `spell_rank[2]`); 0 if this talent has fewer than 3 ranks.
@@ -566,7 +566,7 @@ fn apply_talent_rank(
             crate::spell::learn_spell(ctx, guid, owner, rank_spell);
             let stack = if talent.tab_id != 0 { 1 } else { rank }; // imported: own values; demo: scale by rank
             crate::spell::apply_spell_auras(ctx, rank_spell, guid, level, stack);
-            // Server-side rank SUPERSEDE (031 residual): the imported tree carries a DISTINCT spell
+            // Server-side rank SUPERSEDE: the imported tree carries a DISTINCT spell
             // per rank, so without this every lower rank's book row lingered (the login
             // INITIAL_SPELLS re-grew both ranks) and a mapped-kind passive STACKED with the new
             // rank's aura. Sweep EVERY lower rank (not just N-1) so pre-fix double-rows heal on the
@@ -675,7 +675,7 @@ pub(crate) fn do_reset_talents(
 
     // Snapshot every learned talent's removable spells BEFORE deleting the rows — the join target
     // (`game_talent`) is static, so this is a plain read, not a mutation-order hazard.
-    // 031 residual fix: key on the PER-RANK spells (rank 1..=learned rank), not `def.spell_id`
+    // Key on the PER-RANK spells (rank 1..=learned rank), not `def.spell_id`
     // alone — an imported rank-3 talent's live aura + book row belong to `rank_spell_3`, which the
     // old snapshot missed (rank-3 aura lingered through a respec). Lower ranks are swept too so
     // pre-supersede legacy book rows heal here as well; the demo tree's shared spell id dedups.
@@ -719,8 +719,8 @@ pub(crate) fn do_reset_talents(
     }
     crate::spell::recompute_sheet(ctx, character_guid);
 
-    // Forget every spell the reset talents had put in the book: granted ABILITIES and (031 residual
-    // fix) the passive RANK-SPELLS themselves — the book previously kept every passive through a
+    // Forget every spell the reset talents had put in the book: granted ABILITIES and
+    // the passive RANK-SPELLS themselves — the book previously kept every passive through a
     // respec, so the client re-rendered the talents as still learned after relog.
     for spell_id in granted.iter().chain(passives.iter()) {
         crate::spell::forget_spell(ctx, character_guid, *spell_id);

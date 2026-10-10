@@ -47,7 +47,7 @@ pub(crate) fn resolve_cast_at(
     // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
     // triggered cast, which still use the START(0)+GO+COOLDOWN instant packet sequence.
     is_completion: bool,
-    // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
+    // true ONLY on the player CMSG_CAST_SPELL path (threaded via begin_cast from the cast_spell
     // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
@@ -83,7 +83,7 @@ pub(crate) fn resolve_cast_at_typed(
     // was already sent at begin_cast). false for an instant cast, a channel, a creature cast, and a
     // triggered cast, which still use the START(0)+GO+COOLDOWN instant packet sequence.
     is_completion: bool,
-    // true ONLY on the player CMSG_CAST_SPELL path (088; threaded via begin_cast from the cast_spell
+    // true ONLY on the player CMSG_CAST_SPELL path (threaded via begin_cast from the cast_spell
     // reducer): the gateway sent that caster's START/RESULT/GO synchronously, so the relay suppresses
     // its duplicate. Channel ticks / triggers / creature / debug / item-use casts pass false and the
     // relay DELIVERS the caster's visual (they never had a synchronous send).
@@ -1630,7 +1630,7 @@ pub(crate) fn apply_spell_auras(
     };
     // A talent/login PASSIVE with DBC duration 0 is PERMANENT — the pick is its lifetime; only the
     // rank supersede or a respec removes it. Without this the ~1s expiry reap deleted a fresh
-    // Improved Fireball modifier (264 live find: rank-2's A_SPELLMOD aura vanished before the next
+    // Improved Fireball modifier (rank-2's A_SPELLMOD aura vanished before the next
     // cast). u32::MAX is the established infinite sentinel (Devotion Aura/stances). Scoped HERE
     // (the passive-apply path) so combat casts' real durations are untouched.
     if hdr.duration_ms == 0 {

@@ -521,7 +521,7 @@ pub struct EntityMotion {
     pub cell: i64,
 }
 
-// ── Anti-cheat: movement plausibility (255, tier 1 — DETECT-AND-FLAG, never reject inline) ────────────
+// ── Anti-cheat: movement plausibility (tier 1 — DETECT-AND-FLAG, never reject inline) ────────────
 // The mangos-anticheat lesson: rubber-banding a false positive is worse than the cheat. We LOG anomalies
 // and leave the position write untouched; a GM tool surfaces the flags. Per-character score = the
 // COUNT of a guid's rows (no separate counter table — a detect-and-flag MVP doesn't need O(1) reads).
@@ -688,7 +688,7 @@ pub struct TeleportEvent {
 /// single decision point behind both the module's same-map-in-place-update vs. cross-map-despawn branch
 /// below, and (mirrored gateway-side via live-entity presence post-transaction, since the two can't share
 /// code across the module/gateway boundary) the `on_teleport` relay's ACK vs. TRANSFER_PENDING/NEW_WORLD
-/// choice. Pure. [190/224]
+/// choice. Pure.
 pub(crate) fn is_cross_map_teleport(current_map_id: u32, target_map_id: u32) -> bool {
     current_map_id != target_map_id
 }
@@ -1834,7 +1834,7 @@ pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32, set_offline
 }
 
 /// 1× run speed in basis points — the `.speed`-off value, shared by the live entity's own default and
-/// the durable carry column below so "no GM speed" is spelled ONE way. [289]
+/// the durable carry column below so "no GM speed" is spelled ONE way.
 pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
 
 /// What `(pending_godmode, pending_run_speed_mult_bp)` should be stamped onto the durable Character
@@ -1852,7 +1852,7 @@ pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
 /// pass (`creatures::ai::is_aggro_candidate`) — across future sessions, with no in-game indication.
 /// A session boundary is the natural place for that safety reset, and it costs a GM one `.god`
 /// re-issue per login. Exactly the `persisted_pending_ghost` discipline, same `set_offline` seam.
-/// Pure. [289]
+/// Pure.
 pub(crate) fn persisted_gm_playtest(
     godmode: bool,
     run_speed_mult_bp: u32,
@@ -1871,7 +1871,7 @@ pub(crate) fn persisted_gm_playtest(
 /// `(dead, health, player_flags, unit_bytes_1)`: exactly the four fields `do_repop` sets on release
 /// (dead stays true, health 1 — vanilla's ghost HP — plus the GHOST player flag and the
 /// UNIT_VIS_FLAG_GHOST render bit OR'd over whatever the fresh build carried, e.g. a Warrior's
-/// Battle-Stance byte in `unit_bytes_1`). Pure. [226]
+/// Battle-Stance byte in `unit_bytes_1`). Pure.
 pub(crate) fn ghost_restored_fields(player_flags: u32, unit_bytes_1: u32) -> (bool, u32, u32, u32) {
     use lyracore_shared::constants::{player_flags as pf, unit_vis_flags};
     (
