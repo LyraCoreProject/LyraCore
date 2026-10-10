@@ -22,6 +22,10 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - name: Check formatting
         run: cargo fmt --all -- --check
+      # The SpacetimeDB build aborts on a print-family macro anywhere in Module source, even in a
+      # comment or a test. Use `writeln!(std::io::stderr(), ...)` for a test diagnostic.
+      - name: Check for print macros in Module source
+        run: "! grep -rnE --include='*.rs' 'e?print(ln)?!' module/src packages/*/src"
 
   clippy:
     runs-on: ubuntu-latest
