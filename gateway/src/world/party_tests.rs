@@ -5359,7 +5359,10 @@ fn a_group_invite_transport_loss_is_not_answered_as_a_refusal() {
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("an unknown party outcome must end the session promptly")
         .expect_err("a party Transport Loss must be session-fatal");
-    assert!(format!("{error:#}").contains("transport disconnected"));
+    assert_eq!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    );
 }
 
 #[test]

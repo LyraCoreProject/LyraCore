@@ -214,7 +214,9 @@ A guid-owned player entity.
 _Avoid_: player (as a noun in code)
 
 **Actor**:
-The guid a Gateway Verb acts as.
+The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
+`Actor::new` returns `None` for guid 0, so no request acts as guid 0. The Coordinator signs an Actor
+into a SessionActor.
 
 **Session**:
 The Module's record that an Account is logged in on a Character.

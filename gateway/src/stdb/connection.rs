@@ -2518,21 +2518,6 @@ impl Coordinator {
             .send(PumpCommand::Resume)
             .unwrap();
     }
-
-    /// Live player-session count on THIS shard: player entities (`account_id != 0`) in the
-    /// shard's coordinator cache. Shard truth, so horizontally-scaled gateways report the same
-    /// number instead of each undercounting to its own connections. Good enough for an ops gauge.
-    pub(crate) fn session_count(&self) -> usize {
-        let guard = self.0.coord();
-        let n = guard
-            .conn
-            .db
-            .game_world_entity()
-            .iter()
-            .filter(|e| e.account_id != 0)
-            .count();
-        n
-    }
 }
 
 impl Coordinator {

@@ -54,10 +54,9 @@ impl Coordinator {
             .collect()
     }
 
-    /// Bag slot of the item instance with `item_guid`. Reads from the coordinator's privileged cache
-    /// (same source as `player_items`). Item GUIDs are globally unique so account_id isn't needed
-    /// for the lookup — ownership is enforced by the module reducer on the call.
-    pub fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
+    /// Bag slot of the item instance with `item_guid`, from the privileged cache. The Module
+    /// reducer that uses the slot enforces ownership.
+    pub fn item_slot_by_guid(&self, item_guid: u64) -> Option<u8> {
         // `collect()` forces the iterator to complete (and drop its borrow from `guard`) before `guard`
         // itself drops — same pattern as `player_items`.
         let guard = self.0.coord();

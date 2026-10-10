@@ -6,6 +6,7 @@ use super::{party_command_intent, Coordinator, DURABLE_TOPOLOGY_ENV_LOCK};
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
+use crate::realm_core::RealmDb as _;
 use crate::stdb::bindings::GamePartyCommandIntentTableAccess;
 use crate::world::party::{self, AdmittedCompanionCommand, CompanionCommandOutcome};
 use crate::world::{Actor, PartyStore, SessionStore, TransferStore};

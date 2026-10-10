@@ -111,20 +111,6 @@ impl Coordinator {
             .find(|r| r.character_guid == guid)
     }
 
-    /// The realm-core character→shard index entry for `guid`: the `(map_id, instance_id)` the realm
-    /// believes the character is at. A HINT — `realm_core::locate_home_shard` confirms it against
-    /// the shard that actually holds the row before routing anything to it.
-    pub fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
-        self.0
-            .coord()
-            .conn
-            .db
-            .game_character_shard()
-            .character_guid()
-            .find(&guid)
-            .map(|s| (s.map_id, s.instance_id))
-    }
-
     pub(crate) fn realm_character_partition(
         &self,
         guid: u64,

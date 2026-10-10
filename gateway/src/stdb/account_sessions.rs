@@ -127,11 +127,6 @@ impl Coordinator {
         self.signed_actor(self.2.as_ref().map_or(0, |owner| owner.character_guid))
     }
 
-    /// `guid` as the Actor, or the bound owner's Character when `guid` is 0.
-    pub(crate) fn actor_or_owner(&self, guid: u64) -> SessionActor {
-        Actor::new(guid).map_or_else(|| self.owner_actor(), |actor| self.session_actor(actor))
-    }
-
     fn signed_actor(&self, guid: u64) -> SessionActor {
         SessionActor {
             guid,

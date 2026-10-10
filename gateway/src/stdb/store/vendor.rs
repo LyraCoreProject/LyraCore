@@ -95,7 +95,7 @@ impl VendorActionStore for crate::stdb::Coordinator {
     }
 
     fn vendor_item_slot(&self, item_guid: u64) -> Option<u8> {
-        crate::stdb::Coordinator::item_slot_by_guid(self, 0, item_guid)
+        crate::stdb::Coordinator::item_slot_by_guid(self, item_guid)
     }
 
     /// The module gates the REPAIR NPC and charges copper; the player's item and purse replicate

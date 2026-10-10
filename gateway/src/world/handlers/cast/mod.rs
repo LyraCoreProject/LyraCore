@@ -74,7 +74,7 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 
     /// The bag slot holding the item instance a client spell-target names, so the enchant and
     /// disenchant operations receive a slot rather than a guid.
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8>;
+    fn item_slot_by_guid(&self, item_guid: u64) -> Option<u8>;
 
     /// Disenchant the item in `slot`. The module validates skill and disenchantability, and yields
     /// the resulting reagents into the bag.
@@ -291,7 +291,7 @@ fn ordinary_cast<St: CastStore + ?Sized>(
             break 'request Some(NO_ACTOR.to_string());
         };
         let result = if item_guid != 0 {
-            let Some(slot) = store.item_slot_by_guid(player.account_id, item_guid) else {
+            let Some(slot) = store.item_slot_by_guid(item_guid) else {
                 break 'request Some(format!(
                     "item target {item_guid} is not in the player's bag"
                 ));
@@ -489,7 +489,7 @@ pub(super) mod tests {
             self.answer("gw_cast_item_target", &self.cast_error)
         }
 
-        fn item_slot_by_guid(&self, _account_id: u64, item_guid: u64) -> Option<u8> {
+        fn item_slot_by_guid(&self, item_guid: u64) -> Option<u8> {
             self.item_slots
                 .iter()
                 .find(|(g, _)| *g == item_guid)

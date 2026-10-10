@@ -60,7 +60,7 @@ impl CastStore for WorldFake {
     ) -> Result<()> {
         Ok(())
     }
-    fn item_slot_by_guid(&self, _account_id: u64, _item_guid: u64) -> Option<u8> {
+    fn item_slot_by_guid(&self, _item_guid: u64) -> Option<u8> {
         None
     }
     fn disenchant_item(&self, _actor: Actor, _slot: u8) -> Result<()> {

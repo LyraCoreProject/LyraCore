@@ -1373,8 +1373,9 @@ fn a_movement_failure_that_is_not_a_desync_is_still_session_fatal() {
         .join()
         .unwrap()
         .expect_err("a non-desync movement failure must still end the session");
-    assert!(
-        format!("{err:#}").contains("transport disconnected"),
+    assert_eq!(
+        crate::stdb::classify(&err),
+        crate::stdb::DurableFailure::TransportLoss,
         "{err:#}"
     );
 }
@@ -2064,7 +2065,10 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
         .recv_timeout(std::time::Duration::from_secs(1))
         .expect("transport loss must end the session promptly")
         .expect_err("a disconnected reducer transport must end the world session");
-    assert!(format!("{err:#}").contains("transport disconnected"));
+    assert_eq!(
+        crate::stdb::classify(&err),
+        crate::stdb::DurableFailure::TransportLoss
+    );
     assert!(
         ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).is_err(),
         "the world socket closes after the fatal reducer result"

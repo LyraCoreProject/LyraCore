@@ -93,6 +93,11 @@ routing fact; module game logic never reads one, and an architecture test fails 
   character, and the nine-boundary Transfer driver. See §6.
 - **The subscription plane** — the AOI tracker and every `on_insert` relay that turns a table delta
   into an SMSG. See §5.
+- **Durable Requests in one hop.** A family handler in `gateway/src/world/handlers/` resolves its
+  session facts to an `Actor` once and calls its Store trait. The trait's `Coordinator` impl in
+  `gateway/src/stdb/store/<family>.rs` calls the reducer directly. When the call fails,
+  `classify` in `gateway/src/stdb/connection.rs` decides. A Refusal gets the family's answer and
+  the session continues. Every other failure is a Transport Loss and ends the World Session.
 
 ### 2.3 The honest exception: gates that live in the gateway
 

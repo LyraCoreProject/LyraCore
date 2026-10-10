@@ -59,7 +59,7 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
                 if item_guid == 0 {
                     break 'request Err("enchant: no item target in cast".to_string());
                 }
-                let Some(slot) = store.item_slot_by_guid(player.account_id, item_guid) else {
+                let Some(slot) = store.item_slot_by_guid(item_guid) else {
                     break 'request Err(format!("enchant: item {item_guid} not in player bag"));
                 };
                 match enchant_route {

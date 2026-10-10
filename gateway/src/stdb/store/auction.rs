@@ -7,9 +7,9 @@ use lyracore_shared::auction::AuctionRefusal;
 use lyracore_shared::item::Proficiency;
 use spacetimedb_sdk::Table;
 
+use super::{next_operation_id, wait_for_cache_row};
 use crate::stdb::bindings::*;
 use crate::stdb::connection::{call_reducer, classify, DurableFailure};
-use crate::stdb::reducers::{next_operation_id, wait_for_cache_row};
 use crate::stdb::Coordinator;
 use crate::world::{
     Actor, AuctionActionStore, AuctionBrowseRequest, AuctionHousePolicy, AuctionInteraction,

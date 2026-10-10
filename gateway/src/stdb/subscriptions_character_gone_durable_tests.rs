@@ -2,6 +2,7 @@ use super::*;
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
+use crate::realm_core::RealmDb as _;
 use crate::world::party::PartyOutcome;
 use crate::world::{Actor, PartyStore};
 use std::path::{Path, PathBuf};

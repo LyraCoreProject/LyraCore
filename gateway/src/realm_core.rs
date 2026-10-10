@@ -6,7 +6,7 @@ use anyhow::{anyhow, Result};
 
 use crate::config::ShardMap;
 use crate::stdb::{AccountRow, RealmRow};
-use crate::world::WorldSession;
+use crate::world::{Actor, WorldSession};
 
 /// The `game_session` row as the world handshake reads it: K and the end of its validity.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -30,9 +30,8 @@ fn now_micros() -> i64 {
 
 /// A SpacetimeDB database handle, reduced to exactly what the realm-core split touches.
 ///
-/// Implemented by [`crate::stdb::Coordinator`] (production) and [`fake::Handle`] (tests). Every
-/// method has an identically-named inherent method on `Coordinator`, so the production impl is a
-/// block of forwards and no behaviour moves when a caller becomes generic.
+/// Implemented by [`crate::stdb::Coordinator`] (production, `stdb/realm_db.rs`) and
+/// [`fake::Handle`] (tests).
 pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     /// The database this handle targets.
     fn shard_name(&self) -> &str;
@@ -64,12 +63,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     ) -> Result<()>;
 
     // --- Account-authorized command routing
-    fn request_gm_command(
-        &self,
-        actor_guid: u64,
-        alpha_test_tools: bool,
-        text: String,
-    ) -> Result<()>;
+    fn request_gm_command(&self, actor: Actor, alpha_test_tools: bool, text: String) -> Result<()>;
 
     // --- the character→shard index
     /// Where THIS database's own rows say the character is. `None` = not here.
@@ -130,10 +124,7 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     ) -> Result<()>;
     /// Does THIS database hold an in-flight escrow (`game_transfer_out`) for `guid`? A shard
     /// answering `true` is the SOURCE of a resumed transfer and wins outright over any shard merely
-    /// holding a durable row for the guid — see [`locate_home_shard`]. The one method here whose
-    /// `Coordinator` forward is not a bare call (it narrows `escrow_row`'s `Option<TransferOut>` to
-    /// a bool) — the narrowing itself carries no routing decision, so it cannot silently pick the
-    /// wrong database the way a real forward-body change could.
+    /// holding a durable row for the guid — see [`locate_home_shard`].
     fn has_escrow(&self, guid: u64) -> bool;
 
     // --- Load sampling. The gateway is the one component that can see the whole realm (every
@@ -173,7 +164,7 @@ fn unknown_account(account_name: &str) -> anyhow::Error {
 pub(crate) fn run_gm_command<D: RealmDb>(
     home_shard: &D,
     account_name: &str,
-    actor_guid: u64,
+    actor: Actor,
     text: String,
 ) -> Result<()> {
     let account_name = account_name.to_ascii_uppercase();
@@ -182,7 +173,7 @@ pub(crate) fn run_gm_command<D: RealmDb>(
         .account_by_username(&account_name)?
         .ok_or_else(|| unknown_account(&account_name))?
         .alpha_test_tools;
-    home_shard.request_gm_command(actor_guid, authority, text)
+    home_shard.request_gm_command(actor, authority, text)
 }
 
 // ===============================================================================================
@@ -1058,16 +1049,16 @@ pub(crate) mod fake {
         }
         fn request_gm_command(
             &self,
-            actor_guid: u64,
+            actor: Actor,
             alpha_test_tools: bool,
             text: String,
         ) -> Result<()> {
             let db = self.store();
-            db.note(&format!("request_gm_command({actor_guid})"));
+            db.note(&format!("request_gm_command({})", actor.guid()));
             db.gm_commands
                 .lock()
                 .unwrap()
-                .push((actor_guid, alpha_test_tools, text.clone()));
+                .push((actor.guid(), alpha_test_tools, text.clone()));
             if alpha_test_tools && text.starts_with(".speed") {
                 Ok(())
             } else {
@@ -1321,6 +1312,10 @@ mod tests {
     const USER: &str = "PONYTAIL";
     const K: [u8; 40] = [7u8; 40];
 
+    fn gm() -> Actor {
+        Actor::new(42).unwrap()
+    }
+
     fn split_realm() -> super::fake::Handle {
         let h = realm(&[WORLD, CORE], "", Some(CORE));
         // realm-core: the authority. id 9, salt 0xAA.
@@ -1348,7 +1343,7 @@ mod tests {
             .get_mut(USER)
             .expect("Realm-core Account")
             .alpha_test_tools = true;
-        run_gm_command(&h, &USER.to_ascii_lowercase(), 42, ".speed 3".into())
+        run_gm_command(&h, &USER.to_ascii_lowercase(), gm(), ".speed 3".into())
             .expect("Alpha Test Tools permit speed");
 
         assert_eq!(
@@ -1372,7 +1367,7 @@ mod tests {
             .get_mut(USER)
             .expect("Realm-core Account")
             .alpha_test_tools = true;
-        run_gm_command(&h, USER, 42, ".speed 3".into()).expect("first command is authorized");
+        run_gm_command(&h, USER, gm(), ".speed 3".into()).expect("first command is authorized");
 
         h.db_at(CORE)
             .accounts
@@ -1381,7 +1376,7 @@ mod tests {
             .get_mut(USER)
             .expect("Realm-core Account")
             .alpha_test_tools = false;
-        let refusal = run_gm_command(&h, USER, 42, ".speed 4".into())
+        let refusal = run_gm_command(&h, USER, gm(), ".speed 4".into())
             .expect_err("the same World Session must see the revocation");
 
         assert_eq!(
@@ -1405,7 +1400,7 @@ mod tests {
     #[test]
     fn a_dead_realm_core_fails_before_the_home_shard_command_request() {
         let h = realm_with_dead_core(&[WORLD, CORE], "", CORE);
-        let error = run_gm_command(&h, USER, 42, ".speed 3".into())
+        let error = run_gm_command(&h, USER, gm(), ".speed 3".into())
             .expect_err("a dead Realm-core cannot authorize a command");
         assert_eq!(
             crate::stdb::classify(&error),
@@ -1418,7 +1413,7 @@ mod tests {
     #[test]
     fn an_unknown_account_is_a_refusal_the_gm_reads() {
         let h = split_realm();
-        let error = run_gm_command(&h, "NOBODY", 42, ".speed 3".into())
+        let error = run_gm_command(&h, "NOBODY", gm(), ".speed 3".into())
             .expect_err("Realm-core holds no such Account");
         assert_eq!(
             crate::stdb::classify(&error),

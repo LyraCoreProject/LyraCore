@@ -49,6 +49,6 @@ impl SpeechStore for Coordinator {
     /// Module's reason, or the Gateway's own when the Account is unknown. Realm-core being
     /// unreachable is a Transport Loss.
     fn gm_command(&self, account_name: &str, actor: Actor, text: String) -> Result<()> {
-        crate::realm_core::run_gm_command(self, account_name, actor.guid(), text)
+        crate::realm_core::run_gm_command(self, account_name, actor, text)
     }
 }

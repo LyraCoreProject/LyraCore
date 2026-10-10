@@ -260,8 +260,8 @@ impl CastStore for Coordinator {
     }
 
     // The shared reads stay inherent: vendor and the Character reads call them too.
-    fn item_slot_by_guid(&self, account_id: u64, item_guid: u64) -> Option<u8> {
-        Coordinator::item_slot_by_guid(self, account_id, item_guid)
+    fn item_slot_by_guid(&self, item_guid: u64) -> Option<u8> {
+        Coordinator::item_slot_by_guid(self, item_guid)
     }
 
     fn player_items(&self, owner_guid: u64) -> Result<Vec<codec::ItemInstanceView>> {
