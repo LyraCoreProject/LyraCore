@@ -1,30 +1,18 @@
-//! Source-scan tripwires: `lib.rs` used to open with "this is the thin index" while
-//! carrying 900+ lines of `#[cfg(test)]` scan machinery below its real index — pulled out here so
-//! that doc comment stays true. `#[cfg(test)] mod tripwires;` is `lib.rs`'s only mention of this
-//! file.
+//! Architecture Tests: source scans for structural invariants that behaviour tests cannot observe.
+//! Each failure message opens with the invariant it protects, and each scanner has a negative test
+//! that feeds it a small violating source.
 //!
-//! Ten tripwires, in file order:
-//! - [`character_owned_tripwire`] — every table with a Character-capable guid field has a
-//!   `character_owned` sweep marker or an explicit exclusion.
-//! - [`build_scan_strip_tripwire`] — a commented-out marker invocation never registers.
-//! - [`partition_discipline_tripwire`] — no raw whole-table scan of a spatial table outside the
-//!   partition-scoped helpers, plus its extension (no module game logic reads a shard id).
-//! - [`character_fence_tripwire`] — no raw `game_character` lookup outside the by-guid chokepoint.
-//! - [`print_macro_tripwire`] — no print-family macro anywhere under `module/src` (new).
-//! - [`gc_reap_tripwire`] — every TTL-shaped event table is named in `gc.rs` (new).
-//! - [`grid_cell_tripwire`] — indexed cell fields are derived from their grid coordinates.
-//! - [`issue_reference_tripwire`] — no comment carries a tracker issue reference.
-//! - [`dead_code_allowance_tripwire`] — dead-code allowances stay confined to declared boundaries.
-//! - [`package_name_tripwire`] — Core source names no official Package.
+//! - [`character_owned_tripwire`]: every table with a Character-capable guid has a
+//!   `character_owned` sweep marker or a reasoned exclusion.
+//! - [`build_scan_strip_tripwire`]: a commented-out marker invocation never registers.
+//! - [`partition_discipline_tripwire`]: no whole-table scan of a spatial table outside the budget,
+//!   and no Module game logic reads a shard id.
+//! - [`character_fence_tripwire`]: no raw `game_character` lookup outside the transfer fence.
+//! - [`gc_reap_tripwire`]: every TTL-shaped event table is reaped in `gc.rs`.
+//! - [`grid_cell_tripwire`]: a grid-coordinate write also writes the packed cell.
+//! - [`package_name_tripwire`]: Core source names no official Package.
 //!
-//! `partition_discipline_tripwire::raw_scans` and `character_fence_tripwire::raw_lookups` used to
-//! be ~70-line near-clones — identical bound-handle walk-back, handle dedup, comment-line filtering
-//! — that had already drifted from each other in small ways neither review caught. The exact drift
-//! pattern consolidated once already, one file down (`body_of`/`code_of` into
-//! `test_scan.rs`). Both now defer to the one engine there, [`crate::test_scan::raw_table_reads`]:
-//! they differ only in which accessor(s) they watch and what counts as "opens a read" (`.iter()` /
-//! `.count()` for a whole-table scan vs `.guid().find(` for a raw point lookup), so the two can no
-//! longer disagree about what a table read is.
+//! The spatial and fence scanners share one engine, [`crate::test_scan::raw_table_reads`].
 
 /// ENFORCEMENT tripwire: `build.rs`'s codegen only registers tables that remembered to
 /// add a `character_owned` marker — it can't catch a table that forgot to. This test independently
@@ -264,7 +252,7 @@ pub(crate) mod character_owned_tripwire {
     /// Replace comments, literals, and `#[cfg(test)]` items with spaces while preserving byte offsets
     /// and newlines. The scanner can then use simple balanced-delimiter walks without accepting a
     /// declaration that production never compiles.
-    fn production_code(content: &str) -> String {
+    pub(super) fn production_code(content: &str) -> String {
         fn blank(bytes: &mut [u8], start: usize, end: usize) {
             for byte in &mut bytes[start..end] {
                 if *byte != b'\n' {
@@ -630,7 +618,8 @@ pub(crate) mod character_owned_tripwire {
 
         assert!(
             missing.is_empty(),
-            "table(s) with a Character-capable guid have no matching `character_owned` sweep marker \
+            "Invariant: deleting or re-owning a Character sweeps every table keyed by its guid.\n\
+             table(s) with a Character-capable guid have no matching `character_owned` sweep marker \
              or `NOT_CHARACTER_OWNED` classification: {missing:?}\n\
              Add a `crate::character_owned` `delete` marker invocation (and usually the `restamp` \
              form too, see the macro doc at the top of lib.rs), or add the accessor to \
@@ -938,6 +927,18 @@ mod partition_discipline_tripwire {
     }
 
     #[test]
+    fn the_scan_counts_inline_and_bound_handle_scans_but_not_comments() {
+        let src =
+            "fn f(ctx: &ReducerContext) {\n    for e in ctx.db.game_world_entity().iter() {}\n    \
+                   let spawns = ctx.db.game_creature_spawn();\n    let n = spawns.count();\n    \
+                   // ctx.db.game_world_entity().iter()\n}\n";
+        assert_eq!(
+            raw_scans(src),
+            vec![(2, "game_world_entity"), (4, "game_creature_spawn")]
+        );
+    }
+
+    #[test]
     fn no_unwhitelisted_raw_spatial_scans() {
         let root = repo_root();
         let mut violations = Vec::new();
@@ -969,9 +970,9 @@ mod partition_discipline_tripwire {
 
         assert!(
             violations.is_empty(),
-            "raw spatial-table scan(s) outside the partition-scoped helpers:\n  {}\n\n\
-             A whole-table `.iter()` over a spatial table is not shardable (issue #14 / spec #12): \
-             after a region or continent split it silently sees only the caller's own shard. Use \
+            "Invariant: no whole-table scan of a spatial table outside the partition-scoped \
+             helpers.\nraw spatial-table scan(s) over budget:\n  {}\n\n\
+             A whole-table `.iter()` over a spatial table is not shardable: after a region or continent split it silently sees only the caller's own shard. Use \
              `crate::helpers::entities_near(ctx, map_id, instance_id, x, y, radius)` for a radius \
              search (grid-indexed, `(map_id, instance_id)`-scoped) and \
              `crate::helpers::in_same_partition(&e, map_id, instance_id)` to test partition \
@@ -1066,6 +1067,14 @@ mod partition_discipline_tripwire {
         out
     }
 
+    #[test]
+    fn the_scan_finds_a_shard_field_read_but_not_prose_or_longer_names() {
+        let src = "fn f(ctx: &ReducerContext, row: Row) {\n    if row.shard == DB {}\n    \
+                   // row.shard is prose\n    let name = row.shard_name;\n    \
+                   let loc = ctx.db.game_character_shard();\n}\n";
+        assert_eq!(shard_id_reads(src), vec![(2, ".shard")]);
+    }
+
     /// AC#1 of **region definitions are data; shard ids are the gateway's business.** The
     /// module stores `region_assignment { map_id, region_id, shard, epoch }` (it has to — realm-core
     /// is this same wasm under another database name), but the instant a reducer *branches* on
@@ -1116,8 +1125,9 @@ mod partition_discipline_tripwire {
         }
         assert!(
             violations.is_empty(),
-            "module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
-             A shard is a database name — a GATEWAY routing fact (issue #23 / spec #12). Module \
+            "Invariant: no Module game logic reads a shard id.\n\
+             module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
+             A shard is a database name, a GATEWAY routing fact. Module \
              game logic may read cells (`lyracore_shared::spatial`) and regions \
              (`lyracore_shared::region::RegionMap`), and may partition by `(map_id, instance_id)` via \
              `crate::helpers`, but must never branch on which database owns a region: that is what \
@@ -1158,10 +1168,10 @@ mod partition_discipline_tripwire {
 /// character as ABSENT so each caller's existing "no such character" arm fires. This test
 /// source-scans the same file set as its two sibling tripwires for RAW character lookups and fails
 /// on any file over its whitelisted budget. `WHITELIST` FREEZES today's audited exceptions in
-/// Core's own source, each with a verdict (see the verdict table in `transfer/mod.rs`'s module doc,
-/// and `docs/history/transfer-by-guid-verdict-table.md` for each verdict's reasoning); it is a
-/// ratchet, so it should only ever shrink. `PACKAGE_FILE_BUDGET` carries the same budget for an
-/// installed Package's file, keyed by file shape instead of by Package, so Core names no Package.
+/// Core's own source, each with a verdict (see the verdict table in `transfer/mod.rs`'s module doc);
+/// it is a ratchet, so it should only ever shrink. `PACKAGE_FILE_BUDGET` carries the same budget
+/// for an installed Package's file, keyed by file shape instead of by Package, so Core names no
+/// Package.
 ///
 // Note: same (file, count) granularity, same text-scan mechanism, and the same two ceilings as
 // `partition_discipline_tripwire` — swapping one whitelisted lookup for a different one inside an
@@ -1281,6 +1291,15 @@ mod character_fence_tripwire {
     }
 
     #[test]
+    fn the_scan_counts_raw_lookups_and_deletes_but_not_the_fence() {
+        let src = "fn f(ctx: &ReducerContext, guid: u64) {\n    \
+                   let c = ctx.db.game_character().guid().find(guid);\n    \
+                   let chars = ctx.db.game_character();\n    chars.guid().delete(guid);\n    \
+                   let fenced = crate::helpers::character_by_guid(ctx, guid);\n}\n";
+        assert_eq!(raw_lookups(src), vec![2, 4]);
+    }
+
+    #[test]
     fn no_unwhitelisted_raw_character_lookups() {
         let root = repo_root();
         let mut violations = Vec::new();
@@ -1309,9 +1328,10 @@ mod character_fence_tripwire {
 
         assert!(
             violations.is_empty(),
-            "raw `game_character` lookup(s) outside the by-guid chokepoint:\n  {}\n\n\
+            "Invariant: every Character lookup goes through the transfer fence.\n\
+             raw `game_character` lookup(s) outside the by-guid chokepoint:\n  {}\n\n\
              A reducer that reaches a character by guid or by name passes NONE of the escrowed-\
-             transfer chokepoints (issue #30 / spec #12), so cross-database it can write to a source \
+             transfer chokepoints, so cross-database it can write to a source \
              copy the destination already serialized past — a lost write. Route the READ through \
              `crate::helpers::character_by_guid(ctx, guid)` or \
              `crate::helpers::character_by_name(ctx, name)`; both read an in-transit character as \
@@ -1355,66 +1375,6 @@ mod character_fence_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire: SpacetimeDB's own CLI (2.7.1) source-scans this whole crate
-/// for the print family — four macro names, each followed by a `!` — and aborts the build the
-/// instant one appears ANYWHERE under `module/src`, including behind `#[cfg(test)]`: the scan is
-/// source-level and does not know what `cfg` means. The trigger was three diagnostic notes in test-only
-/// code (`publish_safety.rs` ×2, `test_scan.rs` ×1) that never compile into the wasm at all, yet
-/// still failed every fresh clone's first `preflight` — the alpha's own start command, blocked for
-/// everyone before a single reducer ever ran. Fixed there by swapping each to
-/// `writeln!(std::io::stderr(), ...)`, which the CLI's list does not name, wrapped in `let _ = ...;`
-/// so the ignored `Result` raises no warning.
-///
-/// This pins that fix from coming apart again: no file under `module/src` (or a drop-in
-/// `packages/*/src`) may spell one of those four names immediately followed by `!`. The needles
-/// are assembled from two literal halves at RUN time — the same self-exclusion
-/// `creatures::tick::relay_tripwire`'s move-event needle already uses (see its doc comment) — so
-/// the forbidden spelling never sits contiguously in this file's own source. That matters twice
-/// over: contiguous text here would (a) match itself in the scan below, and (b) trip the very
-/// SpacetimeDB build scan this test exists to keep quiet, since that scan cannot tell a
-/// `#[cfg(test)]` tripwire body apart from live reducer code either.
-#[cfg(test)]
-pub(crate) mod print_macro_tripwire {
-    /// The four forbidden spellings, each built from two halves so neither ever appears whole in
-    /// this source file.
-    fn needles() -> [String; 4] {
-        [
-            format!("{}{}", "println", "!"),
-            format!("{}{}", "print", "!"),
-            format!("{}{}", "eprintln", "!"),
-            format!("{}{}", "eprint", "!"),
-        ]
-    }
-
-    #[test]
-    fn no_print_family_macro_under_module_src() {
-        let mut violations = Vec::new();
-        for file in super::character_owned_tripwire::scanned_files() {
-            let content = std::fs::read_to_string(&file)
-                .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            for needle in needles() {
-                for (idx, _) in content.match_indices(needle.as_str()) {
-                    violations.push(format!(
-                        "{}:{} contains `{needle}`",
-                        file.display(),
-                        crate::test_scan::line_of(&content, idx)
-                    ));
-                }
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "print-family macro found under module/src or a drop-in package (issue #432):\n  {}\n\n\
-             SpacetimeDB's CLI source-scans this whole crate and aborts the build on any of these — \
-             even behind #[cfg(test)], because the scan is source-level and does not understand cfg. \
-             For a test-only diagnostic, use `writeln!(std::io::stderr(), ...)` (needs \
-             `use std::io::Write;`) instead, wrapped in `let _ = ...;` so the ignored Result does \
-             not warn.",
-            violations.join("\n  ")
-        );
-    }
-}
-
 /// ENFORCEMENT tripwire: `gc.rs` has a hand-maintained `reap!` list. It covers the
 /// fifteen event tables reaped on their 1s `EVENT_TTL_MICROS` and the handful of tables with their
 /// own ad-hoc TTL block below it. A NEW short-lived event table
@@ -1454,12 +1414,33 @@ mod gc_reap_tripwire {
         "game_bot_transfer_intent",
     ];
 
-    /// `gc.rs` actually reaps `accessor` — via the shared `reap!(accessor)` macro invocation, or a
-    /// direct `ctx.db.accessor()` call (the shape of the ad-hoc blocks: `game_group_invite`'s own
-    /// TTL, and `corpse::sweep_corpse_decay`'s own `ctx.db.game_corpse()`, called from here).
-    fn gc_reaps(gc_src: &str, accessor: &str) -> bool {
-        gc_src.contains(&format!("reap!({accessor})"))
-            || gc_src.contains(&format!("ctx.db.{accessor}()"))
+    /// `gc.rs` reaps `accessor` through `reap!(accessor)` or a direct `ctx.db.accessor()` call.
+    /// Comments and string literals do not count.
+    fn gc_reaps(gc_code: &str, accessor: &str) -> bool {
+        gc_code.contains(&format!("reap!({accessor})"))
+            || gc_code.contains(&format!("ctx.db.{accessor}()"))
+    }
+
+    /// The `id: u64` primary key plus `created_at: Timestamp` shape every TTL-reaped table uses.
+    /// Full field names, because `id: u64` alone is a substring of every `*_guid: u64` field.
+    fn is_ttl_shaped(fields: &str) -> bool {
+        fields.contains("pub id: u64,")
+            && (fields.contains("pub created_at: Timestamp,")
+                || fields.contains("pub created_at: spacetimedb::Timestamp,"))
+    }
+
+    /// Every TTL-shaped, non-exempt table declared in `content` that `gc_src` never reaps.
+    fn unreaped_tables(content: &str, gc_src: &str) -> Vec<String> {
+        let gc_code = super::character_owned_tripwire::production_code(gc_src);
+        super::character_owned_tripwire::extract_tables(content)
+            .into_iter()
+            .filter(|(accessor, fields)| {
+                is_ttl_shaped(fields)
+                    && !EXEMPT_ACCESSORS.contains(&accessor.as_str())
+                    && !gc_reaps(&gc_code, accessor)
+            })
+            .map(|(accessor, _)| accessor)
+            .collect()
     }
 
     #[test]
@@ -1475,24 +1456,15 @@ mod gc_reap_tripwire {
             }
             let content = std::fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {}: {e}", file.display()));
-            for (accessor, fields) in super::character_owned_tripwire::extract_tables(&content) {
-                // Full field names, not "id: u64" / "created_at:" bare — those are substrings of
-                // *_guid: u64` fields, which are on almost every table here.
-                let is_ttl_shaped = fields.contains("pub id: u64,")
-                    && (fields.contains("pub created_at: Timestamp,")
-                        || fields.contains("pub created_at: spacetimedb::Timestamp,"));
-                if !is_ttl_shaped || EXEMPT_ACCESSORS.contains(&accessor.as_str()) {
-                    continue;
-                }
-                if !gc_reaps(&gc_src, &accessor) {
-                    missing.push(format!("{accessor} (in {})", file.display()));
-                }
+            for accessor in unreaped_tables(&content, &gc_src) {
+                missing.push(format!("{accessor} (in {})", file.display()));
             }
         }
 
         assert!(
             missing.is_empty(),
-            "table(s) shaped `id: u64` PK + `created_at: Timestamp` — the TTL-reaped convention \
+            "Invariant: every TTL-shaped event table is reaped in gc.rs.\n\
+             table(s) shaped `id: u64` PK + `created_at: Timestamp` — the TTL-reaped convention \
              every existing short-lived event table uses — with no reap in gc.rs: {missing:?}\n\n\
              A short-lived event table only stops growing without bound if something deletes its \
              rows. Add `reap!(<accessor>);` to `reap_movement_events` in `gc.rs` (the 1s \
@@ -1502,6 +1474,21 @@ mod gc_reap_tripwire {
              pattern: gc.rs calls it, it owns the policy). OR add the accessor to `EXEMPT_ACCESSORS` \
              above with a comment justifying why it is intentionally unreaped."
         );
+    }
+
+    #[test]
+    fn the_scan_flags_a_ttl_table_that_gc_only_mentions_in_a_comment() {
+        let table = "#[table(accessor = game_fixture_event)]\n\
+                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
+                     pub created_at: Timestamp,\n}\n";
+        let mentioned = "fn reap(ctx: &ReducerContext) {\n    // reap!(game_fixture_event);\n}\n";
+        assert_eq!(
+            unreaped_tables(table, mentioned),
+            vec!["game_fixture_event"]
+        );
+
+        let reaped = "fn reap(ctx: &ReducerContext) {\n    reap!(game_fixture_event);\n}\n";
+        assert!(unreaped_tables(table, reaped).is_empty());
     }
 }
 
@@ -1798,7 +1785,8 @@ pub(crate) mod grid_cell_tripwire {
 
         assert!(
             violations.is_empty(),
-            "a `grid_x` write with no `cell` write beside it (#456):\n  {}\n\n\
+            "Invariant: a grid-coordinate write also writes the packed `cell`.\n\
+             a `grid_x` write with no `cell` write beside it:\n  {}\n\n\
              `cell` packs `(grid_x, grid_y)` into the one indexed value the AOI subscription probes \
              by equality — it is what makes the box query index-served instead of a full partition \
              scan. It is a plain column, so nothing updates it for you: write it in the SAME \
@@ -1926,305 +1914,6 @@ pub(crate) mod grid_cell_tripwire {
     }
 }
 
-/// ENFORCEMENT tripwire: a comment must stay understandable without tracker history, so no comment
-/// under `module/src` may carry an issue reference (a hash sign followed by 2..=4 digits). The
-/// allow-list below records exact counts. Cleanup updates the count, and a file at zero leaves the
-/// list entirely.
-#[cfg(test)]
-pub(crate) mod issue_reference_tripwire {
-    /// `(path under `module/src`, tracker references still tolerated there)`.
-    const RATCHET: &[(&str, usize)] = &[];
-
-    /// Returns one line number for each tracker reference in a comment. A reference is a hash sign
-    /// opening a 2..=4 digit token; a build, opcode, patch or revision number is not one.
-    fn tracker_refs(content: &str) -> Vec<usize> {
-        let bytes = content.as_bytes();
-        let mut out = Vec::new();
-        let mut i = 0;
-
-        while i < bytes.len() {
-            if let Some(end) = raw_string_end(bytes, i) {
-                i = end;
-                continue;
-            }
-
-            match bytes[i] {
-                b'/' if bytes.get(i + 1) == Some(&b'/') => {
-                    let end = bytes[i + 2..]
-                        .iter()
-                        .position(|byte| *byte == b'\n')
-                        .map_or(bytes.len(), |offset| i + 2 + offset);
-                    comment_refs(content, i + 2, end, &mut out);
-                    i = end;
-                }
-                b'/' if bytes.get(i + 1) == Some(&b'*') => {
-                    i = block_comment_refs(content, i + 2, &mut out);
-                }
-                b'"' => i = quoted_end(bytes, i, b'"'),
-                b'\'' => i = char_literal_end(bytes, i).unwrap_or(i + 1),
-                _ => i += 1,
-            }
-        }
-        out
-    }
-
-    fn comment_refs(content: &str, start: usize, end: usize, out: &mut Vec<usize>) {
-        for (offset, byte) in content.as_bytes()[start..end].iter().enumerate() {
-            let index = start + offset;
-            if *byte == b'#' && is_tracker_ref(content, index) {
-                out.push(crate::test_scan::line_of(content, index));
-            }
-        }
-    }
-
-    fn block_comment_refs(content: &str, mut i: usize, out: &mut Vec<usize>) -> usize {
-        let bytes = content.as_bytes();
-        let mut depth = 1;
-        while i < bytes.len() && depth > 0 {
-            if bytes.get(i..i + 2) == Some(b"/*") {
-                depth += 1;
-                i += 2;
-            } else if bytes.get(i..i + 2) == Some(b"*/") {
-                depth -= 1;
-                i += 2;
-            } else {
-                if bytes[i] == b'#' && is_tracker_ref(content, i) {
-                    out.push(crate::test_scan::line_of(content, i));
-                }
-                i += 1;
-            }
-        }
-        i
-    }
-
-    fn raw_string_end(bytes: &[u8], start: usize) -> Option<usize> {
-        let mut quote = start;
-        if bytes.get(quote) == Some(&b'b') {
-            quote += 1;
-        }
-        if bytes.get(quote) != Some(&b'r') {
-            return None;
-        }
-        quote += 1;
-        let hashes = bytes[quote..]
-            .iter()
-            .take_while(|byte| **byte == b'#')
-            .count();
-        quote += hashes;
-        if bytes.get(quote) != Some(&b'"') {
-            return None;
-        }
-
-        let mut i = quote + 1;
-        while i < bytes.len() {
-            if bytes[i] == b'"'
-                && bytes.get(i + 1..i + 1 + hashes) == Some(&bytes[quote - hashes..quote])
-            {
-                return Some(i + 1 + hashes);
-            }
-            i += 1;
-        }
-        Some(bytes.len())
-    }
-
-    fn quoted_end(bytes: &[u8], mut i: usize, quote: u8) -> usize {
-        i += 1;
-        while i < bytes.len() {
-            if bytes[i] == b'\\' {
-                i += 2;
-            } else if bytes[i] == quote {
-                return i + 1;
-            } else {
-                i += 1;
-            }
-        }
-        bytes.len()
-    }
-
-    fn char_literal_end(bytes: &[u8], start: usize) -> Option<usize> {
-        if bytes
-            .get(start + 1)
-            .is_some_and(|byte| byte.is_ascii_alphabetic() || *byte == b'_')
-            && bytes.get(start + 2) != Some(&b'\'')
-        {
-            return None;
-        }
-
-        let end = (start + 9).min(bytes.len());
-        let mut i = start + 1;
-        while i < end {
-            if bytes[i] == b'\\' {
-                i += 2;
-            } else if bytes[i] == b'\'' {
-                return Some(i + 1);
-            } else {
-                i += 1;
-            }
-        }
-        None
-    }
-
-    fn is_tracker_ref(content: &str, index: usize) -> bool {
-        let bytes = content.as_bytes();
-        let digits = bytes[index + 1..]
-            .iter()
-            .take_while(|byte| byte.is_ascii_digit())
-            .count();
-        if !(2..=4).contains(&digits)
-            || bytes
-                .get(index + 1 + digits)
-                .is_some_and(u8::is_ascii_digit)
-        {
-            return false;
-        }
-
-        let before = content[..index].trim_end_matches(|character: char| {
-            character.is_ascii_whitespace() || character == '(' || character == '['
-        });
-        let word = before
-            .rsplit(|character: char| !character.is_ascii_alphabetic())
-            .next()
-            .unwrap_or_default();
-        !["build", "opcode", "patch", "rev", "revision"]
-            .iter()
-            .any(|exception| word.eq_ignore_ascii_case(exception))
-    }
-
-    fn ratchet_mismatch(path: &str, found: usize, budget: usize) -> Option<String> {
-        (found != budget).then(|| format!("{path}: {found} refs (ratchet {budget})"))
-    }
-
-    fn ratchet_file_is_missing(path: &str, seen: &[String]) -> bool {
-        !seen.iter().any(|seen_path| seen_path == path)
-    }
-
-    #[test]
-    fn no_comment_carries_a_tracker_issue_reference() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        super::character_owned_tripwire::collect_rs_files(&root, &mut files);
-        let mut violations = Vec::new();
-        let mut seen = Vec::new();
-        for file in files {
-            let rel = file
-                .strip_prefix(&root)
-                .expect("scanned under module/src")
-                .to_string_lossy()
-                .replace('\\', "/");
-            let content = std::fs::read_to_string(&file).expect("readable module source");
-            let lines = tracker_refs(&content);
-            seen.push(rel.clone());
-            if let Some((_, budget)) = RATCHET.iter().find(|(path, _)| *path == rel) {
-                if let Some(mismatch) = ratchet_mismatch(&rel, lines.len(), *budget) {
-                    violations.push(format!("{mismatch}, lines {lines:?}"));
-                }
-            } else if !lines.is_empty() {
-                violations.push(format!(
-                    "{rel}: {} refs (ratchet 0), lines {lines:?}",
-                    lines.len()
-                ));
-            }
-        }
-        for (path, _) in RATCHET {
-            if ratchet_file_is_missing(path, &seen) {
-                violations.push(format!("{path}: ratchet file is missing"));
-            }
-        }
-        assert!(
-            violations.is_empty(),
-            "tracker issue references found in module/src comments:\n  {}\n\n\
-             Record the reasoning in the comment itself: a reader with no tracker access must still \
-             understand why the constraint exists.",
-            violations.join("\n  ")
-        );
-    }
-
-    /// The scan covers line, trailing and nested block comments, while leaving literals alone.
-    #[test]
-    fn the_scan_covers_comments_without_reading_literals() {
-        let h = '#';
-        let source = format!(
-            "// full {h}119\nlet x = 0; // pre-{h}22\n/* outer {h}23 /* nested {h}24 */ tail {h}25 */\nfn f<'a /* issue {h}22 */>() {{}}\nlet normal = \"{h}26\";\nlet escaped = \"\\\\\"{h}27\";\nlet raw = r###\"{h}28\"###;\nlet byte_raw = br#\"{h}29\"#;\nlet character = '{h}';\n// build {h}5875 and opcode {h}117\n// build ({h}5875) and opcode [{h}117]\n// BUILD {h}5875, OpCoDe ({h}117), PATCH [{h}123], ReV {h}456, ReViSiOn {h}789\n"
-        );
-        assert_eq!(tracker_refs(&source), vec![1, 2, 3, 3, 3, 4]);
-    }
-
-    #[test]
-    fn the_ratchet_rejects_stale_counts() {
-        assert!(ratchet_mismatch("fixture.rs", 1, 1).is_none());
-        assert!(ratchet_mismatch("fixture.rs", 0, 1).is_some());
-        assert!(ratchet_mismatch("fixture.rs", 2, 1).is_some());
-    }
-
-    #[test]
-    fn the_ratchet_rejects_a_missing_allow_listed_file() {
-        assert!(!ratchet_file_is_missing(
-            "fixture.rs",
-            &["fixture.rs".to_owned()]
-        ));
-        assert!(ratchet_file_is_missing("fixture.rs", &[]));
-    }
-}
-
-/// ENFORCEMENT tripwire: five unconditional `dead_code` allowances document the remaining
-/// deliberate residues. A conditional `cfg_attr` allowance does not count here.
-#[cfg(test)]
-pub(crate) mod dead_code_allowance_tripwire {
-    // Three taxonomy probes, the stacking boundary, and the retained Package API v1 cast_at adapter.
-    const EXPECTED_UNCONDITIONAL_ALLOWANCES: usize = 5;
-
-    fn unconditional_dead_code_allows(content: &str) -> Vec<usize> {
-        let mut lines = Vec::new();
-        for (start, _) in content.match_indices("#[allow(") {
-            let line_start = content[..start].rfind('\n').map_or(0, |index| index + 1);
-            if !content[line_start..start].trim().is_empty() {
-                continue;
-            }
-            let Some(end) = content[start..].find(")]") else {
-                continue;
-            };
-            if content[start..start + end].contains("dead_code") {
-                lines.push(crate::test_scan::line_of(content, start));
-            }
-        }
-        lines
-    }
-
-    #[test]
-    fn module_dead_code_allowances_stay_at_declared_boundaries() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
-        let mut files = Vec::new();
-        super::character_owned_tripwire::collect_rs_files(&root, &mut files);
-        let mut found = Vec::new();
-        for file in files {
-            let rel = file
-                .strip_prefix(&root)
-                .expect("scanned under module/src")
-                .to_string_lossy()
-                .replace('\\', "/");
-            let content = std::fs::read_to_string(&file).expect("readable module source");
-            found.extend(
-                unconditional_dead_code_allows(&content)
-                    .into_iter()
-                    .map(|line| format!("{rel}:{line}")),
-            );
-        }
-        assert_eq!(
-            found.len(),
-            EXPECTED_UNCONDITIONAL_ALLOWANCES,
-            "unconditional dead_code allowances changed:\n  {}",
-            found.join("\n  ")
-        );
-    }
-
-    #[test]
-    fn the_scan_excludes_conditional_allowances() {
-        let source =
-            "#[allow(dead_code, reason = \"residue\")]\n#[cfg_attr(test, allow(dead_code))]\n";
-        assert_eq!(unconditional_dead_code_allows(source), vec![1]);
-    }
-}
-
 /// ENFORCEMENT tripwire: Core source names no official Package, in code, comments or the
 /// generated Gateway bindings. Core must build and read the same with no Package installed.
 #[cfg(test)]
@@ -2294,7 +1983,8 @@ pub(crate) mod package_name_tripwire {
         }
         assert!(
             found.is_empty(),
-            "Core source names an official Package:\n  {}\n\nName the capability instead.",
+            "Invariant: Core source names no official Package.\n\
+             Core source names an official Package:\n  {}\n\nName the capability instead.",
             found.join("\n  ")
         );
     }
