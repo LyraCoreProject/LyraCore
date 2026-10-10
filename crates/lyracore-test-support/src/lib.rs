@@ -326,7 +326,7 @@ impl Standalone {
         self.assert_ok(&self.call_database(database, reducer, args));
     }
 
-    pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
+    pub fn call_anonymous(&self, reducer: &str, args: &[&str]) -> Output {
         let mut command = self.command();
         command.args([
             "call",
@@ -337,7 +337,11 @@ impl Standalone {
             reducer,
         ]);
         command.args(args);
-        self.assert_ok(&command.output().expect("failed to call reducer"));
+        command.output().expect("failed to call reducer")
+    }
+
+    pub fn assert_call_anonymous(&self, reducer: &str, args: &[&str]) {
+        self.assert_ok(&self.call_anonymous(reducer, args));
     }
 
     pub fn assert_sql(&self, query: &str) {
