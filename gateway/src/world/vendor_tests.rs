@@ -23,7 +23,12 @@ fn buy_item_err_sends_smsg_buy_failed() {
     // When `buy_item` returns Err (e.g. "not enough money"), the gateway must send SMSG_BUY_FAILED
     // with the matching BuyResult code so the player gets an on-screen error.
     let actions = InMemoryVendorActions {
-        buy_error: Some("not enough money to buy that item".into()),
+        buy_error: Some(|| {
+            crate::stdb::ReducerCallError::refused(
+                "gw_buy_item",
+                "not enough money to buy that item",
+            )
+        }),
         ..Default::default()
     };
     let sent = run(
