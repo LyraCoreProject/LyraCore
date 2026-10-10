@@ -1,13 +1,8 @@
-//! Class-trainer wire: the trainer window (`SMSG_TRAINER_LIST`) + the buy result
-//! (`SMSG_TRAINER_BUY_SUCCEEDED`/`_FAILED`) + the live `SMSG_LEARNED_SPELL` push so a bought ability
-//! shows on the action bar without a relog. All gtker-typed vanilla (SMSG_TRAINER_LIST IS vanilla-complete
-//! in the crate, unlike the raw-encoded vendor list). The per-spell Green/Red/Gray state is computed here
-//! from the player's level + what they already know.
+//! Trainer window, purchase results, and learned-spell packets.
 
 use super::*;
 
-/// A trainer-list row the store fills for [`build_trainer_list`] — the static spell facts plus the two
-/// player-dependent bits (`player_level`, `known`) the codec folds into the Green/Red/Gray state.
+/// An offering and the Character facts used to render its training state.
 #[derive(Clone, Copy, Debug)]
 pub struct TrainerSpellView {
     pub spell_id: u32,
@@ -15,24 +10,37 @@ pub struct TrainerSpellView {
     pub required_level: u8,
     pub player_level: u32,
     pub known: bool,
-    /// This offering is a PROFESSION learn-row (learn_skill_line != 0). Drives the two
-    /// misleadingly-named gtker u32s (really cmangos primary_prof_first_rank / primary_prof) —
-    /// sending first_rank=1 on CLASS spells made the 5875 client treat every spell as a primary
-    /// profession and DISABLE the Train button (live find 2026-07-11, screenshot: green row,
-    /// funded purse, dead button). Class spells must send (0, 0).
-    pub profession: bool,
+    /// Skill line taught by this offering, or 0 for a spell or recipe. Includes professions,
+    /// weapon skills and riding, which need distinct trainer list types.
+    pub learn_skill_line: u32,
 }
 
-/// Build `SMSG_TRAINER_LIST` — the trainer window. Each spell's state: GRAY if already known, RED if the
-/// player is below `required_level`, else GREEN (learnable now). `first_rank = 1` enables the client's
-/// Learn button (cmangos convention for a standalone rank). Deliberate simplification: no
-/// rank-chain / required_skill — class spells need neither; `required_skill = Skill::default()`
-/// (None) + empty prereqs.
+/// Build the trainer window. Profession learn rows select the recipe icon lookup in build 5875.
+/// Known offerings are gray, offerings above the Character's level are red, and others are green.
 pub fn build_trainer_list(
     trainer_guid: u64,
     spells: &[TrainerSpellView],
     greeting: &str,
 ) -> SMSG_TRAINER_LIST {
+    // The importer supplies learn rows for each profession a trainer teaches. The packet type is
+    // distinct from the creature template type, which also labels weapon masters as tradeskills.
+    let teaches_profession = spells.iter().any(|s| {
+        matches!(
+            Skill::try_from(s.learn_skill_line),
+            Ok(Skill::Alchemy
+                | Skill::Blacksmithing
+                | Skill::Cooking
+                | Skill::Enchanting
+                | Skill::Engineering
+                | Skill::FirstAid
+                | Skill::Fishing
+                | Skill::Herbalism
+                | Skill::Leatherworking
+                | Skill::Mining
+                | Skill::Skinning
+                | Skill::Tailoring)
+        )
+    });
     let spells = spells
         .iter()
         .map(|s| {
@@ -47,12 +55,8 @@ pub fn build_trainer_list(
                 spell: s.spell_id,
                 state,
                 spell_cost: s.cost,
-                // Real 1.12 semantics (cmangos SendTrainerList): these are
-                // (primary_prof_first_rank, primary_prof) — NOT talent cost / rank. Class spells
-                // send (0,0); profession learn-rows flag both so the client runs its
-                // profession-slot handling only where it belongs.
-                talent_point_cost: if s.profession { 1 } else { 0 },
-                first_rank: if s.profession { 1 } else { 0 },
+                talent_point_cost: if s.learn_skill_line != 0 { 1 } else { 0 },
+                first_rank: if s.learn_skill_line != 0 { 1 } else { 0 },
                 required_level: s.required_level,
                 required_skill: Skill::default(),
                 required_skill_value: 0,
@@ -62,7 +66,7 @@ pub fn build_trainer_list(
         .collect();
     SMSG_TRAINER_LIST {
         guid: Guid::new(trainer_guid),
-        trainer_type: 0, // unused in vanilla
+        trainer_type: if teaches_profession { 2 } else { 0 },
         spells,
         greeting: greeting.to_string(),
     }
@@ -102,6 +106,57 @@ mod tests {
     use super::*;
 
     #[test]
+    fn profession_lists_enable_recipe_item_icons_without_changing_offering_ids() {
+        use wow_world_messages::vanilla::ServerMessage;
+
+        for line in [129, 164, 165, 171, 182, 185, 186, 197, 202, 333, 356, 393] {
+            let spells = [
+                TrainerSpellView {
+                    spell_id: 3984,
+                    cost: 100,
+                    required_level: 1,
+                    player_level: 10,
+                    known: false,
+                    learn_skill_line: 0,
+                },
+                TrainerSpellView {
+                    spell_id: 4036,
+                    cost: 0,
+                    required_level: 1,
+                    player_level: 10,
+                    known: true,
+                    learn_skill_line: line,
+                },
+            ];
+            let mut packet = Vec::new();
+            build_trainer_list(42, &spells, "Greetings")
+                .write_unencrypted_server(&mut packet)
+                .unwrap();
+            // Four-byte server header, guid, then the list type and row count.
+            assert_eq!(&packet[12..16], &2u32.to_le_bytes(), "skill line {line}");
+            assert_eq!(&packet[16..20], &2u32.to_le_bytes());
+            assert_eq!(&packet[20..24], &3984u32.to_le_bytes());
+            assert_eq!(&packet[58..62], &4036u32.to_le_bytes());
+        }
+    }
+
+    #[test]
+    fn other_skill_lists_keep_the_spell_icon_type() {
+        for line in [0, 43, 173, 762, u32::MAX] {
+            let spells = [TrainerSpellView {
+                spell_id: 100,
+                cost: 10,
+                required_level: 1,
+                player_level: 10,
+                known: false,
+                learn_skill_line: line,
+            }];
+            assert_eq!(build_trainer_list(42, &spells, "").trainer_type, 0);
+        }
+        assert_eq!(build_trainer_list(42, &[], "").trainer_type, 0);
+    }
+
+    #[test]
     fn trainer_list_state_mapping() {
         let v = [
             TrainerSpellView {
@@ -110,7 +165,7 @@ mod tests {
                 required_level: 6,
                 player_level: 10,
                 known: false,
-                profession: false,
+                learn_skill_line: 0,
             }, // learnable
             TrainerSpellView {
                 spell_id: 101,
@@ -118,7 +173,7 @@ mod tests {
                 required_level: 6,
                 player_level: 2,
                 known: false,
-                profession: false,
+                learn_skill_line: 0,
             }, // too low
             TrainerSpellView {
                 spell_id: 102,
@@ -126,7 +181,7 @@ mod tests {
                 required_level: 1,
                 player_level: 10,
                 known: true,
-                profession: false,
+                learn_skill_line: 0,
             }, // already known
         ];
         let msg = build_trainer_list(42, &v, "Greetings");
@@ -142,7 +197,7 @@ mod tests {
             required_level: 6,
             player_level: 6,
             known: false,
-            profession: false,
+            learn_skill_line: 0,
         }];
         assert_eq!(
             build_trainer_list(1, &edge, "").spells[0].state,

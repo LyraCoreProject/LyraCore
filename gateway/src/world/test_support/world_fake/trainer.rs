@@ -2,6 +2,7 @@ use super::super::*;
 
 #[derive(Default)]
 pub(crate) struct TrainerState {
+    pub(crate) spells: Vec<codec::TrainerSpellView>,
     pub(crate) reputation_at_war: std::sync::Mutex<std::collections::BTreeMap<u32, bool>>,
     pub(crate) talent_reset_quote: Option<u32>,
     pub(crate) reset_talents_refusal: Option<String>,
@@ -27,7 +28,7 @@ impl TrainerStore for WorldFake {
         _player_guid: u64,
         _trainer_guid: u64,
     ) -> Result<Vec<codec::TrainerSpellView>> {
-        Ok(Vec::new())
+        Ok(self.trainer.spells.clone())
     }
 
     fn buy_trainer_spell(

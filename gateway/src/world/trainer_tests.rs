@@ -246,7 +246,7 @@ fn one_spell() -> Vec<codec::TrainerSpellView> {
         required_level: 1,
         player_level: 1,
         known: false,
-        profession: false,
+        learn_skill_line: 0,
     }]
 }
 
@@ -515,6 +515,29 @@ fn trainer_list_replies_smsg_trainer_list_with_the_fixture_spells() {
     assert_eq!(list.guid, Guid::new(70));
     assert_eq!(list.spells.len(), 1, "the fixture's one spell row");
     assert_eq!(list.spells[0].spell, 100);
+    assert_eq!(list.trainer_type, 0);
+}
+
+#[test]
+fn direct_profession_training_request_sends_the_profession_list_type() {
+    let mut spells = one_spell();
+    spells[0].spell_id = 4036;
+    spells[0].learn_skill_line = 202;
+    let store = TrainerFake {
+        spells,
+        ..Default::default()
+    };
+    let sent = run(
+        &store,
+        CMSG_TRAINER_LIST {
+            guid: Guid::new(70),
+        },
+    );
+    let [ServerOpcodeMessage::SMSG_TRAINER_LIST(list)] = sent.as_slice() else {
+        panic!("expected one trainer list, got [{}]", kinds(&sent));
+    };
+    assert_eq!(list.trainer_type, 2);
+    assert_eq!(list.spells[0].spell, 4036);
 }
 
 /// The class gate removes the training service, not the creature: the NPC still talks, which the
