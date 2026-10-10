@@ -28,9 +28,15 @@ fn script(
     enabled: bool,
     lua: &str,
 ) -> String {
-    format!(
-        r#"{{"script_id":{script_id},"name":"{name}","event":"{event}","priority":{priority},"enabled":{enabled},"source":"{lua}"}}"#
-    )
+    serde_json::json!({
+        "script_id": script_id,
+        "name": name,
+        "event": event,
+        "priority": priority,
+        "enabled": enabled,
+        "source": lua,
+    })
+    .to_string()
 }
 
 fn artifact(package: &str, source_hash: &str, scripts: &[String]) -> String {
@@ -456,5 +462,74 @@ fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_n
         35,
         "the two working scripts granted 10 and 25; the broken one granted nothing and the \
          disabled one was never invoked"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook() {
+    let mut standalone = Standalone::start("package-runtime-scripts-typed-levelup");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("install_guid_range", &["0"]);
+    standalone.assert_call("debug_seed_scenario_fixtures", &[]);
+    standalone.assert_call("debug_spawn_player_entity", &[&PLAYER.to_string()]);
+    standalone.assert_sql("UPDATE game_character SET online = true WHERE guid = 1");
+    standalone.assert_sql("UPDATE game_quest_template SET reward_xp = 1300 WHERE entry = 50900");
+    standalone.assert_sql("DELETE FROM game_quest_objective WHERE quest_entry = 50900");
+    standalone.assert_call("debug_spawn_at_feet", &[&PLAYER.to_string(), "51003", "3"]);
+    let giver = standalone
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51003")
+        .into_iter()
+        .next()
+        .expect("the quest giver was spawned")["guid"]
+        .clone();
+
+    apply(
+        &standalone,
+        &[artifact(
+            "test_fixture.typed",
+            HASH_A,
+            &[script(
+                100_100,
+                "typed.ding",
+                "on_levelup",
+                0,
+                true,
+                include_str!("../../datascripts/tests/fixtures/typed/ding.generated.lua"),
+            )],
+        )],
+    );
+    standalone.assert_call(
+        "debug_grant_quest",
+        &[&PLAYER.to_string(), &QUEST.to_string()],
+    );
+    // L1 requires 400 XP and L2 requires 900 XP. The row is persisted after both hooks fire.
+    standalone.assert_call(
+        "debug_turn_in_quest",
+        &[&PLAYER.to_string(), &giver, &QUEST.to_string(), "0"],
+    );
+
+    let entity = standalone
+        .query_rows("SELECT level FROM game_world_entity WHERE guid = 1")
+        .into_iter()
+        .next()
+        .expect("the Character remains in the world");
+    assert_eq!(entity["level"], "3");
+    let mut messages = standalone.query_rows(
+        "SELECT id, recipient_guid, message FROM game_system_message_event WHERE recipient_guid = 1",
+    );
+    messages.sort_by_key(|row| {
+        row["id"]
+            .parse::<u64>()
+            .expect("the message identifier is numeric")
+    });
+    assert_eq!(
+        messages
+            .iter()
+            .map(|row| row["message"].as_str())
+            .collect::<Vec<_>>(),
+        ["Ding 2", "Ding 3"],
+        "the typed handler receives each attained level and its Character handle"
     );
 }
