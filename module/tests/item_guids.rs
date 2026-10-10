@@ -245,6 +245,64 @@ fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip()
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
+    const TRANSFER: &str = "5090173";
+    const FOREIGN: &str = "16777217";
+    let source = fixture("aura-guid-transfer-source");
+    let destination = fixture_in_range("aura-guid-transfer-destination", "1000000000");
+    for (shard, guid) in [(&source, "1"), (&destination, FOREIGN)] {
+        shard.assert_call("debug_set_level", &[guid, "20"]);
+        shard.assert_sql("UPDATE game_spell SET duration_ms = 3600000 WHERE spell_id = 50072");
+        shard.assert_call("debug_force_cast_at", &[guid, "50072", guid]);
+    }
+
+    let departing =
+        source.query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072");
+    assert_eq!(departing.len(), 1);
+    destination.assert_sql(&format!(
+        "UPDATE game_aura SET id = {} WHERE target_guid = {FOREIGN} AND spell_id = 50072",
+        departing[0]["id"]
+    ));
+    let foreign = destination.query_rows(&format!(
+        "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = 50072"
+    ));
+    assert_eq!(foreign.len(), 1);
+    assert_eq!(foreign[0]["id"], departing[0]["id"]);
+
+    let blob = freeze_character(&source, TRANSFER, "1");
+    destination.assert_sql("DELETE FROM game_world_entity WHERE guid = 1");
+    let operator = r#"{"guid":0,"ownership":null}"#;
+    destination.assert_call("import_character_blob", &[TRANSFER, &blob, operator]);
+    let arriving = destination
+        .query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072");
+    assert_eq!(arriving.len(), 1);
+    assert_ne!(arriving[0]["id"], foreign[0]["id"]);
+    let mut expected = departing[0].clone();
+    let mut actual = arriving[0].clone();
+    expected.remove("id");
+    actual.remove("id");
+    assert_eq!(actual, expected);
+    assert_eq!(
+        destination.query_rows(&format!(
+            "SELECT * FROM game_aura WHERE target_guid = {FOREIGN} AND spell_id = 50072"
+        )),
+        foreign
+    );
+
+    destination.assert_call("import_character_blob", &[TRANSFER, &blob, operator]);
+    finish(&source, &destination, TRANSFER);
+    assert_eq!(
+        destination
+            .query_rows("SELECT * FROM game_aura WHERE target_guid = 1 AND spell_id = 50072"),
+        arriving
+    );
+    assert!(source
+        .query_rows("SELECT * FROM game_aura WHERE target_guid = 1")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks() {
     let shard = fixture("item-guid-exhaustion");
     shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);

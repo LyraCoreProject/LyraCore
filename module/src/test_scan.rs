@@ -248,7 +248,10 @@ mod tests {
     fn read_scanned_reads_a_shipped_file() {
         let src = read_scanned("module/src/test_scan.rs")
             .expect("module/ is never optional, so this can never be skipped");
-        assert!(src.contains("fn read_scanned("));
+        assert_eq!(
+            src,
+            std::fs::read_to_string(repo_root().join("module/src/test_scan.rs")).unwrap()
+        );
     }
 
     /// The typo case the tripwires must keep catching: the directory is installed, the named file
