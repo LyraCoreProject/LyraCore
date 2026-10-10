@@ -1,31 +1,26 @@
 use super::super::*;
+use crate::stdb::ReducerCallError;
 
 #[derive(Default)]
 pub(crate) struct CombatState {
-    /// When set, `set_target` fails before the reducer can complete. This models the call pipe
-    /// whose transport dies while an admitted world session is in flight.
-    pub(crate) set_target_error: Option<String>,
+    /// When set, `set_target` fails as a Transport Loss before the reducer can complete. This
+    /// models the call pipe whose transport dies while an admitted World Session is in flight.
+    pub(crate) set_target_transport_lost: bool,
 }
 
 impl CombatStore for WorldFake {
-    fn set_target(&self, _account_id: u64, _self_guid: u64, _target_guid: u64) -> Result<()> {
-        match &self.combat.set_target_error {
-            Some(e) => Err(anyhow!("{e}")),
-            None => Ok(()),
+    fn set_target(&self, _actor: Actor, _target_guid: u64) -> Result<()> {
+        if self.combat.set_target_transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_set_target").into());
         }
-    }
-
-    fn pet_command(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _data: u32,
-        _target_guid: u64,
-    ) -> Result<()> {
         Ok(())
     }
 
-    fn set_sheathed(&self, _account_id: u64, _self_guid: u64, _state: u8) -> Result<()> {
+    fn pet_command(&self, _actor: Actor, _data: u32, _target_guid: u64) -> Result<()> {
+        Ok(())
+    }
+
+    fn set_sheathed(&self, _actor: Actor, _state: u8) -> Result<()> {
         Ok(())
     }
 }

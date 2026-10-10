@@ -1,4 +1,5 @@
 use super::super::*;
+use crate::stdb::ReducerCallError;
 
 #[derive(Default)]
 pub(crate) struct LootRollState {
@@ -8,9 +9,9 @@ pub(crate) struct LootRollState {
     pub(crate) loot_master_gives: std::sync::Mutex<Vec<(u64, u8, u64)>>,
     /// Typed gameplay Refusal returned by loot-roll and master-loot action tests.
     pub(crate) loot_action_refusal: Option<LootRefusal>,
-    /// Infrastructure failure returned by loot-roll and master-loot action tests.
-    pub(crate) loot_action_failure: Option<String>,
-    /// Records every `realm_loot_op` argument in wire order. The Realm-core handle owns the
+    /// When set, loot-roll and master-loot requests fail as a Transport Loss.
+    pub(crate) loot_action_transport_lost: bool,
+    /// Records every `realm_loot_op` reducer argument in wire order. The Realm-core handle owns the
     /// recorder so a test can distinguish authority routing from a Shard-local request.
     #[allow(clippy::type_complexity)]
     pub(crate) realm_loot_ops: std::sync::Mutex<
@@ -28,8 +29,8 @@ pub(crate) struct LootRollState {
             u64,
         )>,
     >,
-    /// When set, `realm_loot_op` fails with this message.
-    pub(crate) realm_loot_op_error: Option<String>,
+    /// When set, `realm_loot_start` is refused with this reason.
+    pub(crate) realm_loot_op_refusal: Option<String>,
     /// This WORLD SHARD's staging rolls `pending_local_rolls` answers — the relay's promotion
     /// INPUT. `Mutex`-wrapped (like `mirror`) so a test can set it AFTER the fixture
     /// is wrapped in an `Arc` — every existing party/whisper topology builder hands back `Arc`s.
@@ -37,8 +38,8 @@ pub(crate) struct LootRollState {
     pub(crate) pending_rolls: std::sync::Mutex<Vec<crate::world::loot::PendingLootRoll>>,
     /// Recorded `settle_loot_roll` calls on THIS shard — `(corpse_guid, slot, winner_guid)`.
     pub(crate) settled_rolls: std::sync::Mutex<Vec<(u64, u8, u64)>>,
-    /// When set, `settle_loot_roll` fails with this message.
-    pub(crate) settle_loot_roll_error: Option<String>,
+    /// When set, `settle_loot_roll` fails as a Transport Loss.
+    pub(crate) settle_loot_roll_transport_lost: bool,
     /// Recorded `clear_promoted_loot_roll` calls on THIS shard — the roll ids the relay told
     /// this shard's staging copy to forget after a successful promotion.
     pub(crate) cleared_rolls: std::sync::Mutex<Vec<u64>>,
@@ -53,14 +54,13 @@ pub(crate) struct LootRollState {
 impl LootRollStore for WorldFake {
     fn loot_roll(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         corpse_guid: u64,
         loot_slot: u32,
         vote: u8,
     ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_roll.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
+        if self.loot_roll.loot_action_transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_loot_roll").into());
         }
         if let Some(refusal) = self.loot_roll.loot_action_refusal {
             return Ok(LootActionStatus::Refused(refusal));
@@ -75,14 +75,13 @@ impl LootRollStore for WorldFake {
 
     fn loot_master_give(
         &self,
-        _account_id: u64,
-        _self_guid: u64,
+        _actor: Actor,
         corpse_guid: u64,
         loot_slot: u8,
         target_guid: u64,
     ) -> Result<LootActionStatus> {
-        if let Some(failure) = &self.loot_roll.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
+        if self.loot_roll.loot_action_transport_lost {
+            return Err(ReducerCallError::transport_lost("gw_loot_master_give").into());
         }
         if let Some(refusal) = self.loot_roll.loot_action_refusal {
             return Ok(LootActionStatus::Refused(refusal));
@@ -96,14 +95,11 @@ impl LootRollStore for WorldFake {
     }
 
     #[allow(clippy::too_many_arguments)]
-    fn realm_loot_op(
+    fn realm_loot_start(
         &self,
-        op: u8,
         corpse_guid: u64,
         slot: u8,
         item_entry: u32,
-        actor_guid: u64,
-        vote: u8,
         deadline_micros: i64,
         recipients: Vec<u64>,
         random_property_id: u32,
@@ -112,46 +108,47 @@ impl LootRollStore for WorldFake {
     ) -> Result<()> {
         self.rec("realm_loot_op");
         self.loot_roll.realm_loot_ops.lock().unwrap().push((
-            op,
+            lyracore_shared::loot_roll::loot_op::START,
             corpse_guid,
             slot,
             item_entry,
-            actor_guid,
-            vote,
+            0,
+            0,
             deadline_micros,
             recipients,
             random_property_id,
             promotion_source,
             source_roll_id,
         ));
-        if let Some(e) = &self.loot_roll.realm_loot_op_error {
-            return Err(anyhow!("{e}"));
+        match &self.loot_roll.realm_loot_op_refusal {
+            Some(reason) => Err(ReducerCallError::refused("realm_loot_op", reason).into()),
+            None => Ok(()),
         }
-        Ok(())
     }
 
     fn realm_loot_vote(
         &self,
         corpse_guid: u64,
         slot: u8,
-        actor_guid: u64,
+        actor: Actor,
         vote: u8,
     ) -> Result<LootActionStatus> {
-        self.realm_loot_op(
+        self.rec("realm_loot_op");
+        self.loot_roll.realm_loot_ops.lock().unwrap().push((
             lyracore_shared::loot_roll::loot_op::VOTE,
             corpse_guid,
             slot,
             0,
-            actor_guid,
+            actor.guid(),
             vote,
             0,
             Vec::new(),
             0,
             spacetimedb_sdk::Identity::ZERO,
             0,
-        )?;
-        if let Some(failure) = &self.loot_roll.loot_action_failure {
-            return Err(anyhow!(failure.clone()));
+        ));
+        if self.loot_roll.loot_action_transport_lost {
+            return Err(ReducerCallError::transport_lost("realm_loot_op").into());
         }
         Ok(self
             .loot_roll
@@ -165,8 +162,8 @@ impl LootRollStore for WorldFake {
 
     fn settle_loot_roll(&self, corpse_guid: u64, slot: u8, winner_guid: u64) -> Result<()> {
         self.rec("settle_loot_roll");
-        if let Some(e) = &self.loot_roll.settle_loot_roll_error {
-            return Err(anyhow!("{e}"));
+        if self.loot_roll.settle_loot_roll_transport_lost {
+            return Err(ReducerCallError::transport_lost("settle_loot_roll").into());
         }
         self.loot_roll
             .settled_rolls

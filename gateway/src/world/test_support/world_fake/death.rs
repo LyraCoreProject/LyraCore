@@ -3,28 +3,23 @@ use super::super::*;
 /// Death requests are tested against `HandleLootFake`. A World Session on this Fake answers
 /// every one with success and no effect.
 impl DeathStore for WorldFake {
-    fn repop(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn repop(&self, _actor: Actor) -> Result<()> {
         Ok(())
     }
 
-    fn reclaim_corpse(&self, _account_id: u64, _self_guid: u64, _corpse_guid: u64) -> Result<()> {
+    fn reclaim_corpse(&self, _actor: Actor, _corpse_guid: u64) -> Result<()> {
         Ok(())
     }
 
-    fn resurrect_response(&self, _account_id: u64, _self_guid: u64, _accept: bool) -> Result<()> {
+    fn resurrect_response(&self, _actor: Actor, _accept: bool) -> Result<()> {
         Ok(())
     }
 
-    fn self_resurrect(&self, _account_id: u64, _self_guid: u64) -> Result<()> {
+    fn self_resurrect(&self, _actor: Actor) -> Result<()> {
         Ok(())
     }
 
-    fn spirit_healer_res(
-        &self,
-        _account_id: u64,
-        _self_guid: u64,
-        _healer_guid: u64,
-    ) -> Result<()> {
+    fn spirit_healer_res(&self, _actor: Actor, _healer_guid: u64) -> Result<()> {
         Ok(())
     }
 
