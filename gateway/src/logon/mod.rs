@@ -9,6 +9,19 @@
 //! The only state this touches is the `game_account` read (salt/verifier) and the session write
 //! (K) — both via `LogonStore`. Everything else is per-connection handshake scratch.
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 pub mod limiter;
 
 use crate::accept::{classify_accept_error, AcceptBackoff, AcceptOutcome};

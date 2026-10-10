@@ -7,6 +7,19 @@
 //! `build: u32`, `server_id: u32`, `username: CString`, `client_seed: u32`, `client_proof: u8[20]`,
 //! then the compressed addon list.
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 use std::io::{self, Read};
 
 /// The opcode of the one plaintext client frame in the world handshake.

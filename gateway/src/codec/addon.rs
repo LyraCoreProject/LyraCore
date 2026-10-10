@@ -16,6 +16,19 @@
 //! <part>/<parts>|<payload>"`. v1 implements the single-part fast path only — a multi-part
 //! message logs and drops (payloads that don't fit ~230 bytes are a design smell at this layer).
 
+// Untrusted input arrives here: a malformed packet or env var must return an error, never unwind.
+#![cfg_attr(
+    not(test),
+    deny(
+        clippy::unwrap_used,
+        clippy::expect_used,
+        clippy::panic,
+        clippy::unreachable,
+        clippy::todo,
+        clippy::unimplemented
+    )
+)]
+
 /// The addon language value `SendAddonMessage` stamps (`LANG_ADDON`).
 pub const LANG_ADDON: u32 = 0xFFFF_FFFF;
 /// Our bridge prefix — the addon sends/filters on exactly this.
