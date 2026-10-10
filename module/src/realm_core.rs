@@ -137,6 +137,8 @@ pub(crate) fn record_shard(
 
 /// Mark one crossing before the source is frozen. Party partition certification treats this Realm
 /// phase as pending without trusting a World Shard cache that can change after it is sampled.
+/// A human crossing with source revision zero requires an absent locator and inserts pending
+/// revision one. Replays must name that same pending crossing; they cannot replace a settled row.
 #[reducer]
 #[allow(clippy::too_many_arguments)] // Exact predecessor, destination, crossing, and Actor are the wire Gate.
 pub fn begin_character_shard_transfer(
@@ -154,16 +156,34 @@ pub fn begin_character_shard_transfer(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     crate::account_ownership::require_actor_for(ctx, request_actor, character_guid)?;
-    if source_revision == 0
-        || (source_module_identity == Identity::ZERO) != (transfer_intent_id == 0)
+    if (source_module_identity == Identity::ZERO) != (transfer_intent_id == 0)
+        || (source_revision == 0
+            && (source_module_identity != Identity::ZERO
+                || transfer_intent_id != 0
+                || controller_generation != 0))
     {
         return Err("Transfer locator identity is incomplete".to_string());
     }
     let table = ctx.db.game_character_shard();
-    let current = table
-        .character_guid()
-        .find(character_guid)
-        .ok_or_else(|| "Transfer source has no Realm locator".to_string())?;
+    let Some(current) = table.character_guid().find(character_guid) else {
+        if source_revision != 0 {
+            return Err("Transfer source has no Realm locator".to_string());
+        }
+        table.insert(CharacterShard {
+            character_guid,
+            map_id: source_map_id,
+            instance_id: source_instance_id,
+            updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+            revision: 1,
+            bot_source_identity: source_module_identity,
+            bot_transfer_intent_id: transfer_intent_id,
+            bot_controller_generation: controller_generation,
+            transfer_pending: true,
+            pending_destination_map: destination_map_id,
+            pending_destination_instance: destination_instance_id,
+        });
+        return Ok(());
+    };
     let crossing = (
         source_module_identity,
         transfer_intent_id,
@@ -171,7 +191,7 @@ pub fn begin_character_shard_transfer(
     );
     if current.transfer_pending
         && (current.map_id, current.instance_id, current.revision)
-            == (source_map_id, source_instance_id, source_revision)
+            == (source_map_id, source_instance_id, source_revision.max(1))
         && (
             current.pending_destination_map,
             current.pending_destination_instance,
@@ -184,7 +204,8 @@ pub fn begin_character_shard_transfer(
     {
         return Ok(());
     }
-    if current.transfer_pending
+    if source_revision == 0
+        || current.transfer_pending
         || (current.map_id, current.instance_id, current.revision)
             != (source_map_id, source_instance_id, source_revision)
     {

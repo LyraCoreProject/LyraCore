@@ -47,5 +47,15 @@ receipt means the destination is unconsulted. The reaper holds the Escrow, and t
 forward recovery at the next world entry. A frozen Character is recoverable; deleting or duplicating
 one is not.
 
+A Character's first cross-shard Transfer may have no Realm-core locator. The Gateway supplies its
+source Character's location with predecessor revision zero. Realm-core creates revision one
+directly as pending, so the destination is never advertised as settled before import. Only that
+exact pending crossing can replay the initialization. Bot Transfers still require their bound
+predecessor.
+
+While the locator is pending, login checks the World Shards for source Escrow before accepting a
+destination copy. After the source finishes, login can settle and release the destination's exact
+arrival fence. Login repair never overwrites a pending locator.
+
 The Fakes execute the shared planners and protocol bodies. Durable tests exercise reducer shims,
 real table arms, and SpacetimeDB transaction rollback. These checks cover different boundaries.

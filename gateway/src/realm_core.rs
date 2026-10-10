@@ -68,8 +68,6 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
     // --- the character→shard index
     /// Where THIS database's own rows say the character is. `None` = not here.
     fn character_location(&self, guid: u64) -> Option<(u32, u64)>;
-    /// This database's `game_character_shard` entry for `guid` — a HINT, never the authority.
-    fn character_shard(&self, guid: u64) -> Option<(u32, u64)>;
     /// Write `guid`'s location into this database's character→shard index.
     fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()>;
     /// Read the ordered Realm partition and any pending Transfer phase.
@@ -77,7 +75,8 @@ pub(crate) trait RealmDb: Clone + Sized + Send + Sync {
         &self,
         guid: u64,
     ) -> Result<Option<crate::world::party::RealmCharacterPartition>>;
-    /// Begin one exact Realm Transfer phase from its observed predecessor.
+    /// Begin one exact Realm Transfer phase from its observed predecessor. Revision zero requires
+    /// an absent human locator and creates pending revision one.
     // The arguments preserve the Realm reducer's predecessor, destination, and crossing Gate.
     #[allow(clippy::too_many_arguments)]
     fn begin_character_shard_transfer(
@@ -269,12 +268,10 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
     bot_intent: Option<(&crate::world::transfer::BotTransferIntent, u64)>,
 ) -> Result<crate::world::party::RealmCharacterPartition> {
     let realm = db.realm_core()?;
-    let locator = realm
-        .realm_character_partition(plan.character_guid)?
-        .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
+    let locator = realm.realm_character_partition(plan.character_guid)?;
     let (source_map, source_instance, source_revision, source_identity, intent_id, generation) =
-        match bot_intent {
-            Some((intent, _claim_token)) => {
+        match (locator, bot_intent) {
+            (Some(locator), Some((intent, _claim_token))) => {
                 if intent.source_locator_revision == 0 {
                     anyhow::bail!("bot Transfer has no bound Realm locator predecessor");
                 }
@@ -322,7 +319,7 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
                     intent.controller_generation,
                 )
             }
-            None => (
+            (Some(locator), None) => (
                 locator.map_id,
                 locator.instance_id,
                 locator.revision,
@@ -330,6 +327,20 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
                 0,
                 0,
             ),
+            (None, None) => {
+                let (map_id, instance_id) = db
+                    .character_location(plan.character_guid)
+                    .ok_or_else(|| anyhow!("Transfer source has no Character"))?;
+                (
+                    map_id,
+                    instance_id,
+                    0,
+                    spacetimedb_sdk::Identity::ZERO,
+                    0,
+                    0,
+                )
+            }
+            (None, Some(_)) => anyhow::bail!("Transfer source has no Realm locator"),
         };
     realm.begin_character_shard_transfer(
         source_map,
@@ -344,21 +355,22 @@ pub(crate) fn begin_shard_index_transfer<D: RealmDb>(
     )?;
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
     loop {
-        let observed = realm
+        if let Some(observed) = realm
             .realm_character_partition(plan.character_guid)?
-            .ok_or_else(|| anyhow!("Transfer source Realm locator disappeared"))?;
-        if observed.transfer_pending
-            && (observed.map_id, observed.instance_id, observed.revision)
-                == (source_map, source_instance, source_revision)
-            && (
-                observed.pending_destination_map,
-                observed.pending_destination_instance,
-            ) == (plan.dest_map_id, plan.dest_instance_id)
-            && (
-                observed.bot_source_identity,
-                observed.bot_transfer_intent_id,
-                observed.bot_controller_generation,
-            ) == (source_identity, intent_id, generation)
+            .filter(|row| {
+                row.transfer_pending
+                    && (row.map_id, row.instance_id, row.revision)
+                        == (source_map, source_instance, source_revision.max(1))
+                    && (
+                        row.pending_destination_map,
+                        row.pending_destination_instance,
+                    ) == (plan.dest_map_id, plan.dest_instance_id)
+                    && (
+                        row.bot_source_identity,
+                        row.bot_transfer_intent_id,
+                        row.bot_controller_generation,
+                    ) == (source_identity, intent_id, generation)
+            })
         {
             return Ok(observed);
         }
@@ -530,16 +542,7 @@ fn wait_for_settled_locator<D: RealmDb>(
 /// A missing or stale hint falls back to a census. An escrow holder takes precedence over
 /// a destination copy so a resumed transfer can complete from its source.
 pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
-    // This function's own copy of the short-circuit. `settle_home_shard` (`stdb::world_store`) already
-    // guards its call to this function with an identical `if !self.is_sharded() { return Ok(None);
-    // }` — that one is production's, stays exactly where it is, and cannot be exercised by any test
-    // without a live SpacetimeDB connection (`Coordinator` cannot be constructed offline). This copy
-    // is redundant on the happy path (never fires when the caller's guard already returned), but it
-    // is the only layer of "an unconfigured gateway reads NOTHING while resolving a home shard" that
-    // a test can actually reach — `fake::Handle` runs this function directly. Without it, a single
-    // connected database (unsharded) still pays a `character_shard` probe, a `character_location`
-    // scan and a `set_character_shard` heal write to reach the one answer "stay put" gives for
-    // free — exactly the reads an unset `LYRACORE_REALM_CORE`/`LYRACORE_SHARD_MAP` must never pay.
+    // An unsharded Gateway needs no locator read or repair to find its own Character.
     if !db.is_sharded() {
         return None;
     }
@@ -547,12 +550,18 @@ pub(crate) fn locate_home_shard<D: RealmDb>(db: &D, guid: u64) -> Option<D> {
     let shards = db.world_shards();
     let is_connected = |d: &str| shards.iter().any(|(n, _)| n == d);
 
-    // Fast path: trust the hint only far enough to know which ONE shard to ask.
+    // A pending locator may already name the destination map. Scan for source Escrow before
+    // accepting an imported destination copy.
     if let Some(rc) = &index {
-        if let Some(hint) = rc.character_shard(guid) {
-            let hinted_name = db
-                .shard_map()
-                .resolve_connected(hint.0, hint.1, is_connected);
+        if let Some(hint) = rc
+            .realm_character_partition(guid)
+            .ok()
+            .flatten()
+            .filter(|row| !row.transfer_pending)
+        {
+            let hinted_name =
+                db.shard_map()
+                    .resolve_connected(hint.map_id, hint.instance_id, is_connected);
             if let Some((_, hinted)) = shards.iter().find(|(n, _)| n == hinted_name) {
                 if hinted.has_escrow(guid) || hinted.character_location(guid).is_some() {
                     heal_shard_entry(rc, guid, hinted);
@@ -637,7 +646,10 @@ fn heal_shard_entry<D: RealmDb>(rc: &D, guid: u64, shard: &D) {
     if shard.shard_map().resolve(actual.0, actual.1) != shard.shard_name() {
         return;
     }
-    if rc.character_shard(guid) == Some(actual) {
+    let Ok(locator) = rc.realm_character_partition(guid) else {
+        return;
+    };
+    if locator.is_some_and(|row| row.transfer_pending || (row.map_id, row.instance_id) == actual) {
         return;
     }
     if let Err(e) = rc.set_character_shard(guid, actual.0, actual.1) {
@@ -720,6 +732,8 @@ pub(crate) mod fake {
         pub shard_index: Mutex<HashMap<u64, (u32, u64)>>,
         /// Ordered `game_character_shard` Transfer phases used by the crossing tests.
         pub shard_phases: Mutex<HashMap<u64, crate::world::party::RealmCharacterPartition>>,
+        /// Reads before a Realm locator subscription observes the committed row.
+        pub unobserved_locator_reads: Mutex<usize>,
         /// The node-issued identity of this database's per-account player connection.
         pub identities: Mutex<HashMap<u64, [u8; 32]>>,
         /// How many identities this database has ever minted. Stamped into every identity so
@@ -1077,12 +1091,6 @@ pub(crate) mod fake {
                 .get(&guid)
                 .map(|(_, loc)| *loc)
         }
-        fn character_shard(&self, guid: u64) -> Option<(u32, u64)> {
-            let db = self.store();
-            db.note(&format!("character_shard({guid})"));
-            self.stored_partition(guid)
-                .map(|partition| (partition.map_id, partition.instance_id))
-        }
         fn set_character_shard(&self, guid: u64, map_id: u32, instance_id: u64) -> Result<()> {
             let db = self.store();
             db.note(&format!("set_character_shard({guid})"));
@@ -1136,6 +1144,11 @@ pub(crate) mod fake {
         ) -> Result<Option<crate::world::party::RealmCharacterPartition>> {
             self.store()
                 .note(&format!("realm_character_partition({guid})"));
+            let mut remaining = self.store().unobserved_locator_reads.lock().unwrap();
+            if *remaining > 0 {
+                *remaining -= 1;
+                return Ok(None);
+            }
             Ok(self.stored_partition(guid))
         }
         fn begin_character_shard_transfer(
@@ -1152,8 +1165,11 @@ pub(crate) mod fake {
         ) -> Result<()> {
             let db = self.store();
             db.note(&format!("begin_character_shard_transfer({character_guid})"));
-            if source_revision == 0
-                || (source_module_identity == spacetimedb_sdk::Identity::ZERO) != (intent_id == 0)
+            if (source_module_identity == spacetimedb_sdk::Identity::ZERO) != (intent_id == 0)
+                || (source_revision == 0
+                    && (source_module_identity != spacetimedb_sdk::Identity::ZERO
+                        || intent_id != 0
+                        || controller_generation != 0))
             {
                 return Err(anyhow!("Transfer locator identity is incomplete"));
             }
@@ -1161,12 +1177,35 @@ pub(crate) mod fake {
             let current = phases
                 .get(&character_guid)
                 .copied()
-                .or_else(|| self.indexed_partition(character_guid))
-                .ok_or_else(|| anyhow!("Transfer source has no Realm locator"))?;
+                .or_else(|| self.indexed_partition(character_guid));
+            let Some(current) = current else {
+                if source_revision != 0 {
+                    return Err(anyhow!("Transfer source has no Realm locator"));
+                }
+                phases.insert(
+                    character_guid,
+                    crate::world::party::RealmCharacterPartition {
+                        map_id: source_map,
+                        instance_id: source_instance,
+                        revision: 1,
+                        transfer_pending: true,
+                        pending_destination_map: destination_map,
+                        pending_destination_instance: destination_instance,
+                        bot_source_identity: source_module_identity,
+                        bot_transfer_intent_id: intent_id,
+                        bot_controller_generation: controller_generation,
+                    },
+                );
+                db.shard_index
+                    .lock()
+                    .unwrap()
+                    .insert(character_guid, (source_map, source_instance));
+                return Ok(());
+            };
             let crossing = (source_module_identity, intent_id, controller_generation);
             if current.transfer_pending
                 && (current.map_id, current.instance_id, current.revision)
-                    == (source_map, source_instance, source_revision)
+                    == (source_map, source_instance, source_revision.max(1))
                 && (
                     current.pending_destination_map,
                     current.pending_destination_instance,
@@ -1179,7 +1218,8 @@ pub(crate) mod fake {
             {
                 return Ok(());
             }
-            if current.transfer_pending
+            if source_revision == 0
+                || current.transfer_pending
                 || (current.map_id, current.instance_id, current.revision)
                     != (source_map, source_instance, source_revision)
             {
@@ -1892,11 +1932,7 @@ mod tests {
         );
     }
 
-    /// The read this whole issue is about: a correct index entry must be TRUSTED, not just
-    /// consulted-then-ignored. If `locate_home_shard` stopped reading the index (falling straight
-    /// through to the scan), this still "routes correctly" by accident — the scan finds the same
-    /// answer — so the pin is the ACCESS LOG, not the routing answer: deleting the index
-    /// consultation makes both assertions below fail.
+    /// A settled locator avoids reads on unrelated World Shards.
     #[test]
     fn locate_home_shard_trusts_a_correct_index_entry_without_scanning_the_other_shard() {
         let h = routed_realm();
@@ -1910,14 +1946,6 @@ mod tests {
             found.shard_name(),
             INSTANCES,
             "must route to the shard the index names"
-        );
-        assert!(
-            h.db_at(CORE)
-                .touched()
-                .iter()
-                .any(|c| c.starts_with("character_shard(100)")),
-            "the realm-core index was never consulted — `settle_home_shard`'s production path \
-             would be back to the unconditional scan this lookup exists to replace"
         );
         assert!(
             h.db_at(WORLD).touched().is_empty(),
@@ -1957,6 +1985,113 @@ mod tests {
             h.db_at(CORE).shard_index.lock().unwrap().get(&100).copied(),
             Some((36, 7)),
             "the index must be populated by the scan that had to run without it"
+        );
+    }
+
+    #[test]
+    fn a_first_kalimdor_login_can_begin_transfer_without_a_realm_locator() {
+        let h = realm(
+            &[WORLD, "kalimdor", INSTANCES, CORE],
+            "1:*=kalimdor,36:*=instances",
+            Some(CORE),
+        );
+        h.db_at(WORLD)
+            .characters
+            .lock()
+            .unwrap()
+            .insert(100, (1, (1, 0)));
+        let holder = locate_home_shard(&h, 100).expect("the Character remains on its Home Shard");
+        assert_eq!(holder.shard_name(), WORLD);
+        assert!(h.at(CORE).realm_character_partition(100).unwrap().is_none());
+
+        let pending = begin_shard_index_transfer(&holder, &kalimdor_plan(), None)
+            .expect("the first Kalimdor login must begin its Transfer");
+        assert!(pending.transfer_pending);
+        assert_eq!(pending.revision, 1);
+        assert_eq!(pending.pending_destination_map, 1);
+        assert_eq!(pending.pending_destination_instance, 0);
+    }
+
+    fn kalimdor_plan() -> crate::world::transfer::TransferPlan {
+        crate::world::transfer::TransferPlan {
+            transfer_id: 100,
+            character_guid: 100,
+            dest_map_id: 1,
+            dest_instance_id: 0,
+            dest_x: 0.0,
+            dest_y: 0.0,
+            dest_z: 0.0,
+            dest_o: 0.0,
+        }
+    }
+
+    #[test]
+    fn an_in_world_transfer_can_begin_without_a_realm_locator() {
+        let h = realm(&[WORLD, INSTANCES, CORE], "36:*=instances", Some(CORE));
+        h.store()
+            .characters
+            .lock()
+            .unwrap()
+            .insert(100, (1, (0, 0)));
+        let pending = begin_shard_index_transfer(&h, &kalimdor_plan(), None).unwrap();
+        assert_eq!(
+            (pending.map_id, pending.instance_id, pending.revision),
+            (0, 0, 1)
+        );
+        assert!(pending.transfer_pending);
+        assert_eq!(pending.pending_destination_map, 1);
+    }
+
+    #[test]
+    fn a_missing_character_cannot_create_a_realm_transfer_locator() {
+        let h = realm(&[WORLD, INSTANCES, CORE], "36:*=instances", Some(CORE));
+        assert!(begin_shard_index_transfer(&h, &kalimdor_plan(), None).is_err());
+        assert!(h.at(CORE).realm_character_partition(100).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_first_transfer_waits_for_its_new_locator_subscription() {
+        let h = realm(&[WORLD, INSTANCES, CORE], "36:*=instances", Some(CORE));
+        h.store()
+            .characters
+            .lock()
+            .unwrap()
+            .insert(100, (1, (1, 0)));
+        *h.db_at(CORE).unobserved_locator_reads.lock().unwrap() = 2;
+        let pending = begin_shard_index_transfer(&h, &kalimdor_plan(), None).unwrap();
+        assert!(pending.transfer_pending);
+        assert_eq!(pending.revision, 1);
+    }
+
+    #[test]
+    fn a_pending_destination_hint_keeps_routing_to_source_escrow_until_source_finish() {
+        let h = realm(
+            &[WORLD, "kalimdor", INSTANCES, CORE],
+            "1:*=kalimdor,36:*=instances",
+            Some(CORE),
+        );
+        for shard in [WORLD, "kalimdor"] {
+            h.db_at(shard)
+                .characters
+                .lock()
+                .unwrap()
+                .insert(100, (1, (1, 0)));
+        }
+        h.store().escrows.lock().unwrap().insert(100);
+        let pending = begin_shard_index_transfer(&h, &kalimdor_plan(), None).unwrap();
+
+        assert_eq!(locate_home_shard(&h, 100).unwrap().shard_name(), WORLD);
+        assert_eq!(
+            h.at(CORE).realm_character_partition(100).unwrap(),
+            Some(pending)
+        );
+
+        h.store().characters.lock().unwrap().remove(&100);
+        h.store().escrows.lock().unwrap().remove(&100);
+        assert_eq!(locate_home_shard(&h, 100).unwrap().shard_name(), "kalimdor");
+        assert_eq!(
+            h.at(CORE).realm_character_partition(100).unwrap(),
+            Some(pending)
         );
     }
 
@@ -2166,7 +2301,6 @@ mod tests {
         realm
             .set_character_shard(100, 0, 0)
             .expect("a later settled repair succeeds");
-        assert_eq!(realm.character_shard(100), Some((0, 0)));
         let partition = realm
             .realm_character_partition(100)
             .expect("partition read")
