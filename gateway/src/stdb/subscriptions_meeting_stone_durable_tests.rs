@@ -9,8 +9,8 @@ use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::world::{
-    dispatch_meeting_stone_action, MeetingStoneActionOutcome, MeetingStonePlayer, Outbound,
-    WorldSessionToken,
+    dispatch_meeting_stone_action, MeetingStoneActionOutcome, MeetingStoneActionStore,
+    MeetingStonePlayer, Outbound, WorldSessionToken,
 };
 use lyracore_shared::meeting_stone::queue_status::{JOINED_QUEUE, NONE};
 use std::sync::mpsc::Receiver;
