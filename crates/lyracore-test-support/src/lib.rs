@@ -1,4 +1,5 @@
 mod module_wasm;
+pub mod source_scan;
 
 pub use module_wasm::{gateway_binary, module_bytes};
 
