@@ -1,11 +1,6 @@
 use super::super::*;
 
-#[derive(Default)]
-pub(crate) struct ItemState {
-    /// Recorded `use_item` slots.
-    pub(crate) used_items: std::sync::Mutex<Vec<u8>>,
-}
-
+/// Item behaviour is tested through `InMemoryItemActions`; every verb here succeeds.
 impl ItemActionStore for WorldFake {
     fn equip_item(
         &self,
@@ -13,7 +8,7 @@ impl ItemActionStore for WorldFake {
         _self_guid: u64,
         _from_slot: u8,
     ) -> Result<ItemActionResult> {
-        self.canned_item_action()
+        Ok(ItemActionResult::Done)
     }
 
     fn unequip_item(
@@ -22,7 +17,7 @@ impl ItemActionStore for WorldFake {
         _self_guid: u64,
         _from_slot: u8,
     ) -> Result<ItemActionResult> {
-        self.canned_item_action()
+        Ok(ItemActionResult::Done)
     }
 
     fn move_item(
@@ -32,24 +27,10 @@ impl ItemActionStore for WorldFake {
         _from_slot: u8,
         _to_slot: u8,
     ) -> Result<ItemActionResult> {
-        self.canned_item_action()
+        Ok(ItemActionResult::Done)
     }
 
-    fn use_item(&self, _account_id: u64, _self_guid: u64, slot: u8) -> Result<ItemActionResult> {
-        self.item.used_items.lock().unwrap().push(slot);
-        self.canned_item_action()
-    }
-}
-
-impl WorldFake {
-    /// The Coordinator answers a Refusal tag as an outcome and anything else as a failure with an
-    /// unknown durable result, so `trade_error` reaches the item family the same way.
-    pub(crate) fn canned_item_action(&self) -> Result<ItemActionResult> {
-        match &self.trade_error {
-            None => Ok(ItemActionResult::Done),
-            Some(e) => ItemRefusal::parse_tag(e)
-                .map(ItemActionResult::from)
-                .ok_or_else(|| anyhow!("{e}")),
-        }
+    fn use_item(&self, _account_id: u64, _self_guid: u64, _slot: u8) -> Result<ItemActionResult> {
+        Ok(ItemActionResult::Done)
     }
 }

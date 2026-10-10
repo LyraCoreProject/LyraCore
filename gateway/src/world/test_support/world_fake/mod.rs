@@ -37,11 +37,9 @@ pub(crate) use self::character::*;
 pub(crate) use self::chat::*;
 pub(crate) use self::combat::*;
 pub(crate) use self::guild::*;
-pub(crate) use self::item::*;
 pub(crate) use self::loot_roll::*;
 pub(crate) use self::loot_window::*;
 pub(crate) use self::mail::*;
-pub(crate) use self::melee::*;
 pub(crate) use self::member_stats::*;
 pub(crate) use self::npc::*;
 pub(crate) use self::party::*;
@@ -82,7 +80,6 @@ pub(crate) struct WorldFake {
     pub(crate) combat: CombatState,
     pub(crate) cast: CastState,
     pub(crate) taxi: TaxiState,
-    pub(crate) melee: MeleeState,
     pub(crate) chat: ChatState,
     pub(crate) speech: SpeechState,
     pub(crate) channel: ChannelState,
@@ -90,7 +87,6 @@ pub(crate) struct WorldFake {
     pub(crate) auction: AuctionState,
     pub(crate) quest: QuestState,
     pub(crate) vendor: VendorState,
-    pub(crate) item: ItemState,
     pub(crate) weather: WeatherState,
     pub(crate) member_stats: MemberStatsState,
     pub(crate) loot_window: LootWindowState,
