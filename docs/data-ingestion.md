@@ -298,8 +298,9 @@ creatures have spawns in the World Shard.
 For each faction, a zero creature entry selects the other faction's entry before lookup. A missing
 template, a template with no model, or a selected model absent from `CreatureDisplayInfo` produces
 display zero and a warning. The Module then refuses that faction's flight before charging the fare.
-An explicit missing entry does not fall back to the other faction. Empty, malformed or duplicate
-template input fails before any DBC catalogue SQL runs.
+An explicit missing entry does not fall back to the other faction. Empty template input, unfinished
+INSERT statements, duplicate entries and invalid entry or model fields fail before any DBC catalogue
+SQL runs.
 
 The catalogue stores the first nonzero model in the template's four model slots. This deterministic
 choice omits the reference's random model and gender selection. The creature-entry lookup and
