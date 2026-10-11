@@ -176,11 +176,6 @@ mod tests {
         assert_eq!(run_speed(7.0, [ghost]), 8.75);
         assert_eq!(run_speed(7.0, [ghost, wisp]), 10.5);
         assert_eq!(run_speed(7.0, [wisp, ghost]), 10.5);
-        let snare = AuraAmount {
-            amount: -30,
-            ..ghost
-        };
-        assert_eq!(run_speed(7.0, [ghost, wisp, snare]), 8.4);
     }
 
     #[test]

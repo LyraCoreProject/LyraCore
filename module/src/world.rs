@@ -1840,7 +1840,7 @@ pub(crate) const RUN_SPEED_BP_1X: u32 = 10_000;
 /// GM who forgets `.god` off should not stay invulnerable — and invisible to every creature's aggro
 /// pass (`creatures::ai::is_aggro_candidate`) — across future sessions, with no in-game indication.
 /// A session boundary is the natural place for that safety reset, and it costs a GM one `.god`
-/// re-issue per login. Exactly the `persisted_pending_ghost` discipline, same `set_offline` seam.
+/// re-issue per login.
 /// Pure.
 pub(crate) fn persisted_gm_playtest(
     godmode: bool,

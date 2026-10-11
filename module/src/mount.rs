@@ -59,7 +59,7 @@ pub(crate) fn active_mount_spell(ctx: &ReducerContext, guid: u64) -> Option<u32>
 
 /// Re-derive `guid`'s `mount_display_id` AND relayed run speed from its current aura rows. Zero
 /// `A_MOUNTED` auras clears the display; one restores the value frozen on it. The speed side reuses
-/// `combat::effective_move_speed` at base 1.0 (SPEED_MOVE always, SPEED_MOUNTED only while mounted), so
+/// `combat::effective_move_speed` at base 1.0 with the current movement effects, so
 /// `run_speed_mult_bp` carries the exact multiplier — 16 000 for a 60% mount, 10 000 for an unmounted
 /// rider with no other speed aura — and the existing `run_speed_mult_bp` subscription diff (shared with
 /// GM `.speed`) turns that into `SMSG_FORCE_RUN_SPEED_CHANGE` with no gateway change needed. NEVER a

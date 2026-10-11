@@ -87,8 +87,8 @@ pub struct Character {
     /// Persisted current power (mana/rage/energy) at last logout, mirrors
     /// `WorldEntity.power`. Same `0` = "no persisted value" sentinel as `health` — 0 is also a
     /// legitimate live value for rage/energy classes, so `build_player_entity` disambiguates using
-    /// `health == 0` (a character can never legitimately persist at 0 health; the relog-alive rule
-    /// clamps that case to 1 before saving) rather than power alone. [entity]
+    /// `health == 0` rather than power alone. `persist_entity` saves health as at least 1, including
+    /// for a released ghost. [entity]
     #[default(0u32)]
     pub power: u32,
     /// Number of times this character has reset its talents at a trainer (`talent::do_reset_talents`) —
