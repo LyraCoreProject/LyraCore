@@ -1,14 +1,13 @@
 mod support;
 
 use std::collections::BTreeMap;
-use std::thread;
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use spacetimedb::Timestamp;
-use support::Standalone;
+use support::{poll_until, Standalone};
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and waits for the five-minute session reaper"]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
     let mut standalone = Standalone::start("session-expiry");
     standalone.publish_module();
@@ -17,6 +16,9 @@ fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
     assert!(standalone
         .query_rows("SELECT * FROM game_session_reaper_schedule")
         .is_empty());
+    let unarmed = standalone.call("debug_accelerate_session_reaper", &[]);
+    assert!(!unarmed.status.success());
+    assert!(String::from_utf8_lossy(&unarmed.stderr).contains("Session reaper is not armed"));
 
     for table in [
         "game_account",
@@ -69,27 +71,44 @@ fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
     assert!(message.contains("scheduler only"), "{message}");
     assert_eq!(session(&standalone, &expired), before);
 
-    let deadline = Instant::now() + Duration::from_secs(330);
-    while !standalone
-        .query_rows(&format!(
-            "SELECT * FROM game_session WHERE account_id = {expired}"
-        ))
-        .is_empty()
-    {
-        assert!(
-            Instant::now() < deadline,
-            "the scheduled reaper did not run"
-        );
-        thread::sleep(Duration::from_secs(2));
-    }
+    // The production interval was checked above. Keep the real scheduler and reducer, but bring
+    // the next invocation forward on this private instance.
+    assert!(!standalone
+        .call_anonymous("debug_accelerate_session_reaper", &[])
+        .status
+        .success());
+    assert_eq!(
+        standalone.query_rows("SELECT * FROM game_session_reaper_schedule"),
+        schedule
+    );
+    standalone.assert_call("debug_accelerate_session_reaper", &[]);
+    let accelerated = standalone.query_rows("SELECT * FROM game_session_reaper_schedule");
+    assert_eq!(accelerated.len(), 1);
+    assert_eq!(accelerated[0]["scheduled_id"], schedule[0]["scheduled_id"]);
+    assert!(accelerated[0]["scheduled_at"].contains("+1.000000"));
+    assert_reaped(&standalone, &expired);
     assert_eq!(session(&standalone, &renewed), fresh);
     assert_eq!(
         standalone.query_rows("SELECT * FROM game_session_reaper_schedule"),
-        schedule,
+        accelerated,
         "the recurring schedule remains armed after its first invocation"
     );
     establish(&standalone, &expired, 6);
     assert_lifetime(&session(&standalone, &expired));
+    standalone.assert_call("debug_expire_session", &[&expired]);
+    assert_reaped(&standalone, &expired);
+    assert_eq!(session(&standalone, &renewed), fresh);
+}
+
+fn assert_reaped(standalone: &Standalone, account: &str) {
+    assert!(
+        poll_until(Duration::from_secs(15), || standalone
+            .query_rows(&format!(
+                "SELECT * FROM game_session WHERE account_id = {account}"
+            ))
+            .is_empty()),
+        "the scheduled reaper did not run"
+    );
 }
 
 fn provision(standalone: &Standalone, name: &str) -> String {
