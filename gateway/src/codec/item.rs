@@ -628,6 +628,21 @@ fn weapon_subclass_mask(player_class: u8) -> u32 {
 mod tests {
     use super::*;
 
+    #[test]
+    fn hearthstone_query_names_the_client_use_spell() {
+        let template = ItemTemplateView {
+            entry: 6948,
+            class: 15,
+            spellid_1: 8690,
+            spelltrigger_1: 0,
+            ..Default::default()
+        };
+        let reply = build_item_query_response(6948, Some(&template));
+        let spell = reply.found.unwrap().spells[0];
+        assert_eq!(spell.spell, 8690);
+        assert_eq!(spell.spell_trigger, SpellTriggerType::OnUse);
+    }
+
     fn charter(enchantment: u32) -> ItemInstanceView {
         ItemInstanceView {
             guid: 0x4000_0000_0000_0101,

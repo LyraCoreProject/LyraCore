@@ -62,6 +62,7 @@ const E_HEAL_MAX_HEALTH: u8 = 0x16; // heal the target to FULL max health (Lay o
 const E_TAME_CREATURE: u8 = 0x20; // completed Hunter tame; raw vanilla TameCreature effect (55), lockstep with module taxonomy
 const E_FEED_PET: u8 = 0x21; // feed a Hunter pet from the explicit item target; raw effect 101
 const E_POWER_BURN: u8 = 0x19;
+const E_RECALL_HOME: u8 = 0x1F;
 const E_BLINK: u8 = 0x1A; // teleport the caster ~20yd FORWARD along its facing (Mage Blink); reclassified BY NAME from the dead SCRIPT teleport effect (lockstep with module taxonomy)
 const E_PERSISTENT_AREA: u8 = 0x1B; // ground-AoE (Consecration): spawns a fixed-position game_ground_area whose tick damages hostiles inside; reclassified BY NAME from the ground A_PERIODIC_DAMAGE effect (lockstep with module taxonomy)
 const E_OPEN_LOCK: u8 = 0x1D;
@@ -1564,7 +1565,12 @@ fn resolve_effect_kind(
         }
         (k, resolve_aura_params(k, aura, s.effect_misc_value[i]))
     } else {
-        let k = instant_effect_to_kind(effect_id);
+        // TeleportUnits to the caster home bind uses the Character's bound home.
+        let k = if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
+            E_RECALL_HOME
+        } else {
+            instant_effect_to_kind(effect_id)
+        };
         if k == E_SCRIPTED {
             *cov.unmapped_effect.entry(effect_id).or_default() += 1;
         }
@@ -1713,7 +1719,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
         E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE
-        | E_SELF_RESURRECT => T_SELF,
+        | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
@@ -1980,6 +1986,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_CREATE_ITEM => "E_CREATE_ITEM",
         E_CHARGE => "E_CHARGE",
         E_BLINK => "E_BLINK",
+        E_RECALL_HOME => "E_RECALL_HOME",
         E_PERSISTENT_AREA => "E_PERSISTENT_AREA",
         E_OPEN_LOCK => "E_OPEN_LOCK",
         E_CONVERT_RESOURCE => "E_CONVERT_RESOURCE",
@@ -3348,6 +3355,31 @@ mod tests {
         );
         assert_eq!(resolve_instant_params(E_DISTRACT, 0, 0), (0, P_NONE));
         assert_eq!(spell_flag_attributes("Distract"), SPELL_ATTR_STEALTH_SAFE);
+    }
+
+    #[test]
+    fn home_bind_teleports_keep_the_cast_time_and_recall_once() {
+        let mut dbc = fixture_tables();
+        dbc.cast_times = authored_table(4, &[&[1, 10_000, 0, 10_000]]);
+        dbc.spells = vec![Spell {
+            id: 8690,
+            name: "Hearthstone".into(),
+            casting_time_index: 1,
+            recovery_time: 3_600_000,
+            effect: [5, 77, 0],
+            implicit_target_a: [9, 1, 0],
+            ..Default::default()
+        }];
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(rows.headers[0].cast_time_ms, 10_000);
+        assert_eq!(rows.headers[0].cooldown_ms, 3_600_000);
+        assert_eq!(rows.effects[0].kind, E_RECALL_HOME);
+        assert_eq!(rows.effects[0].target, T_SELF);
+        assert_eq!(rows.effects[1].kind, E_SCRIPTED);
+
+        dbc.spells[0].implicit_target_a[0] = 17;
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        assert_eq!(rows.effects[0].kind, E_SCRIPTED);
     }
 
     #[test]

@@ -672,7 +672,7 @@ pub(crate) fn apply_item_use(
         }
     }
     // Cast at SELF. `begin_cast` runs the full effect list, emits the cast-START/GO events the gateway
-    // relays, and routes channeled (bandage) vs instant (potion/food/recall) on the spell header — no
+    // relays, and routes channeled, timed, and instant casts from the spell header. No
     // per-item branching here.
     crate::spell::begin_cast(
         ctx,

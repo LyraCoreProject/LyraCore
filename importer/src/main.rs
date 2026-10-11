@@ -3364,10 +3364,6 @@ fn build_items_and_loot(
         (2680, 50116), // Spiced Wolf Meat -> Well Fed (+Sta/+Spi buff)
         (858, 50117), // Lesser Healing Potion -> Lesser Healing (E_HEAL, rank-2)
         (2581, 50118), // Heavy Linen Bandage -> Heavy Linen Bandage (channeled HoT, rank-2)
-        (
-            lyracore_shared::constants::starter_item::HEARTHSTONE_ENTRY as u64,
-            50119,
-        ), // Hearthstone -> Call Stone (E_RECALL_HOME)
     ];
     let use_spell_override = |entry: u64| -> Option<u32> {
         USE_SPELL_OVERRIDE
@@ -6481,6 +6477,26 @@ mod tests {
             (2, 2550, 1, 0, true),
             "negative chance → quest_only, chance_bp is the ABS value"
         );
+    }
+
+    #[test]
+    fn hearthstone_item_keeps_its_client_use_spell() {
+        use std::collections::{HashMap, HashSet};
+        let mut cols = vec!["0".to_string(); 124];
+        cols[it::ENTRY] = "6948".into();
+        cols[it::NAME] = "'Hearthstone'".into();
+        cols[it::SPELLID_1] = "8690".into();
+        let dump = format!("INSERT INTO `item_template` VALUES ({});", cols.join(","));
+        let (rows, _, _) = build_items_and_loot(
+            &dump,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap();
+        let fields: Vec<_> = rows[0].split(',').collect();
+        assert_eq!(&fields[26..28], &["8690", "0"]);
     }
 
     /// The dropped item_template columns (resistances, extra spell slots, skill/rep

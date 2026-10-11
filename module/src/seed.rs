@@ -493,13 +493,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         build_creature_entity(&trainer_spawn, &trainer_tmpl, 0, 0),
     );
 
-    // The Hearthstone (entry 6948) — every character starts with one (granted in `grant_starter_item`);
-    // using it recalls to the bound home (`Character::home_*`). Real vanilla values: class 15 (Misc),
-    // display 6418 (the hearthstone icon, ships in 5875), unsellable, non-stacking, no stats.
-    // spellid_1/spelltrigger_1 name its on-use spell — "Call Stone" (50119, seeded in
-    // `seed_spell_registry` below), trigger 0 (on-use). `apply_item_use` now reads spellid_1 as the
-    // single on-use authority for EVERY item, so this is what makes the Hearthstone usable at all;
-    // the old hardcoded entry-id special case in items::ops is retired.
+    // The client reads the Hearthstone use text from its own spell 8690.
     ctx.db.game_item_template().insert(ItemTemplate {
         class: 15, // Miscellaneous
         display_id: 6418,
@@ -507,7 +501,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         item_level: 1,
         required_level: 1,
         max_stack: 1,
-        spellid_1: 50119,  // "Call Stone" — E_RECALL_HOME, seeded below
+        spellid_1: 8690,
         spelltrigger_1: 0, // on-use
         // Real vanilla Hearthstone: unique + BoP the instant it's granted (starter kit source).
         bonding: crate::items::bonding::BIND_ON_PICKUP,
@@ -1204,19 +1198,13 @@ fn seed_spell_registry(ctx: &ReducerContext) {
         ..base_effect(50118, 1)
     }); // id 200473
 
-    // (6) Call Stone 50119 — the Hearthstone's on-use spell: ONE E_RECALL_HOME (0x1F) instant
-    // effect, T_SELF, that teleports the caster to its bound home via `world::recall_to_home`. No
-    // cost/cooldown/cast-time (matches the earlier hardcoded path's IMMEDIATE-teleport behavior — the
-    // vanilla ~10s cast + 1hr CD is a later follow-up, same as Blink's forward-teleport). Wired onto the
-    // Hearthstone template's spellid_1 below (bonding BIND_ON_PICKUP) — `apply_item_use` reads it as
-    // ANY other on-use spell now, with one data-driven exception: `spell_keeps_item` (keyed on THIS
-    // effect kind, not the item's entry id) skips the stack-consumption every other on-use spell takes,
-    // since a recall trinket is never used up. A mount item qualifies through the same predicate.
+    // Match the imported Hearthstone on a Realm without client data.
     ctx.db.game_spell().insert(Spell {
-        gcd_ms: 0, // item-triggered: no GCD
-        ..base_spell(50119, "Call Stone")
+        cast_time_ms: 10_000,
+        gcd_ms: 0,
+        ..base_spell(8690, "Hearthstone")
     });
-    effect(50119, 0, crate::spell::E_RECALL_HOME, 0, 0, 0, 0, 0); // E_RECALL_HOME, T_SELF (id 200476)
+    effect(8690, 0, crate::spell::E_RECALL_HOME, 0, 0, 0, 0, 0);
 
     // Test Stun (50020) — the STUN crowd-control: ONE A_CONTROL (0xB0) effect whose p0 names the
     // MECHANIC M_STUN (1, p0_kind 3 P_MECHANIC), targeting an ENEMY (target 1 T_TARGET_ENEMY). A unit

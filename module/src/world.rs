@@ -899,9 +899,8 @@ pub(crate) fn set_home(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-/// Recall a character to its hearthstone home — an IMMEDIATE teleport via the shared core (the vanilla
-/// ~10s channel/cast is a follow-up). Always to the open world (instance 0), even from inside a
-/// dungeon. No-op if the character row is gone. [entity]
+/// Recall a Character to its bound home in instance 0. The Hearthstone cast calls this
+/// after completion. No-op if the Character row is gone.
 ///
 /// A Character with a live entity takes the ordinary teleport. A Character with no live entity
 /// has only its durable row, so the row moves home and the next login builds the entity there;
