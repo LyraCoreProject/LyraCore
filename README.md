@@ -38,8 +38,13 @@ world. Import the real one next.
 lyracore config set client-data <path-to-client-Data-folder>
 lyracore import
 ```
-The import reads data you supply: the DBCs inside your own client and cMaNGOS' public
-`classic-db` dump.
+You supply your own client's `Data` folder. After you confirm the prompt, `lyracore import`
+downloads the pinned world-data dump from [cMaNGOS classic-db](https://github.com/cmangos/classic-db),
+verifies its checksum, and imports it together with data extracted from your client. You do not
+need to download or configure a SQL dump yourself.
+
+See the [detailed import instructions](./docs/quickstart.md#5-point-your-client-at-it) for what
+the import loads and how long it takes.
 
 ## Can I use my existing client?
 
