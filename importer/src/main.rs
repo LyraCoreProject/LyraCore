@@ -17,6 +17,7 @@
 //!   --dbc  <client Data/ dir>       client DBC extraction/checks (dbc.rs); add --spells for the
 //!                                   Spell.dbc importer (spell.rs) or --talents for the
 //!                                   TalentTab.dbc/Talent.dbc importer (talent.rs)
+//!                                   Standalone catalogue import needs --taxi-mounts <dump.sql[.gz]>.
 //!                                   Required with --dump when items reference Random Properties.
 //!                                   [--packages <enabled packages root> reapplies every enabled
 //!                                    Package's Delta claims after the base spell rows are back;
@@ -45,7 +46,7 @@
 //!                                   for distribution. Reads no client, refuses baseline-derived
 //!                                   files, takes no --apply (pack_client.rs)
 //! e.g.  importer --dump .import/classic-db-full.sql --apply
-//!       importer --dbc ../wowclient/Data
+//!       importer --dbc ../wowclient/Data --taxi-mounts .import/classic-db-full.sql
 //!       importer --dbc ../wowclient/Data --talents --apply
 //!       importer --dump .import/classic-db-full.sql --map 0 --print-extents
 
@@ -882,9 +883,22 @@ mod ai {
 // single-quoted strings with `\` escapes (names contain commas/apostrophes). Returns each field as
 // an unescaped String (quotes stripped). We PARSE, never execute (the firewall: no GPL code runs).
 pub(crate) fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
+    parse_table_inserts(dump, table).0
+}
+
+pub(crate) fn parse_complete_table(dump: &str, table: &str) -> Result<Vec<Vec<String>>> {
+    let (rows, complete) = parse_table_inserts(dump, table);
+    if !complete {
+        bail!("unterminated {table} INSERT in dump");
+    }
+    Ok(rows)
+}
+
+fn parse_table_inserts(dump: &str, table: &str) -> (Vec<Vec<String>>, bool) {
     let needle = format!("INSERT INTO `{table}` VALUES ");
     let mut rows = Vec::new();
     let mut search = 0;
+    let mut complete = true;
     while let Some(rel) = dump[search..].find(&needle) {
         let mut i = search + rel + needle.len();
         let bytes = dump.as_bytes();
@@ -935,9 +949,10 @@ pub(crate) fn parse_table(dump: &str, table: &str) -> Vec<Vec<String>> {
             }
             i += 1;
         }
+        complete &= i < bytes.len() && !in_tuple && !in_quote;
         search = i;
     }
-    rows
+    (rows, complete)
 }
 
 pub(crate) fn field(row: &[String], idx: usize) -> &str {
@@ -989,6 +1004,7 @@ pub(crate) fn sql_text(s: &str) -> String {
 }
 
 pub(crate) struct Args {
+    taxi_mounts: Option<String>,
     dump: Option<String>,               // cmangos creature ETL input (.sql[.gz])
     dbc: Option<String>,                // client Data/ dir for the DBC stream
     pub(crate) terrain: Option<String>, // client Data/ dir for the ADT heightmap stream (see terrain.rs)
@@ -1063,6 +1079,7 @@ where
 {
     let mut a = Args {
         dump: None,
+        taxi_mounts: None,
         dbc: None,
         pack_client: None,
         pack_out: None,
@@ -1099,6 +1116,9 @@ where
     let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--taxi-mounts" => {
+                a.taxi_mounts = Some(it.next().context("--taxi-mounts needs a dump path")?)
+            }
             "--dump" => a.dump = Some(it.next().context("--dump needs a path")?),
             "--terrain" => {
                 a.terrain = Some(it.next().context("--terrain needs the client Data/ dir")?)
@@ -1332,6 +1352,24 @@ where
                 legacy_spatial_args.join(", ")
             );
         }
+    }
+    if a.taxi_mounts.is_some()
+        && (a.dbc.is_none()
+            || a.dump.is_some()
+            || a.spells
+            || a.talents
+            || a.spell_snapshot.is_some()
+            || a.terrain.is_some()
+            || a.dump_collision.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.go_models.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some())
+    {
+        bail!("--taxi-mounts is only valid with standalone --dbc catalogue import");
     }
     // Need at least one input. `--dump` alone = cmangos creatures; `--dbc` alone = standalone DBC
     // mode (proof/checks); BOTH = cmangos creatures with DBC-resolved scale (display-derived).
@@ -8259,12 +8297,44 @@ mod tests {
         );
     }
 
+    #[test]
+    fn taxi_mount_dump_belongs_to_standalone_dbc_mode() {
+        let args =
+            parse_args_from(["--dbc", "client/Data", "--taxi-mounts", "world.sql.gz"]).unwrap();
+        assert_eq!(args.taxi_mounts.as_deref(), Some("world.sql.gz"));
+        assert!(args.dump.is_none());
+        for mode in ["--spells", "--talents"] {
+            assert!(
+                parse_args_from(["--dbc", "client/Data", "--taxi-mounts", "world.sql", mode])
+                    .is_err()
+            );
+        }
+        assert!(parse_args_from(["--taxi-mounts", "world.sql"]).is_err());
+        assert!(parse_args_from([
+            "--dbc",
+            "client/Data",
+            "--taxi-mounts",
+            "world.sql",
+            "--dump",
+            "world.sql"
+        ])
+        .is_err());
+    }
+
+    #[test]
+    fn standalone_dbc_requires_mount_templates_before_opening_inputs() {
+        let args = parse_args_from(["--dbc", "/nonexistent/client/Data"]).unwrap();
+        let error = dbc::run("/nonexistent/client/Data", &args).unwrap_err();
+        assert!(error.to_string().contains("--taxi-mounts"));
+    }
+
     /// A default `Args` for tests that need the struct but not real CLI input (mirrors `parse_args`'s
     /// defaults where it matters for `build_dump_plan`: center/radius match the Northshire default so
     /// a fixture creature placed exactly at the center lands in scope).
     fn test_args() -> Args {
         Args {
             dump: None,
+            taxi_mounts: None,
             dbc: None,
             terrain: None,
             packages: None,

@@ -289,6 +289,35 @@ failure during those statements can leave a partial family, but `import-world.sh
 failure and the next run clears the family again before rebuilding it. No DBC bytes or generated
 catalogue artifact is written into the repository.
 
+TaxiNodes mount fields name creature-template entries, despite the `wow_dbc` field name
+`mount_creature_display_info`. The standalone DBC pass requires `--taxi-mounts <dump.sql[.gz]>`
+and resolves them through the full dump, not the spatially filtered creature catalogue. The world
+import script passes its existing `DUMP` input. This makes import order independent of which mount
+creatures have spawns in the World Shard.
+
+For each faction, a zero creature entry selects the other faction's entry before lookup. A missing
+template, a template with no model, or a selected model absent from `CreatureDisplayInfo` produces
+display zero and a warning. The Module then refuses that faction's flight before charging the fare.
+An explicit missing entry does not fall back to the other faction. Empty, malformed or duplicate
+template input fails before any DBC catalogue SQL runs.
+
+The catalogue stores the first nonzero model in the template's four model slots. This deterministic
+choice omits the reference's random model and gender selection. The creature-entry lookup and
+faction fallback follow [CMaNGOS Classic's taxi mount selection](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Globals/ObjectMgr.cpp#L6500-L6534).
+
+Existing catalogues need the standalone DBC pass again with the same client and full dump. Updating
+the binary alone does not repair stored displays. With flights stopped, an Operator can rebuild
+them on each affected World Shard with explicit targets:
+
+```bash
+cargo run -p lyracore-importer -- --server "$SPACETIME_SERVER" --db "$DB" \
+  --dbc "$DBC" --taxi-mounts "$DUMP"
+# Review the dry run, then repeat with --apply during the import maintenance window.
+```
+
+This reloads all standalone DBC catalogues, including taxi nodes, paths and points. It preserves the
+reserved taxi fixture. Flights already active retain their captured mount display until they end.
+
 ## What the seeded fixture knowingly contains
 
 The firewall above is about **bulk data**: this project never vendors, mirrors, or ships a

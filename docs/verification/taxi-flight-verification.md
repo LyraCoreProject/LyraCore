@@ -26,3 +26,15 @@ and run the full adapter suite.
 
 The attended gate remains separate: an unmodified 1.12.1 build-5875 client must confirm the taxi
 map, multi-point spline, mount, flight animation, landing cleanup, and session stability by eye.
+
+## Imported mount displays
+
+The importer tests use different creature entries and display IDs for both factions. They cover
+zero-entry fallback, missing templates, absent client displays and template model selection. These
+checks verify the stored display values, not the client's rendered model.
+
+For a real-client check, record the source and destination node IDs, the source TaxiNodes faction
+entry, the template's first nonzero model, and the imported `game_taxi_node` display. Take the route
+with each supported faction and compare the active flight's mount display with that value and the
+model shown by the client. Include the reported flight over Mist's Edge once its endpoints are
+known. The report did not supply those endpoints, so that route has not been reproduced here.

@@ -160,11 +160,12 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
     })
 }
 
-/// `--dbc <Data dir>` mode. P1a (proof-of-toolchain): confirm `wow-mpq` opens the operator's real
-/// `dbc.MPQ`, the known-path lookup works, `wow_dbc` accepts the 5875 schema, and a foreign-key chase
-/// resolves — by printing Human's male display (must be 49) and the demo chicken's display-304 scale.
-/// Writes NO game data and NO `.dbc` file; it only reads + prints, so it's safe to run any time.
+/// Build the DBC catalogues from the operator's client and taxi mount dump.
+/// Dry runs print the plan; `--apply` clears and reloads the derived tables.
 pub fn run(data_dir: &str, args: &Args) -> Result<()> {
+    let mount_dump = crate::read_dump(args.taxi_mounts.as_deref().context(
+        "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays",
+    )?)?;
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("dbc: opened MPQ chain from {}", dir.display());
@@ -244,7 +245,13 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         statements: taxi_stmts,
         counts: taxi_counts,
         warnings: taxi_warnings,
-    } = taxi_catalogue_sql(&taxi_nodes, &taxi_paths, &taxi_path_nodes)?;
+    } = taxi_catalogue_sql(
+        &taxi_nodes,
+        &taxi_paths,
+        &taxi_path_nodes,
+        &mount_dump,
+        &cdi.rows().iter().map(|row| row.id.id).collect(),
+    )?;
     for warning in taxi_warnings {
         eprintln!("{warning}");
     }
@@ -900,6 +907,43 @@ struct TaxiCatalogueSql {
     warnings: Vec<String>,
 }
 
+/// Resolve from the full dump, since taxi mounts need not have a spawn in the imported area.
+fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
+    let rows = crate::parse_complete_table(dump, "creature_template")?;
+    if rows.is_empty() {
+        bail!("taxi mount dump has no creature_template rows");
+    }
+    let mut mounts = HashMap::with_capacity(rows.len());
+    for row in rows {
+        let entry: u32 = crate::field(&row, crate::ct::ENTRY)
+            .parse()
+            .context("taxi mount dump has an invalid creature entry")?;
+        let mut display = 0;
+        for index in crate::ct::MODEL_ID1..crate::ct::MODEL_ID1 + 4 {
+            let model: u32 = row
+                .get(index)
+                .with_context(|| {
+                    format!("taxi mount creature {entry} is missing model column {index}")
+                })?
+                .trim()
+                .parse()
+                .with_context(|| format!("taxi mount creature {entry} has an invalid model"))?;
+            // A catalogue has one display per faction. Choose the first nonzero template model
+            // deterministically, rather than rerolling the template's model on each flight.
+            if display == 0 {
+                display = model;
+            }
+        }
+        if !display_ids.contains(&display) {
+            display = 0;
+        }
+        if mounts.insert(entry, display).is_some() {
+            bail!("taxi mount dump has duplicate creature entry {entry}");
+        }
+    }
+    Ok(mounts)
+}
+
 /// Validate and emit the three-table taxi catalogue as one deterministic clear+reload family.
 /// All validation happens before SQL is returned: a path must resolve both endpoint nodes,
 /// costs/indices must be non-negative, and the operator's data may not enter the reserved fixture
@@ -910,6 +954,8 @@ fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
     path_nodes: &DbcTaxiPathNode,
+    mount_dump: &str,
+    display_ids: &HashSet<u32>,
 ) -> Result<TaxiCatalogueSql> {
     use lyracore_shared::constants::taxi_fixture as fixture;
     use lyracore_shared::constants::taxi_protocol;
@@ -918,6 +964,8 @@ fn taxi_catalogue_sql(
         bail!("taxi DBC catalogue is incomplete: TaxiNodes=0 rows");
     }
 
+    let mounts = taxi_mount_displays(mount_dump, display_ids)?;
+    let mut warnings = Vec::new();
     let mut node_ids = HashSet::with_capacity(nodes.rows().len());
     let mut node_rows = Vec::with_capacity(nodes.rows().len() + 2);
     for row in nodes.rows() {
@@ -944,6 +992,26 @@ fn taxi_catalogue_sql(
         {
             bail!("TaxiNodes.dbc node {id} has a non-finite position");
         }
+        // Despite wow_dbc's field name, vanilla TaxiNodes stores creature-template entries.
+        let entries = row.mount_creature_display_info;
+        let displays = [0, 1].map(|faction| {
+            let entry = if entries[faction] == 0 {
+                entries[1 - faction]
+            } else {
+                entries[faction]
+            };
+            let display = if entry == 0 {
+                0
+            } else {
+                mounts.get(&entry).copied().unwrap_or(0)
+            };
+            if entry != 0 && display == 0 {
+                warnings.push(format!(
+                    "dbc: WARN TaxiNodes.dbc node {id} faction slot {faction}: creature {entry} has no valid mount display; flights unavailable"
+                ));
+            }
+            display
+        });
         node_rows.push((
             id,
             format!(
@@ -955,8 +1023,8 @@ fn taxi_catalogue_sql(
                 row.location_y,
                 row.location_z,
                 sql_text(&row.name.en_gb),
-                row.mount_creature_display_info[0],
-                row.mount_creature_display_info[1],
+                displays[0],
+                displays[1],
             ),
         ));
     }
@@ -1181,7 +1249,7 @@ fn taxi_catalogue_sql(
         &point_rows,
     );
     dangling_points.sort_unstable();
-    let mut warnings = Vec::with_capacity(dangling_points.len() + empty_paths.len());
+    warnings.sort_unstable();
     warnings.extend(dangling_points.into_iter().map(|(id, path_id)| {
         format!("dbc: WARN TaxiPathNode.dbc point {id} references missing path {path_id}; omitted")
     }));
@@ -1695,6 +1763,24 @@ mod tests {
         }
     }
 
+    fn catalogue_with_mounts(
+        nodes: &DbcTaxiNodes,
+        paths: &DbcTaxiPath,
+        points: &DbcTaxiPathNode,
+    ) -> Result<TaxiCatalogueSql> {
+        super::taxi_catalogue_sql(
+            nodes,
+            paths,
+            points,
+            "INSERT INTO `creature_template` VALUES \
+                (1100,'Horde mount','',1,1,295,0,0,0),
+                (1101,'Alliance mount','',1,1,1147,0,0,0),
+                (2200,'Other Horde mount','',1,1,295,0,0,0),
+                (2201,'Other Alliance mount','',1,1,1147,0,0,0);",
+            &HashSet::from([295, 1147]),
+        )
+    }
+
     fn synthetic_taxi_catalogue() -> (DbcTaxiNodes, DbcTaxiPath, DbcTaxiPathNode) {
         (
             DbcTaxiNodes {
@@ -1720,13 +1806,135 @@ mod tests {
     }
 
     #[test]
+    fn taxi_mount_fallback_requires_an_absent_faction_entry() {
+        let (mut nodes, paths, points) = synthetic_taxi_catalogue();
+        for (entries, expected, warning_count) in [
+            ([0, 1101], [1147, 1147], 0),
+            ([1100, 0], [295, 295], 0),
+            ([0, 0], [0, 0], 0),
+            ([9999, 1101], [0, 1147], 1),
+            ([1100, 9999], [295, 0], 1),
+        ] {
+            nodes.rows[1].mount_creature_display_info = entries;
+            let catalogue = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
+            let expected = format!(
+                "(10,10,0,10,2,3,'O''Ryan''s Source',{},{})",
+                expected[0], expected[1]
+            );
+            assert!(
+                catalogue
+                    .statements
+                    .iter()
+                    .any(|sql| sql.contains(&expected)),
+                "{entries:?}"
+            );
+            assert_eq!(catalogue.warnings.len(), warning_count);
+            if warning_count != 0 {
+                assert!(catalogue.warnings[0].contains("creature 9999"));
+            }
+        }
+    }
+
+    #[test]
+    fn taxi_mounts_use_the_first_nonzero_template_model() {
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        let catalogue = super::taxi_catalogue_sql(
+            &nodes,
+            &paths,
+            &points,
+            "INSERT INTO `creature_template` VALUES \
+                (1100,'Horde mount','',1,1, 0, 295, 1147, 0),
+                (1101,'Alliance mount','',1,1,0,0,0,1147);",
+            &HashSet::from([295, 1147]),
+        )
+        .unwrap();
+        assert!(catalogue
+            .statements
+            .iter()
+            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147)")));
+    }
+
+    #[test]
+    fn taxi_mounts_without_a_client_display_stay_unavailable() {
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        let catalogue = super::taxi_catalogue_sql(
+            &nodes,
+            &paths,
+            &points,
+            "INSERT INTO `creature_template` VALUES \
+                (1100,'Unknown model','',1,1,9999,0,0,0),
+                (1101,'No model','',1,1,0,0,0,0);",
+            &HashSet::from([295, 1147]),
+        )
+        .unwrap();
+        assert!(catalogue
+            .statements
+            .iter()
+            .any(|sql| sql.contains("(10,10,0,10,2,3,'O''Ryan''s Source',0,0)")));
+        assert!(catalogue
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("creature 1100")));
+        assert!(catalogue
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("creature 1101")));
+    }
+
+    #[test]
+    fn taxi_catalogue_refuses_unusable_template_dumps_before_returning_sql() {
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        for dump in [
+            "",
+            "INSERT INTO `creature_template` VALUES (1100,'Short row');",
+            "INSERT INTO `creature_template` VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
+            "INSERT INTO `creature_template` VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
+            "INSERT INTO `creature_template` VALUES \
+                (1100,'First','',1,1,295,0,0,0),(1100,'Duplicate','',1,1,1147,0,0,0);",
+        ] {
+            assert!(
+                super::taxi_catalogue_sql(
+                    &nodes,
+                    &paths,
+                    &points,
+                    dump,
+                    &HashSet::from([295, 1147])
+                )
+                .is_err(),
+                "{dump}"
+            );
+        }
+    }
+
+    #[test]
+    fn taxi_catalogue_refuses_truncated_template_inserts() {
+        let (nodes, paths, points) = synthetic_taxi_catalogue();
+        for tail in [",(1101,'Unfinished", ",(1101,'Mount',1", ""] {
+            let dump = format!(
+                "INSERT INTO `creature_template` VALUES (1100,'Mount','',1,1,295,0,0,0){tail}"
+            );
+            let error = super::taxi_catalogue_sql(
+                &nodes,
+                &paths,
+                &points,
+                &dump,
+                &HashSet::from([295, 1147]),
+            )
+            .unwrap_err();
+            assert!(error
+                .to_string()
+                .contains("unterminated creature_template INSERT"));
+        }
+    }
+
+    #[test]
     fn taxi_catalogue_sql_preserves_direction_fare_mounts_and_point_order() {
         let (nodes, paths, points) = synthetic_taxi_catalogue();
         let TaxiCatalogueSql {
             statements: stmts,
             counts,
             warnings,
-        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        } = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
         assert!(warnings.is_empty());
         assert_eq!(
             counts,
@@ -1751,8 +1959,8 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_taxi_node "))
             .unwrap();
         assert!(
-            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',1100,1101)"),
-            "Horde/Alliance DBC slots and escaped names must survive: {node_insert}"
+            node_insert.contains("(10,10,0,10,2,3,'O''Ryan''s Source',295,1147)"),
+            "Horde/Alliance creature entries must resolve to displays: {node_insert}"
         );
 
         let path_insert = stmts
@@ -1789,7 +1997,7 @@ mod tests {
             statements: stmts,
             counts,
             warnings,
-        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        } = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
 
         assert_eq!(counts.path_nodes, 3);
         assert_eq!(
@@ -1818,7 +2026,7 @@ mod tests {
             statements: stmts,
             counts,
             warnings,
-        } = taxi_catalogue_sql(&nodes, &paths, &points).unwrap();
+        } = catalogue_with_mounts(&nodes, &paths, &points).unwrap();
 
         assert_eq!(
             counts,
@@ -1854,7 +2062,7 @@ mod tests {
         use lyracore_shared::constants::taxi_fixture as fixture;
 
         let (nodes, paths, points) = synthetic_taxi_catalogue();
-        let first = taxi_catalogue_sql(&nodes, &paths, &points)
+        let first = catalogue_with_mounts(&nodes, &paths, &points)
             .unwrap()
             .statements;
 
@@ -1862,7 +2070,7 @@ mod tests {
         nodes_reversed.rows.reverse();
         let mut points_reversed = points.clone();
         points_reversed.rows.reverse();
-        let second = taxi_catalogue_sql(&nodes_reversed, &paths, &points_reversed)
+        let second = catalogue_with_mounts(&nodes_reversed, &paths, &points_reversed)
             .unwrap()
             .statements;
         assert_eq!(
@@ -1913,7 +2121,7 @@ mod tests {
             rows: vec![taxi_path_row(70, 10, 999, 125)],
         };
         let no_points = DbcTaxiPathNode { rows: vec![] };
-        let err = taxi_catalogue_sql(&nodes, &bad_path, &no_points)
+        let err = catalogue_with_mounts(&nodes, &bad_path, &no_points)
             .unwrap_err()
             .to_string();
         assert!(err.contains("missing destination node 999"), "{err}");
@@ -1922,7 +2130,7 @@ mod tests {
     #[test]
     fn taxi_catalogue_rejects_an_empty_file_before_emitting_clear_sql() {
         let (nodes, paths, _) = synthetic_taxi_catalogue();
-        let err = taxi_catalogue_sql(&nodes, &paths, &DbcTaxiPathNode { rows: vec![] })
+        let err = catalogue_with_mounts(&nodes, &paths, &DbcTaxiPathNode { rows: vec![] })
             .unwrap_err()
             .to_string();
         assert!(err.contains("TaxiPathNode=0 rows"), "{err}");
@@ -1937,7 +2145,7 @@ mod tests {
         let point = DbcTaxiPathNode {
             rows: vec![taxi_point_row(701, 70, 0, 10.0, 0, 0)],
         };
-        assert!(taxi_catalogue_sql(&nodes, &negative_fare, &point)
+        assert!(catalogue_with_mounts(&nodes, &negative_fare, &point)
             .unwrap_err()
             .to_string()
             .contains("negative fare"));
@@ -1948,7 +2156,7 @@ mod tests {
         let negative_index = DbcTaxiPathNode {
             rows: vec![taxi_point_row(701, 70, -1, 10.0, 0, 0)],
         };
-        assert!(taxi_catalogue_sql(&nodes, &path, &negative_index)
+        assert!(catalogue_with_mounts(&nodes, &path, &negative_index)
             .unwrap_err()
             .to_string()
             .contains("negative node index"));
@@ -1956,7 +2164,7 @@ mod tests {
         let negative_delay = DbcTaxiPathNode {
             rows: vec![taxi_point_row(701, 70, 0, 10.0, 0, -1)],
         };
-        assert!(taxi_catalogue_sql(&nodes, &path, &negative_delay)
+        assert!(catalogue_with_mounts(&nodes, &path, &negative_delay)
             .unwrap_err()
             .to_string()
             .contains("negative delay"));
@@ -1969,7 +2177,7 @@ mod tests {
                 0.0,
             )],
         };
-        assert!(taxi_catalogue_sql(
+        assert!(catalogue_with_mounts(
             &reserved_nodes,
             &DbcTaxiPath { rows: vec![] },
             &DbcTaxiPathNode { rows: vec![] }
@@ -1985,7 +2193,7 @@ mod tests {
             let out_of_range = DbcTaxiNodes {
                 rows: vec![taxi_node_row(id, "unrepresentable", [1, 2], 0.0)],
             };
-            assert!(taxi_catalogue_sql(
+            assert!(catalogue_with_mounts(
                 &out_of_range,
                 &DbcTaxiPath { rows: vec![] },
                 &DbcTaxiPathNode { rows: vec![] }
@@ -2003,7 +2211,7 @@ mod tests {
                 0.0,
             )],
         };
-        assert!(taxi_catalogue_sql(
+        assert!(catalogue_with_mounts(
             &wire_collision,
             &DbcTaxiPath { rows: vec![] },
             &DbcTaxiPathNode { rows: vec![] }

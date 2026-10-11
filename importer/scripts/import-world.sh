@@ -427,15 +427,11 @@ else
     ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
     --nav "$DBC" "${SCOPE_FLAGS[@]}" --apply || exit 1
 fi
-# Character-creation + faction DBC tables. The combined --dump --dbc pass above uses the DBCs ONLY for
-# Scale==0 resolution; dbc::run() — the SOLE loader of game_start_item / game_char_base_info /
-# game_race_info / game_faction[_template] — is gated on --dump being ABSENT, so a --dump pass SKIPS it.
-# Run --dbc ALONE here so a fresh reprovision + this script populates those tables; otherwise non-Warrior
-# classes fall back to the Warrior loadout, Human Female renders Male, and create_character skips
-# race/class validation (each is an idempotent clear+reload, independent of the cmangos creature slice).
+# The standalone DBC pass loads character creation, faction and taxi catalogues.
+# Taxi mount entries resolve through the full dump, independent of the imported creature slice.
 echo "[world] character-creation + faction DBC tables (start items / race+class combos / race display / factions)"
 run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
-  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --apply || exit 1
+  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --taxi-mounts "$DUMP" --apply || exit 1
 # Real talent trees (TalentTab.dbc + Talent.dbc → game_talent_tab/game_talent).
 # WITHOUT this the tables hold only the 8 demo talents, whose ids don't match what the 5875 client
 # sends on a talent click → talent selection silently fails (the client renders the real trees from its

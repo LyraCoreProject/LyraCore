@@ -196,6 +196,8 @@ STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single run_import
 check "the profile run reaches the assertion stage" not_contains "$out" '[world] ABORT'
 check "the profile is displayed with all of its planned maps" \
     contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36 369)'
+check "the standalone DBC catalogue receives the full taxi mount dump" \
+    grep -q -- '--dbc .*--taxi-mounts .import/classic-db-full.sql --apply' "$stub_log"
 check "the dump ETL receives the canonical profile name" \
     grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
