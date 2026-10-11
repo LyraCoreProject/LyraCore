@@ -91,8 +91,13 @@ impl CharacterStore for Coordinator {
     /// `a_freshly_created_characters_first_login_transfers_off_the_default_shard`
     /// (`world/shard_routing_tests.rs`).
     ///
-    /// The `create_character` reducer runs on the owner connection. A Refusal maps to a game
-    /// outcome; a Transport Loss is `Err`.
+    /// Runs on the VISIBILITY pipe (`visibility_pipe`), not a call pipe: the client re-sends
+    /// `CMSG_CHAR_ENUM` the instant it sees `SMSG_CHAR_CREATE` success, and that read hits the
+    /// Coordinator's `game_character` subscription cache. A call pipe carries only the liveness
+    /// subscription, so its return does not order the insert ahead of the read and the fresh
+    /// character is missing until the update lands on the Coordinator (or the next login). The
+    /// subscribed pipe returns only after the SDK has applied the committed row to that cache.
+    /// A Refusal maps to a game outcome; a Transport Loss is `Err`.
     fn create_character(
         &self,
         account_id: u64,
@@ -104,8 +109,9 @@ impl CharacterStore for Coordinator {
     ) -> Result<codec::CharCreateOutcome> {
         // The SpacetimeDB-generated reducer binding takes the five appearance bytes positionally;
         // unbundle `Appearance` here, at the single generated-boundary call.
+        let coordinator = self.0.visibility_pipe();
         let result = call_reducer!(
-            self.0.call_pipe().conn.reducers,
+            coordinator.conn.reducers,
             "create_character",
             create_character_then(
                 account_id,
