@@ -6,7 +6,6 @@ use crate::config::GatewayConfig;
 use crate::durable_test_support::Standalone;
 use crate::stdb::Coordinator;
 use crate::world::CharacterStore;
-use std::time::{Duration, Instant};
 
 struct Realm {
     coordinator: Coordinator,
@@ -171,26 +170,6 @@ impl Client {
             let guid = owner.player_pack_slot(slot)?;
             (self.objects.get(&guid)?.get(&3) == Some(&entry)).then_some(slot + 23)
         })
-    }
-
-    fn until(
-        &mut self,
-        description: &str,
-        mut matches: impl FnMut(&ServerPacket) -> bool,
-    ) -> ServerPacket {
-        let deadline = Instant::now() + Duration::from_secs(15);
-        let mut seen = Vec::new();
-        loop {
-            assert!(
-                Instant::now() < deadline,
-                "waiting for {description}; saw {seen:?}"
-            );
-            let packet = self.recv();
-            if matches(&packet) {
-                return packet;
-            }
-            seen.push(packet.name());
-        }
     }
 
     fn peer(&mut self, guid: u64) -> messages::MovementBlock {

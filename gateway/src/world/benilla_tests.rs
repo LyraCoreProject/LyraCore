@@ -9,7 +9,7 @@ use benilla_srp::NormalizedString;
 use std::io::{Read, Write};
 use std::os::unix::net::UnixStream;
 use std::sync::{Arc, Mutex};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 #[path = "benilla_tests/durable.rs"]
 mod durable;
@@ -97,6 +97,26 @@ impl Client {
         packet
     }
 
+    fn until(
+        &mut self,
+        description: &str,
+        mut matches: impl FnMut(&ServerPacket) -> bool,
+    ) -> ServerPacket {
+        let deadline = Instant::now() + Duration::from_secs(15);
+        let mut seen = Vec::new();
+        loop {
+            assert!(
+                Instant::now() < deadline,
+                "waiting for {description}; saw {seen:?}"
+            );
+            let packet = self.recv();
+            if matches(&packet) {
+                return packet;
+            }
+            seen.push(packet.name());
+        }
+    }
+
     fn enter_world(&mut self) -> Vec<Object> {
         self.enter_world_as(1, "Tester")
     }
@@ -170,10 +190,16 @@ impl Client {
 
     fn logout(&mut self) {
         self.send(opcode::CMSG_LOGOUT_REQUEST, &[]);
-        assert!(matches!(
-            self.recv(),
-            ServerPacket::LogoutResponse { reason: 0, .. }
-        ));
+        let response = self.until("logout response", |packet| {
+            matches!(
+                packet,
+                ServerPacket::LogoutResponse { .. } | ServerPacket::LogoutComplete
+            )
+        });
+        match response {
+            ServerPacket::LogoutResponse { reason, .. } => assert_eq!(reason, 0),
+            other => panic!("expected logout response, got {}", other.name()),
+        }
         assert!(matches!(self.recv(), ServerPacket::LogoutComplete));
     }
 }
@@ -1363,6 +1389,19 @@ fn benilla_compatibility_requests_refuse_truncation_and_trailing_bytes() {
             assert!(gateway.join().unwrap().is_err());
         }
     }
+}
+
+#[test]
+fn benilla_logout_receives_a_world_update_already_in_flight() {
+    let (mut client, gateway) = client_in_world(gameplay_store(GameplayState::default()));
+    client.send(
+        opcode::CMSG_SET_WATCHED_FACTION,
+        &messages::set_watched_faction(19),
+    );
+    client.logout();
+    assert_eq!(client.objects[&1].get(&1261), Some(&19));
+    drop(client);
+    gateway.join().unwrap().unwrap();
 }
 
 #[test]
