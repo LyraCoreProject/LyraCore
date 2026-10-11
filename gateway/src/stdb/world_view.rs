@@ -2181,8 +2181,8 @@ fn item_slot_read(coord: &Coordinator) -> ItemSlotRead {
     })
 }
 
-/// Peers see worn gear only. Read the current occupant on the writer so a swap or a later
-/// replacement cannot leave a slot empty because an earlier item moved out of it.
+/// Peers see worn gear only. The first eligible writer reads the current slot occupant;
+/// all recipients share it so the item table is scanned once per changed slot.
 fn item_visible_changed(
     view: &WorldView,
     shard: ShardId,
@@ -2210,6 +2210,7 @@ fn item_visible_changed(
         }
     }
     for (owner_guid, slot) in slots {
+        let item = Arc::new(OnceLock::new());
         let key = view
             .spatial
             .entity_cell_on_shard(EntityLayer::WorldEntity, owner_guid, shard);
@@ -2218,12 +2219,13 @@ fn item_visible_changed(
                 continue;
             }
             let item_in_slot = item_in_slot.clone();
+            let item = item.clone();
             enqueue(viewer, move |viewer| {
                 if !viewer.created.lock().unwrap().contains(&owner_guid) {
                     return Vec::new();
                 }
-                let item = item_in_slot(owner_guid, slot).unwrap_or_default();
-                crate::codec::build_visible_item_values(owner_guid, slot, &item)
+                let item = item.get_or_init(|| item_in_slot(owner_guid, slot).unwrap_or_default());
+                crate::codec::build_visible_item_values(owner_guid, slot, item)
                     .map(|values| {
                         vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
                             Box::new(values),
@@ -3482,6 +3484,9 @@ mod cell_audience_tests;
 
 #[cfg(test)]
 mod relay_bench;
+
+#[cfg(test)]
+mod item_durable_tests;
 
 #[cfg(all(test, unix))]
 mod benilla_movement_tests {
@@ -5057,12 +5062,12 @@ mod family_audience_tests {
             update.write_unencrypted_server(&mut bytes).unwrap();
             let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
             assert_eq!(decoded.len(), 1);
-            // Build 5875 exposes nineteen 12-word visible items starting at field 260.
+            // Build 5875 exposes nineteen 12-word visible items starting at field 258.
             assert!(
                 decoded[0]
                     .fields
                     .iter()
-                    .all(|&(field, _)| (260..488).contains(&field)),
+                    .all(|&(field, _)| (258..486).contains(&field)),
                 "no TYPE, inventory pointers, item fields or Character sheet fields"
             );
         }
@@ -5091,10 +5096,13 @@ mod family_audience_tests {
                     .map(crate::stdb::reads::view_of_item_row)
             })
         };
+        for slot in [0, 8, 18] {
+            let item = worn_item(slot);
+            *committed.lock().unwrap() = vec![item.clone()];
+            item_visible_changed(&view, 0, None, Some(&item), read.clone());
+            assert_eq!(visible_items(queued_job(&rx)), [(slot, 1337, 117, 823)]);
+        }
         let item = worn_item(8);
-        committed.lock().unwrap().push(item.clone());
-        item_visible_changed(&view, 0, None, Some(&item), read.clone());
-        assert_eq!(visible_items(queued_job(&rx)), [(8, 1337, 117, 823)]);
 
         for changed in [
             ItemInstance {
