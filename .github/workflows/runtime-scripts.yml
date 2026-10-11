@@ -5,12 +5,17 @@ on:
   push:
     branches: [main]
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 permissions:
   contents: read
 
 jobs:
   build:
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     defaults:
       run:
         working-directory: datascripts
@@ -20,5 +25,6 @@ jobs:
         with:
           bun-version: 1.3.7
       - run: bun install --frozen-lockfile
+        timeout-minutes: 2
       - name: Test Datascripts and compile Runtime Scripts
         run: bun test

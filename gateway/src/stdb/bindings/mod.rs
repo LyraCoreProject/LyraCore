@@ -133,6 +133,7 @@ pub mod creature_spline_type;
 pub mod creature_template_type;
 pub mod creature_waypoint_type;
 pub mod death_condition_type;
+pub mod debug_accelerate_session_reaper_reducer;
 pub mod debug_accept_quest_reducer;
 pub mod debug_add_threat_reducer;
 pub mod debug_admit_sessionless_action_reducer;
@@ -1316,6 +1317,7 @@ pub use creature_spline_type::CreatureSpline;
 pub use creature_template_type::CreatureTemplate;
 pub use creature_waypoint_type::CreatureWaypoint;
 pub use death_condition_type::DeathCondition;
+pub use debug_accelerate_session_reaper_reducer::debug_accelerate_session_reaper;
 pub use debug_accept_quest_reducer::debug_accept_quest;
 pub use debug_add_threat_reducer::debug_add_threat;
 pub use debug_admit_sessionless_action_reducer::debug_admit_sessionless_action;
@@ -2511,6 +2513,7 @@ pub enum Reducer {
         hair_color: u8,
         facial_hair: u8,
     },
+    DebugAccelerateSessionReaper,
     DebugAcceptQuest {
         character_guid: u64,
         giver_guid: u64,
@@ -4462,6 +4465,7 @@ impl __sdk::Reducer for Reducer {
             Reducer::ConfirmPartyCommandHolder { .. } => "confirm_party_command_holder",
             Reducer::ConfirmPartyCommandReceipt { .. } => "confirm_party_command_receipt",
             Reducer::CreateCharacter { .. } => "create_character",
+            Reducer::DebugAccelerateSessionReaper => "debug_accelerate_session_reaper",
             Reducer::DebugAcceptQuest { .. } => "debug_accept_quest",
             Reducer::DebugAddThreat { .. } => "debug_add_threat",
             Reducer::DebugAdmitSessionlessAction { .. } => "debug_admit_sessionless_action",
@@ -5196,7 +5200,9 @@ Reducer::ClaimPartyCommandIntent{
                 hair_color: hair_color.clone(),
                 facial_hair: facial_hair.clone(),
 }),
-            Reducer::DebugAcceptQuest{
+            Reducer::DebugAccelerateSessionReaper => __sats::bsatn::to_vec(&debug_accelerate_session_reaper_reducer::DebugAccelerateSessionReaperArgs {
+                }),
+Reducer::DebugAcceptQuest{
                 character_guid,
                 giver_guid,
                 quest_entry,

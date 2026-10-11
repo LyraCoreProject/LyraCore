@@ -1,18 +1,16 @@
 name: Module durable tests and Gateway bindings
 
-# The durable integration rung: `module/tests/`, marked `#[ignore]` because each target
-# starts its own SpacetimeDB standalone, publishes the module to it, and drives real reducers.
-# `rust.yml`'s `--lib` run cannot reach any of it.
-#
-# There is no shared node to start here: `lyracore-test-support` starts one standalone per
-# test on a free loopback port with `--in-memory`, publishes with `--features=debug_reducers` (the
-# feature set `lyracore publish` bakes in), and kills it on drop. This job installs the pinned CLI
-# and gets out of the way.
+# Durable tests start private SpacetimeDB instances and publish the Module with test fixtures.
+# The Rust workflow's --lib run does not execute these ignored integration tests.
 
 on:
   pull_request:
   push:
     branches: [main]
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 permissions:
   contents: read
@@ -24,9 +22,7 @@ env:
   SPACETIME_ARCHIVE_SHA256: 9b58192135733083479f30aba47dbbbc79b51db368c46cc221baa663e9c3a2c1
 
 jobs:
-  # The suite is mostly wall-clock waiting on standalones, so three shards run in parallel. Each
-  # shard takes every third test target by position in the sorted file list, so a new target lands
-  # in a shard without a workflow edit. The binding checks and the Gateway regressions run once.
+  # Balance measured target durations, reserving time for each job's builds and Gateway checks.
   durable:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -42,6 +38,7 @@ jobs:
 
       # Each test uses its own temporary CLI configuration.
       - name: Install SpacetimeDB ${{ env.SPACETIME_VERSION }}
+        timeout-minutes: 3
         run: |
           archive_path="$RUNNER_TEMP/spacetime.tar.gz"
           cli_dir="$RUNNER_TEMP/spacetime-$SPACETIME_VERSION"
@@ -61,9 +58,9 @@ jobs:
           echo "spacetime $found"
           [ "$found" = "$SPACETIME_VERSION" ]
 
-      - name: Test the Gateway binding check
+      - name: Test the CI scripts
         if: matrix.shard == 0
-        run: python3 -m unittest scripts/tests/test_check_gateway_bindings.py
+        run: python3 -m unittest discover -s scripts/tests
 
       # This regenerates the complete private schema into a temporary directory. It does not need a
       # running Realm and never publishes the Module.
@@ -74,7 +71,7 @@ jobs:
       # Build failures report before any fixture starts. Each test process asks Cargo for the
       # current artifact, caches its bytes, and publishes private copies through --bin-path.
       - name: Build the module wasm
-        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
 
       # Each test owns a whole database process, so the thread cap is a memory bound, not a CPU one.
       #
@@ -83,13 +80,19 @@ jobs:
       # is flaky on `main` with or without this change.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 3
         run: |
-          targets=$(ls module/tests/*.rs | xargs -n1 basename -s .rs | sort | awk -v shard="${{ matrix.shard }}" 'NR % 3 == shard { printf "--test %s ", $0 }')
-          echo "targets: $targets"
-          cargo test -p lyracore-module $targets -- --ignored --test-threads=4 --skip deadmines --skip lethal_floor
+          mapfile -t targets < <(python3 scripts/durable-test-targets.py "${{ matrix.shard }}")
+          [ "${#targets[@]}" -gt 0 ]
+          args=()
+          for target in "${targets[@]}"; do args+=(--test "$target"); done
+          echo "targets: ${targets[*]}"
+          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip lethal_floor
 
       - name: Run the single-shard auction Refusal regression
         if: matrix.shard == 0
-        run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reducers::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome -- --ignored --exact
+        run: |
+          target_test=stdb::store::auction::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome
+          cargo test -p lyracore-gateway --bin lyracore-gateway "$target_test" -- --ignored --exact --list | grep -Fx "$target_test: test"
+          cargo test -p lyracore-gateway --bin lyracore-gateway "$target_test" -- --ignored --exact
 
       - name: Run the Gateway ownership and durable projection regressions
         if: matrix.shard == 0
