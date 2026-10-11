@@ -1,4 +1,4 @@
-//! A Fake for the traits `handle_loot` is bounded on: Death, Loot Window, Npc, Shard Routing and
+//! A Fake for the traits `Loot::handle` is bounded on: Death, Loot Window, Npc, Shard Routing and
 //! Loot Roll. Death and the Loot Window carry state. The other three are not reachable from the
 //! tests that use it.
 
@@ -187,7 +187,7 @@ impl DeathStore for HandleLootFake {
 
 impl LootWindowStore for HandleLootFake {
     fn loot_target_money(&self, _target_guid: u64) -> Result<u32> {
-        unreachable!("handle_loot reads no loot money")
+        unreachable!("Loot reads no loot money")
     }
 
     fn loot_target_items(
@@ -211,15 +211,15 @@ impl LootWindowStore for HandleLootFake {
         _actor: Actor,
         _corpse_guid: u64,
     ) -> Result<LootWindowRequestStatus> {
-        unreachable!("handle_loot opens no creature loot")
+        unreachable!("Loot opens no creature loot")
     }
 
     fn skin_corpse(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
-        unreachable!("handle_loot skins no corpse")
+        unreachable!("Loot skins no corpse")
     }
 
     fn loot_money(&self, _actor: Actor, _target_guid: u64) -> Result<LootWindowRequestStatus> {
-        unreachable!("handle_loot takes no money")
+        unreachable!("Loot takes no money")
     }
 
     fn take_loot(
@@ -228,7 +228,7 @@ impl LootWindowStore for HandleLootFake {
         _target_guid: u64,
         _loot_slot: u8,
     ) -> Result<LootWindowRequestStatus> {
-        unreachable!("handle_loot takes no item")
+        unreachable!("Loot takes no item")
     }
 }
 

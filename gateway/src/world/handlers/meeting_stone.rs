@@ -47,56 +47,47 @@ pub(crate) trait MeetingStoneActionStore {
     fn queued_area(&self, character_guid: u64) -> Result<Option<u32>>;
 }
 
-#[derive(Clone, Copy, Debug)]
-pub(crate) struct MeetingStonePlayer {
-    pub(crate) account_id: u64,
-    /// `None` outside the world.
-    pub(crate) self_guid: Option<u64>,
-}
+/// Handle Meeting Stone requests, silently outside the world.
+pub(crate) struct MeetingStone;
 
-pub(crate) enum MeetingStoneActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
-/// Consume the meeting stone opcodes and `MSG_LOOKING_FOR_GROUP`, silently outside the world, and
-/// pass everything else on.
-pub(crate) fn dispatch_meeting_stone_action<St: MeetingStoneActionStore + ?Sized>(
-    store: &St,
-    player: MeetingStonePlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<MeetingStoneActionOutcome> {
-    let action = match msg {
-        ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(join) => Action::Join(join.guid.guid()),
-        ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => Action::Leave,
-        ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO => Action::Info,
-        ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP => Action::LookingForGroup,
-        other => return Ok(MeetingStoneActionOutcome::PassThrough(other)),
-    };
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
-        return Ok(MeetingStoneActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
-    };
-    let outbound = match action {
-        Action::Join(go_guid) => join(store, player.account_id, actor, go_guid)?,
-        Action::Leave => {
-            run_op(
-                store,
-                player.account_id,
-                actor,
-                realm_op::LEAVE,
-                0,
-                Vec::new(),
-            )?;
-            Vec::new()
-        }
-        Action::Info => info(store, player.account_id, actor)?,
-        Action::LookingForGroup => vec![Outbound::One(ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(
-            codec::build_looking_for_group(),
-        ))],
-    };
-    Ok(MeetingStoneActionOutcome::Handled { outbound })
+impl<St: MeetingStoneActionStore + ?Sized> ProtocolFamily<St> for MeetingStone {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let action = match msg {
+            ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(join) => Action::Join(join.guid.guid()),
+            ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => Action::Leave,
+            ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO => Action::Info,
+            ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP => Action::LookingForGroup,
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        let Some(actor) = player.self_guid().and_then(Actor::new) else {
+            return Ok(ProtocolReply::from(Vec::new()));
+        };
+        let outbound = match action {
+            Action::Join(go_guid) => join(store, player.account_id, actor, go_guid)?,
+            Action::Leave => {
+                run_op(
+                    store,
+                    player.account_id,
+                    actor,
+                    realm_op::LEAVE,
+                    0,
+                    Vec::new(),
+                )?;
+                Vec::new()
+            }
+            Action::Info => info(store, player.account_id, actor)?,
+            Action::LookingForGroup => vec![Outbound::One(
+                ServerOpcodeMessage::MSG_LOOKING_FOR_GROUP(codec::build_looking_for_group()),
+            )],
+        };
+        Ok(ProtocolReply::from(outbound))
+    }
 }
 
 enum Action {
@@ -252,7 +243,7 @@ mod tests {
     use crate::stdb::ReducerCallError;
     use std::collections::HashMap;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{CMSG_MEETINGSTONE_JOIN, CMSG_PING};
+    use wow_world_messages::vanilla::CMSG_MEETINGSTONE_JOIN;
     use wow_world_messages::Guid;
 
     const ACTOR: u64 = 7;
@@ -359,11 +350,8 @@ mod tests {
         }
     }
 
-    fn in_world() -> MeetingStonePlayer {
-        MeetingStonePlayer {
-            account_id: 1,
-            self_guid: Some(ACTOR),
-        }
+    fn in_world() -> ProtocolSession {
+        ProtocolSession::in_world(1, ACTOR)
     }
 
     fn join_stone() -> ClientOpcodeMessage {
@@ -373,10 +361,9 @@ mod tests {
     }
 
     fn handled(store: &FakeMeetingStones, msg: ClientOpcodeMessage) -> Vec<Outbound> {
-        match dispatch_meeting_stone_action(store, in_world(), msg).unwrap() {
-            MeetingStoneActionOutcome::Handled { outbound } => outbound,
-            MeetingStoneActionOutcome::PassThrough(_) => panic!("the opcode was not consumed"),
-        }
+        MeetingStone::handle(store, &mut in_world(), msg.into())
+            .unwrap()
+            .outbound
     }
 
     fn joinfailed_reason(outbound: &[Outbound]) -> u8 {
@@ -562,20 +549,17 @@ mod tests {
     #[test]
     fn every_opcode_is_silent_outside_the_world() {
         let store = FakeMeetingStones::at_stone();
-        let outside = MeetingStonePlayer {
-            account_id: 1,
-            self_guid: None,
-        };
+        let mut outside = ProtocolSession::new(1, "TESTER".into());
         for msg in [
             join_stone(),
             ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE,
             ClientOpcodeMessage::CMSG_MEETINGSTONE_INFO,
             ClientOpcodeMessage::MSG_LOOKING_FOR_GROUP,
         ] {
-            match dispatch_meeting_stone_action(&store, outside, msg).unwrap() {
-                MeetingStoneActionOutcome::Handled { outbound } => assert!(outbound.is_empty()),
-                MeetingStoneActionOutcome::PassThrough(_) => panic!("not consumed"),
-            }
+            assert!(MeetingStone::handle(&store, &mut outside, msg.into())
+                .unwrap()
+                .outbound
+                .is_empty());
         }
         assert!(store.calls().is_empty());
     }
@@ -597,16 +581,6 @@ mod tests {
             })),
             ..FakeMeetingStones::at_stone()
         };
-        assert!(dispatch_meeting_stone_action(&lost, in_world(), join_stone()).is_err());
-    }
-
-    #[test]
-    fn other_opcodes_pass_through() {
-        let store = FakeMeetingStones::default();
-        let msg = ClientOpcodeMessage::CMSG_PING(CMSG_PING::default());
-        assert!(matches!(
-            dispatch_meeting_stone_action(&store, in_world(), msg).unwrap(),
-            MeetingStoneActionOutcome::PassThrough(_)
-        ));
+        assert!(MeetingStone::handle(&lost, &mut in_world(), join_stone().into()).is_err());
     }
 }

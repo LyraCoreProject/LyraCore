@@ -1,19 +1,16 @@
-//! The auction house: the views through their dispatcher, and the raw browse path over an
-//! encrypted World Session.
+//! Auction replies through the Protocol Family and encrypted World Session.
 
-use super::handlers::{store_with, InMemoryAuctionActions};
+use super::handlers::{store_with, Auction, InMemoryAuctionActions};
 use super::*;
 
-const PLAYER: AuctionActionPlayer = AuctionActionPlayer { self_guid: Some(1) };
-
-/// Dispatch one auction message and return the packets the session would send for it.
 fn run(actions: &InMemoryAuctionActions, msg: impl Into<ClientOpcodeMessage>) -> Vec<Outbound> {
-    match dispatch_auction_action(actions, PLAYER, msg.into()).unwrap() {
-        AuctionActionOutcome::Handled { outbound } => outbound,
-        AuctionActionOutcome::PassThrough(_) => {
-            panic!("the auction dispatcher passed the message on")
-        }
-    }
+    Auction::handle(
+        actions,
+        &mut ProtocolSession::in_world(7, 1),
+        ProtocolRequest::Message(msg.into()),
+    )
+    .unwrap()
+    .outbound
 }
 
 /// The one typed packet a request answered with.

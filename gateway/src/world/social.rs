@@ -1,12 +1,13 @@
-//! Social-family dispatch: the /who panel, the friends/ignore lists, and party/group management,
-//! carved out of `handle_query` in `world/mod.rs` — pure code-motion, same per-family `handle_*`
-//! shape as the rest of the dispatch chain.
+//! Contact lists, realm-wide presence, and party requests.
 
 use super::party::PartyOutcome;
-use super::{party, presence, send, who, Actor, Outbound, SessionTx, WorldConn, WorldState};
+use super::{
+    party, presence, who, Actor, Outbound, ProtocolFamily, ProtocolReply, ProtocolRequest,
+    ProtocolSession, WorldState,
+};
 use crate::codec;
 use crate::world::{CharacterStore, GuildActionStore, PartyStore, SessionStore, ShardRoutingStore};
-use anyhow::Result;
+use anyhow::{anyhow, Result};
 use lyracore_shared::group::{GroupRefusal, TARGET_ICON_LIST_REQUEST};
 use lyracore_shared::social::ContactRefusal;
 use wow_world_base::shared::friend_result_vanilla_tbc::FriendResult;
@@ -108,208 +109,218 @@ impl From<ContactRefusal> for ContactOutcome {
     }
 }
 
-/// Social family: /who, the friends/ignore lists, and party/group management — the social-pane
-/// opcodes. Each arm consumes its opcode (`Ok(None)`) or passes the message on (`Ok(Some(msg))`),
-/// like the other per-family handlers.
-#[allow(clippy::too_many_lines)] // One arm per social and party opcode.
-pub(super) fn handle_social<
-    St: CharacterStore
-        + GuildActionStore
-        + PartyStore
-        + SessionStore
-        + ShardRoutingStore
-        + SocialStore
-        + ?Sized,
->(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    match msg {
-        // /who panel: filtered realm-wide (`who::respond`), same team only, every filter the
-        // client sent applied. Silently dropped outside the world (no requester Character to read
-        // a team from), for an unresolvable requester (never guess a team), and while this
-        // session's `WHO_THROTTLE` cooldown is running (vm:MiscHandler.cpp:230).
-        ClientOpcodeMessage::CMSG_WHO(request) => {
-            if let Some(me) = self_guid(conn) {
-                if conn.admit_who() {
-                    if let Some(character) = store.character_by_guid(me)? {
-                        if let Some((opcode, body)) = who::respond(store, character.race, &request)?
-                        {
-                            send(tx, Outbound::Raw { opcode, body })?;
+pub(crate) struct Social;
+
+impl<
+        St: CharacterStore
+            + GuildActionStore
+            + PartyStore
+            + SessionStore
+            + ShardRoutingStore
+            + SocialStore
+            + ?Sized,
+    > ProtocolFamily<St> for Social
+{
+    #[allow(clippy::too_many_lines)] // One match arm per social or party opcode.
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let mut outbound = Vec::new();
+        match msg {
+            // /who panel: filtered realm-wide (`who::respond`), same team only, every filter the
+            // client sent applied. Silently dropped outside the world (no requester Character to read
+            // a team from), for an unresolvable requester (never guess a team), and while this
+            // session's `WHO_THROTTLE` cooldown is running (vm:MiscHandler.cpp:230).
+            ClientOpcodeMessage::CMSG_WHO(request) => {
+                if let Some(me) = session.self_guid() {
+                    if session.admit_who() {
+                        if let Some(character) = store.character_by_guid(me)? {
+                            if let Some((opcode, body)) =
+                                who::respond(store, character.race, &request)?
+                            {
+                                outbound.push(Outbound::Raw { opcode, body });
+                            }
                         }
                     }
                 }
             }
-        }
-        // Friends / ignore list: opening the social pane's friends tab requests BOTH
-        // lists off the one opcode — vanilla answers with SMSG_FRIEND_LIST + SMSG_IGNORE_LIST.
-        // Silently dropped outside the world (no character to scope the lists to).
-        ClientOpcodeMessage::CMSG_FRIEND_LIST => {
-            if let WorldState::InWorld(iw) = &conn.state {
-                let (friend_guids, ignored) = store.contact_lists(iw.self_guid)?;
-                let own_team = store
-                    .character_by_guid(iw.self_guid)?
-                    .map_or(lyracore_shared::faction::TEAM_ALLIANCE, |character| {
-                        lyracore_shared::faction::team_for_race(character.race)
-                    });
-                let friends = friend_views(store, own_team, &friend_guids);
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_LIST(Box::new(
-                        codec::build_friend_list_response(&friends),
-                    ))),
-                )?;
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_IGNORE_LIST(Box::new(
-                        codec::build_ignore_list_response(&ignored),
-                    ))),
-                )?;
-            }
-        }
-        // Add a friend/ignore by typed name: resolved realm-wide the same way `/whisper`'s target
-        // is, then the module re-validates self/duplicate/cap/team server-side. Either way the
-        // client gets an SMSG_FRIEND_STATUS its system message reads the result code off. The
-        // contact ops are silently dropped outside the world: there is no Character to act as.
-        ClientOpcodeMessage::CMSG_ADD_FRIEND(c) => {
-            if let Some(actor) = self_actor(conn) {
-                let (result, guid, online) = resolve_add_contact(store, actor, &c.name, false)?;
-                let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
-                send(tx, Outbound::Raw { opcode, body })?;
-            }
-        }
-        ClientOpcodeMessage::CMSG_ADD_IGNORE(c) => {
-            if let Some(actor) = self_actor(conn) {
-                let (result, guid, online) = resolve_add_contact(store, actor, &c.name, true)?;
-                let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
-                send(tx, Outbound::Raw { opcode, body })?;
-            }
-        }
-        // Remove a friend/ignore by guid (the client already has it from the list row).
-        ClientOpcodeMessage::CMSG_DEL_FRIEND(c) => {
-            if let Some(actor) = self_actor(conn) {
-                let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), false)?;
-                let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
-                send(tx, Outbound::Raw { opcode, body })?;
-            }
-        }
-        ClientOpcodeMessage::CMSG_DEL_IGNORE(c) => {
-            if let Some(actor) = self_actor(conn) {
-                let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), true)?;
-                let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
-                send(tx, Outbound::Raw { opcode, body })?;
-            }
-        }
-        // Party/group. The invite/uninvite names resolve gateway-side (the add_friend
-        // convention); outcomes echo as SMSG_PARTY_COMMAND_RESULT. The cross-player packets
-        // (SMSG_GROUP_INVITE/LIST/DECLINE/DESTROYED) ride the game_group_event relay.
-        //
-        // The op itself goes through `world::party`, which decides WHICH DATABASE
-        // runs it — realm-core when the gateway is multi-database, the player's own shard otherwise.
-        // Every arm below is otherwise unchanged, including which failures the client is told about.
-        // Silently dropped outside the world: with no in-world character there is no `self_guid` to
-        // act as, and none of these opcodes is reachable at character select.
-        ClientOpcodeMessage::CMSG_GROUP_INVITE(c) => {
-            let result = match (self_actor(conn), presence::resolve_by_name(store, &c.name)?) {
-                (Some(me), Some(guid)) => {
-                    party_result(party::run(store, me, party::Op::Invite(guid))?)
+            // Friends / ignore list: opening the social pane's friends tab requests BOTH
+            // lists off the one opcode — vanilla answers with SMSG_FRIEND_LIST + SMSG_IGNORE_LIST.
+            // Silently dropped outside the world (no character to scope the lists to).
+            ClientOpcodeMessage::CMSG_FRIEND_LIST => {
+                if let WorldState::InWorld(iw) = &session.state {
+                    let (friend_guids, ignored) = store.contact_lists(iw.self_guid)?;
+                    let own_team = store
+                        .character_by_guid(iw.self_guid)?
+                        .map_or(lyracore_shared::faction::TEAM_ALLIANCE, |character| {
+                            lyracore_shared::faction::team_for_race(character.race)
+                        });
+                    let friends = friend_views(store, own_team, &friend_guids);
+                    outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_FRIEND_LIST(
+                        Box::new(codec::build_friend_list_response(&friends)),
+                    )));
+                    outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_IGNORE_LIST(
+                        Box::new(codec::build_ignore_list_response(&ignored)),
+                    )));
                 }
-                _ => PartyResult::BadPlayerName,
-            };
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
-                    codec::build_party_command_result(PartyOperation::Invite, c.name, result),
-                ))),
-            )?;
-        }
-        ClientOpcodeMessage::CMSG_GROUP_ACCEPT => run_unanswered(store, conn, party::Op::Accept)?,
-        ClientOpcodeMessage::CMSG_GROUP_DECLINE => run_unanswered(store, conn, party::Op::Decline)?,
-        ClientOpcodeMessage::CMSG_GROUP_DISBAND => {
-            run_answering_refusal(tx, store, conn, party::Op::Leave)?
-        }
-        ClientOpcodeMessage::CMSG_GROUP_UNINVITE(c) => {
-            let result = match (self_actor(conn), presence::resolve_by_name(store, &c.name)?) {
-                (Some(me), Some(guid)) => {
-                    party_result(party::run(store, me, party::Op::Uninvite(guid))?)
-                }
-                _ => PartyResult::BadPlayerName,
-            };
-            if result != PartyResult::Success {
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
-                        codec::build_party_command_result(PartyOperation::Leave, c.name, result),
-                    ))),
-                )?;
             }
+            // Add a friend/ignore by typed name: resolved realm-wide the same way `/whisper`'s target
+            // is, then the module re-validates self/duplicate/cap/team server-side. Either way the
+            // client gets an SMSG_FRIEND_STATUS its system message reads the result code off. The
+            // contact ops are silently dropped outside the world: there is no Character to act as.
+            ClientOpcodeMessage::CMSG_ADD_FRIEND(c) => {
+                if let Some(actor) = session.actor() {
+                    let (result, guid, online) = resolve_add_contact(store, actor, &c.name, false)?;
+                    let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+                    outbound.push(Outbound::Raw { opcode, body });
+                }
+            }
+            ClientOpcodeMessage::CMSG_ADD_IGNORE(c) => {
+                if let Some(actor) = session.actor() {
+                    let (result, guid, online) = resolve_add_contact(store, actor, &c.name, true)?;
+                    let (opcode, body) = codec::build_friend_status_raw(result, guid, online);
+                    outbound.push(Outbound::Raw { opcode, body });
+                }
+            }
+            // Remove a friend/ignore by guid (the client already has it from the list row).
+            ClientOpcodeMessage::CMSG_DEL_FRIEND(c) => {
+                if let Some(actor) = session.actor() {
+                    let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), false)?;
+                    let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+                    outbound.push(Outbound::Raw { opcode, body });
+                }
+            }
+            ClientOpcodeMessage::CMSG_DEL_IGNORE(c) => {
+                if let Some(actor) = session.actor() {
+                    let (result, guid) = resolve_del_contact(store, actor, c.guid.guid(), true)?;
+                    let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
+                    outbound.push(Outbound::Raw { opcode, body });
+                }
+            }
+            // Party/group. The invite/uninvite names resolve gateway-side (the add_friend
+            // convention); outcomes echo as SMSG_PARTY_COMMAND_RESULT. The cross-player packets
+            // (SMSG_GROUP_INVITE/LIST/DECLINE/DESTROYED) ride the game_group_event relay.
+            //
+            // The op itself goes through `world::party`, which decides WHICH DATABASE
+            // runs it — realm-core when the gateway is multi-database, the player's own shard otherwise.
+            // Every arm below is otherwise unchanged, including which failures the client is told about.
+            // Silently dropped outside the world: with no in-world character there is no `self_guid` to
+            // act as, and none of these opcodes is reachable at character select.
+            ClientOpcodeMessage::CMSG_GROUP_INVITE(c) => {
+                let result = match (session.actor(), presence::resolve_by_name(store, &c.name)?) {
+                    (Some(me), Some(guid)) => {
+                        party_result(party::run(store, me, party::Op::Invite(guid))?)
+                    }
+                    _ => PartyResult::BadPlayerName,
+                };
+                outbound.push(Outbound::One(
+                    ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+                        codec::build_party_command_result(PartyOperation::Invite, c.name, result),
+                    )),
+                ));
+            }
+            ClientOpcodeMessage::CMSG_GROUP_ACCEPT => {
+                run_unanswered(store, session, party::Op::Accept)?
+            }
+            ClientOpcodeMessage::CMSG_GROUP_DECLINE => {
+                run_unanswered(store, session, party::Op::Decline)?
+            }
+            ClientOpcodeMessage::CMSG_GROUP_DISBAND => {
+                outbound.extend(run_answering_refusal(store, session, party::Op::Leave)?)
+            }
+            ClientOpcodeMessage::CMSG_GROUP_UNINVITE(c) => {
+                let result = match (session.actor(), presence::resolve_by_name(store, &c.name)?) {
+                    (Some(me), Some(guid)) => {
+                        party_result(party::run(store, me, party::Op::Uninvite(guid))?)
+                    }
+                    _ => PartyResult::BadPlayerName,
+                };
+                if result != PartyResult::Success {
+                    outbound.push(Outbound::One(
+                        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+                            codec::build_party_command_result(
+                                PartyOperation::Leave,
+                                c.name,
+                                result,
+                            ),
+                        )),
+                    ));
+                }
+            }
+            // `CMSG_LOOT_METHOD`: the leader sets the party's loot method/
+            // threshold/master. No ack packet — vanilla itself sends none for this opcode (cmangos's
+            // `HandleLootMethodOpcode` only calls `group->SendUpdate()`); the module's own reducer
+            // echoes via the EXISTING `SMSG_GROUP_LIST` roster relay. A rejection (not the leader, bad
+            // method/threshold/master) is per-action — log + ignore, matching group_accept/decline.
+            ClientOpcodeMessage::CMSG_LOOT_METHOD(c) => {
+                let op = party::Op::LootMethod {
+                    setting: c.loot_setting.as_int(),
+                    master: c.loot_master.guid(),
+                    threshold: c.loot_threshold.as_int(),
+                };
+                run_unanswered(store, session, op)?;
+            }
+            ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT => {
+                outbound.extend(raid_convert(store, session)?)
+            }
+            ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(c) => {
+                run_unanswered(store, session, party::Op::SetLeader(c.guid.guid()))?
+            }
+            ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(c) => run_unanswered(
+                store,
+                session,
+                party::Op::SetAssistant {
+                    target: c.guid.guid(),
+                    promote: c.set_assistant,
+                },
+            )?,
+            // The raid frame's "Remove from group" names the member by guid, so no name lookup runs
+            // (cm:GroupHandler.cpp:250-296). Naming yourself gets no answer (lines 255-260).
+            ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(c)
+                if session.self_guid() != Some(c.guid.guid()) =>
+            {
+                outbound.extend(run_answering_refusal(
+                    store,
+                    session,
+                    party::Op::Uninvite(c.guid.guid()),
+                )?)
+            }
+            ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_) => {}
+            // `CMSG_GROUP_CHANGE_SUB_GROUP` / `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant
+            // drags a raid member to another Subgroup, or swaps two. No ack packet: the
+            // `SMSG_GROUP_LIST` roster relay is the client-visible result, and cmangos is silent for
+            // every refusal here (cm:GroupHandler.cpp:492-525, cm:GroupHandler.cpp:901-944).
+            ClientOpcodeMessage::CMSG_GROUP_CHANGE_SUB_GROUP(c) => {
+                change_subgroup(store, session, &c.name, c.group_number)?
+            }
+            ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(c) => {
+                swap_subgroup(store, session, &c.name, &c.swap_with_name)?
+            }
+            // Group Broadcasts. Every member's packet rides the group event relay, the actor's too.
+            ClientOpcodeMessage::MSG_RAID_READY_CHECK(c) => {
+                let op = match c.answer {
+                    None => party::Op::ReadyCheckStart,
+                    Some(answer) => party::Op::ReadyCheckAnswer(answer.state),
+                };
+                run_group_broadcast(store, session, op);
+            }
+            ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(c) => {
+                run_group_broadcast(store, session, target_icon_op(&c));
+            }
+            ClientOpcodeMessage::MSG_MINIMAP_PING(c) => {
+                let op = party::Op::MinimapPing {
+                    x: c.position_x,
+                    y: c.position_y,
+                };
+                run_group_broadcast(store, session, op);
+            }
+            _ => return Err(anyhow!("opcode routed to the wrong Protocol Family")),
         }
-        // `CMSG_LOOT_METHOD`: the leader sets the party's loot method/
-        // threshold/master. No ack packet — vanilla itself sends none for this opcode (cmangos's
-        // `HandleLootMethodOpcode` only calls `group->SendUpdate()`); the module's own reducer
-        // echoes via the EXISTING `SMSG_GROUP_LIST` roster relay. A rejection (not the leader, bad
-        // method/threshold/master) is per-action — log + ignore, matching group_accept/decline.
-        ClientOpcodeMessage::CMSG_LOOT_METHOD(c) => {
-            let op = party::Op::LootMethod {
-                setting: c.loot_setting.as_int(),
-                master: c.loot_master.guid(),
-                threshold: c.loot_threshold.as_int(),
-            };
-            run_unanswered(store, conn, op)?;
-        }
-        ClientOpcodeMessage::CMSG_GROUP_RAID_CONVERT => raid_convert(tx, store, conn)?,
-        ClientOpcodeMessage::CMSG_GROUP_SET_LEADER(c) => {
-            run_unanswered(store, conn, party::Op::SetLeader(c.guid.guid()))?
-        }
-        ClientOpcodeMessage::CMSG_GROUP_ASSISTANT_LEADER(c) => run_unanswered(
-            store,
-            conn,
-            party::Op::SetAssistant {
-                target: c.guid.guid(),
-                promote: c.set_assistant,
-            },
-        )?,
-        // The raid frame's "Remove from group" names the member by guid, so no name lookup runs
-        // (cm:GroupHandler.cpp:250-296). Naming yourself gets no answer (lines 255-260).
-        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(c)
-            if self_guid(conn) != Some(c.guid.guid()) =>
-        {
-            run_answering_refusal(tx, store, conn, party::Op::Uninvite(c.guid.guid()))?
-        }
-        ClientOpcodeMessage::CMSG_GROUP_UNINVITE_GUID(_) => {}
-        // `CMSG_GROUP_CHANGE_SUB_GROUP` / `CMSG_GROUP_SWAP_SUB_GROUP`: the leader or an Assistant
-        // drags a raid member to another Subgroup, or swaps two. No ack packet: the
-        // `SMSG_GROUP_LIST` roster relay is the client-visible result, and cmangos is silent for
-        // every refusal here (cm:GroupHandler.cpp:492-525, cm:GroupHandler.cpp:901-944).
-        ClientOpcodeMessage::CMSG_GROUP_CHANGE_SUB_GROUP(c) => {
-            change_subgroup(store, conn, &c.name, c.group_number)?
-        }
-        ClientOpcodeMessage::CMSG_GROUP_SWAP_SUB_GROUP(c) => {
-            swap_subgroup(store, conn, &c.name, &c.swap_with_name)?
-        }
-        // Group Broadcasts. Every member's packet rides the group event relay, the actor's too.
-        ClientOpcodeMessage::MSG_RAID_READY_CHECK(c) => {
-            let op = match c.answer {
-                None => party::Op::ReadyCheckStart,
-                Some(answer) => party::Op::ReadyCheckAnswer(answer.state),
-            };
-            run_group_broadcast(store, conn, op);
-        }
-        ClientOpcodeMessage::MSG_RAID_TARGET_UPDATE(c) => {
-            run_group_broadcast(store, conn, target_icon_op(&c));
-        }
-        ClientOpcodeMessage::MSG_MINIMAP_PING(c) => {
-            let op = party::Op::MinimapPing {
-                x: c.position_x,
-                y: c.position_y,
-            };
-            run_group_broadcast(store, conn, op);
-        }
-        other => return Ok(Some(other)),
+        Ok(outbound.into())
     }
-    Ok(None)
 }
 
 /// Run a leave or a kick by guid. Only a Refusal answers, as `SMSG_PARTY_COMMAND_RESULT(Leave, "",
@@ -317,59 +328,53 @@ pub(super) fn handle_social<
 fn run_answering_refusal<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
-    tx: &SessionTx,
     store: &St,
-    conn: &WorldConn,
+    session: &ProtocolSession,
     op: party::Op,
-) -> Result<()> {
-    let Some(me) = self_actor(conn) else {
-        return Ok(());
+) -> Result<Vec<Outbound>> {
+    let Some(actor) = session.actor() else {
+        return Ok(Vec::new());
     };
-    match party::run(store, me, op)? {
-        PartyOutcome::Ran => Ok(()),
-        PartyOutcome::Refused(refusal) => send(
-            tx,
-            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+    match party::run(store, actor, op)? {
+        PartyOutcome::Ran => Ok(Vec::new()),
+        PartyOutcome::Refused(refusal) => Ok(vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
                 codec::build_party_command_result(
                     PartyOperation::Leave,
                     String::new(),
                     party_result_for(refusal),
                 ),
-            ))),
-        ),
+            )),
+        )]),
     }
 }
 
-/// The leader's "Convert to Raid". cmangos answers success with
-/// `SMSG_PARTY_COMMAND_RESULT(Invite, "", Ok)` and every refusal with silence
-/// (cm:GroupHandler.cpp:473-490); the raid list reaches every member through the LIST relay.
+/// Raid conversion answers success with a party command result. A Refusal is silent.
 fn raid_convert<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
-    tx: &SessionTx,
     store: &St,
-    conn: &WorldConn,
-) -> Result<()> {
-    let Some(me) = self_actor(conn) else {
-        return Ok(());
+    session: &ProtocolSession,
+) -> Result<Vec<Outbound>> {
+    let Some(actor) = session.actor() else {
+        return Ok(Vec::new());
     };
-    match party::run(store, me, party::Op::RaidConvert)? {
-        PartyOutcome::Ran => send(
-            tx,
-            Outbound::One(ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+    match party::run(store, actor, party::Op::RaidConvert)? {
+        PartyOutcome::Ran => Ok(vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
                 codec::build_party_command_result(
                     PartyOperation::Invite,
                     String::new(),
                     PartyResult::Success,
                 ),
-            ))),
-        ),
+            )),
+        )]),
         PartyOutcome::Refused(refusal) => {
             log::debug!(
                 "world: group_raid_convert refused (account {}): {refusal:?}",
-                conn.account_id
+                session.account_id
             );
-            Ok(())
+            Ok(Vec::new())
         }
     }
 }
@@ -381,16 +386,16 @@ fn run_unanswered<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
     store: &St,
-    conn: &WorldConn,
+    session: &ProtocolSession,
     op: party::Op,
 ) -> Result<()> {
-    let Some(me) = self_actor(conn) else {
+    let Some(me) = session.actor() else {
         return Ok(());
     };
     if let PartyOutcome::Refused(refusal) = party::run(store, me, op)? {
         log::debug!(
             "world: {op:?} refused (account {}): {refusal:?}",
-            conn.account_id
+            session.account_id
         );
     }
     Ok(())
@@ -404,20 +409,24 @@ fn change_subgroup<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
     store: &St,
-    conn: &WorldConn,
+    session: &ProtocolSession,
     name: &str,
     subgroup: u8,
 ) -> Result<()> {
-    let Some(me) = self_actor(conn) else {
+    let Some(me) = session.actor() else {
         return Ok(());
     };
     match party::resolve_roster_member_by_name(store, me.guid(), name)? {
-        Some(target) => run_unanswered(store, conn, party::Op::ChangeSubgroup { target, subgroup }),
+        Some(target) => run_unanswered(
+            store,
+            session,
+            party::Op::ChangeSubgroup { target, subgroup },
+        ),
         None => {
             log::debug!(
                 "world: group_change_sub_group named a Character outside the caller's own \
                  roster (account {})",
-                conn.account_id
+                session.account_id
             );
             Ok(())
         }
@@ -432,24 +441,24 @@ fn swap_subgroup<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
     store: &St,
-    conn: &WorldConn,
+    session: &ProtocolSession,
     name: &str,
     swap_with_name: &str,
 ) -> Result<()> {
-    let Some(me) = self_actor(conn) else {
+    let Some(me) = session.actor() else {
         return Ok(());
     };
     let (first, second) =
         party::resolve_roster_members_by_name(store, me.guid(), name, swap_with_name)?;
     match (first, second) {
         (Some(first), Some(second)) => {
-            run_unanswered(store, conn, party::Op::SwapSubgroup { first, second })
+            run_unanswered(store, session, party::Op::SwapSubgroup { first, second })
         }
         _ => {
             log::debug!(
                 "world: group_swap_sub_group named a Character outside the caller's own roster \
                  (account {})",
-                conn.account_id
+                session.account_id
             );
             Ok(())
         }
@@ -464,16 +473,16 @@ pub(super) fn run_group_broadcast<
     St: CharacterStore + PartyStore + SessionStore + ShardRoutingStore + SocialStore + ?Sized,
 >(
     store: &St,
-    conn: &mut WorldConn,
+    session: &mut ProtocolSession,
     op: party::Op,
 ) {
-    let Some(me) = self_actor(conn) else {
+    let Some(me) = session.actor() else {
         return;
     };
-    if !conn.admit_group_broadcast(op) {
+    if !session.admit_group_broadcast(op) {
         log::debug!(
             "world: group broadcast {op:?} dropped inside its cooldown (account {})",
-            conn.account_id
+            session.account_id
         );
         return;
     }
@@ -481,11 +490,11 @@ pub(super) fn run_group_broadcast<
         Ok(PartyOutcome::Ran) => {}
         Ok(PartyOutcome::Refused(refusal)) => log::debug!(
             "world: group broadcast {op:?} refused (account {}): {refusal:?}",
-            conn.account_id
+            session.account_id
         ),
         Err(error) => log::warn!(
             "world: group broadcast {op:?} lost (account {}): {error:#}",
-            conn.account_id
+            session.account_id
         ),
     }
 }
@@ -510,27 +519,6 @@ fn target_icon_op(update: &MSG_RAID_TARGET_UPDATE_Client) -> party::Op {
         icon,
         target: target.guid(),
     }
-}
-
-/// The session's in-world character guid, or `None` at character select. Party ops need it for two
-/// reasons that only coincide on a single-database gateway: it is the CHARACTER realm-core acts as
-/// (realm-core has no live entity to derive one from), and it is the character the module's
-/// own `entity_by_owner` would have resolved on the shard plane. Reading it here, from the state the
-/// gateway already authenticated for this socket, is what keeps the realm-core call trustworthy.
-///
-/// `pub(super)` because every Realm Chat Line needs the same guid for the same reason:
-/// `realm_chat` and `realm_whisper` take the speaker as an argument, so this accessor is the
-/// authorization of every line (see `handlers::chat`).
-pub(super) fn self_guid(conn: &WorldConn) -> Option<u64> {
-    match &conn.state {
-        WorldState::InWorld(iw) => Some(iw.self_guid),
-        _ => None,
-    }
-}
-
-/// [`self_guid`] as the Actor a Durable Request acts as.
-pub(super) fn self_actor(conn: &WorldConn) -> Option<Actor> {
-    self_guid(conn).and_then(Actor::new)
 }
 
 /// The `PartyResult` code one party outcome renders as.

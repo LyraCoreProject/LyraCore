@@ -1,5 +1,5 @@
 //! Vendor family: opening a vendor's inventory window, buy/sell/buyback/repair, and the buyback-tab
-//! view. Every vendor opcode enters through `dispatch_vendor_action`; the gossip Browse-goods click
+//! view. Every vendor opcode enters through `Vendor::handle`; the gossip Browse-goods click
 //! and the world-entry ring replay call the shared builders here rather than reaching for the store.
 
 use super::super::*;
@@ -42,19 +42,6 @@ pub(crate) const BUYBACK_WIRE_SLOT_BASE: u16 = 69;
 /// need no memory of what the tab showed before.
 const BUYBACK_SLOTS: u16 = 12;
 
-/// Who is asking. `self_guid` is `None` before world entry — the character-select state has no
-/// actor, so gates that need one are skipped rather than run against a placeholder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct VendorActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
-
-pub(crate) enum VendorActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
 /// Whether a Module Gate refused the call. Anything else leaves the durable outcome unknown.
 fn is_refusal(error: &anyhow::Error) -> bool {
     matches!(classify(error), DurableFailure::Refusal { .. })
@@ -64,7 +51,7 @@ fn is_refusal(error: &anyhow::Error) -> bool {
 /// out of a vendor — but a Transport Loss ends the session.
 fn refuses_interaction<St: VendorActionStore + ?Sized>(
     store: &St,
-    player: VendorActionPlayer,
+    player: &ProtocolSession,
     actor: Option<Actor>,
     vendor_guid: u64,
 ) -> Result<bool> {
@@ -105,152 +92,137 @@ pub(crate) fn vendor_has_stock<St: VendorActionStore + ?Sized>(
     Ok(!store.vendor_stock(vendor_guid)?.is_empty())
 }
 
-pub(crate) fn dispatch_vendor_action<St: VendorActionStore + ?Sized>(
-    store: &St,
-    player: VendorActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<VendorActionOutcome> {
-    let actor = player.self_guid.and_then(Actor::new);
-    match msg {
-        // A refusing NPC answers nothing at all; an empty stock still answers, or the client waits
-        // forever on the window it asked for.
-        ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
-            let vendor_guid = c.guid.guid();
-            if refuses_interaction(store, player, actor, vendor_guid)? {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
+pub(crate) struct Vendor;
+
+impl<St: VendorActionStore + ?Sized> ProtocolFamily<St> for Vendor {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let actor = player.self_guid().and_then(Actor::new);
+        match msg {
+            // A refusing NPC answers nothing at all; an empty stock still answers, or the client waits
+            // forever on the window it asked for.
+            ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
+                let vendor_guid = c.guid.guid();
+                if refuses_interaction(store, player, actor, vendor_guid)? {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                }
+                Ok(ProtocolReply::from(vendor_open_outbound(
+                    store,
+                    vendor_guid,
+                )?))
             }
-            Ok(VendorActionOutcome::Handled {
-                outbound: vendor_open_outbound(store, vendor_guid)?,
-            })
-        }
-        // Successful purchases carry no reply — the item/purse subscriptions deliver the row
-        // changes; only a rejection needs an explicit client-visible message.
-        ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
-            let vendor_guid = c.vendor.guid();
-            let item_entry = c.item;
-            let buy_failed = |reason: &str| {
-                vec![Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(
-                    Box::new(codec::build_buy_failed(vendor_guid, item_entry, reason)),
-                ))]
-            };
-            let outbound = match actor {
-                None => buy_failed(""),
-                Some(actor) => {
-                    match store.vendor_buy(actor, vendor_guid, item_entry, c.amount as u32) {
-                        Ok(()) => Vec::new(),
-                        Err(e) if is_refusal(&e) => {
-                            log::debug!(
-                                "world: vendor_buy failed (account {}): {e}",
-                                player.account_id
-                            );
-                            buy_failed(&e.to_string())
+            // Successful purchases carry no reply — the item/purse subscriptions deliver the row
+            // changes; only a rejection needs an explicit client-visible message.
+            ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
+                let vendor_guid = c.vendor.guid();
+                let item_entry = c.item;
+                let buy_failed = |reason: &str| {
+                    vec![Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(
+                        Box::new(codec::build_buy_failed(vendor_guid, item_entry, reason)),
+                    ))]
+                };
+                let outbound = match actor {
+                    None => buy_failed(""),
+                    Some(actor) => {
+                        match store.vendor_buy(actor, vendor_guid, item_entry, c.amount as u32) {
+                            Ok(()) => Vec::new(),
+                            Err(e) if is_refusal(&e) => {
+                                log::debug!(
+                                    "world: vendor_buy failed (account {}): {e}",
+                                    player.account_id
+                                );
+                                buy_failed(&e.to_string())
+                            }
+                            Err(e) => return Err(e),
                         }
-                        Err(e) => return Err(e),
                     }
-                }
-            };
-            Ok(VendorActionOutcome::Handled { outbound })
-        }
-        // CMSG_REPAIR_ITEM carries the item INSTANCE guid, but the module's repair takes the
-        // inventory SLOT; guid 0 means repair-all, routed to the whole-body slot instead of a
-        // guid lookup. An unmatched guid (already sold / not ours) is a silent no-op.
-        ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
-            let Some(actor) = actor else {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            let item_guid = c.item.guid();
-            let slot = if item_guid == 0 {
-                Some(u8::MAX)
-            } else {
-                store.vendor_item_slot(item_guid)
-            };
-            let Some(slot) = slot else {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            match store.vendor_repair(actor, c.npc.guid(), slot) {
-                Ok(()) => Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                }),
-                Err(e) if is_refusal(&e) => {
-                    log::debug!(
-                        "world: repair_item ignored (account {}): {e}",
-                        player.account_id
-                    );
-                    Ok(VendorActionOutcome::Handled {
-                        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
-                            Box::new(codec::build_gm_system_message(e.to_string())),
-                        ))],
-                    })
-                }
-                Err(e) => Err(e),
+                };
+                Ok(ProtocolReply::from(outbound))
             }
-        }
-        // CMSG_SELL_ITEM carries the item INSTANCE guid; the module's sell takes the inventory
-        // SLOT. An unmatched guid (already sold / not ours) is a silent no-op, same as repair.
-        ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
-            let Some(actor) = actor else {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            let Some(slot) = store.vendor_item_slot(c.item.guid()) else {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            match store.vendor_sell(actor, c.vendor.guid(), slot) {
-                // Reflect the new ring in the buyback tab immediately.
-                Ok(()) => Ok(VendorActionOutcome::Handled {
-                    outbound: build_buyback_view(store, actor.guid()),
-                }),
-                Err(e) if is_refusal(&e) => {
-                    log::debug!(
-                        "world: sell_item ignored (account {}): {e}",
-                        player.account_id
-                    );
-                    Ok(VendorActionOutcome::Handled {
-                        outbound: Vec::new(),
-                    })
+            // CMSG_REPAIR_ITEM carries the item INSTANCE guid, but the module's repair takes the
+            // inventory SLOT; guid 0 means repair-all, routed to the whole-body slot instead of a
+            // guid lookup. An unmatched guid (already sold / not ours) is a silent no-op.
+            ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
+                let Some(actor) = actor else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                let item_guid = c.item.guid();
+                let slot = if item_guid == 0 {
+                    Some(u8::MAX)
+                } else {
+                    store.vendor_item_slot(item_guid)
+                };
+                let Some(slot) = slot else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                match store.vendor_repair(actor, c.npc.guid(), slot) {
+                    Ok(()) => Ok(ProtocolReply::from(Vec::new())),
+                    Err(e) if is_refusal(&e) => {
+                        log::debug!(
+                            "world: repair_item ignored (account {}): {e}",
+                            player.account_id
+                        );
+                        Ok(ProtocolReply::from(vec![Outbound::One(
+                            ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                                codec::build_gm_system_message(e.to_string()),
+                            )),
+                        )]))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }
-        // CMSG_BUYBACK_ITEM carries a wire BuybackSlot enum (69–81); map to the 0-based ring slot
-        // the module reducer takes. A successful re-buy rebuilds the whole tab so shifted and
-        // cleared entries appear immediately, but only once there is an actor to render it for.
-        ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
-            let Some(actor) = actor else {
-                return Ok(VendorActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            let slot = c
-                .slot
-                .as_int()
-                .saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()) as u8;
-            match store.vendor_buyback(actor, c.guid.guid(), slot) {
-                Ok(()) => Ok(VendorActionOutcome::Handled {
-                    outbound: build_buyback_view(store, actor.guid()),
-                }),
-                Err(e) if is_refusal(&e) => {
-                    log::debug!(
-                        "world: buyback_item ignored (account {}): {e}",
-                        player.account_id
-                    );
-                    Ok(VendorActionOutcome::Handled {
-                        outbound: Vec::new(),
-                    })
+            // CMSG_SELL_ITEM carries the item INSTANCE guid; the module's sell takes the inventory
+            // SLOT. An unmatched guid (already sold / not ours) is a silent no-op, same as repair.
+            ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
+                let Some(actor) = actor else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                let Some(slot) = store.vendor_item_slot(c.item.guid()) else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                match store.vendor_sell(actor, c.vendor.guid(), slot) {
+                    // Reflect the new ring in the buyback tab immediately.
+                    Ok(()) => Ok(ProtocolReply::from(build_buyback_view(store, actor.guid()))),
+                    Err(e) if is_refusal(&e) => {
+                        log::debug!(
+                            "world: sell_item ignored (account {}): {e}",
+                            player.account_id
+                        );
+                        Ok(ProtocolReply::from(Vec::new()))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
+            // CMSG_BUYBACK_ITEM carries a wire BuybackSlot enum (69–81); map to the 0-based ring slot
+            // the module reducer takes. A successful re-buy rebuilds the whole tab so shifted and
+            // cleared entries appear immediately, but only once there is an actor to render it for.
+            ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
+                let Some(actor) = actor else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                let slot = c
+                    .slot
+                    .as_int()
+                    .saturating_sub(BUYBACK_WIRE_SLOT_BASE.into()) as u8;
+                match store.vendor_buyback(actor, c.guid.guid(), slot) {
+                    Ok(()) => Ok(ProtocolReply::from(build_buyback_view(store, actor.guid()))),
+                    Err(e) if is_refusal(&e) => {
+                        log::debug!(
+                            "world: buyback_item ignored (account {}): {e}",
+                            player.account_id
+                        );
+                        Ok(ProtocolReply::from(Vec::new()))
+                    }
+                    Err(e) => Err(e),
+                }
+            }
+            other => Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
         }
-        other => Ok(VendorActionOutcome::PassThrough(other)),
     }
 }
 
@@ -337,7 +309,7 @@ pub(super) mod tests {
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
         BuyResult, BuybackSlot, Guid, CMSG_BUYBACK_ITEM, CMSG_BUY_ITEM, CMSG_LIST_INVENTORY,
-        CMSG_PING, CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
+        CMSG_REPAIR_ITEM, CMSG_SELL_ITEM,
     };
 
     /// How a Fake call fails: a constructor for the typed error, so every call builds a fresh one.
@@ -472,11 +444,8 @@ pub(super) mod tests {
     const NPC: u64 = 0xF130_0000_0000_0200;
     const ITEM: u64 = 0x4000_0000_0000_0099;
 
-    fn player() -> VendorActionPlayer {
-        VendorActionPlayer {
-            account_id: 7,
-            self_guid: Some(42),
-        }
+    fn player() -> ProtocolSession {
+        ProtocolSession::in_world(7, 42)
     }
 
     fn list_inventory() -> ClientOpcodeMessage {
@@ -503,12 +472,12 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), list_inventory().into()).unwrap();
 
         let expected = codec::build_list_inventory_raw(VENDOR, &actions.stock);
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound }
+            ProtocolReply { outbound, .. }
                 if matches!(outbound.as_slice(), [Outbound::Raw { opcode, body }]
                     if (*opcode, body.clone()) == expected)
         ));
@@ -527,11 +496,9 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), list_inventory().into()).unwrap();
 
-        assert!(
-            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+        assert!(outcome.outbound.is_empty());
         assert!(actions.stock_requests.lock().unwrap().is_empty());
     }
 
@@ -539,12 +506,12 @@ pub(super) mod tests {
     fn an_empty_stock_still_opens_the_window() {
         let actions = InMemoryVendorActions::default();
 
-        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), list_inventory().into()).unwrap();
 
         let expected = codec::build_list_inventory_raw(VENDOR, &[]);
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound }
+            ProtocolReply { outbound, .. }
                 if matches!(outbound.as_slice(), [Outbound::Raw { opcode, body }]
                     if (*opcode, body.clone()) == expected)
         ));
@@ -560,11 +527,11 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), list_inventory()).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), list_inventory().into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.len() == 1
+            ProtocolReply { outbound, .. } if outbound.len() == 1
         ));
     }
 
@@ -617,7 +584,7 @@ pub(super) mod tests {
                 buyback_item(BuybackSlot::Slot1),
             ),
         ] {
-            let error = match dispatch_vendor_action(&actions, player(), msg) {
+            let error = match Vendor::handle(&actions, &mut player(), msg.into()) {
                 Err(error) => error,
                 Ok(_) => panic!("a transport loss must end the session"),
             };
@@ -660,11 +627,9 @@ pub(super) mod tests {
     fn a_successful_purchase_requests_the_durable_buy_and_sends_no_packets() {
         let actions = InMemoryVendorActions::default();
 
-        let outcome = dispatch_vendor_action(&actions, player(), buy_item(2589, 3)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), buy_item(2589, 3).into()).unwrap();
 
-        assert!(
-            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+        assert!(outcome.outbound.is_empty());
         assert_eq!(
             actions.buy_requests.lock().unwrap().as_slice(),
             &[BuyRequest {
@@ -685,11 +650,11 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), buy_item(2589, 1)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), buy_item(2589, 1).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound }
+            ProtocolReply { outbound, .. }
                 if matches!(
                     outbound.as_slice(),
                     [Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(_))]
@@ -700,16 +665,13 @@ pub(super) mod tests {
     #[test]
     fn a_buyer_without_an_actor_is_told_the_item_cannot_be_found() {
         let actions = InMemoryVendorActions::default();
-        let player = VendorActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let mut player = ProtocolSession::new(7, "TESTER".into());
 
-        let outcome = dispatch_vendor_action(&actions, player, buy_item(2589, 1)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player, buy_item(2589, 1).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound }
+            ProtocolReply { outbound, .. }
                 if matches!(outbound.as_slice(),
                     [Outbound::One(ServerOpcodeMessage::SMSG_BUY_FAILED(p))]
                         if matches!(p.result, BuyResult::CantFindItem))
@@ -725,11 +687,11 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), repair_item(ITEM)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), repair_item(ITEM).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
         assert_eq!(
             actions.repair_requests.lock().unwrap().as_slice(),
@@ -741,11 +703,11 @@ pub(super) mod tests {
     fn repairing_item_guid_zero_dispatches_the_whole_body_slot() {
         let actions = InMemoryVendorActions::default();
 
-        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), repair_item(0).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
         assert_eq!(
             actions.repair_requests.lock().unwrap().as_slice(),
@@ -757,11 +719,11 @@ pub(super) mod tests {
     fn repairing_an_unknown_item_guid_is_a_harmless_no_op() {
         let actions = InMemoryVendorActions::default();
 
-        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0x99)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), repair_item(0x99).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
         assert!(actions.repair_requests.lock().unwrap().is_empty());
     }
@@ -775,14 +737,14 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), repair_item(0)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), repair_item(0).into()).unwrap();
 
         let expected = codec::build_gm_system_message(
             "gw_repair_item reducer failed: not enough money to repair".to_string(),
         );
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound }
+            ProtocolReply { outbound, .. }
                 if matches!(outbound.as_slice(),
                     [Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(m))]
                         if **m == expected)
@@ -798,27 +760,24 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), sell_item(ITEM)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), sell_item(ITEM).into()).unwrap();
 
         assert_eq!(
             actions.sell_requests.lock().unwrap().as_slice(),
             &[(42, VENDOR, 30)]
         );
-        match outcome {
-            VendorActionOutcome::Handled { outbound } => assert_renders_ring(&outbound, &ring),
-            VendorActionOutcome::PassThrough(_) => panic!("a sale must be handled"),
-        }
+        assert_renders_ring(&outcome.outbound, &ring);
     }
 
     #[test]
     fn selling_an_unknown_item_guid_is_a_harmless_no_op() {
         let actions = InMemoryVendorActions::default();
 
-        let outcome = dispatch_vendor_action(&actions, player(), sell_item(0x99)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), sell_item(0x99).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
         assert!(actions.sell_requests.lock().unwrap().is_empty());
     }
@@ -833,11 +792,11 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_vendor_action(&actions, player(), sell_item(ITEM)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player(), sell_item(ITEM).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
     }
 
@@ -847,16 +806,13 @@ pub(super) mod tests {
             item_slots: vec![(ITEM, 30)],
             ..Default::default()
         };
-        let player = VendorActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let mut player = ProtocolSession::new(7, "TESTER".into());
 
-        let outcome = dispatch_vendor_action(&actions, player, sell_item(ITEM)).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player, sell_item(ITEM).into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.is_empty()
+            ProtocolReply { outbound, .. } if outbound.is_empty()
         ));
         assert!(actions.sell_requests.lock().unwrap().is_empty());
     }
@@ -867,16 +823,13 @@ pub(super) mod tests {
             refuses: true,
             ..Default::default()
         };
-        let player = VendorActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let mut player = ProtocolSession::new(7, "TESTER".into());
 
-        let outcome = dispatch_vendor_action(&actions, player, list_inventory()).unwrap();
+        let outcome = Vendor::handle(&actions, &mut player, list_inventory().into()).unwrap();
 
         assert!(matches!(
             outcome,
-            VendorActionOutcome::Handled { outbound } if outbound.len() == 1
+            ProtocolReply { outbound, .. } if outbound.len() == 1
         ));
         assert!(actions.gate_requests.lock().unwrap().is_empty());
     }
@@ -1029,28 +982,21 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
-        let actions = InMemoryVendorActions::default();
-
-        let outcome = dispatch_vendor_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-
-        assert!(matches!(
-            outcome,
-            VendorActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
-    }
-
-    #[test]
     fn buyback_wire_slots_map_to_zero_based_ring_slots_at_the_durable_call() {
         let actions = InMemoryVendorActions::default();
 
-        dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
-        dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot13)).unwrap();
+        Vendor::handle(
+            &actions,
+            &mut player(),
+            buyback_item(BuybackSlot::Slot1).into(),
+        )
+        .unwrap();
+        Vendor::handle(
+            &actions,
+            &mut player(),
+            buyback_item(BuybackSlot::Slot13).into(),
+        )
+        .unwrap();
 
         assert_eq!(
             actions.buyback_requests.lock().unwrap().as_slice(),
@@ -1066,13 +1012,14 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome =
-            dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
+        let outcome = Vendor::handle(
+            &actions,
+            &mut player(),
+            buyback_item(BuybackSlot::Slot1).into(),
+        )
+        .unwrap();
 
-        let outbound = match outcome {
-            VendorActionOutcome::Handled { outbound } => outbound,
-            VendorActionOutcome::PassThrough(_) => panic!("buyback must be handled"),
-        };
+        let outbound = outcome.outbound;
         assert_renders_ring(&outbound, &ring[1..]);
     }
 
@@ -1082,17 +1029,16 @@ pub(super) mod tests {
             ring: Mutex::new(vec![(2589, 5, 120, 0)]),
             ..Default::default()
         };
-        let player = VendorActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let mut player = ProtocolSession::new(7, "TESTER".into());
 
-        let outcome =
-            dispatch_vendor_action(&actions, player, buyback_item(BuybackSlot::Slot1)).unwrap();
+        let outcome = Vendor::handle(
+            &actions,
+            &mut player,
+            buyback_item(BuybackSlot::Slot1).into(),
+        )
+        .unwrap();
 
-        assert!(
-            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+        assert!(outcome.outbound.is_empty());
         assert!(actions.buyback_requests.lock().unwrap().is_empty());
     }
 
@@ -1105,11 +1051,13 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let outcome =
-            dispatch_vendor_action(&actions, player(), buyback_item(BuybackSlot::Slot1)).unwrap();
+        let outcome = Vendor::handle(
+            &actions,
+            &mut player(),
+            buyback_item(BuybackSlot::Slot1).into(),
+        )
+        .unwrap();
 
-        assert!(
-            matches!(outcome, VendorActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+        assert!(outcome.outbound.is_empty());
     }
 }

@@ -1,5 +1,6 @@
 //! Mail routing tests through the shared WorldFake topology.
 
+use super::handlers::Mail;
 use super::party_tests::{character, DORMANT, GINGER, TRIN, VIM};
 use super::*;
 const MAILBOX: u64 = 0xF110_0000_0000_0042;
@@ -4207,12 +4208,11 @@ fn a_send_refusal_is_answered_and_a_transport_loss_ends_the_session() {
         }))
     };
     let (realm, world, _instances, _calls) = sharded_send();
-    let (tx, rx) = SessionTx::with_depth(0);
-    let mut conn = in_world_conn(7, GINGER);
+    let mut session = ProtocolSession::in_world(7, GINGER);
 
-    handle_mail(&tx, world.as_ref(), &mut conn, send("Nobody"))
-        .expect("a Refusal keeps the session");
-    match drain_outbound(&rx).as_slice() {
+    let reply = Mail::handle(world.as_ref(), &mut session, send("Nobody").into())
+        .expect("a Refusal keeps the World Session");
+    match outbound_messages(reply.outbound).as_slice() {
         [ServerOpcodeMessage::SMSG_SEND_MAIL_RESULT(m)] => assert_eq!(
             m.action,
             wow_world_messages::vanilla::SMSG_SEND_MAIL_RESULT_MailAction::Send {
@@ -4223,9 +4223,5 @@ fn a_send_refusal_is_answered_and_a_transport_loss_ends_the_session() {
     }
 
     *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
-    assert!(handle_mail(&tx, world.as_ref(), &mut conn, send("Trin")).is_err());
-    assert!(
-        drain_outbound(&rx).is_empty(),
-        "a Transport Loss answers nothing"
-    );
+    assert!(Mail::handle(world.as_ref(), &mut session, send("Trin").into()).is_err());
 }

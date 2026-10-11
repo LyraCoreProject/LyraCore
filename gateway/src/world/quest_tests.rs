@@ -1,5 +1,5 @@
 //! Quest traffic over the world session. Which screen a quest opens, and which durable request it
-//! makes, is decided and proved at the `dispatch_quest_action` seam (`handlers/quest.rs`). What is
+//! makes, is decided and proved at the `Quest::handle` seam (`handlers/quest.rs`). What is
 //! left here is only what the seam cannot see: that a quest opcode reaches the seam through the
 //! full handshake + login + cipher, and that the bodies it answers with survive the encrypted
 //! frame.
@@ -335,7 +335,7 @@ fn assert_create_quest_progress(frames: &[ServerOpcodeMessage]) {
 fn quest_hello_reaches_the_quest_module_and_its_raw_details_body_survives_the_cipher() {
     // The socket-level contract: dispatch routes HELLO to the quest module, and the raw-encoded
     // DETAILS screen it returns crosses the encrypted frame intact. Which screen a giver opens is
-    // decided at the `dispatch_quest_action` seam and proved there.
+    // decided at the `Quest::handle` seam and proved there.
     const OP_QUEST_DETAILS: u16 = 0x0188;
     let mut s = quest_store();
     s.quest.quest_evals = vec![eval(1234, codec::ROLE_START, false, false)];

@@ -7,19 +7,19 @@ use super::*;
 /// spell id is unused: the caller has at most one pending cast, which names it.
 pub(super) fn cancel_cast<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
-) -> Result<CastOutcome> {
-    best_effort(player, "cancel_cast", |actor| store.cancel_cast(actor))
+    session: &mut ProtocolSession,
+) -> Result<ProtocolReply> {
+    best_effort(session, "cancel_cast", |actor| store.cancel_cast(actor))
 }
 
 /// `CMSG_CANCEL_AURA`: remove the caller's own aura named by the wire spell id. The aura relay then
 /// re-syncs the buff bar.
 pub(super) fn cancel_aura<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     spell_id: u32,
-) -> Result<CastOutcome> {
-    best_effort(player, "cancel_aura", |actor| {
+) -> Result<ProtocolReply> {
+    best_effort(session, "cancel_aura", |actor| {
         store.cancel_aura(actor, spell_id)
     })
 }
@@ -28,21 +28,18 @@ pub(super) fn cancel_aura<St: CastStore + ?Sized>(
 /// is logged rather than raised. Only a Transport Loss ends the session, because no later request
 /// could be served either. A session with no Actor has nothing to cancel.
 fn best_effort(
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     what: &str,
     request: impl FnOnce(Actor) -> Result<()>,
-) -> Result<CastOutcome> {
-    if let Some(Err(e)) = player.actor().map(request) {
+) -> Result<ProtocolReply> {
+    if let Some(Err(e)) = session.actor().map(request) {
         let reason = refusal_reason(e)?;
         log::debug!(
             "world: {what} ignored (account {}): {reason}",
-            player.account_id
+            session.account_id
         );
     }
-    Ok(CastOutcome::Handled {
-        transition: CastTransition::default(),
-        outbound: Vec::new(),
-    })
+    Ok(ProtocolReply::default())
 }
 
 #[cfg(test)]
@@ -71,8 +68,8 @@ mod tests {
     fn cancelling_a_cast_asks_for_the_callers_pending_cast_and_answers_nothing() {
         let store = InMemoryCasts::default();
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, player(), cancel_cast_msg()).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, session(), cancel_cast_msg()).unwrap());
 
         assert_eq!(
             store.cancel_cast_calls.lock().unwrap().as_slice(),
@@ -83,15 +80,14 @@ mod tests {
             outbound.is_empty(),
             "the client already dropped its cast bar"
         );
-        assert_eq!(transition, CastTransition::default());
+        assert!(!repeating);
     }
 
     #[test]
     fn cancelling_an_aura_passes_the_wire_spell_id() {
         let store = InMemoryCasts::default();
 
-        let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cancel_aura_msg(5555)).unwrap());
+        let (_, outbound) = handled(run_cast(&store, session(), cancel_aura_msg(5555)).unwrap());
 
         assert_eq!(
             store.cancel_aura_calls.lock().unwrap().as_slice(),
@@ -106,7 +102,7 @@ mod tests {
             let store = refusing_store("nothing to cancel");
 
             let (_, outbound) = handled(
-                dispatch_cast(&store, player(), msg)
+                run_cast(&store, session(), msg)
                     .unwrap_or_else(|_| panic!("a losing {what} race must not end the session")),
             );
 
@@ -121,18 +117,15 @@ mod tests {
             ..Default::default()
         };
 
-        assert!(dispatch_cast(&store, player(), cancel_cast_msg()).is_err());
+        assert!(run_cast(&store, session(), cancel_cast_msg()).is_err());
     }
 
     #[test]
     fn a_player_with_no_character_in_world_has_nothing_to_cancel() {
         let store = InMemoryCasts::default();
-        let player = CastPlayer {
-            self_guid: None,
-            ..player()
-        };
+        let player = ProtocolSession::new(ACCOUNT, "TESTER".into());
 
-        handled(dispatch_cast(&store, player, cancel_aura_msg(5555)).unwrap());
+        handled(run_cast(&store, player, cancel_aura_msg(5555)).unwrap());
 
         assert!(store.cancel_aura_calls.lock().unwrap().is_empty());
     }

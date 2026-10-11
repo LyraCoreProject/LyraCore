@@ -213,24 +213,6 @@ pub(crate) trait GuildActionStore: GuildFeeStore + Send + Sync {
     fn guild_name_of_member(&self, character_guid: u64) -> Result<Option<String>>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct GuildActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
-
-pub(crate) enum GuildActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
-impl GuildActionPlayer {
-    /// The Character this player acts as. `None` before the World Session has one.
-    fn actor(self) -> Option<Actor> {
-        self.self_guid.and_then(Actor::new)
-    }
-}
-
 /// A Transport Loss ends the World Session. A Refusal this Gateway has no answer for, or a Realm
 /// Presence another World Shard cannot vouch for, comes back for the caller to drop.
 fn unless_transport_loss(error: anyhow::Error) -> Result<anyhow::Error> {
@@ -243,126 +225,130 @@ fn unless_transport_loss(error: anyhow::Error) -> Result<anyhow::Error> {
     }
 }
 
-pub(crate) fn dispatch_guild_action<St: GuildActionStore + ?Sized>(
-    store: &St,
-    player: GuildActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<GuildActionOutcome> {
-    let outbound = match msg {
-        ClientOpcodeMessage::CMSG_GUILD_QUERY(query) => query_outbound(store, query.guild_id),
-        ClientOpcodeMessage::CMSG_GUILD_ROSTER => roster_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_INFO => info_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_CREATE(create) => {
-            create_outbound(store, player, create.guild_name)
-        }
-        ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(activate) => {
-            tabard_window_outbound(store, player, activate.guid.guid())
-        }
-        ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(save) => {
-            save_emblem_outbound(store, player, &save)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_INVITE(invite) => {
-            invite_outbound(store, player, invite.invited_player)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_ACCEPT => accept_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_DECLINE => decline_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_LEAVE => leave_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_REMOVE(remove) => named_member_op(
-            store,
-            player,
-            remove.player_name,
-            GuildOpKind::Remove,
-            |target_guid| GuildRequest::Remove { target_guid },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_PROMOTE(promote) => named_member_op(
-            store,
-            player,
-            promote.player_name,
-            GuildOpKind::Promote,
-            |target_guid| GuildRequest::Promote { target_guid },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_DEMOTE(demote) => named_member_op(
-            store,
-            player,
-            demote.player_name,
-            GuildOpKind::Demote,
-            |target_guid| GuildRequest::Demote { target_guid },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_LEADER(leader) => named_member_op(
-            store,
-            player,
-            leader.new_guild_leader_name,
-            GuildOpKind::Leader,
-            |target_guid| GuildRequest::SetLeader { target_guid },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_DISBAND => disband_outbound(store, player),
-        ClientOpcodeMessage::CMSG_GUILD_MOTD(motd) => {
-            motd_outbound(store, player, motd.message_of_the_day)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(info) => {
-            info_text_outbound(store, player, info.guild_info)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(note) => set_note_outbound(
-            store,
-            player,
-            note.player_name,
-            note.note,
-            |target_guid, text| GuildRequest::SetPublicNote { target_guid, text },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(note) => set_note_outbound(
-            store,
-            player,
-            note.player_name,
-            note.note,
-            |target_guid, text| GuildRequest::SetOfficerNote { target_guid, text },
-        ),
-        ClientOpcodeMessage::CMSG_GUILD_RANK(rank) => {
-            edit_rank_outbound(store, player, rank.rank_id, rank.rights, rank.rank_name)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(add) => {
-            add_rank_outbound(store, player, add.rank_name)
-        }
-        ClientOpcodeMessage::CMSG_GUILD_DEL_RANK => delete_rank_outbound(store, player),
-        ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(list) => {
-            petition_showlist_outbound(store, player, list.guid.guid())
-        }
-        ClientOpcodeMessage::CMSG_PETITION_BUY(buy) => {
-            petition_buy_outbound(store, player, buy.npc.guid(), buy.name)
-        }
-        ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(show) => {
-            show_signatures_outbound(store, player, show.item.guid())
-        }
-        ClientOpcodeMessage::CMSG_PETITION_QUERY(query) => {
-            petition_query_outbound(store, query.petition.guid())
-        }
-        ClientOpcodeMessage::MSG_PETITION_RENAME(rename) => {
-            rename_petition_outbound(store, player, rename.petition.guid(), rename.new_name)
-        }
-        ClientOpcodeMessage::CMSG_OFFER_PETITION(offer) => {
-            offer_petition_outbound(store, player, offer.petition.guid(), offer.target.guid())
-        }
-        ClientOpcodeMessage::CMSG_PETITION_SIGN(sign) => {
-            sign_petition_outbound(store, player, sign.petition.guid())
-        }
-        ClientOpcodeMessage::MSG_PETITION_DECLINE(decline) => {
-            decline_petition_outbound(store, player, decline.petition.guid())
-        }
-        ClientOpcodeMessage::CMSG_TURN_IN_PETITION(turn_in) => {
-            turn_in_petition_outbound(store, player, turn_in.petition.guid())
-        }
-        other => return Ok(GuildActionOutcome::PassThrough(other)),
-    };
-    match outbound {
-        Ok(outbound) => Ok(GuildActionOutcome::Handled { outbound }),
-        Err(error) => {
-            let error = unless_transport_loss(error)?;
-            log::debug!(
-                "world: guild request dropped (account {}): {error:#}",
-                player.account_id
-            );
-            Ok(GuildActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
+pub(crate) struct Guild;
+
+impl<St: GuildActionStore + ?Sized> ProtocolFamily<St> for Guild {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let outbound = match msg {
+            ClientOpcodeMessage::CMSG_GUILD_QUERY(query) => query_outbound(store, query.guild_id),
+            ClientOpcodeMessage::CMSG_GUILD_ROSTER => roster_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_INFO => info_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_CREATE(create) => {
+                create_outbound(store, player, create.guild_name)
+            }
+            ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(activate) => {
+                tabard_window_outbound(store, player, activate.guid.guid())
+            }
+            ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(save) => {
+                save_emblem_outbound(store, player, &save)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_INVITE(invite) => {
+                invite_outbound(store, player, invite.invited_player)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_ACCEPT => accept_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_DECLINE => decline_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_LEAVE => leave_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_REMOVE(remove) => named_member_op(
+                store,
+                player,
+                remove.player_name,
+                GuildOpKind::Remove,
+                |target_guid| GuildRequest::Remove { target_guid },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_PROMOTE(promote) => named_member_op(
+                store,
+                player,
+                promote.player_name,
+                GuildOpKind::Promote,
+                |target_guid| GuildRequest::Promote { target_guid },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_DEMOTE(demote) => named_member_op(
+                store,
+                player,
+                demote.player_name,
+                GuildOpKind::Demote,
+                |target_guid| GuildRequest::Demote { target_guid },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_LEADER(leader) => named_member_op(
+                store,
+                player,
+                leader.new_guild_leader_name,
+                GuildOpKind::Leader,
+                |target_guid| GuildRequest::SetLeader { target_guid },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_DISBAND => disband_outbound(store, player),
+            ClientOpcodeMessage::CMSG_GUILD_MOTD(motd) => {
+                motd_outbound(store, player, motd.message_of_the_day)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_INFO_TEXT(info) => {
+                info_text_outbound(store, player, info.guild_info)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_SET_PUBLIC_NOTE(note) => set_note_outbound(
+                store,
+                player,
+                note.player_name,
+                note.note,
+                |target_guid, text| GuildRequest::SetPublicNote { target_guid, text },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_SET_OFFICER_NOTE(note) => set_note_outbound(
+                store,
+                player,
+                note.player_name,
+                note.note,
+                |target_guid, text| GuildRequest::SetOfficerNote { target_guid, text },
+            ),
+            ClientOpcodeMessage::CMSG_GUILD_RANK(rank) => {
+                edit_rank_outbound(store, player, rank.rank_id, rank.rights, rank.rank_name)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_ADD_RANK(add) => {
+                add_rank_outbound(store, player, add.rank_name)
+            }
+            ClientOpcodeMessage::CMSG_GUILD_DEL_RANK => delete_rank_outbound(store, player),
+            ClientOpcodeMessage::CMSG_PETITION_SHOWLIST(list) => {
+                petition_showlist_outbound(store, player, list.guid.guid())
+            }
+            ClientOpcodeMessage::CMSG_PETITION_BUY(buy) => {
+                petition_buy_outbound(store, player, buy.npc.guid(), buy.name)
+            }
+            ClientOpcodeMessage::CMSG_PETITION_SHOW_SIGNATURES(show) => {
+                show_signatures_outbound(store, player, show.item.guid())
+            }
+            ClientOpcodeMessage::CMSG_PETITION_QUERY(query) => {
+                petition_query_outbound(store, query.petition.guid())
+            }
+            ClientOpcodeMessage::MSG_PETITION_RENAME(rename) => {
+                rename_petition_outbound(store, player, rename.petition.guid(), rename.new_name)
+            }
+            ClientOpcodeMessage::CMSG_OFFER_PETITION(offer) => {
+                offer_petition_outbound(store, player, offer.petition.guid(), offer.target.guid())
+            }
+            ClientOpcodeMessage::CMSG_PETITION_SIGN(sign) => {
+                sign_petition_outbound(store, player, sign.petition.guid())
+            }
+            ClientOpcodeMessage::MSG_PETITION_DECLINE(decline) => {
+                decline_petition_outbound(store, player, decline.petition.guid())
+            }
+            ClientOpcodeMessage::CMSG_TURN_IN_PETITION(turn_in) => {
+                turn_in_petition_outbound(store, player, turn_in.petition.guid())
+            }
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        match outbound {
+            Ok(outbound) => Ok(ProtocolReply::from(outbound)),
+            Err(error) => {
+                let error = unless_transport_loss(error)?;
+                log::debug!(
+                    "world: guild request dropped (account {}): {error:#}",
+                    player.account_id
+                );
+                Ok(ProtocolReply::from(Vec::new()))
+            }
         }
     }
 }
@@ -399,9 +385,9 @@ fn query_outbound<St: GuildActionStore + ?Sized>(
 /// The actor's membership and its Guild, when both exist.
 fn actor_guild<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Option<(codec::GuildMemberView, codec::GuildView)>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor_guid) = player.self_guid() else {
         return Ok(None);
     };
     let Some(member) = store.guild_member(actor_guid)? else {
@@ -415,7 +401,7 @@ fn actor_guild<St: GuildActionStore + ?Sized>(
 /// the cap never pays for a `guild_character_facts` read that would be discarded.
 fn roster_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some((viewer, guild)) = actor_guild(store, player)? else {
         return Ok(Vec::new());
@@ -513,7 +499,7 @@ pub(crate) fn roster_packet(
 
 fn info_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some((_, guild)) = actor_guild(store, player)? else {
         return Ok(vec![not_in_guild()]);
@@ -549,7 +535,7 @@ fn account_count(members: &[codec::GuildMemberView]) -> u32 {
 /// replies to neither outcome (`cm:GuildHandler.cpp:46-64`).
 fn create_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     name: String,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -602,7 +588,7 @@ fn live_character_named<St: GuildActionStore + ?Sized>(
 /// so this Gateway read happens first here too.
 fn invite_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     typed_name: String,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -643,7 +629,7 @@ fn invite_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_ACCEPT (`cm:GuildHandler.cpp:192-211`): every failure is silent, like mangos.
 fn accept_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
         return Ok(Vec::new());
@@ -668,7 +654,7 @@ fn accept_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_DECLINE (`cm:GuildHandler.cpp:214-238`): every failure is silent.
 fn decline_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
         return Ok(Vec::new());
@@ -696,7 +682,7 @@ fn decline_outbound<St: GuildActionStore + ?Sized>(
 /// outcomes apart, only whether the actor already is the Guild Leader.
 fn leave_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
         return Ok(Vec::new());
@@ -728,7 +714,7 @@ fn leave_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_DISBAND (`cm:GuildHandler.cpp:424-435`).
 fn disband_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
         return Ok(Vec::new());
@@ -752,7 +738,7 @@ fn disband_outbound<St: GuildActionStore + ?Sized>(
 /// (`cm:GuildHandler.cpp:146-152,290-296,343-349,467-473`).
 fn named_member_op<St, F>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     typed_name: String,
     op_kind: GuildOpKind,
     build_request: F,
@@ -882,7 +868,7 @@ fn membership_refusal_outbound(
 /// CMSG_GUILD_MOTD (`cm:GuildHandler.cpp:488-513`).
 fn motd_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     text: String,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -904,7 +890,7 @@ fn motd_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_INFO_TEXT (`cm:GuildHandler.cpp:693-713`).
 fn info_text_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     text: String,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -928,7 +914,7 @@ fn info_text_outbound<St: GuildActionStore + ?Sized>(
 /// `GetMemberSlot` (`cm:GuildHandler.cpp:526-545,564-582`), then run the edit.
 fn set_note_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     target_name: String,
     text: String,
     request: impl FnOnce(u64, String) -> GuildRequest,
@@ -979,7 +965,7 @@ fn rank_refusal_outbound(outcome: GuildOutcome) -> Vec<Outbound> {
 /// CMSG_GUILD_RANK.
 fn edit_rank_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     rank_id: u32,
     rights: u32,
     name: String,
@@ -1001,7 +987,7 @@ fn edit_rank_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_ADD_RANK.
 fn add_rank_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     name: String,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -1014,7 +1000,7 @@ fn add_rank_outbound<St: GuildActionStore + ?Sized>(
 /// CMSG_GUILD_DEL_RANK.
 fn delete_rank_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
         return Ok(Vec::new());
@@ -1036,7 +1022,7 @@ pub(crate) fn is_guild_dot_command(text: &str) -> bool {
 /// system line for the actor; success is silent, like every other dot-command.
 pub(crate) fn run_guild_dot_command<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     text: &str,
 ) -> Result<Option<String>> {
     let Some(actor) = player.actor() else {
@@ -1124,10 +1110,10 @@ fn parse_guild_create(text: &str) -> Option<(Option<&str>, &str)> {
 /// run in the Fee Hold when the emblem is saved.
 fn tabard_window_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     npc_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor_guid) = player.self_guid() else {
         return Ok(Vec::new());
     };
     if store.guild_npc_refuses(npc_guid, actor_guid)? {
@@ -1153,7 +1139,7 @@ pub(crate) fn tabard_designer_window(npc_guid: u64) -> Outbound {
 /// through the TABARD_CHANGED Guild Event.
 fn save_emblem_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     save: &MSG_SAVE_GUILD_EMBLEM_Client,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -1210,10 +1196,10 @@ fn emblem_result(outcome: guild_fee::FeeOutcome) -> GuildEmblemResult {
 /// bought.
 fn petition_showlist_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     npc_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor_guid) = player.self_guid() else {
         return Ok(Vec::new());
     };
     if store.guild_npc_refuses(npc_guid, actor_guid)? {
@@ -1241,7 +1227,7 @@ fn guild_create_result(name: String, result: GuildCommandResult) -> Outbound {
 /// Charter reaches the client through the item relay.
 fn petition_buy_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     npc_guid: u64,
     name: String,
 ) -> Result<Vec<Outbound>> {
@@ -1337,10 +1323,10 @@ fn charter_purchase_reply(
 /// CMSG_PETITION_SHOW_SIGNATURES (`cm:PetitionsHandler.cpp:176-218`). A member hears nothing.
 fn show_signatures_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
-    let Some(actor_guid) = player.self_guid else {
+    let Some(actor_guid) = player.self_guid() else {
         return Ok(Vec::new());
     };
     if store.guild_member(actor_guid)?.is_some() {
@@ -1383,7 +1369,7 @@ fn petition_query(petition: &codec::PetitionView) -> Outbound {
 /// Charter. The reply echoes the new name.
 fn rename_petition_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
     name: String,
 ) -> Result<Vec<Outbound>> {
@@ -1426,7 +1412,7 @@ fn rename_petition_outbound<St: GuildActionStore + ?Sized>(
 /// the offerer's name there.
 fn offer_petition_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
     target_guid: u64,
 ) -> Result<Vec<Outbound>> {
@@ -1474,7 +1460,7 @@ fn offer_petition_outbound<St: GuildActionStore + ?Sized>(
 /// Account that already signed, reach both the signer and the owner through Guild Events.
 fn sign_petition_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -1527,7 +1513,7 @@ fn sign_petition_outbound<St: GuildActionStore + ?Sized>(
 /// Event; the decliner hears nothing.
 fn decline_petition_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -1547,7 +1533,7 @@ fn decline_petition_outbound<St: GuildActionStore + ?Sized>(
 /// the next world entry destroys it (`destroy_inert_charters`).
 fn turn_in_petition_outbound<St: GuildActionStore + ?Sized>(
     store: &St,
-    player: GuildActionPlayer,
+    player: &ProtocolSession,
     charter_item_guid: u64,
 ) -> Result<Vec<Outbound>> {
     let Some(actor) = player.actor() else {
@@ -1973,7 +1959,7 @@ mod tests {
         CMSG_GUILD_INFO_TEXT, CMSG_GUILD_MOTD, CMSG_GUILD_QUERY, CMSG_GUILD_RANK,
         CMSG_GUILD_SET_OFFICER_NOTE, CMSG_GUILD_SET_PUBLIC_NOTE, CMSG_OFFER_PETITION,
         CMSG_PETITION_BUY, CMSG_PETITION_QUERY, CMSG_PETITION_SHOWLIST,
-        CMSG_PETITION_SHOW_SIGNATURES, CMSG_PETITION_SIGN, CMSG_PING, CMSG_TURN_IN_PETITION,
+        CMSG_PETITION_SHOW_SIGNATURES, CMSG_PETITION_SIGN, CMSG_TURN_IN_PETITION,
         MSG_PETITION_DECLINE,
     };
 
@@ -2348,22 +2334,18 @@ mod tests {
         ReducerCallError::refused("realm_guild_op", "mystery").into()
     }
 
-    fn in_world(guid: u64) -> GuildActionPlayer {
-        GuildActionPlayer {
-            account_id: 7,
-            self_guid: Some(guid),
-        }
+    fn in_world(guid: u64) -> ProtocolSession {
+        ProtocolSession::in_world(7, guid)
     }
 
     fn dispatch(
         store: &InMemoryGuildActions,
-        player: GuildActionPlayer,
+        mut player: ProtocolSession,
         msg: ClientOpcodeMessage,
     ) -> Vec<Outbound> {
-        match dispatch_guild_action(store, player, msg).unwrap() {
-            GuildActionOutcome::Handled { outbound } => outbound,
-            GuildActionOutcome::PassThrough(msg) => panic!("{msg} was not handled"),
-        }
+        Guild::handle(store, &mut player, msg.into())
+            .unwrap()
+            .outbound
     }
 
     fn only_message(outbound: Vec<Outbound>) -> ServerOpcodeMessage {
@@ -2386,7 +2368,7 @@ mod tests {
     fn dot_create_founds_a_guild_led_by_the_gm_when_nothing_is_selected() {
         let store = realm();
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create \"Tracer Guild\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create \"Tracer Guild\"").unwrap();
         assert_eq!(line, None);
         let guild = store.guild_named("Tracer Guild").expect("guild founded");
         assert_eq!(guild.leader_guid, GM);
@@ -2404,9 +2386,9 @@ mod tests {
     #[test]
     fn a_repeated_dot_create_of_the_same_name_answers_guild_not_created() {
         let store = realm();
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Tracer Guild\"").unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Tracer Guild\"").unwrap();
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create \"tracer guild\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create \"tracer guild\"").unwrap();
         assert_eq!(line.as_deref(), Some("guild not created"));
         assert_eq!(store.guilds.lock().unwrap().len(), 1);
         assert_eq!(store.members.lock().unwrap().len(), 1);
@@ -2415,10 +2397,13 @@ mod tests {
     #[test]
     fn dot_create_with_a_taken_name_in_another_case_answers_guild_not_created() {
         let store = realm();
-        run_guild_dot_command(&store, in_world(GM), ".guild create Bob \"Tracer Guild\"").unwrap();
-        let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create Carol \"tracer guild\"")
-                .unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create Bob \"Tracer Guild\"").unwrap();
+        let line = run_guild_dot_command(
+            &store,
+            &in_world(GM),
+            ".guild create Carol \"tracer guild\"",
+        )
+        .unwrap();
         assert_eq!(line.as_deref(), Some("guild not created"));
         assert_eq!(store.guilds.lock().unwrap().len(), 1);
         assert_eq!(store.guild_member(CAROL).unwrap(), None);
@@ -2429,7 +2414,7 @@ mod tests {
         let mut store = realm();
         store.characters[1].online = false;
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create bob \"Knights\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create bob \"Knights\"").unwrap();
         assert_eq!(line, None);
         assert_eq!(store.guild_named("Knights").unwrap().leader_guid, BOB);
         let (_, request) = store.ops.lock().unwrap()[0].clone();
@@ -2451,7 +2436,7 @@ mod tests {
         let store = realm();
         store.add_member(9, BOB, 3, "");
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create Bob \"Knights\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create Bob \"Knights\"").unwrap();
         assert_eq!(line.as_deref(), Some("Bob is already in a guild"));
         assert!(store.guilds.lock().unwrap().is_empty());
     }
@@ -2460,7 +2445,7 @@ mod tests {
     fn dot_create_for_an_unknown_leader_answers_no_player_named() {
         let store = realm();
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create Dave \"Knights\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create Dave \"Knights\"").unwrap();
         assert_eq!(line.as_deref(), Some("no player named Dave"));
         assert!(store.ops.lock().unwrap().is_empty());
     }
@@ -2469,7 +2454,7 @@ mod tests {
     fn dot_create_without_a_name_uses_the_selected_player() {
         let mut store = realm();
         store.selected = CAROL;
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap();
         assert_eq!(store.guild_named("Knights").unwrap().leader_guid, CAROL);
     }
 
@@ -2477,7 +2462,7 @@ mod tests {
     fn dot_create_with_a_selected_creature_falls_back_to_the_actor() {
         let mut store = realm();
         store.selected = 0xF130_0000_0000_0042;
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap();
         assert_eq!(store.guild_named("Knights").unwrap().leader_guid, GM);
     }
 
@@ -2485,7 +2470,7 @@ mod tests {
     fn dot_create_from_gm_level_zero_is_denied_before_any_request() {
         let store = realm();
         let line =
-            run_guild_dot_command(&store, in_world(BOB), ".guild create \"Knights\"").unwrap();
+            run_guild_dot_command(&store, &in_world(BOB), ".guild create \"Knights\"").unwrap();
         assert_eq!(line.as_deref(), Some("permission denied"));
         assert!(store.ops.lock().unwrap().is_empty());
         assert!(store.guilds.lock().unwrap().is_empty());
@@ -2498,7 +2483,7 @@ mod tests {
             ..realm()
         };
         let line =
-            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
+            run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap();
         assert_eq!(line.as_deref(), Some("guild not created"));
         assert!(store.ops.lock().unwrap().is_empty());
     }
@@ -2509,7 +2494,7 @@ mod tests {
             facts_error: Some(lost_transport),
             ..realm()
         };
-        let error = run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"")
+        let error = run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"")
             .expect_err("a lost read is a Transport Loss");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
         assert!(store.ops.lock().unwrap().is_empty());
@@ -2571,7 +2556,7 @@ mod tests {
             ".guild invite Bob",
         ] {
             assert_eq!(
-                run_guild_dot_command(&store, in_world(GM), text)
+                run_guild_dot_command(&store, &in_world(GM), text)
                     .unwrap()
                     .as_deref(),
                 Some(GUILD_CREATE_USAGE),
@@ -2593,7 +2578,7 @@ mod tests {
     fn a_lost_reducer_transport_ends_the_session() {
         let mut store = realm();
         store.op_error = Some(lost_transport);
-        let error = run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"")
+        let error = run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"")
             .expect_err("fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
     }
@@ -2603,7 +2588,7 @@ mod tests {
         let mut store = realm();
         store.op_error = Some(unknown_refusal);
         assert_eq!(
-            run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap(),
+            run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap(),
             Some("guild not created".into())
         );
     }
@@ -2613,12 +2598,12 @@ mod tests {
         let disband = || ClientOpcodeMessage::CMSG_GUILD_DISBAND;
         let mut store = realm();
         store.op_error = Some(lost_transport);
-        assert!(dispatch_guild_action(&store, in_world(GM), disband()).is_err());
+        assert!(Guild::handle(&store, &mut in_world(GM), disband().into()).is_err());
         store.op_error = Some(unknown_refusal);
-        match dispatch_guild_action(&store, in_world(GM), disband()).unwrap() {
-            GuildActionOutcome::Handled { outbound } => assert!(outbound.is_empty()),
-            GuildActionOutcome::PassThrough(_) => panic!("expected Handled"),
-        }
+        assert!(Guild::handle(&store, &mut in_world(GM), disband().into())
+            .unwrap()
+            .outbound
+            .is_empty());
     }
 
     #[test]
@@ -2653,11 +2638,8 @@ mod tests {
     #[test]
     fn guild_query_answers_any_guild_at_character_select() {
         let store = realm();
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
-        let character_select = GuildActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap();
+        let character_select = ProtocolSession::new(7, "TESTER".into());
         let message = only_message(dispatch(
             &store,
             character_select,
@@ -2694,7 +2676,7 @@ mod tests {
         store.characters[2].online = false;
         // A day and a half ago: 1.5 * 86_400_000_000 micros.
         store.characters[2].last_logout_micros = now_micros() - 129_600_000_000;
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Knights\"").unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Knights\"").unwrap();
         store.add_member(1, BOB, 3, "bob note");
         store.add_member(1, CAROL, 4, "carol note");
         store
@@ -2826,21 +2808,6 @@ mod tests {
         );
     }
 
-    #[test]
-    fn unrelated_opcode_passes_through() {
-        let store = realm();
-        let outcome = dispatch_guild_action(
-            &store,
-            in_world(GM),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-        assert!(matches!(
-            outcome,
-            GuildActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
-    }
-
     fn raw(outbound: Vec<Outbound>) -> Vec<(u16, Vec<u8>)> {
         outbound
             .into_iter()
@@ -2936,7 +2903,7 @@ mod tests {
 
     fn activate_tabard_vendor(
         store: &InMemoryGuildActions,
-        player: GuildActionPlayer,
+        player: ProtocolSession,
     ) -> Vec<Outbound> {
         dispatch(
             store,
@@ -2966,10 +2933,7 @@ mod tests {
             ..realm()
         };
         assert!(activate_tabard_vendor(&store, in_world(BOB)).is_empty());
-        let character_select = GuildActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let character_select = ProtocolSession::new(7, "TESTER".into());
         assert!(activate_tabard_vendor(&realm(), character_select).is_empty());
     }
 
@@ -3010,7 +2974,7 @@ mod tests {
             fee_refusal,
             ..realm()
         };
-        run_guild_dot_command(&store, in_world(GM), ".guild create Bob \"Knights\"").unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create Bob \"Knights\"").unwrap();
         store.add_member(1, CAROL, 3, "");
         store
     }
@@ -3021,7 +2985,7 @@ mod tests {
             fee_decide_error: Some(lost_transport),
             ..led_by_bob(None, None)
         };
-        let error = dispatch_guild_action(&store, in_world(BOB), save_emblem_message())
+        let error = Guild::handle(&store, &mut in_world(BOB), save_emblem_message().into())
             .err()
             .expect("a Transport Loss is fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
@@ -3108,7 +3072,7 @@ mod tests {
     fn invite_reaches_a_live_target_with_both_teams_and_no_reply() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "Dave".into()).unwrap();
         assert!(outbound.is_empty());
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
@@ -3127,7 +3091,7 @@ mod tests {
     #[test]
     fn invite_of_an_unknown_name_answers_player_not_found() {
         let store = founded_with_members();
-        let outbound = invite_outbound(&store, in_world(GM), "Nobody".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "Nobody".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3143,7 +3107,7 @@ mod tests {
         let mut offline_dave = facts(DAVE, "Dave");
         offline_dave.online = false;
         store.characters.push(offline_dave);
-        let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3158,7 +3122,7 @@ mod tests {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
         store.ignored.push((DAVE, GM));
-        let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "Dave".into()).unwrap();
         assert!(outbound.is_empty());
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
@@ -3179,7 +3143,7 @@ mod tests {
         let mut store = founded_with_members();
         store.characters.push(horde_facts(DAVE, "Dave"));
         store.refuse_next_op(GuildRefusal::NotAllied);
-        let outbound = invite_outbound(&store, in_world(GM), "dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "dave".into()).unwrap();
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
             Some((
@@ -3204,7 +3168,7 @@ mod tests {
     fn invite_of_a_guilded_target_maps_already_in_guild_to_its_resolved_name() {
         let store = founded_with_members();
         store.refuse_next_op(GuildRefusal::AlreadyInGuild);
-        let outbound = invite_outbound(&store, in_world(GM), "bob".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "bob".into()).unwrap();
         let ServerOpcodeMessage::SMSG_GUILD_COMMAND_RESULT(result) = only_message(outbound) else {
             panic!("expected a command result");
         };
@@ -3217,7 +3181,7 @@ mod tests {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
         store.refuse_next_op(GuildRefusal::AlreadyInvited);
-        let outbound = invite_outbound(&store, in_world(GM), "Dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(GM), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3232,7 +3196,7 @@ mod tests {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
         store.refuse_next_op(GuildRefusal::NoPermission);
-        let outbound = invite_outbound(&store, in_world(BOB), "Dave".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(BOB), "Dave".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3247,7 +3211,7 @@ mod tests {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
         store.refuse_next_op(GuildRefusal::NotInGuild);
-        let outbound = invite_outbound(&store, in_world(DAVE), "Bob".into()).unwrap();
+        let outbound = invite_outbound(&store, &in_world(DAVE), "Bob".into()).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3261,7 +3225,7 @@ mod tests {
     fn accept_conveys_the_actors_name_and_team_and_replies_nothing() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        let outbound = accept_outbound(&store, in_world(DAVE)).unwrap();
+        let outbound = accept_outbound(&store, &in_world(DAVE)).unwrap();
         assert!(outbound.is_empty());
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
@@ -3279,7 +3243,7 @@ mod tests {
     fn decline_conveys_the_actors_name_and_replies_nothing() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        let outbound = decline_outbound(&store, in_world(DAVE)).unwrap();
+        let outbound = decline_outbound(&store, &in_world(DAVE)).unwrap();
         assert!(outbound.is_empty());
         assert_eq!(
             store.ops.lock().unwrap().last().cloned(),
@@ -3295,7 +3259,7 @@ mod tests {
     #[test]
     fn leave_of_an_ordinary_member_replies_quit_success() {
         let store = founded_with_members();
-        let outbound = leave_outbound(&store, in_world(BOB)).unwrap();
+        let outbound = leave_outbound(&store, &in_world(BOB)).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (GuildCommand::Quit, GuildCommandResult::PlayerNoMoreInGuild)
@@ -3306,7 +3270,7 @@ mod tests {
     fn leave_of_the_leader_with_company_answers_leader_cannot_leave() {
         let store = founded_with_members();
         store.refuse_next_op(GuildRefusal::LeaderCannotLeave);
-        let outbound = leave_outbound(&store, in_world(GM)).unwrap();
+        let outbound = leave_outbound(&store, &in_world(GM)).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3319,8 +3283,8 @@ mod tests {
     #[test]
     fn leave_of_a_lone_leader_disbands_silently() {
         let store = realm();
-        run_guild_dot_command(&store, in_world(GM), ".guild create \"Solo\"").unwrap();
-        let outbound = leave_outbound(&store, in_world(GM)).unwrap();
+        run_guild_dot_command(&store, &in_world(GM), ".guild create \"Solo\"").unwrap();
+        let outbound = leave_outbound(&store, &in_world(GM)).unwrap();
         assert!(outbound.is_empty());
     }
 
@@ -3328,7 +3292,7 @@ mod tests {
     fn leave_outside_a_guild_answers_not_in_guild() {
         let mut store = founded_with_members();
         store.characters.push(facts(DAVE, "Dave"));
-        let outbound = leave_outbound(&store, in_world(DAVE)).unwrap();
+        let outbound = leave_outbound(&store, &in_world(DAVE)).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3344,7 +3308,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             "Nobody".into(),
             GuildOpKind::Remove,
             |target_guid| GuildRequest::Remove { target_guid },
@@ -3368,7 +3332,7 @@ mod tests {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(BOB),
             GuildOpKind::Remove,
             |target_guid| GuildRequest::Remove { target_guid },
@@ -3387,7 +3351,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::NoPermission);
         let outbound = named_member_op(
             &store,
-            in_world(BOB),
+            &in_world(BOB),
             snapshot_name(CAROL),
             GuildOpKind::Remove,
             |target_guid| GuildRequest::Remove { target_guid },
@@ -3408,7 +3372,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::LeaderCannotLeave);
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(GM),
             GuildOpKind::Remove,
             |target_guid| GuildRequest::Remove { target_guid },
@@ -3429,7 +3393,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
-            in_world(BOB),
+            &in_world(BOB),
             snapshot_name(CAROL),
             GuildOpKind::Remove,
             |target_guid| GuildRequest::Remove { target_guid },
@@ -3446,7 +3410,7 @@ mod tests {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(BOB),
             GuildOpKind::Promote,
             |target_guid| GuildRequest::Promote { target_guid },
@@ -3465,7 +3429,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::RankTooHigh);
         let outbound = named_member_op(
             &store,
-            in_world(BOB),
+            &in_world(BOB),
             snapshot_name(CAROL),
             GuildOpKind::Promote,
             |target_guid| GuildRequest::Promote { target_guid },
@@ -3483,7 +3447,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::TargetIsSelf);
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(GM),
             GuildOpKind::Promote,
             |target_guid| GuildRequest::Promote { target_guid },
@@ -3500,7 +3464,7 @@ mod tests {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(BOB),
             GuildOpKind::Demote,
             |target_guid| GuildRequest::Demote { target_guid },
@@ -3519,7 +3483,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::RankTooLow);
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(CAROL),
             GuildOpKind::Demote,
             |target_guid| GuildRequest::Demote { target_guid },
@@ -3536,7 +3500,7 @@ mod tests {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(BOB),
             GuildOpKind::Leader,
             |target_guid| GuildRequest::SetLeader { target_guid },
@@ -3555,7 +3519,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::NotLeader);
         let outbound = named_member_op(
             &store,
-            in_world(BOB),
+            &in_world(BOB),
             snapshot_name(CAROL),
             GuildOpKind::Leader,
             |target_guid| GuildRequest::SetLeader { target_guid },
@@ -3575,7 +3539,7 @@ mod tests {
         let store = founded_with_members();
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             snapshot_name(GM),
             GuildOpKind::Leader,
             |target_guid| GuildRequest::SetLeader { target_guid },
@@ -3590,7 +3554,7 @@ mod tests {
         store.refuse_next_op(GuildRefusal::TargetNotInGuild);
         let outbound = named_member_op(
             &store,
-            in_world(GM),
+            &in_world(GM),
             "Nobody".into(),
             GuildOpKind::Leader,
             |target_guid| GuildRequest::SetLeader { target_guid },
@@ -3612,7 +3576,7 @@ mod tests {
     #[test]
     fn disband_by_the_leader_replies_nothing() {
         let store = founded_with_members();
-        let outbound = disband_outbound(&store, in_world(GM)).unwrap();
+        let outbound = disband_outbound(&store, &in_world(GM)).unwrap();
         assert!(outbound.is_empty());
     }
 
@@ -3620,7 +3584,7 @@ mod tests {
     fn disband_by_a_non_leader_answers_no_permission() {
         let store = founded_with_members();
         store.refuse_next_op(GuildRefusal::NotLeader);
-        let outbound = disband_outbound(&store, in_world(BOB)).unwrap();
+        let outbound = disband_outbound(&store, &in_world(BOB)).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3634,7 +3598,7 @@ mod tests {
     fn disband_outside_a_guild_answers_not_in_guild() {
         let store = founded_with_members();
         store.refuse_next_op(GuildRefusal::NotInGuild);
-        let outbound = disband_outbound(&store, in_world(DAVE)).unwrap();
+        let outbound = disband_outbound(&store, &in_world(DAVE)).unwrap();
         assert_eq!(
             command_result_of(outbound),
             (
@@ -3701,7 +3665,7 @@ mod tests {
                 invited_player: "Dave".into(),
             },
         ));
-        let error = dispatch_guild_action(&store, in_world(GM), msg)
+        let error = Guild::handle(&store, &mut in_world(GM), msg.into())
             .err()
             .expect("a lost read is a Transport Loss");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
@@ -4387,10 +4351,7 @@ mod tests {
         let query = |charter: u64| {
             dispatch(
                 &store,
-                GuildActionPlayer {
-                    account_id: 7,
-                    self_guid: None,
-                },
+                ProtocolSession::new(7, "TESTER".into()),
                 ClientOpcodeMessage::CMSG_PETITION_QUERY(Box::new(CMSG_PETITION_QUERY {
                     guild_id: 42,
                     petition: Guid::new(charter),

@@ -3,6 +3,7 @@
 //! session sees: the ordered batch, the ranged auto-repeat state it carries between casts, and
 //! the effect of each cancellation.
 
+use super::family::{ProtocolFamily, ProtocolSession};
 use super::handlers::InMemoryCasts;
 use super::*;
 use std::sync::Mutex;
@@ -11,52 +12,18 @@ use std::sync::Mutex;
 /// contract under test.
 const OP_CAST_RESULT: u16 = 0x0130;
 
-/// What the session keeps between two casts.
-struct Caster {
-    self_guid: Option<u64>,
-    ranged_repeat: bool,
-}
-
-impl Caster {
-    fn in_world() -> Self {
-        Self {
-            self_guid: Some(1),
-            ranged_repeat: false,
-        }
-    }
-
-    fn at_character_select() -> Self {
-        Self {
-            self_guid: None,
-            ranged_repeat: false,
-        }
-    }
-}
-
-/// Dispatch one cast message, apply the session transition it asks for, and return the packets
-/// the session would send for it.
 fn run(
     store: &InMemoryCasts,
-    caster: &mut Caster,
+    session: &mut ProtocolSession,
     msg: impl Into<ClientOpcodeMessage>,
 ) -> Vec<Outbound> {
-    let player = CastPlayer {
-        account_id: 7,
-        self_guid: caster.self_guid,
-        ranged_repeat: caster.ranged_repeat,
-    };
-    match dispatch_cast(store, player, msg.into()).unwrap() {
-        CastOutcome::Handled {
-            transition,
-            outbound,
-        } => {
-            if let Some(armed) = transition.ranged_repeat {
-                caster.ranged_repeat = armed;
-            }
-            outbound
-        }
-        CastOutcome::PassThrough(_) => panic!("the cast dispatcher passed the message on"),
-    }
+    handlers::Cast::handle(store, session, msg.into().into())
+        .unwrap()
+        .outbound
+}
+
+fn repeating(session: &ProtocolSession) -> bool {
+    matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat)
 }
 
 /// `SpellCastTargets` carrying a UNIT target (the client's selected mob).
@@ -79,7 +46,7 @@ fn instant_cast_sends_start_then_raw_cast_result_ok_then_go_and_threads_the_targ
     let store = InMemoryCasts::instant();
     let sent = run(
         &store,
-        &mut Caster::in_world(),
+        &mut ProtocolSession::in_world(7, 1),
         CMSG_CAST_SPELL {
             spell: 100,
             targets: unit_targets(77),
@@ -119,7 +86,7 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
             ranged_auto_repeat: vec![75, 5019],
             ..InMemoryCasts::instant()
         };
-        let mut caster = Caster::in_world();
+        let mut caster = ProtocolSession::in_world(7, 1);
         let sent = run(
             &store,
             &mut caster,
@@ -152,7 +119,7 @@ fn auto_shot_intercept_starts_the_ranged_attack_instead_of_casting() {
             ),
         }
         assert!(
-            caster.ranged_repeat,
+            repeating(&caster),
             "spell {spell}: the session arms the loop"
         );
         assert_eq!(
@@ -171,7 +138,7 @@ fn a_cast_before_entering_the_world_makes_no_request_and_does_not_fail() {
     let store = InMemoryCasts::instant();
     let sent = run(
         &store,
-        &mut Caster::at_character_select(),
+        &mut ProtocolSession::new(7, "TESTER".into()),
         CMSG_CAST_SPELL {
             spell: 100,
             targets: unit_targets(77),
@@ -195,7 +162,7 @@ fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack()
         ranged_auto_repeat: vec![75],
         ..InMemoryCasts::instant()
     };
-    let mut caster = Caster::in_world();
+    let mut caster = ProtocolSession::in_world(7, 1);
     run(
         &store,
         &mut caster,
@@ -209,7 +176,7 @@ fn cancelling_auto_repeat_still_tears_the_ranged_loop_down_through_stop_attack()
     // The cancel sends no ack of its own (the on_delete relay does).
     let sent = run(&store, &mut caster, CMSG_CANCEL_AUTO_REPEAT_SPELL {});
     assert!(sent.is_empty());
-    assert!(!caster.ranged_repeat);
+    assert!(!repeating(&caster));
     assert!(store.engaged.lock().unwrap().is_empty());
 }
 
@@ -221,7 +188,7 @@ fn cancel_aura_removes_the_aura_the_wire_spell_id_names() {
     };
     let sent = run(
         &store,
-        &mut Caster::in_world(),
+        &mut ProtocolSession::in_world(7, 1),
         CMSG_CANCEL_AURA { id: 5555 },
     );
     assert!(sent.is_empty());
@@ -236,7 +203,7 @@ fn cancel_cast_drops_the_pending_cast_of_the_caller_only() {
     };
     let sent = run(
         &store,
-        &mut Caster::in_world(),
+        &mut ProtocolSession::in_world(7, 1),
         CMSG_CANCEL_CAST { id: 133 },
     );
     assert!(sent.is_empty());

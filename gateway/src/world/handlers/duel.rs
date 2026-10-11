@@ -7,59 +7,50 @@ pub(crate) trait DuelActionStore: Send + Sync {
     fn duel_cancel(&self, actor: Actor, flag_guid: u64) -> Result<()>;
 }
 
-#[derive(Clone, Copy)]
-pub(crate) struct DuelActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
+pub(crate) struct Duel;
 
-pub(crate) enum DuelActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
-pub(crate) fn dispatch_duel_action<St: DuelActionStore + ?Sized>(
-    store: &St,
-    player: DuelActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<DuelActionOutcome> {
-    let (accept, flag_guid) = match msg {
-        ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(request) => (true, request.guid.guid()),
-        ClientOpcodeMessage::CMSG_DUEL_CANCELLED(request) => (false, request.guid.guid()),
-        other => return Ok(DuelActionOutcome::PassThrough(other)),
-    };
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
-        return Ok(DuelActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
-    };
-    let result = if accept {
-        store.duel_accept(actor, flag_guid)
-    } else {
-        store.duel_cancel(actor, flag_guid)
-    };
-    if let Err(error) = result {
-        if matches!(
-            crate::stdb::classify(&error),
-            crate::stdb::DurableFailure::TransportLoss
-        ) {
-            return Err(error);
+impl<St: DuelActionStore + ?Sized> ProtocolFamily<St> for Duel {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let (accept, flag_guid) = match msg {
+            ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(request) => (true, request.guid.guid()),
+            ClientOpcodeMessage::CMSG_DUEL_CANCELLED(request) => (false, request.guid.guid()),
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        let Some(actor) = player.self_guid().and_then(Actor::new) else {
+            return Ok(ProtocolReply::from(Vec::new()));
+        };
+        let result = if accept {
+            store.duel_accept(actor, flag_guid)
+        } else {
+            store.duel_cancel(actor, flag_guid)
+        };
+        if let Err(error) = result {
+            if matches!(
+                crate::stdb::classify(&error),
+                crate::stdb::DurableFailure::TransportLoss
+            ) {
+                return Err(error);
+            }
+            log::debug!(
+                "world: duel action ignored (account {}): {error}",
+                player.account_id
+            );
         }
-        log::debug!(
-            "world: duel action ignored (account {}): {error}",
-            player.account_id
-        );
+        Ok(ProtocolReply::from(Vec::new()))
     }
-    Ok(DuelActionOutcome::Handled {
-        outbound: Vec::new(),
-    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{CMSG_DUEL_ACCEPTED, CMSG_DUEL_CANCELLED, CMSG_PING};
+    use wow_world_messages::vanilla::{CMSG_DUEL_ACCEPTED, CMSG_DUEL_CANCELLED};
     use wow_world_messages::Guid;
 
     use crate::stdb::ReducerCallError;
@@ -100,36 +91,33 @@ mod tests {
         }
     }
 
-    fn player() -> DuelActionPlayer {
-        DuelActionPlayer {
-            account_id: 7,
-            self_guid: Some(42),
-        }
+    fn player() -> ProtocolSession {
+        ProtocolSession::in_world(7, 42)
     }
 
     #[test]
     fn accept_and_cancel_forward_the_wire_arbiter_as_reducer_intents() {
         let store = InMemoryDuelStore::default();
-        let accepted = dispatch_duel_action(
+        let accepted = Duel::handle(
             &store,
-            player(),
+            &mut player(),
             ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(CMSG_DUEL_ACCEPTED {
                 guid: Guid::new(99),
-            }),
+            })
+            .into(),
         )
         .unwrap();
-        let cancelled = dispatch_duel_action(
+        let cancelled = Duel::handle(
             &store,
-            player(),
+            &mut player(),
             ClientOpcodeMessage::CMSG_DUEL_CANCELLED(CMSG_DUEL_CANCELLED {
                 guid: Guid::new(100),
-            }),
+            })
+            .into(),
         )
         .unwrap();
-        assert!(matches!(accepted, DuelActionOutcome::Handled { outbound } if outbound.is_empty()));
-        assert!(
-            matches!(cancelled, DuelActionOutcome::Handled { outbound } if outbound.is_empty())
-        );
+        assert!(accepted.outbound.is_empty());
+        assert!(cancelled.outbound.is_empty());
         assert_eq!(
             store.calls.lock().unwrap().as_slice(),
             &[("accept", 42, 99), ("cancel", 42, 100)]
@@ -139,18 +127,16 @@ mod tests {
     #[test]
     fn no_in_world_actor_is_consumed_without_a_forged_reducer_identity() {
         let store = InMemoryDuelStore::default();
-        let outcome = dispatch_duel_action(
+        let outcome = Duel::handle(
             &store,
-            DuelActionPlayer {
-                account_id: 7,
-                self_guid: None,
-            },
+            &mut ProtocolSession::new(7, "TESTER".into()),
             ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(CMSG_DUEL_ACCEPTED {
                 guid: Guid::new(99),
-            }),
+            })
+            .into(),
         )
         .unwrap();
-        assert!(matches!(outcome, DuelActionOutcome::Handled { .. }));
+        assert!(outcome.outbound.is_empty());
         assert!(store.calls.lock().unwrap().is_empty());
     }
 
@@ -163,7 +149,7 @@ mod tests {
     #[test]
     fn transport_loss_ends_the_world_session() {
         let store = InMemoryDuelStore::failing(ReducerCallError::transport_lost("gw_duel_accept"));
-        assert!(dispatch_duel_action(&store, player(), accept_message()).is_err());
+        assert!(Duel::handle(&store, &mut player(), accept_message().into()).is_err());
     }
 
     #[test]
@@ -172,22 +158,7 @@ mod tests {
             "gw_duel_accept",
             "duel_not_pending",
         ));
-        let outcome = dispatch_duel_action(&store, player(), accept_message()).unwrap();
-        assert!(matches!(outcome, DuelActionOutcome::Handled { outbound } if outbound.is_empty()));
-    }
-
-    #[test]
-    fn unrelated_opcode_passes_through() {
-        let store = InMemoryDuelStore::default();
-        let outcome = dispatch_duel_action(
-            &store,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-        assert!(matches!(
-            outcome,
-            DuelActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
+        let outcome = Duel::handle(&store, &mut player(), accept_message().into()).unwrap();
+        assert!(outcome.outbound.is_empty());
     }
 }

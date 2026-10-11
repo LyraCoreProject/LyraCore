@@ -18,6 +18,7 @@ mod ranged;
 use super::super::*;
 use super::MeleeActionStore;
 use crate::stdb::{classify, DurableFailure};
+use crate::world::family::{ProtocolFamily, ProtocolReply, ProtocolRequest, ProtocolSession};
 use wow_world_messages::vanilla::CMSG_CAST_SPELL;
 
 /// `SMSG_CAST_RESULT`. Both bodies are hand-rolled (gtker's typed message inverts the status
@@ -69,7 +70,7 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
     fn cast_item_target(&self, actor: Actor, spell_id: u32, slot: u8) -> Result<()>;
 
     /// Arm the ranged auto-repeat loop on `target_guid` with `spell_id`. The module requires an
-    /// equipped ranged weapon; `Err` is the refusal the player sees as a cast failure.
+    /// equipped ranged weapon; `Err` is the Refusal the client sees as a cast failure.
     fn start_ranged_attack(&self, actor: Actor, target_guid: u64, spell_id: u32) -> Result<()>;
 
     /// The bag slot holding the item instance a client spell-target names, so the enchant and
@@ -88,7 +89,7 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
     fn fish(&self, actor: Actor) -> Result<()>;
 
     /// Pick the lock on GameObject `go_guid`. The module gates range, the lock requirement and the
-    /// caller's skill; `Err` is the refusal the player sees as a cast failure.
+    /// caller's skill; `Err` is the Refusal the client sees as a cast failure.
     fn pick_lock(&self, actor: Actor, go_guid: u64) -> Result<()>;
 
     /// Drop the caller's pending cast, so a scheduled completion cannot fire later. Under the
@@ -110,41 +111,6 @@ pub(crate) trait CastStore: MeleeActionStore + Send + Sync {
 
     /// One item template by entry — the launcher's class/subclass and the projectile's display id.
     fn item_template(&self, entry: u32) -> Result<Option<codec::ItemTemplateView>>;
-}
-
-/// Everything the cast module knows about the caller. `self_guid` is `None` when the session has no
-/// character in the world: no durable request is made and no synchronous message is sent.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct CastPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-    /// A ranged auto-repeat loop is armed. Only the ranged route reads it.
-    pub(crate) ranged_repeat: bool,
-}
-
-impl CastPlayer {
-    fn actor(self) -> Option<Actor> {
-        self.self_guid.and_then(Actor::new)
-    }
-}
-
-/// Session state the dispatcher applies before it sends the outbound batch. The ordinary cast route
-/// never sets one; ranged auto-repeat activation and cancellation do.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) struct CastTransition {
-    /// `Some(armed)` writes the session's ranged auto-repeat flag; `None` leaves it alone.
-    pub(crate) ranged_repeat: Option<bool>,
-}
-
-/// The result of one cast request. `Handled` carries the complete, ordered client-visible batch —
-/// exact message order is external behaviour for the vanilla client, so the outcome states it
-/// rather than leaving it to the caller.
-pub(crate) enum CastOutcome {
-    Handled {
-        transition: CastTransition,
-        outbound: Vec<Outbound>,
-    },
-    PassThrough(ClientOpcodeMessage),
 }
 
 /// Which route a `CMSG_CAST_SPELL` takes, selected from imported taxonomy alone.
@@ -193,7 +159,7 @@ fn unit_target(c: &CMSG_CAST_SPELL) -> u64 {
         .map_or(0, |u| u.unit_target.guid())
 }
 
-/// The ground point the player clicked (`DEST_LOCATION`), if the cast carries one.
+/// The ground point the client clicked (`DEST_LOCATION`), if the cast carries one.
 fn dest_target(c: &CMSG_CAST_SPELL) -> Option<(f32, f32, f32)> {
     c.targets
         .target_flags
@@ -201,35 +167,41 @@ fn dest_target(c: &CMSG_CAST_SPELL) -> Option<(f32, f32, f32)> {
         .map(|d| (d.destination.x, d.destination.y, d.destination.z))
 }
 
-/// Route one client message through the cast seam. Anything that is not a cast request, and every
-/// route a sibling module does not own yet, passes through untouched.
-pub(crate) fn dispatch_cast<St: CastStore + ?Sized>(
-    store: &St,
-    player: CastPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<CastOutcome> {
-    match msg {
-        ClientOpcodeMessage::CMSG_CAST_SPELL(c) => match route_for(store, c.spell) {
-            CastRoute::Ordinary => ordinary_cast(store, player, &c),
-            CastRoute::RangedAutoRepeat => ranged::activate(store, player, &c),
-            CastRoute::ManualCompletion(route) => {
-                manual::manual_completion_cast(store, player, &c, route)
+/// Handle cast requests, cancellations and ranged auto-repeat state.
+pub(crate) struct Cast;
+
+impl<St: CastStore + ?Sized> ProtocolFamily<St> for Cast {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        match msg {
+            ClientOpcodeMessage::CMSG_CAST_SPELL(c) => match route_for(store, c.spell) {
+                CastRoute::Ordinary => ordinary_cast(store, session, &c),
+                CastRoute::RangedAutoRepeat => ranged::activate(store, session, &c),
+                CastRoute::ManualCompletion(route) => {
+                    manual::manual_completion_cast(store, session, &c, route)
+                }
+            },
+            ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => ranged::cancel(store, session),
+            ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
+            | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => {
+                cancel::cancel_cast(store, session)
             }
-        },
-        ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL => ranged::cancel(store, player),
-        ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
-        | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => cancel::cancel_cast(store, player),
-        ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => cancel::cancel_aura(store, player, c.id),
-        other => Ok(CastOutcome::PassThrough(other)),
+            ClientOpcodeMessage::CMSG_CANCEL_AURA(c) => cancel::cancel_aura(store, session, c.id),
+            other => Err(anyhow!("request routed to Cast: {other}")),
+        }
     }
 }
 
 /// The ordinary cast route: instant, timed, next-swing, ground-area and ground-targeted casts.
 fn ordinary_cast<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     c: &CMSG_CAST_SPELL,
-) -> Result<CastOutcome> {
+) -> Result<ProtocolReply> {
     let spell = c.spell;
     // Thread the client's unit target so target-keyed effects — combo finishers, enemy spells —
     // see the real target. No unit target stays 0 so the module applies its own self-cast rule.
@@ -247,7 +219,7 @@ fn ordinary_cast<St: CastStore + ?Sized>(
     // sequence below would un-light the button and resolve the cast at queue time.
     let queues_swing = instant && store.spell_queues_next_swing(spell);
     if instant && !queues_swing {
-        if let Some(caster) = player.actor().map(Actor::guid) {
+        if let Some(caster) = session.actor().map(Actor::guid) {
             // vmangos order: START(0) then the raw CAST_RESULT(OK) then GO. The 5875 client needs
             // that 5-byte ack before GO to make m_currentSpells clearable.
             // A cast at a clicked ground point echoes the point in both target blocks.
@@ -288,13 +260,13 @@ fn ordinary_cast<St: CastStore + ?Sized>(
         _ => 0,
     };
     let refusal = 'request: {
-        let Some(actor) = player.actor() else {
+        let Some(actor) = session.actor() else {
             break 'request Some(NO_ACTOR.to_string());
         };
         let result = if item_guid != 0 {
             let Some(slot) = store.item_slot_by_guid(item_guid) else {
                 break 'request Some(format!(
-                    "item target {item_guid} is not in the player's bag"
+                    "item target {item_guid} is not in the Character's bag"
                 ));
             };
             store.cast_item_target(actor, spell, slot)
@@ -315,17 +287,14 @@ fn ordinary_cast<St: CastStore + ?Sized>(
         // server-only gates — behind, stealth, stance, react window — invisible.
         log::debug!(
             "world: cast {spell} rejected (account {}): {reason}",
-            player.account_id
+            session.account_id
         );
         outbound.push(Outbound::Raw {
             opcode: OP_CAST_RESULT,
             body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(&reason)),
         });
     }
-    Ok(CastOutcome::Handled {
-        transition: CastTransition::default(),
-        outbound,
-    })
+    Ok(outbound.into())
 }
 
 /// The focused in-memory cast adapter and the shared seam-test helpers. Every route module's tests
@@ -340,12 +309,12 @@ pub(super) mod tests {
         SpellCastTargets_SpellCastTargetFlags_DestLocation,
         SpellCastTargets_SpellCastTargetFlags_Gameobject,
         SpellCastTargets_SpellCastTargetFlags_Item, SpellCastTargets_SpellCastTargetFlags_Unit,
-        Vector3d, CMSG_PING,
+        Vector3d,
     };
 
     /// One recorded durable cast: caster, spell and unit target.
-    pub(crate) type Cast = (u64, u32, u64);
-    /// One recorded durable ground cast: a [`Cast`] plus the click point.
+    pub(crate) type RecordedCast = (u64, u32, u64);
+    /// One recorded durable ground cast: a [`RecordedCast`] plus the click point.
     pub(crate) type GroundCast = (u64, u32, u64, f32, f32, f32);
     /// One recorded ranged activation: caster, unit target and spell.
     pub(crate) type RangedAttack = (u64, u64, u32);
@@ -383,7 +352,7 @@ pub(super) mod tests {
         pub(crate) manual_error: Option<String>,
         /// Shared refusal for both cancellation operations.
         pub(crate) cancel_error: Option<String>,
-        pub(crate) casts: Mutex<Vec<Cast>>,
+        pub(crate) casts: Mutex<Vec<RecordedCast>>,
         pub(crate) ground_casts: Mutex<Vec<GroundCast>>,
         pub(crate) item_target_casts: Mutex<Vec<(u64, u32, u8)>>,
         pub(crate) ranged_attacks: Mutex<Vec<RangedAttack>>,
@@ -583,12 +552,8 @@ pub(super) mod tests {
     pub(crate) const ACCOUNT: u64 = 7;
     pub(crate) const CASTER: u64 = 42;
 
-    pub(crate) fn player() -> CastPlayer {
-        CastPlayer {
-            account_id: ACCOUNT,
-            self_guid: Some(CASTER),
-            ranged_repeat: false,
-        }
+    pub(crate) fn session() -> ProtocolSession {
+        ProtocolSession::in_world(ACCOUNT, CASTER)
     }
 
     pub(crate) fn cast(spell: u32, targets: SpellCastTargets) -> ClientOpcodeMessage {
@@ -642,15 +607,19 @@ pub(super) mod tests {
         }
     }
 
-    /// The handled outcome, or a panic naming what came back instead.
-    pub(crate) fn handled(outcome: CastOutcome) -> (CastTransition, Vec<Outbound>) {
-        match outcome {
-            CastOutcome::Handled {
-                transition,
-                outbound,
-            } => (transition, outbound),
-            CastOutcome::PassThrough(_) => panic!("expected a handled cast"),
-        }
+    /// The ranged state and client messages after one request.
+    pub(crate) fn handled(result: (bool, ProtocolReply)) -> (bool, Vec<Outbound>) {
+        (result.0, result.1.outbound)
+    }
+
+    pub(crate) fn run_cast<St: CastStore + ?Sized>(
+        store: &St,
+        mut session: ProtocolSession,
+        message: ClientOpcodeMessage,
+    ) -> Result<(bool, ProtocolReply)> {
+        let reply = Cast::handle(store, &mut session, message.into())?;
+        let repeating = matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat);
+        Ok((repeating, reply))
     }
 
     /// One label per outbound unit, in order — the synchronous sequence is the contract, and it
@@ -696,15 +665,15 @@ pub(super) mod tests {
     fn instant_unit_target_cast_clears_the_client_then_requests_the_durable_cast() {
         let store = InMemoryCasts::instant();
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, player(), cast(100, unit_targets(77))).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, session(), cast(100, unit_targets(77))).unwrap());
 
         assert_eq!(
             sequence(&outbound),
             ["START", "CAST_RESULT(OK)", "GO"],
             "the 5875 client needs the OK ack between START and GO"
         );
-        assert_eq!(transition, CastTransition::default());
+        assert!(!repeating);
         assert_eq!(store.casts.lock().unwrap().as_slice(), &[(CASTER, 100, 77)]);
     }
 
@@ -712,7 +681,7 @@ pub(super) mod tests {
     fn instant_cast_with_no_unit_target_passes_target_zero_to_the_durable_cast() {
         let store = InMemoryCasts::instant();
 
-        handled(dispatch_cast(&store, player(), cast(100, SpellCastTargets::default())).unwrap());
+        handled(run_cast(&store, session(), cast(100, SpellCastTargets::default())).unwrap());
 
         assert_eq!(
             store.casts.lock().unwrap().as_slice(),
@@ -726,7 +695,7 @@ pub(super) mod tests {
         let store = InMemoryCasts::default();
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(42, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(42, unit_targets(77))).unwrap());
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
     }
@@ -736,7 +705,7 @@ pub(super) mod tests {
         let store = InMemoryCasts::instant();
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(100, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(100, unit_targets(77))).unwrap());
 
         assert_eq!(
             spell_go(&outbound)
@@ -756,7 +725,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(118, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(118, unit_targets(77))).unwrap());
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
         assert!(
@@ -770,9 +739,9 @@ pub(super) mod tests {
         let store = InMemoryCasts::instant();
 
         let (_, outbound) = handled(
-            dispatch_cast(
+            run_cast(
                 &store,
-                player(),
+                session(),
                 cast(1725, dest_targets(-8913.5, 554.25, 93.75)),
             )
             .unwrap(),
@@ -820,7 +789,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(100, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(100, unit_targets(77))).unwrap());
 
         assert!(
             outbound.is_empty(),
@@ -837,7 +806,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(78, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(78, unit_targets(77))).unwrap());
 
         assert!(
             outbound.is_empty(),
@@ -856,9 +825,9 @@ pub(super) mod tests {
         };
 
         handled(
-            dispatch_cast(
+            run_cast(
                 &store,
-                player(),
+                session(),
                 cast(2120, dest_targets(-8913.5, 554.25, 93.75)),
             )
             .unwrap(),
@@ -881,7 +850,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(100, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(100, unit_targets(77))).unwrap());
 
         assert_eq!(
             sequence(&outbound),
@@ -898,7 +867,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(100, unit_targets(77))).unwrap());
+            handled(run_cast(&store, session(), cast(100, unit_targets(77))).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILED 0x59)"]);
     }
@@ -911,7 +880,7 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let error = match dispatch_cast(&store, player(), cast(100, unit_targets(77))) {
+        let error = match run_cast(&store, session(), cast(100, unit_targets(77))) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -919,37 +888,17 @@ pub(super) mod tests {
         assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
-    // ── Player context ───────────────────────────────────────────────────────
+    // ── World Session context ───────────────────────────────────────────────────────
 
     #[test]
     fn a_player_with_no_character_in_world_makes_no_request_and_gets_a_failed_cast() {
         let store = InMemoryCasts::instant();
-        let player = CastPlayer {
-            account_id: ACCOUNT,
-            self_guid: None,
-            ranged_repeat: false,
-        };
+        let player = ProtocolSession::new(ACCOUNT, "TESTER".into());
 
-        let (_, outbound) =
-            handled(dispatch_cast(&store, player, cast(100, unit_targets(77))).unwrap());
+        let (_, outbound) = handled(run_cast(&store, player, cast(100, unit_targets(77))).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILED 0x17)"]);
         assert!(store.casts.lock().unwrap().is_empty());
-    }
-
-    #[test]
-    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
-        let store = InMemoryCasts::default();
-
-        assert!(matches!(
-            dispatch_cast(
-                &store,
-                player(),
-                ClientOpcodeMessage::CMSG_PING(CMSG_PING::default())
-            )
-            .unwrap(),
-            CastOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
     }
 
     // ── Manual completion: enchant, disenchant, fishing, lock opening ────────
@@ -962,11 +911,11 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, player(), cast(7418, item_targets(500))).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, session(), cast(7418, item_targets(500))).unwrap());
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
-        assert_eq!(transition, CastTransition::default());
+        assert!(!repeating);
         assert_eq!(store.enchant_calls.lock().unwrap().as_slice(), &[(4, 777)]);
         assert!(store.disenchant_calls.lock().unwrap().is_empty());
         assert!(
@@ -984,7 +933,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(13262, item_targets(500))).unwrap());
+            handled(run_cast(&store, session(), cast(13262, item_targets(500))).unwrap());
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
         assert_eq!(store.disenchant_calls.lock().unwrap().as_slice(), &[9]);
@@ -998,9 +947,8 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let (_, outbound) = handled(
-            dispatch_cast(&store, player(), cast(7418, SpellCastTargets::default())).unwrap(),
-        );
+        let (_, outbound) =
+            handled(run_cast(&store, session(), cast(7418, SpellCastTargets::default())).unwrap());
 
         assert_eq!(
             sequence(&outbound),
@@ -1019,7 +967,7 @@ pub(super) mod tests {
         };
 
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(13262, item_targets(500))).unwrap());
+            handled(run_cast(&store, session(), cast(13262, item_targets(500))).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
         assert!(store.disenchant_calls.lock().unwrap().is_empty());
@@ -1032,9 +980,8 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let (_, outbound) = handled(
-            dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())).unwrap(),
-        );
+        let (_, outbound) =
+            handled(run_cast(&store, session(), cast(7620, SpellCastTargets::default())).unwrap());
 
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
         assert_eq!(store.fish_calls.lock().unwrap().as_slice(), &[CASTER]);
@@ -1048,9 +995,8 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let (_, outbound) = handled(
-            dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())).unwrap(),
-        );
+        let (_, outbound) =
+            handled(run_cast(&store, session(), cast(7620, SpellCastTargets::default())).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
     }
@@ -1063,7 +1009,7 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let error = match dispatch_cast(&store, player(), cast(7620, SpellCastTargets::default())) {
+        let error = match run_cast(&store, session(), cast(7620, SpellCastTargets::default())) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -1079,9 +1025,9 @@ pub(super) mod tests {
             };
 
             let (_, outbound) = handled(
-                dispatch_cast(
+                run_cast(
                     &store,
-                    player(),
+                    session(),
                     cast(1804, gameobject_targets(0xABCD, unk_shape)),
                 )
                 .unwrap(),
@@ -1103,9 +1049,8 @@ pub(super) mod tests {
             ..Default::default()
         };
 
-        let (_, outbound) = handled(
-            dispatch_cast(&store, player(), cast(1804, SpellCastTargets::default())).unwrap(),
-        );
+        let (_, outbound) =
+            handled(run_cast(&store, session(), cast(1804, SpellCastTargets::default())).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILURE)"]);
         assert!(store.pick_lock_calls.lock().unwrap().is_empty());
@@ -1119,7 +1064,7 @@ pub(super) mod tests {
             ..Default::default()
         };
         let (_, outbound) =
-            handled(dispatch_cast(&store, player(), cast(6991, item_targets(500))).unwrap());
+            handled(run_cast(&store, session(), cast(6991, item_targets(500))).unwrap());
         assert_eq!(sequence(&outbound), ["START", "CAST_RESULT(OK)", "GO"]);
         assert_eq!(
             *store.item_target_casts.lock().unwrap(),

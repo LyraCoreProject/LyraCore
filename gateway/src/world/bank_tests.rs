@@ -1,7 +1,6 @@
-//! Bank opcodes, run through `handle_bank` against a Fake that holds only the Bank and Npc Stores
-//! the handler is bounded on.
+//! Bank replies and durable outcomes through the Bank and Npc Stores.
 
-use super::handlers::{handle_bank, BankStore, NpcStore};
+use super::handlers::{Bank, BankStore, NpcStore};
 use super::*;
 use crate::stdb::ReducerCallError;
 use std::collections::BTreeSet;
@@ -86,24 +85,24 @@ impl BankStore for BankFake {
     }
 }
 
-/// Send `msg` as Character 1 of account 7 and return what the handler sent, in order.
-/// Phase 5 retargets only this helper.
+/// Handle `msg` as Character 1 of Account 7 and return the replies in order.
 fn run(store: &BankFake, msg: impl Into<ClientOpcodeMessage>) -> Vec<ServerOpcodeMessage> {
-    let (tx, rx) = SessionTx::with_depth(0);
-    let mut conn = in_world_conn(7, 1);
-    let passed_on = handle_bank(&tx, store, &mut conn, msg.into()).unwrap();
-    assert!(passed_on.is_none(), "the bank family owns this opcode");
-    drain_outbound(&rx)
+    let mut session = ProtocolSession::in_world(7, 1);
+    let reply = Bank::handle(store, &mut session, ProtocolRequest::Message(msg.into())).unwrap();
+    outbound_messages(reply.outbound)
 }
 
 /// What the handler returns when the Store loses the transport.
-fn run_transport_lost(msg: impl Into<ClientOpcodeMessage>) -> Result<Option<ClientOpcodeMessage>> {
+fn run_transport_lost(msg: impl Into<ClientOpcodeMessage>) -> Result<ProtocolReply> {
     let store = BankFake {
         transport_lost: true,
         ..Default::default()
     };
-    let (tx, _rx) = SessionTx::with_depth(0);
-    handle_bank(&tx, &store, &mut in_world_conn(7, 1), msg.into())
+    Bank::handle(
+        &store,
+        &mut ProtocolSession::in_world(7, 1),
+        ProtocolRequest::Message(msg.into()),
+    )
 }
 
 fn kinds(sent: &[ServerOpcodeMessage]) -> String {

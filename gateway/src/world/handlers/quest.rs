@@ -1,6 +1,6 @@
 //! Quest family: the overhead `!`/`?` status, the quest-giver menu, the details and definition
 //! screens, accept, the turn-in round trip, log abandon and party sharing all enter through
-//! `dispatch_quest_action`; the gameobject giver, the item-started quest, the world-entry
+//! `Quest::handle`; the gameobject giver, the item-started quest, the world-entry
 //! descriptor block and the gossip quest section call the shared builders here rather than
 //! reaching for the store. Every quest read and reducer the world session needs lives on
 //! `QuestActionStore`; no other Store family carries them. The stdb-tier relays in
@@ -9,6 +9,9 @@
 
 use super::super::*;
 use crate::stdb::{classify, DurableFailure};
+use crate::world::family::{
+    ProtocolFamily, ProtocolReply, ProtocolRequest, ProtocolSession, WorldSessionAction,
+};
 use wow_world_messages::vanilla::QuestItem;
 
 /// The durable reads and reducer calls the quest family needs, in the seam's own vocabulary so it
@@ -66,26 +69,6 @@ pub(crate) trait QuestActionStore: Send + Sync {
     /// `(taken, rewarded)` for `quest_id` in `player_guid`'s quest log — feeds the
     /// QUEST_TAKEN/QUEST_REWARDED gossip option conditions.
     fn quest_status(&self, player_guid: u64, quest_id: u32) -> (bool, bool);
-}
-
-/// Who is asking. `self_guid` is `None` before world entry — a questgiver can only be clicked
-/// in-world, so those opcodes pass through instead of being evaluated against a placeholder.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct QuestActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
-
-pub(crate) enum QuestActionOutcome {
-    Handled {
-        outbound: Vec<Outbound>,
-    },
-    /// The quest was turned in. The turn-in filed any Reward Letter it sends as Escrow, so the
-    /// session drives the Character's held letters after it sends `outbound`.
-    TurnedIn {
-        outbound: Vec<Outbound>,
-    },
-    PassThrough(ClientOpcodeMessage),
 }
 
 /// A Refusal of a best-effort quest request is logged and dropped. A Transport Loss ends the
@@ -175,10 +158,10 @@ pub(crate) fn quest_details_screen<St: QuestActionStore + ?Sized>(
 /// never used up by opening its own quest.
 pub(crate) fn item_started_quest<St: QuestActionStore + ?Sized>(
     store: &St,
-    player: QuestActionPlayer,
+    session: &ProtocolSession,
     slot: u8,
 ) -> Result<Option<Vec<Outbound>>> {
-    let Some(self_guid) = player.self_guid else {
+    let Some(self_guid) = session.self_guid() else {
         return Ok(None);
     };
     let Some((item_guid, quest_id)) = store.item_start_quest(self_guid, slot) else {
@@ -216,11 +199,9 @@ fn quest_reward_screen<St: QuestActionStore + ?Sized>(
     giver: u64,
     self_guid: u64,
     quest_id: u32,
-) -> Result<QuestActionOutcome> {
+) -> Result<ProtocolReply> {
     let Some(detail) = store.quest_detail_view(quest_id)? else {
-        return Ok(QuestActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
+        return Ok(ProtocolReply::from(Vec::new()));
     };
     let complete = store
         .giver_quest_evals(giver, self_guid)?
@@ -239,156 +220,152 @@ fn quest_reward_screen<St: QuestActionStore + ?Sized>(
             giver, &detail, false,
         )))
     };
-    Ok(QuestActionOutcome::Handled {
-        outbound: vec![Outbound::One(screen)],
-    })
+    Ok(ProtocolReply::from(vec![Outbound::One(screen)]))
 }
 
-/// The quest opcodes that own their whole protocol round trip. Anything else — and anything at all
-/// before world entry — passes through to the next family in the dispatch chain.
-pub(crate) fn dispatch_quest_action<St: QuestActionStore + ?Sized>(
-    store: &St,
-    player: QuestActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<QuestActionOutcome> {
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
-        return Ok(QuestActionOutcome::PassThrough(msg));
-    };
-    let self_guid = actor.guid();
-    match msg {
-        // The client polls each nearby questgiver for its overhead icon (`!` available / `?` turn-in).
-        ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => {
-            let giver = q.guid.guid();
-            let status = codec::quest_giver_status(&store.giver_quest_evals(giver, self_guid)?);
-            Ok(QuestActionOutcome::Handled {
-                outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(
-                    Box::new(codec::build_questgiver_status(giver, status)),
-                ))],
-            })
-        }
-        // Right-click a questgiver → the quest menu (every quest it offers/completes for this
-        // player). An Unfriendly-or-below giver refuses it and answers nothing at all. A
-        // QUESTGIVER GameObject reaches the same `quest_giver_menu` helper from session dispatch.
-        ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(h) => {
-            let giver = h.guid.guid();
-            let refuses = store.giver_refuses_interaction(giver, self_guid)?;
-            Ok(QuestActionOutcome::Handled {
-                outbound: if refuses {
+/// Map quest requests and durable outcomes to client replies.
+pub(crate) struct Quest;
+
+impl<St: QuestActionStore + ?Sized> ProtocolFamily<St> for Quest {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let Some(actor) = session.actor() else {
+            return Ok(ProtocolReply::default());
+        };
+        let self_guid = actor.guid();
+        match msg {
+            // The client polls each nearby questgiver for its overhead icon (`!` available / `?` turn-in).
+            ClientOpcodeMessage::CMSG_QUESTGIVER_STATUS_QUERY(q) => {
+                let giver = q.guid.guid();
+                let status = codec::quest_giver_status(&store.giver_quest_evals(giver, self_guid)?);
+                Ok(ProtocolReply::from(vec![Outbound::One(
+                    ServerOpcodeMessage::SMSG_QUESTGIVER_STATUS(Box::new(
+                        codec::build_questgiver_status(giver, status),
+                    )),
+                )]))
+            }
+            // Right-click a questgiver → the quest menu (every quest it offers/completes for this
+            // player). An Unfriendly-or-below giver refuses it and answers nothing at all. A
+            // QUESTGIVER GameObject reaches the same `quest_giver_menu` helper from session dispatch.
+            ClientOpcodeMessage::CMSG_QUESTGIVER_HELLO(h) => {
+                let giver = h.guid.guid();
+                let refuses = store.giver_refuses_interaction(giver, self_guid)?;
+                Ok(ProtocolReply::from(if refuses {
                     Vec::new()
                 } else {
                     quest_giver_menu(store, giver, self_guid)?
-                },
-            })
-        }
-        // Clicked a quest in the menu → its details + Accept button.
-        ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => Ok(QuestActionOutcome::Handled {
-            outbound: quest_details_screen(store, q.guid.guid(), q.quest_id)?,
-        }),
-        // The client asks for a quest's full definition (it sends this for any quest id it sees in a
-        // PLAYER_QUEST_LOG slot but has no data for). Without this reply the client won't
-        // display/count the quest in its log — so this is what makes the quest-log window entry
-        // actually appear. RAW-encoded: gtker's typed layout writes the rep Faction fields as u16,
-        // shifting the title by 4 bytes; the hand-rolled body matches the 5875 layout exactly.
-        ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => {
-            let outbound = store
-                .quest_detail_view(q.quest_id)?
-                .map_or_else(Vec::new, |detail| {
-                    let (opcode, body) = codec::build_quest_query_response_raw(&detail);
-                    vec![Outbound::Raw { opcode, body }]
-                });
-            Ok(QuestActionOutcome::Handled { outbound })
-        }
-        // Clicked Accept → the module opens the quest log row (gated). No SMSG on success: the
-        // client closes the window itself and the quest-log relay carries the new slot.
-        ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(a) => {
-            ignore_refusal(
-                store.accept_quest(actor, a.guid.guid(), a.quest_id),
-                "accept_quest",
-                player.account_id,
-            )?;
-            Ok(QuestActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
-        }
-        ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(c) => {
-            quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
-        }
-        ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(c) => {
-            quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
-        }
-        // Chose the reward → the module grants money/XP/items (gated on completion). The durable
-        // turn-in is requested BEFORE any outbound is built, so a refused turn-in can never show a
-        // "Quest Complete" popup for rewards the player did not get. A refusal instead re-opens
-        // the current offer when its details remain readable, so the player can correct the choice.
-        ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
-            match store.turn_in_quest(actor, c.guid.guid(), c.quest_id, c.reward) {
-                // The popup echoes the definition's XP/money/items, so what it shows matches what
-                // the module granted. Unreadable details drop it — the turn-in already happened.
-                Ok(()) => Ok(QuestActionOutcome::TurnedIn {
-                    outbound: match store.quest_detail_view(c.quest_id)? {
-                        Some(detail) => vec![Outbound::One(
-                            ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(Box::new(
-                                codec::build_quest_complete(&detail),
-                            )),
-                        )],
-                        None => Vec::new(),
-                    },
-                }),
-                Err(e) if matches!(classify(&e), DurableFailure::Refusal { .. }) => {
-                    log::debug!(
-                        "world: turn_in_quest refused (quest {}, reward index {}): {e}",
-                        c.quest_id,
-                        c.reward
-                    );
-                    Ok(QuestActionOutcome::Handled {
+                }))
+            }
+            // Clicked a quest in the menu → its details + Accept button.
+            ClientOpcodeMessage::CMSG_QUESTGIVER_QUERY_QUEST(q) => Ok(ProtocolReply::from(
+                quest_details_screen(store, q.guid.guid(), q.quest_id)?,
+            )),
+            // The client asks for a quest's full definition (it sends this for any quest id it sees in a
+            // PLAYER_QUEST_LOG slot but has no data for). Without this reply the client won't
+            // display/count the quest in its log — so this is what makes the quest-log window entry
+            // actually appear. RAW-encoded: gtker's typed layout writes the rep Faction fields as u16,
+            // shifting the title by 4 bytes; the hand-rolled body matches the 5875 layout exactly.
+            ClientOpcodeMessage::CMSG_QUEST_QUERY(q) => {
+                let outbound =
+                    store
+                        .quest_detail_view(q.quest_id)?
+                        .map_or_else(Vec::new, |detail| {
+                            let (opcode, body) = codec::build_quest_query_response_raw(&detail);
+                            vec![Outbound::Raw { opcode, body }]
+                        });
+                Ok(ProtocolReply::from(outbound))
+            }
+            // Clicked Accept → the module opens the quest log row (gated). No SMSG on success: the
+            // client closes the window itself and the quest-log relay carries the new slot.
+            ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(a) => {
+                ignore_refusal(
+                    store.accept_quest(actor, a.guid.guid(), a.quest_id),
+                    "accept_quest",
+                    session.account_id,
+                )?;
+                Ok(ProtocolReply::from(Vec::new()))
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_COMPLETE_QUEST(c) => {
+                quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
+            }
+            ClientOpcodeMessage::CMSG_QUESTGIVER_REQUEST_REWARD(c) => {
+                quest_reward_screen(store, c.guid.guid(), self_guid, c.quest_id)
+            }
+            // Chose the reward → the module grants money/XP/items (gated on completion). The durable
+            // turn-in is requested BEFORE any outbound is built, so a refused turn-in can never show a
+            // "Quest Complete" popup for rewards the player did not get. A refusal instead re-opens
+            // the current offer when its details remain readable, so the player can correct the choice.
+            ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(c) => {
+                match store.turn_in_quest(actor, c.guid.guid(), c.quest_id, c.reward) {
+                    // The popup echoes the definition's XP/money/items, so what it shows matches what
+                    // the module granted. Unreadable details drop it — the turn-in already happened.
+                    Ok(()) => Ok(ProtocolReply {
                         outbound: match store.quest_detail_view(c.quest_id)? {
                             Some(detail) => vec![Outbound::One(
-                                ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                                    codec::build_offer_reward(c.guid.guid(), &detail),
+                                ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(Box::new(
+                                    codec::build_quest_complete(&detail),
                                 )),
                             )],
                             None => Vec::new(),
                         },
-                    })
+                        after_queue: Some(WorldSessionAction::RedriveMail(actor)),
+                    }),
+                    Err(e) if matches!(classify(&e), DurableFailure::Refusal { .. }) => {
+                        log::debug!(
+                            "world: turn_in_quest refused (quest {}, reward index {}): {e}",
+                            c.quest_id,
+                            c.reward
+                        );
+                        Ok(ProtocolReply::from(
+                            match store.quest_detail_view(c.quest_id)? {
+                                Some(detail) => vec![Outbound::One(
+                                    ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
+                                        codec::build_offer_reward(c.guid.guid(), &detail),
+                                    )),
+                                )],
+                                None => Vec::new(),
+                            },
+                        ))
+                    }
+                    Err(e) => Err(e),
                 }
-                Err(e) => Err(e),
             }
-        }
-        // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG SLOT (0..19), not a
-        // quest id — resolve it against the same `player_quest_log` ordering the world-entry block
-        // reads, then request the durable abandon. A slot that is not currently in the log (stale
-        // window, typo'd click) resolves to nothing and requests nothing — it cannot abandon an
-        // arbitrary quest. No SMSG on success: the quest-log relay re-sends the cleared block.
-        ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(r) => {
-            if let Some(s) = store
-                .player_quest_log(self_guid)?
-                .into_iter()
-                .find(|s| s.slot == r.slot)
-            {
+            // Abandon a quest from the log ("Abandon Quest"). The payload is a LOG SLOT (0..19), not a
+            // quest id — resolve it against the same `player_quest_log` ordering the world-entry block
+            // reads, then request the durable abandon. A slot that is not currently in the log (stale
+            // window, typo'd click) resolves to nothing and requests nothing — it cannot abandon an
+            // arbitrary quest. No SMSG on success: the quest-log relay re-sends the cleared block.
+            ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(r) => {
+                if let Some(s) = store
+                    .player_quest_log(self_guid)?
+                    .into_iter()
+                    .find(|s| s.slot == r.slot)
+                {
+                    ignore_refusal(
+                        store.abandon_quest(actor, s.quest_id),
+                        "abandon_quest",
+                        session.account_id,
+                    )?;
+                }
+                Ok(ProtocolReply::from(Vec::new()))
+            }
+            // Share a quest with the party (`CMSG_PUSHQUESTTOPARTY`). The module validates
+            // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
+            // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
+            ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(p) => {
                 ignore_refusal(
-                    store.abandon_quest(actor, s.quest_id),
-                    "abandon_quest",
-                    player.account_id,
+                    store.push_quest(actor, p.quest_id),
+                    "push_quest",
+                    session.account_id,
                 )?;
+                Ok(ProtocolReply::from(Vec::new()))
             }
-            Ok(QuestActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
+            other => Err(anyhow!("request routed to Quest: {other}")),
         }
-        // Share a quest with the party (`CMSG_PUSHQUESTTOPARTY`). The module validates
-        // grouped + actively-on-the-quest and pushes the per-member `QUEST_SHARE`/`QUEST_PUSH_RESULT`
-        // events itself (relayed by `subscriptions.rs`'s `on_group_event`); no direct SMSG here.
-        ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(p) => {
-            ignore_refusal(
-                store.push_quest(actor, p.quest_id),
-                "push_quest",
-                player.account_id,
-            )?;
-            Ok(QuestActionOutcome::Handled {
-                outbound: Vec::new(),
-            })
-        }
-        other => Ok(QuestActionOutcome::PassThrough(other)),
     }
 }
 
@@ -398,7 +375,7 @@ mod tests {
     use crate::stdb::ReducerCallError;
     use std::sync::Mutex;
     use wow_world_messages::vanilla::{
-        Guid, QuestGiverStatus, CMSG_PING, CMSG_PUSHQUESTTOPARTY, CMSG_QUESTGIVER_ACCEPT_QUEST,
+        Guid, QuestGiverStatus, CMSG_PUSHQUESTTOPARTY, CMSG_QUESTGIVER_ACCEPT_QUEST,
         CMSG_QUESTGIVER_CHOOSE_REWARD, CMSG_QUESTGIVER_COMPLETE_QUEST, CMSG_QUESTGIVER_HELLO,
         CMSG_QUESTGIVER_QUERY_QUEST, CMSG_QUESTGIVER_STATUS_QUERY, CMSG_QUESTLOG_REMOVE_QUEST,
         CMSG_QUEST_QUERY,
@@ -565,11 +542,16 @@ mod tests {
     const OP_QUEST_DETAILS: u16 = 0x0188;
     const OP_QUEST_QUERY_RESPONSE: u16 = 0x005D;
 
-    fn player() -> QuestActionPlayer {
-        QuestActionPlayer {
-            account_id: 7,
-            self_guid: Some(SELF_GUID),
-        }
+    fn run_quest<St: QuestActionStore + ?Sized>(
+        store: &St,
+        mut session: ProtocolSession,
+        message: ClientOpcodeMessage,
+    ) -> Result<ProtocolReply> {
+        Quest::handle(store, &mut session, message.into())
+    }
+
+    fn session() -> ProtocolSession {
+        ProtocolSession::in_world(7, SELF_GUID)
     }
 
     fn status_query(giver: u64) -> ClientOpcodeMessage {
@@ -670,14 +652,8 @@ mod tests {
         }
     }
 
-    fn outbound(outcome: QuestActionOutcome) -> Vec<Outbound> {
-        match outcome {
-            QuestActionOutcome::Handled { outbound }
-            | QuestActionOutcome::TurnedIn { outbound } => outbound,
-            QuestActionOutcome::PassThrough(_) => {
-                panic!("expected the quest module to handle this")
-            }
-        }
+    fn outbound(reply: ProtocolReply) -> Vec<Outbound> {
+        reply.outbound
     }
 
     /// The same client-visible traffic: same order, same messages, same raw bytes.
@@ -708,8 +684,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), status_query(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), status_query(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -731,9 +706,7 @@ mod tests {
             ..one_quest(codec::ROLE_START, false, false)
         };
 
-        assert!(
-            outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap()).is_empty()
-        );
+        assert!(outbound(run_quest(&actions, session(), hello(GIVER)).unwrap()).is_empty());
         assert_eq!(
             actions.gate_requests.lock().unwrap().as_slice(),
             &[(GIVER, SELF_GUID)]
@@ -745,7 +718,7 @@ mod tests {
     fn a_single_new_quest_opens_its_details_screen_directly() {
         let actions = one_quest(codec::ROLE_START, false, false);
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -758,7 +731,7 @@ mod tests {
     fn a_single_complete_turn_in_opens_the_offer_reward_screen() {
         let actions = one_quest(codec::ROLE_END, true, true);
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -771,7 +744,7 @@ mod tests {
     fn a_single_incomplete_turn_in_opens_the_request_items_screen() {
         let actions = one_quest(codec::ROLE_END, true, false);
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -791,7 +764,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -806,7 +779,7 @@ mod tests {
     fn a_giver_with_no_menu_quests_opens_an_empty_list() {
         let actions = InMemoryQuestActions::default();
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -822,7 +795,7 @@ mod tests {
         // would let those two answers disagree inside one request.
         let actions = one_quest(codec::ROLE_END, true, true);
 
-        dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap();
+        run_quest(&actions, session(), hello(GIVER)).unwrap();
 
         assert_eq!(
             actions.eval_requests.lock().unwrap().as_slice(),
@@ -833,11 +806,11 @@ mod tests {
 
     #[test]
     fn a_gameobject_giver_opens_the_same_screen_as_a_creature_giver() {
-        // The client never sends HELLO for a gameobject giver, so `handle_loot` calls the menu
+        // The client never sends HELLO for a gameobject giver, so `GameObject::handle` calls the menu
         // directly. Same state, same screen — only the giver guid in the body differs.
         let actions = one_quest(codec::ROLE_START, false, false);
 
-        let creature = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let creature = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
         let gameobject = quest_giver_menu(&actions, GIVER, SELF_GUID).unwrap();
         let other_giver = quest_giver_menu(&actions, GO_GIVER, SELF_GUID).unwrap();
 
@@ -854,8 +827,7 @@ mod tests {
     fn a_details_request_opens_the_whole_screen_for_the_asking_giver() {
         let actions = loaded_quest();
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), query_quest(GIVER, QUEST)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -868,9 +840,8 @@ mod tests {
     fn a_details_request_for_an_unloaded_quest_answers_nothing() {
         let actions = loaded_quest();
 
-        let batch = outbound(
-            dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST + 1)).unwrap(),
-        );
+        let batch =
+            outbound(run_quest(&actions, session(), query_quest(GIVER, QUEST + 1)).unwrap());
 
         assert!(batch.is_empty());
     }
@@ -879,8 +850,7 @@ mod tests {
     fn a_definition_query_answers_the_raw_vanilla_definition() {
         let actions = loaded_quest();
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), quest_query(QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), quest_query(QUEST)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -893,8 +863,7 @@ mod tests {
     fn a_definition_query_for_an_unloaded_quest_answers_nothing() {
         let actions = loaded_quest();
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), quest_query(QUEST + 1)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), quest_query(QUEST + 1)).unwrap());
 
         assert!(batch.is_empty());
     }
@@ -905,8 +874,7 @@ mod tests {
     fn accept_requests_the_durable_accept_for_the_player_giver_and_quest() {
         let actions = loaded_quest();
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), accept(GIVER, QUEST)).unwrap());
 
         assert!(batch.is_empty(), "the client closes the window itself");
         assert_eq!(
@@ -922,8 +890,7 @@ mod tests {
             ..loaded_quest()
         };
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), accept(GIVER, QUEST)).unwrap());
 
         assert!(batch.is_empty());
     }
@@ -935,7 +902,7 @@ mod tests {
             ..loaded_quest()
         };
 
-        let error = match dispatch_quest_action(&actions, player(), accept(GIVER, QUEST)) {
+        let error = match run_quest(&actions, session(), accept(GIVER, QUEST)) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -952,7 +919,7 @@ mod tests {
             ..loaded_quest()
         };
 
-        let batch = item_started_quest(&actions, player(), BAG_SLOT)
+        let batch = item_started_quest(&actions, &session(), BAG_SLOT)
             .unwrap()
             .expect("the quest module owns a quest-starting item");
 
@@ -971,7 +938,7 @@ mod tests {
     fn an_item_that_starts_no_quest_leaves_the_action_to_the_item_family() {
         let actions = loaded_quest();
 
-        assert!(item_started_quest(&actions, player(), BAG_SLOT)
+        assert!(item_started_quest(&actions, &session(), BAG_SLOT)
             .unwrap()
             .is_none());
     }
@@ -985,7 +952,7 @@ mod tests {
             ..loaded_quest()
         };
 
-        let batch = item_started_quest(&actions, player(), BAG_SLOT).unwrap();
+        let batch = item_started_quest(&actions, &session(), BAG_SLOT).unwrap();
 
         assert_eq!(batch.map(|batch| batch.len()), Some(0));
     }
@@ -996,12 +963,9 @@ mod tests {
             start_quest: Some((ITEM_GIVER, QUEST)),
             ..loaded_quest()
         };
-        let player = QuestActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let player = ProtocolSession::new(7, "TESTER".into());
 
-        assert!(item_started_quest(&actions, player, BAG_SLOT)
+        assert!(item_started_quest(&actions, &player, BAG_SLOT)
             .unwrap()
             .is_none());
         assert!(actions.start_quest_requests.lock().unwrap().is_empty());
@@ -1015,8 +979,8 @@ mod tests {
         };
 
         let from_giver =
-            outbound(dispatch_quest_action(&actions, player(), query_quest(GIVER, QUEST)).unwrap());
-        let from_item = item_started_quest(&actions, player(), BAG_SLOT)
+            outbound(run_quest(&actions, session(), query_quest(GIVER, QUEST)).unwrap());
+        let from_item = item_started_quest(&actions, &session(), BAG_SLOT)
             .unwrap()
             .expect("the quest module owns a quest-starting item");
 
@@ -1032,7 +996,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(3)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), abandon(3)).unwrap());
 
         assert!(
             batch.is_empty(),
@@ -1053,7 +1017,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(9)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), abandon(9)).unwrap());
 
         assert!(batch.is_empty());
         assert!(actions.abandon_requests.lock().unwrap().is_empty());
@@ -1063,7 +1027,7 @@ mod tests {
     fn abandon_against_an_empty_log_requests_nothing() {
         let actions = InMemoryQuestActions::default();
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(0)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), abandon(0)).unwrap());
 
         assert!(batch.is_empty());
         assert!(actions.abandon_requests.lock().unwrap().is_empty());
@@ -1077,7 +1041,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), abandon(3)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), abandon(3)).unwrap());
 
         assert!(batch.is_empty());
     }
@@ -1090,7 +1054,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = match dispatch_quest_action(&actions, player(), abandon(3)) {
+        let error = match run_quest(&actions, session(), abandon(3)) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -1098,24 +1062,26 @@ mod tests {
         assert!(matches!(classify(&error), DurableFailure::TransportLoss));
     }
 
-    // ── Player context and error classification ──────────────────────────────
-
     #[test]
-    fn before_world_entry_the_quest_opcodes_pass_through() {
-        let actions = one_quest(codec::ROLE_START, false, false);
-        let player = QuestActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
-
-        for msg in [status_query(GIVER), hello(GIVER)] {
-            assert!(matches!(
-                dispatch_quest_action(&actions, player, msg).unwrap(),
-                QuestActionOutcome::PassThrough(_)
-            ));
+    fn quest_requests_before_world_entry_make_no_durable_request() {
+        let actions = InMemoryQuestActions::default();
+        for message in [
+            hello(GIVER),
+            accept(GIVER, QUEST),
+            abandon(0),
+            push_to_party(QUEST),
+        ] {
+            let mut session = ProtocolSession::new(7, "TESTER".into());
+            let reply = Quest::handle(&actions, &mut session, message.into()).unwrap();
+            assert!(reply.outbound.is_empty());
+            assert!(reply.after_queue.is_none());
         }
-        assert!(actions.eval_requests.lock().unwrap().is_empty());
+        assert!(actions.accept_requests.lock().unwrap().is_empty());
+        assert!(actions.abandon_requests.lock().unwrap().is_empty());
+        assert!(actions.push_requests.lock().unwrap().is_empty());
     }
+
+    // ── World Session context and error classification ──────────────────────────────
 
     #[test]
     fn a_failed_interaction_gate_read_is_session_fatal() {
@@ -1124,31 +1090,12 @@ mod tests {
             ..one_quest(codec::ROLE_START, false, false)
         };
 
-        let error = match dispatch_quest_action(&actions, player(), hello(GIVER)) {
+        let error = match run_quest(&actions, session(), hello(GIVER)) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
 
         assert!(matches!(classify(&error), DurableFailure::TransportLoss));
-    }
-
-    // ── Pass-through ─────────────────────────────────────────────────────────
-
-    #[test]
-    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
-        let actions = InMemoryQuestActions::default();
-
-        let outcome = dispatch_quest_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-
-        assert!(matches!(
-            outcome,
-            QuestActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
     }
 
     // ── The turn-in round trip ───────────────────────────────────────────────
@@ -1197,8 +1144,7 @@ mod tests {
     fn opening_a_complete_turn_in_offers_the_reward_and_grants_nothing() {
         let actions = one_quest(codec::ROLE_END, true, true);
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), complete_quest(QUEST)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -1218,8 +1164,7 @@ mod tests {
     fn opening_an_incomplete_turn_in_asks_for_the_remaining_items() {
         let actions = one_quest(codec::ROLE_END, true, false);
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), complete_quest(QUEST)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -1232,8 +1177,7 @@ mod tests {
     fn opening_a_turn_in_for_an_unknown_quest_answers_nothing() {
         let actions = one_quest(codec::ROLE_END, true, true);
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), complete_quest(QUEST + 1)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), complete_quest(QUEST + 1)).unwrap());
 
         assert!(batch.is_empty());
         // No screen to build, so the giver is never evaluated.
@@ -1246,7 +1190,7 @@ mod tests {
         // recorded ahead of it is what stops a refusal from showing a false "Quest Complete".
         let actions = rewarded_turn_in();
 
-        dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap();
+        run_quest(&actions, session(), choose_reward(2)).unwrap();
 
         assert_eq!(
             actions.turn_in_calls.lock().unwrap().as_slice(),
@@ -1258,7 +1202,7 @@ mod tests {
     fn a_granted_turn_in_answers_the_popup_built_from_the_quest_details() {
         let actions = rewarded_turn_in();
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(0)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), choose_reward(0)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -1273,14 +1217,26 @@ mod tests {
     /// the Character's held letters.
     #[test]
     fn only_a_granted_turn_in_asks_for_the_held_letters_to_be_driven() {
-        let granted = dispatch_quest_action(&rewarded_turn_in(), player(), choose_reward(0));
-        assert!(matches!(granted, Ok(QuestActionOutcome::TurnedIn { .. })));
+        let granted = run_quest(&rewarded_turn_in(), session(), choose_reward(0));
+        assert!(matches!(
+            granted,
+            Ok(ProtocolReply {
+                after_queue: Some(WorldSessionAction::RedriveMail(_)),
+                ..
+            })
+        ));
         let refused = InMemoryQuestActions {
             turn_in_error: Some("quest objectives are not complete".into()),
             ..rewarded_turn_in()
         };
-        let refused = dispatch_quest_action(&refused, player(), choose_reward(0));
-        assert!(matches!(refused, Ok(QuestActionOutcome::Handled { .. })));
+        let refused = run_quest(&refused, session(), choose_reward(0));
+        assert!(matches!(
+            refused,
+            Ok(ProtocolReply {
+                after_queue: None,
+                ..
+            })
+        ));
     }
 
     #[test]
@@ -1290,7 +1246,7 @@ mod tests {
             ..rewarded_turn_in()
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), choose_reward(2)).unwrap());
 
         assert!(matches!(
             batch.as_slice(),
@@ -1311,7 +1267,7 @@ mod tests {
             ..one_quest(codec::ROLE_END, true, true)
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(2)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), choose_reward(2)).unwrap());
 
         assert!(batch.is_empty());
         assert_eq!(
@@ -1327,7 +1283,7 @@ mod tests {
             ..one_quest(codec::ROLE_END, true, true)
         };
 
-        let batch = outbound(dispatch_quest_action(&actions, player(), choose_reward(0)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), choose_reward(0)).unwrap());
 
         assert!(batch.is_empty());
         assert_eq!(
@@ -1343,7 +1299,7 @@ mod tests {
             ..rewarded_turn_in()
         };
 
-        let error = match dispatch_quest_action(&actions, player(), choose_reward(2)) {
+        let error = match run_quest(&actions, session(), choose_reward(2)) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -1361,8 +1317,7 @@ mod tests {
     fn party_sharing_requests_the_durable_share_and_answers_nothing_on_success() {
         let actions = InMemoryQuestActions::default();
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), push_to_party(QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), push_to_party(QUEST)).unwrap());
 
         assert!(
             batch.is_empty(),
@@ -1381,8 +1336,7 @@ mod tests {
             ..Default::default()
         };
 
-        let batch =
-            outbound(dispatch_quest_action(&actions, player(), push_to_party(QUEST)).unwrap());
+        let batch = outbound(run_quest(&actions, session(), push_to_party(QUEST)).unwrap());
 
         assert!(batch.is_empty());
     }
@@ -1394,7 +1348,7 @@ mod tests {
             ..Default::default()
         };
 
-        let error = match dispatch_quest_action(&actions, player(), push_to_party(QUEST)) {
+        let error = match run_quest(&actions, session(), push_to_party(QUEST)) {
             Err(error) => error,
             Ok(_) => panic!("a dead reducer transport must end the session"),
         };
@@ -1418,7 +1372,7 @@ mod tests {
         };
 
         let gossip_items = gossip_quest_items(&actions, GIVER, SELF_GUID).unwrap();
-        let menu = outbound(dispatch_quest_action(&actions, player(), hello(GIVER)).unwrap());
+        let menu = outbound(run_quest(&actions, session(), hello(GIVER)).unwrap());
 
         let menu_items = match menu.as_slice() {
             [Outbound::One(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_LIST(l))] => &l.quest_items,

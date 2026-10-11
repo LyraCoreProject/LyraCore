@@ -9,8 +9,8 @@ use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
 use crate::durable_test_support::{module_bytes, poll_until, Standalone, POLL_TIMEOUT};
 use crate::world::{
-    dispatch_meeting_stone_action, MeetingStoneActionOutcome, MeetingStoneActionStore,
-    MeetingStonePlayer, Outbound, WorldSessionToken,
+    MeetingStone, MeetingStoneActionStore, Outbound, ProtocolFamily, ProtocolSession,
+    WorldSessionToken,
 };
 use lyracore_shared::meeting_stone::queue_status::{JOINED_QUEUE, NONE};
 use std::sync::mpsc::Receiver;
@@ -106,14 +106,13 @@ fn use_stone(session: &Coordinator, guid: u64, stone: u64) -> Vec<Outbound> {
 }
 
 fn send(session: &Coordinator, guid: u64, msg: ClientOpcodeMessage) -> Vec<Outbound> {
-    let player = MeetingStonePlayer {
-        account_id: guid,
-        self_guid: Some(guid),
-    };
-    match dispatch_meeting_stone_action(session, player, msg).unwrap() {
-        MeetingStoneActionOutcome::Handled { outbound } => outbound,
-        MeetingStoneActionOutcome::PassThrough(_) => panic!("the meeting stone seam passed it on"),
-    }
+    MeetingStone::handle(
+        session,
+        &mut ProtocolSession::in_world(guid, guid),
+        msg.into(),
+    )
+    .unwrap()
+    .outbound
 }
 
 /// The meeting stone messages in `outbound`, running each relay job the way the session writer

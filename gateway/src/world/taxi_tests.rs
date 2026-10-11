@@ -1,32 +1,20 @@
 //! Taxi opcodes through their dispatcher, and taxi gossip over an encrypted World Session.
 
+use super::family::{ProtocolFamily, ProtocolSession};
 use super::handlers::InMemoryTaxiActions;
 use super::*;
 use wow_world_messages::vanilla::ActivateTaxiReply;
 
-const PLAYER: TaxiActionPlayer = TaxiActionPlayer { self_guid: Some(1) };
-
-/// Dispatch one taxi message and return the packets the session would send for it. An activation
-/// goes through `queue_reply_then_arm`, as the session does, so the reply is queued before the
-/// flight arms.
 fn try_run(
     actions: &InMemoryTaxiActions,
     msg: impl Into<ClientOpcodeMessage>,
 ) -> Result<Vec<Outbound>> {
-    match dispatch_taxi_action(actions, PLAYER, msg.into())? {
-        TaxiActionOutcome::Handled { outbound } => Ok(outbound),
-        TaxiActionOutcome::Activated {
-            outbound,
-            character_guid,
-            arm,
-        } => {
-            let (tx, rx) = SessionTx::with_depth(0);
-            queue_reply_then_arm(&tx, actions, outbound, character_guid, arm)?;
-            drop(tx);
-            Ok(rx.try_iter().collect())
-        }
-        TaxiActionOutcome::PassThrough(_) => panic!("the taxi dispatcher passed the message on"),
-    }
+    Ok(handlers::Taxi::handle(
+        actions,
+        &mut ProtocolSession::in_world(7, 1),
+        msg.into().into(),
+    )?
+    .outbound)
 }
 
 fn run(actions: &InMemoryTaxiActions, msg: impl Into<ClientOpcodeMessage>) -> Vec<Outbound> {

@@ -5,7 +5,7 @@
 //! `chat.rs`.
 
 use super::super::*;
-use super::chat::{drop_unrecognised_refusal, ChatActionPlayer, ChatActionStore, SpeakerFacts};
+use super::chat::{drop_unrecognised_refusal, ChatActionStore, SpeakerFacts};
 use lyracore_shared::channel::{channel_op, notice, ChannelRefusal};
 use lyracore_shared::faction::team_for_race;
 
@@ -90,152 +90,159 @@ pub(crate) fn resolve_online_character<St: ShardRoutingStore + SocialStore + ?Si
     Ok(None)
 }
 
-pub(crate) enum ChannelActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
 /// What CHANNEL_OWNER names when a channel has no owner (vm:Channel.cpp:881-890).
 const NO_OWNER: &str = "Nobody";
 /// What CHANNEL_OWNER names when the owner's Character cannot be found (cm:Channel.cpp:817-824).
 const OWNER_NOT_FOUND: &str = "PLAYER_NOT_FOUND";
 
-/// Consume the channel opcodes and pass everything else on.
-pub(crate) fn dispatch_channel_action<St: ChannelActionStore + ?Sized>(
-    store: &St,
-    player: ChatActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<ChannelActionOutcome> {
-    let outbound = match msg {
-        // An empty name is dropped (cm:ChannelHandler.cpp:66-67, cm:ChannelHandler.cpp:88-89).
-        ClientOpcodeMessage::CMSG_JOIN_CHANNEL(join) if join.channel_name.is_empty() => Vec::new(),
-        ClientOpcodeMessage::CMSG_JOIN_CHANNEL(join) => run_op(
-            store,
-            player,
-            channel_op::JOIN,
-            join.channel_name,
-            join.channel_password,
-        )?,
-        ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(leave) if leave.channel_name.is_empty() => {
-            Vec::new()
-        }
-        ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(leave) => run_op(
-            store,
-            player,
-            channel_op::LEAVE,
-            leave.channel_name,
-            String::new(),
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(password) => run_op(
-            store,
-            player,
-            channel_op::PASSWORD,
-            password.channel_name,
-            password.channel_password,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(set_owner) => run_targeted_op(
-            store,
-            player,
-            channel_op::SET_OWNER,
-            set_owner.channel_name,
-            set_owner.new_owner,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(moderator) => run_targeted_op(
-            store,
-            player,
-            channel_op::MODERATOR,
-            moderator.channel_name,
-            moderator.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(unmoderator) => run_targeted_op(
-            store,
-            player,
-            channel_op::UNMODERATOR,
-            unmoderator.channel_name,
-            unmoderator.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_MUTE(mute) => run_targeted_op(
-            store,
-            player,
-            channel_op::MUTE,
-            mute.channel_name,
-            mute.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(unmute) => run_targeted_op(
-            store,
-            player,
-            channel_op::UNMUTE,
-            unmute.channel_name,
-            unmute.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_KICK(kick) => run_targeted_op(
-            store,
-            player,
-            channel_op::KICK,
-            kick.channel_name,
-            kick.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_BAN(ban) => run_targeted_op(
-            store,
-            player,
-            channel_op::BAN,
-            ban.channel_name,
-            ban.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(unban) => run_targeted_op(
-            store,
-            player,
-            channel_op::UNBAN,
-            unban.channel_name,
-            unban.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_INVITE(invite) => run_targeted_op(
-            store,
-            player,
-            channel_op::INVITE,
-            invite.channel_name,
-            invite.player_name,
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(announcements) => run_op(
-            store,
-            player,
-            channel_op::ANNOUNCEMENTS,
-            announcements.channel_name,
-            String::new(),
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(moderate) => run_op(
-            store,
-            player,
-            channel_op::MODERATE,
-            moderate.channel_name,
-            String::new(),
-        )?,
-        ClientOpcodeMessage::CMSG_CHANNEL_LIST(list) => {
-            read_roster(store, player, list.channel_name, |roster| {
-                Outbound::One(ServerOpcodeMessage::SMSG_CHANNEL_LIST(Box::new(
-                    codec::channel::build_channel_list(roster.name, roster.flags, &roster.members),
-                )))
-            })?
-        }
-        ClientOpcodeMessage::CMSG_CHANNEL_OWNER(owner) => {
-            let typed = owner.channel_name.clone();
-            read_roster(store, player, owner.channel_name, |roster| {
-                let owner_name = match (roster.owner_guid, roster.owner_name) {
-                    (0, _) => NO_OWNER.to_string(),
-                    (_, name) if name.is_empty() => OWNER_NOT_FOUND.to_string(),
-                    (_, name) => name,
-                };
-                notice_outbound(codec::channel::ChannelNoticeView {
-                    notice: notice::CHANNEL_OWNER,
-                    channel_name: typed,
-                    text: owner_name,
-                    ..Default::default()
-                })
-            })?
-        }
-        other => return Ok(ChannelActionOutcome::PassThrough(other)),
-    };
-    Ok(ChannelActionOutcome::Handled { outbound })
+/// Handle Chat Channel requests and map Module outcomes to client notices.
+pub(crate) struct Channel;
+
+impl<St: ChannelActionStore + ?Sized> ProtocolFamily<St> for Channel {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let outbound = match msg {
+            // An empty name is dropped (cm:ChannelHandler.cpp:66-67, cm:ChannelHandler.cpp:88-89).
+            ClientOpcodeMessage::CMSG_JOIN_CHANNEL(join) if join.channel_name.is_empty() => {
+                Vec::new()
+            }
+            ClientOpcodeMessage::CMSG_JOIN_CHANNEL(join) => run_op(
+                store,
+                player,
+                channel_op::JOIN,
+                join.channel_name,
+                join.channel_password,
+            )?,
+            ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(leave) if leave.channel_name.is_empty() => {
+                Vec::new()
+            }
+            ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(leave) => run_op(
+                store,
+                player,
+                channel_op::LEAVE,
+                leave.channel_name,
+                String::new(),
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(password) => run_op(
+                store,
+                player,
+                channel_op::PASSWORD,
+                password.channel_name,
+                password.channel_password,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(set_owner) => run_targeted_op(
+                store,
+                player,
+                channel_op::SET_OWNER,
+                set_owner.channel_name,
+                set_owner.new_owner,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(moderator) => run_targeted_op(
+                store,
+                player,
+                channel_op::MODERATOR,
+                moderator.channel_name,
+                moderator.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(unmoderator) => run_targeted_op(
+                store,
+                player,
+                channel_op::UNMODERATOR,
+                unmoderator.channel_name,
+                unmoderator.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_MUTE(mute) => run_targeted_op(
+                store,
+                player,
+                channel_op::MUTE,
+                mute.channel_name,
+                mute.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(unmute) => run_targeted_op(
+                store,
+                player,
+                channel_op::UNMUTE,
+                unmute.channel_name,
+                unmute.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_KICK(kick) => run_targeted_op(
+                store,
+                player,
+                channel_op::KICK,
+                kick.channel_name,
+                kick.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_BAN(ban) => run_targeted_op(
+                store,
+                player,
+                channel_op::BAN,
+                ban.channel_name,
+                ban.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(unban) => run_targeted_op(
+                store,
+                player,
+                channel_op::UNBAN,
+                unban.channel_name,
+                unban.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_INVITE(invite) => run_targeted_op(
+                store,
+                player,
+                channel_op::INVITE,
+                invite.channel_name,
+                invite.player_name,
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(announcements) => run_op(
+                store,
+                player,
+                channel_op::ANNOUNCEMENTS,
+                announcements.channel_name,
+                String::new(),
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(moderate) => run_op(
+                store,
+                player,
+                channel_op::MODERATE,
+                moderate.channel_name,
+                String::new(),
+            )?,
+            ClientOpcodeMessage::CMSG_CHANNEL_LIST(list) => {
+                read_roster(store, player, list.channel_name, |roster| {
+                    Outbound::One(ServerOpcodeMessage::SMSG_CHANNEL_LIST(Box::new(
+                        codec::channel::build_channel_list(
+                            roster.name,
+                            roster.flags,
+                            &roster.members,
+                        ),
+                    )))
+                })?
+            }
+            ClientOpcodeMessage::CMSG_CHANNEL_OWNER(owner) => {
+                let typed = owner.channel_name.clone();
+                read_roster(store, player, owner.channel_name, |roster| {
+                    let owner_name = match (roster.owner_guid, roster.owner_name) {
+                        (0, _) => NO_OWNER.to_string(),
+                        (_, name) if name.is_empty() => OWNER_NOT_FOUND.to_string(),
+                        (_, name) => name,
+                    };
+                    notice_outbound(codec::channel::ChannelNoticeView {
+                        notice: notice::CHANNEL_OWNER,
+                        channel_name: typed,
+                        text: owner_name,
+                        ..Default::default()
+                    })
+                })?
+            }
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        Ok(ProtocolReply::from(outbound))
+    }
 }
 
 /// The actor and Speaker Facts every channel op needs. `None` when the caller has no live entity
@@ -243,7 +250,7 @@ pub(crate) fn dispatch_channel_action<St: ChannelActionStore + ?Sized>(
 /// channel op takes for that case.
 fn actor_and_speaker<St: ChannelActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
 ) -> Result<Option<(Actor, SpeakerFacts)>> {
     let Some(actor) = player.actor() else {
         return Ok(None);
@@ -268,7 +275,7 @@ struct RefusalContext {
 /// logged at debug and dropped. A Transport Loss ends the World Session.
 fn submit_channel_op<St: ChannelActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     actor: Actor,
     op: u8,
     request: ChannelRequest,
@@ -293,7 +300,7 @@ fn submit_channel_op<St: ChannelActionStore + ?Sized>(
 /// name another Character.
 fn run_op<St: ChannelActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     op: u8,
     channel_name: String,
     password: String,
@@ -334,7 +341,7 @@ fn run_op<St: ChannelActionStore + ?Sized>(
 /// the same way. Any other failed target read ends the World Session.
 fn run_targeted_op<St: ChannelActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     op: u8,
     channel_name: String,
     typed_name: String,
@@ -377,7 +384,7 @@ fn run_targeted_op<St: ChannelActionStore + ?Sized>(
 /// with the name the client typed (cm:Channel.cpp:446-456, cm:Channel.cpp:479-488).
 fn read_roster<St: ChannelActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     channel_name: String,
     answer: impl FnOnce(ChannelRoster) -> Outbound,
 ) -> Result<Vec<Outbound>> {
@@ -436,7 +443,6 @@ mod tests {
         CMSG_CHANNEL_LIST, CMSG_CHANNEL_MODERATE, CMSG_CHANNEL_MODERATOR, CMSG_CHANNEL_MUTE,
         CMSG_CHANNEL_OWNER, CMSG_CHANNEL_PASSWORD, CMSG_CHANNEL_SET_OWNER, CMSG_CHANNEL_UNBAN,
         CMSG_CHANNEL_UNMODERATOR, CMSG_CHANNEL_UNMUTE, CMSG_JOIN_CHANNEL, CMSG_LEAVE_CHANNEL,
-        CMSG_PING,
     };
 
     /// How a Fake's Durable Request or read fails.
@@ -572,11 +578,8 @@ mod tests {
         }
     }
 
-    fn player() -> ChatActionPlayer {
-        ChatActionPlayer {
-            account_id: 7,
-            self_guid: Some(ACTOR),
-        }
+    fn player() -> ProtocolSession {
+        ProtocolSession::in_world(7, ACTOR)
     }
 
     fn join(name: &str, password: &str) -> ClientOpcodeMessage {
@@ -679,11 +682,8 @@ mod tests {
         }))
     }
 
-    fn handled(outcome: ChannelActionOutcome) -> Vec<Outbound> {
-        match outcome {
-            ChannelActionOutcome::Handled { outbound } => outbound,
-            ChannelActionOutcome::PassThrough(msg) => panic!("expected Handled, got {msg}"),
-        }
+    fn handled(outcome: ProtocolReply) -> Vec<Outbound> {
+        outcome.outbound
     }
 
     /// The single raw packet `outbound` holds, as `(opcode, body)`.
@@ -708,8 +708,9 @@ mod tests {
     #[test]
     fn a_join_conveys_the_typed_name_the_password_and_the_speaker() {
         let store = store(None);
-        let outbound =
-            handled(dispatch_channel_action(&store, player(), join("Raiders", "hunter2")).unwrap());
+        let outbound = handled(
+            Channel::handle(&store, &mut player(), join("Raiders", "hunter2").into()).unwrap(),
+        );
         assert!(outbound.is_empty(), "YOU_JOINED returns on the Relay");
         assert_eq!(
             store.ops.lock().unwrap().as_slice(),
@@ -732,13 +733,13 @@ mod tests {
     #[test]
     fn a_leave_and_a_password_change_run_their_ops() {
         let store = store(None);
-        handled(dispatch_channel_action(&store, player(), leave("Raiders")).unwrap());
+        handled(Channel::handle(&store, &mut player(), leave("Raiders").into()).unwrap());
         let password =
             ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(Box::new(CMSG_CHANNEL_PASSWORD {
                 channel_name: "Raiders".to_string(),
                 channel_password: "sesame".to_string(),
             }));
-        handled(dispatch_channel_action(&store, player(), password).unwrap());
+        handled(Channel::handle(&store, &mut player(), password.into()).unwrap());
         let ops = store.ops.lock().unwrap();
         assert_eq!(ops.len(), 2);
         assert_eq!((ops[0].1, ops[0].2.channel_name.as_str()), (1, "Raiders"));
@@ -753,7 +754,7 @@ mod tests {
     fn an_empty_name_does_nothing() {
         let store = store(None);
         for msg in [join("", ""), leave("")] {
-            let outbound = handled(dispatch_channel_action(&store, player(), msg).unwrap());
+            let outbound = handled(Channel::handle(&store, &mut player(), msg.into()).unwrap());
             assert!(outbound.is_empty());
         }
         assert!(store.ops.lock().unwrap().is_empty());
@@ -764,7 +765,7 @@ mod tests {
     fn leaving_a_channel_you_are_not_on_answers_not_member_with_the_typed_name() {
         let store = store(Some(Ok(ChannelOutcome::Refused(ChannelRefusal::NotMember))));
         let outbound =
-            handled(dispatch_channel_action(&store, player(), leave("rAiders")).unwrap());
+            handled(Channel::handle(&store, &mut player(), leave("rAiders").into()).unwrap());
         assert_eq!(
             only_raw(outbound),
             (
@@ -783,7 +784,7 @@ mod tests {
         ] {
             let store = store(Some(Ok(ChannelOutcome::Refused(refusal))));
             let outbound =
-                handled(dispatch_channel_action(&store, player(), join("1x", "")).unwrap());
+                handled(Channel::handle(&store, &mut player(), join("1x", "").into()).unwrap());
             assert_eq!(
                 only_raw(outbound),
                 (0x0099, vec![code, b'1', b'x', 0]),
@@ -798,7 +799,8 @@ mod tests {
         let store = store(Some(Ok(ChannelOutcome::Refused(
             ChannelRefusal::PlayerAlreadyMember,
         ))));
-        let outbound = handled(dispatch_channel_action(&store, player(), join("Rx", "")).unwrap());
+        let outbound =
+            handled(Channel::handle(&store, &mut player(), join("Rx", "").into()).unwrap());
         assert_eq!(
             only_raw(outbound),
             (0x0099, vec![0x17, b'R', b'x', 0, 42, 0, 0, 0, 0, 0, 0, 0])
@@ -815,14 +817,14 @@ mod tests {
                 channel_name: "Rx".to_string(),
                 channel_password: "x".to_string(),
             }));
-        let outbound = handled(dispatch_channel_action(&store, player(), password).unwrap());
+        let outbound = handled(Channel::handle(&store, &mut player(), password.into()).unwrap());
         assert_eq!(only_raw(outbound), (0x0099, vec![0x06, b'R', b'x', 0]));
     }
 
     #[test]
     fn a_lost_reducer_transport_ends_the_session() {
         let store = store(Some(Err(Failure::TransportLost)));
-        let error = dispatch_channel_action(&store, player(), join("Rx", ""))
+        let error = Channel::handle(&store, &mut player(), join("Rx", "").into())
             .err()
             .expect("transport loss is fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
@@ -831,14 +833,16 @@ mod tests {
     #[test]
     fn an_unrecognised_refusal_drops_the_op_and_keeps_the_session() {
         let store = store(Some(Err(Failure::Refused)));
-        let outbound = handled(dispatch_channel_action(&store, player(), join("Rx", "")).unwrap());
+        let outbound =
+            handled(Channel::handle(&store, &mut player(), join("Rx", "").into()).unwrap());
         assert!(outbound.is_empty());
     }
 
     #[test]
     fn an_actor_without_a_live_entity_sends_nothing() {
         let store = InMemoryChannelActions::default();
-        let outbound = handled(dispatch_channel_action(&store, player(), join("Rx", "")).unwrap());
+        let outbound =
+            handled(Channel::handle(&store, &mut player(), join("Rx", "").into()).unwrap());
         assert!(outbound.is_empty());
         assert!(store.ops.lock().unwrap().is_empty());
     }
@@ -851,7 +855,8 @@ mod tests {
             roster: Some(roster(&[(9, 0x03), (ACTOR, 0x08)], 9, "Thrall")),
             ..store(None)
         };
-        let outbound = handled(dispatch_channel_action(&store, player(), list("raiders")).unwrap());
+        let outbound =
+            handled(Channel::handle(&store, &mut player(), list("raiders").into()).unwrap());
         assert_eq!(
             store.roster_reads.lock().unwrap().as_slice(),
             &[(67, "raiders".to_string())]
@@ -879,14 +884,15 @@ mod tests {
                 roster: Some(roster(&[(9, 0x03)], 9, "Thrall")),
                 ..store(None)
             };
-            let outbound = handled(dispatch_channel_action(&store, player(), msg).unwrap());
+            let outbound = handled(Channel::handle(&store, &mut player(), msg.into()).unwrap());
             assert_eq!(
                 only_raw(outbound),
                 (0x0099, [&[0x05][..], b"Raiders\0"].concat())
             );
         }
         let store = store(None);
-        let outbound = handled(dispatch_channel_action(&store, player(), list("Nowhere")).unwrap());
+        let outbound =
+            handled(Channel::handle(&store, &mut player(), list("Nowhere").into()).unwrap());
         assert_eq!(
             only_raw(outbound),
             (0x0099, [&[0x05][..], b"Nowhere\0"].concat()),
@@ -901,7 +907,7 @@ mod tests {
             ..store(None)
         };
         let outbound =
-            handled(dispatch_channel_action(&store, player(), owner("Raiders")).unwrap());
+            handled(Channel::handle(&store, &mut player(), owner("Raiders").into()).unwrap());
         assert_eq!(
             only_raw(outbound),
             (0x0099, [&[0x0B][..], b"Raiders\0Thrall\0"].concat())
@@ -916,7 +922,7 @@ mod tests {
             ..store(None)
         };
         let outbound =
-            handled(dispatch_channel_action(&store, player(), owner("Trade - City")).unwrap());
+            handled(Channel::handle(&store, &mut player(), owner("Trade - City").into()).unwrap());
         assert_eq!(
             only_raw(outbound),
             (0x0099, [&[0x0B][..], b"Trade - City\0Nobody\0"].concat())
@@ -929,22 +935,7 @@ mod tests {
             roster_failure: true,
             ..store(None)
         };
-        assert!(dispatch_channel_action(&store, player(), list("Raiders")).is_err());
-    }
-
-    #[test]
-    fn another_opcode_passes_through() {
-        let store = store(None);
-        let outcome = dispatch_channel_action(
-            &store,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-        assert!(matches!(
-            outcome,
-            ChannelActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
+        assert!(Channel::handle(&store, &mut player(), list("Raiders").into()).is_err());
     }
 
     const TARGET: u64 = 9;
@@ -980,7 +971,7 @@ mod tests {
         ];
         for (msg, op) in cases {
             let store = resolved(true);
-            let outbound = handled(dispatch_channel_action(&store, player(), msg).unwrap());
+            let outbound = handled(Channel::handle(&store, &mut player(), msg.into()).unwrap());
             assert!(outbound.is_empty(), "op {op}");
             let ops = store.ops.lock().unwrap();
             assert_eq!(ops.len(), 1, "op {op}");
@@ -1005,8 +996,8 @@ mod tests {
     #[test]
     fn announcements_and_moderate_carry_no_target() {
         let store = store(None);
-        handled(dispatch_channel_action(&store, player(), announcements("Raiders")).unwrap());
-        handled(dispatch_channel_action(&store, player(), moderate("Raiders")).unwrap());
+        handled(Channel::handle(&store, &mut player(), announcements("Raiders").into()).unwrap());
+        handled(Channel::handle(&store, &mut player(), moderate("Raiders").into()).unwrap());
         let ops = store.ops.lock().unwrap();
         assert_eq!(
             ops.iter()
@@ -1025,8 +1016,9 @@ mod tests {
             outcome: Some(Ok(ChannelOutcome::Refused(ChannelRefusal::PlayerNotFound))),
             ..store(None) // `online` defaults to `None`.
         };
-        let outbound =
-            handled(dispatch_channel_action(&store, player(), kick("Raiders", "Ghost")).unwrap());
+        let outbound = handled(
+            Channel::handle(&store, &mut player(), kick("Raiders", "Ghost").into()).unwrap(),
+        );
         assert_eq!(
             only_raw(outbound),
             (0x0099, [&[0x09][..], b"Raiders\0Ghost\0"].concat())
@@ -1044,7 +1036,7 @@ mod tests {
             lookup_failure: Some(Failure::PresenceUnknown),
             ..store(None)
         };
-        handled(dispatch_channel_action(&store, player(), kick("Raiders", "Ghost")).unwrap());
+        handled(Channel::handle(&store, &mut player(), kick("Raiders", "Ghost").into()).unwrap());
         let ops = store.ops.lock().unwrap();
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].2.target_guid, 0);
@@ -1058,7 +1050,7 @@ mod tests {
             lookup_failure: Some(Failure::TransportLost),
             ..store(None)
         };
-        let error = dispatch_channel_action(&store, player(), kick("Raiders", "Ghost"))
+        let error = Channel::handle(&store, &mut player(), kick("Raiders", "Ghost").into())
             .err()
             .expect("a lost read is fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
@@ -1074,7 +1066,7 @@ mod tests {
             outcome: Some(Ok(ChannelOutcome::Refused(ChannelRefusal::PlayerNotFound))),
             ..store(None)
         };
-        handled(dispatch_channel_action(&store, player(), invite("Raiders", "Ghost")).unwrap());
+        handled(Channel::handle(&store, &mut player(), invite("Raiders", "Ghost").into()).unwrap());
         let ops = store.ops.lock().unwrap();
         assert_eq!(ops.len(), 1);
         assert_eq!(ops[0].2.target_guid, 0);
@@ -1093,7 +1085,9 @@ mod tests {
             ignore_failure: Some(Failure::TransportLost),
             ..resolved(false)
         };
-        assert!(dispatch_channel_action(&store, player(), invite("Raiders", "Thrall")).is_err());
+        assert!(
+            Channel::handle(&store, &mut player(), invite("Raiders", "Thrall").into()).is_err()
+        );
         assert!(store.ops.lock().unwrap().is_empty());
     }
 
@@ -1107,7 +1101,7 @@ mod tests {
             ..resolved(false)
         };
         let outbound = handled(
-            dispatch_channel_action(&store, player(), invite("Raiders", "Thrall")).unwrap(),
+            Channel::handle(&store, &mut player(), invite("Raiders", "Thrall").into()).unwrap(),
         );
         assert_eq!(
             only_raw(outbound),
@@ -1125,8 +1119,9 @@ mod tests {
             outcome: Some(Ok(ChannelOutcome::Refused(ChannelRefusal::PlayerNotBanned))),
             ..resolved(false)
         };
-        let outbound =
-            handled(dispatch_channel_action(&store, player(), unban("Raiders", "thrall")).unwrap());
+        let outbound = handled(
+            Channel::handle(&store, &mut player(), unban("Raiders", "thrall").into()).unwrap(),
+        );
         assert_eq!(
             only_raw(outbound),
             (0x0099, [&[0x16][..], b"Raiders\0", b"Thrall\0"].concat())

@@ -38,47 +38,53 @@ pub(super) fn ignore_refusal(action: &str, account_id: u64, result: Result<()>) 
 /// Combat family leftovers: selection, pet commands, the run-speed ack and sheathing. Each arm is
 /// best-effort. The session-fatal desync exits went to the melee seam with the two melee opcodes
 /// that owned them.
-pub(crate) fn handle_combat<St: CombatStore + ?Sized>(
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    let actor = social::self_guid(conn).and_then(Actor::new);
+pub(crate) struct Combat;
 
-    match msg {
-        // Targeting (N3): record the player's selection server-side (foundation for combat).
-        ClientOpcodeMessage::CMSG_SET_SELECTION(s) => {
-            let actor = actor.ok_or_else(|| anyhow!("CMSG_SET_SELECTION before world entry"))?;
-            store.set_target(actor, s.target.guid())?
-        }
-        // Pet command bar (CMSG_PET_ACTION): pass the raw packed `data` + target through; the module
-        // decodes stay/follow/attack/dismiss + passive/defensive/aggressive and validates ownership. A
-        // transient reject (no pet, dead/invalid target) must NOT drop the session — log + ignore, like
-        // the start_attack path (do NOT route through is_desync_error).
-        ClientOpcodeMessage::CMSG_PET_ACTION(p) => {
-            if let Some(actor) = actor {
-                let result = store.pet_command(actor, p.data, p.target.guid());
-                ignore_refusal("pet_command", conn.account_id, result)?;
+impl<St: CombatStore + ?Sized> ProtocolFamily<St> for Combat {
+    fn handle(
+        store: &St,
+        conn: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let actor = conn.self_guid().and_then(Actor::new);
+
+        match msg {
+            // Targeting (N3): record the player's selection server-side (foundation for combat).
+            ClientOpcodeMessage::CMSG_SET_SELECTION(s) => {
+                let actor =
+                    actor.ok_or_else(|| anyhow!("CMSG_SET_SELECTION before world entry"))?;
+                store.set_target(actor, s.target.guid())?
             }
-        }
-        // The client's ack to our `SMSG_FORCE_RUN_SPEED_CHANGE` (`.speed`). We don't
-        // gate on the reply (the movement counter/new_speed aren't cross-checked) — explicitly
-        // consumed here (rather than falling through to the dispatch tail's `log::debug!` "ignoring"
-        // line) so a `.speed` never spams the log or risks a future desync-classifier false-positive.
-        ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_) => {}
-        // Draw / stow weapons. The client sends this on `Z`, on a weapon swap, and when an
-        // ability auto-draws. It is a pure render-state change: nothing gates on it, so a failure is
-        // logged and dropped rather than being session-fatal like ATTACKSWING/ATTACKSTOP. gtker
-        // already parsed the payload into a `SheathState`, so the byte reaching the module is one of
-        // 0/1/2 — the module re-checks anyway, being the trust boundary for every caller.
-        ClientOpcodeMessage::CMSG_SETSHEATHED(s) => {
-            let state = s.sheathed.as_int();
-            if let Some(actor) = actor {
-                let result = store.set_sheathed(actor, state);
-                ignore_refusal(&format!("set_sheathed({state})"), conn.account_id, result)?;
+            // Pet command bar (CMSG_PET_ACTION): pass the raw packed `data` + target through; the module
+            // decodes stay/follow/attack/dismiss + passive/defensive/aggressive and validates ownership. A
+            // transient reject (no pet, dead/invalid target) must NOT drop the session — log + ignore, like
+            // the start_attack path (do NOT route through is_desync_error).
+            ClientOpcodeMessage::CMSG_PET_ACTION(p) => {
+                if let Some(actor) = actor {
+                    let result = store.pet_command(actor, p.data, p.target.guid());
+                    ignore_refusal("pet_command", conn.account_id, result)?;
+                }
             }
+            // The client's ack to our `SMSG_FORCE_RUN_SPEED_CHANGE` (`.speed`). We don't
+            // gate on the reply (the movement counter/new_speed aren't cross-checked) — explicitly
+            // consumed here (rather than falling through to the dispatch tail's `log::debug!` "ignoring"
+            // line) so a `.speed` never spams the log or risks a future desync-classifier false-positive.
+            ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_) => {}
+            // Draw / stow weapons. The client sends this on `Z`, on a weapon swap, and when an
+            // ability auto-draws. It is a pure render-state change: nothing gates on it, so a failure is
+            // logged and dropped rather than being session-fatal like ATTACKSWING/ATTACKSTOP. gtker
+            // already parsed the payload into a `SheathState`, so the byte reaching the module is one of
+            // 0/1/2 — the module re-checks anyway, being the trust boundary for every caller.
+            ClientOpcodeMessage::CMSG_SETSHEATHED(s) => {
+                let state = s.sheathed.as_int();
+                if let Some(actor) = actor {
+                    let result = store.set_sheathed(actor, state);
+                    ignore_refusal(&format!("set_sheathed({state})"), conn.account_id, result)?;
+                }
+            }
+            _ => return Err(anyhow!("opcode routed to the wrong Protocol Family")),
         }
-        other => return Ok(Some(other)),
+        Ok(ProtocolReply::default())
     }
-    Ok(None)
 }

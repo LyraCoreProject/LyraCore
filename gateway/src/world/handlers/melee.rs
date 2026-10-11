@@ -2,6 +2,7 @@
 
 use super::super::*;
 use crate::stdb::{classify, DurableFailure};
+use crate::world::family::{ProtocolFamily, ProtocolReply, ProtocolRequest, ProtocolSession};
 
 pub(crate) trait MeleeActionStore: Send + Sync {
     fn start_attack(&self, actor: Actor, target_guid: u64) -> Result<()>;
@@ -10,115 +11,54 @@ pub(crate) trait MeleeActionStore: Send + Sync {
     fn stop_attack(&self, actor: Actor) -> Result<()>;
 }
 
-/// The melee-relevant session facts. `self_guid` is `None` outside the world.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct MeleeActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-    pub(crate) attacking_target: Option<u64>,
-    pub(crate) ranged_repeat: bool,
-}
+pub(crate) struct Melee;
 
-impl MeleeActionPlayer {
-    pub(crate) fn from_conn(conn: &WorldConn) -> Self {
-        let (attacking_target, ranged_repeat) = match &conn.state {
-            WorldState::InWorld(iw) => (iw.attacking_target, iw.ranged_repeat),
-            WorldState::CharSelect => (None, false),
-        };
-        Self {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-            attacking_target,
-            ranged_repeat,
-        }
-    }
-}
-
-/// The session-state change a melee outcome asks the world session to apply.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum MeleeTransition {
-    /// Leave the session's combat state as it is (every refusal).
-    Unchanged,
-    /// Melee engagement armed on `target`. Clears ranged auto-repeat: the shared durable row now
-    /// means melee.
-    Engaged(u64),
-    /// Melee engagement dropped. Leaves ranged auto-repeat alone: a stop that reaches here never
-    /// had one armed.
-    Disengaged,
-}
-
-impl MeleeTransition {
-    /// A player who left the world meanwhile has no combat state to carry, so this is a no-op.
-    pub(crate) fn apply(self, state: &mut WorldState) {
-        let WorldState::InWorld(iw) = state else {
-            return;
-        };
-        match self {
-            Self::Unchanged => {}
-            Self::Engaged(target_guid) => {
-                iw.attacking_target = Some(target_guid);
-                iw.ranged_repeat = false;
-            }
-            Self::Disengaged => iw.attacking_target = None,
-        }
-    }
-}
-
-pub(crate) enum MeleeActionOutcome {
-    Handled {
-        transition: MeleeTransition,
-        outbound: Vec<Outbound>,
-    },
-    PassThrough(ClientOpcodeMessage),
-}
-
-pub(crate) fn dispatch_melee_action<St: MeleeActionStore + ?Sized>(
-    store: &St,
-    player: MeleeActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<MeleeActionOutcome> {
-    match msg {
-        ClientOpcodeMessage::CMSG_ATTACKSWING(s) => {
-            let target_guid = s.guid.guid();
-            log::info!(
+impl<St: MeleeActionStore + ?Sized> ProtocolFamily<St> for Melee {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        match msg {
+            ClientOpcodeMessage::CMSG_ATTACKSWING(s) => {
+                let target_guid = s.guid.guid();
+                log::info!(
                 "world[autoshot]: CMSG_ATTACKSWING target={target_guid} ranged_repeat_active={} (account {})",
-                player.ranged_repeat,
-                player.account_id
+                matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat),
+                session.account_id
             );
-            attack_start(store, player, target_guid)
+                attack_start(store, session, target_guid)
+            }
+            ClientOpcodeMessage::CMSG_ATTACKSTOP => {
+                log::info!(
+                    "world[autoshot]: CMSG_ATTACKSTOP ranged_repeat_active={} (account {})",
+                    matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat),
+                    session.account_id
+                );
+                attack_stop(store, session)
+            }
+            other => Err(anyhow!("request routed to Melee: {other}")),
         }
-        ClientOpcodeMessage::CMSG_ATTACKSTOP => {
-            log::info!(
-                "world[autoshot]: CMSG_ATTACKSTOP ranged_repeat_active={} (account {})",
-                player.ranged_repeat,
-                player.account_id
-            );
-            attack_stop(store, player)
-        }
-        other => Ok(MeleeActionOutcome::PassThrough(other)),
     }
 }
 
-/// The player's own entity is gone, so no further action can be served. Close the session rather
-/// than leave the player in a frozen world with no recovery.
+/// The Character's entity is gone, so no further action can be served. End the World Session so the client can log in again.
 fn desync_exit(error: anyhow::Error, opcode: &str) -> anyhow::Error {
     error.context(format!(
-        "player desync (entity missing) on {opcode} — closing session for a clean relog"
+        "Character entity missing on {opcode}: desync ends the World Session"
     ))
 }
 
 /// Arm the durable engagement first; session state and client stance follow only on success.
 fn attack_start<St: MeleeActionStore + ?Sized>(
     store: &St,
-    player: MeleeActionPlayer,
+    session: &mut ProtocolSession,
     target_guid: u64,
-) -> Result<MeleeActionOutcome> {
+) -> Result<ProtocolReply> {
     // Not in the world: no combat state to arm and no attacker guid to name.
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
-        return Ok(MeleeActionOutcome::Handled {
-            transition: MeleeTransition::Unchanged,
-            outbound: Vec::new(),
-        });
+    let Some(actor) = session.actor() else {
+        return Ok(ProtocolReply::default());
     };
     if let Err(e) = store.start_attack(actor, target_guid) {
         let DurableFailure::Refusal { reason } = classify(&e) else {
@@ -139,18 +79,22 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
         // Every non-desync refusal stays visible to operators, answered ones included.
         log::debug!(
             "world: start_attack ignored (account {}): {e}",
-            player.account_id
+            session.account_id
         );
-        return Ok(MeleeActionOutcome::Handled {
-            transition: MeleeTransition::Unchanged,
-            outbound: refusal.map(Outbound::One).into_iter().collect(),
-        });
+        return Ok(refusal
+            .map(Outbound::One)
+            .into_iter()
+            .collect::<Vec<_>>()
+            .into());
     }
-    Ok(MeleeActionOutcome::Handled {
-        transition: MeleeTransition::Engaged(target_guid),
-        outbound: vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(
+    Ok({
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.attacking_target = Some(target_guid);
+            world.ranged_repeat = false;
+        }
+        ProtocolReply::from(vec![Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(
             Box::new(codec::build_attack_start(actor.guid(), target_guid)),
-        ))],
+        ))])
     })
 }
 
@@ -158,22 +102,21 @@ fn attack_start<St: MeleeActionStore + ?Sized>(
 /// combat stance after.
 fn attack_stop<St: MeleeActionStore + ?Sized>(
     store: &St,
-    player: MeleeActionPlayer,
-) -> Result<MeleeActionOutcome> {
+    session: &mut ProtocolSession,
+) -> Result<ProtocolReply> {
     // Melee and ranged auto-repeat share one durable engagement row per attacker. The client sends
     // CMSG_ATTACKSTOP whenever it leaves melee stance, ranged loop armed or not, so honoring it
     // here would delete the auto-shot engagement: one shot, then silence. Only
     // CMSG_CANCEL_AUTO_REPEAT_SPELL tears that loop down.
-    if player.ranged_repeat {
-        return Ok(MeleeActionOutcome::Handled {
-            transition: MeleeTransition::Unchanged,
-            outbound: Vec::new(),
-        });
+    if matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat) {
+        return Ok(ProtocolReply::default());
     }
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
-        return Ok(MeleeActionOutcome::Handled {
-            transition: MeleeTransition::Disengaged,
-            outbound: Vec::new(),
+    let Some(actor) = session.actor() else {
+        return Ok({
+            if let WorldState::InWorld(world) = &mut session.state {
+                world.attacking_target = None;
+            }
+            ProtocolReply::from(Vec::new())
         });
     };
     if let Err(e) = store.stop_attack(actor) {
@@ -184,24 +127,28 @@ fn attack_stop<St: MeleeActionStore + ?Sized>(
             return Err(desync_exit(e, "attackstop"));
         }
         // A refused stop still clears the client's stance: the recorded target may already be dead,
-        // and leaving the player swinging at nothing is worse than a stale disarm.
+        // and leaving the Character swinging at nothing is worse than a stale disarm.
         log::debug!(
             "world: stop_attack ignored (account {}): {e}",
-            player.account_id
+            session.account_id
         );
     }
-    let outbound = player
-        .attacking_target
-        .map(|target_guid| {
-            Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(Box::new(
-                codec::build_attack_stop(actor.guid(), target_guid),
-            )))
-        })
-        .into_iter()
-        .collect();
-    Ok(MeleeActionOutcome::Handled {
-        transition: MeleeTransition::Disengaged,
-        outbound,
+    let outbound: Vec<Outbound> = match &session.state {
+        WorldState::InWorld(world) => world.attacking_target,
+        WorldState::CharSelect => None,
+    }
+    .map(|target_guid| {
+        Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(Box::new(
+            codec::build_attack_stop(actor.guid(), target_guid),
+        )))
+    })
+    .into_iter()
+    .collect();
+    Ok({
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.attacking_target = None;
+        }
+        ProtocolReply::from(outbound)
     })
 }
 
@@ -210,7 +157,7 @@ pub(super) mod tests {
     use super::*;
     use crate::stdb::ReducerCallError;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{Guid, CMSG_ATTACKSWING, CMSG_PING};
+    use wow_world_messages::vanilla::{Guid, CMSG_ATTACKSWING};
 
     #[derive(Default)]
     pub(crate) struct InMemoryMeleeActions {
@@ -262,360 +209,190 @@ pub(super) mod tests {
         }
     }
 
-    /// A player mid ranged auto-repeat: attack start must engage melee and clear that loop.
-    fn player() -> MeleeActionPlayer {
-        MeleeActionPlayer {
-            account_id: 7,
-            self_guid: Some(42),
-            attacking_target: None,
-            ranged_repeat: true,
+    fn session(target: Option<u64>, ranged: bool) -> ProtocolSession {
+        let mut session = ProtocolSession::in_world(7, 42);
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.attacking_target = target;
+            world.ranged_repeat = ranged;
+        }
+        session
+    }
+
+    fn combat_state(session: &ProtocolSession) -> (Option<u64>, bool) {
+        match &session.state {
+            WorldState::InWorld(world) => (world.attacking_target, world.ranged_repeat),
+            WorldState::CharSelect => (None, false),
         }
     }
 
-    fn in_world(attacking_target: Option<u64>, ranged_repeat: bool) -> WorldState {
-        WorldState::InWorld(InWorld {
-            self_guid: 42,
-            subs: PlayerSubscriptions::empty(),
-            attacking_target,
-            open_loot: OpenLootState::default(),
-            ranged_repeat,
-        })
-    }
-
-    fn combat_state(state: &WorldState) -> (Option<u64>, bool) {
-        match state {
-            WorldState::InWorld(iw) => (iw.attacking_target, iw.ranged_repeat),
-            WorldState::CharSelect => panic!("not in world"),
-        }
-    }
-
-    /// A player in melee on `target`, with no ranged loop armed.
-    fn engaged(target: u64) -> MeleeActionPlayer {
-        MeleeActionPlayer {
-            attacking_target: Some(target),
-            ranged_repeat: false,
-            ..player()
-        }
-    }
-
-    fn attack_swing(target: u64) -> ClientOpcodeMessage {
+    fn swing(target: u64) -> ProtocolRequest {
         ClientOpcodeMessage::CMSG_ATTACKSWING(CMSG_ATTACKSWING {
             guid: Guid::new(target),
         })
+        .into()
     }
 
-    fn refused(error: &str) -> InMemoryMeleeActions {
-        InMemoryMeleeActions {
-            start_error: Some(error.into()),
-            ..Default::default()
+    #[test]
+    fn starting_melee_arms_the_engagement_and_clears_ranged_repeat() {
+        let store = InMemoryMeleeActions::default();
+        let mut session = session(None, true);
+        let reply = Melee::handle(&store, &mut session, swing(90)).unwrap();
+        assert_eq!(*store.engaged.lock().unwrap(), vec![42]);
+        assert_eq!(combat_state(&session), (Some(90), false));
+        assert!(
+            matches!(reply.outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(message))] if message.attacker.guid() == 42 && message.victim.guid() == 90)
+        );
+    }
+
+    #[test]
+    fn refused_attack_preserves_the_previous_target_and_answers_the_refusal() {
+        for (reason, expected) in [
+            (
+                lyracore_shared::ERR_ATTACK_TARGET_DEAD,
+                Some(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET),
+            ),
+            (
+                lyracore_shared::ERR_ATTACK_FRIENDLY,
+                Some(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK),
+            ),
+            ("target out of range", None),
+        ] {
+            let store = InMemoryMeleeActions {
+                start_error: Some(reason.into()),
+                ..Default::default()
+            };
+            let mut session = session(Some(80), true);
+            let reply = Melee::handle(&store, &mut session, swing(90)).unwrap();
+            assert_eq!(combat_state(&session), (Some(80), true));
+            assert!(store.engaged.lock().unwrap().is_empty());
+            match expected {
+                Some(expected) => assert!(
+                    matches!(reply.outbound.as_slice(), [Outbound::One(actual)] if *actual == expected)
+                ),
+                None => assert!(reply.outbound.is_empty()),
+            }
         }
     }
 
     #[test]
-    fn attack_start_requests_the_durable_engagement_then_arms_the_session_and_client() {
-        let actions = InMemoryMeleeActions::default();
+    fn melee_requests_before_world_entry_do_nothing() {
+        let store = InMemoryMeleeActions::default();
+        let mut session = ProtocolSession::new(7, "TESTER".into());
+        assert!(Melee::handle(&store, &mut session, swing(90))
+            .unwrap()
+            .outbound
+            .is_empty());
+        assert!(Melee::handle(
+            &store,
+            &mut session,
+            ClientOpcodeMessage::CMSG_ATTACKSTOP.into()
+        )
+        .unwrap()
+        .outbound
+        .is_empty());
+        assert!(store.start_requests.lock().unwrap().is_empty());
+        assert!(store.stop_requests.lock().unwrap().is_empty());
+    }
 
-        let outcome = dispatch_melee_action(&actions, player(), attack_swing(90)).unwrap();
-
-        assert_eq!(
-            actions.start_requests.lock().unwrap().as_slice(),
-            &[(42, 90)]
-        );
-        let MeleeActionOutcome::Handled {
-            transition,
-            outbound,
-        } = outcome
-        else {
-            panic!("attack start must be handled by the melee seam");
-        };
-        assert_eq!(transition, MeleeTransition::Engaged(90));
+    #[test]
+    fn stopping_melee_disarms_the_engagement_and_clears_the_client_stance() {
+        let store = InMemoryMeleeActions::default();
+        store.engaged.lock().unwrap().push(42);
+        let mut session = session(Some(90), false);
+        let reply = Melee::handle(
+            &store,
+            &mut session,
+            ClientOpcodeMessage::CMSG_ATTACKSTOP.into(),
+        )
+        .unwrap();
+        assert!(store.engaged.lock().unwrap().is_empty());
+        assert_eq!(combat_state(&session), (None, false));
         assert!(
-            matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTART(a))]
-                if a.attacker.guid() == 42 && a.victim.guid() == 90)
+            matches!(reply.outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(message))] if message.player.guid() == 42 && message.enemy.guid() == 90)
         );
-        let mut state = in_world(None, true);
-        transition.apply(&mut state);
-        assert_eq!(combat_state(&state), (Some(90), false));
     }
 
     #[test]
-    fn attack_start_from_an_inactive_ranged_state_gives_the_same_melee_transition() {
-        let actions = InMemoryMeleeActions::default();
-        let player = MeleeActionPlayer {
-            ranged_repeat: false,
-            ..player()
-        };
-
-        let outcome = dispatch_melee_action(&actions, player, attack_swing(90)).unwrap();
-
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, .. }
-                if transition == MeleeTransition::Engaged(90)
-        ));
+    fn stopping_without_a_target_does_not_invent_a_client_message() {
+        let store = InMemoryMeleeActions::default();
+        let mut session = session(None, false);
+        let reply = Melee::handle(
+            &store,
+            &mut session,
+            ClientOpcodeMessage::CMSG_ATTACKSTOP.into(),
+        )
+        .unwrap();
+        assert!(reply.outbound.is_empty());
+        assert_eq!(combat_state(&session), (None, false));
     }
 
     #[test]
-    fn a_dead_target_replies_deadtarget_and_leaves_the_active_target_unchanged() {
-        let actions = refused(lyracore_shared::ERR_ATTACK_TARGET_DEAD);
-
-        let outcome = dispatch_melee_action(&actions, player(), attack_swing(90)).unwrap();
-
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Unchanged
-                    && matches!(outbound.as_slice(),
-                        [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET)])
-        ));
-    }
-
-    #[test]
-    fn a_friendly_target_replies_cant_attack_and_leaves_the_active_target_unchanged() {
-        let actions = refused(lyracore_shared::ERR_ATTACK_FRIENDLY);
-
-        let outcome = dispatch_melee_action(&actions, player(), attack_swing(90)).unwrap();
-
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Unchanged
-                    && matches!(outbound.as_slice(),
-                        [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK)])
-        ));
-    }
-
-    #[test]
-    fn an_ordinary_refusal_sends_no_client_message_and_keeps_the_session_alive() {
-        let actions = refused("target out of range");
-
-        let outcome = dispatch_melee_action(&actions, player(), attack_swing(90)).unwrap();
-
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Unchanged && outbound.is_empty()
-        ));
-    }
-
-    #[test]
-    fn an_unresolved_player_requests_nothing_and_arms_nothing() {
-        let actions = InMemoryMeleeActions::default();
-        let player = MeleeActionPlayer {
-            self_guid: None,
-            ..player()
-        };
-
-        let outcome = dispatch_melee_action(&actions, player, attack_swing(90)).unwrap();
-
-        assert!(actions.start_requests.lock().unwrap().is_empty());
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Unchanged && outbound.is_empty()
-        ));
-    }
-
-    #[test]
-    fn attack_stop_requests_the_durable_disengagement_then_clears_the_session_and_client() {
-        let actions = InMemoryMeleeActions::default();
-
-        let outcome =
-            dispatch_melee_action(&actions, engaged(90), ClientOpcodeMessage::CMSG_ATTACKSTOP)
-                .unwrap();
-
-        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[42]);
-        let MeleeActionOutcome::Handled {
-            transition,
-            outbound,
-        } = outcome
-        else {
-            panic!("attack stop must be handled by the melee seam");
-        };
-        assert_eq!(transition, MeleeTransition::Disengaged);
-        assert!(
-            matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(a))]
-                if a.player.guid() == 42 && a.enemy.guid() == 90)
-        );
-        let mut state = in_world(Some(90), false);
-        transition.apply(&mut state);
-        assert_eq!(combat_state(&state), (None, false));
-    }
-
-    #[test]
-    fn attack_stop_with_no_recorded_target_still_disengages_and_fabricates_no_message() {
-        let actions = InMemoryMeleeActions::default();
-        let player = MeleeActionPlayer {
-            ranged_repeat: false,
-            ..player()
-        };
-
-        let outcome =
-            dispatch_melee_action(&actions, player, ClientOpcodeMessage::CMSG_ATTACKSTOP).unwrap();
-
-        assert_eq!(actions.stop_requests.lock().unwrap().as_slice(), &[42]);
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Disengaged && outbound.is_empty()
-        ));
-    }
-
-    /// A kill clears the durable row on another thread, so a late stop is refused. That is harmless.
-    #[test]
-    fn an_ordinary_stop_refusal_still_clears_the_target_and_keeps_the_session_alive() {
-        let actions = InMemoryMeleeActions {
+    fn an_ordinary_stop_refusal_still_clears_the_target_and_client_stance() {
+        let store = InMemoryMeleeActions {
             stop_error: Some("no engagement for that attacker".into()),
             ..Default::default()
         };
-
-        let outcome =
-            dispatch_melee_action(&actions, engaged(90), ClientOpcodeMessage::CMSG_ATTACKSTOP)
-                .unwrap();
-
-        assert_eq!(
-            actions.stop_requests.lock().unwrap().as_slice(),
-            &[42],
-            "the durable stop is attempted before the refusal is swallowed"
-        );
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Disengaged
-                    && matches!(outbound.as_slice(),
-                        [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(_))])
-        ));
-    }
-
-    #[test]
-    fn attack_stop_from_an_unresolved_player_requests_nothing_and_echoes_nothing() {
-        let actions = InMemoryMeleeActions::default();
-        let player = MeleeActionPlayer {
-            self_guid: None,
-            ..engaged(90)
-        };
-
-        let outcome =
-            dispatch_melee_action(&actions, player, ClientOpcodeMessage::CMSG_ATTACKSTOP).unwrap();
-
-        assert!(actions.stop_requests.lock().unwrap().is_empty());
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Disengaged && outbound.is_empty()
-        ));
-    }
-
-    #[test]
-    fn an_armed_ranged_repeat_consumes_the_stop_and_changes_nothing() {
-        let actions = InMemoryMeleeActions::default();
-        let player = MeleeActionPlayer {
-            ranged_repeat: true,
-            ..engaged(90)
-        };
-
-        let outcome =
-            dispatch_melee_action(&actions, player, ClientOpcodeMessage::CMSG_ATTACKSTOP).unwrap();
-
-        assert!(
-            actions.stop_requests.lock().unwrap().is_empty(),
-            "honoring the stop would delete the shared auto-shot engagement row"
-        );
-        assert!(matches!(
-            outcome,
-            MeleeActionOutcome::Handled { transition, outbound }
-                if transition == MeleeTransition::Unchanged && outbound.is_empty()
-        ));
-    }
-
-    #[test]
-    fn unrelated_opcodes_pass_through_to_the_next_dispatcher() {
-        let actions = InMemoryMeleeActions::default();
-
-        let outcome = dispatch_melee_action(
-            &actions,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
+        let mut session = session(Some(90), false);
+        let reply = Melee::handle(
+            &store,
+            &mut session,
+            ClientOpcodeMessage::CMSG_ATTACKSTOP.into(),
         )
         .unwrap();
-
+        assert_eq!(combat_state(&session), (None, false));
         assert!(matches!(
-            outcome,
-            MeleeActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
+            reply.outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_ATTACKSTOP(_))]
         ));
-        assert!(actions.start_requests.lock().unwrap().is_empty());
     }
 
     #[test]
-    fn a_player_desync_ends_the_session_with_attack_start_context() {
-        let actions = refused("no live entity for guid 42");
-
-        let error = match dispatch_melee_action(&actions, player(), attack_swing(90)) {
-            Err(error) => error,
-            Ok(_) => panic!("a missing player entity must end the session"),
-        };
-
-        let text = format!("{error:#}");
-        assert!(
-            text.contains("desync"),
-            "expected desync context, got: {text}"
-        );
-        assert!(
-            text.contains("attackswing"),
-            "expected attack-start context, got: {text}"
-        );
+    fn stopping_melee_preserves_an_armed_ranged_repeat() {
+        let store = InMemoryMeleeActions::default();
+        store.engaged.lock().unwrap().push(42);
+        let mut session = session(Some(90), true);
+        let reply = Melee::handle(
+            &store,
+            &mut session,
+            ClientOpcodeMessage::CMSG_ATTACKSTOP.into(),
+        )
+        .unwrap();
+        assert_eq!(combat_state(&session), (Some(90), true));
+        assert_eq!(*store.engaged.lock().unwrap(), vec![42]);
+        assert!(store.stop_requests.lock().unwrap().is_empty());
+        assert!(reply.outbound.is_empty());
     }
 
     #[test]
-    fn a_player_desync_on_stop_ends_the_session_with_attack_stop_context() {
-        let actions = InMemoryMeleeActions {
+    fn a_missing_entity_ends_the_world_session_with_request_context() {
+        let store = InMemoryMeleeActions {
+            start_error: Some("no live entity for guid 42".into()),
             stop_error: Some("player 42 not in world".into()),
             ..Default::default()
         };
-
-        let error = match dispatch_melee_action(
-            &actions,
-            engaged(90),
-            ClientOpcodeMessage::CMSG_ATTACKSTOP,
-        ) {
-            Err(error) => error,
-            Ok(_) => panic!("a missing player entity must end the session"),
-        };
-
-        let text = format!("{error:#}");
-        assert!(
-            text.contains("desync"),
-            "expected desync context, got: {text}"
-        );
-        assert!(
-            text.contains("attackstop"),
-            "expected attack-stop context, got: {text}"
-        );
+        for (request, context) in [
+            (swing(90), "attackswing"),
+            (ClientOpcodeMessage::CMSG_ATTACKSTOP.into(), "attackstop"),
+        ] {
+            let mut session = session(Some(90), false);
+            let error = Melee::handle(&store, &mut session, request)
+                .err()
+                .expect("missing entity must end the World Session");
+            assert!(format!("{error:#}").contains(context));
+            assert_eq!(combat_state(&session), (Some(90), false));
+        }
     }
 
     #[test]
-    fn a_transport_loss_ends_the_session_where_a_refusal_keeps_it_alive() {
-        let lost = InMemoryMeleeActions {
+    fn transport_loss_keeps_protocol_state_unchanged_and_ends_the_world_session() {
+        let store = InMemoryMeleeActions {
             transport_lost: true,
             ..Default::default()
         };
-        assert!(dispatch_melee_action(&lost, player(), attack_swing(90)).is_err());
-        assert!(
-            dispatch_melee_action(&lost, engaged(90), ClientOpcodeMessage::CMSG_ATTACKSTOP)
-                .is_err()
-        );
-
-        let refusing = InMemoryMeleeActions {
-            start_error: Some("target out of range".into()),
-            stop_error: Some("no engagement for that attacker".into()),
-            ..Default::default()
-        };
-        assert!(dispatch_melee_action(&refusing, player(), attack_swing(90)).is_ok());
-        assert!(dispatch_melee_action(
-            &refusing,
-            engaged(90),
-            ClientOpcodeMessage::CMSG_ATTACKSTOP
-        )
-        .is_ok());
+        for request in [swing(90), ClientOpcodeMessage::CMSG_ATTACKSTOP.into()] {
+            let mut session = session(Some(80), false);
+            assert!(Melee::handle(&store, &mut session, request).is_err());
+            assert_eq!(combat_state(&session), (Some(80), false));
+        }
     }
 }

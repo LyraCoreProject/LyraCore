@@ -1,7 +1,6 @@
-//! Trainer and talent opcodes, run through `handle_trainer` against a Fake that holds only the
-//! Character, Npc and Trainer Stores the handler is bounded on.
+//! Trainer and talent replies through the Character, Npc, and Trainer Stores.
 
-use super::handlers::{handle_trainer, CharacterStore, TrainerBuyOutcome, TrainerStore};
+use super::handlers::{CharacterStore, Trainer, TrainerBuyOutcome, TrainerStore};
 use super::*;
 use crate::stdb::ReducerCallError;
 use lyracore_shared::constants::armor_proficiency::{
@@ -207,23 +206,18 @@ impl TrainerStore for TrainerFake {
     }
 }
 
-/// Send `msg` as Character 1 of account 7. Returns the handler's verdict and what it sent, in order.
-/// Phase 5 retargets only this helper.
+/// Handle `msg` as Character 1 of Account 7 and return the replies in order.
 fn drive(
     store: &TrainerFake,
     msg: impl Into<ClientOpcodeMessage>,
-) -> (Result<()>, Vec<ServerOpcodeMessage>) {
-    let (tx, rx) = SessionTx::with_depth(0);
-    let mut conn = in_world_conn(7, 1);
-    let verdict = handle_trainer(&tx, store, &mut conn, msg.into())
-        .map(|passed_on| assert!(passed_on.is_none(), "the trainer family owns this opcode"));
-    (verdict, drain_outbound(&rx))
+) -> Result<Vec<ServerOpcodeMessage>> {
+    let mut session = ProtocolSession::in_world(7, 1);
+    let reply = Trainer::handle(store, &mut session, ProtocolRequest::Message(msg.into()))?;
+    Ok(outbound_messages(reply.outbound))
 }
 
 fn run(store: &TrainerFake, msg: impl Into<ClientOpcodeMessage>) -> Vec<ServerOpcodeMessage> {
-    let (verdict, sent) = drive(store, msg);
-    verdict.unwrap();
-    sent
+    drive(store, msg).unwrap()
 }
 
 fn kinds(sent: &[ServerOpcodeMessage]) -> String {
@@ -403,13 +397,8 @@ fn a_trainer_transport_loss_is_not_answered_as_a_refusal() {
         buy_error: Some(|| ReducerCallError::transport_lost("gw_trainer_buy").into()),
         ..Default::default()
     };
-    let (verdict, sent) = drive(&store, buy(1234));
-    verdict.expect_err("a lost trainer reducer transport must be session-fatal");
-    assert!(
-        sent.is_empty(),
-        "nothing claims the purchase failed: [{}]",
-        kinds(&sent)
-    );
+    drive(&store, buy(1234))
+        .expect_err("a lost trainer Durable Request must end the World Session");
 }
 
 /// A refused talent pick is per-action: the client hears nothing and the session goes on. A lost
@@ -422,16 +411,14 @@ fn a_refused_talent_pick_keeps_the_session_and_a_transport_loss_ends_it() {
         }),
         ..Default::default()
     };
-    let (verdict, sent) = drive(&refused, pick_talent());
-    verdict.unwrap();
+    let sent = drive(&refused, pick_talent()).unwrap();
     assert!(sent.is_empty(), "got [{}]", kinds(&sent));
 
     let lost = TrainerFake {
         talent_error: Some(|| ReducerCallError::transport_lost("gw_learn_talent").into()),
         ..Default::default()
     };
-    let (verdict, _) = drive(&lost, pick_talent());
-    verdict.expect_err("a lost talent pick must be session-fatal");
+    drive(&lost, pick_talent()).expect_err("a lost talent pick must end the World Session");
 }
 
 /// An ability talent (`grant_spell_id != 0`) pushes the granted spell so the new button works

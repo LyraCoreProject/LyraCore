@@ -141,200 +141,204 @@ impl From<TrainerRefusal> for TrainerBuyOutcome {
 /// Green/Red/Gray) and learn a spell (`CMSG_TRAINER_BUY_SPELL` → the module buy →
 /// `SMSG_TRAINER_BUY_*` + a live `SMSG_LEARNED_SPELL` so it hits the action bar without a relog).
 /// Needs the in-world player guid (a trainer is only clicked in-world); in CharSelect the opcodes
-/// pass through. A buy Refusal is per-action — surfaced as `SMSG_TRAINER_BUY_FAILED`.
-pub(crate) fn handle_trainer<St: CharacterStore + NpcStore + TrainerStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    let Some(actor) = (match &conn.state {
-        WorldState::InWorld(iw) => Actor::new(iw.self_guid),
-        WorldState::CharSelect => None,
-    }) else {
-        return Ok(Some(msg));
-    };
-    let self_guid = actor.guid();
-    match msg {
-        ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
-            let trainer_guid = c.guid.guid();
-            // A trainer that dislikes you refuses the window (silent drop).
-            if store
-                .npc_refuses_interaction(trainer_guid, self_guid)
-                .unwrap_or(false)
-            {
-                return Ok(None);
-            }
-            // Wrong class: silent drop, not an empty window — an empty list is indistinguishable
-            // from a trainer whose offerings were never imported.
-            if !store
-                .trainer_serves(self_guid, trainer_guid)
-                .unwrap_or(true)
-            {
-                return Ok(None);
-            }
-            let spells = store.trainer_list(self_guid, trainer_guid)?;
-            // Deliberate simplification: a generic greeting — the per-NPC trainer greeting text is
-            // a later npc_text slice (same as the vendor's generic gossip line).
-            let list =
-                codec::build_trainer_list(trainer_guid, &spells, "I can teach you a thing or two.");
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(list))),
-            )?;
-        }
-        ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(c) => {
-            let trainer_guid = c.guid.guid();
-            let spell_id = c.id;
-            // A Refusal arrives as an outcome. An error leaves the durable result unknown, so it
-            // ends the session instead of posing as a gameplay answer.
-            match store.buy_trainer_spell(actor, trainer_guid, spell_id)? {
-                TrainerBuyOutcome::Learned => {
-                    // Confirm + push the spell live so it appears on the action bar without a relog.
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(Box::new(
-                            codec::build_trainer_buy_succeeded(trainer_guid, spell_id),
-                        ))),
-                    )?;
-                    // RIDING buy: the offering teaches a SKILL, and its trainer-list id is a marker with
-                    // no Spell.dbc row behind it — echoing that as a learned spell would push the client
-                    // an id it cannot resolve. The skill pane already moves on its own, from the live
-                    // `game_player_skill` relay, so a riding purchase needs no spell echo at all.
-                    // Profession offerings keep theirs: the importer synthesizes them with real
-                    // learn-spell ids the client does resolve.
-                    if store.trainer_offer_skill_line(trainer_guid, spell_id)
-                        == lyracore_shared::trainer::RIDING_SKILL_LINE
-                    {
-                        return Ok(None);
-                    }
-                    // Book the RESOLVED rank (465), not the wrapper (1875) — the module granted
-                    // the trigger spell; echoing the wrapper put "the spell that teaches Devotion
-                    // Aura" in the player's General tab until relog.
-                    // A RANK UPGRADE (the chain prev is already known) sends SUPERCEDED
-                    // instead — the client REPLACES the old rank's book entry (vanilla) rather
-                    // than stacking "Rank 1" next to "Rank 2". WIRE ORDER: cmangos writes
-                    // old u16 THEN new u16; gtker's field names claim new-first — per the
-                    // field-names-lie precedent we follow cmangos, so `new_spell_id` (the FIRST
-                    // wire slot) carries the OLD rank. If live verify shows the NEW rank
-                    // vanishing instead, swap these two.
-                    let resolved = store.resolve_learn_target(spell_id);
-                    match store.superseded_old_rank(resolved, self_guid) {
-                        Some(old_rank) => {
-                            use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
-                                    SMSG_SUPERCEDED_SPELL {
-                                        new_spell_id: old_rank as u16,
-                                        old_spell_id: resolved as u16,
-                                    },
-                                )),
-                            )?;
-                        }
-                        None => {
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
-                                    codec::build_learned_spell(resolved),
-                                )),
-                            )?;
-                        }
-                    }
-                    // An armor-proficiency purchase widens what this Character may wear, and the
-                    // client only learns that from SMSG_SET_PROFICIENCY. Re-read the spellbook the
-                    // buy just changed and resend the ARMOR mask; the weapon table never moves.
-                    if teaches_armor_proficiency(spell_id) || teaches_armor_proficiency(resolved) {
-                        send_armor_proficiency(tx, store, self_guid)?;
-                    }
-                }
-                TrainerBuyOutcome::Refused(reason) => {
-                    log::debug!(
-                        "world: trainer buy refused (account {}): {reason:?}",
-                        conn.account_id
-                    );
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(Box::new(
-                            codec::build_trainer_buy_failed(trainer_guid, spell_id, reason),
-                        ))),
-                    )?;
-                }
-            }
-        }
-        // Spend a talent point (`CMSG_LEARN_TALENT`). The module gates points/prereqs; on success the
-        // passive aura relay covers stat/buff updates. If this talent also grants a learnable ability
-        // (`grant_spell_id != 0`), push `SMSG_LEARNED_SPELL` so the action bar is usable without a relog.
-        // Action-bar persistence: the client sends ONE of these per drag/clear and expects the
-        // full bar back at login (SMSG_ACTION_BUTTONS). Unhandled until now — every bar change
-        // was lost on relog (only the creation-seeded buttons survived; user find via a
-        // talent-learned Consecration vanishing from the bar). `action`+`misc` are the client's
-        // packed u24 payload (spell id, or item id spilling into misc); best-effort (a failure
-        // must never drop the session — the button just won't stick).
-        ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(c) => {
-            let action = c.action as u32 | ((c.misc as u32) << 16);
-            settle_per_action(
-                "set_action_button",
-                conn.account_id,
-                store.set_action_button(actor, c.button, action, c.action_type),
-            )?;
-        }
-        ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
-            let talent_id = c.talent.as_int();
-            let grant_spell_id = store.talent_grant_spell(talent_id);
-            match store.learn_talent(actor, talent_id) {
-                Ok(()) => {
-                    if grant_spell_id != 0 {
-                        send(
-                            tx,
-                            Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
-                                codec::build_learned_spell(grant_spell_id),
-                            )),
-                        )?;
-                    }
+/// answer nothing. A buy Refusal is per-action — surfaced as `SMSG_TRAINER_BUY_FAILED`.
+pub(crate) struct Trainer;
 
-                    let (teach, superseded, remaining) =
-                        store.talent_pane_sync(self_guid, talent_id);
-                    if teach != 0 && teach != grant_spell_id {
-                        if superseded != 0 {
-                            use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
-                                    SMSG_SUPERCEDED_SPELL {
-                                        new_spell_id: superseded as u16, // cmangos wire order: OLD rides the first slot
-                                        old_spell_id: teach as u16,
-                                    },
-                                )),
-                            )?;
-                        } else {
-                            send(
-                                tx,
-                                Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
-                                    codec::build_learned_spell(teach),
-                                )),
-                            )?;
+impl<St: CharacterStore + NpcStore + TrainerStore + ?Sized> ProtocolFamily<St> for Trainer {
+    fn handle(
+        store: &St,
+        conn: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = match request {
+            ProtocolRequest::FactionAtWar(body) => return faction_at_war(store, conn, &body),
+            ProtocolRequest::WatchedFaction(body) => return watched_faction(store, conn, &body),
+            other => other.message()?,
+        };
+        let mut outbound = Vec::new();
+        let Some(actor) = (match &conn.state {
+            WorldState::InWorld(iw) => Actor::new(iw.self_guid),
+            WorldState::CharSelect => None,
+        }) else {
+            return Ok(outbound.into());
+        };
+        let self_guid = actor.guid();
+        match msg {
+            ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
+                let trainer_guid = c.guid.guid();
+                // A trainer that dislikes you refuses the window (silent drop).
+                if store
+                    .npc_refuses_interaction(trainer_guid, self_guid)
+                    .unwrap_or(false)
+                {
+                    return Ok(outbound.into());
+                }
+                // Wrong class: silent drop, not an empty window — an empty list is indistinguishable
+                // from a trainer whose offerings were never imported.
+                if !store
+                    .trainer_serves(self_guid, trainer_guid)
+                    .unwrap_or(true)
+                {
+                    return Ok(outbound.into());
+                }
+                let spells = store.trainer_list(self_guid, trainer_guid)?;
+                // Deliberate simplification: a generic greeting — the per-NPC trainer greeting text is
+                // a later npc_text slice (same as the vendor's generic gossip line).
+                let list = codec::build_trainer_list(
+                    trainer_guid,
+                    &spells,
+                    "I can teach you a thing or two.",
+                );
+                outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_LIST(
+                    Box::new(list),
+                )));
+            }
+            ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(c) => {
+                let trainer_guid = c.guid.guid();
+                let spell_id = c.id;
+                // A Refusal arrives as an outcome. An error leaves the durable result unknown, so it
+                // ends the session instead of posing as a gameplay answer.
+                match store.buy_trainer_spell(actor, trainer_guid, spell_id)? {
+                    TrainerBuyOutcome::Learned => {
+                        // Confirm + push the spell live so it appears on the action bar without a relog.
+                        outbound.push(Outbound::One(
+                            ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(Box::new(
+                                codec::build_trainer_buy_succeeded(trainer_guid, spell_id),
+                            )),
+                        ));
+                        // RIDING buy: the offering teaches a SKILL, and its trainer-list id is a marker with
+                        // no Spell.dbc row behind it — echoing that as a learned spell would push the client
+                        // an id it cannot resolve. The skill pane already moves on its own, from the live
+                        // `game_player_skill` relay, so a riding purchase needs no spell echo at all.
+                        // Profession offerings keep theirs: the importer synthesizes them with real
+                        // learn-spell ids the client does resolve.
+                        if store.trainer_offer_skill_line(trainer_guid, spell_id)
+                            == lyracore_shared::trainer::RIDING_SKILL_LINE
+                        {
+                            return Ok(outbound.into());
+                        }
+                        // Book the RESOLVED rank (465), not the wrapper (1875) — the module granted
+                        // the trigger spell; echoing the wrapper put "the spell that teaches Devotion
+                        // Aura" in the player's General tab until relog.
+                        // A RANK UPGRADE (the chain prev is already known) sends SUPERCEDED
+                        // instead — the client REPLACES the old rank's book entry (vanilla) rather
+                        // than stacking "Rank 1" next to "Rank 2". WIRE ORDER: cmangos writes
+                        // old u16 THEN new u16; gtker's field names claim new-first — per the
+                        // field-names-lie precedent we follow cmangos, so `new_spell_id` (the FIRST
+                        // wire slot) carries the OLD rank. If live verify shows the NEW rank
+                        // vanishing instead, swap these two.
+                        let resolved = store.resolve_learn_target(spell_id);
+                        match store.superseded_old_rank(resolved, self_guid) {
+                            Some(old_rank) => {
+                                use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
+                                outbound.push(Outbound::One(
+                                    ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
+                                        SMSG_SUPERCEDED_SPELL {
+                                            new_spell_id: old_rank as u16,
+                                            old_spell_id: resolved as u16,
+                                        },
+                                    ),
+                                ));
+                            }
+                            None => {
+                                outbound.push(Outbound::One(
+                                    ServerOpcodeMessage::SMSG_LEARNED_SPELL(
+                                        codec::build_learned_spell(resolved),
+                                    ),
+                                ));
+                            }
+                        }
+                        // An armor-proficiency purchase widens what this Character may wear, and the
+                        // client only learns that from SMSG_SET_PROFICIENCY. Re-read the spellbook the
+                        // buy just changed and resend the ARMOR mask; the weapon table never moves.
+                        if teaches_armor_proficiency(spell_id)
+                            || teaches_armor_proficiency(resolved)
+                        {
+                            append_armor_proficiency(&mut outbound, store, self_guid)?;
                         }
                     }
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-                            codec::build_talent_points_values(self_guid, remaining),
-                        ))),
-                    )?;
-                    // Spell-modifier mirror: the pick may have applied an A_SPELLMOD
-                    // passive — re-send the aggregated totals so the client's cast bars match
-                    // the server's folded timings immediately (idempotent absolute values).
-                    for m in codec::build_spell_modifier_msgs(&store.spell_modifiers(self_guid)) {
-                        send(tx, Outbound::One(m))?;
+                    TrainerBuyOutcome::Refused(reason) => {
+                        log::debug!(
+                            "world: trainer buy refused (account {}): {reason:?}",
+                            conn.account_id
+                        );
+                        outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(
+                            Box::new(codec::build_trainer_buy_failed(
+                                trainer_guid,
+                                spell_id,
+                                reason,
+                            )),
+                        )));
                     }
                 }
-                Err(error) => settle_per_action("learn_talent", conn.account_id, Err(error))?,
             }
+            // Spend a talent point (`CMSG_LEARN_TALENT`). The module gates points/prereqs; on success the
+            // passive aura relay covers stat/buff updates. If this talent also grants a learnable ability
+            // (`grant_spell_id != 0`), push `SMSG_LEARNED_SPELL` so the action bar is usable without a relog.
+            // Action-bar persistence: the client sends ONE of these per drag/clear and expects the
+            // full bar back at login (SMSG_ACTION_BUTTONS). Unhandled until now — every bar change
+            // was lost on relog (only the creation-seeded buttons survived; user find via a
+            // talent-learned Consecration vanishing from the bar). `action`+`misc` are the client's
+            // packed u24 payload (spell id, or item id spilling into misc); best-effort (a failure
+            // must never drop the session — the button just won't stick).
+            ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(c) => {
+                let action = c.action as u32 | ((c.misc as u32) << 16);
+                settle_per_action(
+                    "set_action_button",
+                    conn.account_id,
+                    store.set_action_button(actor, c.button, action, c.action_type),
+                )?;
+            }
+            ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
+                let talent_id = c.talent.as_int();
+                let grant_spell_id = store.talent_grant_spell(talent_id);
+                match store.learn_talent(actor, talent_id) {
+                    Ok(()) => {
+                        if grant_spell_id != 0 {
+                            outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_LEARNED_SPELL(
+                                codec::build_learned_spell(grant_spell_id),
+                            )));
+                        }
+
+                        let (teach, superseded, remaining) =
+                            store.talent_pane_sync(self_guid, talent_id);
+                        if teach != 0 && teach != grant_spell_id {
+                            if superseded != 0 {
+                                use wow_world_messages::vanilla::SMSG_SUPERCEDED_SPELL;
+                                outbound.push(Outbound::One(
+                                    ServerOpcodeMessage::SMSG_SUPERCEDED_SPELL(
+                                        SMSG_SUPERCEDED_SPELL {
+                                            new_spell_id: superseded as u16, // cmangos wire order: OLD rides the first slot
+                                            old_spell_id: teach as u16,
+                                        },
+                                    ),
+                                ));
+                            } else {
+                                outbound.push(Outbound::One(
+                                    ServerOpcodeMessage::SMSG_LEARNED_SPELL(
+                                        codec::build_learned_spell(teach),
+                                    ),
+                                ));
+                            }
+                        }
+                        outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                            Box::new(codec::build_talent_points_values(self_guid, remaining)),
+                        )));
+                        // Spell-modifier mirror: the pick may have applied an A_SPELLMOD
+                        // passive — re-send the aggregated totals so the client's cast bars match
+                        // the server's folded timings immediately (idempotent absolute values).
+                        for m in codec::build_spell_modifier_msgs(&store.spell_modifiers(self_guid))
+                        {
+                            outbound.push(Outbound::One(m));
+                        }
+                    }
+                    Err(error) => settle_per_action("learn_talent", conn.account_id, Err(error))?,
+                }
+            }
+            _ => return Err(anyhow!("opcode routed to the wrong Protocol Family")),
         }
-        other => return Ok(Some(other)),
+        Ok(outbound.into())
     }
-    Ok(None)
 }
 
 /// Does this trainer offering teach an armor proficiency? Both the trainer-list wrapper and the
@@ -355,8 +359,8 @@ fn teaches_armor_proficiency(spell_id: u32) -> bool {
 /// re-tints its bags without a relog. Read after the buy: the mask states what the Character knows
 /// now, not what the purchase was meant to grant, so a buy the Module only half-applied never
 /// tints an item the equip Gate would still refuse.
-fn send_armor_proficiency<St: CharacterStore + TrainerStore + ?Sized>(
-    tx: &SessionTx,
+fn append_armor_proficiency<St: CharacterStore + TrainerStore + ?Sized>(
+    outbound: &mut Vec<Outbound>,
     store: &St,
     self_guid: u64,
 ) -> Result<()> {
@@ -366,57 +370,49 @@ fn send_armor_proficiency<St: CharacterStore + TrainerStore + ?Sized>(
     let Some((_, _, player_class, _)) = store.character_presence(self_guid).ok().flatten() else {
         return Ok(());
     };
-    send(
-        tx,
-        Outbound::One(codec::build_armor_proficiency_msg(player_class, &learned)),
-    )
+    {
+        outbound.push(Outbound::One(codec::build_armor_proficiency_msg(
+            player_class,
+            &learned,
+        )));
+        Ok(())
+    }
 }
 
-/// The vanilla request names a reputation-list index, not a Faction.dbc id.
-pub(crate) fn handle_at_war<St: TrainerStore + SessionStore + ?Sized>(
-    tx: &SessionTx,
+fn faction_at_war<St: TrainerStore + ?Sized>(
     store: &St,
-    conn: &mut WorldConn,
+    session: &ProtocolSession,
     body: &[u8],
-) -> Result<()> {
+) -> Result<ProtocolReply> {
     anyhow::ensure!(
         body.len() == 5 && body[4] <= 1,
         "invalid CMSG_SET_FACTION_ATWAR body"
     );
-    let Some(actor) = social::self_guid(conn).and_then(Actor::new) else {
-        return Ok(());
+    let Some(actor) = session.actor() else {
+        return Ok(ProtocolReply::default());
     };
     let index = u32::from_le_bytes(body[..4].try_into()?);
-    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
-        forward_movement(store, conn, opcode, &info)?;
-    }
+    let mut outbound = Vec::new();
     if let InteractionOutcome::Refused(reason) =
         store.set_faction_at_war(actor, index, body[4] != 0)?
     {
-        send(
-            tx,
-            Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                codec::build_gm_system_message(reason),
-            ))),
-        )?;
+        outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_MESSAGECHAT(
+            Box::new(codec::build_gm_system_message(reason)),
+        )));
     }
-    Ok(())
+    Ok(outbound.into())
 }
 
-pub(crate) fn handle_watched_faction<St: TrainerStore + SessionStore + ?Sized>(
-    tx: &SessionTx,
+fn watched_faction<St: TrainerStore + ?Sized>(
     store: &St,
-    conn: &mut WorldConn,
+    session: &ProtocolSession,
     body: &[u8],
-) -> Result<()> {
+) -> Result<ProtocolReply> {
     anyhow::ensure!(body.len() == 4, "invalid CMSG_SET_WATCHED_FACTION body");
-    let Some(actor) = social::self_guid(conn).and_then(Actor::new) else {
-        return Ok(());
+    let Some(actor) = session.actor() else {
+        return Ok(ProtocolReply::default());
     };
     let index = i32::from_le_bytes(body.try_into()?);
-    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
-        forward_movement(store, conn, opcode, &info)?;
-    }
     let message = match store.set_watched_faction(actor, index)? {
         InteractionOutcome::Done => ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
             codec::build_watched_faction_values(actor.guid(), index),
@@ -425,5 +421,5 @@ pub(crate) fn handle_watched_faction<St: TrainerStore + SessionStore + ?Sized>(
             ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(reason)))
         }
     };
-    send(tx, Outbound::One(message))
+    Ok(vec![Outbound::One(message)].into())
 }

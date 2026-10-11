@@ -38,6 +38,11 @@ use wow_world_messages::vanilla::{
 mod actor;
 mod chat_flood;
 mod coalesce;
+mod entry;
+mod family;
+mod routing;
+pub(crate) use family::{ProtocolFamily, ProtocolSession};
+use family::{ProtocolReply, ProtocolRequest, WorldSessionAction};
 pub(crate) mod guild_fee;
 mod handlers;
 pub mod login_queue;
@@ -54,24 +59,12 @@ pub mod whisper;
 mod who;
 pub(crate) use actor::Actor;
 use coalesce::CoalesceState;
+#[cfg(test)]
+pub(crate) use handlers::MeetingStone;
 pub(crate) use handlers::{
-    character_facts, dispatch_meeting_stone_action, reconcile_deleted_guild_characters,
-    DurableCharacterFacts, GuildCleanup, MeetingStoneActionOutcome, MeetingStonePlayer,
+    character_facts, reconcile_deleted_guild_characters, DurableCharacterFacts, GuildCleanup,
 };
-use handlers::{
-    decode_auction_browse, dispatch_auction_action, dispatch_auction_browse_action, dispatch_cast,
-    dispatch_channel_action, dispatch_chat_action, dispatch_duel_action, dispatch_guild_action,
-    dispatch_item_action, dispatch_loot_window, dispatch_melee_action, dispatch_member_stats,
-    dispatch_quest_action, dispatch_taxi_action, dispatch_vendor_action, handle_bank, handle_char,
-    handle_combat, handle_loot, handle_mail, handle_query, handle_trade, handle_trainer,
-    quest_giver_menu, queue_reply_then_arm, AuctionActionOutcome, AuctionActionPlayer, CastOutcome,
-    CastPlayer, CastTransition, ChannelActionOutcome, ChatActionOutcome, ChatActionPlayer,
-    DuelActionOutcome, DuelActionPlayer, GuildActionOutcome, GuildActionPlayer, ItemActionOutcome,
-    ItemActionPlayer, LootWindowOutcome, LootWindowPlayer, MeleeActionOutcome, MeleeActionPlayer,
-    MemberStatsOutcome, MemberStatsPlayer, OpenLootState, QuestActionOutcome, QuestActionPlayer,
-    TaxiActionOutcome, TaxiActionPlayer, VendorActionOutcome, VendorActionPlayer,
-    CMSG_AUCTION_LIST_ITEMS_OPCODE,
-};
+use handlers::{decode_auction_browse, OpenLootState, CMSG_AUCTION_LIST_ITEMS_OPCODE};
 pub(crate) use handlers::{
     member_stats_tick, resolve_online_character, zone_weather_message, AuctionBrowseRequest,
     AuctionHousePolicy, AuctionInteraction, AuctionPage, AuctionQuery, CancelAuctionOutcome,
@@ -92,7 +85,7 @@ use login_queue::{Admission, LoginQueue};
 pub(crate) use loot::LootRollStore;
 pub(crate) use mail::MailStore;
 pub(crate) use party::PartyStore;
-use social::handle_social;
+
 pub(crate) use social::ContactOutcome;
 pub(crate) use social::SocialStore;
 pub use store::{InteractionOutcome, WorldSessionToken, WorldStore};
@@ -361,25 +354,17 @@ pub struct InWorld {
 /// sole writer of the socket (the header cipher is a stateful stream, so exactly one writer may
 /// advance it). NOT game state: the cipher is re-derivable from K on reconnect.
 pub struct WorldConn {
+    pub(crate) protocol: ProtocolSession,
     /// Retained before world entry so failed routing or admission is also cleaned up.
     session_claim: Option<WorldSessionToken>,
-    pub account_id: u64,
-    /// Proof-validated, realm-wide Account name used for cross-database authority reads.
-    pub account_name: String,
     /// Decrypts inbound CMSG headers (reader-thread only).
     pub decrypt: DecrypterHalf,
-    /// Character-select vs in-world; the relay subs + combat/loot/session state live in `InWorld`.
-    pub state: WorldState,
     /// Per-connection movement coalescing. Lives directly on `WorldConn` (not
     /// `InWorld`) so it survives a world-port/relogin boundary uneventfully — it only ever sees
     /// traffic while `InWorld` movement is being dispatched, but there's no correctness reason to
     /// tear it down on a state transition, and keeping it here avoids re-plumbing it through
     /// `enter_world`.
     move_coalesce: CoalesceState,
-    /// The gossip menu last sent to this client. A select carries only a position into a
-    /// condition-filtered list, so re-deriving that list at click time renumbers it under a quest
-    /// accepted while the window was open.
-    pub(crate) gossip_menu: Option<GossipMenuSnapshot>,
     /// Automatic client requests announce each missing feature once per World Session.
     unavailable_notices: std::collections::HashSet<handlers::UnavailableNotice>,
     /// The Store every message of this session runs against.
@@ -400,16 +385,22 @@ pub struct WorldConn {
     /// Reset by the first movement whose entity is present. See
     /// [`MOVE_DESYNC_TOLERANCE`] for why the tolerance is bounded rather than unconditional.
     move_desync_drops: u32,
-    /// When the last `CMSG_WHO` this session's writer started answering was admitted. A second
-    /// request inside [`WHO_THROTTLE`] is dropped, the same shape vm:MiscHandler.cpp:230 drops a
-    /// concurrent request in — `/who`'s realm-wide scan is the one social read costly enough to
-    /// throttle per session.
-    who_throttled_until: Option<Instant>,
-    /// When each throttled Group Broadcast kind may run again for this session.
-    group_broadcast_cooldowns: party::GroupBroadcastCooldowns,
     /// The Chat Flood Limiter. It lives on the connection, as cmangos keeps the mute on its
     /// session, so a relog does not clear it.
     chat_flood: chat_flood::ChatFloodLimiter,
+}
+
+impl std::ops::Deref for WorldConn {
+    type Target = ProtocolSession;
+    fn deref(&self) -> &Self::Target {
+        &self.protocol
+    }
+}
+
+impl std::ops::DerefMut for WorldConn {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.protocol
+    }
 }
 
 /// How many CONSECUTIVE desynced movement packets a session may drop before the desync is treated
@@ -520,23 +511,6 @@ impl WorldConn {
         };
         self.store.unpin();
         outcome
-    }
-
-    /// Admit one `CMSG_WHO`, or refuse it because the last one this session sent was inside
-    /// [`WHO_THROTTLE`]. Advances the cooldown on every admitted request, including a malformed
-    /// one that answers nothing — the request itself is what cost the scan.
-    pub(super) fn admit_who(&mut self) -> bool {
-        let now = Instant::now();
-        if self.who_throttled_until.is_some_and(|until| now < until) {
-            return false;
-        }
-        self.who_throttled_until = Some(now + WHO_THROTTLE);
-        true
-    }
-
-    /// [`party::GroupBroadcastCooldowns::admit_at`] now.
-    pub(super) fn admit_group_broadcast(&mut self, op: party::Op) -> bool {
-        self.group_broadcast_cooldowns.admit_at(op, Instant::now())
     }
 }
 
@@ -693,19 +667,14 @@ fn world_handshake_with_queue_and_deadline<S: Read + Write + IoDeadline, C: Dead
     Ok(Some((
         WorldConn {
             session_claim: None,
-            account_id,
-            account_name: username,
+            protocol: ProtocolSession::new(account_id, username),
             decrypt,
-            state: WorldState::CharSelect,
             move_coalesce: CoalesceState::default(),
-            gossip_menu: None,
             unavailable_notices: Default::default(),
             store: RoutedStore::new(store), // pinned at CMSG_PLAYER_LOGIN
             session_key: Some(session_key), // for establish_session on a non-realm shard
             guild_signed_on: None,
             move_desync_drops: 0,
-            who_throttled_until: None,
-            group_broadcast_cooldowns: Default::default(),
             chat_flood: Default::default(),
         },
         encrypt,
@@ -1134,7 +1103,13 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
                 let request =
                     decode_auction_browse(&body).map_err(|e| anyhow!("world read error: {e}"))?;
                 let store = conn.store.current();
-                dispatch_raw_auction_browse(&tx, &*store, &mut conn, request)?;
+                dispatch(
+                    &tx,
+                    &*store,
+                    &mut conn,
+                    hdr.opcode,
+                    ProtocolRequest::AuctionBrowse(request),
+                )?;
                 continue;
             }
             if hdr.opcode == CMSG_AUTH_SESSION_OPCODE {
@@ -1143,12 +1118,24 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
             }
             if hdr.opcode == 0x0125 {
                 let store = conn.store.current();
-                handlers::handle_at_war(&tx, &*store, &mut conn, &body)?;
+                dispatch(
+                    &tx,
+                    &*store,
+                    &mut conn,
+                    hdr.opcode,
+                    ProtocolRequest::FactionAtWar(body),
+                )?;
                 continue;
             }
             if hdr.opcode == 0x0318 {
                 let store = conn.store.current();
-                handlers::handle_watched_faction(&tx, &*store, &mut conn, &body)?;
+                dispatch(
+                    &tx,
+                    &*store,
+                    &mut conn,
+                    hdr.opcode,
+                    ProtocolRequest::WatchedFaction(body),
+                )?;
                 continue;
             }
             if let Some(replies) = handlers::raw_unavailable_outbound(hdr.opcode, &body)? {
@@ -1174,7 +1161,7 @@ fn run_world_session_with_queue_and_deadline<S: DuplexStream, C: DeadlineClock>(
             // CMSG_PLAYER_LOGIN resolves one (and always, with a single-entry shard map) this is
             // the handle the listener passed in.
             let store = conn.store.current();
-            dispatch(&tx, &*store, &mut conn, msg)?;
+            dispatch(&tx, &*store, &mut conn, hdr.opcode, msg.into())?;
         }
     })();
 
@@ -1240,7 +1227,7 @@ fn handle_addon_message<St: SessionStore + ?Sized>(
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
         return Ok(());
     };
-    let Some(actor) = social::self_actor(conn) else {
+    let Some(actor) = conn.actor() else {
         log::info!(
             "addon bridge: command {cmd:?} from account {} dropped outside the world",
             conn.account_id
@@ -1281,358 +1268,39 @@ fn is_desync_error(e: &anyhow::Error) -> bool {
     s.contains("not in world") || s.contains("no live entity")
 }
 
-/// Write one cast-lifecycle transition into the session. A transition only exists while the player
-/// is in the world, so a character-select session ignores it.
-fn apply_cast_transition(conn: &mut WorldConn, transition: CastTransition) {
-    if let (Some(armed), WorldState::InWorld(iw)) = (transition.ranged_repeat, &mut conn.state) {
-        iw.ranged_repeat = armed;
-    }
-}
-
-/// Route one decrypted client message through the per-family handlers. Each stage either consumes
-/// its opcode or passes it onward, so the disjoint-family chain ends in the movement-relay catch-all.
-#[allow(clippy::too_many_lines)] // One stage per opcode family.
+/// Flush movement and apply the Chat Flood Limiter before selecting one opcode owner.
 fn dispatch(
     tx: &SessionTx,
     store: &dyn WorldStore,
     conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
+    opcode: u32,
+    request: ProtocolRequest,
 ) -> Result<()> {
-    // Coalescing rule 2 (the robust flush): a pending coalesced heartbeat may leave the
-    // MODULE's stored position a window behind the wire. Any non-movement opcode (loot/vendor/
-    // gossip/etc. range checks, in particular) must see the CURRENT position, so flush it FIRST —
-    // one check here removes the whole "stale position mid-coalesce" class instead of auditing
-    // every position-sensitive reducer individually. A movement opcode flushes (if needed) as part
-    // of its own classification below, not here.
-    if codec::relayed_move_opcode(&msg).is_none() {
+    let movement = match &request {
+        ProtocolRequest::Message(message) => codec::relayed_move_opcode(message).is_some(),
+        _ => false,
+    };
+    if !movement {
         if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
             forward_movement(store, conn, opcode, &info)?;
         }
     }
-
-    // The Chat Flood Limiter runs ahead of every chat, channel and emote handler, so a muted
-    // line costs no Durable Request.
-    let speaker = social::self_guid(conn);
-    let flood_answer = conn.chat_flood.judge(
-        &msg,
-        Instant::now(),
-        || speaker.is_some_and(|guid| is_game_master(store, guid)),
-        || speaker.and_then(|guid| speaker_race(store, guid)),
-    );
-    if let Some(answer) = flood_answer {
-        return send(tx, Outbound::One(answer));
+    if let ProtocolRequest::Message(message) = &request {
+        let speaker = conn.self_guid();
+        if let Some(answer) = conn.chat_flood.judge(
+            message,
+            Instant::now(),
+            || speaker.is_some_and(|guid| is_game_master(store, guid)),
+            || speaker.and_then(|guid| speaker_race(store, guid)),
+        ) {
+            return send(tx, Outbound::One(answer));
+        }
     }
-
-    let Some(msg) = handle_char(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_melee_action(store, MeleeActionPlayer::from_conn(conn), msg)? {
-        MeleeActionOutcome::Handled {
-            transition,
-            outbound,
-        } => {
-            transition.apply(&mut conn.state);
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MeleeActionOutcome::PassThrough(msg) => msg,
-    };
-    // The cast seam owns every cast opcode. Melee runs first only because its two opcodes are
-    // disjoint from the cast set; neither seam sees the other's traffic.
-    let msg = match dispatch_cast(
-        store,
-        CastPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-            ranged_repeat: matches!(&conn.state, WorldState::InWorld(iw) if iw.ranged_repeat),
-        },
-        msg,
-    )? {
-        CastOutcome::Handled {
-            transition,
-            outbound,
-        } => {
-            // The transition lands first: the batch is what the client sees, and session state
-            // must already agree with it when the next request arrives.
-            apply_cast_transition(conn, transition);
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        CastOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_combat(store, conn, msg)? else {
-        return Ok(());
-    };
-    let dispatches_to_loot_window = if let ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) = &msg {
-        let target_guid = request.guid.guid();
-        match store.gameobject_type(target_guid)? {
-            Some(lyracore_shared::constants::go_type::QUESTGIVER) => {
-                for message in
-                    quest_giver_menu(store, target_guid, social::self_guid(conn).unwrap_or(0))?
-                {
-                    send(tx, message)?;
-                }
-                return Ok(());
-            }
-            Some(lyracore_shared::constants::go_type::CHEST) => true,
-            _ => false,
-        }
-    } else {
-        true
-    };
-    let current_loot_state = match &conn.state {
-        WorldState::InWorld(iw) => iw.open_loot,
-        WorldState::CharSelect => OpenLootState::default(),
-    };
-    let msg = if dispatches_to_loot_window {
-        match dispatch_loot_window(
-            store,
-            LootWindowPlayer {
-                account_id: conn.account_id,
-                self_guid: social::self_guid(conn),
-            },
-            current_loot_state,
-            msg,
-        )? {
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request: _observed_durable_request,
-                outbound,
-            } => {
-                if let WorldState::InWorld(iw) = &mut conn.state {
-                    iw.open_loot = next_state;
-                }
-                for message in outbound {
-                    send(tx, message)?;
-                }
-                return Ok(());
-            }
-            LootWindowOutcome::PassThrough(msg) => msg,
-        }
-    } else {
-        msg
-    };
-    let Some(msg) = handle_loot(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_auction_action(
-        store,
-        AuctionActionPlayer {
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        AuctionActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        AuctionActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_vendor_action(
-        store,
-        VendorActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        VendorActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        VendorActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_bank(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_trainer(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_item_action(
-        store,
-        ItemActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        ItemActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ItemActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_quest_action(
-        store,
-        QuestActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        QuestActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        QuestActionOutcome::TurnedIn { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            // The turn-in used the visibility pipe, so a Reward Letter it filed is in the cache
-            // and the escrow index now. A failed drive leaves the letter held for world entry or
-            // the next mailbox visit.
-            if let Some(self_guid) = social::self_guid(conn) {
-                mail::redrive(store, self_guid);
-            }
-            return Ok(());
-        }
-        QuestActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_taxi_action(
-        store,
-        TaxiActionPlayer {
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        TaxiActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        TaxiActionOutcome::Activated {
-            outbound,
-            character_guid,
-            arm,
-        } => {
-            // Queue the vanilla result first. Arming mutates the entity and spline tables, whose
-            // callbacks enqueue behind this item on the same writer even if they fire immediately.
-            queue_reply_then_arm(tx, store, outbound, character_guid, arm)?;
-            return Ok(());
-        }
-        TaxiActionOutcome::PassThrough(msg) => msg,
-    };
-    let member_stats_player = match &conn.state {
-        WorldState::InWorld(iw) => MemberStatsPlayer {
-            self_guid: Some(iw.self_guid),
-            record: iw.subs.member_stats_record(),
-        },
-        WorldState::CharSelect => MemberStatsPlayer::default(),
-    };
-    let msg = match dispatch_member_stats(store, member_stats_player, msg) {
-        MemberStatsOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MemberStatsOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_social(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_trade(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let msg = match dispatch_duel_action(
-        store,
-        DuelActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        DuelActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        DuelActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_chat_action(
-        store,
-        ChatActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        ChatActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ChatActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_channel_action(
-        store,
-        ChatActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        ChannelActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        ChannelActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_meeting_stone_action(
-        store,
-        MeetingStonePlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        MeetingStoneActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        MeetingStoneActionOutcome::PassThrough(msg) => msg,
-    };
-    let msg = match dispatch_guild_action(
-        store,
-        GuildActionPlayer {
-            account_id: conn.account_id,
-            self_guid: social::self_guid(conn),
-        },
-        msg,
-    )? {
-        GuildActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
-            return Ok(());
-        }
-        GuildActionOutcome::PassThrough(msg) => msg,
-    };
-    let Some(msg) = handle_query(tx, store, conn, msg)? else {
-        return Ok(());
-    };
-    let Some(msg) = handle_mail(tx, store, conn, msg)? else {
-        return Ok(());
-    };
+    if let Some(owner) = routing::owner(opcode) {
+        let reply = owner.handle(store, &mut conn.protocol, request)?;
+        return complete_reply(tx, store, conn, reply);
+    }
+    let msg = request.message()?;
     // MSG_MOVE_* -> movement_update (persist + relay). The relayed peer events
     // come back on this player's game_movement_event subscription and are re-emitted (same
     // opcode + verbatim MovementInfo) to other players by their own subscription callbacks.
@@ -1689,7 +1357,7 @@ fn dispatch(
             return Ok(());
         }
         if let ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(request) = &msg {
-            if social::self_guid(conn) == Some(request.guid.guid()) {
+            if conn.self_guid() == Some(request.guid.guid()) {
                 return Ok(());
             }
             return send(
@@ -1713,32 +1381,22 @@ fn dispatch(
     Ok(())
 }
 
-fn dispatch_raw_auction_browse<St: AuctionActionStore + SessionStore + ?Sized>(
+fn complete_reply(
     tx: &SessionTx,
-    store: &St,
+    store: &dyn WorldStore,
     conn: &mut WorldConn,
-    request: AuctionBrowseRequest,
+    reply: ProtocolReply,
 ) -> Result<()> {
-    if let Some((opcode, info)) = conn.move_coalesce.flush_now() {
-        forward_movement(store, conn, opcode, &info)?;
-    }
-    match dispatch_auction_browse_action(
-        store,
-        AuctionActionPlayer {
-            self_guid: social::self_guid(conn),
-        },
-        request,
-    )? {
-        AuctionActionOutcome::Handled { outbound } => {
-            for message in outbound {
-                send(tx, message)?;
-            }
+    reply.complete(tx, |action| match action {
+        WorldSessionAction::Login(actor) => entry::login(tx, store, conn, actor),
+        WorldSessionAction::WorldPortAck => entry::world_port_ack(tx, store, conn),
+        WorldSessionAction::Logout => conn.leave_world(),
+        WorldSessionAction::ArmTaxi(actor) => store.arm_taxi_flight(actor),
+        WorldSessionAction::RedriveMail(actor) => {
+            mail::redrive(store, actor.guid());
             Ok(())
         }
-        AuctionActionOutcome::PassThrough(_) => Err(anyhow!(
-            "raw auction browse was not handled by auction dispatcher"
-        )),
-    }
+    })
 }
 
 fn forward_movement<St: SessionStore + ?Sized>(

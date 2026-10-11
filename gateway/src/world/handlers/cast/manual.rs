@@ -40,17 +40,17 @@ fn gameobject_target(c: &CMSG_CAST_SPELL) -> u64 {
 /// Enchant, disenchant, fishing and lock opening: decode the route's target, request the durable
 /// operation, then send the shared completion sequence on success or the shared simple failure on
 /// refusal. None of these reducers emit a cast event, so the gateway is the only sender either way.
-pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
+pub(super) fn manual_completion_cast<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     c: &CMSG_CAST_SPELL,
     route: ManualRoute,
-) -> Result<CastOutcome> {
+) -> Result<ProtocolReply> {
     let spell = c.spell;
     // `Err` carries the reason the request ended in a Refusal: the Module's, or the Gateway's own
     // when the cast names no usable target.
     let completed: std::result::Result<Actor, String> = 'request: {
-        let Some(actor) = player.actor() else {
+        let Some(actor) = session.actor() else {
             break 'request Err(NO_ACTOR.to_string());
         };
         let result = match route {
@@ -60,7 +60,9 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
                     break 'request Err("enchant: no item target in cast".to_string());
                 }
                 let Some(slot) = store.item_slot_by_guid(item_guid) else {
-                    break 'request Err(format!("enchant: item {item_guid} not in player bag"));
+                    break 'request Err(format!(
+                        "enchant: item {item_guid} not in the Character inventory"
+                    ));
                 };
                 match enchant_route {
                     EnchantRoute::Disenchant => store.disenchant_item(actor, slot),
@@ -88,7 +90,7 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
         Err(reason) => {
             log::debug!(
                 "world: manual-completion cast {spell} rejected (account {}): {reason}",
-                player.account_id
+                session.account_id
             );
             vec![Outbound::One(ServerOpcodeMessage::SMSG_CAST_RESULT(
                 Box::new(SMSG_CAST_RESULT {
@@ -110,8 +112,5 @@ pub(crate) fn manual_completion_cast<St: CastStore + ?Sized>(
             ))),
         ],
     };
-    Ok(CastOutcome::Handled {
-        transition: CastTransition::default(),
-        outbound,
-    })
+    Ok(outbound.into())
 }

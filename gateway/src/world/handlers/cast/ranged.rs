@@ -2,36 +2,35 @@
 //!
 //! Activation arms the durable loop and parks a cast in the client's auto-repeat slot; each real
 //! shot belongs to the durable swing tick and its combat-event relay. Cancellation only clears the
-//! loop. Both directions return a session transition — whether a loop is armed is gateway session
-//! state, and melee start, melee stop and this route all read it.
+//! loop. Both directions update the shared ranged state that melee requests also read.
 
 use super::*;
 
 /// Arm or refuse a ranged auto-repeat loop (`CMSG_CAST_SPELL` for Auto Shot / wand Shoot).
 pub(super) fn activate<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     c: &CMSG_CAST_SPELL,
-) -> Result<CastOutcome> {
+) -> Result<ProtocolReply> {
     let spell = c.spell;
     // The shot's target rides the cast's UNIT block. No current-selection fallback: Auto Shot and
     // Shoot are cast ON a target, so the client always sends one.
     let target = unit_target(c);
     log::info!(
         "world[autoshot]: activate spell={spell} target={target} already_repeating={} (account {})",
-        player.ranged_repeat,
-        player.account_id
+        matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat),
+        session.account_id
     );
 
     // Arm the durable loop FIRST, before any success outcome exists. A refusal then answers only
     // the raw failure result, and the 5875 client drops its auto-repeat toggle on that — client and
     // server stay in lockstep. Acknowledging first and failing after left the client toggled ON
     // over a dead loop, so the next press sent a cancel instead of a cast.
-    let Some(actor) = player.actor() else {
-        return refuse(store, player, spell, NO_ACTOR);
+    let Some(actor) = session.actor() else {
+        return refuse(store, session, spell, NO_ACTOR);
     };
     if let Err(e) = store.start_ranged_attack(actor, target, spell) {
-        return refuse(store, player, spell, &refusal_reason(e)?);
+        return refuse(store, session, spell, &refusal_reason(e)?);
     }
 
     // The activation ack is `SMSG_SPELL_START` alone: timer 0 (the wind-up is an attack timer, not
@@ -48,24 +47,24 @@ pub(super) fn activate<St: CastStore + ?Sized>(
             ammo_display(store, caster),
         )),
     ))];
-    Ok(CastOutcome::Handled {
-        transition: CastTransition {
-            ranged_repeat: Some(true),
-        },
-        outbound,
+    Ok({
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.ranged_repeat = true;
+        }
+        ProtocolReply::from(outbound)
     })
 }
 
 /// A refused activation. A Refusal is a handled outcome; a Transport Loss never reaches here.
 fn refuse<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
+    session: &mut ProtocolSession,
     spell: u32,
     reason: &str,
-) -> Result<CastOutcome> {
+) -> Result<ProtocolReply> {
     log::info!(
         "world[autoshot]: start_ranged_attack refused spell={spell} (account {}): {reason}",
-        player.account_id
+        session.account_id
     );
     let outbound = vec![Outbound::Raw {
         opcode: OP_CAST_RESULT,
@@ -74,57 +73,58 @@ fn refuse<St: CastStore + ?Sized>(
     // A refused RETARGET drops the client's toggle on that failure result, so the still-firing OLD
     // loop has to go too — otherwise the server keeps shooting a target the client believes it
     // stopped. A fresh activation has no older loop, and must not touch unrelated engagement state.
-    if !player.ranged_repeat {
-        return Ok(CastOutcome::Handled {
-            transition: CastTransition::default(),
-            outbound,
-        });
+    if !matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat) {
+        return Ok(outbound.into());
     }
-    stop_loop(store, player, "reject-teardown")?;
-    Ok(CastOutcome::Handled {
-        transition: CastTransition {
-            ranged_repeat: Some(false),
-        },
-        outbound,
+    stop_loop(store, session, "reject-teardown")?;
+    Ok({
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.ranged_repeat = false;
+        }
+        ProtocolReply::from(outbound)
     })
 }
 
 /// `CMSG_CANCEL_AUTO_REPEAT_SPELL`: the client toggled the loop off, or auto-switched to melee.
 pub(super) fn cancel<St: CastStore + ?Sized>(
     store: &St,
-    player: CastPlayer,
-) -> Result<CastOutcome> {
+    session: &mut ProtocolSession,
+) -> Result<ProtocolReply> {
     log::info!(
         "world[autoshot]: cancel auto-repeat active={} (account {})",
-        player.ranged_repeat,
-        player.account_id
+        matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat),
+        session.account_id
     );
     // The durable stop runs ONLY when a ranged loop was armed. A melee press sends CMSG_ATTACKSWING
     // and this cancel back to back, and the swing handler has already overwritten the shared
     // engagement row to melee — an unconditional stop deleted that just-armed melee row. No inline
     // ack either: the engagement's on_delete relay is the one sender of SMSG_CANCEL_AUTO_REPEAT.
-    if player.ranged_repeat {
-        stop_loop(store, player, "cancel_auto_repeat")?;
+    if matches!(&session.state, WorldState::InWorld(world) if world.ranged_repeat) {
+        stop_loop(store, session, "cancel_auto_repeat")?;
     }
-    Ok(CastOutcome::Handled {
-        transition: CastTransition {
-            ranged_repeat: Some(false),
-        },
-        outbound: Vec::new(),
+    Ok({
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.ranged_repeat = false;
+        }
+        ProtocolReply::from(Vec::new())
     })
 }
 
 /// Ask the module to tear the engagement down. A Refusal (nothing armed, a race with the swing
 /// tick) must not end the session or reach the client; a Transport Loss ends the session.
-fn stop_loop<St: CastStore + ?Sized>(store: &St, player: CastPlayer, context: &str) -> Result<()> {
-    let Some(actor) = player.actor() else {
+fn stop_loop<St: CastStore + ?Sized>(
+    store: &St,
+    session: &mut ProtocolSession,
+    context: &str,
+) -> Result<()> {
+    let Some(actor) = session.actor() else {
         return Ok(());
     };
     if let Err(e) = store.stop_attack(actor) {
         let reason = refusal_reason(e)?;
         log::debug!(
             "world: {context} stop_attack ignored (account {}): {reason}",
-            player.account_id
+            session.account_id
         );
     }
     Ok(())
@@ -211,11 +211,12 @@ mod tests {
     }
 
     /// A player with an older ranged loop already armed.
-    fn repeating() -> CastPlayer {
-        CastPlayer {
-            ranged_repeat: true,
-            ..player()
+    fn repeating() -> ProtocolSession {
+        let mut session = session();
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.ranged_repeat = true;
         }
+        session
     }
 
     /// The single `SMSG_SPELL_START` in the batch.
@@ -243,20 +244,15 @@ mod tests {
     fn activation_arms_the_durable_loop_and_acknowledges_with_a_zero_timer_start() {
         let store = ranged_store();
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, player(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, session(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
 
         assert_eq!(
             store.ranged_attacks.lock().unwrap().as_slice(),
             &[(CASTER, 88, AUTO_SHOT)],
             "the cast's unit target arms the loop, with no selection fallback"
         );
-        assert_eq!(
-            transition,
-            CastTransition {
-                ranged_repeat: Some(true)
-            }
-        );
+        assert!(repeating);
         assert_eq!(
             sequence(&outbound),
             ["START"],
@@ -286,13 +282,12 @@ mod tests {
             ..ranged_store()
         };
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, player(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, session(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILED 0x17)"]);
-        assert_eq!(
-            transition,
-            CastTransition::default(),
+        assert!(
+            !repeating,
             "a refused activation must not arm ranged-repeat state"
         );
         assert!(
@@ -308,16 +303,11 @@ mod tests {
             ..ranged_store()
         };
 
-        let (transition, outbound) =
-            handled(dispatch_cast(&store, repeating(), cast(AUTO_SHOT, unit_targets(99))).unwrap());
+        let (repeating, outbound) =
+            handled(run_cast(&store, repeating(), cast(AUTO_SHOT, unit_targets(99))).unwrap());
 
         assert_eq!(sequence(&outbound), ["CAST_RESULT(FAILED 0x59)"]);
-        assert_eq!(
-            transition,
-            CastTransition {
-                ranged_repeat: Some(false)
-            }
-        );
+        assert!(!repeating);
         assert_eq!(
             store.stop_attacks.lock().unwrap().as_slice(),
             &[CASTER],
@@ -332,7 +322,7 @@ mod tests {
             ..ranged_store()
         };
 
-        assert!(dispatch_cast(&store, player(), cast(AUTO_SHOT, unit_targets(88))).is_err());
+        assert!(run_cast(&store, session(), cast(AUTO_SHOT, unit_targets(88))).is_err());
     }
 
     #[test]
@@ -342,7 +332,7 @@ mod tests {
             ..ranged_store()
         };
 
-        assert!(dispatch_cast(
+        assert!(run_cast(
             &store,
             repeating(),
             ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL
@@ -356,8 +346,8 @@ mod tests {
     fn cancelling_an_active_loop_clears_the_state_and_stops_it_with_no_inline_ack() {
         let store = ranged_store();
 
-        let (transition, outbound) = handled(
-            dispatch_cast(
+        let (repeating, outbound) = handled(
+            run_cast(
                 &store,
                 repeating(),
                 ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL,
@@ -365,12 +355,7 @@ mod tests {
             .unwrap(),
         );
 
-        assert_eq!(
-            transition,
-            CastTransition {
-                ranged_repeat: Some(false)
-            }
-        );
+        assert!(!repeating);
         assert_eq!(store.stop_attacks.lock().unwrap().as_slice(), &[CASTER]);
         assert!(
             outbound.is_empty(),
@@ -382,21 +367,16 @@ mod tests {
     fn cancelling_with_no_active_loop_clears_the_state_without_a_durable_stop() {
         let store = ranged_store();
 
-        let (transition, outbound) = handled(
-            dispatch_cast(
+        let (repeating, outbound) = handled(
+            run_cast(
                 &store,
-                player(),
+                session(),
                 ClientOpcodeMessage::CMSG_CANCEL_AUTO_REPEAT_SPELL,
             )
             .unwrap(),
         );
 
-        assert_eq!(
-            transition,
-            CastTransition {
-                ranged_repeat: Some(false)
-            }
-        );
+        assert!(!repeating);
         assert!(
             store.stop_attacks.lock().unwrap().is_empty(),
             "a late cancel must not delete a just-armed melee engagement"
@@ -423,7 +403,7 @@ mod tests {
 
     fn activate_ammo(store: &InMemoryCasts) -> Option<(u32, u32)> {
         let (_, outbound) =
-            handled(dispatch_cast(store, player(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
+            handled(run_cast(store, session(), cast(AUTO_SHOT, unit_targets(88))).unwrap());
         ammo_block(&outbound)
     }
 

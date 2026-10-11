@@ -9,10 +9,7 @@ use super::party_tests::{
     character, form_split_party, party_members, party_topology, BOT, GINGER, TRIN, VIM,
 };
 use super::*;
-use crate::world::handlers::{
-    dispatch_member_stats, member_stats_tick, MemberSnapshot, MemberStatsOutcome,
-    MemberStatsPlayer, MemberStatsRecord,
-};
+use crate::world::handlers::{member_stats_tick, MemberSnapshot, MemberStats};
 use std::collections::HashMap;
 use std::sync::atomic::Ordering;
 
@@ -414,32 +411,31 @@ fn a_mate_who_leaves_the_group_is_forgotten() {
     assert!(!snapshots.contains_key(&TRIN));
 }
 
-fn request_with(
-    store: &WorldFake,
-    self_guid: Option<u64>,
-    record: Option<&MemberStatsRecord>,
-    guid: u64,
-) -> MemberStatsOutcome {
-    dispatch_member_stats(
+fn request_with(store: &WorldFake, session: &mut ProtocolSession, guid: u64) -> ProtocolReply {
+    MemberStats::handle(
         store,
-        MemberStatsPlayer { self_guid, record },
+        session,
         ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(
             wow_world_messages::vanilla::CMSG_REQUEST_PARTY_MEMBER_STATS {
                 guid: Guid::new(guid),
             },
-        ),
+        )
+        .into(),
     )
+    .unwrap()
 }
 
-fn request(store: &WorldFake, self_guid: Option<u64>, guid: u64) -> MemberStatsOutcome {
-    request_with(store, self_guid, None, guid)
+fn request(store: &WorldFake, self_guid: Option<u64>, guid: u64) -> ProtocolReply {
+    let mut session = match self_guid {
+        Some(guid) => ProtocolSession::in_world(7, guid),
+        None => ProtocolSession::new(7, "TESTER".into()),
+    };
+    request_with(store, &mut session, guid)
 }
 
 /// Run the answer the way the session writer does: every job, in order.
-fn answer(outcome: MemberStatsOutcome) -> Vec<(u16, Vec<u8>)> {
-    let MemberStatsOutcome::Handled { outbound } = outcome else {
-        panic!("an in-world stats request is handled");
-    };
+fn answer(outcome: ProtocolReply) -> Vec<(u16, Vec<u8>)> {
+    let outbound = outcome.outbound;
     outbound
         .into_iter()
         .flat_map(|packet| match packet {
@@ -516,12 +512,20 @@ fn after_a_full_answer_the_next_tick_sends_every_field() {
     let (realm, world, instances, _) = party_topology();
     form_split_party(&world, &instances);
     place(&instances, VIM, caster());
-    let record = MemberStatsRecord::default();
+    let view = Arc::new(crate::stdb::world_view::WorldView::new(true));
+    let (tx, _queued, _depth) = session_channel();
+    let mut session = ProtocolSession::in_world(7, GINGER);
+    let WorldState::InWorld(in_world) = &mut session.state else {
+        unreachable!()
+    };
+    in_world.subs =
+        PlayerSubscriptions::registered_for_test(view, GINGER, &codec::EntityView::default(), tx);
+    let record = in_world.subs.member_stats_record().unwrap().clone();
     tick(&world, &[GINGER], &mut record.lock());
 
     despawn(&instances, VIM);
     realm.party.members_in_transit.lock().unwrap().push(VIM);
-    answer(request_with(&world, Some(GINGER), Some(&record), VIM));
+    answer(request_with(&world, &mut session, VIM));
     realm.party.members_in_transit.lock().unwrap().clear();
     place(&world, VIM, caster());
 
@@ -583,12 +587,9 @@ fn a_bot_crossing_between_shards_is_never_reported_offline() {
 }
 
 #[test]
-fn a_stats_request_outside_the_world_passes_through() {
+fn a_stats_request_outside_the_world_sends_nothing() {
     let (_realm, world, _instances) = ginger_and_trin();
-    assert!(matches!(
-        request(&world, None, TRIN),
-        MemberStatsOutcome::PassThrough(ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(_))
-    ));
+    assert!(request(&world, None, TRIN).outbound.is_empty());
 }
 
 /// The raw FULL body survives the session writer and the header cipher, on a single database
