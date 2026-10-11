@@ -2106,6 +2106,7 @@ fn item_owner_job(
 }
 
 fn item_inserted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
+    item_visible_changed(view, shard, None, Some(row), item_slot_read(coord));
     let (coord, row) = (coord.clone(), row.clone());
     item_owner_job(view, shard, row.owner_guid, move |viewer| {
         let enchantment = item_enchantment_word(&coord, &row);
@@ -2141,6 +2142,7 @@ fn item_updated(
     old: &ItemInstance,
     row: &ItemInstance,
 ) {
+    item_visible_changed(view, shard, Some(old), Some(row), item_slot_read(coord));
     let (coord, old, row) = (coord.clone(), old.clone(), row.clone());
     item_owner_job(view, shard, row.owner_guid, move |viewer| {
         let guard = coord.0.coord();
@@ -2154,11 +2156,83 @@ fn item_updated(
 }
 
 fn item_deleted(view: &WorldView, coord: &Coordinator, shard: ShardId, row: &ItemInstance) {
+    item_visible_changed(view, shard, Some(row), None, item_slot_read(coord));
     let (coord, row) = (coord.clone(), row.clone());
     item_owner_job(view, shard, row.owner_guid, move |viewer| {
         let guard = coord.0.coord();
         super::subscriptions::item_instance_delete_outbound(&guard.conn.db, viewer.self_guid, &row)
     });
+}
+
+type ItemSlotRead = Arc<dyn Fn(u64, u8) -> Option<crate::codec::ItemInstanceView> + Send + Sync>;
+
+fn item_slot_read(coord: &Coordinator) -> ItemSlotRead {
+    let coord = coord.clone();
+    Arc::new(move |owner_guid, slot| {
+        coord
+            .0
+            .coord()
+            .conn
+            .db
+            .game_item_instance()
+            .iter()
+            .find(|item| item.owner_guid == owner_guid && item.slot == slot)
+            .map(|item| super::reads::view_of_item_row(&item))
+    })
+}
+
+/// Peers see worn gear only. Read the current occupant on the writer so a swap or a later
+/// replacement cannot leave a slot empty because an earlier item moved out of it.
+fn item_visible_changed(
+    view: &WorldView,
+    shard: ShardId,
+    old: Option<&ItemInstance>,
+    new: Option<&ItemInstance>,
+    item_in_slot: ItemSlotRead,
+) {
+    let visible = |row: &ItemInstance| {
+        (
+            row.owner_guid,
+            row.slot,
+            row.entry,
+            row.random_property_id,
+            row.enchant_id,
+        )
+    };
+    if old.map(visible) == new.map(visible) {
+        return;
+    }
+    let mut slots = Vec::with_capacity(2);
+    for row in old.into_iter().chain(new) {
+        let slot = (row.owner_guid, row.slot);
+        if row.slot <= 18 && !slots.contains(&slot) {
+            slots.push(slot);
+        }
+    }
+    for (owner_guid, slot) in slots {
+        let key = view
+            .spatial
+            .entity_cell_on_shard(EntityLayer::WorldEntity, owner_guid, shard);
+        for viewer in view.cell_audience(shard, key, BOX_HALF_SPAN, &[]) {
+            if viewer.self_guid == owner_guid {
+                continue;
+            }
+            let item_in_slot = item_in_slot.clone();
+            enqueue(viewer, move |viewer| {
+                if !viewer.created.lock().unwrap().contains(&owner_guid) {
+                    return Vec::new();
+                }
+                let item = item_in_slot(owner_guid, slot).unwrap_or_default();
+                crate::codec::build_visible_item_values(owner_guid, slot, &item)
+                    .map(|values| {
+                        vec![Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+                            Box::new(values),
+                        ))]
+                    })
+                    .unwrap_or_default()
+            });
+        }
+    }
 }
 
 /// Send a rest-state change to its owner on the callback's Shard.
@@ -3426,17 +3500,18 @@ mod family_audience_tests {
         addon_message_appeared, charter_petition_opened, duel_winner_audience,
         exploration_outbound_for_word, guild_event_appeared, guild_membership_changed,
         instance_removal_ended, instance_removal_started, instance_removal_time_left_ms,
-        is_initial_apply, item_owner_job, levelup_appeared, mail_arrived, petition_event_appeared,
-        reputation_appeared, resident_countdown_ms, self_res_option_changed, sweep_into_view,
-        system_message_appeared, teleport_appeared, weather_changed, xp_appeared, zone_crossed,
-        BoundIdentity, ExplorationReplay, GuildMembershipRead, GuildRosterSnapshotRead,
-        MotionPending, OwnerGuid, PetitionRead, Viewer, WorldView,
+        is_initial_apply, item_owner_job, item_visible_changed, levelup_appeared, mail_arrived,
+        petition_event_appeared, reputation_appeared, resident_countdown_ms,
+        self_res_option_changed, sweep_into_view, system_message_appeared, teleport_appeared,
+        weather_changed, xp_appeared, zone_crossed, BoundIdentity, ExplorationReplay,
+        GuildMembershipRead, GuildRosterSnapshotRead, MotionPending, OwnerGuid, PetitionRead,
+        Viewer, WorldView,
     };
     use crate::stdb::aoi::ViewerGates;
     use crate::stdb::bindings::{
         AddonMessage, CharacterExplored, CharacterQuest, GuildEvent, GuildPetition,
-        InstanceRemoval, LevelupEvent, MailArrival, PlayerReputation, SystemMessageEvent,
-        TeleportEvent, XpEvent, ZoneWeather,
+        InstanceRemoval, ItemInstance, LevelupEvent, MailArrival, PlayerReputation,
+        SystemMessageEvent, TeleportEvent, XpEvent, ZoneWeather,
     };
     use crate::stdb::subscriptions::{private_recipient_audience, quest_update_packets};
     use crate::stdb::world_index::{CellKey, EntityLayer};
@@ -4936,6 +5011,268 @@ mod family_audience_tests {
             instance_removal_time_left_ms(&interval, 1_899_999_955_000_000),
             None
         );
+    }
+
+    fn worn_item(slot: u8) -> ItemInstance {
+        ItemInstance {
+            guid: 700,
+            entry: 1337,
+            owner_identity: identity(1),
+            owner_guid: 9001,
+            slot,
+            stack_count: 1,
+            durability: 20,
+            created_at: spacetimedb_sdk::Timestamp::UNIX_EPOCH,
+            enchant_id: 7745,
+            soulbound: false,
+            random_property_id: 117,
+            item_text_id: 0,
+        }
+    }
+
+    fn visible_items(out: Vec<Outbound>) -> Vec<(u8, u32, u32, u32)> {
+        use wow_world_messages::vanilla::{Object, ServerMessage, UpdateMask, VisibleItemIndex};
+        let mut items = Vec::new();
+        for message in out {
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update)) = message else {
+                panic!("peers receive only visible item VALUES");
+            };
+            let [Object::Values {
+                guid1,
+                mask1: UpdateMask::Player(mask),
+            }] = update.objects.as_slice()
+            else {
+                panic!("peers receive no private item objects");
+            };
+            assert_eq!(guid1.guid(), 9001);
+            for slot in 0..=18 {
+                if let Some(item) =
+                    mask.player_visible_item(VisibleItemIndex::try_from(slot).unwrap())
+                {
+                    assert_eq!(item.enchants[1], 0);
+                    items.push((slot, item.item, item.random_property_id, item.enchants[0]));
+                }
+            }
+            let mut bytes = Vec::new();
+            update.write_unencrypted_server(&mut bytes).unwrap();
+            let decoded = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+            assert_eq!(decoded.len(), 1);
+            // Build 5875 exposes nineteen 12-word visible items starting at field 260.
+            assert!(
+                decoded[0]
+                    .fields
+                    .iter()
+                    .all(|&(field, _)| (260..488).contains(&field)),
+                "no TYPE, inventory pointers, item fields or Character sheet fields"
+            );
+        }
+        items
+    }
+
+    #[test]
+    fn visible_gear_changes_reach_peers_with_current_slot_contents() {
+        let view = WorldView::new(true);
+        let (tx, rx) = SessionTx::with_depth(0);
+        let peer = viewer_with_tx(2, 9002, identity(2), tx);
+        peer.created.lock().unwrap().insert(9001);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(peer, anchor, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 0, 0);
+        let committed = Arc::new(Mutex::new(Vec::<ItemInstance>::new()));
+        let read: super::ItemSlotRead = {
+            let committed = committed.clone();
+            Arc::new(move |owner, slot| {
+                committed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item.owner_guid == owner && item.slot == slot)
+                    .map(crate::stdb::reads::view_of_item_row)
+            })
+        };
+        let item = worn_item(8);
+        committed.lock().unwrap().push(item.clone());
+        item_visible_changed(&view, 0, None, Some(&item), read.clone());
+        assert_eq!(visible_items(queued_job(&rx)), [(8, 1337, 117, 823)]);
+
+        for changed in [
+            ItemInstance {
+                enchant_id: 7748,
+                ..item.clone()
+            },
+            ItemInstance {
+                enchant_id: 0,
+                ..item.clone()
+            },
+            ItemInstance {
+                entry: 42,
+                ..item.clone()
+            },
+            ItemInstance {
+                random_property_id: 118,
+                ..item.clone()
+            },
+        ] {
+            *committed.lock().unwrap() = vec![changed.clone()];
+            item_visible_changed(&view, 0, Some(&item), Some(&changed), read.clone());
+            let enchant = match changed.enchant_id {
+                7748 => 724,
+                0 => 0,
+                _ => 823,
+            };
+            assert_eq!(
+                visible_items(queued_job(&rx)),
+                [(8, changed.entry, changed.random_property_id, enchant)]
+            );
+        }
+
+        let bagged = ItemInstance {
+            slot: 23,
+            ..item.clone()
+        };
+        *committed.lock().unwrap() = vec![bagged.clone()];
+        item_visible_changed(&view, 0, Some(&item), Some(&bagged), read.clone());
+        assert_eq!(visible_items(queued_job(&rx)), [(8, 0, 0, 0)]);
+        *committed.lock().unwrap() = vec![item.clone()];
+        item_visible_changed(&view, 0, Some(&bagged), Some(&item), read.clone());
+        assert_eq!(visible_items(queued_job(&rx)), [(8, 1337, 117, 823)]);
+
+        committed.lock().unwrap().clear();
+        item_visible_changed(&view, 0, Some(&item), None, read);
+        assert_eq!(visible_items(queued_job(&rx)), [(8, 0, 0, 0)]);
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn visible_gear_swap_and_delete_read_replacements_when_the_writer_runs() {
+        let view = WorldView::new(true);
+        let (tx, rx) = SessionTx::with_depth(0);
+        let peer = viewer_with_tx(2, 9002, identity(2), tx);
+        peer.created.lock().unwrap().insert(9001);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.add_viewer_on_shard(peer, anchor, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 0, 0);
+        let old = worn_item(8);
+        let moved = ItemInstance {
+            slot: 23,
+            ..old.clone()
+        };
+        let committed = Arc::new(Mutex::new(vec![old.clone()]));
+        let read: super::ItemSlotRead = {
+            let committed = committed.clone();
+            Arc::new(move |owner, slot| {
+                committed
+                    .lock()
+                    .unwrap()
+                    .iter()
+                    .find(|item| item.owner_guid == owner && item.slot == slot)
+                    .map(crate::stdb::reads::view_of_item_row)
+            })
+        };
+        item_visible_changed(&view, 0, Some(&old), Some(&moved), read.clone());
+        item_visible_changed(&view, 0, Some(&old), None, read);
+        *committed.lock().unwrap() = vec![ItemInstance {
+            guid: 701,
+            entry: 42,
+            enchant_id: 7748,
+            ..old
+        }];
+        for _ in 0..2 {
+            assert_eq!(visible_items(queued_job(&rx)), [(8, 42, 117, 724)]);
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn visible_gear_is_scoped_to_peers_that_still_see_the_character() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 0, 0);
+        let item = worn_item(8);
+        let read: super::ItemSlotRead =
+            Arc::new(|_, _| Some(crate::stdb::reads::view_of_item_row(&worn_item(8))));
+        let mut queues = Vec::new();
+        for (session, guid, cell, shard) in [
+            (1, 9001, anchor, 0),
+            (2, 9002, anchor, 0),
+            (3, 9003, CellKey::at(0, 0, 10, 0), 0),
+            (4, 9004, CellKey::at(0, 1, 0, 0), 0),
+            (5, 9005, CellKey::at(1, 0, 0, 0), 0),
+            (6, 9006, anchor, 1),
+        ] {
+            let (tx, rx) = SessionTx::with_depth(0);
+            let viewer = viewer_with_tx(session, guid, identity(session as u8), tx);
+            viewer.created.lock().unwrap().insert(9001);
+            view.add_viewer_on_shard(viewer.clone(), cell, shard);
+            queues.push((viewer, rx));
+        }
+        let (peer, rx) = &queues[1];
+        item_visible_changed(&view, 0, None, Some(&item), read.clone());
+        peer.created.lock().unwrap().remove(&9001);
+        assert!(queued_job(rx).is_empty(), "hidden before the writer runs");
+        item_visible_changed(&view, 0, None, Some(&item), read.clone());
+        peer.created.lock().unwrap().insert(9001);
+        assert_eq!(
+            visible_items(queued_job(rx)),
+            [(8, 1337, 117, 823)],
+            "CREATE ran before the gear job"
+        );
+        item_visible_changed(&view, 0, None, Some(&item), read.clone());
+        view.remove_viewer(peer.session);
+        assert!(queued_job(rx).is_empty(), "departed World Session");
+        for (_, rx) in &queues {
+            assert!(
+                rx.try_recv().is_err(),
+                "owner, distant, other map/instance/Shard receive no peer job"
+            );
+        }
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 1, 0);
+        item_visible_changed(&view, 0, None, Some(&item), read);
+        for (_, rx) in &queues {
+            assert!(
+                rx.try_recv().is_err(),
+                "source Shard cannot relay after Transfer"
+            );
+        }
+    }
+
+    #[test]
+    fn visible_gear_ignores_bagged_items_and_changes_to_private_fields() {
+        let view = WorldView::new(true);
+        let anchor = CellKey::at(0, 0, 0, 0);
+        let (tx, rx) = SessionTx::with_depth(0);
+        view.add_viewer_on_shard(viewer_with_tx(2, 9002, identity(2), tx), anchor, 0);
+        view.spatial
+            .upsert_entity(EntityLayer::WorldEntity, 9001, anchor, 0, 0);
+        let read: super::ItemSlotRead = Arc::new(|_, _| panic!("no gear read needed"));
+        for slot in [19, 23, 120] {
+            let bagged = worn_item(slot);
+            item_visible_changed(&view, 0, None, Some(&bagged), read.clone());
+            item_visible_changed(&view, 0, Some(&bagged), None, read.clone());
+            item_visible_changed(
+                &view,
+                0,
+                Some(&bagged),
+                Some(&ItemInstance {
+                    enchant_id: 0,
+                    ..bagged.clone()
+                }),
+                read.clone(),
+            );
+        }
+        let old = worn_item(8);
+        let new = ItemInstance {
+            durability: 0,
+            stack_count: 3,
+            soulbound: true,
+            ..old.clone()
+        };
+        item_visible_changed(&view, 0, Some(&old), Some(&new), read);
+        assert!(rx.try_recv().is_err());
     }
 
     #[test]
