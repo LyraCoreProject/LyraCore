@@ -172,16 +172,6 @@ pub(crate) trait AuctionActionStore: Send + Sync {
     ) -> Result<AuctionPage>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct AuctionActionPlayer {
-    pub(crate) self_guid: Option<u64>,
-}
-
-pub(crate) enum AuctionActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
 enum AuctionRequest {
     Hello(wow_world_messages::vanilla::Guid),
     Owner(u32),
@@ -244,41 +234,39 @@ pub(crate) fn decode_auction_browse(body: &[u8]) -> Result<AuctionBrowseRequest>
     })
 }
 
-pub(crate) fn dispatch_auction_browse_action<St: AuctionActionStore + ?Sized>(
+fn browse<St: AuctionActionStore + ?Sized>(
     store: &St,
-    player: AuctionActionPlayer,
+    player: &ProtocolSession,
     request: AuctionBrowseRequest,
-) -> Result<AuctionActionOutcome> {
+) -> Result<ProtocolReply> {
     let Some((actor, interaction)) =
         auction_actor_interaction(store, player, request.auctioneer_guid)?
             .filter(|(_, interaction)| !interaction.refuses_interaction)
     else {
-        return Ok(AuctionActionOutcome::Handled {
-            outbound: vec![Outbound::One(
-                ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
-                    codec::build_auction_list_result(&[], 0, 0),
-                )),
-            )],
-        });
+        return Ok(ProtocolReply::from(vec![Outbound::One(
+            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
+                codec::build_auction_list_result(&[], 0, 0),
+            )),
+        )]));
     };
     let page = store.auction_query(actor, interaction.house.id, AuctionQuery::Browse(request))?;
-    Ok(AuctionActionOutcome::Handled {
-        outbound: vec![Outbound::One(
-            ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(
-                codec::build_auction_list_result(&page.rows, page.total, page.now_micros),
-            )),
-        )],
-    })
+    Ok(ProtocolReply::from(vec![Outbound::One(
+        ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(codec::build_auction_list_result(
+            &page.rows,
+            page.total,
+            page.now_micros,
+        ))),
+    )]))
 }
 
 /// Resolve the Character and auction house. Read paths apply the faction verdict; Durable
 /// Requests leave the interaction Gate to the Module.
 fn auction_actor_interaction<St: AuctionActionStore + ?Sized>(
     store: &St,
-    player: AuctionActionPlayer,
+    player: &ProtocolSession,
     auctioneer_guid: u64,
 ) -> Result<Option<(Actor, AuctionInteraction)>> {
-    let Some(actor) = player.self_guid.and_then(Actor::new) else {
+    let Some(actor) = player.self_guid().and_then(Actor::new) else {
         return Ok(None);
     };
     // A missing auctioneer or house is `None`; a failed Durable Read is a failure, not a Refusal.
@@ -286,7 +274,7 @@ fn auction_actor_interaction<St: AuctionActionStore + ?Sized>(
     Ok(interaction.map(|interaction| (actor, interaction)))
 }
 
-fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
+fn create_result(outcome: CreateAuctionOutcome) -> ProtocolReply {
     use wow_world_messages::vanilla::{
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
@@ -298,19 +286,15 @@ fn create_result(outcome: CreateAuctionOutcome) -> AuctionActionOutcome {
         CreateAuctionOutcome::NotEnoughMoney => (0, ResultTwo::ErrNotEnoughMoney),
         CreateAuctionOutcome::Database => (0, ResultTwo::ErrDatabase),
     };
-    AuctionActionOutcome::Handled {
-        outbound: vec![Outbound::One(
-            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
-                SMSG_AUCTION_COMMAND_RESULT {
-                    auction_id,
-                    action: Action::Started { result2 },
-                },
-            )),
-        )],
-    }
+    ProtocolReply::from(vec![Outbound::One(
+        ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(SMSG_AUCTION_COMMAND_RESULT {
+            auction_id,
+            action: Action::Started { result2 },
+        })),
+    )])
 }
 
-fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> AuctionActionOutcome {
+fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> ProtocolReply {
     use wow_world_messages::{
         vanilla::{
             SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
@@ -338,22 +322,18 @@ fn bid_result(auction_id: u32, outcome: PlaceBidOutcome) -> AuctionActionOutcome
         PlaceBidOutcome::BidOwn => ResultOne::ErrBidOwn,
         PlaceBidOutcome::Database => ResultOne::ErrDatabase,
     };
-    AuctionActionOutcome::Handled {
-        outbound: vec![Outbound::One(
-            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
-                SMSG_AUCTION_COMMAND_RESULT {
-                    auction_id,
-                    action: Action::BidPlaced { result },
-                },
-            )),
-        )],
-    }
+    ProtocolReply::from(vec![Outbound::One(
+        ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(SMSG_AUCTION_COMMAND_RESULT {
+            auction_id,
+            action: Action::BidPlaced { result },
+        })),
+    )])
 }
 
 /// `SMSG_AUCTION_COMMAND_RESULT` for a Cancellation (`cm:AuctionHouseHandler.cpp:423-428,441-442,
 /// 459`): the auction id with Removed and Ok, id 0 with Removed and ErrDatabase, or nothing for a
 /// seller who cannot pay the cut.
-fn cancel_result(auction_id: u32, outcome: CancelAuctionOutcome) -> AuctionActionOutcome {
+fn cancel_result(auction_id: u32, outcome: CancelAuctionOutcome) -> ProtocolReply {
     use wow_world_messages::vanilla::{
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandAction as Action,
         SMSG_AUCTION_COMMAND_RESULT_AuctionCommandResultTwo as ResultTwo,
@@ -363,172 +343,175 @@ fn cancel_result(auction_id: u32, outcome: CancelAuctionOutcome) -> AuctionActio
         CancelAuctionOutcome::Cancelled => (auction_id, ResultTwo::Ok),
         CancelAuctionOutcome::NotFound | CancelAuctionOutcome::Stale => (0, ResultTwo::ErrDatabase),
         CancelAuctionOutcome::CannotAfford => {
-            return AuctionActionOutcome::Handled {
-                outbound: Vec::new(),
-            };
+            return ProtocolReply::from(Vec::new());
         }
     };
-    AuctionActionOutcome::Handled {
-        outbound: vec![Outbound::One(
-            ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(
-                SMSG_AUCTION_COMMAND_RESULT {
-                    auction_id,
-                    action: Action::Removed { result2 },
-                },
-            )),
-        )],
-    }
+    ProtocolReply::from(vec![Outbound::One(
+        ServerOpcodeMessage::SMSG_AUCTION_COMMAND_RESULT(Box::new(SMSG_AUCTION_COMMAND_RESULT {
+            auction_id,
+            action: Action::Removed { result2 },
+        })),
+    )])
 }
 
-pub(crate) fn dispatch_auction_action<St: AuctionActionStore + ?Sized>(
-    store: &St,
-    player: AuctionActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<AuctionActionOutcome> {
-    let (auctioneer, request) = match msg {
-        ClientOpcodeMessage::MSG_AUCTION_HELLO(message) => (
-            message.auctioneer,
-            AuctionRequest::Hello(message.auctioneer),
-        ),
-        ClientOpcodeMessage::CMSG_AUCTION_LIST_ITEMS(message) => {
-            return dispatch_auction_browse_action(
-                store,
-                player,
-                AuctionBrowseRequest {
-                    auctioneer_guid: message.auctioneer.guid(),
-                    offset: message.list_start_item,
-                    name: message.searched_name,
-                    minimum_level: (message.minimum_level != 0).then_some(message.minimum_level),
-                    maximum_level: (message.maximum_level != 0).then_some(message.maximum_level),
-                    inventory_type: (message.auction_slot_id != u32::MAX)
-                        .then_some(message.auction_slot_id),
-                    item_class: (message.auction_main_category != u32::MAX)
-                        .then_some(message.auction_main_category),
-                    item_subclass: (message.auction_sub_category != u32::MAX)
-                        .then_some(message.auction_sub_category),
-                    quality: Some(message.auction_quality.as_int()),
-                    usable_only: message.usable != 0,
+pub(crate) struct Auction;
+
+impl<St: AuctionActionStore + ?Sized> ProtocolFamily<St> for Auction {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = match request {
+            ProtocolRequest::AuctionBrowse(request) => return browse(store, player, request),
+            request => request.message()?,
+        };
+        let (auctioneer, request) = match msg {
+            ClientOpcodeMessage::MSG_AUCTION_HELLO(message) => (
+                message.auctioneer,
+                AuctionRequest::Hello(message.auctioneer),
+            ),
+            ClientOpcodeMessage::CMSG_AUCTION_LIST_ITEMS(message) => {
+                return browse(
+                    store,
+                    player,
+                    AuctionBrowseRequest {
+                        auctioneer_guid: message.auctioneer.guid(),
+                        offset: message.list_start_item,
+                        name: message.searched_name,
+                        minimum_level: (message.minimum_level != 0)
+                            .then_some(message.minimum_level),
+                        maximum_level: (message.maximum_level != 0)
+                            .then_some(message.maximum_level),
+                        inventory_type: (message.auction_slot_id != u32::MAX)
+                            .then_some(message.auction_slot_id),
+                        item_class: (message.auction_main_category != u32::MAX)
+                            .then_some(message.auction_main_category),
+                        item_subclass: (message.auction_sub_category != u32::MAX)
+                            .then_some(message.auction_sub_category),
+                        quality: Some(message.auction_quality.as_int()),
+                        usable_only: message.usable != 0,
+                    },
+                );
+            }
+            ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(message) => {
+                (message.auctioneer, AuctionRequest::Owner(message.list_from))
+            }
+            ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => (
+                message.auctioneer,
+                AuctionRequest::Bidder {
+                    offset: message.start_from_page,
+                    outbid_auction_ids: message.outbid_item_ids,
                 },
-            );
+            ),
+            ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
+                let auction_id = message.auction_id;
+                let auctioneer_guid = message.auctioneer.guid();
+                let Some((actor, interaction)) =
+                    auction_actor_interaction(store, player, auctioneer_guid)?
+                else {
+                    return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
+                };
+                // A Refusal arrives as an outcome. An error is a failure with an unknown durable
+                // result, so it ends the session instead of posing as a gameplay answer.
+                let outcome = store.place_bid(PlaceBidRequest {
+                    actor,
+                    auctioneer_guid,
+                    auction_id,
+                    offer: message.price.as_int(),
+                    house_id: interaction.house.id,
+                })?;
+                return Ok(bid_result(auction_id, outcome));
+            }
+            ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
+                let auctioneer_guid = message.auctioneer.guid();
+                let Some((actor, interaction)) =
+                    auction_actor_interaction(store, player, auctioneer_guid)?
+                else {
+                    return Ok(create_result(CreateAuctionOutcome::Database));
+                };
+                let outcome = store.create_auction(CreateAuctionRequest {
+                    actor,
+                    auctioneer_guid,
+                    item_guid: message.item.guid(),
+                    start_bid: message.starting_bid,
+                    buyout: message.buyout,
+                    duration_minutes: message.auction_duration_in_minutes,
+                    house_id: interaction.house.id,
+                })?;
+                return Ok(create_result(outcome));
+            }
+            ClientOpcodeMessage::CMSG_AUCTION_REMOVE_ITEM(message) => {
+                let auction_id = message.auction_id;
+                let auctioneer_guid = message.auctioneer.guid();
+                // Vanilla ignores a Cancellation away from an auctioneer
+                // (`cm:AuctionHouseHandler.cpp:413-415`).
+                let Some((actor, interaction)) =
+                    auction_actor_interaction(store, player, auctioneer_guid)?
+                else {
+                    return Ok(ProtocolReply::from(Vec::new()));
+                };
+                let outcome = store.cancel_auction(CancelAuctionRequest {
+                    actor,
+                    auctioneer_guid,
+                    auction_id,
+                    house_id: interaction.house.id,
+                })?;
+                return Ok(cancel_result(auction_id, outcome));
+            }
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        if let (AuctionRequest::Hello(_), Some(actor)) =
+            (&request, player.self_guid().and_then(Actor::new))
+        {
+            store.resume_auction_holds(actor)?;
         }
-        ClientOpcodeMessage::CMSG_AUCTION_LIST_OWNER_ITEMS(message) => {
-            (message.auctioneer, AuctionRequest::Owner(message.list_from))
-        }
-        ClientOpcodeMessage::CMSG_AUCTION_LIST_BIDDER_ITEMS(message) => (
-            message.auctioneer,
+        let auctioneer_guid = auctioneer.guid();
+        let Some((actor, interaction)) = auction_actor_interaction(store, player, auctioneer_guid)?
+            .filter(|(_, interaction)| !interaction.refuses_interaction)
+        else {
+            return Ok(ProtocolReply::from(Vec::new()));
+        };
+        let house = interaction.house;
+        use wow_world_messages::vanilla::{AuctionHouse, MSG_AUCTION_HELLO_Server};
+        let message = match request {
+            AuctionRequest::Hello(auctioneer) => {
+                ServerOpcodeMessage::MSG_AUCTION_HELLO(Box::new(MSG_AUCTION_HELLO_Server {
+                    auctioneer,
+                    auction_house: AuctionHouse::try_from(house.id)
+                        .map_err(|error| anyhow!("imported auction house {}: {error}", house.id))?,
+                }))
+            }
+            AuctionRequest::Owner(offset) => {
+                let page = store.auction_query(actor, house.id, AuctionQuery::Owner { offset })?;
+                ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
+                    codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
+                ))
+            }
             AuctionRequest::Bidder {
-                offset: message.start_from_page,
-                outbid_auction_ids: message.outbid_item_ids,
-            },
-        ),
-        ClientOpcodeMessage::CMSG_AUCTION_PLACE_BID(message) => {
-            let auction_id = message.auction_id;
-            let auctioneer_guid = message.auctioneer.guid();
-            let Some((actor, interaction)) =
-                auction_actor_interaction(store, player, auctioneer_guid)?
-            else {
-                return Ok(bid_result(auction_id, PlaceBidOutcome::Database));
-            };
-            // A Refusal arrives as an outcome. An error is a failure with an unknown durable
-            // result, so it ends the session instead of posing as a gameplay answer.
-            let outcome = store.place_bid(PlaceBidRequest {
-                actor,
-                auctioneer_guid,
-                auction_id,
-                offer: message.price.as_int(),
-                house_id: interaction.house.id,
-            })?;
-            return Ok(bid_result(auction_id, outcome));
-        }
-        ClientOpcodeMessage::CMSG_AUCTION_SELL_ITEM(message) => {
-            let auctioneer_guid = message.auctioneer.guid();
-            let Some((actor, interaction)) =
-                auction_actor_interaction(store, player, auctioneer_guid)?
-            else {
-                return Ok(create_result(CreateAuctionOutcome::Database));
-            };
-            let outcome = store.create_auction(CreateAuctionRequest {
-                actor,
-                auctioneer_guid,
-                item_guid: message.item.guid(),
-                start_bid: message.starting_bid,
-                buyout: message.buyout,
-                duration_minutes: message.auction_duration_in_minutes,
-                house_id: interaction.house.id,
-            })?;
-            return Ok(create_result(outcome));
-        }
-        ClientOpcodeMessage::CMSG_AUCTION_REMOVE_ITEM(message) => {
-            let auction_id = message.auction_id;
-            let auctioneer_guid = message.auctioneer.guid();
-            // Vanilla ignores a Cancellation away from an auctioneer
-            // (`cm:AuctionHouseHandler.cpp:413-415`).
-            let Some((actor, interaction)) =
-                auction_actor_interaction(store, player, auctioneer_guid)?
-            else {
-                return Ok(AuctionActionOutcome::Handled {
-                    outbound: Vec::new(),
-                });
-            };
-            let outcome = store.cancel_auction(CancelAuctionRequest {
-                actor,
-                auctioneer_guid,
-                auction_id,
-                house_id: interaction.house.id,
-            })?;
-            return Ok(cancel_result(auction_id, outcome));
-        }
-        other => return Ok(AuctionActionOutcome::PassThrough(other)),
-    };
-    if let (AuctionRequest::Hello(_), Some(actor)) =
-        (&request, player.self_guid.and_then(Actor::new))
-    {
-        store.resume_auction_holds(actor)?;
+                offset,
+                outbid_auction_ids,
+            } => {
+                let page = store.auction_query(
+                    actor,
+                    house.id,
+                    AuctionQuery::Bidder {
+                        offset,
+                        outbid_auction_ids,
+                    },
+                )?;
+                ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
+                    codec::build_auction_bidder_list_result(
+                        &page.rows,
+                        page.total,
+                        page.now_micros,
+                    ),
+                ))
+            }
+        };
+        Ok(ProtocolReply::from(vec![Outbound::One(message)]))
     }
-    let auctioneer_guid = auctioneer.guid();
-    let Some((actor, interaction)) = auction_actor_interaction(store, player, auctioneer_guid)?
-        .filter(|(_, interaction)| !interaction.refuses_interaction)
-    else {
-        return Ok(AuctionActionOutcome::Handled {
-            outbound: Vec::new(),
-        });
-    };
-    let house = interaction.house;
-    use wow_world_messages::vanilla::{AuctionHouse, MSG_AUCTION_HELLO_Server};
-    let message = match request {
-        AuctionRequest::Hello(auctioneer) => {
-            ServerOpcodeMessage::MSG_AUCTION_HELLO(Box::new(MSG_AUCTION_HELLO_Server {
-                auctioneer,
-                auction_house: AuctionHouse::try_from(house.id)
-                    .map_err(|error| anyhow!("imported auction house {}: {error}", house.id))?,
-            }))
-        }
-        AuctionRequest::Owner(offset) => {
-            let page = store.auction_query(actor, house.id, AuctionQuery::Owner { offset })?;
-            ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(Box::new(
-                codec::build_auction_owner_list_result(&page.rows, page.total, page.now_micros),
-            ))
-        }
-        AuctionRequest::Bidder {
-            offset,
-            outbid_auction_ids,
-        } => {
-            let page = store.auction_query(
-                actor,
-                house.id,
-                AuctionQuery::Bidder {
-                    offset,
-                    outbid_auction_ids,
-                },
-            )?;
-            ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(Box::new(
-                codec::build_auction_bidder_list_result(&page.rows, page.total, page.now_micros),
-            ))
-        }
-    };
-    Ok(AuctionActionOutcome::Handled {
-        outbound: vec![Outbound::One(message)],
-    })
 }
 
 #[cfg(test)]
@@ -746,15 +729,13 @@ pub(super) mod tests {
             refuses_interaction: true,
             ..valid_interaction()
         }));
-        let outcome = dispatch_auction_browse_action(
+        let outcome = Auction::handle(
             &store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            decode_auction_browse(&raw_browse(u32::MAX)).unwrap(),
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::AuctionBrowse(decode_auction_browse(&raw_browse(u32::MAX)).unwrap()),
         )
         .unwrap();
-        let AuctionActionOutcome::Handled { outbound } = outcome else {
-            panic!("browse must be handled")
-        };
+        let outbound = outcome.outbound;
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(message))]
@@ -796,19 +777,17 @@ pub(super) mod tests {
             usable_only: false,
         };
 
-        let outcome = dispatch_auction_browse_action(
+        let outcome = Auction::handle(
             &store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            request.clone(),
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::AuctionBrowse(request.clone()),
         )
         .unwrap();
         assert_eq!(
             store.queries.lock().unwrap().as_slice(),
             &[(7, 4, AuctionQuery::Browse(request))]
         );
-        let AuctionActionOutcome::Handled { outbound } = outcome else {
-            panic!("browse must be handled")
-        };
+        let outbound = outcome.outbound;
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(message))]
@@ -839,14 +818,16 @@ pub(super) mod tests {
             total: 52,
             now_micros: 1_000_000,
         });
-        let outcome = dispatch_auction_action(
+        let outcome = Auction::handle(
             &store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            CMSG_AUCTION_LIST_OWNER_ITEMS {
-                auctioneer: Guid::new(42),
-                list_from: 50,
-            }
-            .into(),
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::Message(
+                CMSG_AUCTION_LIST_OWNER_ITEMS {
+                    auctioneer: Guid::new(42),
+                    list_from: 50,
+                }
+                .into(),
+            ),
         )
         .unwrap();
 
@@ -854,9 +835,7 @@ pub(super) mod tests {
             store.queries.lock().unwrap().as_slice(),
             &[(7, 4, AuctionQuery::Owner { offset: 50 })]
         );
-        let AuctionActionOutcome::Handled { outbound } = outcome else {
-            panic!("owner view must be handled")
-        };
+        let outbound = outcome.outbound;
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_OWNER_LIST_RESULT(message))]
@@ -888,15 +867,17 @@ pub(super) mod tests {
             total: 52,
             now_micros: 1_000_000,
         });
-        let outcome = dispatch_auction_action(
+        let outcome = Auction::handle(
             &store,
-            AuctionActionPlayer { self_guid: Some(8) },
-            CMSG_AUCTION_LIST_BIDDER_ITEMS {
-                auctioneer: Guid::new(42),
-                start_from_page: 50,
-                outbid_item_ids: vec![19, 88],
-            }
-            .into(),
+            &mut ProtocolSession::in_world(7, 8),
+            ProtocolRequest::Message(
+                CMSG_AUCTION_LIST_BIDDER_ITEMS {
+                    auctioneer: Guid::new(42),
+                    start_from_page: 50,
+                    outbid_item_ids: vec![19, 88],
+                }
+                .into(),
+            ),
         )
         .unwrap();
 
@@ -911,9 +892,7 @@ pub(super) mod tests {
                 },
             )]
         );
-        let AuctionActionOutcome::Handled { outbound } = outcome else {
-            panic!("bidder view must be handled")
-        };
+        let outbound = outcome.outbound;
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_BIDDER_LIST_RESULT(message))]
@@ -927,39 +906,35 @@ pub(super) mod tests {
     }
 
     fn hello_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
-        match dispatch_auction_action(
+        Ok(Auction::handle(
             store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            MSG_AUCTION_HELLO_Client {
-                auctioneer: Guid::new(42),
-            }
-            .into(),
-        )? {
-            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
-            AuctionActionOutcome::PassThrough(_) => {
-                panic!("auction hello must never pass beyond its focused seam")
-            }
-        }
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::Message(
+                MSG_AUCTION_HELLO_Client {
+                    auctioneer: Guid::new(42),
+                }
+                .into(),
+            ),
+        )?
+        .outbound)
     }
 
     fn sell_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
-        match dispatch_auction_action(
+        Ok(Auction::handle(
             store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            CMSG_AUCTION_SELL_ITEM {
-                auctioneer: Guid::new(42),
-                item: Guid::new(70),
-                starting_bid: 100,
-                buyout: 500,
-                auction_duration_in_minutes: 480,
-            }
-            .into(),
-        )? {
-            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
-            AuctionActionOutcome::PassThrough(_) => {
-                panic!("auction sell must never pass beyond its focused seam")
-            }
-        }
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::Message(
+                CMSG_AUCTION_SELL_ITEM {
+                    auctioneer: Guid::new(42),
+                    item: Guid::new(70),
+                    starting_bid: 100,
+                    buyout: 500,
+                    auction_duration_in_minutes: 480,
+                }
+                .into(),
+            ),
+        )?
+        .outbound)
     }
 
     fn session_error(result: Result<Vec<Outbound>>, what: &str) -> anyhow::Error {
@@ -970,39 +945,37 @@ pub(super) mod tests {
     }
 
     fn bid_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
-        match dispatch_auction_action(
+        Ok(Auction::handle(
             store,
-            AuctionActionPlayer { self_guid: Some(8) },
-            CMSG_AUCTION_PLACE_BID {
-                auctioneer: Guid::new(42),
-                auction_id: 41,
-                price: Gold::new(107),
-            }
-            .into(),
-        )? {
-            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
-            AuctionActionOutcome::PassThrough(_) => {
-                panic!("auction bid must never pass beyond its focused seam")
-            }
-        }
+            &mut ProtocolSession::in_world(7, 8),
+            ProtocolRequest::Message(
+                CMSG_AUCTION_PLACE_BID {
+                    auctioneer: Guid::new(42),
+                    auction_id: 41,
+                    price: Gold::new(107),
+                }
+                .into(),
+            ),
+        )?
+        .outbound)
     }
 
     #[test]
     fn a_reachable_auctioneer_opens_its_imported_house() {
         let store = store_with(Some(valid_interaction()));
-        let outcome = dispatch_auction_action(
+        let outcome = Auction::handle(
             &store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            MSG_AUCTION_HELLO_Client {
-                auctioneer: Guid::new(42),
-            }
-            .into(),
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::Message(
+                MSG_AUCTION_HELLO_Client {
+                    auctioneer: Guid::new(42),
+                }
+                .into(),
+            ),
         )
         .unwrap();
 
-        let AuctionActionOutcome::Handled { outbound } = outcome else {
-            panic!("auction hello must be handled by the auction seam");
-        };
+        let outbound = outcome.outbound;
         assert_eq!(outbound.len(), 1);
         let Outbound::One(ServerOpcodeMessage::MSG_AUCTION_HELLO(message)) = &outbound[0] else {
             panic!("auction hello must reply with MSG_AUCTION_HELLO");
@@ -1034,15 +1007,13 @@ pub(super) mod tests {
         ];
 
         for (index, request) in requests.into_iter().enumerate() {
-            let outcome = dispatch_auction_action(
+            let outcome = Auction::handle(
                 &store_with(Some(valid_interaction())),
-                AuctionActionPlayer { self_guid: Some(7) },
-                request,
+                &mut ProtocolSession::in_world(7, 7),
+                request.into(),
             )
             .unwrap();
-            let AuctionActionOutcome::Handled { outbound } = outcome else {
-                panic!("auction query {index} must be handled by the auction seam");
-            };
+            let outbound = outcome.outbound;
             assert_eq!(outbound.len(), 1, "query {index} has one ordered reply");
             match (index, &outbound[0]) {
                 (0, Outbound::One(ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(result))) => {
@@ -1363,20 +1334,18 @@ pub(super) mod tests {
     }
 
     fn cancel_outbound(store: &InMemoryAuctionActions) -> Result<Vec<Outbound>> {
-        match dispatch_auction_action(
+        Ok(Auction::handle(
             store,
-            AuctionActionPlayer { self_guid: Some(7) },
-            wow_world_messages::vanilla::CMSG_AUCTION_REMOVE_ITEM {
-                auctioneer: Guid::new(42),
-                auction_id: 41,
-            }
-            .into(),
-        )? {
-            AuctionActionOutcome::Handled { outbound } => Ok(outbound),
-            AuctionActionOutcome::PassThrough(_) => {
-                panic!("auction cancel must never pass beyond its focused seam")
-            }
-        }
+            &mut ProtocolSession::in_world(7, 7),
+            ProtocolRequest::Message(
+                wow_world_messages::vanilla::CMSG_AUCTION_REMOVE_ITEM {
+                    auctioneer: Guid::new(42),
+                    auction_id: 41,
+                }
+                .into(),
+            ),
+        )?
+        .outbound)
     }
 
     /// The encoded `SMSG_AUCTION_COMMAND_RESULT` body of the one packet in `outbound`.

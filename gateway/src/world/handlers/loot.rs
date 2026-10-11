@@ -2,6 +2,7 @@
 
 use super::super::*;
 use super::combat::ignore_refusal;
+use crate::world::family::{ProtocolFamily, ProtocolReply, ProtocolRequest, ProtocolSession};
 use lyracore_shared::loot::LootRefusal;
 use wow_world_messages::vanilla::LootMethodError;
 
@@ -85,30 +86,6 @@ pub(crate) struct OpenLootState {
     pub(crate) target_guid: Option<u64>,
 }
 
-/// Authenticated player facts needed by loot-window operations.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct LootWindowPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
-
-impl LootWindowPlayer {
-    fn actor(self) -> Option<Actor> {
-        self.self_guid.and_then(Actor::new)
-    }
-}
-
-/// Records the durable request already executed while producing an outcome; it is not a command
-/// for the outcome consumer to execute again.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) enum LootWindowDurableRequest {
-    UseGameObject { target_guid: u64 },
-    OpenCreature { target_guid: u64 },
-    SkinCreature { target_guid: u64 },
-    TakeMoney { target_guid: u64 },
-    TakeItem { target_guid: u64, loot_slot: u8 },
-}
-
 /// The client traffic a loot Refusal earns. An unanswered Refusal stays silent.
 fn refusal_outbound(refusal: LootWindowRefusal, target_guid: u64) -> Vec<Outbound> {
     refusal
@@ -135,10 +112,10 @@ fn refusal_transition(
     (next_state, refusal_outbound(refusal, target_guid))
 }
 
-fn log_refusal(player: LootWindowPlayer, refusal: LootWindowRefusal) {
+fn log_refusal(session: &ProtocolSession, refusal: LootWindowRefusal) {
     log::debug!(
         "world: loot request refused (account {}): {refusal:?}",
-        player.account_id
+        session.account_id
     );
 }
 
@@ -148,352 +125,323 @@ fn finish_loot_action(status: LootActionStatus) {
     }
 }
 
-/// A handled loot request returns all session state and client traffic to apply in order.
-pub(crate) enum LootWindowOutcome {
-    Handled {
-        next_state: OpenLootState,
-        durable_request: Option<LootWindowDurableRequest>,
-        outbound: Vec<Outbound>,
-    },
-    PassThrough(ClientOpcodeMessage),
-}
-
 /// Map a client request through the loot-window lifecycle without owning session transport.
-pub(crate) fn dispatch_loot_window<St: LootWindowStore + ?Sized>(
-    store: &St,
-    player: LootWindowPlayer,
-    current_state: OpenLootState,
-    msg: ClientOpcodeMessage,
-) -> Result<LootWindowOutcome> {
-    match msg {
-        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
-            let Some(actor) = player.actor() else {
-                return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
-                    durable_request: None,
-                    outbound: Vec::new(),
-                });
-            };
-            let target_guid = request.guid.guid();
-            let durable_request = Some(LootWindowDurableRequest::UseGameObject { target_guid });
-            if let LootWindowRequestStatus::Refused(refusal) =
-                store.use_gameobject(actor, target_guid)?
-            {
-                log_refusal(player, refusal);
-                let (next_state, outbound) =
-                    refusal_transition(refusal, current_state, target_guid);
-                return Ok(LootWindowOutcome::Handled {
-                    next_state,
-                    durable_request,
-                    outbound,
-                });
-            }
-            let items = store.loot_target_items(target_guid, actor.guid())?;
-            if items.is_empty() {
-                return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
-                    durable_request,
-                    outbound: Vec::new(),
-                });
-            }
-            let (opcode, body) = codec::build_loot_response_raw(target_guid, 0, &items);
-            Ok(LootWindowOutcome::Handled {
-                next_state: OpenLootState {
-                    target_guid: Some(target_guid),
-                },
-                durable_request,
-                outbound: vec![Outbound::Raw { opcode, body }],
-            })
-        }
-        ClientOpcodeMessage::CMSG_LOOT(request) => {
-            let Some(viewer) = player.actor() else {
-                return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
-                    durable_request: None,
-                    outbound: Vec::new(),
-                });
-            };
-            let target_guid = request.guid.guid();
-            let open_request = LootWindowDurableRequest::OpenCreature { target_guid };
-            if let LootWindowRequestStatus::Refused(refusal) =
-                store.open_creature_loot(viewer, target_guid)?
-            {
-                log_refusal(player, refusal);
-                let (next_state, outbound) =
-                    refusal_transition(refusal, current_state, target_guid);
-                return Ok(LootWindowOutcome::Handled {
-                    next_state,
-                    durable_request: Some(open_request),
-                    outbound,
-                });
-            }
-            let money = store.loot_target_money(target_guid)?;
-            let items = store.loot_target_items(target_guid, viewer.guid())?;
-            let durable_request = if items.is_empty() && money == 0 {
-                // Skinning an empty corpse is opportunistic: a Refusal still shows the empty window.
-                store.skin_corpse(viewer, target_guid)?;
-                Some(LootWindowDurableRequest::SkinCreature { target_guid })
-            } else {
-                Some(open_request)
-            };
-            let (opcode, body) = codec::build_loot_response_raw(target_guid, money, &items);
-            Ok(LootWindowOutcome::Handled {
-                next_state: OpenLootState {
-                    target_guid: Some(target_guid),
-                },
-                durable_request,
-                outbound: vec![Outbound::Raw { opcode, body }],
-            })
-        }
-        ClientOpcodeMessage::CMSG_LOOT_MONEY => {
-            let (Some(actor), Some(target_guid)) = (player.actor(), current_state.target_guid)
-            else {
-                return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
-                    durable_request: None,
-                    outbound: Vec::new(),
-                });
-            };
-            let durable_request = LootWindowDurableRequest::TakeMoney { target_guid };
-            let (next_state, outbound) = match store.loot_money(actor, target_guid)? {
-                LootWindowRequestStatus::Applied => (
-                    current_state,
-                    vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)],
-                ),
-                LootWindowRequestStatus::Refused(refusal) => {
-                    log_refusal(player, refusal);
-                    refusal_transition(refusal, current_state, target_guid)
+pub(crate) struct LootWindow;
+
+impl<St: LootWindowStore + ?Sized> ProtocolFamily<St> for LootWindow {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let current_state = match &session.state {
+            WorldState::InWorld(world) => world.open_loot,
+            WorldState::CharSelect => OpenLootState::default(),
+        };
+        match msg {
+            ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
+                let Some(actor) = session.actor() else {
+                    return Ok(ProtocolReply::default());
+                };
+                let target_guid = request.guid.guid();
+                if let LootWindowRequestStatus::Refused(refusal) =
+                    store.use_gameobject(actor, target_guid)?
+                {
+                    log_refusal(session, refusal);
+                    let (next_state, outbound) =
+                        refusal_transition(refusal, current_state, target_guid);
+                    return Ok({
+                        if let WorldState::InWorld(world) = &mut session.state {
+                            world.open_loot = next_state;
+                        }
+                        ProtocolReply::from(outbound)
+                    });
                 }
-            };
-            Ok(LootWindowOutcome::Handled {
-                next_state,
-                durable_request: Some(durable_request),
-                outbound,
-            })
-        }
-        ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(request) => {
-            let (Some(actor), Some(target_guid)) = (player.actor(), current_state.target_guid)
-            else {
-                return Ok(LootWindowOutcome::Handled {
-                    next_state: current_state,
-                    durable_request: None,
-                    outbound: Vec::new(),
-                });
-            };
-            let durable_request = LootWindowDurableRequest::TakeItem {
-                target_guid,
-                loot_slot: request.item_slot,
-            };
-            let (next_state, outbound) =
-                match store.take_loot(actor, target_guid, request.item_slot)? {
+                let items = store.loot_target_items(target_guid, actor.guid())?;
+                if items.is_empty() {
+                    return Ok(ProtocolReply::default());
+                }
+                let (opcode, body) = codec::build_loot_response_raw(target_guid, 0, &items);
+                Ok({
+                    if let WorldState::InWorld(world) = &mut session.state {
+                        world.open_loot = OpenLootState {
+                            target_guid: Some(target_guid),
+                        };
+                    }
+                    ProtocolReply::from(vec![Outbound::Raw { opcode, body }])
+                })
+            }
+            ClientOpcodeMessage::CMSG_LOOT(request) => {
+                let Some(viewer) = session.actor() else {
+                    return Ok(ProtocolReply::default());
+                };
+                let target_guid = request.guid.guid();
+                if let LootWindowRequestStatus::Refused(refusal) =
+                    store.open_creature_loot(viewer, target_guid)?
+                {
+                    log_refusal(session, refusal);
+                    let (next_state, outbound) =
+                        refusal_transition(refusal, current_state, target_guid);
+                    return Ok({
+                        if let WorldState::InWorld(world) = &mut session.state {
+                            world.open_loot = next_state;
+                        }
+                        ProtocolReply::from(outbound)
+                    });
+                }
+                let money = store.loot_target_money(target_guid)?;
+                let items = store.loot_target_items(target_guid, viewer.guid())?;
+                if items.is_empty() && money == 0 {
+                    // Skinning an empty corpse is opportunistic: a Refusal still shows the empty window.
+                    store.skin_corpse(viewer, target_guid)?;
+                }
+                let (opcode, body) = codec::build_loot_response_raw(target_guid, money, &items);
+                Ok({
+                    if let WorldState::InWorld(world) = &mut session.state {
+                        world.open_loot = OpenLootState {
+                            target_guid: Some(target_guid),
+                        };
+                    }
+                    ProtocolReply::from(vec![Outbound::Raw { opcode, body }])
+                })
+            }
+            ClientOpcodeMessage::CMSG_LOOT_MONEY => {
+                let (Some(actor), Some(target_guid)) = (session.actor(), current_state.target_guid)
+                else {
+                    return Ok(ProtocolReply::default());
+                };
+                let (next_state, outbound) = match store.loot_money(actor, target_guid)? {
                     LootWindowRequestStatus::Applied => (
                         current_state,
-                        vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_REMOVED(
-                            codec::build_loot_removed(request.item_slot),
-                        ))],
+                        vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)],
                     ),
                     LootWindowRequestStatus::Refused(refusal) => {
-                        log_refusal(player, refusal);
+                        log_refusal(session, refusal);
                         refusal_transition(refusal, current_state, target_guid)
                     }
                 };
-            Ok(LootWindowOutcome::Handled {
-                next_state,
-                durable_request: Some(durable_request),
-                outbound,
-            })
+                Ok({
+                    if let WorldState::InWorld(world) = &mut session.state {
+                        world.open_loot = next_state;
+                    }
+                    ProtocolReply::from(outbound)
+                })
+            }
+            ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(request) => {
+                let (Some(actor), Some(target_guid)) = (session.actor(), current_state.target_guid)
+                else {
+                    return Ok(ProtocolReply::default());
+                };
+                let (next_state, outbound) =
+                    match store.take_loot(actor, target_guid, request.item_slot)? {
+                        LootWindowRequestStatus::Applied => (
+                            current_state,
+                            vec![Outbound::One(ServerOpcodeMessage::SMSG_LOOT_REMOVED(
+                                codec::build_loot_removed(request.item_slot),
+                            ))],
+                        ),
+                        LootWindowRequestStatus::Refused(refusal) => {
+                            log_refusal(session, refusal);
+                            refusal_transition(refusal, current_state, target_guid)
+                        }
+                    };
+                Ok({
+                    if let WorldState::InWorld(world) = &mut session.state {
+                        world.open_loot = next_state;
+                    }
+                    ProtocolReply::from(outbound)
+                })
+            }
+            ClientOpcodeMessage::CMSG_LOOT_RELEASE(request) => Ok({
+                if let WorldState::InWorld(world) = &mut session.state {
+                    world.open_loot = OpenLootState::default();
+                }
+                ProtocolReply::from(vec![Outbound::One(
+                    ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(
+                        codec::build_loot_release_response(request.guid.guid()),
+                    )),
+                )])
+            }),
+            other => Err(anyhow!("request routed to LootWindow: {other}")),
         }
-        ClientOpcodeMessage::CMSG_LOOT_RELEASE(request) => Ok(LootWindowOutcome::Handled {
-            next_state: OpenLootState::default(),
-            durable_request: None,
-            outbound: vec![Outbound::One(
-                ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(Box::new(
-                    codec::build_loot_release_response(request.guid.guid()),
-                )),
-            )],
-        }),
-        other => Ok(LootWindowOutcome::PassThrough(other)),
     }
 }
 
-/// Remaining group-loot, non-window GameObject, and death-recovery operations not yet migrated to
-/// a focused action interface.
-pub(crate) fn handle_loot<
-    St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized,
->(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    let actor = social::self_guid(conn).and_then(Actor::new);
-    match msg {
-        // Group loot methods: a need/greed vote, and the master looter's
-        // explicit assign. Both are per-action — a rejection (no roll open, already voted, not the
-        // master) is logged + ignored rather than tearing the session; the live vote/winner/master
-        // packets ride the `game_group_event` roll relay (`stdb/subscriptions.rs`), not a direct
-        // reply here.
-        ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
-            let corpse_guid = c.item.guid();
-            let vote = c.vote.as_int();
-            // Unsharded, `loot::run_vote` is exactly the call above (`store.loot_roll`);
-            // sharded, it routes to realm-core instead, so the Actor it votes as must be the one
-            // THIS socket authenticated with, never a literal from the packet.
-            let actor = actor.ok_or_else(|| anyhow!("CMSG_LOOT_ROLL before world entry"))?;
-            finish_loot_action(loot::run_vote(
-                store,
-                actor,
-                corpse_guid,
-                c.item_slot,
-                vote,
-            )?);
-        }
-        ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => {
-            let corpse_guid = c.loot.guid();
-            let target_guid = c.player.guid();
-            let actor = actor.ok_or_else(|| anyhow!("CMSG_LOOT_MASTER_GIVE before world entry"))?;
-            finish_loot_action(store.loot_master_give(
-                actor,
-                corpse_guid,
-                c.slot_id,
-                target_guid,
-            )?);
-        }
-        ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
-            let Some(actor) = actor else {
-                return Ok(None);
-            };
-            let target_guid = request.guid.guid();
-            match store.use_gameobject(actor, target_guid)? {
-                LootWindowRequestStatus::Applied => {
-                    let items = store.loot_target_items(target_guid, actor.guid())?;
-                    if !items.is_empty() {
-                        if let WorldState::InWorld(iw) = &mut conn.state {
-                            iw.open_loot = OpenLootState {
-                                target_guid: Some(target_guid),
-                            };
+/// Handle loot rolls, general GameObject use and death recovery.
+pub(crate) struct Loot;
+
+impl<St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingStore + ?Sized>
+    ProtocolFamily<St> for Loot
+{
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let mut outbound = Vec::new();
+        let actor = session.actor();
+        match msg {
+            // Group loot methods: a need/greed vote, and the master looter's
+            // explicit assign. Both are per-action — a rejection (no roll open, already voted, not the
+            // master) is logged + ignored rather than tearing the session; the live vote/winner/master
+            // packets ride the `game_group_event` roll relay (`stdb/subscriptions.rs`), not a direct
+            // reply here.
+            ClientOpcodeMessage::CMSG_LOOT_ROLL(c) => {
+                let corpse_guid = c.item.guid();
+                let vote = c.vote.as_int();
+                // Unsharded, `loot::run_vote` is exactly the call above (`store.loot_roll`);
+                // sharded, it routes to realm-core instead, so the Actor it votes as must be the one
+                // THIS socket authenticated with, never a literal from the packet.
+                let actor = actor.ok_or_else(|| anyhow!("CMSG_LOOT_ROLL before world entry"))?;
+                finish_loot_action(loot::run_vote(
+                    store,
+                    actor,
+                    corpse_guid,
+                    c.item_slot,
+                    vote,
+                )?);
+            }
+            ClientOpcodeMessage::CMSG_LOOT_MASTER_GIVE(c) => {
+                let corpse_guid = c.loot.guid();
+                let target_guid = c.player.guid();
+                let actor =
+                    actor.ok_or_else(|| anyhow!("CMSG_LOOT_MASTER_GIVE before world entry"))?;
+                finish_loot_action(store.loot_master_give(
+                    actor,
+                    corpse_guid,
+                    c.slot_id,
+                    target_guid,
+                )?);
+            }
+            ClientOpcodeMessage::CMSG_GAMEOBJ_USE(request) => {
+                let Some(actor) = actor else {
+                    return Ok(outbound.into());
+                };
+                let target_guid = request.guid.guid();
+                match store.use_gameobject(actor, target_guid)? {
+                    LootWindowRequestStatus::Applied => {
+                        let items = store.loot_target_items(target_guid, actor.guid())?;
+                        if !items.is_empty() {
+                            if let WorldState::InWorld(iw) = &mut session.state {
+                                iw.open_loot = OpenLootState {
+                                    target_guid: Some(target_guid),
+                                };
+                            }
+                            let (opcode, body) =
+                                codec::build_loot_response_raw(target_guid, 0, &items);
+                            outbound.push(Outbound::Raw { opcode, body });
                         }
-                        let (opcode, body) = codec::build_loot_response_raw(target_guid, 0, &items);
-                        send(tx, Outbound::Raw { opcode, body })?;
+                    }
+                    LootWindowRequestStatus::Refused(refusal) => {
+                        if refusal.loot_error().is_some() {
+                            if let WorldState::InWorld(iw) = &mut session.state {
+                                iw.open_loot = OpenLootState::default();
+                            }
+                        }
+                        outbound.extend(refusal_outbound(refusal, target_guid));
                     }
                 }
-                LootWindowRequestStatus::Refused(refusal) => {
-                    if refusal.loot_error().is_some() {
-                        if let WorldState::InWorld(iw) = &mut conn.state {
-                            iw.open_loot = OpenLootState::default();
-                        }
-                    }
-                    for outbound in refusal_outbound(refusal, target_guid) {
-                        send(tx, outbound)?;
-                    }
-                }
             }
-        }
-        // Enter an area trigger (CMSG_AREATRIGGER): the client fires this when the player physically
-        // walks into a trigger zone (e.g. a mine for an "explore" quest). The module credits any active
-        // explore quest tied to the trigger id. A transient/no-match result is logged + ignored.
-        ClientOpcodeMessage::CMSG_AREATRIGGER(a) => {
-            if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
-                super::trainer::settle_per_action(
-                    "enter_areatrigger",
-                    conn.account_id,
-                    store.enter_areatrigger(actor, a.trigger_id),
-                )?;
-            }
-        }
-        // Gameobject template query (CMSG_GAMEOBJECT_QUERY): the client asks for a GO's name/type/display
-        // before it renders/interacts. Reply with the template, or the not-found form.
-        ClientOpcodeMessage::CMSG_GAMEOBJECT_QUERY(q) => {
-            let tmpl = store.gameobject_template(q.entry_id)?;
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
-                    Box::new(codec::build_gameobject_query_response(
-                        q.entry_id,
-                        tmpl.as_ref(),
-                    )),
-                )),
-            )?;
-        }
-        // Release Spirit after death. The client sends this (empty body) when the player
-        // clicks Release on the death screen. Revive in place at full health; the restored health
-        // replicates via the on_update VALUES relay and the client leaves the death screen.
-        // SMSG_CORPSE_RECLAIM_DELAY is now relay-driven (the escalated per-corpse
-        // delay, not a flat 30s) — see `on_corpse_insert` in `stdb/subscriptions.rs`, which fires off
-        // the SAME `game_corpse` insert `repop`'s reducer call just caused, so no explicit send here.
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST => {
-            if let Some(actor) = actor {
-                ignore_refusal("repop", conn.account_id, store.repop(actor))?;
-            }
-        }
-        // Corpse location query: the client asks where the player's corpse is to draw the
-        // map marker + offer "Reclaim Corpse" near it. Reply with the corpse's position, or NotFound.
-        ClientOpcodeMessage::MSG_CORPSE_QUERY => {
-            if let WorldState::InWorld(iw) = &conn.state {
-                let loc = store.corpse_location(iw.self_guid)?;
-                send(
-                    tx,
-                    Outbound::One(ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(
-                        codec::build_corpse_query_response(loc)?,
-                    ))),
-                )?;
-            }
-        }
-        // Reclaim your corpse: the ghost, near its corpse and past the 30s delay, resurrects
-        // at 50%. The module validates ownership/ghost/range/delay; a failure (too far, too soon, not
-        // a ghost) is expected and silently ignored — the client just stays a ghost.
-        ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(r) => {
-            if let Some(actor) = actor {
-                let result = store.reclaim_corpse(actor, r.guid.guid());
-                ignore_refusal("reclaim_corpse", conn.account_id, result)?;
-            }
-        }
-        // Resurrection accept-prompt response: the dead player answered the SMSG_RESURRECT_REQUEST
-        // offer. `status` is vanilla's accept(1)/decline(0) byte; the offer's guid is ignored (mirrors
-        // `reclaim_corpse`'s own-corpse derivation — the module resolves the pending offer from the
-        // CALLER via `ctx.sender()`, never the wire guid). A failure (no pending offer — already
-        // answered/lapsed) is expected and silently ignored.
-        ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(r) => {
-            if let Some(actor) = actor {
-                let result = store.resurrect_response(actor, r.status != 0);
-                ignore_refusal("resurrect_response", conn.account_id, result)?;
-            }
-        }
-        // The death dialog's second button: use the Self-Resurrection Option the Module wrote into
-        // PLAYER_SELF_RES_SPELL. The revive replicates through the entity VALUES relay. A Refusal
-        // (already used, already alive) is expected after a race and sends nothing.
-        ClientOpcodeMessage::CMSG_SELF_RES => {
-            if let Some(actor) = actor {
-                ignore_refusal(
-                    "self_resurrect",
-                    conn.account_id,
-                    store.self_resurrect(actor),
-                )?;
-            }
-        }
-        // Spirit-Healer resurrection: a ghost activated the graveyard Spirit Healer (npc_flags
-        // SPIRITHEALER). The module res's in place at 50% + applies Resurrection Sickness; on success
-        // reply with SMSG_SPIRIT_HEALER_CONFIRM (echoing the healer's guid) so the client closes the
-        // dialog. The res itself replicates via the entity VALUES relay (health > 0 + cleared ghost
-        // bits), exactly like reclaim_corpse. A failure (not a ghost) is per-action — log + ignore.
-        ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(s) => {
-            if let Some(actor) = actor {
-                let result = store.spirit_healer_res(actor, s.guid.guid());
-                let revived = result.is_ok();
-                ignore_refusal("spirit_healer_res", conn.account_id, result)?;
-                if revived {
-                    send(
-                        tx,
-                        Outbound::One(ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(
-                            SMSG_SPIRIT_HEALER_CONFIRM { guid: s.guid },
-                        )),
+            // Enter an area trigger (CMSG_AREATRIGGER): the client fires this when the player physically
+            // walks into a trigger zone (e.g. a mine for an "explore" quest). The module credits any active
+            // explore quest tied to the trigger id. A transient/no-match result is logged + ignored.
+            ClientOpcodeMessage::CMSG_AREATRIGGER(a) => {
+                if let Some(actor) = session.actor() {
+                    super::trainer::settle_per_action(
+                        "enter_areatrigger",
+                        session.account_id,
+                        store.enter_areatrigger(actor, a.trigger_id),
                     )?;
                 }
             }
+            // Gameobject template query (CMSG_GAMEOBJECT_QUERY): the client asks for a GO's name/type/display
+            // before it renders/interacts. Reply with the template, or the not-found form.
+            ClientOpcodeMessage::CMSG_GAMEOBJECT_QUERY(q) => {
+                let tmpl = store.gameobject_template(q.entry_id)?;
+                outbound.push(Outbound::One(
+                    ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(Box::new(
+                        codec::build_gameobject_query_response(q.entry_id, tmpl.as_ref()),
+                    )),
+                ));
+            }
+            // Release Spirit after death. The client sends this (empty body) when the player
+            // clicks Release on the death screen. Revive in place at full health; the restored health
+            // replicates via the on_update VALUES relay and the client leaves the death screen.
+            // SMSG_CORPSE_RECLAIM_DELAY is now relay-driven (the escalated per-corpse
+            // delay, not a flat 30s) — see `on_corpse_insert` in `stdb/subscriptions.rs`, which fires off
+            // the SAME `game_corpse` insert `repop`'s reducer call just caused, so no explicit send here.
+            ClientOpcodeMessage::CMSG_REPOP_REQUEST => {
+                if let Some(actor) = actor {
+                    ignore_refusal("repop", session.account_id, store.repop(actor))?;
+                }
+            }
+            // Corpse location query: the client asks where the player's corpse is to draw the
+            // map marker + offer "Reclaim Corpse" near it. Reply with the corpse's position, or NotFound.
+            ClientOpcodeMessage::MSG_CORPSE_QUERY => {
+                if let WorldState::InWorld(iw) = &session.state {
+                    let loc = store.corpse_location(iw.self_guid)?;
+                    outbound.push(Outbound::One(ServerOpcodeMessage::MSG_CORPSE_QUERY(
+                        Box::new(codec::build_corpse_query_response(loc)?),
+                    )));
+                }
+            }
+            // Reclaim your corpse: the ghost, near its corpse and past the 30s delay, resurrects
+            // at 50%. The module validates ownership/ghost/range/delay; a failure (too far, too soon, not
+            // a ghost) is expected and silently ignored — the client just stays a ghost.
+            ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(r) => {
+                if let Some(actor) = actor {
+                    let result = store.reclaim_corpse(actor, r.guid.guid());
+                    ignore_refusal("reclaim_corpse", session.account_id, result)?;
+                }
+            }
+            // Resurrection accept-prompt response: the dead player answered the SMSG_RESURRECT_REQUEST
+            // offer. `status` is vanilla's accept(1)/decline(0) byte; the offer's guid is ignored (mirrors
+            // `reclaim_corpse`'s own-corpse derivation — the module resolves the pending offer from the
+            // CALLER via `ctx.sender()`, never the wire guid). A failure (no pending offer — already
+            // answered/lapsed) is expected and silently ignored.
+            ClientOpcodeMessage::CMSG_RESURRECT_RESPONSE(r) => {
+                if let Some(actor) = actor {
+                    let result = store.resurrect_response(actor, r.status != 0);
+                    ignore_refusal("resurrect_response", session.account_id, result)?;
+                }
+            }
+            // The death dialog's second button: use the Self-Resurrection Option the Module wrote into
+            // PLAYER_SELF_RES_SPELL. The revive replicates through the entity VALUES relay. A Refusal
+            // (already used, already alive) is expected after a race and sends nothing.
+            ClientOpcodeMessage::CMSG_SELF_RES => {
+                if let Some(actor) = actor {
+                    ignore_refusal(
+                        "self_resurrect",
+                        session.account_id,
+                        store.self_resurrect(actor),
+                    )?;
+                }
+            }
+            // Spirit-Healer resurrection: a ghost activated the graveyard Spirit Healer (npc_flags
+            // SPIRITHEALER). The module res's in place at 50% + applies Resurrection Sickness; on success
+            // reply with SMSG_SPIRIT_HEALER_CONFIRM (echoing the healer's guid) so the client closes the
+            // dialog. The res itself replicates via the entity VALUES relay (health > 0 + cleared ghost
+            // bits), exactly like reclaim_corpse. A failure (not a ghost) is per-action — log + ignore.
+            ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(s) => {
+                if let Some(actor) = actor {
+                    let result = store.spirit_healer_res(actor, s.guid.guid());
+                    let revived = result.is_ok();
+                    ignore_refusal("spirit_healer_res", session.account_id, result)?;
+                    if revived {
+                        outbound.push(Outbound::One(
+                            ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(
+                                SMSG_SPIRIT_HEALER_CONFIRM { guid: s.guid },
+                            ),
+                        ));
+                    }
+                }
+            }
+            other => return Err(anyhow!("request routed to Loot: {other}")),
         }
-        other => return Ok(Some(other)),
+        Ok(outbound.into())
     }
-    Ok(None)
 }
 
 #[cfg(test)]
@@ -656,11 +604,25 @@ mod tests {
         );
     }
 
-    fn player() -> LootWindowPlayer {
-        LootWindowPlayer {
-            account_id: 7,
-            self_guid: Some(42),
+    fn run_window<St: LootWindowStore + ?Sized>(
+        store: &St,
+        mut session: ProtocolSession,
+        current: OpenLootState,
+        message: ClientOpcodeMessage,
+    ) -> Result<(OpenLootState, Vec<Outbound>)> {
+        if let WorldState::InWorld(world) = &mut session.state {
+            world.open_loot = current;
         }
+        let reply = LootWindow::handle(store, &mut session, message.into())?;
+        let state = match &session.state {
+            WorldState::InWorld(world) => world.open_loot,
+            WorldState::CharSelect => OpenLootState::default(),
+        };
+        Ok((state, reply.outbound))
+    }
+
+    fn session() -> ProtocolSession {
+        ProtocolSession::in_world(7, 42)
     }
 
     fn open_creature(target_guid: u64) -> ClientOpcodeMessage {
@@ -701,12 +663,9 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            LootWindowPlayer {
-                account_id: 7,
-                self_guid: None,
-            },
+            ProtocolSession::new(7, "TESTER".into()),
             current_state,
             open_creature(60),
         )
@@ -714,13 +673,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request.is_none()
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == OpenLootState::default() && outbound.is_empty()
         ));
         assert!(store.money_reads.lock().unwrap().is_empty());
         assert!(store.item_reads.lock().unwrap().is_empty());
@@ -734,12 +687,9 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            LootWindowPlayer {
-                account_id: 7,
-                self_guid: Some(0),
-            },
+            ProtocolSession::in_world(7, 0),
             current_state,
             open_creature(60),
         )
@@ -747,13 +697,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request.is_none()
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert!(store.money_reads.lock().unwrap().is_empty());
         assert!(store.item_reads.lock().unwrap().is_empty());
@@ -768,22 +712,11 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome =
-            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+        let outcome = run_window(&store, session(), current_state, open_chest(90)).unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("chest use passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state.target_guid, Some(90));
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::UseGameObject { target_guid: 90 })
-        );
+
         let [Outbound::Raw { opcode, body }] = outbound.as_slice() else {
             panic!("expected one raw loot window")
         };
@@ -807,18 +740,11 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome =
-            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+        let outcome = run_window(&store, session(), current_state, open_chest(90)).unwrap();
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::UseGameObject { target_guid: 90 })
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert_eq!(
             store.operations.lock().unwrap().as_slice(),
@@ -836,18 +762,11 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome =
-            dispatch_loot_window(&store, player(), current_state, open_chest(90)).unwrap();
+        let outcome = run_window(&store, session(), current_state, open_chest(90)).unwrap();
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::UseGameObject { target_guid: 90 })
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert_eq!(
             store.operations.lock().unwrap().as_slice(),
@@ -866,7 +785,7 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let error = dispatch_loot_window(&store, player(), current_state, open_chest(90))
+        let error = run_window(&store, session(), current_state, open_chest(90))
             .err()
             .expect("fatal GameObject failure was handled");
 
@@ -886,9 +805,9 @@ mod tests {
             ..Default::default()
         };
 
-        let error = dispatch_loot_window(
+        let error = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState {
                 target_guid: Some(11),
             },
@@ -912,9 +831,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState {
                 target_guid: Some(11),
             },
@@ -922,19 +841,9 @@ mod tests {
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("creature open passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state, OpenLootState::default());
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::OpenCreature { target_guid: 60 })
-        );
+
         assert_didnt_kill(&outbound, 60);
         assert_eq!(store.open_requests.lock().unwrap().as_slice(), &[(42, 60)]);
         assert!(store.money_reads.lock().unwrap().is_empty());
@@ -949,9 +858,9 @@ mod tests {
             ..Default::default()
         };
 
-        let error = dispatch_loot_window(
+        let error = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             open_creature(60),
         )
@@ -973,16 +882,11 @@ mod tests {
             target_guid: Some(11),
         };
 
-        let outcome =
-            dispatch_loot_window(&store, player(), current_state, open_creature(60)).unwrap();
+        let outcome = run_window(&store, session(), current_state, open_creature(60)).unwrap();
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request: Some(LootWindowDurableRequest::OpenCreature { target_guid: 60 }),
-                outbound,
-            } if next_state == current_state && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert!(store.money_reads.lock().unwrap().is_empty());
         assert!(store.item_reads.lock().unwrap().is_empty());
@@ -995,22 +899,15 @@ mod tests {
     }
 
     fn dispatch_release(current_state: OpenLootState, request_target: u64) -> OpenLootState {
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &InMemoryLootWindow::default(),
-            player(),
+            session(),
             current_state,
             release(request_target),
         )
         .unwrap();
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("release passed through")
-        };
-        assert_eq!(durable_request, None);
+        let (next_state, outbound) = outcome;
+
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_RELEASE_RESPONSE(response))]
@@ -1026,9 +923,9 @@ mod tests {
             target_guid: Some(60),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             current_state,
             ClientOpcodeMessage::CMSG_LOOT_MONEY,
         )
@@ -1036,13 +933,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::TakeMoney { target_guid: 60 })
-                && matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)])
+            (next_state, outbound) if next_state == current_state && matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_CLEAR_MONEY)])
         ));
         assert_eq!(
             store.money_take_requests.lock().unwrap().as_slice(),
@@ -1060,9 +951,9 @@ mod tests {
             target_guid: Some(60),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             current_state,
             ClientOpcodeMessage::CMSG_LOOT_MONEY,
         )
@@ -1070,13 +961,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::TakeMoney { target_guid: 60 })
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert_eq!(
             store.money_take_requests.lock().unwrap().as_slice(),
@@ -1136,15 +1021,8 @@ mod tests {
                     },
                 ),
             ] {
-                let outcome = dispatch_loot_window(&store, player(), open_window, message).unwrap();
-                let LootWindowOutcome::Handled {
-                    next_state,
-                    outbound,
-                    ..
-                } = outcome
-                else {
-                    panic!("{refusal:?} passed through")
-                };
+                let outcome = run_window(&store, session(), open_window, message).unwrap();
+                let (next_state, outbound) = outcome;
                 match loot_error {
                     // An answered Refusal invalidates the Loot Window the client is showing.
                     Some(loot_error) => {
@@ -1167,9 +1045,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState {
                 target_guid: Some(60),
             },
@@ -1177,19 +1055,9 @@ mod tests {
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("money take passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state, OpenLootState::default());
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::TakeMoney { target_guid: 60 })
-        );
+
         assert_didnt_kill(&outbound, 60);
         assert_eq!(
             store.money_take_requests.lock().unwrap().as_slice(),
@@ -1201,9 +1069,9 @@ mod tests {
     fn money_take_without_an_open_target_has_no_operation_or_outbound() {
         let store = InMemoryLootWindow::default();
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             ClientOpcodeMessage::CMSG_LOOT_MONEY,
         )
@@ -1211,11 +1079,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state: OpenLootState { target_guid: None },
-                durable_request,
-                outbound,
-            } if durable_request.is_none() && outbound.is_empty()
+            (OpenLootState { target_guid: None }, outbound) if outbound.is_empty()
         ));
         assert!(store.money_take_requests.lock().unwrap().is_empty());
     }
@@ -1227,9 +1091,9 @@ mod tests {
             target_guid: Some(75),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             current_state,
             ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(CMSG_AUTOSTORE_LOOT_ITEM {
                 item_slot: 3,
@@ -1239,13 +1103,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::TakeItem { target_guid: 75, loot_slot: 3 })
-                && matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_REMOVED(removed))] if removed.slot == 3)
+            (next_state, outbound) if next_state == current_state && matches!(outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_LOOT_REMOVED(removed))] if removed.slot == 3)
         ));
         assert_eq!(
             store.item_take_requests.lock().unwrap().as_slice(),
@@ -1263,9 +1121,9 @@ mod tests {
             target_guid: Some(75),
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             current_state,
             ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(CMSG_AUTOSTORE_LOOT_ITEM {
                 item_slot: 3,
@@ -1275,13 +1133,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state,
-                durable_request,
-                outbound,
-            } if next_state == current_state
-                && durable_request == Some(LootWindowDurableRequest::TakeItem { target_guid: 75, loot_slot: 3 })
-                && outbound.is_empty()
+            (next_state, outbound) if next_state == current_state && outbound.is_empty()
         ));
         assert_eq!(
             store.item_take_requests.lock().unwrap().as_slice(),
@@ -1296,9 +1148,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState {
                 target_guid: Some(75),
             },
@@ -1308,22 +1160,9 @@ mod tests {
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("item take passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state, OpenLootState::default());
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::TakeItem {
-                target_guid: 75,
-                loot_slot: 3,
-            })
-        );
+
         assert_didnt_kill(&outbound, 75);
         assert_eq!(
             store.item_take_requests.lock().unwrap().as_slice(),
@@ -1335,9 +1174,9 @@ mod tests {
     fn item_take_without_an_open_target_has_no_operation_or_outbound() {
         let store = InMemoryLootWindow::default();
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             ClientOpcodeMessage::CMSG_AUTOSTORE_LOOT_ITEM(CMSG_AUTOSTORE_LOOT_ITEM {
                 item_slot: 3,
@@ -1347,11 +1186,7 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state: OpenLootState { target_guid: None },
-                durable_request,
-                outbound,
-            } if durable_request.is_none() && outbound.is_empty()
+            (OpenLootState { target_guid: None }, outbound) if outbound.is_empty()
         ));
         assert!(store.item_take_requests.lock().unwrap().is_empty());
     }
@@ -1368,7 +1203,7 @@ mod tests {
         };
 
         for request in [ClientOpcodeMessage::CMSG_LOOT_MONEY, take_item(3)] {
-            let error = dispatch_loot_window(&store, player(), open, request)
+            let error = run_window(&store, session(), open, request)
                 .err()
                 .expect("transport loss was handled");
 
@@ -1384,9 +1219,9 @@ mod tests {
         };
         store.items_by_viewer.insert(42, vec![(3, 2589, 5, 200, 0)]);
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState {
                 target_guid: Some(11),
             },
@@ -1394,19 +1229,9 @@ mod tests {
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("creature open passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state.target_guid, Some(60));
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::OpenCreature { target_guid: 60 })
-        );
+
         let [Outbound::Raw { opcode, body }] = outbound.as_slice() else {
             panic!("expected one raw loot window")
         };
@@ -1430,38 +1255,23 @@ mod tests {
         store.items_by_viewer.insert(42, vec![(0, 6948, 1, 100, 0)]);
         store.items_by_viewer.insert(43, vec![(2, 2589, 5, 200, 0)]);
 
-        let first = dispatch_loot_window(
+        let first = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             open_creature(60),
         )
         .unwrap();
-        let second = dispatch_loot_window(
+        let second = run_window(
             &store,
-            LootWindowPlayer {
-                account_id: 8,
-                self_guid: Some(43),
-            },
+            ProtocolSession::in_world(7, 43),
             OpenLootState::default(),
             open_creature(60),
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            outbound: first_outbound,
-            ..
-        } = first
-        else {
-            panic!("first creature open passed through")
-        };
-        let LootWindowOutcome::Handled {
-            outbound: second_outbound,
-            ..
-        } = second
-        else {
-            panic!("second creature open passed through")
-        };
+        let (_, first_outbound) = first;
+        let (_, second_outbound) = second;
         let [Outbound::Raw {
             body: first_body, ..
         }] = first_outbound.as_slice()
@@ -1510,27 +1320,17 @@ mod tests {
     fn fully_empty_creature_attempts_skinning_and_returns_an_empty_window() {
         let store = InMemoryLootWindow::default();
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             open_creature(61),
         )
         .unwrap();
 
-        let LootWindowOutcome::Handled {
-            next_state,
-            durable_request,
-            outbound,
-        } = outcome
-        else {
-            panic!("creature open passed through")
-        };
+        let (next_state, outbound) = outcome;
         assert_eq!(next_state.target_guid, Some(61));
-        assert_eq!(
-            durable_request,
-            Some(LootWindowDurableRequest::SkinCreature { target_guid: 61 })
-        );
+
         let [Outbound::Raw { opcode, body }] = outbound.as_slice() else {
             panic!("expected one raw loot window")
         };
@@ -1548,9 +1348,9 @@ mod tests {
             ..Default::default()
         };
 
-        let outcome = dispatch_loot_window(
+        let outcome = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             open_creature(61),
         )
@@ -1558,15 +1358,9 @@ mod tests {
 
         assert!(matches!(
             outcome,
-            LootWindowOutcome::Handled {
-                next_state: OpenLootState {
+            (OpenLootState {
                     target_guid: Some(61)
-                },
-                durable_request: Some(LootWindowDurableRequest::SkinCreature {
-                    target_guid: 61
-                }),
-                outbound,
-            } if matches!(outbound.as_slice(), [Outbound::Raw { opcode: 0x0160, body }] if body[13] == 0)
+                }, outbound) if matches!(outbound.as_slice(), [Outbound::Raw { opcode: 0x0160, body }] if body[13] == 0)
         ));
     }
 
@@ -1577,9 +1371,9 @@ mod tests {
             ..Default::default()
         };
 
-        let error = dispatch_loot_window(
+        let error = run_window(
             &store,
-            player(),
+            session(),
             OpenLootState::default(),
             open_creature(61),
         )
@@ -1595,14 +1389,7 @@ mod tests {
         state: &mut OpenLootState,
         msg: ClientOpcodeMessage,
     ) -> Vec<Outbound> {
-        let LootWindowOutcome::Handled {
-            next_state,
-            outbound,
-            ..
-        } = dispatch_loot_window(store, player(), *state, msg).unwrap()
-        else {
-            panic!("the request passed through")
-        };
+        let (next_state, outbound) = run_window(store, session(), *state, msg).unwrap();
         *state = next_state;
         outbound
     }

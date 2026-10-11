@@ -1,32 +1,20 @@
 //! Taxi opcodes through their dispatcher, and taxi gossip over an encrypted World Session.
 
+use super::family::{ProtocolFamily, ProtocolSession};
 use super::handlers::InMemoryTaxiActions;
 use super::*;
 use wow_world_messages::vanilla::ActivateTaxiReply;
 
-const PLAYER: TaxiActionPlayer = TaxiActionPlayer { self_guid: Some(1) };
-
-/// Dispatch one taxi message and return the packets the session would send for it. An activation
-/// goes through `queue_reply_then_arm`, as the session does, so the reply is queued before the
-/// flight arms.
 fn try_run(
     actions: &InMemoryTaxiActions,
     msg: impl Into<ClientOpcodeMessage>,
 ) -> Result<Vec<Outbound>> {
-    match dispatch_taxi_action(actions, PLAYER, msg.into())? {
-        TaxiActionOutcome::Handled { outbound } => Ok(outbound),
-        TaxiActionOutcome::Activated {
-            outbound,
-            character_guid,
-            arm,
-        } => {
-            let (tx, rx) = SessionTx::with_depth(0);
-            queue_reply_then_arm(&tx, actions, outbound, character_guid, arm)?;
-            drop(tx);
-            Ok(rx.try_iter().collect())
-        }
-        TaxiActionOutcome::PassThrough(_) => panic!("the taxi dispatcher passed the message on"),
-    }
+    Ok(handlers::Taxi::handle(
+        actions,
+        &mut ProtocolSession::in_world(7, 1),
+        msg.into().into(),
+    )?
+    .outbound)
 }
 
 fn run(actions: &InMemoryTaxiActions, msg: impl Into<ClientOpcodeMessage>) -> Vec<Outbound> {
@@ -61,6 +49,75 @@ fn activate_90() -> CMSG_ACTIVATETAXI {
         source_node: 255,
         destination_node: 256,
     }
+}
+
+fn accepted_flight(tx: &SessionTx) -> WorldFake {
+    let mut store = WorldFake::default();
+    store.taxi.activation.result_code = lyracore_shared::constants::taxi_protocol::ACTIVATE_OK;
+    *store.taxi.flight_tx.lock().unwrap() = Some(tx.clone());
+    store
+}
+
+fn dispatch_activation(store: &WorldFake, tx: &SessionTx) -> Result<()> {
+    dispatch(
+        tx,
+        store,
+        &mut in_world_conn(7, 1),
+        <CMSG_ACTIVATETAXI as wow_world_messages::Message>::OPCODE,
+        ClientOpcodeMessage::from(activate_90()).into(),
+    )
+}
+
+#[test]
+fn taxi_dispatch_queues_acceptance_before_the_flight_spline() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let store = accepted_flight(&tx);
+
+    dispatch_activation(&store, &tx).unwrap();
+
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), Some(1));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))
+            if reply.reply == ActivateTaxiReply::Ok
+    ));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::Raw { opcode: 0x00dd, .. }
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn taxi_dispatch_does_not_arm_when_the_reply_queue_is_closed() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let store = accepted_flight(&tx);
+    drop(rx);
+
+    assert!(dispatch_activation(&store, &tx).is_err());
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), None);
+}
+
+#[test]
+fn taxi_dispatch_propagates_arming_transport_loss_after_acceptance() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let mut store = accepted_flight(&tx);
+    store.taxi.arm_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_arm_taxi_flight").into());
+
+    let error = dispatch_activation(&store, &tx).unwrap_err();
+
+    assert!(matches!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    ));
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), None);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))
+            if reply.reply == ActivateTaxiReply::Ok
+    ));
+    assert!(rx.try_recv().is_err());
 }
 
 #[test]

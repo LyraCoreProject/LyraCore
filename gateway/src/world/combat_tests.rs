@@ -1,7 +1,6 @@
-//! Targeting and sheathing, run through `handle_combat` against a Fake that holds only the Combat
-//! Store the handler is bounded on.
+//! Targeting and sheathing through the Combat Store.
 
-use super::handlers::{handle_combat, CombatStore};
+use super::handlers::{Combat, CombatStore};
 use super::*;
 use crate::stdb::ReducerCallError;
 use std::collections::BTreeMap;
@@ -61,11 +60,11 @@ impl CombatStore for CombatFake {
     }
 }
 
-/// Send `msg` as Character 1 of account 7. Phase 5 retargets only this helper.
+/// Handle `msg` as Character 1 of Account 7.
 fn run(store: &CombatFake, msg: impl Into<ClientOpcodeMessage>) {
-    let mut conn = in_world_conn(7, 1);
-    let passed_on = handle_combat(store, &mut conn, msg.into()).unwrap();
-    assert!(passed_on.is_none(), "the combat family owns this opcode");
+    let mut session = ProtocolSession::in_world(7, 1);
+    let reply = Combat::handle(store, &mut session, ProtocolRequest::Message(msg.into())).unwrap();
+    assert!(reply.outbound.is_empty());
 }
 
 #[test]
@@ -106,18 +105,25 @@ fn sheathe() -> CMSG_SETSHEATHED {
 #[test]
 fn transport_loss_ends_the_world_session() {
     let store = CombatFake::failing(ReducerCallError::transport_lost("gw_set_sheathed"));
-    let mut conn = in_world_conn(7, 1);
-    assert!(handle_combat(&store, &mut conn, sheathe().into()).is_err());
+    let mut session = ProtocolSession::in_world(7, 1);
+    assert!(Combat::handle(
+        &store,
+        &mut session,
+        ProtocolRequest::Message(sheathe().into())
+    )
+    .is_err());
 }
 
 #[test]
 fn refusal_is_ignored_and_the_world_session_continues() {
     let store = CombatFake::failing(ReducerCallError::refused("gw_set_sheathed", "not in world"));
-    let mut conn = in_world_conn(7, 1);
-    let passed_on = handle_combat(&store, &mut conn, sheathe().into()).unwrap();
-    assert!(
-        passed_on.is_none(),
-        "the combat family still owns the opcode"
-    );
+    let mut session = ProtocolSession::in_world(7, 1);
+    let reply = Combat::handle(
+        &store,
+        &mut session,
+        ProtocolRequest::Message(sheathe().into()),
+    )
+    .unwrap();
+    assert!(reply.outbound.is_empty());
     assert_eq!(store.sheath_of(1), None);
 }

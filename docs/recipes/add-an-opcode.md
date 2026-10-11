@@ -86,25 +86,25 @@ or another family also calls is an `impl Coordinator` method in `gateway/src/std
 in the Coordinator cache by a unique index. The SDK cache has no other index, and a whole-table
 `iter()` holds the lock the pump needs.
 
-## 7. Write the family dispatcher
+## 7. Write the Protocol Family handler
 
-File: `gateway/src/world/handlers/<family>.rs`, declared in `gateway/src/world/handlers/mod.rs` with
-a `pub(crate) use` of its public items. For an opcode in an existing family, add an arm to that
-family's dispatcher and skip to step 10.
+File: `gateway/src/world/handlers/<family>.rs`, declared and re-exported in
+`gateway/src/world/handlers/mod.rs`. For an existing Protocol Family, add its request arm and
+ownership entry, then continue with the packet and tests.
 
-- A Store trait, `<Family>ActionStore`. Each method's doc says whether it is a Durable Request or a
-  Durable Read and on which Shard. A method that acts for a Character takes `actor: Actor`. Steps 5
-  and 6 implement it.
-- The dispatcher resolves the session's Character to `Option<Actor>` once, with `Actor::new`. When
-  it is `None`, make no Durable Request. The client usually gets no answer.
-- When a Store call fails, match on `classify(&error)`. A `DurableFailure::Refusal { reason }` gets
-  the family's answer to the client and the session continues. A `DurableFailure::TransportLoss`
-  returns the `Err`, which ends the World Session.
-- A player struct with the session facts the family needs, and an outcome enum with
-  `Handled { outbound }` and `PassThrough(msg)`.
-- `dispatch_<family>_action(store, player, msg)` matches the family's `ClientOpcodeMessage` variants
-  and passes every other message through.
-- A local Fake of the Store and the family's tests in the same file.
+- Keep Durable Reads and Durable Requests on the Protocol Family's Store trait. A method that acts for a
+  Character takes `actor: Actor`. Steps 5 and 6 implement it.
+- Implement `ProtocolFamily<St>` on the handler. Its `handle` method takes the Store, shared
+  `ProtocolSession`, and `ProtocolRequest`, and returns `ProtocolReply`.
+- Resolve the Character with `session.actor()`. Before world entry it is `None`; preserve the
+  opcode's specified reply without inventing an Actor.
+- Classify Store errors with `classify`. A Refusal gets the Protocol Family's reply. A Transport Loss
+  returns `Err`, which ends the World Session.
+- Update local protocol state after the Durable Request succeeds and return outbound messages in
+  their required order. The World Session queues them. Existing operations that must follow that
+  queue step, such as taxi arming, use `WorldSessionAction`.
+- Keep a local Fake and test through `handle`. The shared `ProtocolSession` needs no socket or
+  routed Store. Do not add a separate context for each Protocol Family, dispatch outcome, or pass-through result.
 
 ## 8. Join the family to `WorldStore`
 
@@ -113,15 +113,19 @@ family's dispatcher and skip to step 10.
 - File: `gateway/src/world/test_support/world_fake/<family>.rs`. Implement the trait for `WorldFake`,
   the shared Fake that implements every family, and keep the family's state in its own struct there.
 
-## 9. Link the dispatcher into the chain
+## 9. Declare opcode ownership
 
-File: `gateway/src/world/mod.rs`. In `dispatch`, add a `match dispatch_<family>_action(...)` link
-that sends `Handled` messages and returns, and passes `PassThrough` on. Re-export the family's items
-in the `pub(crate) use handlers::{...}` list.
+File: `gateway/src/world/routing.rs`. Add the opcode type to its owner's entry in
+`protocol_families!`. The declaration supplies both the ownership table and the handler call.
+A new Protocol Family needs one entry with its handler type and opcodes.
 
-The order of the links matters. The first dispatcher that matches an opcode consumes it, and the
-links before yours must not claim your opcodes. A message no link takes reaches the debug log
-`world: ignoring`.
+The ownership test refuses duplicate entries. Declaration order has no routing meaning. A handler
+receives only its owned requests; an unexpected opcode is a routing defect. If one opcode serves
+several interactions, its owner selects the operation from the payload or Durable Read. GameObject
+use and chat are examples.
+
+The reader supplies the numeric opcode, including requests whose packet layout needs a custom
+reader. Movement coalescing and the Chat Flood Limiter run before handler dispatch.
 
 ## 10. Build the packet
 

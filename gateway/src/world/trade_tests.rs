@@ -1,8 +1,7 @@
-//! Trade opcodes, run through `handle_trade` against a Fake that holds only the Trade Store the
-//! handler is bounded on. Every trade status reaches the client through the `game_trade_event`
-//! relay, so the handler sends nothing and a test reads the Fake's Trade Session instead.
+//! Trade requests and durable outcomes through the Trade Store. The Relay sends trade status;
+//! these tests check the Fake's Trade Session and the absence of direct replies.
 
-use super::handlers::{handle_trade, TradeStore};
+use super::handlers::{Trade, TradeStore};
 use super::*;
 use crate::stdb::ReducerCallError;
 use std::collections::{BTreeMap, BTreeSet};
@@ -194,12 +193,11 @@ impl TradeStore for TradeFake {
     }
 }
 
-/// Send `msg` as `seat`, a Character of account 7. Phase 5 retargets only this helper.
+/// Handle `msg` as `seat`, a Character of Account 7.
 fn run(store: &TradeFake, seat: u64, msg: impl Into<ClientOpcodeMessage>) {
-    let mut conn = in_world_conn(7, seat);
-    let passed_on =
-        handle_trade(&SessionTx::with_depth(0).0, store, &mut conn, msg.into()).unwrap();
-    assert!(passed_on.is_none(), "the trade family owns this opcode");
+    let mut session = ProtocolSession::in_world(7, seat);
+    let reply = Trade::handle(store, &mut session, ProtocolRequest::Message(msg.into())).unwrap();
+    assert!(reply.outbound.is_empty());
 }
 
 /// Initiating a trade with a targeted player names the wire's target.
@@ -399,19 +397,18 @@ fn cancel_trade_cancels_for_the_initiating_side_too() {
 #[test]
 fn transport_loss_ends_the_world_session() {
     let store = TradeFake::failing(ReducerCallError::transport_lost("gw_accept_trade"));
-    let mut conn = in_world_conn(7, 1);
+    let mut session = ProtocolSession::in_world(7, 1);
     let msg = CMSG_ACCEPT_TRADE { unknown1: 1 };
-    let result = handle_trade(&SessionTx::with_depth(0).0, &store, &mut conn, msg.into());
+    let result = Trade::handle(&store, &mut session, ProtocolRequest::Message(msg.into()));
     assert!(result.is_err());
 }
 
 #[test]
 fn refusal_is_ignored_and_the_world_session_continues() {
     let store = TradeFake::failing(ReducerCallError::refused("gw_accept_trade", "no trade"));
-    let mut conn = in_world_conn(7, 1);
+    let mut session = ProtocolSession::in_world(7, 1);
     let msg = CMSG_ACCEPT_TRADE { unknown1: 1 };
-    let passed_on =
-        handle_trade(&SessionTx::with_depth(0).0, &store, &mut conn, msg.into()).unwrap();
-    assert!(passed_on.is_none(), "the trade family owns this opcode");
+    let reply = Trade::handle(&store, &mut session, ProtocolRequest::Message(msg.into())).unwrap();
+    assert!(reply.outbound.is_empty());
     assert_eq!(store.accepted(), Vec::<u64>::new());
 }

@@ -2,7 +2,7 @@
 //! the vendor family.
 
 use super::super::*;
-use super::send_show_bank;
+use super::show_bank;
 use crate::stdb::{classify, DurableFailure};
 
 /// Bank Durable Requests.
@@ -21,13 +21,13 @@ pub(crate) trait BankStore: Send + Sync {
 /// Move the item in `slot_index` between carry space and the bank. A Refusal, or no Character yet,
 /// answers `SMSG_INVENTORY_CHANGE_FAILURE`; a Transport Loss ends the World Session.
 fn auto_bank<St: BankStore + ?Sized>(
-    tx: &SessionTx,
+    outbound: &mut Vec<Outbound>,
     store: &St,
-    conn: &WorldConn,
+    conn: &ProtocolSession,
     slot_index: u8,
     direction: &str,
 ) -> Result<()> {
-    if let Some(actor) = social::self_guid(conn).and_then(Actor::new) {
+    if let Some(actor) = conn.self_guid().and_then(Actor::new) {
         let Err(error) = store.auto_bank_item(actor, slot_index) else {
             return Ok(());
         };
@@ -39,12 +39,14 @@ fn auto_bank<St: BankStore + ?Sized>(
             conn.account_id
         );
     }
-    send(
-        tx,
-        Outbound::One(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
-            Box::new(codec::build_inventory_change_failure()),
-        )),
-    )
+    {
+        outbound.push(Outbound::One(
+            ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
+                codec::build_inventory_change_failure(),
+            )),
+        ));
+        Ok(())
+    }
 }
 
 /// Bank family: `CMSG_BANKER_ACTIVATE` opens the bank window (a standing-refusing banker gets no
@@ -53,80 +55,85 @@ fn auto_bank<St: BankStore + ?Sized>(
 /// into the first free carry slot — both resolve to the same module entry point, which infers the
 /// direction from the source slot and carries the banker-proximity gate for free (it reuses the
 /// move core). Only the main pseudo-bag (255) is addressed, matching the item handler's restriction.
-pub(crate) fn handle_bank<St: BankStore + NpcStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    conn: &mut WorldConn,
-    msg: ClientOpcodeMessage,
-) -> Result<Option<ClientOpcodeMessage>> {
-    const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — same restriction as the item handler
-    match msg {
-        ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(c) => {
-            let banker_guid = c.guid.guid();
-            if let WorldState::InWorld(iw) = &conn.state {
-                if store
-                    .npc_refuses_interaction(banker_guid, iw.self_guid)
-                    .unwrap_or(false)
-                {
-                    return Ok(None);
+pub(crate) struct Bank;
+
+impl<St: BankStore + NpcStore + ?Sized> ProtocolFamily<St> for Bank {
+    fn handle(
+        store: &St,
+        conn: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let mut outbound = Vec::new();
+        const MAIN_BAG: u8 = 255; // INVENTORY_SLOT_BAG_0 — same restriction as the item handler
+        match msg {
+            ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(c) => {
+                let banker_guid = c.guid.guid();
+                if let WorldState::InWorld(iw) = &conn.state {
+                    if store
+                        .npc_refuses_interaction(banker_guid, iw.self_guid)
+                        .unwrap_or(false)
+                    {
+                        return Ok(outbound.into());
+                    }
+                }
+                outbound.push(show_bank(banker_guid));
+            }
+            // Right-click a bag item with the bank open → deposit into the first free bank slot.
+            ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
+                if c.bag_index == MAIN_BAG {
+                    auto_bank(&mut outbound, store, conn, c.slot_index, "deposit")?;
+                } else {
+                    log::debug!(
+                        "world: autobank from sub-bag {} unsupported (account {})",
+                        c.bag_index,
+                        conn.account_id
+                    );
                 }
             }
-            send_show_bank(tx, banker_guid)?;
-        }
-        // Right-click a bag item with the bank open → deposit into the first free bank slot.
-        ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
-            if c.bag_index == MAIN_BAG {
-                auto_bank(tx, store, conn, c.slot_index, "deposit")?;
-            } else {
-                log::debug!(
-                    "world: autobank from sub-bag {} unsupported (account {})",
-                    c.bag_index,
-                    conn.account_id
-                );
+            // Buy the next bank bag slot from the named banker. Success and every refusal relay
+            // `SMSG_BUY_BANK_SLOT_RESULT`; the refusal code rides the module's `[N]` error tag.
+            ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
+                let banker_guid = c.guid.guid();
+                // No Character yet gets an untagged reason, which answers NotBanker.
+                let refusal = match conn
+                    .self_guid()
+                    .and_then(Actor::new)
+                    .map(|actor| store.buy_bank_slot(actor, banker_guid))
+                {
+                    Some(Ok(())) => None,
+                    None => Some(String::new()),
+                    Some(Err(error)) => match classify(&error) {
+                        DurableFailure::Refusal { reason } => Some(reason.to_string()),
+                        DurableFailure::TransportLoss => return Err(error),
+                    },
+                };
+                if let Some(reason) = &refusal {
+                    log::debug!(
+                        "world: buy_bank_slot rejected (account {}): {reason}",
+                        conn.account_id
+                    );
+                }
+                outbound.push(Outbound::One(
+                    ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(
+                        codec::build_buy_bank_slot_reply(refusal.as_deref().map_or(Ok(()), Err)),
+                    ),
+                ));
             }
-        }
-        // Buy the next bank bag slot from the named banker. Success and every refusal relay
-        // `SMSG_BUY_BANK_SLOT_RESULT`; the refusal code rides the module's `[N]` error tag.
-        ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
-            let banker_guid = c.guid.guid();
-            // No Character yet gets an untagged reason, which answers NotBanker.
-            let refusal = match social::self_guid(conn)
-                .and_then(Actor::new)
-                .map(|actor| store.buy_bank_slot(actor, banker_guid))
-            {
-                Some(Ok(())) => None,
-                None => Some(String::new()),
-                Some(Err(error)) => match classify(&error) {
-                    DurableFailure::Refusal { reason } => Some(reason.to_string()),
-                    DurableFailure::TransportLoss => return Err(error),
-                },
-            };
-            if let Some(reason) = &refusal {
-                log::debug!(
-                    "world: buy_bank_slot rejected (account {}): {reason}",
-                    conn.account_id
-                );
+            // Right-click a banked item → withdraw into the first free backpack/bag slot.
+            ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(c) => {
+                if c.bag_index == MAIN_BAG {
+                    auto_bank(&mut outbound, store, conn, c.slot_index, "withdraw")?;
+                } else {
+                    log::debug!(
+                        "world: autostore-bank from sub-bag {} unsupported (account {})",
+                        c.bag_index,
+                        conn.account_id
+                    );
+                }
             }
-            send(
-                tx,
-                Outbound::One(ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(
-                    codec::build_buy_bank_slot_reply(refusal.as_deref().map_or(Ok(()), Err)),
-                )),
-            )?;
+            _ => return Err(anyhow!("opcode routed to the wrong Protocol Family")),
         }
-        // Right-click a banked item → withdraw into the first free backpack/bag slot.
-        ClientOpcodeMessage::CMSG_AUTOSTORE_BANK_ITEM(c) => {
-            if c.bag_index == MAIN_BAG {
-                auto_bank(tx, store, conn, c.slot_index, "withdraw")?;
-            } else {
-                log::debug!(
-                    "world: autostore-bank from sub-bag {} unsupported (account {})",
-                    c.bag_index,
-                    conn.account_id
-                );
-            }
-        }
-        other => return Ok(Some(other)),
+        Ok(outbound.into())
     }
-    Ok(None)
 }

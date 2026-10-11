@@ -1,21 +1,16 @@
-//! Vendor opcodes through their dispatcher, and the buyback ring at login.
+//! Vendor replies through the Protocol Family and encrypted World Session.
 
-use super::handlers::InMemoryVendorActions;
+use super::handlers::{InMemoryVendorActions, Vendor};
 use super::*;
 
-const PLAYER: VendorActionPlayer = VendorActionPlayer {
-    account_id: 7,
-    self_guid: Some(1),
-};
-
-/// Dispatch one vendor message and return the packets the session would send for it.
 fn run(actions: &InMemoryVendorActions, msg: impl Into<ClientOpcodeMessage>) -> Vec<Outbound> {
-    match dispatch_vendor_action(actions, PLAYER, msg.into()).unwrap() {
-        VendorActionOutcome::Handled { outbound } => outbound,
-        VendorActionOutcome::PassThrough(_) => {
-            panic!("the vendor dispatcher passed the message on")
-        }
-    }
+    Vendor::handle(
+        actions,
+        &mut ProtocolSession::in_world(7, 1),
+        ProtocolRequest::Message(msg.into()),
+    )
+    .unwrap()
+    .outbound
 }
 
 #[test]

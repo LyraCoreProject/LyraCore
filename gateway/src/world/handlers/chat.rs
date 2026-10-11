@@ -1,9 +1,6 @@
-//! Realm Chat dispatcher: the `CMSG_MESSAGECHAT` kinds that become Realm Chat Lines, `/afk` and
-//! `/dnd`, and `CMSG_CHAT_IGNORED`. The Gateway reads the Speaker Facts on the Home Shard, the
-//! Module decides the audience on Realm-core, and the Relay
-//! (`stdb::world_view::realm_chat_appeared`) delivers the line. Party, Raid, Raid Leader, Raid
-//! Warning, Channel, Guild, Officer and Whisper lines are all Realm Chat Lines. Say, yell and
-//! every kind this file does not own pass through.
+//! Realm Chat Lines, away status and ignored whispers. The Gateway reads Speaker Facts on the
+//! Home Shard; the Module decides the audience on Realm-core. Query owns `CMSG_MESSAGECHAT`
+//! and routes its Realm Chat Kinds here.
 
 use super::super::*;
 use crate::stdb::{classify, DurableFailure};
@@ -118,24 +115,6 @@ pub(crate) trait SpeechStore: Send + Sync {
     fn gm_command(&self, account_name: &str, actor: Actor, text: String) -> Result<()>;
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct ChatActionPlayer {
-    pub(crate) account_id: u64,
-    pub(crate) self_guid: Option<u64>,
-}
-
-impl ChatActionPlayer {
-    /// The Character this player speaks as. `None` before the World Session has one.
-    pub(crate) fn actor(self) -> Option<Actor> {
-        self.self_guid.and_then(Actor::new)
-    }
-}
-
-pub(crate) enum ChatActionOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
 /// cm mangos.sql:4044, sent by cm:ChatHandler.cpp:107-110.
 const UNKNOWN_LANGUAGE_NOTICE: &str = "You don't know that language";
 
@@ -156,95 +135,93 @@ fn silent_refusal_chat_kind(chat_type: &CMSG_MESSAGECHAT_ChatType) -> Option<u8>
     }
 }
 
-/// Consume the `CMSG_MESSAGECHAT` kinds this file owns and `CMSG_CHAT_IGNORED`, and pass
-/// everything else on. A new Chat Kind adds one arm here and answers its own Refusals before the
-/// shared ones.
-pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
-    store: &St,
-    player: ChatActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<ChatActionOutcome> {
-    let CMSG_MESSAGECHAT {
-        chat_type,
-        language,
-        message,
-    } = match msg {
-        ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => *chat,
-        ClientOpcodeMessage::CMSG_CHAT_IGNORED(CMSG_CHAT_IGNORED { guid }) => {
-            let outbound = chat_ignored(store, player, guid.guid())?;
-            return Ok(ChatActionOutcome::Handled { outbound });
-        }
-        other => return Ok(ChatActionOutcome::PassThrough(other)),
-    };
-    let outbound = match chat_type {
-        CMSG_MESSAGECHAT_ChatType::Whisper { target_player } => {
-            whisper(store, player, language.as_int(), message, target_player)?
-        }
-        CMSG_MESSAGECHAT_ChatType::Afk => set_away(store, player, chat_kind::AFK, message)?,
-        CMSG_MESSAGECHAT_ChatType::Dnd => set_away(store, player, chat_kind::DND, message)?,
-        CMSG_MESSAGECHAT_ChatType::Party => {
-            match send_line(store, player, |speaker| RealmChatRequest {
-                kind: chat_kind::PARTY,
-                language: language.as_int(),
-                channel_name: String::new(),
-                target_guid: 0,
-                message,
-                speaker,
-            })? {
-                // Speaking from no party is today's "You aren't in a party" answer.
-                Some(ChatRefusal::NotInGroup) => vec![Outbound::One(
-                    ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
-                        codec::build_party_command_result(
-                            PartyOperation::Leave,
-                            String::new(),
-                            PartyResult::NotInGroup,
-                        ),
-                    )),
-                )],
-                refusal => refusal_outbound(player, refusal),
+/// Handle Realm Chat Lines and away status. Query routes the matching Chat Kinds here.
+pub(crate) struct Chat;
+
+impl<St: ChatActionStore + ?Sized> ProtocolFamily<St> for Chat {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let player = &*session;
+        let msg = request.message()?;
+        let CMSG_MESSAGECHAT {
+            chat_type,
+            language,
+            message,
+        } = match msg {
+            ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => *chat,
+            ClientOpcodeMessage::CMSG_CHAT_IGNORED(CMSG_CHAT_IGNORED { guid }) => {
+                let outbound = chat_ignored(store, player, guid.guid())?;
+                return Ok(ProtocolReply::from(outbound));
             }
-        }
-        CMSG_MESSAGECHAT_ChatType::Channel { channel } => {
-            let typed = channel.clone();
-            match send_line(store, player, |speaker| RealmChatRequest {
-                kind: chat_kind::CHANNEL,
-                language: language.as_int(),
-                channel_name: channel,
-                target_guid: 0,
-                message,
-                speaker,
-            })? {
-                Some(ChatRefusal::Channel(refusal)) => vec![super::channel::refusal_notice(
-                    refusal,
-                    typed,
-                    player.self_guid.unwrap_or(0),
-                    String::new(),
-                )],
-                refusal => refusal_outbound(player, refusal),
+            other => return Err(anyhow!("opcode routed to wrong Protocol Family: {other}")),
+        };
+        let outbound = match chat_type {
+            CMSG_MESSAGECHAT_ChatType::Whisper { target_player } => {
+                whisper(store, player, language.as_int(), message, target_player)?
             }
-        }
-        chat_type => {
-            let Some(kind) = silent_refusal_chat_kind(&chat_type) else {
-                return Ok(ChatActionOutcome::PassThrough(
-                    ClientOpcodeMessage::CMSG_MESSAGECHAT(Box::new(CMSG_MESSAGECHAT {
-                        chat_type,
-                        language,
-                        message,
-                    })),
-                ));
-            };
-            let refusal = send_line(store, player, |speaker| RealmChatRequest {
-                kind,
-                language: language.as_int(),
-                channel_name: String::new(),
-                target_guid: 0,
-                message,
-                speaker,
-            })?;
-            refusal_outbound(player, refusal)
-        }
-    };
-    Ok(ChatActionOutcome::Handled { outbound })
+            CMSG_MESSAGECHAT_ChatType::Afk => set_away(store, player, chat_kind::AFK, message)?,
+            CMSG_MESSAGECHAT_ChatType::Dnd => set_away(store, player, chat_kind::DND, message)?,
+            CMSG_MESSAGECHAT_ChatType::Party => {
+                match send_line(store, player, |speaker| RealmChatRequest {
+                    kind: chat_kind::PARTY,
+                    language: language.as_int(),
+                    channel_name: String::new(),
+                    target_guid: 0,
+                    message,
+                    speaker,
+                })? {
+                    // Speaking from no party is today's "You aren't in a party" answer.
+                    Some(ChatRefusal::NotInGroup) => vec![Outbound::One(
+                        ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(Box::new(
+                            codec::build_party_command_result(
+                                PartyOperation::Leave,
+                                String::new(),
+                                PartyResult::NotInGroup,
+                            ),
+                        )),
+                    )],
+                    refusal => refusal_outbound(player, refusal),
+                }
+            }
+            CMSG_MESSAGECHAT_ChatType::Channel { channel } => {
+                let typed = channel.clone();
+                match send_line(store, player, |speaker| RealmChatRequest {
+                    kind: chat_kind::CHANNEL,
+                    language: language.as_int(),
+                    channel_name: channel,
+                    target_guid: 0,
+                    message,
+                    speaker,
+                })? {
+                    Some(ChatRefusal::Channel(refusal)) => vec![super::channel::refusal_notice(
+                        refusal,
+                        typed,
+                        player.self_guid().unwrap_or(0),
+                        String::new(),
+                    )],
+                    refusal => refusal_outbound(player, refusal),
+                }
+            }
+            chat_type => {
+                let Some(kind) = silent_refusal_chat_kind(&chat_type) else {
+                    return Ok(ProtocolReply::default());
+                };
+                let refusal = send_line(store, player, |speaker| RealmChatRequest {
+                    kind,
+                    language: language.as_int(),
+                    channel_name: String::new(),
+                    target_guid: 0,
+                    message,
+                    speaker,
+                })?;
+                refusal_outbound(player, refusal)
+            }
+        };
+        Ok(ProtocolReply::from(outbound))
+    }
 }
 
 /// One whisper: the target is resolved realm-wide, the Module applies the Gates on Realm-core, and
@@ -253,7 +230,7 @@ pub(crate) fn dispatch_chat_action<St: ChatActionStore + ?Sized>(
 /// target whose Realm Presence is unknown.
 fn whisper<St: ChatActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     language: u32,
     message: String,
     typed_name: String,
@@ -299,7 +276,7 @@ fn player_not_found(name: String) -> Outbound {
 /// change on the entity Relay, so nothing answers here.
 fn set_away<St: ChatActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     kind: u8,
     message: String,
 ) -> Result<Vec<Outbound>> {
@@ -316,7 +293,7 @@ fn set_away<St: ChatActionStore + ?Sized>(
 /// "X is ignoring you." (cm:ChatHandler.cpp:801-815). The notice carries the ignorer's own name.
 fn chat_ignored<St: ChatActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     dropped_speaker: u64,
 ) -> Result<Vec<Outbound>> {
     let refusal = send_line(store, player, |speaker| RealmChatRequest {
@@ -335,7 +312,7 @@ fn chat_ignored<St: ChatActionStore + ?Sized>(
 /// calling arm to answer. A Transport Loss is fatal.
 fn send_line<St: ChatActionStore + ?Sized>(
     store: &St,
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     request: impl FnOnce(SpeakerFacts) -> RealmChatRequest,
 ) -> Result<Option<ChatRefusal>> {
     let Some(actor) = player.actor() else {
@@ -357,7 +334,7 @@ fn send_line<St: ChatActionStore + ?Sized>(
 /// a Refusal this Gateway does not know; a Refusal it knows comes back for the caller to answer.
 /// A Transport Loss is fatal.
 pub(crate) fn settle(
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     line: impl std::fmt::Display,
     sent: Result<ChatOutcome>,
 ) -> Result<Option<ChatRefusal>> {
@@ -373,7 +350,7 @@ pub(crate) fn settle(
 
 /// The answer every Chat Kind shares. Vanilla answers most chat Refusals with silence.
 pub(crate) fn refusal_outbound(
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     refusal: Option<ChatRefusal>,
 ) -> Vec<Outbound> {
     match refusal {
@@ -397,7 +374,7 @@ pub(crate) fn refusal_outbound(
 /// A Refusal this Gateway has no answer for drops the request and keeps the World Session. A
 /// Transport Loss leaves the outcome unknown, so it ends the session.
 pub(super) fn drop_unrecognised_refusal(
-    player: ChatActionPlayer,
+    player: &ProtocolSession,
     request: impl std::fmt::Display,
     error: anyhow::Error,
 ) -> Result<()> {
@@ -419,7 +396,7 @@ mod tests {
     use crate::stdb::ReducerCallError;
     use lyracore_shared::channel::ChannelRefusal;
     use std::sync::Mutex;
-    use wow_world_messages::vanilla::{Language, CMSG_PING};
+    use wow_world_messages::vanilla::Language;
 
     /// How a Fake's Durable Request fails.
     #[derive(Clone, Copy)]
@@ -534,11 +511,8 @@ mod tests {
         }
     }
 
-    fn player() -> ChatActionPlayer {
-        ChatActionPlayer {
-            account_id: 7,
-            self_guid: Some(42),
-        }
+    fn player() -> ProtocolSession {
+        ProtocolSession::in_world(7, 42)
     }
 
     fn line(chat_type: CMSG_MESSAGECHAT_ChatType, language: Language) -> ClientOpcodeMessage {
@@ -553,11 +527,8 @@ mod tests {
         line(CMSG_MESSAGECHAT_ChatType::Party, language)
     }
 
-    fn handled(outcome: ChatActionOutcome) -> Vec<Outbound> {
-        match outcome {
-            ChatActionOutcome::Handled { outbound } => outbound,
-            ChatActionOutcome::PassThrough(msg) => panic!("expected Handled, got {msg}"),
-        }
+    fn handled(outcome: ProtocolReply) -> Vec<Outbound> {
+        outcome.outbound
     }
 
     fn only(outbound: Vec<Outbound>) -> ServerOpcodeMessage {
@@ -572,7 +543,7 @@ mod tests {
     fn a_party_line_carries_the_speaker_facts_and_the_clients_language() {
         let store = store(None);
         let outbound =
-            handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(Language::Common).into()).unwrap());
         assert!(outbound.is_empty(), "the line itself returns on the Relay");
         assert_eq!(store.facts_reads.lock().unwrap().as_slice(), &[42]);
         assert_eq!(
@@ -609,7 +580,7 @@ mod tests {
             (Language::Troll, 14),
         ] {
             let store = store(None);
-            handled(dispatch_chat_action(&store, player(), party(language)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(language).into()).unwrap());
             assert_eq!(
                 store.requests.lock().unwrap()[0].1.language,
                 wire,
@@ -621,12 +592,9 @@ mod tests {
     #[test]
     fn a_line_without_a_world_session_reads_and_requests_nothing() {
         let store = store(None);
-        let no_session = ChatActionPlayer {
-            account_id: 7,
-            self_guid: None,
-        };
+        let mut no_session = ProtocolSession::new(7, "TESTER".into());
         let outbound =
-            handled(dispatch_chat_action(&store, no_session, party(Language::Common)).unwrap());
+            handled(Chat::handle(&store, &mut no_session, party(Language::Common).into()).unwrap());
         assert!(outbound.is_empty());
         assert!(store.facts_reads.lock().unwrap().is_empty());
         assert!(store.requests.lock().unwrap().is_empty());
@@ -636,7 +604,7 @@ mod tests {
     fn a_speaker_without_a_live_entity_sends_nothing() {
         let store = InMemoryChatActions::default();
         let outbound =
-            handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(Language::Common).into()).unwrap());
         assert!(outbound.is_empty());
         assert!(store.requests.lock().unwrap().is_empty());
     }
@@ -645,7 +613,7 @@ mod tests {
     fn speaking_from_no_party_answers_not_in_group() {
         let store = store(Some(Ok(ChatOutcome::Refused(ChatRefusal::NotInGroup))));
         let outbound =
-            handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(Language::Common).into()).unwrap());
         match only(outbound) {
             ServerOpcodeMessage::SMSG_PARTY_COMMAND_RESULT(result) => {
                 assert_eq!(result.operation, PartyOperation::Leave);
@@ -660,7 +628,7 @@ mod tests {
     fn an_unknown_language_answers_the_vanilla_notification() {
         let store = store(Some(Ok(ChatOutcome::Refused(ChatRefusal::UnknownLanguage))));
         let outbound =
-            handled(dispatch_chat_action(&store, player(), party(Language::Orcish)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(Language::Orcish).into()).unwrap());
         match only(outbound) {
             ServerOpcodeMessage::SMSG_NOTIFICATION(notice) => {
                 assert_eq!(notice.notification, "You don't know that language");
@@ -673,8 +641,9 @@ mod tests {
     fn every_other_refusal_is_silent() {
         for refusal in [ChatRefusal::UnsupportedKind, ChatRefusal::EmptyMessage] {
             let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
-            let outbound =
-                handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            let outbound = handled(
+                Chat::handle(&store, &mut player(), party(Language::Common).into()).unwrap(),
+            );
             assert!(outbound.is_empty(), "{refusal:?}");
         }
     }
@@ -698,7 +667,12 @@ mod tests {
         ] {
             let store = store(None);
             let outbound = handled(
-                dispatch_chat_action(&store, player(), line(chat_type, Language::Common)).unwrap(),
+                Chat::handle(
+                    &store,
+                    &mut player(),
+                    line(chat_type, Language::Common).into(),
+                )
+                .unwrap(),
             );
             assert!(outbound.is_empty(), "the line itself returns on the Relay");
             assert_eq!(
@@ -720,7 +694,12 @@ mod tests {
         ] {
             let store = store(None);
             handled(
-                dispatch_chat_action(&store, player(), line(chat_type, Language::Addon)).unwrap(),
+                Chat::handle(
+                    &store,
+                    &mut player(),
+                    line(chat_type, Language::Addon).into(),
+                )
+                .unwrap(),
             );
             assert_eq!(
                 store.requests.lock().unwrap()[0].1.language,
@@ -742,10 +721,10 @@ mod tests {
         ] {
             let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
             let outbound = handled(
-                dispatch_chat_action(
+                Chat::handle(
                     &store,
-                    player(),
-                    line(CMSG_MESSAGECHAT_ChatType::Raid, Language::Common),
+                    &mut player(),
+                    line(CMSG_MESSAGECHAT_ChatType::Raid, Language::Common).into(),
                 )
                 .unwrap(),
             );
@@ -754,10 +733,10 @@ mod tests {
         for refusal in [ChatRefusal::NotInGuild, ChatRefusal::NoGuildChatRight] {
             let store = store(Some(Ok(ChatOutcome::Refused(refusal))));
             let outbound = handled(
-                dispatch_chat_action(
+                Chat::handle(
                     &store,
-                    player(),
-                    line(CMSG_MESSAGECHAT_ChatType::Guild, Language::Common),
+                    &mut player(),
+                    line(CMSG_MESSAGECHAT_ChatType::Guild, Language::Common).into(),
                 )
                 .unwrap(),
             );
@@ -768,7 +747,7 @@ mod tests {
     #[test]
     fn a_lost_reducer_transport_ends_the_session() {
         let store = store(Some(Err(Failure::TransportLost)));
-        let error = dispatch_chat_action(&store, player(), party(Language::Common))
+        let error = Chat::handle(&store, &mut player(), party(Language::Common).into())
             .err()
             .expect("transport loss is fatal");
         assert!(matches!(classify(&error), DurableFailure::TransportLoss));
@@ -778,7 +757,7 @@ mod tests {
     fn an_unrecognised_refusal_drops_the_line_and_keeps_the_session() {
         let store = store(Some(Err(Failure::Refused)));
         let outbound =
-            handled(dispatch_chat_action(&store, player(), party(Language::Common)).unwrap());
+            handled(Chat::handle(&store, &mut player(), party(Language::Common).into()).unwrap());
         assert!(outbound.is_empty());
     }
 
@@ -794,8 +773,9 @@ mod tests {
     #[test]
     fn a_channel_line_carries_the_typed_channel_and_the_clients_language() {
         let store = store(None);
-        let outbound =
-            handled(dispatch_chat_action(&store, player(), channel_line("trade - City")).unwrap());
+        let outbound = handled(
+            Chat::handle(&store, &mut player(), channel_line("trade - City").into()).unwrap(),
+        );
         assert!(outbound.is_empty(), "the line itself returns on the Relay");
         assert_eq!(
             store.requests.lock().unwrap().as_slice(),
@@ -825,7 +805,7 @@ mod tests {
                 refusal,
             )))));
             let outbound =
-                handled(dispatch_chat_action(&store, player(), channel_line("Rx")).unwrap());
+                handled(Chat::handle(&store, &mut player(), channel_line("Rx").into()).unwrap());
             let mut outbound = outbound.into_iter();
             match (outbound.next(), outbound.next()) {
                 (Some(Outbound::Raw { opcode, body }), None) => {
@@ -840,30 +820,12 @@ mod tests {
     #[test]
     fn an_unknown_language_on_a_channel_answers_the_vanilla_notification() {
         let store = store(Some(Ok(ChatOutcome::Refused(ChatRefusal::UnknownLanguage))));
-        let outbound = handled(dispatch_chat_action(&store, player(), channel_line("Rx")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), channel_line("Rx").into()).unwrap());
         assert!(matches!(
             only(outbound),
             ServerOpcodeMessage::SMSG_NOTIFICATION(_)
         ));
-    }
-
-    #[test]
-    fn say_and_yell_pass_through_untouched() {
-        let store = store(None);
-        for chat_type in [
-            CMSG_MESSAGECHAT_ChatType::Say,
-            CMSG_MESSAGECHAT_ChatType::Yell,
-        ] {
-            match dispatch_chat_action(&store, player(), line(chat_type, Language::Common)).unwrap()
-            {
-                ChatActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_MESSAGECHAT(chat)) => {
-                    assert_eq!(chat.message, "form up");
-                }
-                _ => panic!("say and yell stay proximity chat"),
-            }
-        }
-        assert!(store.facts_reads.lock().unwrap().is_empty());
-        assert!(store.requests.lock().unwrap().is_empty());
     }
 
     fn target() -> WhisperTargetFacts {
@@ -907,7 +869,8 @@ mod tests {
     #[test]
     fn a_whisper_conveys_the_speaker_and_the_target_facts() {
         let store = whisper_store(Ok(Some(target())), None);
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vim")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("vim").into()).unwrap());
         assert!(outbound.is_empty(), "the lines return on the Relay");
         assert_eq!(
             store.target_reads.lock().unwrap().as_slice(),
@@ -931,7 +894,8 @@ mod tests {
     #[test]
     fn a_whisper_to_nobody_online_answers_player_not_found() {
         let store = whisper_store(Ok(None), None);
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vIm")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("vIm").into()).unwrap());
         assert_eq!(not_found(outbound), "vIm");
         assert!(store.whispers.lock().unwrap().is_empty());
     }
@@ -939,7 +903,8 @@ mod tests {
     #[test]
     fn an_unknown_target_presence_answers_player_not_found() {
         let store = whisper_store(Err(Failure::PresenceUnknown), None);
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("vIm")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("vIm").into()).unwrap());
         assert_eq!(not_found(outbound), "vIm");
         assert!(store.whispers.lock().unwrap().is_empty());
     }
@@ -947,7 +912,7 @@ mod tests {
     #[test]
     fn a_lost_target_read_ends_the_session() {
         let store = whisper_store(Err(Failure::TransportLost), None);
-        let error = dispatch_chat_action(&store, player(), whisper_to("Vim"))
+        let error = Chat::handle(&store, &mut player(), whisper_to("Vim").into())
             .err()
             .expect("a lost read is fatal");
         assert_eq!(classify(&error), DurableFailure::TransportLoss);
@@ -961,7 +926,8 @@ mod tests {
             Ok(Some(target())),
             Some(Ok(ChatOutcome::Refused(ChatRefusal::WrongFaction))),
         );
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("Vim").into()).unwrap());
         let message = only(outbound);
         assert!(matches!(
             message,
@@ -977,7 +943,7 @@ mod tests {
         for refusal in [ChatRefusal::EmptyMessage, ChatRefusal::UnsupportedKind] {
             let store = whisper_store(Ok(Some(target())), Some(Ok(ChatOutcome::Refused(refusal))));
             let outbound =
-                handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+                handled(Chat::handle(&store, &mut player(), whisper_to("Vim").into()).unwrap());
             assert!(outbound.is_empty(), "{refusal:?}");
         }
     }
@@ -988,7 +954,8 @@ mod tests {
             facts: None,
             ..whisper_store(Ok(Some(target())), None)
         };
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("Vim").into()).unwrap());
         assert!(outbound.is_empty());
         assert!(store.target_reads.lock().unwrap().is_empty());
         assert!(store.whispers.lock().unwrap().is_empty());
@@ -997,13 +964,14 @@ mod tests {
     #[test]
     fn a_lost_transport_on_a_whisper_ends_the_session() {
         let store = whisper_store(Ok(Some(target())), Some(Err(Failure::TransportLost)));
-        assert!(dispatch_chat_action(&store, player(), whisper_to("Vim")).is_err());
+        assert!(Chat::handle(&store, &mut player(), whisper_to("Vim").into()).is_err());
     }
 
     #[test]
     fn an_unrecognised_whisper_refusal_is_silent() {
         let store = whisper_store(Ok(Some(target())), Some(Err(Failure::Refused)));
-        let outbound = handled(dispatch_chat_action(&store, player(), whisper_to("Vim")).unwrap());
+        let outbound =
+            handled(Chat::handle(&store, &mut player(), whisper_to("Vim").into()).unwrap());
         assert!(outbound.is_empty());
     }
 
@@ -1020,7 +988,7 @@ mod tests {
                 language: Language::Universal,
                 message: message.to_string(),
             }));
-            let outbound = handled(dispatch_chat_action(&store, player(), away).unwrap());
+            let outbound = handled(Chat::handle(&store, &mut player(), away.into()).unwrap());
             assert!(outbound.is_empty());
         }
         assert_eq!(
@@ -1037,12 +1005,12 @@ mod tests {
             away_failure: Some(Failure::Refused),
             ..store(None)
         };
-        assert!(handled(dispatch_chat_action(&refused, player(), afk()).unwrap()).is_empty());
+        assert!(handled(Chat::handle(&refused, &mut player(), afk().into()).unwrap()).is_empty());
         let lost = InMemoryChatActions {
             away_failure: Some(Failure::TransportLost),
             ..store(None)
         };
-        assert!(dispatch_chat_action(&lost, player(), afk()).is_err());
+        assert!(Chat::handle(&lost, &mut player(), afk().into()).is_err());
     }
 
     /// cm:ChatHandler.cpp:801-815: the ignorer's name, to the Character whose line was dropped.
@@ -1052,7 +1020,7 @@ mod tests {
         let ignored = ClientOpcodeMessage::CMSG_CHAT_IGNORED(CMSG_CHAT_IGNORED {
             guid: wow_world_base::vanilla::Guid::new(20),
         });
-        let outbound = handled(dispatch_chat_action(&store, player(), ignored).unwrap());
+        let outbound = handled(Chat::handle(&store, &mut player(), ignored.into()).unwrap());
         assert!(outbound.is_empty());
         assert_eq!(
             store.requests.lock().unwrap().as_slice(),
@@ -1068,21 +1036,5 @@ mod tests {
                 }
             )]
         );
-    }
-
-    #[test]
-    fn another_opcode_passes_through() {
-        let store = store(None);
-        let outcome = dispatch_chat_action(
-            &store,
-            player(),
-            ClientOpcodeMessage::CMSG_PING(CMSG_PING::default()),
-        )
-        .unwrap();
-        assert!(matches!(
-            outcome,
-            ChatActionOutcome::PassThrough(ClientOpcodeMessage::CMSG_PING(_))
-        ));
-        assert!(store.requests.lock().unwrap().is_empty());
     }
 }

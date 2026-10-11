@@ -1,5 +1,6 @@
 //! Death and resurrection requests, handled against a Fake that models only who is alive.
 
+use super::family::{ProtocolFamily, ProtocolSession};
 use super::*;
 use handle_loot_fake::{HandleLootFake, Life};
 
@@ -8,48 +9,21 @@ pub(crate) mod handle_loot_fake;
 
 pub(crate) const SELF_GUID: u64 = 1;
 
-/// A World Session connection in the world as `SELF_GUID`. `handle_loot` never reads the
-/// connection's Store, but `WorldConn` needs one.
-pub(crate) fn in_world_conn() -> WorldConn {
-    let (_, crypto) = ProofSeed::new().into_client_header_crypto(&ns("TESTER"), K, 0);
-    let (_, decrypt) = crypto.split();
-    WorldConn {
-        session_claim: None,
-        account_id: 7,
-        account_name: "TESTER".into(),
-        decrypt,
-        state: WorldState::InWorld(InWorld {
-            self_guid: SELF_GUID,
-            subs: PlayerSubscriptions::empty(),
-            attacking_target: None,
-            open_loot: OpenLootState::default(),
-            ranged_repeat: false,
-        }),
-        move_coalesce: Default::default(),
-        gossip_menu: None,
-        unavailable_notices: Default::default(),
-        store: RoutedStore::new(std::sync::Arc::new(WorldFake::default())),
-        session_key: None,
-        guild_signed_on: None,
-        move_desync_drops: 0,
-        who_throttled_until: None,
-        group_broadcast_cooldowns: Default::default(),
-        chat_flood: Default::default(),
-    }
+/// Protocol state for the Character named by `SELF_GUID`.
+pub(crate) fn in_world_conn() -> ProtocolSession {
+    ProtocolSession::in_world(7, SELF_GUID)
 }
 
 /// Handle one request and return what the client is sent. Fails when the handler ends the session
 /// or passes the request on.
 pub(crate) fn run(
     store: &HandleLootFake,
-    conn: &mut WorldConn,
+    session: &mut ProtocolSession,
     msg: ClientOpcodeMessage,
 ) -> Vec<Outbound> {
-    let (tx, rx) = SessionTx::with_depth(0);
-    let passed_on = handle_loot(&tx, store, conn, msg).expect("the request ends the session");
-    assert!(passed_on.is_none(), "the request was passed on");
-    drop(tx);
-    rx.try_iter().collect()
+    handlers::Loot::handle(store, session, msg.into())
+        .expect("the request ends the World Session")
+        .outbound
 }
 
 #[test]
@@ -179,13 +153,11 @@ fn transport_loss_ends_the_world_session() {
     let store = HandleLootFake::default()
         .with_life(SELF_GUID, Life::Dead)
         .with_transport_loss();
-    let (tx, _rx) = SessionTx::with_depth(0);
 
-    let result = handle_loot(
-        &tx,
+    let result = handlers::Loot::handle(
         &store,
         &mut in_world_conn(),
-        ClientOpcodeMessage::CMSG_REPOP_REQUEST,
+        ClientOpcodeMessage::CMSG_REPOP_REQUEST.into(),
     );
 
     assert!(result.is_err());

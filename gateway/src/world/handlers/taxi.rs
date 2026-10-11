@@ -2,6 +2,9 @@
 //! catalogue, discovery, range, or topology tables and therefore cannot fork module policy.
 
 use super::super::*;
+use crate::world::family::{
+    ProtocolFamily, ProtocolReply, ProtocolRequest, ProtocolSession, WorldSessionAction,
+};
 
 pub(crate) trait TaxiActionStore: Send + Sync {
     fn taxi_node_status(
@@ -21,23 +24,6 @@ pub(crate) trait TaxiActionStore: Send + Sync {
     ) -> Result<codec::TaxiActivationResult>;
 
     fn arm_taxi_flight(&self, actor: Actor) -> Result<()>;
-}
-
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct TaxiActionPlayer {
-    pub(crate) self_guid: Option<u64>,
-}
-
-pub(crate) enum TaxiActionOutcome {
-    Handled {
-        outbound: Vec<Outbound>,
-    },
-    Activated {
-        outbound: Vec<Outbound>,
-        character_guid: u64,
-        arm: bool,
-    },
-    PassThrough(ClientOpcodeMessage),
 }
 
 fn status_outbound<St: TaxiActionStore + ?Sized>(
@@ -84,24 +70,6 @@ fn activate_taxi_outbound<St: TaxiActionStore + ?Sized>(
     ))
 }
 
-/// Queue the activation reply, then arm the flight. The activation is already committed, so an
-/// arming failure of any kind ends the World Session.
-pub(crate) fn queue_reply_then_arm<St: TaxiActionStore + ?Sized>(
-    tx: &SessionTx,
-    store: &St,
-    outbound: Vec<Outbound>,
-    character_guid: u64,
-    arm: bool,
-) -> Result<()> {
-    for message in outbound {
-        send(tx, message)?;
-    }
-    match Actor::new(character_guid) {
-        Some(actor) if arm => store.arm_taxi_flight(actor),
-        _ => Ok(()),
-    }
-}
-
 /// The single gateway entry to the module's open operation. Both the direct taxi query and TAXI
 /// gossip selection call this exact function. No Character yet gets no window.
 pub(crate) fn open_taxi_outbound<St: TaxiActionStore + ?Sized>(
@@ -120,37 +88,38 @@ pub(crate) fn open_taxi_outbound<St: TaxiActionStore + ?Sized>(
     }
 }
 
-pub(crate) fn dispatch_taxi_action<St: TaxiActionStore + ?Sized>(
-    store: &St,
-    player: TaxiActionPlayer,
-    msg: ClientOpcodeMessage,
-) -> Result<TaxiActionOutcome> {
-    let actor = player.self_guid.and_then(Actor::new);
-    match msg {
-        ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(query) => Ok(TaxiActionOutcome::Handled {
-            outbound: status_outbound(store, actor, query.guid.guid())?,
-        }),
-        ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(query) => {
-            Ok(TaxiActionOutcome::Handled {
-                outbound: open_taxi_outbound(store, actor, query.guid.guid())?,
-            })
+pub(crate) struct Taxi;
+
+impl<St: TaxiActionStore + ?Sized> ProtocolFamily<St> for Taxi {
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let msg = request.message()?;
+        let actor = session.actor();
+        match msg {
+            ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(query) => Ok(ProtocolReply::from(
+                status_outbound(store, actor, query.guid.guid())?,
+            )),
+            ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(query) => Ok(ProtocolReply::from(
+                open_taxi_outbound(store, actor, query.guid.guid())?,
+            )),
+            ClientOpcodeMessage::CMSG_ACTIVATETAXI(request) => {
+                let (outbound, arm) = activate_taxi_outbound(
+                    store,
+                    actor,
+                    request.guid.guid(),
+                    request.source_node,
+                    request.destination_node,
+                )?;
+                Ok(ProtocolReply {
+                    outbound,
+                    after_queue: actor.filter(|_| arm).map(WorldSessionAction::ArmTaxi),
+                })
+            }
+            other => Err(anyhow!("request routed to Taxi: {other}")),
         }
-        ClientOpcodeMessage::CMSG_ACTIVATETAXI(request) => {
-            let character_guid = player.self_guid.unwrap_or(0);
-            let (outbound, arm) = activate_taxi_outbound(
-                store,
-                actor,
-                request.guid.guid(),
-                request.source_node,
-                request.destination_node,
-            )?;
-            Ok(TaxiActionOutcome::Activated {
-                outbound,
-                character_guid,
-                arm,
-            })
-        }
-        other => Ok(TaxiActionOutcome::PassThrough(other)),
     }
 }
 
@@ -176,8 +145,6 @@ pub(super) mod tests {
         /// The one (source, destination) node pair the Module accepts; any other pair answers
         /// `ACTIVATE_NO_SUCH_PATH`. `None` accepts every pair.
         pub(crate) route: Option<(u32, u32)>,
-        pub(crate) arm_tx_probe: Mutex<Option<SessionTx>>,
-        pub(crate) arm_observed_depth: Mutex<Option<usize>>,
     }
 
     impl TaxiActionStore for InMemoryTaxiActions {
@@ -245,11 +212,53 @@ pub(super) mod tests {
 
         fn arm_taxi_flight(&self, actor: Actor) -> Result<()> {
             self.calls.lock().unwrap().push(("arm", actor.guid(), 0));
-            if let Some(tx) = self.arm_tx_probe.lock().unwrap().as_ref() {
-                *self.arm_observed_depth.lock().unwrap() = Some(tx.depth());
-            }
             Ok(())
         }
+    }
+
+    fn run_taxi(
+        store: &InMemoryTaxiActions,
+        mut session: ProtocolSession,
+        message: ClientOpcodeMessage,
+    ) -> Result<ProtocolReply> {
+        Taxi::handle(store, &mut session, message.into())
+    }
+
+    #[test]
+    fn accepted_activation_requests_arming_after_the_reply_is_queued() {
+        let store = InMemoryTaxiActions::default();
+        *store.activation.lock().unwrap() = codec::TaxiActivationResult {
+            result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
+        };
+        let reply = run_taxi(&store, ProtocolSession::in_world(7, 9), activate_query()).unwrap();
+        assert!(matches!(
+            reply.outbound.as_slice(),
+            [Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(
+                _
+            ))]
+        ));
+        assert!(
+            matches!(reply.after_queue, Some(WorldSessionAction::ArmTaxi(actor)) if actor.guid() == 9)
+        );
+        assert!(!store
+            .calls
+            .lock()
+            .unwrap()
+            .iter()
+            .any(|call| call.0 == "arm"));
+    }
+
+    #[test]
+    fn refused_activation_does_not_request_arming() {
+        let store = InMemoryTaxiActions::default();
+        *store.activation.lock().unwrap() = codec::TaxiActivationResult {
+            result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NOT_ENOUGH_MONEY,
+        };
+        let reply = run_taxi(&store, ProtocolSession::in_world(7, 9), activate_query()).unwrap();
+        assert!(reply.after_queue.is_none());
+        assert!(
+            matches!(reply.outbound.as_slice(), [Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))] if reply.reply == wow_world_messages::vanilla::ActivateTaxiReply::NotEnoughMoney)
+        );
     }
 
     #[test]
@@ -259,16 +268,16 @@ pub(super) mod tests {
             npc_guid: 77,
             known: false,
         });
-        let outcome = dispatch_taxi_action(
+        let outcome = run_taxi(
             &store,
-            TaxiActionPlayer { self_guid: Some(9) },
+            ProtocolSession::in_world(7, 9),
             CMSG_TAXINODE_STATUS_QUERY {
                 guid: Guid::new(77),
             }
             .into(),
         )
         .unwrap();
-        assert!(matches!(outcome, TaxiActionOutcome::Handled { outbound } if outbound.len() == 1));
+        assert!(matches!(outcome, ProtocolReply { outbound, .. } if outbound.len() == 1));
         assert_eq!(*store.calls.lock().unwrap(), vec![("status", 9, 77)]);
     }
 
@@ -280,16 +289,16 @@ pub(super) mod tests {
             source_client_node_id: 255,
             available_client_node_ids: vec![255, 256],
         });
-        let outcome = dispatch_taxi_action(
+        let outcome = run_taxi(
             &store,
-            TaxiActionPlayer { self_guid: Some(9) },
+            ProtocolSession::in_world(7, 9),
             CMSG_TAXIQUERYAVAILABLENODES {
                 guid: Guid::new(77),
             }
             .into(),
         )
         .unwrap();
-        assert!(matches!(outcome, TaxiActionOutcome::Handled { outbound } if outbound.len() == 1));
+        assert!(matches!(outcome, ProtocolReply { outbound, .. } if outbound.len() == 1));
         assert_eq!(*store.calls.lock().unwrap(), vec![("open", 9, 77)]);
     }
 
@@ -320,16 +329,16 @@ pub(super) mod tests {
     #[test]
     fn an_unanswered_query_is_nonfatal() {
         let store = InMemoryTaxiActions::default();
-        let outcome = dispatch_taxi_action(
+        let outcome = run_taxi(
             &store,
-            TaxiActionPlayer { self_guid: Some(9) },
+            ProtocolSession::in_world(7, 9),
             CMSG_TAXIQUERYAVAILABLENODES {
                 guid: Guid::new(77),
             }
             .into(),
         )
         .unwrap();
-        assert!(matches!(outcome, TaxiActionOutcome::Handled { outbound } if outbound.is_empty()));
+        assert!(matches!(outcome, ProtocolReply { outbound, .. } if outbound.is_empty()));
     }
 
     #[test]
@@ -339,7 +348,7 @@ pub(super) mod tests {
             ..Default::default()
         };
         for msg in [status_query(), activate_query()] {
-            let result = dispatch_taxi_action(&store, TaxiActionPlayer { self_guid: Some(9) }, msg);
+            let result = run_taxi(&store, ProtocolSession::in_world(7, 9), msg);
             assert!(
                 result.is_err(),
                 "a lost transport must end the world session"
@@ -355,7 +364,7 @@ pub(super) mod tests {
             ..Default::default()
         };
         for msg in [status_query(), activate_query()] {
-            let result = dispatch_taxi_action(&store, TaxiActionPlayer { self_guid: Some(9) }, msg);
+            let result = run_taxi(&store, ProtocolSession::in_world(7, 9), msg);
             assert!(result.is_err(), "a taxi Refusal ends the world session");
         }
     }
@@ -363,10 +372,13 @@ pub(super) mod tests {
     #[test]
     fn no_character_yet_gets_no_taxi_answer_and_no_store_call() {
         let store = InMemoryTaxiActions::default();
-        let outcome =
-            dispatch_taxi_action(&store, TaxiActionPlayer { self_guid: None }, status_query())
-                .unwrap();
-        assert!(matches!(outcome, TaxiActionOutcome::Handled { outbound } if outbound.is_empty()));
+        let outcome = run_taxi(
+            &store,
+            ProtocolSession::new(7, "TESTER".into()),
+            status_query(),
+        )
+        .unwrap();
+        assert!(matches!(outcome, ProtocolReply { outbound, .. } if outbound.is_empty()));
         assert!(store.calls.lock().unwrap().is_empty());
     }
 
@@ -376,9 +388,9 @@ pub(super) mod tests {
         *store.activation.lock().unwrap() = codec::TaxiActivationResult {
             result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NOT_ENOUGH_MONEY,
         };
-        let outcome = dispatch_taxi_action(
+        let outcome = run_taxi(
             &store,
-            TaxiActionPlayer { self_guid: Some(9) },
+            ProtocolSession::in_world(7, 9),
             CMSG_ACTIVATETAXI {
                 guid: Guid::new(77),
                 source_node: 255,
@@ -387,11 +399,7 @@ pub(super) mod tests {
             .into(),
         )
         .unwrap();
-        let outbound = match outcome {
-            TaxiActionOutcome::Activated { outbound, .. } => outbound,
-            TaxiActionOutcome::Handled { .. } => panic!("activate returned ordinary outcome"),
-            TaxiActionOutcome::PassThrough(_) => panic!("activate must be consumed"),
-        };
+        let outbound = outcome.outbound;
         assert!(matches!(
             outbound.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))]
@@ -400,52 +408,6 @@ pub(super) mod tests {
         assert_eq!(
             *store.activation_inputs.lock().unwrap(),
             vec![(9, 77, 255, 256)]
-        );
-    }
-
-    #[test]
-    fn activation_reply_is_queued_before_the_arm_side_effect() {
-        let store = InMemoryTaxiActions::default();
-        *store.activation.lock().unwrap() = codec::TaxiActivationResult {
-            result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
-        };
-        let (tx, rx) = SessionTx::with_depth(0);
-        *store.arm_tx_probe.lock().unwrap() = Some(tx.clone());
-        let (outbound, arm) = activate_taxi_outbound(&store, Actor::new(9), 77, 255, 256).unwrap();
-
-        queue_reply_then_arm(&tx, &store, outbound, 9, arm).unwrap();
-
-        assert_eq!(*store.arm_observed_depth.lock().unwrap(), Some(1));
-        assert!(matches!(
-            rx.try_recv(),
-            Ok(Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(
-                _
-            )))
-        ));
-    }
-
-    #[test]
-    fn activation_refusal_is_queued_without_calling_arm() {
-        let store = InMemoryTaxiActions::default();
-        *store.activation.lock().unwrap() = codec::TaxiActivationResult {
-            result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_NOT_ENOUGH_MONEY,
-        };
-        let (tx, rx) = SessionTx::with_depth(0);
-        *store.arm_tx_probe.lock().unwrap() = Some(tx.clone());
-        let (outbound, arm) = activate_taxi_outbound(&store, Actor::new(9), 77, 255, 256).unwrap();
-
-        queue_reply_then_arm(&tx, &store, outbound, 9, arm).unwrap();
-
-        assert_eq!(tx.depth(), 1);
-        assert_eq!(*store.arm_observed_depth.lock().unwrap(), None);
-        assert!(!store
-            .calls
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|call| call.0 == "arm"));
-        assert!(
-            matches!(rx.try_recv(), Ok(Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))) if reply.reply == wow_world_messages::vanilla::ActivateTaxiReply::NotEnoughMoney)
         );
     }
 }

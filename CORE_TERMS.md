@@ -130,7 +130,7 @@ _Avoid_: SDK, plugin API, public API, allowlist
 The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
 
 **Protocol Family**:
-A group of client opcodes one Gateway handler owns, with the Store trait that handler calls (for example the vendor family and `VendorActionStore`). `WorldStore` is the umbrella over every family; a handler takes only its family's Store.
+A group of client opcodes one Gateway handler owns, with the Store traits that handler calls. The opcode ownership table selects that handler once. Each handler implements `ProtocolFamily`, reads or changes shared protocol state, and returns its outbound messages. `WorldStore` holds all Store traits for the World Session; each handler names only the Stores it needs.
 _Avoid_: family (unqualified), domain
 
 **Store**:

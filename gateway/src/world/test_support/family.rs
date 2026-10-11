@@ -1,8 +1,7 @@
 //! Pieces the handler-level family tests share: a session connection to run a handler against, and
-//! a drain for what the handler sent. A family test owns its Fake and its `run` helper.
+//! typed reply flattening. A family test owns its Fake and its `run` helper.
 
 use super::*;
-use std::sync::mpsc::Receiver;
 
 /// A connection for `account_id` in the world as `self_guid`. The session's routed Store is
 /// never read here: every handler under test takes its family Fake as an argument.
@@ -19,33 +18,22 @@ pub(crate) fn in_world_conn(account_id: u64, self_guid: u64) -> WorldConn {
         .unwrap_or_else(|_| panic!("the proof was made for the same key"));
     WorldConn {
         session_claim: None,
-        account_id,
-        account_name: "TESTER".into(),
+        protocol: ProtocolSession::in_world(account_id, self_guid),
         decrypt,
-        state: WorldState::InWorld(InWorld {
-            self_guid,
-            subs: PlayerSubscriptions::empty(),
-            attacking_target: None,
-            open_loot: Default::default(),
-            ranged_repeat: false,
-        }),
         move_coalesce: Default::default(),
-        gossip_menu: None,
         unavailable_notices: Default::default(),
         store: RoutedStore::new(Arc::new(WorldFake::default())),
         session_key: None,
         guild_signed_on: None,
         move_desync_drops: 0,
-        who_throttled_until: None,
-        group_broadcast_cooldowns: Default::default(),
         chat_flood: Default::default(),
     }
 }
 
-/// Every message a handler queued on its `SessionTx`, in send order.
-pub(crate) fn drain_outbound(rx: &Receiver<Outbound>) -> Vec<ServerOpcodeMessage> {
+/// Flatten typed replies while preserving their protocol order.
+pub(crate) fn outbound_messages(outbound: Vec<Outbound>) -> Vec<ServerOpcodeMessage> {
     let mut sent = Vec::new();
-    while let Ok(out) = rx.try_recv() {
+    for out in outbound {
         match out {
             Outbound::One(message) => sent.push(message),
             Outbound::Batch(messages) => sent.extend(messages),

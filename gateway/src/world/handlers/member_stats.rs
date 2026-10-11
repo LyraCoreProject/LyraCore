@@ -7,7 +7,7 @@
 use super::super::*;
 use crate::codec::{
     build_member_stats, build_member_status, full_update_mask, member_status, stats_delta,
-    MemberStats, MemberStatsPacket,
+    MemberStats as MemberStatsView, MemberStatsPacket,
 };
 use std::collections::HashMap;
 use std::sync::{Mutex, MutexGuard, PoisonError};
@@ -18,7 +18,7 @@ pub(crate) enum MemberPresence {
     /// A live `game_world_entity` row on some World Shard. Boxed: `MemberStats` carries a 32-slot
     /// and a 16-slot aura array plus its pet's own copies, so an unboxed variant would triple the
     /// size of every `MemberPresence`, most of which are `InTransit` or `Offline`.
-    Live(Box<MemberStats>),
+    Live(Box<MemberStatsView>),
     /// No live entity, but the member is between two places: a pending Transfer, or the loading
     /// screen of a map change. Reporting it offline would make the frame flicker.
     InTransit,
@@ -41,7 +41,7 @@ pub(crate) trait MemberStatsStore: Send + Sync {
 pub(crate) enum MemberSnapshot {
     Offline,
     /// Boxed for the same reason as [`MemberPresence::Live`].
-    Live(Box<MemberStats>),
+    Live(Box<MemberStatsView>),
 }
 
 /// What one World Session's client holds of each group mate's Member Stats.
@@ -129,52 +129,42 @@ pub(crate) fn member_stats_tick<St: MemberStatsStore + ?Sized>(
     Ok(outbound)
 }
 
-#[derive(Clone, Copy, Default)]
-pub(crate) struct MemberStatsPlayer<'a> {
-    pub(crate) self_guid: Option<u64>,
-    /// `None` only for a Store with no Relay, such as the in-memory test Store.
-    pub(crate) record: Option<&'a MemberStatsRecord>,
-}
+pub(crate) struct MemberStats;
 
-pub(crate) enum MemberStatsOutcome {
-    Handled { outbound: Vec<Outbound> },
-    PassThrough(ClientOpcodeMessage),
-}
-
-/// Answer `CMSG_REQUEST_PARTY_MEMBER_STATS` with one `SMSG_PARTY_MEMBER_STATS_FULL`.
-///
-/// The answer is a writer job that also forgets the member in the viewer's record, so the next
-/// Relay tick sends every field on top of it. A failed read logs and sends nothing, because a
-/// party frame is never worth a World Session.
-pub(crate) fn dispatch_member_stats<St: MemberStatsStore + ?Sized>(
-    store: &St,
-    player: MemberStatsPlayer<'_>,
-    msg: ClientOpcodeMessage,
-) -> MemberStatsOutcome {
-    let (ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(request), Some(self_guid)) =
-        (&msg, player.self_guid)
-    else {
-        return MemberStatsOutcome::PassThrough(msg);
-    };
-    let guid = request.guid.guid();
-    let (opcode, body) = match full_answer(store, self_guid, guid) {
-        Ok(answer) => answer,
-        Err(error) => {
-            log::warn!("member stats: no answer for {guid} to {self_guid}: {error:#}");
-            return MemberStatsOutcome::Handled {
-                outbound: Vec::new(),
-            };
-        }
-    };
-    let record = player.record.cloned();
-    let answer = move || {
-        if let Some(record) = record {
-            record.forget(guid);
-        }
-        vec![Outbound::Raw { opcode, body }]
-    };
-    MemberStatsOutcome::Handled {
-        outbound: vec![Outbound::Job(Box::new(answer))],
+impl<St: MemberStatsStore + ?Sized> ProtocolFamily<St> for MemberStats {
+    /// Answer on the writer and clear the previous Relay record before the next tick.
+    /// An unreadable group member sends nothing and leaves the World Session open.
+    fn handle(
+        store: &St,
+        session: &mut ProtocolSession,
+        request: ProtocolRequest,
+    ) -> Result<ProtocolReply> {
+        let ClientOpcodeMessage::CMSG_REQUEST_PARTY_MEMBER_STATS(request) = request.message()?
+        else {
+            return Err(anyhow!("opcode routed to wrong Protocol Family"));
+        };
+        let Some(self_guid) = session.self_guid() else {
+            return Ok(ProtocolReply::default());
+        };
+        let guid = request.guid.guid();
+        let (opcode, body) = match full_answer(store, self_guid, guid) {
+            Ok(answer) => answer,
+            Err(error) => {
+                log::warn!("member stats: no answer for {guid} to {self_guid}: {error:#}");
+                return Ok(ProtocolReply::default());
+            }
+        };
+        let record = match &session.state {
+            WorldState::InWorld(world) => world.subs.member_stats_record().cloned(),
+            WorldState::CharSelect => None,
+        };
+        let answer = move || {
+            if let Some(record) = record {
+                record.forget(guid);
+            }
+            vec![Outbound::Raw { opcode, body }]
+        };
+        Ok(vec![Outbound::Job(Box::new(answer))].into())
     }
 }
 
