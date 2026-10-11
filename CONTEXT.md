@@ -71,7 +71,9 @@ The shard that hosts instanced maps.
 A stable name for the import plan assigned to one World Shard or Instance Pool destination. The
 canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single`,
 `starting-eastern`, `starting-kalimdor`, and `instances`. The starting profiles retain the Alliance
-scope and add the Horde starting areas on the same continent.
+scope and add the Horde starting areas on the same continent. Canonical profiles share quest
+definitions from both starting profiles and the Instance Pool; quest-giver relations stay within
+each destination's World Import Scope.
 
 **World Import Scope**:
 The authoritative union of Bounded Map Slices, Instance Vmap Slices, whole maps, and forced

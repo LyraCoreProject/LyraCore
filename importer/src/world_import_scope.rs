@@ -88,6 +88,29 @@ enum SliceGeometry {
 }
 
 impl WorldImportScope {
+    pub(crate) fn quest_catalogue() -> Result<Self> {
+        let mut bounded_slices = Vec::new();
+        let mut whole_maps = Vec::new();
+        let mut forced_creature_entries = Vec::new();
+        for profile in [
+            WorldImportProfile::StartingEastern,
+            WorldImportProfile::StartingKalimdor,
+            WorldImportProfile::Instances,
+        ] {
+            let scope = Self::canonical(profile)?;
+            bounded_slices.extend(scope.bounded_slices);
+            whole_maps.extend(scope.whole_maps);
+            forced_creature_entries.extend(scope.forced_creature_entries);
+        }
+        Self::new(
+            "quest-catalogue",
+            bounded_slices,
+            whole_maps,
+            vec![],
+            forced_creature_entries,
+        )
+    }
+
     pub(crate) fn canonical(profile: WorldImportProfile) -> Result<Self> {
         // Human bounds are the existing canonical importer rectangle. Dwarf/Gnome and Night Elf
         // bounds were narrowed with `--print-extents` against the local classic-db dump. Their
