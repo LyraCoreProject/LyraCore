@@ -11,7 +11,7 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_call("debug_grant_item", &["1", "6948", "1"]);
-    shard.assert_sql("UPDATE game_character SET home_map = 0, home_x = -9000, home_y = -100, home_z = 80, home_o = 1 WHERE guid = 1");
+    shard.assert_sql("UPDATE game_character SET home_map = 0, home_x = -9000, home_y = -100, home_z = 80, orientation = 1 WHERE guid = 1");
     shard
 }
 
@@ -91,11 +91,42 @@ fn cancelling_hearthstone_prevents_recall_and_keeps_it_usable() {
     std::thread::sleep(Duration::from_secs(11));
     assert_eq!(position(&shard), before);
     assert_eq!(items(&shard), inventory);
+    use_hearthstone(&shard);
+    shard.assert_call("gw_cancel_cast", &[&actor("1")]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn movement_cancels_hearthstone_before_recall() {
+    let shard = fixture("hearthstone-movement");
+    let inventory = items(&shard);
+    let before = position(&shard);
+    use_hearthstone(&shard);
+    let x = (before[0]["x"].parse::<f32>().unwrap() + 1.0).to_string();
+    shard.assert_call(
+        "gw_movement_update",
+        &[
+            &actor("1"),
+            &lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT.to_string(),
+            "[]",
+            &x,
+            &before[0]["y"],
+            &before[0]["z"],
+            "0",
+            "1",
+        ],
+    );
+    let moved = position(&shard);
+    assert_eq!(
+        moved[0]["x"].parse::<f32>().unwrap(),
+        x.parse::<f32>().unwrap()
+    );
     assert!(shard
-        .query_rows(
-            "SELECT * FROM game_spell_cast_event WHERE spell_id = 8690 AND is_completion = true"
-        )
+        .query_rows("SELECT * FROM game_pending_cast WHERE caster_guid = 1")
         .is_empty());
+    std::thread::sleep(Duration::from_secs(11));
+    assert_eq!(position(&shard), moved);
+    assert_eq!(items(&shard), inventory);
     use_hearthstone(&shard);
     shard.assert_call("gw_cancel_cast", &[&actor("1")]);
 }

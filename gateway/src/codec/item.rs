@@ -638,6 +638,14 @@ mod tests {
             ..Default::default()
         };
         let reply = build_item_query_response(6948, Some(&template));
+        let message = ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(Box::new(reply));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        let ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(reply) =
+            ServerOpcodeMessage::read_unencrypted(&mut wire.as_slice()).unwrap()
+        else {
+            panic!("expected item query response");
+        };
         let spell = reply.found.unwrap().spells[0];
         assert_eq!(spell.spell, 8690);
         assert_eq!(spell.spell_trigger, SpellTriggerType::OnUse);

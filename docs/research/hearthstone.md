@@ -88,3 +88,11 @@ only derives cooldowns from spell DBC fields. Do not claim the item cooldown is
 fixed by changing the cast time.
 [Item query spell fields](https://github.com/LyraCoreProject/LyraCore/blob/0d084310db5dc9d37a60247b5e669ddaf0b71bb8/gateway/src/codec/item.rs#L218-L222),
 [spell cooldown import](https://github.com/LyraCoreProject/LyraCore/blob/0d084310db5dc9d37a60247b5e669ddaf0b71bb8/importer/src/spell.rs#L1213-L1217).
+
+## Existing Realms
+
+Publishing does not rerun the initial seed. The post-publish repair does not
+replace the Hearthstone item or spell. Re-import both item data and spell 8690
+on every affected Shard to apply this fix to an existing Realm. The old 50119
+spell can remain unused after the item points to 8690.
+[Spell import deletion](https://github.com/LyraCoreProject/LyraCore/blob/0d084310db5dc9d37a60247b5e669ddaf0b71bb8/importer/src/spell.rs#L1932-L1958).
