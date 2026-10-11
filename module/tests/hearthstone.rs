@@ -107,7 +107,7 @@ fn movement_cancels_hearthstone_before_recall() {
         "gw_movement_update",
         &[
             &actor("1"),
-            &lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT.to_string(),
+            &lyracore_shared::opcodes::movement::MSG_MOVE_STOP.to_string(),
             "[]",
             &x,
             &before[0]["y"],
