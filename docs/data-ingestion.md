@@ -211,8 +211,9 @@ continents' spatial rows. Non-spatial content (spells, items, quests, the DBC re
 duplicated on every shard by design.
 
 Canonical World Import Profiles build quest definitions from the union of the starting profiles
-and the Instance Pool. This keeps quest text and objectives available after Transfer. Quest-giver
-relations still follow the destination's World Import Scope. Legacy map and box imports retain
+and the Instance Pool. This keeps quest text, objectives, and scripted event requirements
+available after Transfer. Quest reimports retain summoned givers and reapply the `creature-ai`
+Package Deltas for event requirements. Quest-giver relations still follow the destination's World Import Scope. Legacy map and box imports retain
 their selected quest scope. Existing canonical imports need the `quests` and `items` families
 reimported on every World Shard and Instance Pool so the shared quest rewards have item templates.
 

@@ -3875,7 +3875,10 @@ pub(crate) fn family_active(args: &Args, name: &str) -> bool {
 /// on the dry-run path as well as `--apply`: a check has to print the same plan an apply would
 /// send, and `package_delta::reapply` itself decides which of those two this call is.
 fn run_package_stage(args: &Args, family: &str) -> Result<()> {
-    if !family_active(args, family) {
+    // Canonical quests also reload the EventAI quest completion rules.
+    let quest_event_reload =
+        family == "creature-ai" && args.world_profile.is_some() && family_active(args, "quests");
+    if !family_active(args, family) && !quest_event_reload {
         return Ok(());
     }
     match &args.packages {
@@ -3949,7 +3952,7 @@ fn build_dump_plan(
         entries,
         eventai,
         eventai_manifest,
-    } = resolve_scope_entries(dump, args, &scope, &spawns)?;
+    } = resolve_scope_entries(dump, args, &scope, &spawns, ScopePurpose::Import)?;
     let CreatureTemplates {
         templates,
         creature_loot_ids,
@@ -3987,24 +3990,19 @@ fn build_dump_plan(
     // Canonical profiles share the supported quest catalogue; giver relations stay local.
     // Legacy slices keep their explicitly selected quest scope.
     let catalogue = if args.world_profile.is_some() {
-        let mut catalogue_scope = WorldImportScope::quest_catalogue()?;
-        catalogue_scope.extend_forced_creatures(&args.include_creatures);
-        let catalogue_spawns = collect_creature_spawns(dump, &catalogue_scope);
-        let catalogue_entries =
-            resolve_scope_entries(dump, args, &catalogue_scope, &catalogue_spawns)?.entries;
-        let catalogue_templates =
-            build_creature_templates(dump, &catalogue_entries, display_scales);
-        Some((
-            catalogue_entries,
-            collect_gameobject_spawns(dump, &catalogue_scope),
-            catalogue_templates.creature_loot_ids,
-        ))
+        Some(build_quest_catalogue(dump, args, display_scales)?)
     } else {
         None
     };
     let (quest_entries, quest_gameobjects, quest_loot_ids) = catalogue
         .as_ref()
-        .map(|(entries, gameobjects, loot_ids)| (entries, gameobjects, loot_ids))
+        .map(|catalogue| {
+            (
+                &catalogue.entries,
+                &catalogue.gameobjects,
+                &catalogue.creature_loot_ids,
+            )
+        })
         .unwrap_or((&entries, &go_spawns, &creature_loot_ids));
     let mut obtainable_items = creature_drop_item_set(dump, quest_loot_ids);
     obtainable_items.extend(gameobject_loot_item_set(dump, &quest_gameobjects.used_go));
@@ -4075,6 +4073,11 @@ fn build_dump_plan(
     // (vendor/innkeeper/trainer/plain-gossip, quest-status conditions folded). Four-table clear+reload.
     let gossip = build_gossip_sql(dump, &entries);
 
+    let quest_event_requirements = catalogue
+        .as_ref()
+        .map(|catalogue| &catalogue.eventai)
+        .unwrap_or(&eventai)
+        .quest_event_requirement_rows();
     let content = MappedContent {
         templates: &templates,
         waypoints: &waypoints,
@@ -4095,6 +4098,7 @@ fn build_dump_plan(
         creature_casts: &creature_casts,
         creature_rotation_rows: &creature_rotation_rows,
         eventai: &eventai,
+        quest_event_requirements: &quest_event_requirements,
     };
     // 5) static content (no Timestamp columns) → plain SQL clear+reload, family by family, in the
     //    order the tables must land. The spawns + live-entity reset are NOT here — they go through
@@ -4162,6 +4166,12 @@ fn build_dump_plan(
 /// db_guid, entry, x, y, z, orientation, movement_type, respawn_secs, map.
 type CreatureSpawnRow = (u64, u64, f64, f64, f64, f64, u8, u32, i64);
 
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScopePurpose {
+    Import,
+    QuestCatalogue,
+}
+
 /// The creature template entries this run imports, with the EventAI plan that grew them.
 struct ScopeEntries {
     entries: std::collections::HashSet<u64>,
@@ -4218,6 +4228,31 @@ struct LootFamilyRows {
     fishing_rows: Vec<String>,
 }
 
+struct QuestCatalogue {
+    entries: std::collections::HashSet<u64>,
+    gameobjects: GameobjectSpawns,
+    creature_loot_ids: std::collections::HashMap<u64, u64>,
+    eventai: eventai::EventAiPlan,
+}
+
+fn build_quest_catalogue(
+    dump: &str,
+    args: &Args,
+    display_scales: &Option<std::collections::HashMap<u32, f32>>,
+) -> Result<QuestCatalogue> {
+    let mut scope = WorldImportScope::quest_catalogue()?;
+    scope.extend_forced_creatures(&args.include_creatures);
+    let spawns = collect_creature_spawns(dump, &scope);
+    let content = resolve_scope_entries(dump, args, &scope, &spawns, ScopePurpose::QuestCatalogue)?;
+    let templates = build_creature_templates(dump, &content.entries, display_scales);
+    Ok(QuestCatalogue {
+        entries: content.entries,
+        gameobjects: collect_gameobject_spawns(dump, &scope),
+        creature_loot_ids: templates.creature_loot_ids,
+        eventai: content.eventai,
+    })
+}
+
 /// Every mapped row set the static-content SQL blocks and the provenance stamps read. Borrowed, so
 /// the push helpers below stay a view over `build_dump_plan`'s own values.
 #[derive(Clone, Copy)]
@@ -4241,6 +4276,7 @@ struct MappedContent<'a> {
     creature_casts: &'a [String],
     creature_rotation_rows: &'a [String],
     eventai: &'a eventai::EventAiPlan,
+    quest_event_requirements: &'a [String],
 }
 
 /// Every creature spawn the World Import Scope keeps: the cmangos `creature` rows inside the scope,
@@ -4389,6 +4425,7 @@ fn resolve_scope_entries(
     args: &Args,
     scope: &WorldImportScope,
     spawns: &[CreatureSpawnRow],
+    purpose: ScopePurpose,
 ) -> Result<ScopeEntries> {
     let mut entries: std::collections::HashSet<u64> = spawns.iter().map(|s| s.1).collect();
     // Spell summons have no placed spawn. Include the pet rewards and both Binding objectives.
@@ -4421,9 +4458,10 @@ fn resolve_scope_entries(
                 template_is_importable(&row).then_some(entry)
             })
             .collect();
-    let (eventai, eventai_manifest) = if family_active(args, "creature-ai") {
-        let profile = eventai::source_profile(&args.eventai_profile).map_err(anyhow::Error::msg)?;
-        let observed_sql_sha256 = sha256_hex(dump.as_bytes())?;
+    // Canonical quest reimports must retain summoned givers discovered by a full import.
+    let (eventai, eventai_manifest) = if args.world_profile.is_some()
+        || family_active(args, "creature-ai")
+    {
         let source = eventai::parse(dump);
         let plan = loop {
             let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
@@ -4437,12 +4475,23 @@ fn resolve_scope_entries(
                 break plan;
             }
         };
-        let manifest =
-            plan.compatibility_manifest(&profile, &observed_sql_sha256, eventai::LOADER_CONTRACT);
-        if args.apply {
-            manifest.require_apply_ready().map_err(anyhow::Error::msg)?;
-        }
-        (plan, Some(manifest.render().to_string()))
+        let manifest = if purpose == ScopePurpose::Import && family_active(args, "creature-ai") {
+            let profile =
+                eventai::source_profile(&args.eventai_profile).map_err(anyhow::Error::msg)?;
+            let observed_sql_sha256 = sha256_hex(dump.as_bytes())?;
+            let manifest = plan.compatibility_manifest(
+                &profile,
+                &observed_sql_sha256,
+                eventai::LOADER_CONTRACT,
+            );
+            if args.apply {
+                manifest.require_apply_ready().map_err(anyhow::Error::msg)?;
+            }
+            Some(manifest.render().to_string())
+        } else {
+            None
+        };
+        (plan, manifest)
     } else {
         (eventai::EventAiPlan::default(), None)
     };
@@ -5555,6 +5604,7 @@ fn push_creature_behaviour_statements(
         creature_casts,
         creature_rotation_rows,
         eventai,
+        quest_event_requirements,
         ..
     } = content;
     // Caster-mob cast + rotation rows (family "casts"). The primary-key is creature_entry, so clear ALL
@@ -5580,10 +5630,16 @@ fn push_creature_behaviour_statements(
         );
     }
 
+    let quest_events_active = family_active(args, "creature-ai")
+        || (args.world_profile.is_some() && family_active(args, "quests"));
     if family_active(args, "creature-ai") {
         stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
+    }
+    if quest_events_active {
         stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
+    }
+    if family_active(args, "creature-ai") {
         push_insert(
             stmts,
             "game_creature_ai_broadcast_text",
@@ -5596,11 +5652,14 @@ fn push_creature_behaviour_statements(
             "id,x,y,z,orientation,lifetime_ms",
             &eventai.summon_rows,
         );
+    }
+    // Event credit is part of the shared quest completion rule, even on another World Shard.
+    if quest_events_active {
         push_insert(
             stmts,
             "game_quest_event_requirement",
             "id,quest_entry",
-            &eventai.quest_event_requirement_rows(),
+            quest_event_requirements,
         );
     }
 }
@@ -7784,6 +7843,129 @@ mod tests {
         );
     }
 
+    #[test]
+    fn canonical_quests_keep_event_requirement_on_other_destination() {
+        let dump = format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0),(2,200,1,1,10300,800,1326,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `quest_template` VALUES {}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500); INSERT INTO `creature_involvedrelation` VALUES (200,500); \
+             INSERT INTO `creature_ai_scripts` VALUES {};",
+            creature_template_row(100, 0), creature_template_row(200, 0),
+            quest_template_row_requiring_event(500),
+            eventai_rule_row(10, 100, 4, 0, 100, 0, [0; 6], [[15, 500, 6, 0], [0; 4], [0; 4]]),
+        );
+        let eastern = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "starting-eastern",
+        ])
+        .unwrap();
+        let mut kalimdor = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "starting-kalimdor",
+        ])
+        .unwrap();
+        kalimdor.family = Some("quests".into());
+        let east = build_dump_plan(&dump, &eastern, &None, &None).unwrap();
+        let west = build_dump_plan(&dump, &kalimdor, &None, &None).unwrap();
+        let reqs = |p: &DumpPlan| {
+            p.stmts
+                .iter()
+                .filter(|s| s.starts_with("INSERT INTO game_quest_event_requirement"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert!(!reqs(&east).is_empty(), "source needs credit");
+        let complete = |p: &DumpPlan| {
+            lyracore_shared::quest::objectives_complete([], &[], |_| 0, !reqs(p).is_empty(), false)
+        };
+        assert!(!complete(&east), "uncredited quest is incomplete on source");
+        assert!(
+            west.stmts
+                .iter()
+                .any(|s| s.starts_with("INSERT INTO game_creature_quest")
+                    && s.contains(",200,500,1)")),
+            "destination has end giver"
+        );
+        assert_eq!(
+            complete(&east),
+            complete(&west),
+            "same uncredited Character can turn in on destination"
+        );
+    }
+
+    #[test]
+    fn canonical_quest_reimport_keeps_summon_giver_quest() {
+        let dump =
+            format!(
+            "INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{}; \
+             INSERT INTO `quest_template` VALUES {},{}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500),(200,501); \
+             INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); \
+             INSERT INTO `creature_ai_scripts` VALUES {};",
+            creature_template_row(100, 0), creature_template_row(200, 0),
+            quest_template_row(500, "Placed giver"), quest_template_row(501, "Summon giver"),
+            eventai_rule_row(10,100,0,0,100,0,[0,1,0,1,0,0],[[32,200,0,700],[0;4],[0;4]]),
+        );
+        let mut args = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "starting-eastern",
+        ])
+        .unwrap();
+        let full = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        args.family = Some("quests".into());
+        let partial = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        let quests = |p: &DumpPlan| {
+            p.stmts
+                .iter()
+                .filter(|s| s.starts_with("INSERT INTO game_quest_template"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert!(quests(&full).join("").contains("(501,"));
+        assert_eq!(
+            quests(&full),
+            quests(&partial),
+            "quest reimport must preserve shared definitions"
+        );
+        let givers = |plan: &DumpPlan| {
+            plan.stmts
+                .iter()
+                .filter(|statement| statement.starts_with("INSERT INTO game_creature_quest"))
+                .cloned()
+                .collect::<Vec<_>>()
+        };
+        assert!(givers(&full).join("").contains(",200,501,0)"));
+        assert_eq!(givers(&full), givers(&partial));
+    }
+
+    #[test]
+    fn canonical_quest_reimport_checks_creature_ai_package_deltas() {
+        let mut args = parse_args_from([
+            "--dump",
+            "synthetic.sql",
+            "--world-profile",
+            "starting-eastern",
+            "--family",
+            "quests",
+        ])
+        .unwrap();
+        let absent_root =
+            std::env::temp_dir().join(format!("lyracore-absent-packages-{}", std::process::id(),));
+        assert!(!absent_root.exists());
+        args.packages = Some(absent_root.to_string_lossy().into_owned());
+        assert!(run_package_stage(&args, "creature-ai").is_err());
+        args.world_profile = None;
+        assert!(run_package_stage(&args, "creature-ai").is_ok());
+    }
+
     fn quest_catalogue_fixture() -> String {
         let mut kalimdor_quest = vec!["0".to_owned(); qt::REW_MONEY_MAX_LEVEL + 1];
         kalimdor_quest[qt::ENTRY] = "501".into();
@@ -7800,11 +7982,13 @@ mod tests {
              (1,100,0,1,-9000,0,80,0,300,300,0,0),\
              (2,200,1,1,10300,800,1326,0,300,300,0,0),\
              (3,400,36,1,-16,-383,-33,0,300,300,0,0),\
-             (4,500,1,1,0,0,0,0,300,300,0,0); \
-             INSERT INTO `creature_template` VALUES {},{},{},{}; \
-             INSERT INTO `quest_template` VALUES {},{},{},{}; \
-             INSERT INTO `creature_questrelation` VALUES (100,500),(400,502),(500,503); \
-             INSERT INTO `creature_involvedrelation` VALUES (100,500),(400,502); \
+             (4,500,1,1,0,0,0,0,300,300,0,0),\
+             (5,600,0,1,1814,1485,90,0,300,300,0,0),\
+             (6,700,1,1,-514,-4344,38,0,300,300,0,0); \
+             INSERT INTO `creature_template` VALUES {},{},{},{},{},{}; \
+             INSERT INTO `quest_template` VALUES {},{},{},{},{},{}; \
+             INSERT INTO `creature_questrelation` VALUES (100,500),(400,502),(500,503),(600,504),(700,505); \
+             INSERT INTO `creature_involvedrelation` VALUES (100,500),(400,502),(600,504),(700,505); \
              INSERT INTO `gameobject_template` VALUES (300,2,100,'Quest giver',0,0,0,1,0,0,0,0); \
              INSERT INTO `gameobject` VALUES (3,300,1,0,10300,800,1326,0,0,0,0,1); \
              INSERT INTO `gameobject_questrelation` VALUES (300,501); \
@@ -7814,10 +7998,14 @@ mod tests {
             creature_template_row(200, 0),
             creature_template_row(400, 0),
             creature_template_row(500, 0),
+            creature_template_row(600, 0),
+            creature_template_row(700, 0),
             quest_template_row_with_cast_objective(500, 100, 456),
             kalimdor_quest,
             quest_template_row(502, "Instance quest"),
             quest_template_row(503, "Outside supported content"),
+            quest_template_row(504, "Deathknell quest"),
+            quest_template_row(505, "Valley of Trials quest"),
         )
     }
 
@@ -7844,7 +8032,7 @@ mod tests {
                 .iter()
                 .find(|s| s.starts_with("INSERT INTO game_quest_template"))
                 .expect("quest catalogue on every Shard");
-            for quest in [500, 501, 502] {
+            for quest in [500, 501, 502, 504, 505] {
                 assert!(
                     templates.contains(&format!("({quest},")),
                     "{profile} is missing quest {quest}: {templates}"
@@ -7910,6 +8098,18 @@ mod tests {
                 .cloned()
                 .collect::<Vec<_>>()
                 .join(";");
+            for (giver, quest, owner) in [
+                (600, 504, "starting-eastern"),
+                (700, 505, "starting-kalimdor"),
+            ] {
+                for role in [0, 1] {
+                    assert_eq!(
+                        relations.contains(&format!(",{giver},{quest},{role})")),
+                        *profile == owner,
+                        "{profile} Horde giver {giver}: {relations}"
+                    );
+                }
+            }
             for role in [0, 1] {
                 assert_eq!(
                     relations.contains(&format!(",100,500,{role})")),
