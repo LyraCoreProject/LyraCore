@@ -165,6 +165,7 @@ fn default_state(ctx: &ReducerContext, creature_guid: u64) -> CreatureAiState {
         definition_revision: 0,
         active_object: false,
         react_state: 2,
+        melee_enabled: true,
     }
 }
 
@@ -479,6 +480,8 @@ pub(super) fn place_summon(
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: u32::MAX,
         life_seq: 0,
+        source_guid: 0,
+        instance_id: summoner.instance_id,
     };
     let entity = crate::creatures::build_creature_entity(
         &spawn,
@@ -720,6 +723,36 @@ pub(crate) fn verify_summon_expiry_boundaries_for_debug(
 
 fn despawn_temporary_summon(ctx: &ReducerContext, creature_guid: u64) {
     crate::creatures::despawn_creature_entity(ctx, creature_guid);
+}
+
+pub(crate) fn melee_enabled(ctx: &ReducerContext, creature_guid: u64) -> bool {
+    ctx.db
+        .game_creature_ai_state()
+        .creature_guid()
+        .find(creature_guid)
+        .is_none_or(|state| state.melee_enabled)
+}
+
+pub(super) fn set_auto_attack(ctx: &ReducerContext, creature_guid: u64, enabled: bool) -> bool {
+    if !ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(creature_guid)
+        .is_some_and(|entity| !entity.is_player() && !entity.dead)
+    {
+        return false;
+    }
+    let table = ctx.db.game_creature_ai_state();
+    let existing = table.creature_guid().find(creature_guid);
+    let mut state = existing.unwrap_or_else(|| default_state(ctx, creature_guid));
+    state.melee_enabled = enabled;
+    if table.creature_guid().find(creature_guid).is_some() {
+        table.creature_guid().update(state);
+    } else {
+        table.insert(state);
+    }
+    true
 }
 
 #[cfg(test)]

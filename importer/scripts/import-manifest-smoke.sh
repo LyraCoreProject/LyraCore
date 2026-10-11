@@ -80,6 +80,10 @@ done
 echo "[smoke] canonical profile vocabulary:"
 for profile in $WORLD_PROFILES; do
   case "$profile" in
+    full-world) maps="$PROFILE_FULL_WORLD_MAPS" ;;
+    full-eastern) maps="$PROFILE_FULL_EASTERN_MAPS" ;;
+    full-kalimdor) maps="$PROFILE_FULL_KALIMDOR_MAPS" ;;
+    full-instances) maps="$PROFILE_FULL_INSTANCES_MAPS" ;;
     alliance-eastern) maps="$PROFILE_ALLIANCE_EASTERN_MAPS" ;;
     alliance-kalimdor) maps="$PROFILE_ALLIANCE_KALIMDOR_MAPS" ;;
     alliance-single) maps="$PROFILE_ALLIANCE_SINGLE_MAPS" ;;
@@ -88,7 +92,7 @@ for profile in $WORLD_PROFILES; do
   esac
   [ -n "$maps" ] && echo "  ok    $profile owns map(s) $maps" || { echo "  FAIL  $profile has no planned maps"; fail=1; }
 done
-for profile in alliance-eastern alliance-kalimdor alliance-single instances; do
+for profile in full-world full-eastern full-kalimdor full-instances alliance-eastern alliance-kalimdor alliance-single instances; do
   case " $WORLD_PROFILES " in *" $profile "*) ;; *) echo "  FAIL  missing canonical profile $profile"; fail=1 ;; esac
 done
 

@@ -38,7 +38,11 @@
 # PROFILE VOCABULARY: WORLD_PROFILE selects one canonical WorldImportProfile in the importer. These
 # names and planned maps intentionally carry no rectangles or samples: world_import_scope.rs is the
 # sole catalogue for spatial scope. The map lists are only the script's post-import ownership check.
-WORLD_PROFILES="alliance-eastern alliance-kalimdor alliance-single instances"
+WORLD_PROFILES="full-world full-eastern full-kalimdor full-instances alliance-eastern alliance-kalimdor alliance-single instances"
+PROFILE_FULL_EASTERN_MAPS="0 369 449"
+PROFILE_FULL_KALIMDOR_MAPS="1 450"
+PROFILE_FULL_INSTANCES_MAPS="30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 289 309 329 349 389 409 429 469 489 509 529 531 533"
+PROFILE_FULL_WORLD_MAPS="$PROFILE_FULL_EASTERN_MAPS $PROFILE_FULL_KALIMDOR_MAPS $PROFILE_FULL_INSTANCES_MAPS"
 PROFILE_ALLIANCE_EASTERN_MAPS="0 369"
 PROFILE_ALLIANCE_KALIMDOR_MAPS="1"
 PROFILE_ALLIANCE_SINGLE_MAPS="0 1 36 369"

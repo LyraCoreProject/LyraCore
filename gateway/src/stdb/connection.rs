@@ -1074,6 +1074,7 @@ fn coordinator_queries(sharded_tables: bool) -> Vec<&'static str> {
         "SELECT * FROM game_meeting_stone_seeker",
         "SELECT * FROM game_config",
         "SELECT * FROM game_creature_template",
+        "SELECT * FROM game_creature_spawn_map",
         "SELECT * FROM game_area",
         "SELECT * FROM game_taxi_node",
         "SELECT * FROM game_taxi_path",
@@ -1542,6 +1543,13 @@ pub(crate) fn recv_reducer_on(
 #[cfg(test)]
 mod coordinator_query_tests {
     use super::{call_pipe_queries, coordinator_queries, CALL_PIPE_LIVENESS_QUERY};
+
+    #[test]
+    fn coordinator_subscribes_source_map_coverage_in_each_topology() {
+        for sharded in [false, true] {
+            assert!(coordinator_queries(sharded).contains(&"SELECT * FROM game_creature_spawn_map"));
+        }
+    }
 
     #[test]
     fn coordinator_subscribes_bot_intents_in_each_topology() {
@@ -2495,7 +2503,22 @@ impl Coordinator {
                 .and_then(|inner| inner.coord().conn.db.game_config().id().find(&0))
                 .map(|cfg| cfg.hosts_instances)
         };
-        map.check_instance_hosting(hosts_instances, |d| conns.contains_key(d))
+        let mut imported_maps: Vec<u32> = conns
+            .values()
+            .flat_map(|inner| {
+                inner
+                    .coord()
+                    .conn
+                    .db
+                    .game_creature_spawn_map()
+                    .iter()
+                    .map(|map| map.map_id)
+                    .collect::<Vec<_>>()
+            })
+            .collect();
+        imported_maps.sort_unstable();
+        imported_maps.dedup();
+        map.check_instance_hosting(&imported_maps, hosts_instances, |d| conns.contains_key(d))
             .enforce()
             .map_err(|msg| anyhow!("{msg}"))?;
         ensure_guid_ranges(&conns, &map);

@@ -19,9 +19,16 @@ after 30 minutes empty, or on the next empty observation when `reset_requested` 
 clears the stamp. Teardown removes population, encounter state, the dedicated tick row, Character
 bindings, and finally the lease.
 
-Instance creature populations have no authored spawn rows of their own. Trash does not respawn,
-corpses remain until reap, and waypoint, wander, and return-home movement is unavailable. Aggro,
-assist, chase, flee, and casting use entity and template state and remain active.
+Each Instance copies its selected source spawn rows and waypoint routes. The copies own their death and
+respawn timers, movement home, and life sequence. Reaping an Instance deletes those copies,
+including dead creatures awaiting respawn. Imported dungeon and battleground source rows stay
+dormant at instance zero. Battleground creation remains unimplemented. The Deeprun Tram and faction
+halls use shared populations at instance zero.
+
+Dungeon exits and graveyard release use imported Area Trigger, area, and graveyard metadata.
+Missing exit metadata sends a reaped-instance login to the Character's home. The small fixture keeps
+its Deadmines bootstrap fallback. Raid admission uses map capacity; saved raid lockouts and encounter
+scripts remain separate gameplay work.
 
 Creature copies use `encounter::wave_guid` with bit 23 set in the low field. This separates their
 identities from imported spawns and encounter wave allocation. GameObject copies use

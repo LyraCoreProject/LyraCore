@@ -327,6 +327,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         movement_type: crate::creatures::MOVEMENT_RANDOM, // the demo chicken loiters near its post (critter)
         respawn_secs: 0,                                  // 0 ⇒ the flat fallback respawn timer
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     });
     crate::creatures::insert_creature_entity(
         ctx,
@@ -451,6 +453,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         movement_type: crate::creatures::MOVEMENT_RANDOM,
         respawn_secs: 0, // 0 ⇒ the flat fallback respawn timer
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     });
     crate::creatures::insert_creature_entity(
         ctx,
@@ -488,6 +492,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         movement_type: crate::creatures::MOVEMENT_IDLE, // a trainer stands at its post
         respawn_secs: 0,                                // 0 ⇒ the flat fallback respawn timer
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     });
     crate::creatures::insert_creature_entity(
         ctx,

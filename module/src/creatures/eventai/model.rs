@@ -344,6 +344,10 @@ pub enum SpeechMode {
     /// and reaches clients as a monster emote rather than speech. Appended last so an existing
     /// encoded rule keeps its variant index.
     Emote,
+    BossEmote,
+    ZoneYell,
+    ZoneEmote,
+    Whisper,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
@@ -617,6 +621,10 @@ pub enum CreatureInstruction {
     NotifyEncounter(NotifyEncounterInstruction),
     StartRelay(StartRelayInstruction),
     AttackStart(InstructionTarget),
+    SetAutoAttack(bool),
+    ZoneCombat,
+    SetSheath(u8),
+    EmptyTextNoEffect,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

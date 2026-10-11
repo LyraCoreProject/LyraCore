@@ -144,6 +144,10 @@ pub(crate) trait EventAiWorld {
         kind: super::AiEventKind,
         radius_yd: u32,
     ) -> bool;
+    fn eventai_set_auto_attack(&mut self, creature_guid: u64, enabled: bool) -> bool;
+    fn eventai_combat_candidates(&self, creature_guid: u64) -> Vec<EventAiUnit>;
+    fn eventai_engage_without_threat(&mut self, creature_guid: u64, target_guid: u64);
+    fn eventai_set_sheath(&mut self, creature_guid: u64, state: u8) -> bool;
     fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool;
     fn eventai_set_react_state(
         &mut self,
@@ -508,6 +512,14 @@ fn execute_instruction<W: EventAiWorld>(
                 ActionResult::Refused
             }
         }
+        CreatureInstruction::SetAutoAttack(enabled) => {
+            action_outcome(world.eventai_set_auto_attack(context.creature_guid, *enabled))
+        }
+        CreatureInstruction::ZoneCombat => super::combat::zone_combat(world, context.creature_guid),
+        CreatureInstruction::SetSheath(state) => {
+            action_outcome(world.eventai_set_sheath(context.creature_guid, *state))
+        }
+        CreatureInstruction::EmptyTextNoEffect => ActionResult::Refused,
         CreatureInstruction::MissingTextTemplateNoEffect(_) => ActionResult::Applied,
         CreatureInstruction::ScaleSelectedThreat(_) | CreatureInstruction::ScaleAllThreat(_) => {
             super::threat::execute(world, context, instruction, linked_choice)
@@ -577,6 +589,10 @@ fn speak<W: EventAiWorld>(
         SpeechMode::Say => CHAT_SAY,
         SpeechMode::Yell => CHAT_YELL,
         SpeechMode::Emote => CHAT_TEXT_EMOTE,
+        SpeechMode::BossEmote => lyracore_shared::chat::broadcast_chat::CREATURE_BOSS_EMOTE,
+        SpeechMode::ZoneYell => lyracore_shared::chat::broadcast_chat::CREATURE_ZONE_YELL,
+        SpeechMode::ZoneEmote => lyracore_shared::chat::broadcast_chat::CREATURE_ZONE_EMOTE,
+        SpeechMode::Whisper => lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER,
     };
     let ids = &speech.broadcast_ids;
     let picked = match ids.len() {
@@ -602,6 +618,13 @@ fn speak<W: EventAiWorld>(
             )
         }
     };
+    if chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER
+        && !world
+            .eventai_unit(target_guid)
+            .is_some_and(|unit| unit.is_player)
+    {
+        return false;
+    }
     let spoken = world.eventai_deliver_line(
         context.creature_guid,
         target_guid,
@@ -790,6 +813,10 @@ fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
                 | CreatureInstruction::SetStandState(_)
                 | CreatureInstruction::SetReactState(_)
                 | CreatureInstruction::RemoveGuardians(_)
+                | CreatureInstruction::SetAutoAttack(_)
+                | CreatureInstruction::ZoneCombat
+                | CreatureInstruction::SetSheath(_)
+                | CreatureInstruction::EmptyTextNoEffect
                 | CreatureInstruction::MissingTextTemplateNoEffect(_)
                 | CreatureInstruction::ScaleAllThreat(_)
                 | CreatureInstruction::Presentation(_)
@@ -1191,6 +1218,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     definition_revision: 0,
                     active_object: false,
                     react_state: 2,
+                    melee_enabled: true,
                 });
             }
         }
@@ -1237,6 +1265,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         let row = match self.state_row(creature_guid) {
             Some(mut row) => {
                 row.phase = 0;
+                row.melee_enabled = true;
                 row.ranged_distance = 0.0;
                 row.ranged_angle = 0.0;
                 row.ranged_posture_active = false;
@@ -1254,6 +1283,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 definition_revision: revision.value,
                 active_object: false,
                 react_state: 2,
+                melee_enabled: true,
             }),
         };
         CreatureState::from(row)
@@ -1430,6 +1460,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                     definition_revision: 0,
                     active_object: false,
                     react_state: 2,
+                    melee_enabled: true,
                 });
             }
         }
@@ -1545,6 +1576,45 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .is_ok()
     }
 
+    fn eventai_set_auto_attack(&mut self, creature_guid: u64, enabled: bool) -> bool {
+        super::mobility::set_auto_attack(self.ctx, creature_guid, enabled)
+    }
+
+    fn eventai_set_sheath(&mut self, creature_guid: u64, state: u8) -> bool {
+        self.ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(creature_guid)
+            .filter(|entity| !entity.is_player())
+            .is_some_and(|entity| crate::world::apply_set_sheathed(self.ctx, entity, state).is_ok())
+    }
+
+    fn eventai_combat_candidates(&self, creature_guid: u64) -> Vec<EventAiUnit> {
+        let entities = self.ctx.db.game_world_entity();
+        let Some(creature) = entities.guid().find(creature_guid) else {
+            return Vec::new();
+        };
+        entities
+            .by_entry()
+            .filter(&0u32)
+            .filter(|target| {
+                target.is_player()
+                    && !target.dead
+                    && crate::helpers::character_by_guid(self.ctx, target.guid)
+                        .is_none_or(|character| character.gm_level == 0)
+                    && target.map_id == creature.map_id
+                    && target.instance_id == creature.instance_id
+                    && crate::combat::may_harm(self.ctx, &creature, target)
+            })
+            .map(|target| unit_of(&target))
+            .collect()
+    }
+
+    fn eventai_engage_without_threat(&mut self, creature_guid: u64, target_guid: u64) {
+        crate::threat::engage_without_threat(self.ctx, creature_guid, target_guid);
+    }
+
     fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool {
         crate::creatures::presentation::apply_relay_stand_state(
             self.ctx,
@@ -1621,5 +1691,13 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 false
             }
         }
+    }
+}
+
+fn action_outcome(applied: bool) -> ActionResult {
+    if applied {
+        ActionResult::Applied
+    } else {
+        ActionResult::Refused
     }
 }

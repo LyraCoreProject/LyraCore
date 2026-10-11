@@ -2417,6 +2417,8 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
+        source_guid: 0,
+        instance_id: player.instance_id,
     };
     let wolf_entity =
         crate::creatures::build_creature_entity(&spawn, &wolf_template, 0, player.instance_id);

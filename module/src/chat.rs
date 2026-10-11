@@ -2,12 +2,14 @@
 //! player's `CMSG_MESSAGECHAT` or `CMSG_TEXT_EMOTE` becomes a broadcast event row that the Gateway
 //! turns into `SMSG_MESSAGECHAT` / `SMSG_TEXT_EMOTE` (+ `SMSG_EMOTE` animation). Say, yell and `/e`
 //! rows carry no range: the Gateway scopes them to the speaker's surroundings when it relays them.
-//! Whisper, party and channel chat are not here. They are Realm Chat Lines (`crate::realm_chat`),
-//! committed on Realm-core with their whole audience. Chat Channels themselves live in
+//! Character whispers, party and channel chat are Realm Chat Lines (`crate::realm_chat`),
+//! committed on Realm-core with their whole audience. Creature whispers stay on the World Shard.
+//! Chat Channels themselves live in
 //! `crate::channel`, and Away Status in `crate::away`. [event]
 
 use spacetimedb::{table, Identity, ReducerContext, Table, Timestamp};
 
+use crate::game_world_entity;
 use lyracore_shared::social::ContactRefusal;
 
 // `game_character_contact` is defined further down in THIS module — its `#[table]` accessor
@@ -51,7 +53,19 @@ pub struct ChatEvent {
 }
 
 pub(crate) fn is_supported_chat_type(chat_type: u8) -> bool {
-    matches!(chat_type, CHAT_SAY | CHAT_YELL | CHAT_TEXT_EMOTE)
+    use lyracore_shared::chat::broadcast_chat::{
+        CREATURE_BOSS_EMOTE, CREATURE_WHISPER, CREATURE_ZONE_EMOTE, CREATURE_ZONE_YELL,
+    };
+    matches!(
+        chat_type,
+        CHAT_SAY
+            | CHAT_YELL
+            | CHAT_TEXT_EMOTE
+            | CREATURE_BOSS_EMOTE
+            | CREATURE_WHISPER
+            | CREATURE_ZONE_YELL
+            | CREATURE_ZONE_EMOTE
+    )
 }
 
 /// Trim + length-cap a chat line, returning `None` when nothing is left (so an empty/whitespace line
@@ -121,6 +135,16 @@ pub(crate) fn apply_send_chat_to(
 ) -> Result<(), String> {
     if !is_supported_chat_type(chat_type) {
         return Err(format!("unsupported chat type {chat_type}"));
+    }
+    if chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER
+        && !ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(target_guid)
+            .is_some_and(|target| target.is_player())
+    {
+        return Err("creature whisper requires a Character recipient".to_string());
     }
     write_chat_event(ctx, sender, target_guid, chat_type, language, message)
 }

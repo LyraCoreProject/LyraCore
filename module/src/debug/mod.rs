@@ -298,12 +298,14 @@ pub fn debug_spawn_at_feet(
         .iter()
         .filter(|s| s.entry == creature_entry)
         .map(|s| s.guid & 0x00FF_FFFF)
+        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
         .max()
         .unwrap_or(0);
     let entity_max = entities
         .iter()
         .filter(|e| e.entry == creature_entry && !e.is_player())
         .map(|e| e.guid & 0x00FF_FFFF)
+        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
         .max()
         .unwrap_or(0);
     let next_low = spawn_max.max(entity_max) + 1;
@@ -334,11 +336,13 @@ pub fn debug_spawn_at_feet(
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0, // not imported — falls back to the flat legacy respawn timer (a debug spawn's death is a one-off harness action)
         life_seq: 0,
+        source_guid: 0,
+        instance_id: player.instance_id,
     };
     // Build the live entity from a reference (fixed roll 0 → deterministic min level/health) BEFORE
     // moving the spawn into its table, so we never depend on the row type deriving Clone. The
     // entity insert fires the gateway's on_insert → CREATE_OBJECT so the creature appears at feet.
-    let entity = build_creature_entity(&spawn, &tmpl, 0, 0);
+    let entity = build_creature_entity(&spawn, &tmpl, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::creatures::insert_creature_entity(ctx, entity);
     log::info!(

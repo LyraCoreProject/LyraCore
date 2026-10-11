@@ -15,7 +15,7 @@ use super::{
     SpellCastTarget, SpellCasterAdmission, SpellCasterRole, SpellStartMode, SpellTargetRole,
 };
 use crate::creatures::ai::{rout_close_ms, rout_window_open, TickScope};
-use crate::{game_creature_ai_definition, game_world_entity};
+use crate::{game_creature_ai_definition, game_creature_spawn, game_world_entity};
 
 pub(super) fn cycle_contexts<W: EventAiWorld>(
     world: &W,
@@ -627,11 +627,27 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
             rules: row.rules,
         });
     }
-    if let Some(row) = definitions
+    let source_guid = ctx
+        .db
+        .game_creature_spawn()
+        .guid()
+        .find(creature_guid)
+        .map_or(0, |spawn| spawn.source_guid);
+    let guid_definition = definitions
         .by_guid()
         .filter(&creature_guid)
         .min_by_key(|row| row.id)
-    {
+        .or_else(|| {
+            (source_guid != 0)
+                .then(|| {
+                    definitions
+                        .by_guid()
+                        .filter(&source_guid)
+                        .min_by_key(|row| row.id)
+                })
+                .flatten()
+        });
+    if let Some(row) = guid_definition {
         rows.push(EventAiDefinition {
             subject: EventAiSubject::Guid(row.creature_guid),
             revision: DefinitionRevision {
@@ -1006,4 +1022,26 @@ fn distance_yd(first: &EventAiUnit, second: &EventAiUnit) -> f32 {
 fn distance_sq(first: &EventAiUnit, second: &EventAiUnit) -> f32 {
     let (dx, dy, dz) = (second.x - first.x, second.y - first.y, second.z - first.z);
     dx * dx + dy * dy + dz * dz
+}
+
+/// The source zone-combat pulse admits living Characters throughout a dungeon instance.
+pub(super) fn zone_combat<W: EventAiWorld>(world: &mut W, creature_guid: u64) -> ActionResult {
+    let Some(creature) = world
+        .eventai_unit(creature_guid)
+        .filter(|unit| !unit.dead && !unit.is_player)
+    else {
+        return ActionResult::Refused;
+    };
+    if !crate::instance::is_dungeon_map(creature.map_id) {
+        return ActionResult::Applied;
+    }
+    let mut targets = world.eventai_combat_candidates(creature_guid);
+    targets.sort_by(|first, second| compare_distance(&creature, first, second));
+    for target in &targets {
+        world.eventai_engage_without_threat(creature_guid, target.guid);
+    }
+    if let Some(target) = targets.first() {
+        world.eventai_engage_assist(creature_guid, target.guid);
+    }
+    ActionResult::Applied
 }

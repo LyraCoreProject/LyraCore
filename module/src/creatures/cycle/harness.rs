@@ -288,6 +288,8 @@ struct Scenario {
     eventai_forced_despawns: RefCell<Vec<(u64, u32)>>,
     eventai_ai_events: RefCell<Vec<(u64, u64, eventai::AiEventKind, u32)>>,
     eventai_stand_states: RefCell<HashMap<u64, u8>>,
+    eventai_auto_attacks: RefCell<HashMap<u64, bool>>,
+    eventai_sheaths: RefCell<HashMap<u64, u8>>,
     eventai_react_states: RefCell<HashMap<u64, CreatureReactState>>,
     eventai_encounter_notifications: RefCell<Vec<(u64, NotifyEncounterInstruction)>>,
     eventai_relay_starts: RefCell<Vec<(u32, u64, u64, u64)>>,
@@ -2081,7 +2083,14 @@ impl EventAiWorld for Scenario {
     }
 
     fn eventai_engage_assist(&mut self, creature_guid: u64, victim_guid: u64) {
-        EngageSink::engage(self, creature_guid, victim_guid, Pull::Assisted);
+        if !self
+            .fights
+            .borrow()
+            .iter()
+            .any(|fight| fight.attacker == creature_guid)
+        {
+            EngageSink::engage(self, creature_guid, victim_guid, Pull::Assisted);
+        }
     }
 
     fn eventai_claim_summon_sequence(&mut self, _lifetime_ms: u32) -> u64 {
@@ -2217,6 +2226,48 @@ impl EventAiWorld for Scenario {
         true
     }
 
+    fn eventai_set_auto_attack(&mut self, creature_guid: u64, enabled: bool) -> bool {
+        if self.eventai_unit(creature_guid).is_none() {
+            return false;
+        }
+        self.eventai_auto_attacks
+            .borrow_mut()
+            .insert(creature_guid, enabled);
+        true
+    }
+    fn eventai_set_sheath(&mut self, creature_guid: u64, state: u8) -> bool {
+        if self.eventai_unit(creature_guid).is_none() {
+            return false;
+        }
+        self.eventai_sheaths
+            .borrow_mut()
+            .insert(creature_guid, state);
+        true
+    }
+    fn eventai_combat_candidates(&self, creature_guid: u64) -> Vec<EventAiUnit> {
+        let Some(creature) = self.eventai_unit(creature_guid) else {
+            return Vec::new();
+        };
+        self.eventai_units_near(&creature, f32::MAX)
+            .into_iter()
+            .filter(|target| {
+                target.is_player
+                    && !target.dead
+                    && target.map_id == creature.map_id
+                    && target.instance_id == creature.instance_id
+                    && self.eventai_factions_hostile(
+                        creature.faction_template,
+                        target.faction_template,
+                    )
+            })
+            .collect()
+    }
+    fn eventai_engage_without_threat(&mut self, creature_guid: u64, target_guid: u64) {
+        self.threat
+            .borrow_mut()
+            .entry((creature_guid, target_guid))
+            .or_insert(0);
+    }
     fn eventai_set_stand_state(&mut self, creature_guid: u64, stand_state: u8) -> bool {
         if self.eventai_unit(creature_guid).is_none() {
             return false;
@@ -2646,7 +2697,8 @@ impl EngageSink for Scenario {
     /// row, so a scenario that puts a creature in an instance puts its fight there too.
     fn engagements(&self) -> Vec<Engagement> {
         let creatures = self.creatures.borrow();
-        self.fights
+        let mut engagements: Vec<Engagement> = self
+            .fights
             .borrow()
             .iter()
             .map(|f| Engagement {
@@ -2655,7 +2707,23 @@ impl EngageSink for Scenario {
                     .map_or(f.instance_id, |c| c.instance_id),
                 ..*f
             })
-            .collect()
+            .collect();
+        let threats = self.threat.borrow();
+        let members = engagements
+            .iter()
+            .flat_map(|engagement| {
+                threats
+                    .keys()
+                    .filter(|(creature, _)| *creature == engagement.attacker)
+                    .map(|(_, target)| Engagement {
+                        victim: *target,
+                        player_never_swung: false,
+                        ..*engagement
+                    })
+            })
+            .collect::<Vec<_>>();
+        engagements.extend(members);
+        engagements
     }
     fn enter_combat(&mut self, guid: u64) {
         self.flagged.borrow_mut().push(guid);
@@ -3829,10 +3897,10 @@ fn a_leg_whose_mover_despawned_is_reaped() {
 }
 
 #[test]
-fn world_maintenance_and_package_passes_run_only_on_the_catch_all_sense_firing() {
+fn world_maintenance_and_package_passes_run_on_every_catch_all_firing() {
     for (sense, scope, maintenance, packages) in [
         (true, catch_all(), 1, 1),
-        (false, catch_all(), 0, 1),
+        (false, catch_all(), 1, 1),
         (true, TickScope::Only(7), 0, 0),
     ] {
         let mut w = wolf_mid_flight(HALF_WAY);
@@ -5847,18 +5915,22 @@ fn movement_runs_every_firing_while_sensing_holds_the_four_second_cadence() {
             60_000,
         );
         let mut moved = 0u64;
+        let mut sensed = 0u64;
         for k in 0..firings {
             let tick = w.firing(k * interval_micros as u64, interval_micros, catch_all());
             let outcome = run_cycle(&mut w, tick);
             moved += outcome.rows_visited[0].1;
+            sensed += u64::from(
+                outcome
+                    .rows_visited
+                    .iter()
+                    .any(|(pass, _)| *pass == "aggro"),
+            );
         }
         assert_eq!(
-            (moved, w.maintenance_runs.get()),
-            (firings, 2),
-            "a tighter row must smooth movement latency WITHOUT multiplying the sensing scans \
-             or the effects quantized to them — regen amount, wander chance and respawn timers \
-             all assume the ~4s sensing cadence, whatever the row's own interval \
-             ({interval_micros}us row)"
+            (moved, u64::from(w.maintenance_runs.get()), sensed),
+            (firings, firings, 2),
+            "movement and due-time maintenance follow each firing; sensing stays at four seconds"
         );
         settled_at.push(w.at(WOLF).at);
     }

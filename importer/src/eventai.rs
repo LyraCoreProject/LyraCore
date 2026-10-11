@@ -83,6 +83,7 @@ const ACTION_SPAWN: u32 = 12;
 const ACTION_THREAT_SINGLE: u32 = 13;
 const ACTION_THREAT_ALL_PCT: u32 = 14;
 const ACTION_QUEST_EVENT: u32 = 15;
+const ACTION_AUTO_ATTACK: u32 = 20;
 const ACTION_COMBAT_MOVEMENT: u32 = 21;
 const ACTION_SET_PHASE: u32 = 22;
 const ACTION_INCREMENT_PHASE: u32 = 23;
@@ -97,7 +98,9 @@ const ACTION_KILLED_MONSTER: u32 = 33;
 const ACTION_SET_INSTANCE_DATA: u32 = 34;
 const ACTION_SET_INSTANCE_DATA_GUID: u32 = 35;
 const ACTION_DIE: u32 = 37;
+const ACTION_ZONE_COMBAT: u32 = 38;
 const ACTION_CALL_FOR_HELP: u32 = 39;
+const ACTION_SET_SHEATH: u32 = 40;
 const ACTION_FORCE_DESPAWN: u32 = 41;
 const ACTION_SET_DEATH_PREVENTION: u32 = 42;
 const ACTION_THROW_AI_EVENT: u32 = 45;
@@ -179,6 +182,8 @@ pub(crate) struct EventAiPlan {
     pub(crate) relay_definition_rows: Vec<String>,
     pub(crate) relay_definition_batches: Vec<String>,
     pub(crate) forced_template_entries: BTreeSet<u64>,
+    pub(crate) forced_gameobject_entries: BTreeSet<u64>,
+    pub(crate) world_state_rows: Vec<String>,
     coverage: Coverage,
 }
 
@@ -196,7 +201,8 @@ impl EventAiPlan {
             + self.broadcast_rows.len()
             + self.summon_rows.len()
             + self.quest_event_entries.len()
-            + self.relay_definition_rows.len()) as u64
+            + self.relay_definition_rows.len()
+            + self.world_state_rows.len()) as u64
     }
 
     pub(crate) fn quest_event_requirement_rows(&self) -> Vec<String> {
@@ -1898,11 +1904,8 @@ impl RelaySource {
         closure
     }
 
-    /// Every creature template the accepted relay closure names. An accepted action already forces
-    /// its summon template into the World Import Scope, and a relay leaf carries the same weight: a
-    /// step that names a template the run never writes would ship against content the shard lacks.
-    /// Steps the source loader skips are excluded, matching `encode_closure`.
-    fn closure_template_entries(&self, roots: &BTreeSet<u32>) -> BTreeSet<u64> {
+    /// Static definitions needed by accepted relay steps, excluding source-loader skips.
+    fn closure_entries(&self, roots: &BTreeSet<u32>, kind: &str) -> BTreeSet<u64> {
         let mut entries = BTreeSet::new();
         for relay_id in self.closure(roots) {
             let Some(steps) = self.definitions.get(&relay_id) else {
@@ -1913,7 +1916,7 @@ impl RelaySource {
                     continue;
                 };
                 for dependency in dependencies {
-                    if dependency.kind == "creature_template" {
+                    if dependency.kind == kind {
                         entries.insert(dependency.raw_value);
                     }
                 }
@@ -3677,8 +3680,20 @@ impl EventAiSource {
                 rule.actions.iter().filter(|action| action[0] != 0).count() as u64;
         }
 
-        plan.forced_template_entries
-            .extend(self.relays.closure_template_entries(&accepted_relay_roots));
+        plan.forced_template_entries.extend(
+            self.relays
+                .closure_entries(&accepted_relay_roots, "creature_template"),
+        );
+        plan.forced_gameobject_entries.extend(
+            self.relays
+                .closure_entries(&accepted_relay_roots, "gameobject_template"),
+        );
+        plan.world_state_rows = self
+            .relays
+            .closure_entries(&accepted_relay_roots, "world_state")
+            .into_iter()
+            .map(|id| format!("({id})"))
+            .collect();
         plan.relay_definition_rows = self.relays.encode_closure(&accepted_relay_roots);
         let relay_catalogue_version =
             RelaySource::encoded_catalogue_version(&plan.relay_definition_rows);
@@ -3706,7 +3721,11 @@ impl EventAiSource {
                 "({id},{male},{female},{chat_type},{language},{delay1},{emote1},{delay2},{emote2},{delay3},{emote3})",
                 male = sql_text(&text.male),
                 female = sql_text(&text.female),
-                chat_type = text.chat_type,
+                chat_type = match text.chat_type {
+                    3 => lyracore_shared::chat::broadcast_chat::CREATURE_BOSS_EMOTE,
+                    4 => lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER,
+                    other => other,
+                },
                 language = text.language,
                 delay1 = text.emotes[0].0,
                 emote1 = text.emotes[0].1,
@@ -4249,7 +4268,8 @@ fn parse_summons(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, SummonLoc
                     field(&row, 2).parse::<f32>().ok()?,
                     field(&row, 3).parse::<f32>().ok()?,
                     field(&row, 4).parse::<f32>().ok()?,
-                    source_u32(field(&row, 5))?.checked_mul(1_000)?,
+                    // The source column says seconds, but the summon API consumes it as milliseconds.
+                    source_u32(field(&row, 5))?,
                 ))
             };
             let Some((x, y, z, orientation, lifetime_ms)) = parsed() else {
@@ -4408,7 +4428,7 @@ fn map_event(
         },
         EVENT_TARGET_HP => percentage("target-health"),
         EVENT_TARGET_CASTING => Some("target-casting".to_string()),
-        EVENT_FRIENDLY_HP if params[1] > 0 && params[4] <= 1 => Some(format!(
+        EVENT_FRIENDLY_HP if params[4] <= 1 => Some(format!(
             "friendly-health:{}:{}:{}",
             params[0], params[1], params[4]
         )),
@@ -4609,6 +4629,17 @@ fn map_action(
                 normalizations: Vec::new(),
             })
         }
+        ACTION_AUTO_ATTACK if action[2] == 0 && action[3] == 0 => Ok(movement_action(
+            kind,
+            format!("auto-attack:{}", u8::from(action[1] != 0)),
+            None,
+        )),
+        ACTION_ZONE_COMBAT if action[1..] == [0, 0, 0] => {
+            Ok(movement_action(kind, "zone-combat".to_string(), None))
+        }
+        ACTION_SET_SHEATH if action[1] <= 2 && action[2] == 0 && action[3] == 0 => {
+            Ok(movement_action(kind, format!("sheath:{}", action[1]), None))
+        }
         ACTION_EMOTE => Ok(NativeAction {
             encoded: format!("emote:{}:self", action[1]),
             raw_kind: kind,
@@ -4742,8 +4773,14 @@ fn map_speech_action(
                 .filter(|id| *id != 0)
                 .collect::<Vec<_>>();
             let mut failures = Vec::new();
-            if texts.is_empty() {
-                failures.push(MappingFailure::source("action", kind as u64, "empty_text"));
+            if action[1] == 0 {
+                let mut mapped = movement_action(kind, "no-effect:empty-text".to_string(), None);
+                mapped.normalizations.push(SourceNormalization {
+                    dimension: "action",
+                    raw_value: u64::from(kind),
+                    reason: "empty_text_has_no_effect",
+                });
+                return Ok(mapped);
             }
             for id in &texts {
                 if !broadcasts.contains_key(id) {
@@ -5896,7 +5933,7 @@ fn speech_mode(
         .filter_map(|id| broadcasts.get(id).map(|text| text.chat_type))
         .collect::<BTreeSet<_>>();
     for mode in &modes {
-        if *mode > 2 {
+        if !matches!(*mode, 0..=4 | 6 | 7) {
             failures.push(MappingFailure::dependency(
                 "broadcast_text",
                 u64::from(*mode),
@@ -5915,6 +5952,10 @@ fn speech_mode(
         // broadcast row's own chat type, so this mode is the fallback when that row cannot be read.
         // Encoding it as `say` made the fallback disagree with the source.
         Some(2) => "emote",
+        Some(3) => "boss-emote",
+        Some(4) => "whisper",
+        Some(6) => "zone-yell",
+        Some(7) => "zone-emote",
         _ => "say",
     }
 }
@@ -6057,6 +6098,83 @@ mod tests {
                     && result["classification"] == classification
                     && result["reason"] == reason
             }));
+    }
+
+    #[test]
+    fn summon_lifetimes_keep_the_source_milliseconds() {
+        let source = parse("INSERT INTO `creature_ai_summons` VALUES (2,-422.562,69.0183,-57.8122,2.72416,86400000,'Dreamscythe');");
+        assert_eq!(source.summon_locations[&2].lifetime_ms, 86_400_000);
+    }
+
+    #[test]
+    fn zero_radius_friendly_heal_remains_self_only() {
+        let source = parse(&dump(&[rule(
+            482003,
+            100,
+            EVENT_FRIENDLY_HP,
+            100,
+            1025,
+            [800, 0, 0, 0, 0, 0],
+            [[ACTION_CAST as i64, 6063, 12, 0], [0; 4], [0; 4]],
+        )]));
+        assert_eq!(
+            map_event(&source.rules[0], &source.event_predicates).unwrap(),
+            "friendly-health:800:0:0"
+        );
+    }
+
+    #[test]
+    fn full_world_combat_actions_keep_source_order() {
+        let source = parse(&dump(&[rule(
+            1448901,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[20, 0, 0, 0], [40, 2, 0, 0], [38, 0, 0, 0]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert_eq!(plan.coverage.dropped_rules, 0);
+        assert!(plan.definition_rows[0].contains("auto-attack:0+sheath:2+zone-combat"));
+    }
+
+    #[test]
+    fn empty_text_preserves_its_sibling_actions() {
+        let source = parse(&dump(&[rule(
+            911901,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[1, 0, 0, 0], [22, 1, 0, 0], [0; 4]],
+        )]));
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert_eq!(plan.coverage.dropped_rules, 0);
+        assert!(plan.definition_rows[0].contains("no-effect:empty-text+phase:1"));
+    }
+
+    #[test]
+    fn source_boss_emote_does_not_use_the_character_emote_discriminant() {
+        let sql = dump(&[rule(
+            1430417,
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[1, 900, 0, 0], [0; 4], [0; 4]],
+        )])
+        .replace("(900,'Hello','Hello',0,", "(900,'Hello','Hello',3,");
+        let source = parse(&sql);
+        let (entries, guids, templates) = scope();
+        let plan = source.assemble(&entries, &guids, &templates);
+        assert_eq!(plan.coverage.dropped_rules, 0);
+        assert!(plan.definition_rows[0].contains("speak:boss-emote:"));
+        assert!(plan.broadcast_rows[0].contains("'Hello','Hello',4,"));
     }
 
     #[test]

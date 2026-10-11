@@ -44,7 +44,7 @@ pub(crate) use loader::replace_definition_for_debug;
 pub(crate) use mobility::summon_lifetime_after;
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::verify_summon_expiry_boundaries_for_debug;
-pub(crate) use mobility::{drop_summon_expiry, ranged_posture, react_state};
+pub(crate) use mobility::{drop_summon_expiry, melee_enabled, ranged_posture, react_state};
 pub use mobility::{CreatureAiForcedDespawn, CreatureAiSummonExpiry, CreatureAiSummonOrigin};
 
 #[cfg(feature = "debug_reducers")]

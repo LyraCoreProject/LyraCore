@@ -1015,7 +1015,7 @@ pub(crate) fn apply_player_login(
     {
         let reaped_id = character.pending_instance_id;
         match crate::instance::stranding_fallback(
-            crate::instance::entrance_fallback(character.map_id),
+            crate::instance::imported_entrance_fallback(ctx, character.map_id),
             crate::instance::is_dungeon_map(character.map_id),
         ) {
             crate::instance::StrandingFallback::Entrance(m, x, y, z, o) => {
@@ -1028,7 +1028,7 @@ pub(crate) fn apply_player_login(
             crate::instance::StrandingFallback::InPlaceOpenWorld => {}
             crate::instance::StrandingFallback::HearthstoneHome => {
                 spacetimedb::log::warn!(
-                    "player_login: dungeon map {} has no entrance_fallback arm — diverting {} to hearthstone",
+                    "player_login: dungeon map {} has no imported entrance; moving {} to hearthstone",
                     character.map_id, character.guid
                 );
                 character.map_id = character.home_map;

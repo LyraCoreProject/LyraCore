@@ -324,6 +324,9 @@ fn resolve_swing(ctx: &ReducerContext) {
         // un-CC'd swing reaches the identical range/timer/roll path it did before — byte-for-byte. A
         // POLYMORPHED or FEARED attacker is action-blocked too, so it can't swing either (a feared unit
         // routs without retaliating).
+        if !attacker.is_player() && !crate::creatures::melee_enabled(ctx, attacker.guid) {
+            continue;
+        }
         if crate::spell::is_action_blocked(ctx, atk.attacker_guid) {
             continue;
         }

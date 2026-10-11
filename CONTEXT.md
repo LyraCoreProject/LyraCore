@@ -70,9 +70,13 @@ The shard that hosts instanced maps.
 **World Import Profile**:
 A stable name for the import plan assigned to one World Shard or Instance Pool destination. The
 canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single`,
-`starting-eastern`, `starting-kalimdor`, and `instances`. The starting profiles retain the Alliance
-scope and add the Horde starting areas on the same continent. Canonical profiles share quest
-definitions and scripted event requirements from both starting profiles and the Instance Pool.
+`starting-eastern`, `starting-kalimdor`, `instances`, `full-world`, `full-eastern`,
+`full-kalimdor`, and `full-instances`. Full profiles share every creature definition and build a shared quest catalogue from the
+full source. Their spawn positions follow the selected maps; `full-world` accepts
+every source map. Partitioned full profiles compile AI for local populations and their summoned
+creatures. The starting profiles retain the Alliance scope and add the Horde starting areas on
+the same continent. Smaller canonical profiles share quest definitions and scripted event
+requirements from both starting profiles and the Instance Pool.
 Quest-giver relations stay within each destination's World Import Scope.
 
 **World Import Scope**:

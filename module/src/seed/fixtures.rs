@@ -354,6 +354,8 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     });
     crate::creatures::insert_creature_entity(
         ctx,

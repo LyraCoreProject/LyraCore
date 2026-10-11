@@ -186,13 +186,47 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
     let mut visited = 0usize;
     // RANGE SCAN (see `pass_decay`): only spawns whose timer has actually fired. A live creature's
     // `respawn_at` sits in the far future (`creatures::timer_never`), so it is not visited at all.
+    const MAX_RESPAWNS_PER_TICK: usize = 256;
     let due: Vec<CreatureSpawn> = spawns
         .by_respawn_at()
         .filter(..=now_ts)
+        .take(MAX_RESPAWNS_PER_TICK)
         .inspect(|_| visited += 1)
-        .filter(|s| entities.guid().find(s.guid).is_none())
         .collect();
-    for spawn in due {
+    let mut next_waypoint_id = None;
+    for mut spawn in due {
+        let guid = spawn.guid;
+        // Disarm legacy source timers too, so they leave the due-time index after one visit.
+        if (spawn.instance_id == 0
+            && lyracore_shared::instance::has_instance_population(spawn.map_id))
+            || entities.guid().find(guid).is_some()
+        {
+            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawns.guid().update(spawn);
+            continue;
+        }
+        let Some(entry) = crate::creatures::population::entry_for_spawn(ctx, &spawn) else {
+            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawns.guid().update(spawn);
+            continue;
+        };
+        if spawn.source_guid == 0 && entry != spawn.entry {
+            spawn.respawn_at = crate::creatures::timer_never(ctx);
+            spawns.guid().update(spawn.clone());
+            spawn.source_guid = guid;
+            spawn.guid = (guid & !(0xFF_FFFFu64 << 24)) | (u64::from(entry) << 24);
+            spawn.entry = entry;
+            if spawns.guid().find(spawn.guid).is_some() {
+                continue;
+            }
+            if let Err(reason) =
+                crate::instance::copy_spawn_waypoints(ctx, guid, spawn.guid, &mut next_waypoint_id)
+            {
+                spacetimedb::log::error!("creature source {guid} cannot copy its patrol: {reason}");
+                continue;
+            }
+            spawns.insert(spawn.clone());
+        }
         let guid = spawn.guid;
         crate::combat::clear_lethal_damage_floor(ctx, guid);
         // The new life reuses this guid, so nothing an earlier life scheduled may reach it.
@@ -211,7 +245,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
-                build_creature_entity(&spawn, &tmpl, ctx.random(), 0),
+                build_creature_entity(&spawn, &tmpl, ctx.random(), spawn.instance_id),
             );
         }
     }
@@ -221,9 +255,8 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
 /// GATHER-node respawn (the POOL model): for every DEPLETED node (state==1)
 /// whose armed respawn time has elapsed, EITHER re-roll its pool (a POOLED point — the node ROAMS to a
 /// different inactive point, holding MAX_ACTIVE) OR flip it state 1→0 in place (a STANDALONE node, the
-/// pool_id==0 path). Runs in the SENSE block (~4s) —
-/// respawns are minutes-scale, so the slow cadence is ample and a 500ms scan would be wasteful, never
-/// late by more than a sense tick. `respawn_at_micros` is a defaulted u64 (NOT a Timestamp — that table
+/// pool_id==0 path). Runs on each catch-all firing through the due-time index.
+/// `respawn_at_micros` is a defaulted u64 (NOT a Timestamp — that table
 /// is live/populated, so a Timestamp column would abort the publish; teleport-core lesson). The due
 /// decision is the unit-tested `gameobject::respawn_due` predicate. Filters to depleted-only inline;
 /// collect-then-mutate so we never write `game_gameobject` while iterating it.

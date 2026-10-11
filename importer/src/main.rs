@@ -9,7 +9,8 @@
 //! defaulting to a dry run that prints the plan and writes nothing):
 //!   --dump <classic-db .sql[.gz]>   cmangos creature/etc ETL
 //!                                   [--world-profile alliance-eastern|alliance-kalimdor|
-//!                                    alliance-single|starting-eastern|starting-kalimdor|instances]
+//!                                    alliance-single|starting-eastern|starting-kalimdor|instances|
+//!                                    full-world|full-eastern|full-kalimdor|full-instances]
 //!                                   [--eventai-profile cmangos-classic-z2815]
 //!                                   [advanced: --map 0 --center X,Y,Z --radius 180]
 //!                                   [--print-extents derives --box from the dump's real spawn
@@ -51,6 +52,7 @@
 //!       importer --dump .import/classic-db-full.sql --map 0 --print-extents
 
 mod collision;
+mod creature_population;
 mod dbc;
 mod eventai;
 mod eventai_presentation;
@@ -535,24 +537,6 @@ mod qr {
     pub const CREATURE: usize = 0; // id = creature_template.entry (or gameobject_template.entry for the GO tables)
     pub const QUEST: usize = 1;
 }
-mod sg {
-    // spawn_group: Id, Name, Type, MaxCount, WorldState, WorldStateExpression, Flags, StringId
-    pub const ID: usize = 0;
-    pub const TYPE: usize = 2; // 0 = creature, 1 = gameobject
-    pub const MAX_COUNT: usize = 3; // 0 = unlimited; >0 = cap across all member guids
-}
-mod sgs {
-    // spawn_group_spawn: GroupId, Guid, SlotId, Chance
-    pub const GROUP_ID: usize = 0;
-    pub const GUID: usize = 1;
-}
-mod cse {
-    // creature_spawn_entry: guid, entry — maps id=0 pool slots to concrete creature_template entries.
-    // Each guid may have multiple entries (the live server picks randomly); we pick the first (deterministic).
-    pub const GUID: usize = 0;
-    pub const ENTRY: usize = 1;
-}
-
 const HIGHGUID_UNIT: u64 = 0xF130;
 
 /// Our deterministic creature guid from the cmangos entry + spawn guid (HIGHGUID_UNIT-encoded, like
@@ -611,7 +595,6 @@ const GO_QUESTGIVER: u8 = lyracore_shared::constants::go_type::QUESTGIVER; // sh
 const GO_CHEST: u8 = 3;
 const GO_GOOBER: u8 = 10;
 const GO_MEETINGSTONE: u8 = lyracore_shared::constants::go_type::MEETINGSTONE;
-const RELAY_TRAP_TEMPLATE_ENTRY: u64 = 180_391;
 /// Synthetic — must equal module `go_type::GATHER`. Vanilla's REAL type 25 is
 /// GAMEOBJECT_TYPE_FISHINGHOLE; see the TYPE-25 COLLISION GUARD in `classify_go_type`.
 const GO_GATHER: u8 = 25;
@@ -3946,16 +3929,53 @@ pub(crate) struct DumpPlan {
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
-/// UNIT_FLAG_NOT_SELECTABLE. A template carrying it is an invisible server-side trigger or event
-/// creature (Scourge Invasion necropolises, Lunar Festival markers, World Trigger). Its spawns sit
-/// inside the box but must never appear in regular gameplay.
-const UNIT_FLAG_NOT_SELECTABLE: u32 = 0x0200_0000;
-
-/// Whether a `creature_template` row may import at all. The template block, the packed spawn
-/// payload, and the EventAI scope all read this one predicate, so an excluded entry can never
-/// import through one path while another skips it.
-fn template_is_importable(row: &[String]) -> bool {
-    field(row, ct::UNIT_FLAGS).parse::<u32>().unwrap_or(0) & UNIT_FLAG_NOT_SELECTABLE == 0
+impl DumpPlan {
+    /// GameObject dependencies precede AI; creatures can raise spawn events only after AI is ready.
+    fn reducer_batches<'a>(&'a self, args: &Args) -> Result<Vec<(&'static str, &'a str)>> {
+        let mut batches = Vec::new();
+        if family_active(args, "gameobjects") {
+            for (index, batch) in self.go_batches.iter().enumerate() {
+                batches.push((
+                    if index == 0 {
+                        "import_gameobjects"
+                    } else {
+                        "import_gameobjects_append"
+                    },
+                    batch.as_str(),
+                ));
+            }
+        }
+        if family_active(args, "creature-ai") {
+            let catalogue = self
+                .eventai_relay_definition_batches
+                .first()
+                .context("EventAI relay plan has no atomic catalogue")?;
+            batches.push(("import_creature_ai_relay_definitions", catalogue.as_str()));
+            for (index, batch) in self.eventai_definition_batches.iter().enumerate() {
+                batches.push((
+                    if index == 0 {
+                        "import_creature_ai_definitions"
+                    } else {
+                        "import_creature_ai_definitions_append"
+                    },
+                    batch.as_str(),
+                ));
+            }
+        }
+        if family_active(args, "creatures") {
+            for (index, batch) in self.spawn_batches.iter().enumerate() {
+                batches.push((
+                    if index == 0 {
+                        "import_creature_spawns"
+                    } else {
+                        "import_creature_spawns_append"
+                    },
+                    batch.as_str(),
+                ));
+            }
+        }
+        Ok(batches)
+    }
 }
 
 /// Build the full `--dump` ETL plan. The `--family` split lives entirely in here, via
@@ -3973,45 +3993,31 @@ fn build_dump_plan(
 ) -> Result<DumpPlan> {
     let scope = args.world_import_scope()?;
     eprintln!("world import scope: {}", scope.name());
-    for slice in &scope.bounded_slices {
-        let (x0, x1, y0, y1) = slice.bounds;
-        let (sx, sy, sz) = slice.sample;
-        eprintln!(
-            "  bounded slice {}: map {} x[{x0:.0},{x1:.0}] y[{y0:.0},{y1:.0}], sample ({sx:.2},{sy:.2},{sz:.2})",
-            slice.name, slice.map_id
-        );
-    }
-    for map in &scope.whole_maps {
-        eprintln!("  whole map: {map}");
-    }
-
-    let spawns = collect_creature_spawns(dump, &scope);
+    let population = creature_population::collect(dump, &scope)?;
+    let spawns = &population.spawns;
     let ScopeEntries {
         entries,
         eventai,
         eventai_manifest,
-    } = resolve_scope_entries(dump, args, &scope, &spawns, ScopePurpose::Import)?;
+    } = resolve_scope_entries(dump, args, &scope, &population, ScopePurpose::Import)?;
     let CreatureTemplates {
         templates,
         creature_loot_ids,
         creature_pickpocket_ids,
         creature_skin_ids,
-        excluded_entries,
         class_trainer_count,
     } = build_creature_templates(dump, &entries, display_scales);
     let (creature_casts, creature_rotation_rows) = build_creature_cast_rows(dump, &entries);
     let SpawnPayload {
         guid_of,
         packed_spawns,
-        excluded_count,
-    } = build_packed_spawn_payload(&spawns, &excluded_entries);
-    let waypoints = build_waypoint_rows(dump, &spawns, &guid_of);
+    } = build_packed_spawn_payload(spawns);
+    let waypoints = build_waypoint_rows(dump, spawns, &guid_of);
 
     eprintln!(
-        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns ({} excluded), {} waypoints",
+        "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns, {} waypoints",
         templates.len(),
-        spawns.len() - excluded_count,
-        excluded_count,
+        spawns.len(),
         waypoints.len()
     );
 
@@ -4021,7 +4027,7 @@ fn build_dump_plan(
         traps: go_trap_rows,
         meeting_stones: go_meeting_stone_rows,
         chest_loot_ids: chest_loot_ids_used,
-    } = gameobject_template_rows(&go_spawns);
+    } = gameobject_template_rows(&go_spawns, &eventai.forced_gameobject_entries)?;
     let trainer_rows = build_trainer_spell_rows(dump, &entries, profession_tier_values);
 
     // A transferred Character needs the same quest text and objectives on every destination.
@@ -4045,13 +4051,22 @@ fn build_dump_plan(
     let mut obtainable_items = creature_drop_item_set(dump, quest_loot_ids);
     obtainable_items.extend(gameobject_loot_item_set(dump, &quest_gameobjects.used_go));
     obtainable_items.extend(vendor_stock_item_set(dump, quest_entries));
+    let local_creature_entries = &population.referenced_entries;
+    let giver_entries = if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+    {
+        local_creature_entries
+    } else {
+        &entries
+    };
     let quests = build_quests(
         dump,
         quest_entries,
         &quest_gameobjects.used_go,
         &quest_gameobjects.goober_entries,
         &obtainable_items,
-        Some((&entries, &go_spawns.used_go)),
+        Some((giver_entries, &go_spawns.used_go)),
     )?;
     eprintln!(
         "mapped: {} quests, {} text, {} objectives, {} cast objectives, {} reward items, {} choice rewards, \
@@ -4151,6 +4166,9 @@ fn build_dump_plan(
         0
     };
     push_world_content_statements(args, content, &mut stmts);
+    if family_active(args, "creatures") {
+        population.append_statements(&mut stmts);
+    }
     push_quest_and_gameobject_statements(args, content, &mut stmts);
     push_creature_behaviour_statements(args, content, &mut stmts);
     let (globals_row_count, spellmeta_row_count) = push_global_statements(args, dump, &mut stmts)?;
@@ -4224,7 +4242,6 @@ struct CreatureTemplates {
     creature_loot_ids: std::collections::HashMap<u64, u64>,
     creature_pickpocket_ids: std::collections::HashMap<u64, u64>,
     creature_skin_ids: std::collections::HashMap<u64, u64>,
-    excluded_entries: std::collections::HashSet<u64>,
     class_trainer_count: usize,
 }
 
@@ -4232,7 +4249,6 @@ struct CreatureTemplates {
 struct SpawnPayload {
     guid_of: std::collections::HashMap<u64, u64>,
     packed_spawns: String,
-    excluded_count: usize,
 }
 
 /// One imported `gameobject_template`, reduced to the columns the per-type row builder needs.
@@ -4278,10 +4294,23 @@ fn build_quest_catalogue(
     args: &Args,
     display_scales: &Option<std::collections::HashMap<u32, f32>>,
 ) -> Result<QuestCatalogue> {
-    let mut scope = WorldImportScope::quest_catalogue()?;
+    let mut scope = if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+    {
+        WorldImportScope::canonical(WorldImportProfile::FullWorld)?
+    } else {
+        WorldImportScope::quest_catalogue()?
+    };
     scope.extend_forced_creatures(&args.include_creatures);
-    let spawns = collect_creature_spawns(dump, &scope);
-    let content = resolve_scope_entries(dump, args, &scope, &spawns, ScopePurpose::QuestCatalogue)?;
+    let population = creature_population::collect(dump, &scope)?;
+    let content = resolve_scope_entries(
+        dump,
+        args,
+        &scope,
+        &population,
+        ScopePurpose::QuestCatalogue,
+    )?;
     let templates = build_creature_templates(dump, &content.entries, display_scales);
     Ok(QuestCatalogue {
         entries: content.entries,
@@ -4317,144 +4346,6 @@ struct MappedContent<'a> {
     quest_event_requirements: &'a [String],
 }
 
-/// Every creature spawn the World Import Scope keeps: the cmangos `creature` rows inside the scope,
-/// with id=0 pool slots resolved through `creature_spawn_entry` and `spawn_group` MaxCount caps
-/// applied.
-fn collect_creature_spawns(dump: &str, scope: &WorldImportScope) -> Vec<CreatureSpawnRow> {
-    // 0b) creature_spawn_entry: resolves id=0 pool slots to concrete creature_template entries.
-    // cmangos places id=0 in `creature` for spawn-pool points; the real entry is in creature_spawn_entry.
-    // Each guid may map to multiple entries (random pick at runtime). We pick the first for determinism.
-    let mut spawn_entry_map: std::collections::HashMap<u64, u64> = std::collections::HashMap::new();
-    for row in parse_table(dump, "creature_spawn_entry") {
-        let guid: u64 = field(&row, cse::GUID).parse().unwrap_or(0);
-        let entry: u64 = field(&row, cse::ENTRY).parse().unwrap_or(0);
-        if guid > 0 && entry > 0 {
-            // keep first entry seen (stable across re-imports; dump order is deterministic)
-            spawn_entry_map.entry(guid).or_insert(entry);
-        }
-    }
-    eprintln!(
-        "creature_spawn_entry: {} guid→entry mappings loaded",
-        spawn_entry_map.len()
-    );
-
-    // 1) spawns in range → the content slice.
-    // db_guid, entry, x,y,z,o, movement_type, respawn_secs, map (map END-appended,
-    // an --include-map row carries its OWN map into the packed payload, not args.map).
-    let mut spawns: Vec<CreatureSpawnRow> = Vec::new();
-    let mut pool_resolved = 0u32;
-    let mut pool_skipped = 0u32;
-    for row in parse_table(dump, "creature") {
-        let map: i64 = field(&row, cr::MAP).parse().unwrap_or(-1);
-        let x: f64 = field(&row, cr::X).parse().unwrap_or(0.0);
-        let y: f64 = field(&row, cr::Y).parse().unwrap_or(0.0);
-        let z: f64 = field(&row, cr::Z).parse().unwrap_or(0.0);
-        let db_guid: u64 = field(&row, cr::GUID).parse().unwrap_or(0);
-        let raw_entry: u64 = field(&row, cr::ID).parse().unwrap_or(0);
-        // A forced entry bypasses bounded geometry but not the scope's map fence. Keeping the spawn
-        // makes its entry flow into every creature-scoped family below.
-        if !creature_row_kept_in_scope(scope, map, x, y, z, raw_entry) {
-            continue;
-        }
-        // cmangos uses id=0 for random spawn-POOL slots; the concrete entry is in creature_spawn_entry.
-        // Resolve via the map (first entry wins for determinism). Skip only if unresolvable.
-        let entry = if raw_entry == 0 {
-            match spawn_entry_map.get(&db_guid) {
-                Some(&e) => {
-                    pool_resolved += 1;
-                    e
-                }
-                None => {
-                    pool_skipped += 1;
-                    continue;
-                }
-            }
-        } else {
-            raw_entry
-        };
-        let o: f64 = field(&row, cr::O).parse().unwrap_or(0.0);
-        // cmangos MovementType (0 idle / 1 random-wander / 2 waypoint); default IDLE if absent/garbage
-        // so a missing cell never wrongly animates a creature.
-        let mt: u8 = field(&row, cr::MOVEMENT_TYPE).parse().unwrap_or(0);
-        // Per-spawn cmangos respawn timer (the MIN leg of spawntimesecsmin/max, the
-        // shorter, more common bound). 0/garbage → 0, which the module's decay pass reads as "not
-        // imported" and falls back to the flat legacy timer (baseline-safe).
-        let respawn_secs: u32 = field(&row, cr::SPAWN_TIME_SECS_MIN).parse().unwrap_or(0);
-        spawns.push((db_guid, entry, x, y, z, o, mt, respawn_secs, map));
-    }
-    if pool_resolved > 0 || pool_skipped > 0 {
-        eprintln!("creature id=0 pool slots: {} resolved via creature_spawn_entry, {} unresolvable (no entry row) → skipped", pool_resolved, pool_skipped);
-    }
-
-    // 1b) spawn_group pool dedup: cmangos pools named/rare creatures via spawn_group (MaxCount=1) over
-    // several placed guids. Without this, every placed point spawns simultaneously — Hogger x5, etc.
-    // Parse spawn_group (creature groups only, MaxCount>0) and spawn_group_spawn (guid→groupId map),
-    // then for each pool present in the collected spawns, keep only MaxCount members (first by
-    // appearance order in the dump, which is deterministic).
-    {
-        // group_id → max_count (only creature groups with MaxCount > 0)
-        let mut group_max_count: std::collections::HashMap<u64, u32> =
-            std::collections::HashMap::new();
-        for row in parse_table(dump, "spawn_group") {
-            let sg_type: i32 = field(&row, sg::TYPE).parse().unwrap_or(-1);
-            if sg_type != 0 {
-                continue; // skip gameobject groups (type=1)
-            }
-            let max_count: u32 = field(&row, sg::MAX_COUNT).parse().unwrap_or(0);
-            if max_count == 0 {
-                continue; // 0 = unlimited — no cap
-            }
-            let id: u64 = field(&row, sg::ID).parse().unwrap_or(0);
-            group_max_count.insert(id, max_count);
-        }
-
-        if !group_max_count.is_empty() {
-            // guid → group_id (only for groups that have a MaxCount cap)
-            let mut guid_to_group: std::collections::HashMap<u64, u64> =
-                std::collections::HashMap::new();
-            for row in parse_table(dump, "spawn_group_spawn") {
-                let group_id: u64 = field(&row, sgs::GROUP_ID).parse().unwrap_or(0);
-                if !group_max_count.contains_key(&group_id) {
-                    continue;
-                }
-                let guid: u64 = field(&row, sgs::GUID).parse().unwrap_or(0);
-                guid_to_group.insert(guid, group_id);
-            }
-
-            if !guid_to_group.is_empty() {
-                // Count how many spawns from each pool are retained so far, drop excess.
-                let mut group_seen: std::collections::HashMap<u64, u32> =
-                    std::collections::HashMap::new();
-                let before = spawns.len();
-                spawns.retain(
-                    |(db_guid, _entry, _x, _y, _z, _o, _mt, _respawn_secs, _map)| {
-                        if let Some(&group_id) = guid_to_group.get(db_guid) {
-                            let max = *group_max_count.get(&group_id).unwrap_or(&1);
-                            let seen = group_seen.entry(group_id).or_insert(0);
-                            if *seen < max {
-                                *seen += 1;
-                                true // keep this spawn
-                            } else {
-                                false // pool already at capacity
-                            }
-                        } else {
-                            true // not in any capped pool — keep unconditionally
-                        }
-                    },
-                );
-                let dropped = before - spawns.len();
-                if dropped > 0 {
-                    eprintln!(
-                        "spawn_group: dropped {dropped} pooled duplicate spawns (MaxCount cap)"
-                    );
-                }
-            }
-        }
-    }
-
-    spawns
-}
-
 /// The creature template entries this run imports, and the EventAI plan built against them. Accepted
 /// EventAI summons force their summoned templates into the entry set, to a fixpoint, so a summoned-only
 /// creature still gets a template.
@@ -4462,10 +4353,31 @@ fn resolve_scope_entries(
     dump: &str,
     args: &Args,
     scope: &WorldImportScope,
-    spawns: &[CreatureSpawnRow],
+    population: &creature_population::PopulationPlan,
     purpose: ScopePurpose,
 ) -> Result<ScopeEntries> {
-    let mut entries: std::collections::HashSet<u64> = spawns.iter().map(|s| s.1).collect();
+    let spawns = &population.spawns;
+    let mut entries = population.referenced_entries.clone();
+    let mut all_templates = std::collections::HashSet::new();
+    if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+    {
+        for row in parse_complete_table(dump, "creature_template")? {
+            let entry = field(&row, ct::ENTRY)
+                .parse::<u64>()
+                .context("invalid creature entry")?;
+            if entry == 0 {
+                bail!("creature definition has reserved entry zero");
+            }
+            all_templates.insert(entry);
+        }
+    }
+    if args.world_profile == Some(WorldImportProfile::FullWorld)
+        || purpose == ScopePurpose::QuestCatalogue
+    {
+        entries.extend(&all_templates);
+    }
     // Spell summons and the wisp body have no placed spawn.
     const SPELL_TEMPLATE_ENTRIES: &[u64] = &[416, 1860, 1863, 5676, 5677, 12861];
     entries.extend(SPELL_TEMPLATE_ENTRIES.iter().copied());
@@ -4493,12 +4405,13 @@ fn resolve_scope_entries(
             .into_iter()
             .filter_map(|row| {
                 let entry = field(&row, ct::ENTRY).parse().ok()?;
-                template_is_importable(&row).then_some(entry)
+                Some(entry)
             })
             .collect();
     // Canonical quest reimports must retain summoned givers discovered by a full import.
     let (eventai, eventai_manifest) = if args.world_profile.is_some()
         || family_active(args, "creature-ai")
+        || family_active(args, "gameobjects")
     {
         let source = eventai::parse(dump);
         let plan = loop {
@@ -4533,6 +4446,7 @@ fn resolve_scope_entries(
     } else {
         (eventai::EventAiPlan::default(), None)
     };
+    entries.extend(all_templates);
     for slice in &scope.bounded_slices {
         let count = spawns
             .iter()
@@ -4561,8 +4475,7 @@ fn resolve_scope_entries(
     })
 }
 
-/// The `game_creature_template` rows for the scope's entries. Also collects the loot ids and the
-/// excluded (`UNIT_FLAG_NOT_SELECTABLE`) entries the spawn payload and the loot families read.
+/// Creature definitions and the loot ids used by the selected catalogue.
 fn build_creature_templates(
     dump: &str,
     entries: &std::collections::HashSet<u64>,
@@ -4578,9 +4491,6 @@ fn build_creature_templates(
         std::collections::HashMap::new();
     let mut creature_skin_ids: std::collections::HashMap<u64, u64> =
         std::collections::HashMap::new();
-    // Entries `template_is_importable` rejects: their template is skipped here and their spawns are
-    // suppressed from the packed payload below.
-    let mut excluded_entries: std::collections::HashSet<u64> = std::collections::HashSet::new();
     // How many imported templates carry a nonzero `trainer_class`. Reported below so an operator can
     // confirm the columns populated: a wrong index reads a real neighbouring cell, which is the one
     // failure mode here that produces plausible data instead of an error.
@@ -4588,10 +4498,6 @@ fn build_creature_templates(
     for row in parse_table(dump, "creature_template") {
         let entry: u64 = field(&row, ct::ENTRY).parse().unwrap_or(0);
         if !entries.contains(&entry) {
-            continue;
-        }
-        if !template_is_importable(&row) {
-            excluded_entries.insert(entry);
             continue;
         }
         let loot_id: u64 = field(&row, ct::LOOT_ID).parse().unwrap_or(0);
@@ -4695,7 +4601,6 @@ fn build_creature_templates(
         creature_loot_ids,
         creature_pickpocket_ids,
         creature_skin_ids,
-        excluded_entries,
         class_trainer_count,
     }
 }
@@ -4795,33 +4700,16 @@ fn build_creature_cast_rows(
 }
 
 /// The packed spawn payload the `import_creature_spawns` reducer loads.
-fn build_packed_spawn_payload(
-    spawns: &[CreatureSpawnRow],
-    excluded_entries: &std::collections::HashSet<u64>,
-) -> SpawnPayload {
+fn build_packed_spawn_payload(spawns: &[CreatureSpawnRow]) -> SpawnPayload {
     // 3) spawn payload for the `import_creature_spawns` reducer — NOT SQL. `game_creature_spawn` has
     //    Timestamp columns (respawn_at/despawn_at) and SpacetimeDB 2.5 SQL has no Timestamp literal,
     //    so spawns load through a reducer (which stamps `ctx.timestamp`). Rows `;`-separated, fields
     //    `,`: guid,entry,map,x,y,z,orientation,movement_type,respawn_secs. (u64 guids exceed JSON's safe-integer
     //    range, so this is one delimited string — never a per-field JSON number that would lose precision.)
-    let guid_of: std::collections::HashMap<u64, u64> = spawns
-        .iter()
-        .filter(|s| !excluded_entries.contains(&s.1))
-        .map(|s| (s.0, world_guid(s.1, s.0)))
-        .collect();
-    let excluded_count = spawns
-        .iter()
-        .filter(|s| excluded_entries.contains(&s.1))
-        .count();
-    if excluded_count > 0 {
-        eprintln!(
-            "filter: excluded {} event/trigger spawns ({} template entries with UNIT_FLAG_NOT_SELECTABLE)",
-            excluded_count, excluded_entries.len()
-        );
-    }
+    let guid_of: std::collections::HashMap<u64, u64> =
+        spawns.iter().map(|s| (s.0, world_guid(s.1, s.0))).collect();
     let packed_spawns: String = spawns
         .iter()
-        .filter(|s| !excluded_entries.contains(&s.1))
         .map(|(db_guid, entry, x, y, z, o, mt, respawn_secs, map)| {
             // `map` is the ROW's own map: an --include-map spawn (Deadmines 36)
             // must land on ITS map, not the primary --map's. The dump Z rides through UNALTERED on
@@ -4841,7 +4729,6 @@ fn build_packed_spawn_payload(
     SpawnPayload {
         guid_of,
         packed_spawns,
-        excluded_count,
     }
 }
 
@@ -5069,8 +4956,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
     }
 }
 
-/// The rows the `gameobjects` family loads for the spawned gameobjects, and the CHEST loot ids they
-/// reference.
+/// GameObject definitions for local spawns and accepted relay dependencies, plus chest loot IDs.
 struct GameobjectTemplateRows {
     templates: Vec<String>,
     traps: Vec<String>,
@@ -5079,7 +4965,10 @@ struct GameobjectTemplateRows {
     chest_loot_ids: Vec<u32>,
 }
 
-fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows {
+fn gameobject_template_rows(
+    spawns: &GameobjectSpawns,
+    required_entries: &std::collections::BTreeSet<u64>,
+) -> Result<GameobjectTemplateRows> {
     let GameobjectSpawns {
         go_meta,
         dropped_type25,
@@ -5087,21 +4976,20 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows
         used_go,
         ..
     } = spawns;
-    // Template rows for the GOs actually spawned, split by type (`go_template_row`) — a SQL INSERT must
-    // name EVERY column (#[default] is NOT applied on INSERT, only on migration). Also builds the per-type coverage histogram + the CHEST lootId set (widened to EVERY
-    // imported chest, not a curated allowlist and its scoping now spans the whole live set).
+    // SQL INSERT must name every column; migration defaults do not apply to imported rows.
     let mut go_template_rows: Vec<String> = Vec::new();
     let mut go_trap_rows: Vec<String> = Vec::new();
     let mut go_meeting_stone_rows: Vec<String> = Vec::new();
     let mut chest_loot_ids_used: Vec<u32> = Vec::new();
     let mut go_type_histogram: std::collections::BTreeMap<u8, u32> =
         std::collections::BTreeMap::new();
-    let mut used_sorted: Vec<u64> = used_go.iter().copied().collect();
-    // The pinned relay closure activates this trap by database GUID. Its static authority must be
-    // present even when the world profile does not include the trap's spawn.
-    if go_meta.contains_key(&RELAY_TRAP_TEMPLATE_ENTRY) {
-        used_sorted.push(RELAY_TRAP_TEMPLATE_ENTRY);
+    for entry in required_entries {
+        if !go_meta.contains_key(entry) {
+            bail!("relay requires GameObject definition {entry}, which cannot be imported");
+        }
     }
+    let mut used_sorted: Vec<u64> = used_go.iter().copied().collect();
+    used_sorted.extend(required_entries);
     used_sorted.sort_unstable();
     used_sorted.dedup();
     for entry in used_sorted {
@@ -5173,12 +5061,12 @@ fn gameobject_template_rows(spawns: &GameobjectSpawns) -> GameobjectTemplateRows
         );
     }
 
-    GameobjectTemplateRows {
+    Ok(GameobjectTemplateRows {
         templates: go_template_rows,
         traps: go_trap_rows,
         meeting_stones: go_meeting_stone_rows,
         chest_loot_ids: chest_loot_ids_used,
-    }
+    })
 }
 
 /// The `game_trainer_spell` rows for the scope's trainers: every cmangos offering, plus the
@@ -5671,6 +5559,13 @@ fn push_creature_behaviour_statements(
     let quest_events_active = family_active(args, "creature-ai")
         || (args.world_profile.is_some() && family_active(args, "quests"));
     if family_active(args, "creature-ai") {
+        stmts.push("DELETE FROM game_world_state_name WHERE variable_id >= 0".into());
+        push_insert(
+            stmts,
+            "game_world_state_name",
+            "variable_id",
+            &eventai.world_state_rows,
+        );
         stmts.push("DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_ai_summon WHERE id > 0".into());
     }
@@ -5867,6 +5762,22 @@ fn family_stamps(
     stamps
 }
 
+fn run_full_world_catalogues(dump: &str, args: &Args) -> Result<()> {
+    if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+        && args.family.is_none()
+    {
+        let data_dir = args
+            .dbc
+            .as_deref()
+            .context("a complete world import requires --dbc <client Data directory>")?;
+        dbc::run_from_dump(data_dir, args, dump)?;
+        spell::run_spells(data_dir, args)?;
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args = parse_args()?;
 
@@ -5984,12 +5895,14 @@ fn main() -> Result<()> {
 
     let plan = build_dump_plan(&dump, &args, &display_scales, &profession_tier_values)?;
 
+    run_full_world_catalogues(&dump, &args)?;
+
     if !args.apply {
         if let Some(manifest) = &plan.eventai_manifest {
             println!("-- EventAI Compatibility Manifest\n{manifest}\n");
         }
         println!(
-            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} relay definition batch(es) for {} definitions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) (of {SPAWN_BATCH}).\n",
+            "-- DRY RUN: {} SQL statements, {} EventAI definition batch(es) for {} definitions and {} instructions, {} relay definition batch(es) for {} definitions, {} creature-spawn batch(es) for {} spawns, and {} gameobject batch(es) for {} spawns (of {SPAWN_BATCH}).\n",
             plan.stmts.len(),
             plan.eventai_definition_batches.len(),
             plan.eventai_definition_count,
@@ -5998,7 +5911,8 @@ fn main() -> Result<()> {
             plan.eventai_relay_definition_count,
             plan.spawn_batches.len(),
             plan.spawn_row_count,
-            plan.go_batches.len()
+            plan.go_batches.len(),
+            plan.go_row_count
         );
         for s in &plan.stmts {
             println!("{s};\n");
@@ -6035,73 +5949,9 @@ fn main() -> Result<()> {
         bail!("no spawns matched the filter — check --box / --radius / --center");
     }
 
-    // Apply static catalogues first, then native EventAI definitions, then spawn batches. Definitions
-    // are ready before a new creature can raise its spawn edge.
     run_sql_statements(&args, &plan.stmts, "creatures")?;
-    if family_active(&args, "creature-ai") {
-        eprintln!(
-            "reducer: loading {} relay definitions in {} batch(es)…",
-            plan.eventai_relay_definition_count,
-            plan.eventai_relay_definition_batches.len()
-        );
-        let relay_catalogue = plan
-            .eventai_relay_definition_batches
-            .first()
-            .context("EventAI relay plan has no atomic catalogue")?;
-        call_reducer(
-            &args,
-            "import_creature_ai_relay_definitions",
-            relay_catalogue,
-        )
-        .context("EventAI relay catalogue")?;
-        eprintln!(
-            "reducer: loading {} EventAI definitions with {} instructions in {} batch(es)…",
-            plan.eventai_definition_count,
-            plan.eventai_instruction_count,
-            plan.eventai_definition_batches.len()
-        );
-        for (index, batch) in plan.eventai_definition_batches.iter().enumerate() {
-            let reducer = if index == 0 {
-                "import_creature_ai_definitions"
-            } else {
-                "import_creature_ai_definitions_append"
-            };
-            call_reducer(&args, reducer, batch)
-                .with_context(|| format!("EventAI definition batch {index}"))?;
-        }
-    }
-    if family_active(&args, "creatures") {
-        eprintln!(
-            "reducer: loading {} spawns in {} batch(es)…",
-            plan.spawn_row_count,
-            plan.spawn_batches.len()
-        );
-        for (i, batch) in plan.spawn_batches.iter().enumerate() {
-            let reducer = if i == 0 {
-                "import_creature_spawns"
-            } else {
-                "import_creature_spawns_append"
-            };
-            call_reducer(&args, reducer, batch).with_context(|| format!("batch {i}"))?;
-        }
-    }
-    // Gameobject (GOOBER) spawns via the import_gameobjects reducer (game_gameobject has a Timestamp).
-    // Same batch-0-clears / append-rest pattern as creatures. // note: an empty slice skips the GO clear
-    // (the reducer errors on an empty payload) — fine in practice (Elwynn always has GOOBERs).
-    if !plan.go_batches.is_empty() && family_active(&args, "gameobjects") {
-        eprintln!(
-            "reducer: loading {} gameobjects in {} batch(es)…",
-            plan.go_row_count,
-            plan.go_batches.len()
-        );
-        for (i, batch) in plan.go_batches.iter().enumerate() {
-            let reducer = if i == 0 {
-                "import_gameobjects"
-            } else {
-                "import_gameobjects_append"
-            };
-            call_reducer(&args, reducer, batch).with_context(|| format!("batch {i}"))?;
-        }
+    for (reducer, batch) in plan.reducer_batches(&args)? {
+        call_reducer(&args, reducer, batch).with_context(|| format!("{reducer} batch"))?;
     }
     eprintln!("import applied.");
 
@@ -6306,22 +6156,49 @@ mod tests {
     }
 
     #[test]
-    fn gameobject_family_emits_the_reachable_relay_trap_profile() {
-        let dump = "INSERT INTO `gameobject_template` VALUES \
-            (180391,6,640,'Fel Rune',0,0,0,1,0,0,0,24425,0,0);";
+    fn relay_imports_its_named_world_state() {
+        let dump = format!(
+            "INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `worldstate_name` VALUES (19990,'Relay state'); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; \
+             INSERT INTO `dbscripts_on_relay` VALUES (1,0,0,53,0,0,0,0,0,0,19990,1,0,0,0,0,0,0,0,0,0,'set state');",
+            creature_template_row(100, 0),
+            eventai_rule_row(10,100,4,0,100,0,[0;6],[[53,1,0,0],[0;4],[0;4]])
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        assert_eq!(plan.eventai_relay_definition_count, 1);
+        assert!(plan
+            .stmts
+            .iter()
+            .any(|sql| sql == "INSERT INTO game_world_state_name (variable_id) VALUES (19990)"));
+    }
+
+    #[test]
+    fn relay_imports_an_unplaced_gameobject_definition() {
+        let dump = format!(
+            "INSERT INTO `creature_template` VALUES {}; \
+             INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
+             INSERT INTO `gameobject_template` VALUES (777,6,640,'Relay trap',0,0,0,1,0,0,0,24425,0,0); \
+             INSERT INTO `spell_template` VALUES (24425); \
+             INSERT INTO `creature_ai_scripts` VALUES {}; \
+             INSERT INTO `dbscripts_on_relay` VALUES (1,0,0,13,0,0,0,777,20,1025,0,0,0,0,0,0,0,0,0,0,0,'activate');",
+            creature_template_row(100, 0),
+            eventai_rule_row(10,100,4,0,100,0,[0;6],[[53,1,0,0],[0;4],[0;4]])
+        );
         let mut args = test_args();
         args.family = Some("gameobjects".to_string());
-        let plan = build_dump_plan(dump, &args, &None, &None).unwrap();
-
-        assert!(plan.stmts.iter().any(|statement| {
-            statement.starts_with("INSERT INTO game_gameobject_trap (entry,spell_id,cooldown_secs)")
-                && statement.contains("(180391,24425,0)")
-        }));
-        assert!(plan.stmts.iter().any(|statement| {
-            statement.starts_with("INSERT INTO game_gameobject_template")
-                && statement.contains("(180391,6,640,'Fel Rune'")
-        }));
-        assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
+        let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+        assert_eq!(plan.eventai_relay_definition_count, 1);
+        assert!(plan.go_batches.is_empty());
+        assert!(plan.stmts.iter().any(|sql| sql
+            .starts_with("INSERT INTO game_gameobject_template")
+            && sql.contains("(777,6,640,'Relay trap'")));
+        assert!(plan
+            .stmts
+            .iter()
+            .any(|sql| sql.starts_with("INSERT INTO game_gameobject_trap")
+                && sql.contains("(777,24425,0)")));
     }
 
     #[test]
@@ -8070,7 +7947,11 @@ mod tests {
     #[test]
     fn canonical_profiles_share_supported_quest_definitions() {
         let mut catalogue = None;
-        for profile in WorldImportProfile::NAMES {
+        for profile in WorldImportProfile::NAMES.iter().filter(|name| {
+            !WorldImportProfile::parse(name)
+                .unwrap()
+                .imports_all_templates()
+        }) {
             let plan = quest_catalogue_plan(profile);
             let templates = plan
                 .stmts
@@ -8150,7 +8031,10 @@ mod tests {
                 for role in [0, 1] {
                     assert_eq!(
                         relations.contains(&format!(",{giver},{quest},{role})")),
-                        *profile == owner,
+                        *profile == owner
+                            || *profile == "full-world"
+                            || (*profile == "full-eastern" && giver == 600)
+                            || (*profile == "full-kalimdor" && giver == 700),
                         "{profile} Horde giver {giver}: {relations}"
                     );
                 }
@@ -8160,22 +8044,129 @@ mod tests {
                     relations.contains(&format!(",100,500,{role})")),
                     matches!(
                         *profile,
-                        "alliance-eastern" | "starting-eastern" | "alliance-single"
+                        "alliance-eastern"
+                            | "starting-eastern"
+                            | "alliance-single"
+                            | "full-world"
+                            | "full-eastern"
                     ),
                     "{profile} Eastern giver role {role}"
                 );
                 assert_eq!(
                     relations.contains(&format!(",400,502,{role})")),
-                    matches!(*profile, "instances" | "alliance-single"),
+                    matches!(
+                        *profile,
+                        "instances" | "alliance-single" | "full-world" | "full-instances"
+                    ),
                     "{profile} Instance giver role {role}"
                 );
                 assert_eq!(
                     go_relations.contains(&format!(",300,501,{role})")),
                     matches!(
                         *profile,
-                        "alliance-kalimdor" | "starting-kalimdor" | "alliance-single"
+                        "alliance-kalimdor"
+                            | "starting-kalimdor"
+                            | "alliance-single"
+                            | "full-world"
+                            | "full-kalimdor"
                     ),
                     "{profile} Kalimdor giver role {role}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn full_profiles_share_the_complete_quest_catalogue() {
+        let mut expected = None;
+        for profile in [
+            "full-world",
+            "full-eastern",
+            "full-kalimdor",
+            "full-instances",
+        ] {
+            let plan = quest_catalogue_plan(profile);
+            let shared: Vec<_> = plan
+                .stmts
+                .iter()
+                .filter(|sql| {
+                    !sql.contains("game_creature_quest") && !sql.contains("game_gameobject_quest")
+                })
+                .collect();
+            assert!(
+                shared
+                    .iter()
+                    .any(|sql| sql.starts_with("INSERT INTO game_quest_template")
+                        && sql.contains("(503,")),
+                "{profile} excludes an outlying quest"
+            );
+            let shared: Vec<String> = shared.into_iter().cloned().collect();
+            if let Some(expected) = &expected {
+                assert_eq!(&shared, expected, "{profile}");
+            } else {
+                expected = Some(shared);
+            }
+        }
+    }
+
+    #[test]
+    fn full_profiles_import_unplaced_definitions_without_foreign_spawns() {
+        let dump = format!(
+            "INSERT INTO `creature_template` VALUES {},{},{}; \
+             INSERT INTO `creature` VALUES \
+             (1,100,0,1,-9000,0,80,0,300,300,0,0),\
+             (2,200,1,1,10300,800,1326,0,300,300,0,0);",
+            creature_template_row(100, 0),
+            creature_template_row(200, 0),
+            creature_template_row(300, 0),
+        );
+        let dump = format!("{dump} INSERT INTO `creature_ai_summons` VALUES (700,1,2,3,4,5); INSERT INTO `creature_ai_scripts` VALUES {},{},{};",
+            eventai_rule_row(10,100,0,0,100,0,[0,1,0,1,0,0],[[32,300,0,700],[0;4],[0;4]]),
+            eventai_rule_row(20,200,0,0,100,0,[0,1,0,1,0,0],[[22,1,0,0],[0;4],[0;4]]),
+            eventai_rule_row(30,300,0,0,100,0,[0,1,0,1,0,0],[[22,1,0,0],[0;4],[0;4]]));
+        for (profile, expected_spawns) in [
+            ("full-world", 2),
+            ("full-eastern", 1),
+            ("full-kalimdor", 1),
+            ("full-instances", 0),
+        ] {
+            let args = parse_args_from([
+                "--dump",
+                "synthetic.sql",
+                "--family",
+                "creatures",
+                "--world-profile",
+                profile,
+            ])
+            .unwrap();
+            let plan = build_dump_plan(&dump, &args, &None, &None).unwrap();
+            assert_eq!(plan.spawn_row_count, expected_spawns, "{profile}");
+            let ai = plan.eventai_definition_batches.join("\n");
+            assert_eq!(
+                ai.contains("entry:100@"),
+                matches!(profile, "full-world" | "full-eastern")
+            );
+            assert_eq!(
+                ai.contains("entry:200@"),
+                matches!(profile, "full-world" | "full-kalimdor")
+            );
+            assert_eq!(
+                ai.contains("entry:300@"),
+                matches!(profile, "full-world" | "full-eastern"),
+                "summoned creature AI must follow its summoner"
+            );
+
+            let templates = plan
+                .stmts
+                .iter()
+                .filter(|sql| sql.starts_with("INSERT INTO game_creature_template"))
+                .cloned()
+                .collect::<Vec<_>>()
+                .join(";");
+            for entry in [100, 200, 300] {
+                assert!(
+                    templates.contains(&format!("({entry},")),
+                    "{profile} template {entry}"
                 );
             }
         }
@@ -8754,6 +8745,118 @@ mod tests {
             source_sha: String::new(),
             eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
         }
+    }
+
+    #[test]
+    #[ignore = "requires pinned ClassicDB, owned client data, and local SpacetimeDB 2.7.1"]
+    fn full_world_source_loads_every_definition_and_spawn_locally() {
+        let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
+        let client = std::env::var("LYRACORE_TEST_DBC").unwrap();
+        let dump = read_dump(&path).unwrap();
+        let args = parse_args_from([
+            "--dump",
+            path.as_str(),
+            "--dbc",
+            client.as_str(),
+            "--world-profile",
+            "full-world",
+        ])
+        .unwrap();
+        let display_scales = Some(dbc::load_display_scales(&client).unwrap());
+        let tiers = Some(dbc::profession_tier_values(&client).unwrap());
+        let plan = build_dump_plan(&dump, &args, &display_scales, &tiers).unwrap();
+        let manifest: serde_json::Value =
+            serde_json::from_str(plan.eventai_manifest.as_deref().unwrap()).unwrap();
+        assert_eq!(manifest["apply_ready"], true, "{manifest:#}");
+        assert_eq!(manifest["counts"]["dropped_rules"], 0);
+        assert_eq!(manifest["counts"]["unapproved_result_groups"], 0);
+        assert_eq!(plan.spawn_row_count, 66_310);
+        assert_eq!(
+            plan.stamps
+                .iter()
+                .find(|(family, _)| *family == "creatures")
+                .unwrap()
+                .1,
+            10_384
+        );
+        let mut node = standalone_support::Standalone::start("full-world-source");
+        node.publish_module();
+        node.assert_call("claim_operator", &[]);
+        node.assert_call("install_guid_range", &["0"]);
+        for statement in dbc::catalogue_statements(&client, &dump).unwrap() {
+            node.assert_sql(&statement);
+        }
+        for statement in spell::build_spell_sql(std::path::Path::new(&client), &[], &[])
+            .unwrap()
+            .0
+        {
+            node.assert_sql(&statement);
+        }
+        for (index, statement) in plan.stmts.iter().enumerate() {
+            node.assert_sql(statement);
+            if index % 100 == 0 {
+                eprintln!(
+                    "full-world static catalogue: {index}/{} statements",
+                    plan.stmts.len()
+                );
+            }
+        }
+        for (index, (reducer, batch)) in plan.reducer_batches(&args).unwrap().iter().enumerate() {
+            if index % 50 == 0 {
+                eprintln!("full-world reducer batch {index}: {reducer}");
+            }
+            node.assert_call(reducer, &[&serde_json::to_string(batch).unwrap()]);
+        }
+        assert_eq!(
+            node.query_rows("SELECT entry FROM game_creature_template")
+                .len(),
+            10_384
+        );
+        let sources = node.query_rows("SELECT guid, map_id FROM game_creature_spawn WHERE source_guid = 0 AND instance_id = 0");
+        assert_eq!(sources.len(), 66_310);
+        let maps: std::collections::BTreeSet<_> = sources
+            .iter()
+            .map(|row| row["map_id"].parse::<u32>().unwrap())
+            .collect();
+        assert_eq!(maps.len(), 34);
+        for map in lyracore_shared::instance::DUNGEON_MAPS
+            .iter()
+            .chain(lyracore_shared::instance::BATTLEGROUND_MAPS)
+        {
+            assert!(node
+                .query_rows(&format!(
+                    "SELECT guid FROM game_world_entity WHERE map_id = {map} AND instance_id = 0"
+                ))
+                .is_empty());
+        }
+        assert!(
+            standalone_support::poll_until(std::time::Duration::from_secs(180), || {
+                std::thread::sleep(std::time::Duration::from_secs(2));
+                let live = node
+                    .query_rows("SELECT guid FROM game_world_entity WHERE instance_id = 0")
+                    .len();
+                eprintln!("full-world live population: {live}");
+                live > 45_000
+            }),
+            "shared-world population did not materialize within three minutes"
+        );
+        eprintln!("full-world reimport: resetting the populated roster");
+        for (index, batch) in plan.spawn_batches.iter().enumerate() {
+            let reducer = if index == 0 {
+                "import_creature_spawns"
+            } else {
+                "import_creature_spawns_append"
+            };
+            node.assert_call(reducer, &[&serde_json::to_string(batch).unwrap()]);
+        }
+        assert_eq!(
+            node.query_rows(
+                "SELECT guid FROM game_creature_spawn WHERE source_guid = 0 AND instance_id = 0"
+            )
+            .len(),
+            66_310
+        );
+        eprintln!("full-world source verified: 10,384 templates, 66,310 positions, 34 maps");
     }
 
     #[test]
@@ -9580,10 +9683,11 @@ mod tests {
         assert_eq!(plan.stamps, vec![("creature-ai", 8)]);
         assert_eq!(plan.eventai_definition_count, 3);
         assert_eq!(plan.eventai_instruction_count, 17);
-        assert_eq!(plan.stmts.len(), 5, "{:?}", plan.stmts);
+        assert_eq!(plan.stmts.len(), 6, "{:?}", plan.stmts);
         assert_eq!(
-            &plan.stmts[..3],
+            &plan.stmts[..4],
             [
+                "DELETE FROM game_world_state_name WHERE variable_id >= 0",
                 "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0",
                 "DELETE FROM game_creature_ai_summon WHERE id > 0",
                 "DELETE FROM game_quest_event_requirement WHERE id > 0",
@@ -9591,7 +9695,8 @@ mod tests {
             "the family replaces its dependency catalogues"
         );
         assert!(plan.stmts.iter().all(|statement| {
-            statement.contains("game_creature_ai_broadcast_text")
+            statement.contains("game_world_state_name")
+                || statement.contains("game_creature_ai_broadcast_text")
                 || statement.contains("game_creature_ai_summon")
                 || statement.contains("game_quest_event_requirement")
         }));
@@ -9706,16 +9811,13 @@ mod tests {
     }
 
     #[test]
-    fn a_not_selectable_template_imports_neither_its_template_row_nor_its_eventai_rules() {
-        // Template eligibility is one predicate. If the EventAI scope and the template block each
-        // kept their own copy, an excluded trigger creature would still get EventAI rules naming a
-        // template that never imported.
+    fn nonselectable_creatures_keep_their_spawns_flags_and_eventai_rules() {
         let dump = format!(
             "x INSERT INTO `creature` VALUES (1,100,0,1,-8949.95,-132.493,83.5312,0,300,300,0,0); \
              INSERT INTO `creature_template` VALUES {}; \
              INSERT INTO `broadcast_text` VALUES {}; \
              INSERT INTO `creature_ai_scripts` VALUES {}; y",
-            creature_template_row_with_unit_flags(100, UNIT_FLAG_NOT_SELECTABLE),
+            creature_template_row_with_unit_flags(100, 0x0200_0000),
             eventai_broadcast_row(900, "Trigger", "Trigger"),
             eventai_rule_row(
                 10,
@@ -9730,17 +9832,18 @@ mod tests {
         );
         let plan = build_dump_plan(&dump, &test_args(), &None, &None).expect("full plan");
         assert!(
-            !plan
-                .stmts
+            plan.stmts
                 .iter()
                 .any(|statement| statement.starts_with("INSERT INTO game_creature_template")),
             "{:?}",
             plan.stmts
         );
+        assert_eq!(plan.spawn_row_count, 1);
+        assert!(plan.stmts.iter().any(|sql| sql.contains(",33554432,")));
         assert!(
             plan.eventai_definition_batches
                 .iter()
-                .all(|batch| !batch.contains("entry:100@")),
+                .any(|batch| batch.contains("entry:100@")),
             "{:?}",
             plan.eventai_definition_batches
         );
@@ -9951,7 +10054,6 @@ mod tests {
             ("missing_summon_creature", 999),
             ("missing_summon_location", 999),
             ("malformed_rule", 1),
-            ("empty_text", 1),
         ] {
             assert_eq!(plan.dropped(reason, value), 1, "{reason}/{value}");
         }

@@ -1407,3 +1407,22 @@ fn motion_delivery_silence_is_scoped_to_the_shard_and_current_window() {
     assert!(!resumed.since(silent).is_silent());
     assert!(!stopped.delivery.snapshot().since(resumed).is_silent());
 }
+
+#[test]
+fn a_creature_whisper_selects_only_its_distant_recipient() {
+    let mut rng = Rng::new(0x5A11_0090);
+    let realm = spread_realm(&mut rng);
+    let recipient = &realm.viewers[0];
+    let speaker = realm.actor(&mut rng);
+    let mut row = chat(
+        speaker,
+        lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER,
+    );
+    row.target_guid = recipient.self_guid;
+    assert_eq!(
+        sessions(chat_audience(&realm.view, 0, &row)),
+        HashSet::from([recipient.session])
+    );
+    row.target_guid = u64::MAX;
+    assert!(chat_audience(&realm.view, 0, &row).is_empty());
+}

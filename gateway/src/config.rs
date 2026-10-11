@@ -371,6 +371,8 @@ impl ShardMap {
     ///
     /// # Inputs
     ///
+    /// - `imported_maps` records source coverage across connected Shards. Every imported dungeon
+    ///   participates even when its route uses the default or a wildcard.
     /// - `hosts_instances(db)` — that database's `game_config.hosts_instances`, or `None` when the
     ///   row is missing/unreadable. `None` reads as **true**, mirroring the module's own
     ///   `hosts_instance_populations` default: a database that predates the column behaves as it did
@@ -382,6 +384,7 @@ impl ShardMap {
     ///   the same *symptom* as `NoHost`, deliberately NOT the same severity, see that variant.
     pub fn check_instance_hosting(
         &self,
+        imported_maps: &[u32],
         hosts_instances: impl Fn(&str) -> Option<bool>,
         connected: impl Fn(&str) -> bool,
     ) -> InstanceHosting {
@@ -392,8 +395,15 @@ impl ShardMap {
         // trick, same expression). Bucket 0 is probed as instance id 0, which is the OPEN WORLD id
         // and never a real instance — that is fine and deliberately not special-cased: `resolve`
         // reads `instance_id % INSTANCE_BUCKETS` and nothing else, so 0 and 8 are the same probe.
+        // Check imported dungeon maps even when a default or wildcard rule owns them.
+        // The bootstrap fixture still requires Deadmines before its first source import.
         let owners = lyracore_shared::instance::DUNGEON_MAPS
             .iter()
+            .filter(|&&map_id| {
+                map_id == 36
+                    || imported_maps.contains(&map_id)
+                    || self.rules.iter().any(|rule| rule.map_id == Some(map_id))
+            })
             .flat_map(|&map_id| (0..INSTANCE_BUCKETS).map(move |bucket| (map_id, bucket)));
         let mut load_not_moved: Option<String> = None;
         for (map_id, instance_id) in owners {
@@ -992,7 +1002,7 @@ mod shard_map_tests {
     fn no_shard_map_plus_hosting_off_is_fatal_and_names_both_remedies() {
         let single = ShardMap::parse("lyracore", "");
         let verdict =
-            single.check_instance_hosting(flags(&[("lyracore", false)]), |d| d == "lyracore");
+            single.check_instance_hosting(&[], flags(&[("lyracore", false)]), |d| d == "lyracore");
         let msg = match &verdict {
             InstanceHosting::NoHost(m) => m.clone(),
             other => panic!(
@@ -1028,13 +1038,13 @@ mod shard_map_tests {
         let single = ShardMap::parse("lyracore", "");
         let up = |d: &str| d == "lyracore";
         assert_eq!(
-            single.check_instance_hosting(flags(&[("lyracore", true)]), up),
+            single.check_instance_hosting(&[], flags(&[("lyracore", true)]), up),
             InstanceHosting::Consistent,
             "a single database that hosts its own dungeons is correctly configured — saying \
              ANYTHING here is noise the detector was built to remove"
         );
         assert_eq!(
-            single.check_instance_hosting(|_| None, up),
+            single.check_instance_hosting(&[], |_| None, up),
             InstanceHosting::Consistent,
             "a database with no game_config row reads as HOSTING (the module's own unwrap_or(true)) \
             — an unreadable config must never fabricate a fatal"
@@ -1050,6 +1060,7 @@ mod shard_map_tests {
         let phase_a = ShardMap::parse("lyracore", "36:*=lyracore-instances");
         let up = |_: &str| true;
         match phase_a.check_instance_hosting(
+            &[],
             flags(&[("lyracore", true), ("lyracore-instances", true)]),
             up,
         ) {
@@ -1067,6 +1078,7 @@ mod shard_map_tests {
         }
         assert_eq!(
             phase_a.check_instance_hosting(
+                &[],
                 flags(&[("lyracore", false), ("lyracore-instances", true)]),
                 up
             ),
@@ -1084,6 +1096,7 @@ mod shard_map_tests {
     fn a_shard_map_that_routes_everything_except_the_dungeon_is_still_fatal() {
         let m = ShardMap::parse("lyracore", "1:*=lyracore-kalimdor");
         let verdict = m.check_instance_hosting(
+            &[],
             flags(&[("lyracore", false), ("lyracore-kalimdor", true)]),
             |_| true,
         );
@@ -1102,6 +1115,7 @@ mod shard_map_tests {
     fn one_unhosted_pool_member_out_of_eight_is_still_fatal() {
         let m = ShardMap::parse("lyracore", "36:1=instances-1, 36:*=instances-0");
         let verdict = m.check_instance_hosting(
+            &[],
             flags(&[
                 ("lyracore", false),
                 ("instances-0", true),
@@ -1135,6 +1149,7 @@ mod shard_map_tests {
     fn an_unreachable_instances_shard_is_reported_but_does_not_stop_the_gateway() {
         let phase_a = ShardMap::parse("lyracore", "36:*=lyracore-instances");
         let verdict = phase_a.check_instance_hosting(
+            &[],
             flags(&[("lyracore", false), ("lyracore-instances", true)]),
             |d| d == "lyracore", // the instances database never connected
         );
@@ -1170,6 +1185,7 @@ mod shard_map_tests {
         let up = |d: &str| matches!(d, "lyracore" | "lyracore-instances" | "lyracore-realm");
         assert_eq!(
             live.check_instance_hosting(
+                &[],
                 flags(&[
                     ("lyracore", false),          // the world shard does not host populations
                     ("lyracore-instances", true), // the instances shard does
@@ -1183,6 +1199,7 @@ mod shard_map_tests {
         // realm-core's flag is irrelevant either way — it owns no map, so flipping it changes nothing.
         assert_eq!(
             live.check_instance_hosting(
+                &[],
                 flags(&[
                     ("lyracore", false),
                     ("lyracore-instances", true),
@@ -1556,7 +1573,7 @@ mod shard_map_tests {
 
         // And the hosting check is inert rather than merely quiet.
         assert_eq!(
-            m.check_instance_hosting(|_| Some(true), |_| true),
+            m.check_instance_hosting(&[], |_| Some(true), |_| true),
             InstanceHosting::Consistent,
             "a single-database realm hosting its own instances has nothing to report"
         );
@@ -1796,5 +1813,30 @@ mod admission_limit_tests {
     fn non_unicode_limit_is_an_error() {
         use std::os::unix::ffi::OsStrExt;
         assert!(parse_admission_limit("LIMIT", Some(OsStr::from_bytes(&[0xff]))).is_err());
+    }
+    #[test]
+    fn imported_raid_maps_require_hosts_through_default_and_wildcard_routes() {
+        for rules in ["36:*=instances", "36:*=instances, *:*=world"] {
+            let map = crate::config::ShardMap::parse("world", rules);
+            let verdict =
+                map.check_instance_hosting(&[533], |shard| Some(shard == "instances"), |_| true);
+            assert!(
+                matches!(verdict, crate::config::InstanceHosting::NoHost(ref reason) if reason.contains("533")),
+                "{rules}: {verdict:?}"
+            );
+            assert!(matches!(
+                map.check_instance_hosting(&[], |shard| Some(shard == "instances"), |_| true),
+                crate::config::InstanceHosting::Consistent
+            ));
+        }
+    }
+
+    #[test]
+    fn configured_raid_routes_require_population_hosts() {
+        let map = crate::config::ShardMap::parse("lyracore", "36:*=instances, 533:*=raids");
+        assert!(matches!(
+            map.check_instance_hosting(&[], |db| Some(db != "raids"), |_| true),
+            crate::config::InstanceHosting::NoHost(_)
+        ));
     }
 }

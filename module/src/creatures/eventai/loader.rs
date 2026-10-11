@@ -497,6 +497,10 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                     "say" => SpeechMode::Say,
                     "yell" => SpeechMode::Yell,
                     "emote" => SpeechMode::Emote,
+                    "boss-emote" => SpeechMode::BossEmote,
+                    "zone-yell" => SpeechMode::ZoneYell,
+                    "zone-emote" => SpeechMode::ZoneEmote,
+                    "whisper" => SpeechMode::Whisper,
                     value => return Err(format!("unknown speech mode: {value}")),
                 },
                 broadcast_ids,
@@ -679,6 +683,16 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 creature_entry: parse_u32(entry)?,
             },
         )),
+        ["auto-attack", enabled] => Ok(CreatureInstruction::SetAutoAttack(parse_bool(enabled)?)),
+        ["zone-combat"] => Ok(CreatureInstruction::ZoneCombat),
+        ["sheath", state] => {
+            let state = parse_u8(state)?;
+            if state > 2 {
+                return Err("invalid sheath state".to_string());
+            }
+            Ok(CreatureInstruction::SetSheath(state))
+        }
+        ["no-effect", "empty-text"] => Ok(CreatureInstruction::EmptyTextNoEffect),
         ["no-effect", "missing-text-template", template] => Ok(
             CreatureInstruction::MissingTextTemplateNoEffect(MissingTextTemplateNoEffect {
                 template_id: nonzero_u32(template, "missing text template")?,
@@ -1406,12 +1420,16 @@ mod tests {
             ("speak:say:self:901", SpeechMode::Say),
             ("speak:yell:self:901", SpeechMode::Yell),
             ("speak:emote:self:901", SpeechMode::Emote),
+            ("speak:boss-emote:self:901", SpeechMode::BossEmote),
+            ("speak:zone-yell:self:901", SpeechMode::ZoneYell),
+            ("speak:zone-emote:self:901", SpeechMode::ZoneEmote),
+            ("speak:whisper:spawner:901", SpeechMode::Whisper),
         ] {
             let CreatureInstruction::Speak(speech) = parse_instruction(encoded).unwrap() else {
                 panic!("{encoded} did not parse as a speak instruction");
             };
             assert_eq!(speech.mode, expected, "{encoded}");
         }
-        assert!(parse_instruction("speak:whisper:self:901").is_err());
+        assert!(parse_instruction("speak:unknown:self:901").is_err());
     }
 }

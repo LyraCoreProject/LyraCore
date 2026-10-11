@@ -146,6 +146,14 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     // Threat is part of being in combat: leaving it clears `guid` from the threat tables — its OWN table
     // (a creature that evaded/fled/died forgets everyone) AND its entries on every other creature's table
     // (a player who died/logged out is forgotten by every mob). One symmetric clear, the canonical place.
+    use crate::game_threat;
+    let threat_members = ctx
+        .db
+        .game_threat()
+        .by_creature()
+        .filter(&guid)
+        .map(|entry| entry.source_guid)
+        .collect::<Vec<_>>();
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);
     // Drop the stale target on every creature that was attacking `guid`. `clear_target` skips players and
@@ -158,6 +166,7 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
     // vanilla drops the player's combat the moment the mob evades, not ~COMBAT_DROP_MS later (the
     // decay window still covers DoT/spell-only combat via the cycle's combat exit, unchanged).
     let mut freed = attackers_of_guid;
+    freed.extend(threat_members);
     freed.push(guid);
     let entities = ctx.db.game_world_entity();
     for g in freed {
@@ -240,7 +249,15 @@ pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
 /// Is `guid` in any melee engagement, attacking or attacked?
 pub(crate) fn is_engaged(ctx: &ReducerContext, guid: u64) -> bool {
     let melee = ctx.db.game_melee_attack();
-    melee.attacker_guid().find(guid).is_some() || melee.by_target().filter(&guid).next().is_some()
+    use crate::game_threat;
+    melee.attacker_guid().find(guid).is_some()
+        || melee.by_target().filter(&guid).next().is_some()
+        || ctx
+            .db
+            .game_threat()
+            .by_source()
+            .filter(&guid)
+            .any(|entry| melee.attacker_guid().find(entry.creature_guid).is_some())
 }
 
 fn may_harm_decision(same_unit: bool, active_duel: bool, friendly: bool) -> bool {

@@ -116,12 +116,7 @@ pub(crate) fn instance_release_zone(map_id: u32) -> Option<u32> {
     crate::instance::dungeon(map_id).map(|d| d.release_zone)
 }
 
-/// Static release floor for an instance map when NOTHING is imported (this sandbox's default
-/// state): Deadmines releases at Sentinel Hill (the Westfall graveyard nearest the Moonbrook
-/// entrance in spirit — the exact safe loc is `[V]`, same provenance caveat as the const itself).
-/// NEVER fall through to `nearest(px, py)` for an instance map — cross-map 2-D distance against
-/// the static consts is meaningless (see the section comment above). A field read
-/// off `crate::instance::DUNGEON_MAPS` (see [`instance_release_zone`]).
+/// Bootstrap release location when the fixture has no imported graveyards.
 pub(crate) fn instance_static_fallback(map_id: u32) -> Option<Graveyard> {
     crate::instance::dungeon(map_id).map(|d| {
         let (map, x, y, z, o) = d.release_fallback;
@@ -233,11 +228,48 @@ pub(crate) fn resolve_graveyard(
 ) -> Graveyard {
     let team = team_for_race(race);
 
-    if let Some(zone_id) = instance_release_zone(map_id) {
-        let linked = zone_linked(ctx, zone_id, team, None);
-        if let Some(g) = pick_instance_graveyard(&linked, instance_static_fallback(map_id), x, y) {
-            return g;
+    if crate::instance::is_dungeon_map(map_id) {
+        use crate::game_area;
+        let entrance = crate::instance::imported_entrance_fallback(ctx, map_id);
+        let mut zones: Vec<u32> = ctx
+            .db
+            .game_area()
+            .iter()
+            .filter(|area| area.map_id == map_id && area.parent_area_id == 0)
+            .map(|area| area.id)
+            .collect();
+        if let Some(zone) = instance_release_zone(map_id) {
+            zones.push(zone);
         }
+        zones.sort_unstable();
+        zones.dedup();
+        let linked: Vec<Graveyard> = zones
+            .into_iter()
+            .flat_map(|zone| zone_linked(ctx, zone, team, entrance.map(|point| point.0)))
+            .filter(|graveyard| !lyracore_shared::instance::has_instance_population(graveyard.map))
+            .collect();
+        // Dungeon coordinates cannot be compared with positions on the outside map.
+        if let Some((outside_map, outside_x, outside_y, outside_z, outside_o)) = entrance {
+            let fallback = nearest_of(&all_on_map(ctx, outside_map), outside_x, outside_y)
+                .or_else(|| instance_static_fallback(map_id));
+            if let Some(graveyard) =
+                pick_instance_graveyard(&linked, fallback, outside_x, outside_y)
+            {
+                return graveyard;
+            }
+            return Graveyard {
+                map: outside_map,
+                x: outside_x,
+                y: outside_y,
+                z: outside_z,
+                o: outside_o,
+            };
+        }
+        return linked
+            .into_iter()
+            .next()
+            .or_else(|| instance_static_fallback(map_id))
+            .unwrap_or(NORTHSHIRE);
     }
     let linked = match crate::terrain::zone_id_at(ctx, map_id, x, y) {
         Some(zone_id) => zone_linked(ctx, zone_id, team, Some(map_id)),

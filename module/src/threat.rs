@@ -509,6 +509,25 @@ pub fn debug_add_threat(
     Ok(())
 }
 
+/// Admit a hostile unit to a creature's combat without changing its accumulated threat.
+pub(crate) fn engage_without_threat(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) {
+    let table = ctx.db.game_threat();
+    if !table
+        .by_creature()
+        .filter(&creature_guid)
+        .any(|row| row.source_guid == source_guid)
+    {
+        table.insert(ThreatEntry {
+            id: 0,
+            creature_guid,
+            source_guid,
+            threat: 0,
+        });
+    }
+    crate::combat::enter_combat(ctx, creature_guid);
+    crate::combat::enter_combat(ctx, source_guid);
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

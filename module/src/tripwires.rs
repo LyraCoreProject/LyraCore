@@ -191,6 +191,7 @@ pub(crate) mod character_owned_tripwire {
         (
             &[
                 "game_creature_spawn",
+                "game_creature_population_member",
                 "game_creature_spline",
                 "game_encounter_spawn",
             ],
@@ -876,7 +877,7 @@ mod partition_discipline_tripwire {
         ("module/src/package_import/creatures.rs", 1, "a Package Delta apply clears the whole Package creature range before it writes, so a Package that left the enabled set takes its spawns with it — realm-wide reconciliation, and the band has no index"),
         ("module/src/package_import/gameobjects.rs", 1, "the same whole-band clear for the Package gameobject range"),
         // Deliberately cross-partition: these ARE the code that manages partitions.
-        ("module/src/instance.rs", 8, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
+        ("module/src/instance.rs", 7, "instance population spawn/teardown + the reaper's occupied-instance census — classifying every partition at once is the job"),
         ("module/src/encounter.rs", 2, "guid high-water marks over spawn/gameobject TEMPLATE rows when allocating a wave guid, not live-world reads"),
         // Unindexed lookups whose target is co-located with the caller anyway.
         ("module/src/creatures/pet.rs", 1, "`nearest_hostile_near` — KNOWN DEBT, a textbook `entities_near` radius search kept only because pets are rare (one per online warlock)"),

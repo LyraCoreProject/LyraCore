@@ -157,6 +157,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
         .filter(|guid| is_package_spawn_guid(*guid))
         .collect();
     for guid in package_guids {
+        crate::instance::remove_spawn_copies(ctx, guid);
         crate::creatures::despawn_creature_entity(ctx, guid);
         spawns.guid().delete(guid);
     }
@@ -231,6 +232,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
     // `import_creature_spawns` reset, one creature wide, through the canonical despawn checklist so
     // no engagement, threat or motion row outlives the creature it named.
     if row.table() == ClaimTable::CreatureSpawn {
+        crate::instance::remove_spawn_copies(ctx, row.row_id());
         crate::creatures::despawn_creature_entity(ctx, row.row_id());
     }
     Ok(())
@@ -348,6 +350,8 @@ fn blank_spawn(ctx: &ReducerContext, key: PrimaryKey) -> CreatureSpawn {
         movement_type: 0,
         respawn_secs: 0,
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     }
 }
 
@@ -516,6 +520,8 @@ mod tests {
             movement_type: 0,
             respawn_secs: 0,
             life_seq: 0,
+            source_guid: 0,
+            instance_id: 0,
         };
         for column in ClaimTable::CreatureSpawn.columns() {
             apply_spawn_field(&mut spawn, column.name, &some_value(*column)).expect("setter");

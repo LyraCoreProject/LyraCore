@@ -2,6 +2,10 @@ use anyhow::{bail, Context, Result};
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub(crate) enum WorldImportProfile {
+    FullWorld,
+    FullEastern,
+    FullKalimdor,
+    FullInstances,
     AllianceEastern,
     AllianceKalimdor,
     AllianceSingle,
@@ -12,6 +16,10 @@ pub(crate) enum WorldImportProfile {
 
 impl WorldImportProfile {
     pub(crate) const NAMES: &[&str] = &[
+        "full-world",
+        "full-eastern",
+        "full-kalimdor",
+        "full-instances",
         "alliance-eastern",
         "alliance-kalimdor",
         "alliance-single",
@@ -22,6 +30,10 @@ impl WorldImportProfile {
 
     pub(crate) fn parse(name: &str) -> Result<Self> {
         match name {
+            "full-world" => Ok(Self::FullWorld),
+            "full-eastern" => Ok(Self::FullEastern),
+            "full-kalimdor" => Ok(Self::FullKalimdor),
+            "full-instances" => Ok(Self::FullInstances),
             "alliance-eastern" => Ok(Self::AllianceEastern),
             "alliance-kalimdor" => Ok(Self::AllianceKalimdor),
             "alliance-single" => Ok(Self::AllianceSingle),
@@ -37,6 +49,10 @@ impl WorldImportProfile {
 
     pub(crate) fn name(self) -> &'static str {
         match self {
+            Self::FullWorld => "full-world",
+            Self::FullEastern => "full-eastern",
+            Self::FullKalimdor => "full-kalimdor",
+            Self::FullInstances => "full-instances",
             Self::AllianceEastern => "alliance-eastern",
             Self::AllianceKalimdor => "alliance-kalimdor",
             Self::AllianceSingle => "alliance-single",
@@ -45,11 +61,19 @@ impl WorldImportProfile {
             Self::Instances => "instances",
         }
     }
+
+    pub(crate) fn imports_all_templates(self) -> bool {
+        matches!(
+            self,
+            Self::FullWorld | Self::FullEastern | Self::FullKalimdor | Self::FullInstances
+        )
+    }
 }
 
 #[derive(Clone, Debug)]
 pub(crate) struct WorldImportScope {
     name: String,
+    all_maps: bool,
     pub(crate) bounded_slices: Vec<BoundedMapSlice>,
     pub(crate) whole_maps: Vec<i64>,
     pub(crate) instance_vmap_slices: Vec<InstanceVmapSlice>,
@@ -182,6 +206,12 @@ impl WorldImportScope {
         };
         let (bounded_slices, whole_maps, instance_vmap_slices, forced_creature_entries) =
             match profile {
+                WorldImportProfile::FullWorld
+                | WorldImportProfile::FullEastern
+                | WorldImportProfile::FullKalimdor
+                | WorldImportProfile::FullInstances => {
+                    return Self::full(profile);
+                }
                 WorldImportProfile::AllianceEastern => {
                     (eastern()?, vec![369], vec![], eastern_forced_creatures())
                 }
@@ -231,6 +261,56 @@ impl WorldImportScope {
             instance_vmap_slices,
             forced_creature_entries,
         )
+    }
+
+    fn full(profile: WorldImportProfile) -> Result<Self> {
+        // The client continent grid is 64 tiles of 533 1/3 yards, centred on zero.
+        // Stay inside its outer edge so inclusive cell ranges remain in 0..1024.
+        let bounds = (-17_066.66, 17_066.66, -17_066.66, 17_066.66);
+        let mut slices = Vec::new();
+        if matches!(
+            profile,
+            WorldImportProfile::FullWorld | WorldImportProfile::FullEastern
+        ) {
+            slices.push(BoundedMapSlice::rectangle(
+                "eastern-kingdoms",
+                0,
+                bounds,
+                (-8_949.95, -132.493, 83.5312),
+            )?);
+        }
+        if matches!(
+            profile,
+            WorldImportProfile::FullWorld | WorldImportProfile::FullKalimdor
+        ) {
+            slices.push(BoundedMapSlice::rectangle(
+                "kalimdor",
+                1,
+                bounds,
+                (-514.34, -4_344.96, 38.31),
+            )?);
+        }
+        let maps = match profile {
+            WorldImportProfile::FullEastern => vec![369, 449],
+            WorldImportProfile::FullKalimdor => vec![450],
+            _ => lyracore_shared::instance::DUNGEON_MAPS
+                .iter()
+                .copied()
+                .chain(lyracore_shared::instance::BATTLEGROUND_MAPS.iter().copied())
+                .map(i64::from)
+                .collect(),
+        };
+        let instance_slices = if matches!(
+            profile,
+            WorldImportProfile::FullWorld | WorldImportProfile::FullInstances
+        ) {
+            Self::canonical(WorldImportProfile::Instances)?.instance_vmap_slices
+        } else {
+            Vec::new()
+        };
+        let mut scope = Self::new(profile.name(), slices, maps, instance_slices, vec![])?;
+        scope.all_maps = profile == WorldImportProfile::FullWorld;
+        Ok(scope)
     }
 
     #[allow(clippy::too_many_arguments)]
@@ -296,6 +376,7 @@ impl WorldImportScope {
         }
         Ok(Self {
             name: name.into(),
+            all_maps: false,
             bounded_slices,
             whole_maps,
             instance_vmap_slices,
@@ -314,7 +395,8 @@ impl WorldImportScope {
     }
 
     pub(crate) fn contains(&self, map_id: i64, x: f64, y: f64, z: f64) -> bool {
-        self.whole_maps.contains(&map_id)
+        (self.all_maps && map_id >= 0)
+            || self.whole_maps.contains(&map_id)
             || self
                 .bounded_slices
                 .iter()
@@ -322,7 +404,8 @@ impl WorldImportScope {
     }
 
     pub(crate) fn contains_map(&self, map_id: i64) -> bool {
-        self.whole_maps.contains(&map_id)
+        (self.all_maps && map_id >= 0)
+            || self.whole_maps.contains(&map_id)
             || self
                 .bounded_slices
                 .iter()
@@ -582,6 +665,34 @@ mod tests {
             "map=36;instance-slice=deadmines-entry-exit;cell_x=511..513;cell_y=522..524;entry=-14.5732,-385.4750,62.4561;exit=-14.3628,-393.3800,64.5605;exit_radius=6.0;collar=1"
         );
         assert!(instances.forced_creature_entries.is_empty());
+    }
+
+    #[test]
+    fn full_profiles_partition_spawns_and_share_all_definitions() {
+        let all = WorldImportScope::canonical(WorldImportProfile::FullWorld).unwrap();
+        assert!(all.contains(999, 50_000.0, 50_000.0, 0.0));
+        assert!(!all.contains(-1, 0.0, 0.0, 0.0));
+        let eastern = WorldImportScope::canonical(WorldImportProfile::FullEastern).unwrap();
+        let kalimdor = WorldImportScope::canonical(WorldImportProfile::FullKalimdor).unwrap();
+        let instances = WorldImportScope::canonical(WorldImportProfile::FullInstances).unwrap();
+        for map in [0, 1, 369, 449, 450]
+            .into_iter()
+            .chain(lyracore_shared::instance::DUNGEON_MAPS.iter().copied())
+            .chain(lyracore_shared::instance::BATTLEGROUND_MAPS.iter().copied())
+        {
+            let owners = [&eastern, &kalimdor, &instances]
+                .iter()
+                .filter(|scope| scope.contains(i64::from(map), 0.0, 0.0, 0.0))
+                .count();
+            assert_eq!(owners, 1, "map {map}");
+        }
+        for scope in [&all, &eastern, &kalimdor] {
+            for slice in &scope.bounded_slices {
+                let (x0, x1, y0, y1) =
+                    crate::terrain::slice_cell_range(Some(slice.bounds), slice.sample, 0.0);
+                assert_eq!((x0, x1, y0, y1), (0, 1023, 0, 1023));
+            }
+        }
     }
 
     #[test]

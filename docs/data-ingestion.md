@@ -104,13 +104,11 @@ live subscriptions already *are* the visibility/broadcast layer (a creature is "
 language (Rust) end-to-end reusing the gtker crate family (incl. `wow_dbc`); our schema is already a
 subset so growth is append-only.
 
-**Tradeoffs:** full-world volume is unproven for us (~1.4 GB MySQL as a size proxy); reducer
-arg-size/exec limits **forbid streaming the whole dump through one call** → import MUST be externally
-chunked/batched via a privileged admin/gateway SDK path; **seed-as-code (`seed.rs`) does NOT scale**
-(~10k creatures / ~66k spawns / ~17k items / ~170k loot rows would wreck compile time + bloat the
-wasm) → need a **data-bundle loader**, content versioned separately from code; migrations are
-append-only (never reshape); we'd own an ETL + validation that mangos has 15 yrs of tooling for;
-mangos column *semantics* don't always map 1:1 (e.g. multiplier-based stats vs our flat values).
+**Tradeoffs:** production capacity needs measurement on the target topology. Imports use external
+batches to stay within reducer argument and execution limits. The pinned source has 10,384
+creature definitions and 66,310 positions; expanded creature loot reaches 1,316,655 rows.
+Content loads from data instead of compiled seed code. Migrations remain append-only, and source
+semantics such as multiplier-based stats still need explicit mappings to the Module's fields.
 
 **Republish & data retention (re-verified 2026-06-17, Slice 2):** a plain `spacetime publish` (no
 `-c`) is **never destructive** — it either auto-migrates while RETAINING all data, or it *aborts*
@@ -204,18 +202,51 @@ Ship **zero** third-party-derived data. Three streams, each with its own provena
 - **P5 — Quests** (+ the npc/gossip relations they need): densest behavioral content; depends on
   creatures/items/gossip.
 
-**Per-shard scope.** Once the world is sharded by continent, the ETL's unit of work is one map into
-one database — the importer takes the target database, the map id, and a bounding box, and its map
-fence plus the surrounding pre- and post-flight guards keep any one database from holding two
-continents' spatial rows. Non-spatial content (spells, items, quests, the DBC reference tables) is
-duplicated on every shard by design.
+**Per-shard scope.** World Import Profiles assign spatial rows to a World Shard or Instance Pool.
+`full-eastern` owns maps 0, 369 and 449; `full-kalimdor` owns maps 1 and 450;
+`full-instances` owns the dungeon, raid and battleground maps. Each full profile imports every
+creature definition and builds a shared quest catalogue from the full source. Runnable AI follows local creature
+populations and their summon dependencies, so its spatial references stay on their owning Shard.
+Quest-giver relations follow local spawns.
+`full-world` imports every source map into one database. Legacy map and box imports retain their
+selected scope. Reimports replace each selected family; two runs do not combine spatial scopes.
 
-Canonical World Import Profiles build quest definitions from the union of the starting profiles
-and the Instance Pool. This keeps quest text, objectives, and scripted event requirements
-available after Transfer. Quest reimports retain summoned givers and reapply the `creature-ai`
-Package Deltas for event requirements. Quest-giver relations still follow the destination's World Import Scope. Legacy map and box imports retain
-their selected quest scope. Existing canonical imports need the `quests` and `items` families
-reimported on every World Shard and Instance Pool so the shared quest rewards have item templates.
+For a complete source import, supply the dump and client data together:
+
+```sh
+cargo run -p lyracore-importer -- \
+  --dump .import/classic-db-full.sql --dbc /path/to/client/Data \
+  --world-profile full-world
+```
+
+This prints the plan. Add `--apply --server <local-node> --db <database>` to load it. Full profiles
+load the client reference catalogues from the same dump and client inputs, including taxi mount
+models. They do not require a separate `--taxi-mounts` argument. The script also loads spells,
+talents, terrain and navigation:
+
+```sh
+WORLD_PROFILE=full-world DUMP=.import/classic-db-full.sql DBC=/path/to/client/Data \
+  DB=local-full-world SPACETIME_SERVER=http://127.0.0.1:3000 \
+  bash importer/scripts/import-world.sh
+```
+
+All authored creature positions are retained, including nonselectable creatures and population
+alternatives. Population metadata retains entry choices, count limits, chances and event links.
+The Module selects an initial population from that metadata. Selections last until reimport or
+Instance teardown; source pool rotation after deaths is not yet implemented. Positive game-event
+members and groups with world-state conditions remain dormant until an event system can evaluate
+them. Negative event members use the inactive-event state. Conditional squad positions with no
+SQL entry choices remain inspectable source rows with entry zero and never become live entities.
+
+Dungeon, raid and battleground source rows stay dormant in Instance zero. Creating a dungeon or
+raid Instance copies its selected creatures and patrols into that Instance. The copies respawn
+and are removed with the Instance. This supplies map populations; it does not supply missing
+encounter scripts, raid lockouts or battleground rules. Continent terrain covers the full client
+grid; imported spawn coverage does not imply complete collision coverage for every interior.
+
+The EventAI compatibility gate still applies to the full catalogue. A larger scope does not
+approve dropped rules or unknown behavior. Existing smaller profiles retain their shared starting
+quest catalogue and their local quest-giver relations.
 
 ## Creature EventAI family
 

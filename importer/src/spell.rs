@@ -885,7 +885,7 @@ fn supported_effect_default(effect_id: i32, kind: u8, is_negative: bool) -> u8 {
 
 /// Coverage accounting accumulated across the whole import — drives the COVERAGE REPORT.
 #[derive(Default)]
-struct Coverage {
+pub(crate) struct Coverage {
     spells: usize,
     effects: usize,
     real: usize,                  // effects mapped to a real (non-E_SCRIPTED) kind
@@ -1771,7 +1771,7 @@ fn assemble_spell_sql(
 }
 
 /// The (clear+)reload SQL plus the dry-run diagnostics: the shape every existing caller expects.
-fn build_spell_sql(
+pub(crate) fn build_spell_sql(
     data_dir: &Path,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],

@@ -97,6 +97,10 @@ PROFILE_FLAGS=()
 PROFILE_MAPS=""
 if [ -n "$WORLD_PROFILE" ]; then
   case "$WORLD_PROFILE" in
+    full-world) PROFILE_MAPS="$PROFILE_FULL_WORLD_MAPS"; MAP=0 ;;
+    full-eastern) PROFILE_MAPS="$PROFILE_FULL_EASTERN_MAPS"; MAP=0 ;;
+    full-kalimdor) PROFILE_MAPS="$PROFILE_FULL_KALIMDOR_MAPS"; MAP=1 ;;
+    full-instances) PROFILE_MAPS="$PROFILE_FULL_INSTANCES_MAPS"; MAP=36 ;;
     alliance-eastern) PROFILE_MAPS="$PROFILE_ALLIANCE_EASTERN_MAPS"; MAP=0 ;;
     alliance-kalimdor) PROFILE_MAPS="$PROFILE_ALLIANCE_KALIMDOR_MAPS"; MAP=1 ;;
     alliance-single) PROFILE_MAPS="$PROFILE_ALLIANCE_SINGLE_MAPS"; MAP=0 ;;
@@ -255,7 +259,7 @@ CENTER_FLAGS=(); [ -n "$CENTER" ] && CENTER_FLAGS=(--center "$CENTER")
 if [ -n "$WORLD_PROFILE" ]; then
   SCOPE_FLAGS=("${PROFILE_FLAGS[@]}")
 else
-  SCOPE_FLAGS=(--map "$MAP" --box "$BOX" "${INC_MAP_FLAGS[@]}" "${INC_CREATURE_FLAGS[@]}" "${CENTER_FLAGS[@]}")
+  SCOPE_FLAGS=(--map "$MAP" --box "$BOX" ${INC_MAP_FLAGS[@]+"${INC_MAP_FLAGS[@]}"} ${INC_CREATURE_FLAGS[@]+"${INC_CREATURE_FLAGS[@]}"} ${CENTER_FLAGS[@]+"${CENTER_FLAGS[@]}"})
 fi
 # Every map whose spatial rows this run is ALLOWED to leave in $DB. Sorted LEXICALLY, not numerically:
 # `comm` below merges as text, and a numeric sort ({36,209}) is not a lexical one ({209,36}) — mixing the
@@ -403,7 +407,7 @@ run_checked_step "world content for $WORLD_PROFILE into $DB" \
 # code path, with the same filename-axis arbitration and the same self-checks. Map 36 remains outside
 # this terrain path because one height per cell cannot represent its stacked floors. The one extra
 # operator obligation on another continent is $CENTER (above) — the self-checks sample it.
-if [ "$WORLD_PROFILE" = instances ]; then
+if { [ "$WORLD_PROFILE" = instances ] || [ "$WORLD_PROFILE" = full-instances ]; }; then
   echo "[world] terrain heightmap ETL SKIPPED — map 36 needs a floor-preserving representation"
 else
   if [ -n "$WORLD_PROFILE" ]; then terrain_scope="--world-profile $WORLD_PROFILE"; else terrain_scope="--map $MAP --box $BOX${CENTER:+  --center $CENTER}"; fi
@@ -417,8 +421,8 @@ fi
 # game_nav_chunk (walkability + LoS obstruction). Same box; --center feeds its own walkable
 # self-check, and the rotation-convention calibration hard-fails on transform drift. M2 parse
 # warnings (a handful of decorative props) are expected; the grep keeps summary lines only.
-if [ "$WORLD_PROFILE" = instances ]; then
-  echo "[world] nav grid ETL SKIPPED — instances owns only WMO map 36"
+if { [ "$WORLD_PROFILE" = instances ] || [ "$WORLD_PROFILE" = full-instances ]; }; then
+  echo "[world] nav grid ETL SKIPPED — instance profiles use WMO maps"
 else
   if [ -n "$WORLD_PROFILE" ]; then nav_scope="--world-profile $WORLD_PROFILE"; else nav_scope="--map $MAP --box $BOX${CENTER:+  --center $CENTER}"; fi
   echo "[world] nav grid ETL $nav_scope"
@@ -429,9 +433,14 @@ else
 fi
 # The standalone DBC pass loads character creation, faction and taxi catalogues.
 # Taxi mount entries resolve through the full dump, independent of the imported creature slice.
-echo "[world] character-creation + faction DBC tables (start items / race+class combos / race display / factions)"
-run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
-  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --taxi-mounts "$DUMP" --apply || exit 1
+case "$WORLD_PROFILE" in
+  full-*) echo "[world] client catalogues loaded with the world content" ;;
+  *)
+    echo "[world] character-creation + faction DBC tables"
+    run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
+      ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --taxi-mounts "$DUMP" --apply || exit 1
+    ;;
+esac
 # Real talent trees (TalentTab.dbc + Talent.dbc → game_talent_tab/game_talent).
 # WITHOUT this the tables hold only the 8 demo talents, whose ids don't match what the 5875 client
 # sends on a talent click → talent selection silently fails (the client renders the real trees from its
@@ -440,19 +449,24 @@ echo "[world] real talent trees (TalentTab.dbc + Talent.dbc → game_talent)"
 run_checked_step "talents into $DB" "loaded [0-9]+ tabs|error|abort" 2 \
   ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
   --dbc "$DBC" --talents --apply || exit 1
-echo "[world] full Spell.dbc import (every non-zero row)"
-# Full de-curated import: EVERY non-zero Spell.dbc row (header+effects), no --only allowlist. The
-# long tail (raid/other-class/PvP spells with no Rust kind mapping yet) lands as E_SCRIPTED no-ops —
-# that's the intended end state, NOT a gap; mapping the long tail of spell effects to typed kinds is
-# separate, later work. The
-# wholesale clear in spell_delete_statements (importer/src/spell.rs) is guarded at
-# SYNTHETIC_SPELL_ID_FLOOR (50000) so the module's synthetic/test fixture spells (Combat Insight
-# 50000, Test PW:Shield 50072, Minor Healing 50110, Test Regeneration 50137 — none re-created by any
-# import script) survive this reload. The curated class import below still runs for its `--trainer`
-# offering bindings. The full catalogue already contains every imported caster spell.
-run_checked_step "full spell catalogue into $DB" "imported [0-9]|WARNING|error|abort" 3 \
-  ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
-  --dbc "$DBC" --spells --apply || exit 1
+case "$WORLD_PROFILE" in
+  full-*) echo "[world] spell catalogue loaded before world AI definitions" ;;
+  *)
+    echo "[world] full Spell.dbc import (every non-zero row)"
+    # Full de-curated import: EVERY non-zero Spell.dbc row (header+effects), no --only allowlist. The
+    # long tail (raid/other-class/PvP spells with no Rust kind mapping yet) lands as E_SCRIPTED no-ops —
+    # that's the intended end state, NOT a gap; mapping the long tail of spell effects to typed kinds is
+    # separate, later work. The
+    # wholesale clear in spell_delete_statements (importer/src/spell.rs) is guarded at
+    # SYNTHETIC_SPELL_ID_FLOOR (50000) so the module's synthetic/test fixture spells (Combat Insight
+    # 50000, Test PW:Shield 50072, Minor Healing 50110, Test Regeneration 50137 — none re-created by any
+    # import script) survive this reload. The curated class import below still runs for its `--trainer`
+    # offering bindings. The full catalogue already contains every imported caster spell.
+    run_checked_step "full spell catalogue into $DB" "imported [0-9]|WARNING|error|abort" 3 \
+      ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
+      --dbc "$DBC" --spells --apply || exit 1
+    ;;
+esac
 # NOTE the explicit `DB=` prefix, and do not drop it: `DB` is a plain shell variable here (not
 # exported) and the child script defaults to `lyracore`, so without the prefix a
 # `DB=<other> import-world.sh` run writes its curated spells into the DEFAULT database instead of the
@@ -534,19 +548,19 @@ chk() { # label  expected-min  actual
 # PROFILE ASSERTION HELPERS BEGIN — extracted by import-manifest-smoke.sh.
 chk0() {
   case "$WORLD_PROFILE" in
-    alliance-eastern|alliance-single) chk "$@" ;;
+    alliance-eastern|alliance-single|full-eastern|full-world) chk "$@" ;;
     "") [ "$MAP" = 0 ] && [ "${SLICE:-0}" = 0 ] && chk "$@" ;;
   esac
   return 0
 }
 chk36() {
   case "$WORLD_PROFILE" in
-    alliance-single|instances) chk "$@" ;;
+    alliance-single|instances|full-world|full-instances) chk "$@" ;;
     "") case " ${INCLUDE_MAPS//,/ } " in *" 36 "*) chk "$@" ;; esac ;;
   esac
   return 0
 }
-chk_open_world() { [ "$WORLD_PROFILE" != instances ] && chk "$@"; return 0; }
+chk_open_world() { [ "$WORLD_PROFILE" != instances ] && [ "$WORLD_PROFILE" != full-instances ] && chk "$@"; return 0; }
 # PROFILE ASSERTION HELPERS END
 n() { # <query> [count-pattern] — the verification stage's row-COUNT chokepoint (#440): routes
       # through $SPACETIME_SERVER via q(), and on a FAILED query records it via sql_note_failure
@@ -667,7 +681,7 @@ verify_graveyard_zone() { # label zone-id
 }
 verify_profile_corridors() {
   case "$WORLD_PROFILE" in
-    alliance-eastern|alliance-single)
+    alliance-eastern|alliance-single|full-eastern|full-world)
       verify_named_corridor "Dun Morogh start" 0 658 "$FLOOR_DUN_MOROGH_START"
       chk "Dun Morogh Paladin trainer (Bromos Grummner 926)" 1 "$(n "SELECT spell_id FROM game_trainer_spell WHERE trainer_entry=926")"
       chk "Dun Morogh vendor (Durnan Furcutter 836)" 1 "$(n "SELECT item_entry FROM game_npc_vendor WHERE creature_entry=836")"
@@ -681,7 +695,7 @@ verify_profile_corridors() {
       ;;
   esac
   case "$WORLD_PROFILE" in
-    alliance-kalimdor|alliance-single)
+    alliance-kalimdor|alliance-single|full-kalimdor|full-world)
       verify_named_corridor "Teldrassil start" 1 2079 "$FLOOR_TELDRASSIL_START"
       chk "Teldrassil Warrior trainer (Alyissia 3593)" 1 "$(n "SELECT spell_id FROM game_trainer_spell WHERE trainer_entry=3593")"
       verify_named_corridor "Darkshore follow-on" 1 10219 "$FLOOR_DARKSHORE_CONTENT"
@@ -710,13 +724,13 @@ if [ -z "$WORLD_PROFILE" ] && [ "$SLICE" != 0 ]; then
   echo "  ..    named Human and Deadmines checks SKIPPED — custom legacy slice"
 elif [ "$WORLD_PROFILE" = alliance-kalimdor ]; then
   echo "  ..    named Human and Deadmines checks SKIPPED — alliance-kalimdor does not own them"
-elif [ "$WORLD_PROFILE" = instances ]; then
-  echo "  ..    open-world corridor checks SKIPPED — instances owns only map 36"
+elif { [ "$WORLD_PROFILE" = instances ] || [ "$WORLD_PROFILE" = full-instances ]; }; then
+  echo "  ..    open-world corridor checks SKIPPED — instance profiles have no continent terrain"
 fi
 [ "$MAP" != 0 ] || verify_taxi_fixture_anchors
 verify_alliance_creation_data
 [ -z "$WORLD_PROFILE" ] || verify_profile_corridors
-if [ "$WORLD_PROFILE" != instances ]; then
+if [ "$WORLD_PROFILE" != instances ] && [ "$WORLD_PROFILE" != full-instances ]; then
 chk0 "Goldshire anchor trainers spawned {328,377,906,913,917,927} (NOT total coverage — see the service-coverage audit below)" "$FLOOR_CLASS_TRAINERS" \
     "$(n "SELECT guid FROM game_world_entity WHERE owner_guid=0 AND (entry=328 OR entry=377 OR entry=906 OR entry=913 OR entry=917 OR entry=927)" '[0-9]{6,}')"
 chk "class trainer offerings (learn_skill_line=0)"   "$FLOOR_TRAINER_OFFERINGS_CLASS" "$(n "SELECT spell_id FROM game_trainer_spell WHERE learn_skill_line = 0")"

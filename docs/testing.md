@@ -141,6 +141,15 @@ For example:
 LYRACORE_CLIENT_DATA=/games/WoW-1.12.1/Data cargo test -p lyracore-importer terrain -- --ignored
 ```
 
+The complete creature import test loads the pinned dump and client catalogues into a private local
+SpacetimeDB node, checks every source position, waits for the shared-world population, and reimports
+the populated roster:
+
+```bash
+LYRACORE_CLASSIC_DB_SQL=/path/to/classic.sql LYRACORE_TEST_DBC=/path/to/client/Data \
+  cargo test -p lyracore-importer full_world_source_loads_every_definition_and_spawn_locally -- --ignored
+```
+
 Run the terrain check before an `--apply` after you change a profile anchor.
 
 A Package test runner sets `LYRACORE_TEST_CORE` to the Core checkout it builds against.

@@ -613,6 +613,7 @@ pub(crate) fn spawn_wave(
             .iter()
             .filter(|s| s.entry == entry)
             .map(|s| s.guid & 0x00FF_FFFF)
+            .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
             .max()
             .unwrap_or(0)
             + 1;
@@ -637,6 +638,8 @@ pub(crate) fn spawn_wave(
             movement_type: crate::creatures::MOVEMENT_IDLE, // holds its post until aggro
             respawn_secs: u32::MAX,                         // "never" — see the fn doc
             life_seq: 0,
+            source_guid: 0,
+            instance_id,
         };
         let entity =
             crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);

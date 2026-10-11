@@ -452,6 +452,13 @@ pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Tim
         .unwrap_or(ctx.timestamp)
 }
 
+/// Maps represented by the current source import. Runtime copies do not change this catalogue.
+#[table(accessor = game_creature_spawn_map, public)]
+pub struct CreatureSpawnMap {
+    #[primary_key]
+    pub map_id: u32,
+}
+
 #[table(
     accessor = game_creature_spawn,
     public,
@@ -461,8 +468,12 @@ pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Tim
     // indexes, so the gateway is unaffected).
     index(accessor = by_respawn_at, btree(columns = [respawn_at])),
     index(accessor = by_despawn_at, btree(columns = [despawn_at])),
-    index(accessor = by_entry_map, btree(columns = [entry, map_id]))
+    index(accessor = by_entry_map, btree(columns = [entry, map_id])),
+    index(accessor = by_source_guid, btree(columns = [source_guid])),
+    index(accessor = by_instance, btree(columns = [instance_id])),
+    index(accessor = by_map_instance, btree(columns = [map_id, instance_id]))
 )]
+#[derive(Clone)]
 pub struct CreatureSpawn {
     #[primary_key]
     pub guid: u64,
@@ -500,6 +511,12 @@ pub struct CreatureSpawn {
     /// END-appended + defaulted (migration rule).
     #[default(0u64)]
     pub life_seq: u64,
+    /// Zero for source rows and shared-world populations; nonzero for an Instance copy.
+    #[default(0u64)]
+    pub instance_id: u64,
+    /// The authored spawn guid for a runtime copy. Zero means this row is the source.
+    #[default(0u64)]
+    pub source_guid: u64,
 }
 
 /// Read stored spawn evidence for one creature entry without walking the world spawn table.
@@ -985,6 +1002,8 @@ mod tests {
 #[reducer]
 pub fn import_creature_spawns(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
+    super::population::check_definitions(ctx)?;
+    super::population::clear_all(ctx);
     let entities = ctx.db.game_world_entity();
     let spawns = ctx.db.game_creature_spawn();
 
@@ -995,19 +1014,25 @@ pub fn import_creature_spawns(ctx: &ReducerContext, packed: String) -> Result<()
         .map(|e| e.guid)
         .collect();
     for g in creature_guids {
-        entities.guid().delete(g);
+        crate::creatures::despawn_creature_entity(ctx, g);
     }
-    let spawn_guids: Vec<u64> = spawns.iter().map(|s| s.guid).collect();
-    for g in spawn_guids {
-        spawns.guid().delete(g);
+    let spawn_guids: Vec<_> = spawns.iter().map(|s| (s.guid, s.source_guid)).collect();
+    for (guid, source_guid) in spawn_guids {
+        if source_guid != 0 {
+            crate::instance::remove_spawn_waypoints(ctx, guid);
+        }
+        spawns.guid().delete(guid);
     }
     // The threat tables are keyed by the creature guids we just deleted — wipe them so a re-import
     // doesn't orphan stale aggro rows (the fresh roster starts with empty threat).
     crate::threat::clear_all(ctx);
 
-    // 2) Load the (first/only) batch. respawn_at = now (in the past by the next tick) so the respawn
-    //    pass re-creates each live entity from this spawn + its template immediately; it disarms the
-    //    timer as it does. despawn_at starts NOT-ARMED — nothing has died yet.
+    let maps = ctx.db.game_creature_spawn_map();
+    for map in maps.iter().collect::<Vec<_>>() {
+        maps.map_id().delete(map.map_id);
+    }
+
+    // Shared-world spawns arm their first population. Instance source rows stay dormant.
     if load_spawn_batch(ctx, &packed)? == 0 {
         return Err("import payload was empty".to_string());
     }
@@ -1018,7 +1043,7 @@ pub fn import_creature_spawns(ctx: &ReducerContext, packed: String) -> Result<()
 /// clears the roster ONCE + loads the first batch), so a whole zone can load across several calls (a
 /// single `spacetime call` string arg can't hold ~2k spawns). note: the importer sends batch 0 via
 /// `import_creature_spawns` and the remaining batches via this; the respawn tick then builds the
-/// entities for every loaded spawn. No reset here — re-calling this alone never wipes the roster.
+/// shared-world entities. Instance source rows stay dormant until creation. No reset here.
 #[reducer]
 pub fn import_creature_spawns_append(ctx: &ReducerContext, packed: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
@@ -1048,29 +1073,37 @@ fn load_spawn_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8: {s}"));
         let pf32 = |s: &str| s.parse::<f32>().map_err(|_| format!("bad f32: {s}"));
+        let map_id = pu32(f[2])?;
         let spawn = CreatureSpawn {
             guid: pu64(f[0])?,
             entry: pu32(f[1])?,
-            map_id: pu32(f[2])?,
+            map_id,
             x: pf32(f[3])?,
             y: pf32(f[4])?,
             z: pf32(f[5])?,
             orientation: pf32(f[6])?,
-            // respawn_at STAYS ARMED (`now`): this is how an imported creature first appears —
-            // `pass_respawn` sees a due timer with no live entity and builds the entity from this
-            // row. It disarms the timer once it has (see `timer_never`), so the row leaves the
-            // range scan after one tick instead of sitting in it forever.
-            respawn_at: now,
+            // Instance maps retain source rows without creating an instance-zero population.
+            respawn_at: if lyracore_shared::instance::has_instance_population(map_id) {
+                timer_never(ctx)
+            } else {
+                now
+            },
             despawn_at: timer_never(ctx), // not a corpse — nothing to decay yet
             movement_type: pu8(f[7])?,
             respawn_secs: if f.len() == 9 { pu32(f[8])? } else { 0 },
             life_seq: 0,
+            source_guid: 0,
+            instance_id: 0,
         };
         // try_insert: a duplicate guid within the payload (shouldn't happen — guids are unique per
         // spawn) fails the run cleanly rather than panicking the reducer.
         spawns
             .try_insert(spawn)
             .map_err(|e| format!("duplicate spawn guid {}: {e}", f[0]))?;
+        let maps = ctx.db.game_creature_spawn_map();
+        if maps.map_id().find(map_id).is_none() {
+            maps.insert(CreatureSpawnMap { map_id });
+        }
         loaded += 1;
     }
     Ok(loaded)

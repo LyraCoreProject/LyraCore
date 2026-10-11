@@ -905,6 +905,8 @@ fn insert_fixture_entity(
         movement_type: crate::creatures::MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
+        source_guid: 0,
+        instance_id: 0,
     };
     let mut entity = crate::creatures::build_creature_entity(&spawn, template, 0, 0);
     entity.owner_guid = owner_guid;

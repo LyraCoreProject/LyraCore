@@ -210,20 +210,35 @@ pub fn build_chat_message_to(
             sender_name,
             target: Guid::new(target_guid),
         },
-        (1, Some(sender_name)) => SMSG_MESSAGECHAT_ChatType::MonsterYell {
-            sender1: sender,
-            sender_name,
-            target: Guid::new(target_guid),
-        },
+        (1 | broadcast_chat::CREATURE_ZONE_YELL, Some(sender_name)) => {
+            SMSG_MESSAGECHAT_ChatType::MonsterYell {
+                sender1: sender,
+                sender_name,
+                target: Guid::new(target_guid),
+            }
+        }
         // `MonsterEmote` carries one guid and it names the SPEAKER, paired with the speaker's own
         // name. The variant has no addressee field on the wire, so an emote's addressed target is
         // not expressible here and is dropped rather than misfiled into the speaker slot.
-        (broadcast_chat::CREATURE_TEXT_EMOTE, Some(monster_name)) => {
-            SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+        (broadcast_chat::CREATURE_WHISPER, Some(monster_name)) => {
+            SMSG_MESSAGECHAT_ChatType::MonsterWhisper {
                 monster: sender,
                 monster_name,
             }
         }
+        (broadcast_chat::CREATURE_BOSS_EMOTE, Some(monster_name)) => {
+            SMSG_MESSAGECHAT_ChatType::RaidBossEmote {
+                monster: sender,
+                monster_name,
+            }
+        }
+        (
+            broadcast_chat::CREATURE_TEXT_EMOTE | broadcast_chat::CREATURE_ZONE_EMOTE,
+            Some(monster_name),
+        ) => SMSG_MESSAGECHAT_ChatType::MonsterEmote {
+            monster: sender,
+            monster_name,
+        },
         (1, None) => SMSG_MESSAGECHAT_ChatType::Yell {
             chat_credit: sender,
             speech_bubble_credit: sender,
@@ -243,7 +258,10 @@ pub fn build_chat_message_to(
         chat_type: kind,
         language: if matches!(
             chat_type,
-            broadcast_chat::CREATURE_TEXT_EMOTE | broadcast_chat::EMOTE
+            broadcast_chat::CREATURE_TEXT_EMOTE
+                | broadcast_chat::CREATURE_BOSS_EMOTE
+                | broadcast_chat::CREATURE_WHISPER
+                | broadcast_chat::EMOTE
         ) {
             Language::Universal
         } else {
@@ -479,6 +497,43 @@ mod tests {
 
         let weird = build_chat_message(1, None, 0, 250, "x".into());
         assert_eq!(weird.language, Language::Universal);
+    }
+
+    #[test]
+    fn creature_speech_keeps_its_wire_kinds_and_languages() {
+        let make = |kind| {
+            build_chat_message_to(
+                11,
+                Some("Herald".into()),
+                77,
+                kind,
+                7,
+                "Attention".into(),
+                0,
+            )
+        };
+        let whisper = make(broadcast_chat::CREATURE_WHISPER);
+        assert!(
+            matches!(whisper.chat_type, SMSG_MESSAGECHAT_ChatType::MonsterWhisper { monster, .. } if monster.guid() == 11)
+        );
+        assert_eq!(whisper.language, Language::Universal);
+        let boss = make(broadcast_chat::CREATURE_BOSS_EMOTE);
+        assert!(matches!(
+            boss.chat_type,
+            SMSG_MESSAGECHAT_ChatType::RaidBossEmote { .. }
+        ));
+        assert_eq!(boss.language, Language::Universal);
+        let yell = make(broadcast_chat::CREATURE_ZONE_YELL);
+        assert!(
+            matches!(yell.chat_type, SMSG_MESSAGECHAT_ChatType::MonsterYell { target, .. } if target.guid() == 77)
+        );
+        assert_eq!(yell.language, Language::Common);
+        let emote = make(broadcast_chat::CREATURE_ZONE_EMOTE);
+        assert!(matches!(
+            emote.chat_type,
+            SMSG_MESSAGECHAT_ChatType::MonsterEmote { .. }
+        ));
+        assert_eq!(emote.language, Language::Common);
     }
 
     /// A player `/e` row (no creature name — EventAI never emits EMOTE) builds `Emote { sender2 }`

@@ -777,10 +777,10 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
 
     rows.push(("advance", advance_legs(w, &tick) as u64));
     rows.push(("patrol", patrol(w, &tick, &active) as u64));
+    if global {
+        rows.extend(w.run_due_world_maintenance());
+    }
     if tick.sense {
-        if global {
-            rows.extend(w.run_due_world_maintenance());
-        }
         let (pulls, seen) = aggro(w, &active);
         rows.push(("aggro", seen as u64));
         rows.push(("assist", assist(w, &active, pulls) as u64));

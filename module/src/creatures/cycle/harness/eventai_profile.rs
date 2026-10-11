@@ -341,3 +341,108 @@ fn random_home_and_random_current_keep_distinct_anchors() {
     );
     assert_eq!(IdleSink::wander_radius(&scenario, CREATURE), 7.0);
 }
+
+#[test]
+fn an_empty_text_action_does_not_cancel_sibling_actions() {
+    let mut scenario = world().eventai_native_definition(definition(
+        EventAiSubject::Entry(ENTRY),
+        700,
+        InstructionSelection::All,
+        vec![
+            CreatureInstruction::EmptyTextNoEffect,
+            CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 3 }),
+        ],
+    ));
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 3);
+}
+
+#[test]
+fn archer_actions_disable_melee_and_draw_the_ranged_weapon() {
+    let mut scenario = world().eventai_native_definition(definition(
+        EventAiSubject::Entry(ENTRY),
+        701,
+        InstructionSelection::All,
+        vec![
+            CreatureInstruction::SetAutoAttack(false),
+            CreatureInstruction::SetSheath(2),
+        ],
+    ));
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(
+        scenario.eventai_auto_attacks.borrow().get(&CREATURE),
+        Some(&false)
+    );
+    assert_eq!(scenario.eventai_sheaths.borrow().get(&CREATURE), Some(&2));
+}
+
+#[test]
+fn a_zone_combat_pulse_keeps_distant_instance_members_in_combat() {
+    let far = TARGET + 1;
+    let other_instance = TARGET + 2;
+    let mut scenario = world()
+        .tweak(CREATURE, |unit| {
+            unit.map_id = 36;
+            unit.instance_id = 91;
+        })
+        .tweak_player(TARGET, |unit| {
+            unit.map_id = 36;
+            unit.instance_id = 91;
+        })
+        .player(far, point(2_000.0))
+        .tweak_player(far, |unit| {
+            unit.map_id = 36;
+            unit.instance_id = 91;
+        })
+        .player(other_instance, point(1.0))
+        .tweak_player(other_instance, |unit| {
+            unit.map_id = 36;
+            unit.instance_id = 92;
+        })
+        .eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            702,
+            InstructionSelection::All,
+            vec![CreatureInstruction::ZoneCombat],
+        ));
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+    assert_eq!(scenario.threat.borrow().get(&(CREATURE, far)), Some(&0));
+    assert!(!scenario
+        .threat
+        .borrow()
+        .contains_key(&(CREATURE, other_instance)));
+    scenario.now_micros.set(20_000_000);
+    let scope = TickScope::CatchAll {
+        dedicated: HashSet::new(),
+    };
+    super::super::combat_entry(&mut scenario, &scope);
+    assert_eq!(scenario.combat_flags.borrow().get(&far), Some(&26_000));
+}
+
+#[test]
+fn creature_whispers_require_and_keep_a_character_recipient() {
+    let mode = lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER;
+    for (target, delivered) in [
+        (InstructionTarget::CurrentOpponent, true),
+        (InstructionTarget::SelfActor, false),
+    ] {
+        let mut scenario = world()
+            .eventai_broadcast(11929, "Use the console", mode)
+            .eventai_native_definition(definition(
+                EventAiSubject::Entry(ENTRY),
+                703,
+                InstructionSelection::All,
+                vec![CreatureInstruction::Speak(SpeakInstruction {
+                    mode: SpeechMode::Whisper,
+                    broadcast_ids: vec![11929],
+                    legacy_text: String::new(),
+                    target,
+                })],
+            ));
+        dispatch(&mut scenario, CREATURE);
+        assert_eq!(!scenario.eventai_speech().is_empty(), delivered);
+        if delivered {
+            assert_eq!(scenario.eventai_speech_targets(), vec![(CREATURE, TARGET)]);
+        }
+    }
+}

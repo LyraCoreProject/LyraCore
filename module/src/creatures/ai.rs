@@ -439,9 +439,8 @@ pub(crate) const MOVE_TICK_SECS: f32 = 0.5;
 /// divisor must use this so they stay in lockstep with `MOVE_TICK_SECS` (0.5s = 500_000us).
 pub(crate) const MOVE_TICK_MICROS: i64 = 500_000;
 
-/// The expensive O(N) "sensing" passes (aggro/cast/threat/regen/decay/respawn/wander) run once every
-/// Nth movement tick, so their per-tick scans + tick-quantized effects (HP-regen amount, wander chance,
-/// respawn timers) keep their original ~4s cadence while movement runs every 0.5s. 8 × 0.5s = 4s.
+/// Aggro, casts, threat, regen and wandering keep a four-second sense cadence.
+/// Movement and due-time population maintenance run every half-second catch-all firing.
 pub(crate) const SENSE_EVERY_N_TICKS: i64 = 8;
 
 /// The target SENSE period in micros (~4s) — `MOVE_TICK_MICROS × SENSE_EVERY_N_TICKS`. A tick row of

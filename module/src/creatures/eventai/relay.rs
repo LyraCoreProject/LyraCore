@@ -2155,12 +2155,13 @@ pub(crate) fn cancel_relay_runs_for_instance(ctx: &ReducerContext, instance_id: 
 /// the corpse, and the corpse window is the whole point. Respawn is the boundary no run may cross.
 pub(crate) fn cancel_relay_runs_for_new_life(ctx: &ReducerContext, source_guid: u64) {
     let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    let mut removed_reference = false;
     for row in arrivals
         .by_source()
         .filter(&source_guid)
         .collect::<Vec<_>>()
     {
-        arrivals.scheduled_id().delete(row.scheduled_id);
+        removed_reference |= arrivals.scheduled_id().delete(row.scheduled_id);
     }
     let run_ids = ctx
         .db
@@ -2169,21 +2170,25 @@ pub(crate) fn cancel_relay_runs_for_new_life(ctx: &ReducerContext, source_guid: 
         .filter(&source_guid)
         .map(|run| run.id)
         .collect::<Vec<_>>();
+    removed_reference |= !run_ids.is_empty();
     for run_id in run_ids {
         cancel_run_tree(ctx, run_id);
     }
-    reap_unused_definitions(ctx);
+    if removed_reference {
+        reap_unused_definitions(ctx);
+    }
 }
 
 pub(crate) fn cancel_relay_runs_for_source(ctx: &ReducerContext, source_guid: u64) {
     let arrivals = ctx.db.game_creature_ai_relay_arrival();
+    let mut removed_reference = false;
     for row in arrivals
         .by_source()
         .filter(&source_guid)
         .filter(|row| source_lifetime_ends(row.lifetime))
         .collect::<Vec<_>>()
     {
-        arrivals.scheduled_id().delete(row.scheduled_id);
+        removed_reference |= arrivals.scheduled_id().delete(row.scheduled_id);
     }
     let run_ids = ctx
         .db
@@ -2193,10 +2198,13 @@ pub(crate) fn cancel_relay_runs_for_source(ctx: &ReducerContext, source_guid: u6
         .filter(|run| source_lifetime_ends(run.lifetime))
         .map(|run| run.id)
         .collect::<Vec<_>>();
+    removed_reference |= !run_ids.is_empty();
     for run_id in run_ids {
         cancel_run_tree(ctx, run_id);
     }
-    reap_unused_definitions(ctx);
+    if removed_reference {
+        reap_unused_definitions(ctx);
+    }
 }
 
 pub(crate) fn reap_unused_definitions(ctx: &ReducerContext) {

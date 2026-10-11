@@ -1,17 +1,23 @@
-//! Shared dungeon-map classification and Instance Removal countdown.
-//! The Module uses the map set to create dungeon Instances. The Gateway uses it to verify
-//! that each dungeon has a Shard that hosts its population.
+//! Shared vanilla dungeon classification and Instance Removal countdown.
 
-/// The maps that are DUNGEONS — entering an areatrigger portal targeting one of these resolves-or-
-/// creates an instance instead of landing at instance 0.
-///
-/// Every entry MUST also have a `module::instance::entrance_fallback` arm (unit-pinned there) so a
-/// reaped-instance login can never strand.
-pub const DUNGEON_MAPS: &[u32] = &[36];
+/// Vanilla dungeon and raid maps. Battlegrounds use a separate population lifecycle.
+/// The client Map.dbc instance types and ClassicDB instance_template identify this set.
+pub const DUNGEON_MAPS: &[u32] = &[
+    33, 34, 36, 43, 47, 48, 70, 90, 109, 129, 189, 209, 229, 230, 249, 289, 309, 329, 349, 389,
+    409, 429, 469, 509, 531, 533,
+];
 
-/// Is `map_id` a dungeon (instanced) map? See [`DUNGEON_MAPS`]. Pure.
 pub fn is_dungeon_map(map_id: u32) -> bool {
     DUNGEON_MAPS.contains(&map_id)
+}
+
+/// Source spawns on these maps remain dormant until their instance creates a population.
+/// Battleground populations stay dormant until battleground creation is implemented.
+/// Shared interiors, including the Deeprun Tram and faction halls, use instance zero.
+pub const BATTLEGROUND_MAPS: &[u32] = &[30, 489, 529];
+
+pub fn has_instance_population(map_id: u32) -> bool {
+    is_dungeon_map(map_id) || BATTLEGROUND_MAPS.contains(&map_id)
 }
 
 /// The Instance Removal countdown in milliseconds (cm:Player.cpp:17723). The Module schedules the
@@ -23,8 +29,18 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_dungeon_set_holds_deadmines_and_no_open_world_map() {
-        assert!(is_dungeon_map(36), "Deadmines is the one imported dungeon");
+    fn dungeons_include_vanilla_raids_but_exclude_battlegrounds_and_shared_interiors() {
+        assert!(is_dungeon_map(36), "Deadmines is instanced");
+        for map_id in [33, 229, 249, 309, 409, 469, 509, 531, 533] {
+            assert!(is_dungeon_map(map_id));
+        }
+        for map_id in [0, 1, 369, 449, 450] {
+            assert!(!has_instance_population(map_id));
+        }
+        for map_id in [30, 489, 529] {
+            assert!(!is_dungeon_map(map_id));
+            assert!(has_instance_population(map_id));
+        }
         assert!(!is_dungeon_map(0), "Eastern Kingdoms is open world");
         assert!(!is_dungeon_map(1), "Kalimdor is open world");
     }

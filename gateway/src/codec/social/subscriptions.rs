@@ -23,11 +23,13 @@ pub(crate) const SAY_RANGE_SQ: f32 = SAY_RANGE_YD * SAY_RANGE_YD;
 #[cfg(test)]
 pub(crate) const YELL_RANGE_SQ: f32 = YELL_RANGE_YD * YELL_RANGE_YD;
 
-/// How far a `game_chat_event` line of this kind carries. Every kind on that table is
-/// range-bound: SAY, `/e` and the creature text emote at SAY range, YELL at its own; party, guild
-/// and whispers ride other tables.
+/// The distance used for local speech. Zone speech and creature whispers use their own audience.
 pub(crate) fn chat_range_yd(chat_type: u8) -> f32 {
-    if chat_type == lyracore_shared::chat::broadcast_chat::YELL {
+    if matches!(
+        chat_type,
+        lyracore_shared::chat::broadcast_chat::YELL
+            | lyracore_shared::chat::broadcast_chat::CREATURE_BOSS_EMOTE
+    ) {
         YELL_RANGE_YD
     } else {
         SAY_RANGE_YD
@@ -421,6 +423,11 @@ pub(crate) fn chat_event_outbound(
     self_guid: u64,
     row: &ChatEvent,
 ) -> Vec<Outbound> {
+    if row.chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER
+        && row.target_guid != self_guid
+    {
+        return Vec::new();
+    }
     let guard = coord.0.coord();
     let entities = guard.conn.db.game_world_entity();
     let speaker = entities.guid().find(&row.sender_guid);
@@ -431,18 +438,7 @@ pub(crate) fn chat_event_outbound(
         let Some(listener) = entities.guid().find(&self_guid) else {
             return Vec::new();
         };
-        let range_yd = chat_range_yd(row.chat_type);
-        if !chat_in_range(
-            speaker.map_id,
-            speaker.instance_id,
-            speaker.x,
-            speaker.y,
-            listener.map_id,
-            listener.instance_id,
-            listener.x,
-            listener.y,
-            range_yd * range_yd,
-        ) {
+        if !creature_chat_reaches(row.chat_type, speaker, &listener) {
             return Vec::new();
         }
         if row.chat_type == lyracore_shared::chat::broadcast_chat::EMOTE
@@ -476,6 +472,92 @@ pub(crate) fn chat_event_outbound(
         sender_name,
         nearby_chat_tag(speaker.as_ref()),
     )]
+}
+
+fn creature_chat_reaches(chat_type: u8, speaker: &WorldEntity, listener: &WorldEntity) -> bool {
+    if chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER {
+        speaker.map_id == listener.map_id && speaker.instance_id == listener.instance_id
+    } else if lyracore_shared::chat::broadcast_chat::is_zone_wide(chat_type) {
+        speaker.map_id == listener.map_id
+            && speaker.instance_id == listener.instance_id
+            && speaker.zone_id == listener.zone_id
+    } else {
+        let range = chat_range_yd(chat_type);
+        chat_in_range(
+            speaker.map_id,
+            speaker.instance_id,
+            speaker.x,
+            speaker.y,
+            listener.map_id,
+            listener.instance_id,
+            listener.x,
+            listener.y,
+            range * range,
+        )
+    }
+}
+
+#[cfg(test)]
+mod creature_chat_tests {
+    use super::*;
+    use crate::codec::entity::subscriptions::tests::player_entity;
+    use lyracore_shared::chat::broadcast_chat::*;
+
+    #[test]
+    fn zone_speech_reaches_distant_listeners_only_in_the_same_zone_and_instance() {
+        let speaker = WorldEntity {
+            map_id: 0,
+            zone_id: 12,
+            instance_id: 0,
+            ..player_entity()
+        };
+        let mut listener = WorldEntity {
+            x: 5_000.0,
+            ..speaker.clone()
+        };
+        for mode in [CREATURE_ZONE_YELL, CREATURE_ZONE_EMOTE] {
+            assert!(creature_chat_reaches(mode, &speaker, &listener));
+            listener.zone_id = 14;
+            assert!(!creature_chat_reaches(mode, &speaker, &listener));
+            listener.zone_id = 12;
+            listener.instance_id = 2;
+            assert!(!creature_chat_reaches(mode, &speaker, &listener));
+            listener.instance_id = 0;
+            listener.map_id = 1;
+            assert!(!creature_chat_reaches(mode, &speaker, &listener));
+            listener.map_id = 0;
+        }
+        assert!(!creature_chat_reaches(YELL, &speaker, &listener));
+    }
+
+    #[test]
+    fn boss_emotes_use_yell_distance() {
+        let speaker = WorldEntity {
+            x: 0.0,
+            y: 0.0,
+            ..player_entity()
+        };
+        let mut listener = WorldEntity {
+            x: 250.0,
+            ..speaker.clone()
+        };
+        assert!(creature_chat_reaches(
+            CREATURE_BOSS_EMOTE,
+            &speaker,
+            &listener
+        ));
+        assert!(!creature_chat_reaches(
+            CREATURE_TEXT_EMOTE,
+            &speaker,
+            &listener
+        ));
+        listener.x = 301.0;
+        assert!(!creature_chat_reaches(
+            CREATURE_BOSS_EMOTE,
+            &speaker,
+            &listener
+        ));
+    }
 }
 
 /// The chat tag a nearby line carries: a player speaker's Away Status, and none for a creature or
@@ -1074,12 +1156,22 @@ pub(crate) fn emote_appeared(
     }
 }
 
-/// A chat line names its speaker and nothing else; the speaker's indexed cell anchors it, widened
-/// to the kind's yard range (a yell carries 300 yd, four cells past the box).
+/// Creature whispers select their recipient; zone speech reaches the shard's viewers before the
+/// zone gate. Local speech uses the speaker's cell and the chat kind's distance.
 pub(crate) fn chat_audience(view: &WorldView, shard: ShardId, row: &ChatEvent) -> Vec<Arc<Viewer>> {
+    if row.chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER {
+        return view
+            .viewers_on_shard(shard)
+            .into_iter()
+            .filter(|viewer| viewer.self_guid == row.target_guid)
+            .collect();
+    }
     let key = view
         .spatial
         .entity_cell_on_shard(EntityLayer::WorldEntity, row.sender_guid, shard);
+    if lyracore_shared::chat::broadcast_chat::is_zone_wide(row.chat_type) {
+        return view.viewers_on_shard(shard);
+    }
     let span = cells_within(crate::codec::social::subscriptions::chat_range_yd(
         row.chat_type,
     ));

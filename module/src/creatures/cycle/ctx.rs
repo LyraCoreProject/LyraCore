@@ -601,7 +601,8 @@ impl EngageSink for CtxWorld<'_> {
     }
     fn engagements(&self) -> Vec<Engagement> {
         let entities = self.ctx.db.game_world_entity();
-        self.ctx
+        let mut engagements: Vec<Engagement> = self
+            .ctx
             .db
             .game_melee_attack()
             .iter()
@@ -621,7 +622,25 @@ impl EngageSink for CtxWorld<'_> {
                         && attacker.is_some_and(|e| e.is_player()),
                 })
             })
-            .collect()
+            .collect();
+        use crate::game_threat;
+        let threats = self.ctx.db.game_threat();
+        let members = engagements
+            .iter()
+            .flat_map(|engagement| {
+                threats
+                    .by_creature()
+                    .filter(&engagement.attacker)
+                    .map(|threat| Engagement {
+                        attacker: engagement.attacker,
+                        victim: threat.source_guid,
+                        instance_id: engagement.instance_id,
+                        player_never_swung: false,
+                    })
+            })
+            .collect::<Vec<_>>();
+        engagements.extend(members);
+        engagements
     }
     fn enter_combat(&mut self, guid: u64) {
         crate::combat::enter_combat(self.ctx, guid);

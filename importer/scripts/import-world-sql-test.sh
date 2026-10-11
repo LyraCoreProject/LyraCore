@@ -34,8 +34,8 @@ check() { # check <description> <command...>
         return 0
     fi
 }
-contains() { grep -q -- "$2" "$1"; }
-not_contains() { ! grep -q -- "$2" "$1"; }
+contains() { grep -Fq -- "$2" "$1"; }
+not_contains() { ! grep -Fq -- "$2" "$1"; }
 count_matches() { grep -c -- "$2" "$1" 2>/dev/null || true; } # never fails the -e-less caller on "0 matches"
 
 sandbox="$(mktemp -d "${TMPDIR:-/tmp}/lyracore-import-world-sql-test.XXXXXX")"
@@ -95,6 +95,10 @@ case "${1:-}" in
             case "$a" in *SELECT*|*select*) query="$a" ;; esac
         done
         case "$query" in
+            *"SELECT map_id FROM "*)
+                for map_id in ${STUB_MAP_IDS:-0}; do echo " $map_id"; done
+                ;;
+            *"SELECT quest_entry FROM "*|*"SELECT safe_loc_id FROM "*) echo " 42" ;;
             *map_id*|*"COUNT(*)"*) echo " 0" ;;
             *)
                 i=0
@@ -129,6 +133,7 @@ run_import() { # run_import [extra env assignments already exported by the calle
             STUB_LOG="$stub_log" \
             STUB_MODE="${STUB_MODE:-succeed}" \
             STUB_ROW_COUNT="${STUB_ROW_COUNT:-20}" \
+            STUB_MAP_IDS="${STUB_MAP_IDS:-0}" \
             SPACETIME_SERVER="${SPACETIME_SERVER:-}" \
             WORLD_PROFILE="${WORLD_PROFILE:-}" \
             ALLOW_MAP_SWITCH="${ALLOW_MAP_SWITCH:-}" \
@@ -217,6 +222,56 @@ check "the Kalimdor profile runs its Teldrassil named check" \
     contains "$out" 'Teldrassil start correct-map quest-giver spawn'
 check "the Kalimdor profile runs its Darkshore named check" \
     contains "$out" 'Darkshore follow-on correct-map quest-giver spawn'
+
+# Full profiles keep map ownership and load client catalogues in the dump pass.
+echo
+echo "import-world.sh: full profile ownership and catalogue passes"
+for profile in full-world full-eastern full-kalimdor full-instances; do
+    case "$profile" in
+        full-world) owned_maps="0 1 30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 289 309 329 349 369 389 409 429 449 450 469 489 509 529 531 533" ;;
+        full-eastern) owned_maps="0 369 449" ;;
+        full-kalimdor) owned_maps="1 450" ;;
+        full-instances) owned_maps="30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 289 309 329 349 389 409 429 469 489 509 529 531 533" ;;
+    esac
+    : >"$stub_log"
+    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$owned_maps" run_import
+    check "$profile accepts all of its spatial maps" not_contains "$out" '[world] ABORT'
+    check "$profile retains the final map ownership assertion" contains "$out" 'ok    one continent per database: spatial rows only on map(s)'
+    check "$profile does not report its own maps as contamination" not_contains "$out" 'cross-continent contamination'
+    check "$profile passes the name to the dump importer" \
+        grep -q -- "lyracore-importer .*--dump .*--world-profile $profile " "$stub_log"
+    dump_passes="$(count_matches "$stub_log" '^lyracore-importer .*--dump ' )"
+    check "$profile runs exactly one dump and client catalogue pass" test "$dump_passes" -eq 1
+    check "$profile reads client catalogues during that dump pass" \
+        grep -q -- "lyracore-importer .*--dump .*--dbc .*--world-profile $profile " "$stub_log"
+    check "$profile skips the duplicate standalone client catalogue pass" not_contains "$stub_log" '--taxi-mounts'
+    plain_spell_passes="$(count_matches "$stub_log" '^lyracore-importer .*--spells --apply$')"
+    check "$profile skips the duplicate standalone spell catalogue pass" test "$plain_spell_passes" -eq 0
+    check "$profile keeps curated spell and trainer overlays" grep -q -- 'lyracore-importer .*--dbc .*--spells --only .*--trainer ' "$stub_log"
+    check "$profile keeps the talent pass" grep -q -- 'lyracore-importer .*--dbc .*--talents --apply' "$stub_log"
+    check "$profile does not recreate the scope with legacy flags" \
+        bash -c '! grep "lyracore-importer .*--world-profile $1 " "$0" | grep -qE -- "--map |--box |--include-map |--include-creatures "' "$stub_log" "$profile"
+    if [ "$profile" = full-instances ]; then
+        check "$profile skips continent terrain" not_contains "$stub_log" '--terrain '
+        check "$profile skips continent navigation" not_contains "$stub_log" '--nav '
+        check "$profile skips open-world corridor assertions" contains "$out" 'open-world corridor checks SKIPPED'
+    else
+        check "$profile imports terrain with its scope" grep -q -- "lyracore-importer .*--terrain .*--world-profile $profile --apply" "$stub_log"
+        check "$profile imports navigation with its scope" grep -q -- "lyracore-importer .*--nav .*--world-profile $profile --apply" "$stub_log"
+    fi
+done
+
+for profile in full-eastern full-kalimdor full-instances; do
+    case "$profile" in
+        full-eastern) foreign_map=1 ;;
+        full-kalimdor) foreign_map=0 ;;
+        full-instances) foreign_map=1 ;;
+    esac
+    : >"$stub_log"
+    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$foreign_map" run_import
+    check "$profile stops before importing over a foreign map" test "$code" -ne 0
+    check "$profile does not call the importer after an ownership failure" not_contains "$stub_log" 'lyracore-importer '
+done
 
 # =====================================================================================================
 # 5. python3 absent — the coverage audit must degrade explicitly, never crash mid-output (defect c) --

@@ -21,6 +21,7 @@ mod hunter_pet;
 mod pet;
 mod pet_care;
 mod pet_progression;
+pub(crate) mod population;
 pub(crate) mod presentation;
 mod spawn;
 pub(crate) mod tick;
@@ -38,9 +39,9 @@ pub(crate) use eventai::{
     cancel_relay_runs_for_source, creature_ai_on_aggro, creature_ai_on_creature_death,
     creature_ai_on_creature_spawn, creature_ai_on_unit_death, current_definition_revision,
     drop_summon_expiry, eventai_on_evade, eventai_on_reached_home, eventai_on_receive_emote,
-    eventai_on_spell_hit, finish_death_dispatch, place_temporary_summon, react_state,
-    reset_creature_lifecycle, reset_engagement, seed_on_aggro_fixtures, CreatureInstruction,
-    CreatureReactState, SummonLocation,
+    eventai_on_spell_hit, finish_death_dispatch, melee_enabled, place_temporary_summon,
+    react_state, reset_creature_lifecycle, reset_engagement, seed_on_aggro_fixtures,
+    CreatureInstruction, CreatureReactState, SummonLocation,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use eventai::{run_relay_arrival, start_imported_relay};

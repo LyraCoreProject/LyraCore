@@ -130,6 +130,8 @@ pub struct CreatureAiState {
     /// Passive 0, defensive 1, aggressive 2. Fresh EventAI creatures are aggressive.
     #[default(2u8)]
     pub react_state: u8,
+    #[default(true)]
+    pub melee_enabled: bool,
 }
 
 /// Timing and consumption state for one creature and one effective source rule. Module only.

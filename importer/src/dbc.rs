@@ -166,6 +166,28 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let mount_dump = crate::read_dump(args.taxi_mounts.as_deref().context(
         "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays",
     )?)?;
+    run_from_dump(data_dir, args, &mount_dump)
+}
+
+/// A complete world import shares its source dump with the client catalogues.
+pub(crate) fn run_from_dump(data_dir: &str, args: &Args, mount_dump: &str) -> Result<()> {
+    let statements = catalogue_statements(data_dir, mount_dump)?;
+    if args.apply {
+        crate::run_sql_statements(args, &statements, "dbc")?;
+        eprintln!(
+            "dbc: loaded client catalogues ({} SQL statements)",
+            statements.len()
+        );
+    } else {
+        println!("-- DBC catalogue: {} SQL statements", statements.len());
+        for statement in &statements {
+            println!("{statement};");
+        }
+    }
+    Ok(())
+}
+
+pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<Vec<String>> {
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("dbc: opened MPQ chain from {}", dir.display());
@@ -249,7 +271,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         &taxi_nodes,
         &taxi_paths,
         &taxi_path_nodes,
-        &mount_dump,
+        mount_dump,
         &cdi.rows().iter().map(|row| row.id.id).collect(),
     )?;
     for warning in taxi_warnings {
@@ -275,59 +297,8 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let (sa_stmts, sa_count) = skill_ability_sql(&skill_abilities);
     let (sav_stmts, sav_count) = skill_availability_sql(&skill_availability);
 
-    if args.apply {
-        crate::run_sql_statements(args, &property_stmts, "itemproperties")?;
-        crate::run_sql_statements(args, &faction_stmts, "faction")?;
-        eprintln!("dbc: loaded {fn_count} faction templates into game_faction_template.");
-        crate::run_sql_statements(args, &gf_stmts, "game_faction")?;
-        eprintln!("dbc: loaded {gf_count} factions into game_faction.");
-        crate::run_sql_statements(args, &auction_house_stmts, "auctionhouse")?;
-        eprintln!("dbc: loaded {auction_house_count} auction houses into game_auction_house.");
-        crate::run_sql_statements(args, &mail_template_stmts, "mailtemplate")?;
-        eprintln!("dbc: loaded {mail_template_count} mail templates into game_mail_template.");
-        crate::run_sql_statements(args, &cbi_stmts, "charbaseinfo")?;
-        eprintln!("dbc: loaded {cbi_count} (race,class) combos into game_char_base_info.");
-        crate::run_sql_statements(args, &race_stmts, "race")?;
-        eprintln!("dbc: loaded {race_count} races into game_race_info.");
-        crate::run_sql_statements(args, &si_stmts, "startitem")?;
-        eprintln!("dbc: loaded {si_count} starting items into game_start_item.");
-        crate::run_sql_statements(args, &sl_stmts, "skillline")?;
-        eprintln!("dbc: loaded {sl_count} skill lines into game_skill_line.");
-        crate::run_sql_statements(args, &sa_stmts, "skillability")?;
-        eprintln!("dbc: loaded {sa_count} skill abilities into game_skill_ability.");
-        crate::run_sql_statements(args, &sav_stmts, "skillavailability")?;
-        eprintln!("dbc: loaded {sav_count} availability rows into game_skill_availability.");
-        crate::run_sql_statements(args, &area_stmts, "area")?;
-        eprintln!("dbc: loaded {area_count} areas into game_area.");
-        crate::run_sql_statements(args, &trigger_stmts, "areatrigger")?;
-        eprintln!("dbc: loaded {trigger_count} area triggers into game_area_trigger.");
-        crate::run_sql_statements(args, &graveyard_stmts, "graveyard")?;
-        eprintln!("dbc: loaded {graveyard_count} graveyards into game_graveyard.");
-        crate::run_sql_statements(args, &family_stmts, "creaturefamily")?;
-        eprintln!("dbc: loaded {family_count} creature families into game_creature_family.");
-        crate::run_sql_statements(args, &lock_stmts, "lock")?;
-        eprintln!("dbc: loaded {lock_count} lock indices into game_lock.");
-        crate::run_sql_statements(args, &taxi_stmts, "taxi")?;
-        eprintln!(
-            "dbc: loaded {} taxi nodes, {} directed paths, and {} ordered path points (plus reserved fixture).",
-            taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
-        );
-    } else {
-        println!("-- DRY RUN: load {fn_count} faction templates + {gf_count} factions + {auction_house_count} auction houses + {cbi_count} (race,class) combos + {race_count} races:");
-        println!("{};", faction_stmts[0]);
-        if let Some(ins) = faction_stmts.get(1) {
-            println!(
-                "{}… ; -- (+{} faction INSERT chunk(s))",
-                &ins[..ins.len().min(90)],
-                faction_stmts.len() - 1
-            );
-        }
-        for s in cbi_stmts.iter().chain(race_stmts.iter()) {
-            println!("{}…", &s[..s.len().min(110)]);
-        }
-        eprintln!("dbc: dry-run — re-run with --apply to load.");
-    }
-
+    println!("FactionTemplate: {fn_count} templates; Faction: {gf_count} factions");
+    println!("CharBaseInfo: {cbi_count} combinations; ChrRaces: {race_count} races; CharStartOutfit: {si_count} items");
     // Skill-import coverage prints (always printed — informational, not gated on --apply like the
     // SQL-preview lines above).
     println!("SkillLine: {sl_count} lines");
@@ -357,7 +328,28 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
         "TaxiNodes/TaxiPath/TaxiPathNode: {} nodes, {} directed paths, {} ordered points",
         taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
     );
-    Ok(())
+    Ok([
+        property_stmts,
+        faction_stmts,
+        gf_stmts,
+        auction_house_stmts,
+        mail_template_stmts,
+        cbi_stmts,
+        race_stmts,
+        si_stmts,
+        sl_stmts,
+        sa_stmts,
+        sav_stmts,
+        area_stmts,
+        trigger_stmts,
+        graveyard_stmts,
+        family_stmts,
+        lock_stmts,
+        taxi_stmts,
+    ]
+    .into_iter()
+    .flatten()
+    .collect())
 }
 
 /// Clear+reload SQL for `game_auction_house` from `AuctionHouse.dbc`. The DBC owns the house id,

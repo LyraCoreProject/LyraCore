@@ -6,30 +6,15 @@ use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timest
 
 use crate::{
     game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
-    game_creature_template, game_encounter_spawn, game_gameobject, game_gameobject_template,
-    game_group, game_group_member, game_world_entity,
+    game_creature_template, game_creature_waypoint, game_encounter_spawn, game_gameobject,
+    game_gameobject_template, game_group, game_group_member, game_world_entity,
 };
 
 // ===========================================================================================
 //  Constants / policy
 // ===========================================================================================
 
-/// The maps that are DUNGEONS — entering an areatrigger portal targeting one of these
-/// resolves-or-creates a `game_instance` instead of landing at instance 0.
-///
-/// MOVED to `lyracore_shared::instance`: the GATEWAY needs the same set to check, at
-/// startup, that the database which will own a dungeon's instances actually hosts instance
-/// populations (`hosts_instances`) — and a set the two tiers could disagree about is exactly how
-/// the empty dungeons stayed invisible. Re-exported here so every call site and every tripwire in
-/// this crate keeps naming it locally. Every entry MUST have an [`entrance_fallback`] arm
-/// (unit-pinned below) so a reaped-instance login can never strand.
 pub(crate) use lyracore_shared::instance::is_dungeon_map;
-/// The set itself has no non-test caller in this crate (`is_dungeon_map` is the read path); it is
-/// imported under a distinct name — the module reserves `DUNGEON_MAPS` locally for the
-/// dungeon-detail table below — for the cross-tier consistency pin, which is the invariant that
-/// keeps the shared set safe to extend from either tier.
-#[cfg(test)]
-pub(crate) use lyracore_shared::instance::DUNGEON_MAPS as SHARED_DUNGEON_MAP_IDS;
 
 pub(crate) struct DungeonMap {
     pub(crate) map_id: u32,
@@ -47,38 +32,103 @@ pub(crate) struct DungeonMap {
     pub(crate) release_fallback: (u32, f32, f32, f32, f32),
 }
 
-/// The dungeon-detail table — one entry per dungeon, pinned 1:1 against
-/// [`lyracore_shared::instance::DUNGEON_MAPS`] by
-/// `every_shared_dungeon_map_has_a_dungeon_maps_record` below (the test-time tripwire that replaced
-/// the old runtime `warn!`).
-///
-/// `[V]` Map 36 → Deadmines: entrance ≈ Moonbrook village, Westfall (map 0, ~(-11080, 1520, 46)) —
-/// approximate vanilla coords, no dump/client in this sandbox to confirm; the fail-safe is inherent
-/// (any error of tens of yards still lands in open-world Westfall — never stranded, never inside WMO
-/// geometry). Confirm against your dump's areatrigger_teleport EXIT row (~1448) target and tighten.
-/// Release zone 1581 (The Deadmines, cmangos AreaTable — CONFIRM against your own dump's
-/// `game_graveyard_zone` rows; a wrong id here just means the zone-linked lookup resolves nothing
-/// and the static fallback below applies) and release fallback Sentinel Hill are the same `[V]`
-/// estimates the earlier per-site consts always carried.
-pub(crate) const DUNGEON_MAPS: &[DungeonMap] = &[DungeonMap {
+/// Bootstrap fallback for a fixture without imported portal or graveyard metadata.
+/// Full imports resolve exits and release locations from the Operator's source data.
+pub(crate) const BOOTSTRAP_DUNGEONS: &[DungeonMap] = &[DungeonMap {
     map_id: 36,
     entrance: (0, -11080.0, 1520.0, 46.0, 0.0), // [V] Moonbrook, Westfall
     release_zone: 1581,                         // [V] The Deadmines
     release_fallback: (0, -10650.0, 1180.0, 34.0, 0.0), // [V] Sentinel Hill
 }];
 
-/// Look up `map_id`'s full dungeon record, or `None` if it is not a dungeon. Pure — the one read
-/// path every former match site (entrance / release-zone / release-fallback) now goes through.
 pub(crate) fn dungeon(map_id: u32) -> Option<&'static DungeonMap> {
-    DUNGEON_MAPS.iter().find(|d| d.map_id == map_id)
+    BOOTSTRAP_DUNGEONS.iter().find(|d| d.map_id == map_id)
 }
 
-/// The open-world position OUTSIDE a dungeon's entrance — see [`DungeonMap::entrance`]. Kept as its
-/// own function: every call site outside this module (`world.rs`'s stranding guard, the tests below)
-/// still names it, and a thin field-read is clearer at the call site than repeating
-/// `dungeon(m).map(|d| d.entrance)`.
 pub(crate) fn entrance_fallback(map_id: u32) -> Option<(u32, f32, f32, f32, f32)> {
     dungeon(map_id).map(|d| d.entrance)
+}
+
+/// Prefer a source-defined exit. An entrance volume also gives a valid outside-map fallback
+/// when a dungeon uses a scripted exit instead of an Area Trigger teleport.
+pub(crate) fn imported_entrance_fallback(
+    ctx: &ReducerContext,
+    map_id: u32,
+) -> Option<(u32, f32, f32, f32, f32)> {
+    use crate::{game_area_trigger, game_areatrigger_teleport};
+    let triggers = ctx.db.game_area_trigger();
+    let portals = ctx.db.game_areatrigger_teleport();
+    let exit = portals
+        .iter()
+        .filter(|portal| !lyracore_shared::instance::has_instance_population(portal.target_map))
+        .filter(|portal| {
+            triggers
+                .id()
+                .find(portal.trigger_id)
+                .is_some_and(|trigger| trigger.map_id == map_id)
+        })
+        .min_by_key(|portal| portal.trigger_id)
+        .map(|portal| (portal.target_map, portal.x, portal.y, portal.z, portal.o));
+    exit.or_else(|| {
+        portals
+            .iter()
+            .filter(|portal| portal.target_map == map_id)
+            .filter_map(|portal| triggers.id().find(portal.trigger_id))
+            .filter(|trigger| !lyracore_shared::instance::has_instance_population(trigger.map_id))
+            .min_by_key(|trigger| trigger.id)
+            .map(|trigger| (trigger.map_id, trigger.x, trigger.y, trigger.z, 0.0))
+    })
+    .or_else(|| entrance_fallback(map_id))
+}
+
+/// Copy a source patrol in source order. Each population operation reserves waypoint ids once.
+pub(crate) fn copy_spawn_waypoints(
+    ctx: &ReducerContext,
+    source_guid: u64,
+    copied_guid: u64,
+    next_id: &mut Option<u64>,
+) -> Result<(), String> {
+    let waypoints = ctx.db.game_creature_waypoint();
+    let mut route: Vec<_> = waypoints.by_creature().filter(source_guid).collect();
+    if route.is_empty() {
+        return Ok(());
+    }
+    route.sort_by_key(|waypoint| waypoint.id);
+    let next = next_id.get_or_insert_with(|| {
+        waypoints
+            .iter()
+            .map(|waypoint| waypoint.id)
+            .max()
+            .unwrap_or(0)
+    });
+    for mut waypoint in route {
+        *next = next.checked_add(1).ok_or("waypoint id exhausted")?;
+        waypoint.id = *next;
+        waypoint.creature_guid = copied_guid;
+        waypoints.insert(waypoint);
+    }
+    Ok(())
+}
+
+pub(crate) fn remove_spawn_waypoints(ctx: &ReducerContext, guid: u64) {
+    let waypoints = ctx.db.game_creature_waypoint();
+    for waypoint in waypoints.by_creature().filter(guid).collect::<Vec<_>>() {
+        waypoints.id().delete(waypoint.id);
+    }
+}
+
+/// Updating or removing an authored source retires each of its runtime copies.
+pub(crate) fn remove_spawn_copies(ctx: &ReducerContext, source_guid: u64) {
+    let spawns = ctx.db.game_creature_spawn();
+    for spawn in spawns
+        .by_source_guid()
+        .filter(source_guid)
+        .collect::<Vec<_>>()
+    {
+        crate::creatures::despawn_creature_entity(ctx, spawn.guid);
+        remove_spawn_waypoints(ctx, spawn.guid);
+        spawns.guid().delete(spawn.guid);
+    }
 }
 
 /// Reap an instance after it has been EMPTY this long (30min const). Vanilla
@@ -137,12 +187,8 @@ pub(crate) fn empty_reap_micros(hosts_populations: bool) -> i64 {
 /// giant commit).
 const REAP_MAX_PER_FIRING: usize = 4;
 
-/// Bit 23 of the 24-bit unit-guid low: the per-instance POPULATION band. Disjoint by construction
-/// from imported/seeded spawn-row lows AND from `encounter::spawn_wave`'s allocator (which maxes
-/// over spawn rows only — an instance-population entity has no spawn row, so without this band a
-/// wave of the same entry could re-allocate a live population guid and panic the insert).
-/// Relies on spawn-row lows staying < 2^23 (cmangos creature db guids are ~10^5; `[V]` for exotic
-/// dumps — a violation shows up as a loud duplicate-PK insert failure, never silent corruption).
+/// Bit 23 separates Instance population copies from imported spawns and encounter summons.
+/// Both live and respawning copies reserve their sequence until the Instance is reaped.
 pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
 
 /// Bit 46 of a gameobject guid low: the per-instance GO-COPY band. Below `gameobject::POOL_TAG`
@@ -278,11 +324,18 @@ pub(crate) fn route_instance(
     }
 }
 
-/// The 5-player dungeon cap, enforced at trigger time. A Party is capped at 5 already; a Raid of
-/// more than 5 is refused here on purpose. cmangos checks instance occupancy instead
-/// (cm:Player.cpp:20055-20062), which LyraCore does not reproduce. Pure.
-pub(crate) fn party_size_allows_entry(member_count: usize) -> bool {
-    member_count <= crate::group::GROUP_MAX_MEMBERS
+/// Admission uses the dungeon or raid capacity. Occupancy and saved raid lockouts remain separate.
+fn instance_capacity(map_id: u32) -> usize {
+    match map_id {
+        249 | 409 | 469 | 531 | 533 => lyracore_shared::group::RAID_MAX_MEMBERS,
+        309 | 509 => 20,
+        229 => 10,
+        _ => crate::group::GROUP_MAX_MEMBERS,
+    }
+}
+
+pub(crate) fn party_size_allows_entry(map_id: u32, member_count: usize) -> bool {
+    member_count <= instance_capacity(map_id)
 }
 
 /// What the reaper does to one instance this firing, given its observed occupancy. Pure —
@@ -333,14 +386,12 @@ pub(crate) fn occupancy_action(
 /// alive-or-ghost is orthogonal and preserved per the `pending_ghost` rules at the call site.
 #[derive(Debug, PartialEq)]
 pub(crate) enum StrandingFallback {
-    /// A known dungeon map → its entrance const, instance 0.
+    /// A dungeon entrance on its outside map, at instance zero.
     Entrance(u32, f32, f32, f32, f32),
     /// A NON-dungeon map (the dev-map fixture case): the position is fine open-world terrain —
     /// stay in place, drop to instance 0.
     InPlaceOpenWorld,
-    /// A dungeon map with no entrance arm (a [`lyracore_shared::instance::DUNGEON_MAPS`] entry missing its
-    /// [`entrance_fallback`] — unit-pinned to never happen, but never strand if it does):
-    /// hearthstone home, instance 0.
+    /// A dungeon with no imported entrance or bootstrap fallback returns to the Character's home.
     HearthstoneHome,
 }
 
@@ -438,10 +489,10 @@ pub(crate) fn resolve_or_create_instance(
         .as_ref()
         .map(|g| crate::group::members_of(ctx, g.group_id).len())
         .unwrap_or(1);
-    if !party_size_allows_entry(member_count) {
+    if !party_size_allows_entry(target_map, member_count) {
         return Err(format!(
             "party of {member_count} exceeds the {}-player dungeon cap",
-            crate::group::GROUP_MAX_MEMBERS
+            instance_capacity(target_map)
         ));
     }
 
@@ -515,12 +566,12 @@ pub(crate) fn admit_existing_party_instance(
         .game_group_member()
         .by_group()
         .filter(&group.group_id)
-        .take(crate::group::GROUP_MAX_MEMBERS + 1)
+        .take(instance_capacity(target_map) + 1)
         .count();
-    if !party_size_allows_entry(member_count) {
+    if !party_size_allows_entry(target_map, member_count) {
         return Err(format!(
             "party of {member_count} exceeds the {}-player dungeon cap",
-            crate::group::GROUP_MAX_MEMBERS
+            instance_capacity(target_map)
         ));
     }
     let instance = ctx
@@ -586,8 +637,8 @@ pub(crate) fn hosts_instance_populations(ctx: &ReducerContext) -> bool {
 
 /// Create a live instance of `map_id` owned by `party_id` (0 = solo): insert the `game_instance`
 /// row, spawn the per-instance creature population, and copy the map's interactive gameobjects. The
-/// creature tick rides the global catch-all row (perf catalog 1.3). Entity-only population — see the module doc's
-/// respawn-within-a-run decision. Returns the new instance id.
+/// creature tick rides the global catch-all row. Copies retain independent death and respawn timers.
+/// Returns the new instance id.
 pub(crate) fn create_instance(
     ctx: &ReducerContext,
     map_id: u32,
@@ -647,6 +698,16 @@ pub(crate) fn create_instance_with_id(
         }
     }
 
+    // A dead copy awaiting respawn still owns its guid.
+    for spawn in ctx.db.game_creature_spawn().by_instance().filter(1u64..) {
+        let low = spawn.guid & 0xFF_FFFF;
+        if low & INSTANCE_POP_LOW_BAND != 0 {
+            let slot = max_band_low.entry(spawn.entry).or_insert(0);
+            *slot = (*slot).max(low & (INSTANCE_POP_LOW_BAND - 1));
+        }
+    }
+    let mut next_waypoint_id = None;
+
     let tracked_wave_guids: std::collections::HashSet<u64> = ctx
         .db
         .game_encounter_spawn()
@@ -656,28 +717,39 @@ pub(crate) fn create_instance_with_id(
     let spawns: Vec<crate::creatures::CreatureSpawn> = ctx
         .db
         .game_creature_spawn()
-        .iter()
-        .filter(|s| s.map_id == map_id && !tracked_wave_guids.contains(&s.guid))
+        .by_map_instance()
+        .filter((map_id, 0u64))
+        .filter(|s| !tracked_wave_guids.contains(&s.guid))
         .collect();
     let templates = ctx.db.game_creature_template();
     let mut spawned = 0u32;
     for spawn in &spawns {
-        let Some(tmpl) = templates.entry().find(spawn.entry) else {
-            continue; // template-less spawn row: the open-world respawn pass skips it too
+        let mut copy = spawn.clone();
+        copy.instance_id = instance_id;
+        copy.source_guid = spawn.guid;
+        let Some(entry) = crate::creatures::population::entry_for_spawn(ctx, &copy) else {
+            continue;
         };
-        let slot = max_band_low.entry(spawn.entry).or_insert(0);
+        copy.entry = entry;
+        let Some(tmpl) = templates.entry().find(entry) else {
+            continue;
+        };
+        let slot = max_band_low.entry(entry).or_insert(0);
         *slot += 1;
         if *slot >= INSTANCE_POP_LOW_BAND {
-            // 2^23 live copies of ONE entry — unreachable in practice; fail LOUD, never wrap into
-            // the spawn-row namespace.
             return Err(format!(
-                "instance population low exhausted for entry {}",
-                spawn.entry
+                "instance population low exhausted for entry {entry}"
             ));
         }
-        let mut entity =
-            crate::creatures::build_creature_entity(spawn, &tmpl, ctx.random(), instance_id);
-        entity.guid = crate::encounter::wave_guid(spawn.entry, INSTANCE_POP_LOW_BAND | *slot);
+        copy.guid = crate::encounter::wave_guid(entry, INSTANCE_POP_LOW_BAND | *slot);
+        copy.life_seq = 1;
+        copy.respawn_at = crate::creatures::timer_never(ctx);
+        copy.despawn_at = crate::creatures::timer_never(ctx);
+        let entity =
+            crate::creatures::build_creature_entity(&copy, &tmpl, ctx.random(), instance_id);
+        let copied_guid = copy.guid;
+        ctx.db.game_creature_spawn().insert(copy);
+        copy_spawn_waypoints(ctx, spawn.guid, copied_guid, &mut next_waypoint_id)?;
         crate::creatures::insert_creature_entity(ctx, entity);
         spawned += 1;
     }
@@ -972,6 +1044,14 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         crate::creatures::despawn_creature_entity(ctx, *guid);
     }
 
+    let spawns = ctx.db.game_creature_spawn();
+    let copies: Vec<_> = spawns.by_instance().filter(instance_id).collect();
+    for spawn in copies {
+        remove_spawn_waypoints(ctx, spawn.guid);
+        spawns.guid().delete(spawn.guid);
+    }
+    crate::creatures::population::clear_instance(ctx, instance_id);
+
     // 2. Player corpses left in the instance (a ghost who never corpse-ran back). The owner's
     //    stranding outcome is the vanilla one: nothing left to reclaim — spirit healer only
     //    (documented on `player_login`'s fallback and in the runbook).
@@ -1254,43 +1334,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_dungeon_map_has_an_entrance_fallback_arm() {
-        // The stranding guard's invariant: a reaped-instance login on ANY dungeon map must have an
-        // entrance to fall back to (the HearthstoneHome branch is the never-strand net for a
-        // violation of exactly this pin). Checked against the SHARED (cross-tier) id set, not the
-        // module-local DUNGEON_MAPS table — see `every_shared_dungeon_map_has_a_dungeon_maps_record`
-        // for why that distinction is the actual tripwire.
-        for &m in SHARED_DUNGEON_MAP_IDS {
-            assert!(
-                entrance_fallback(m).is_some(),
-                "dungeon map {m} has no entrance_fallback arm — logins after a reap would divert to hearthstone"
-            );
-        }
-        // Entrance consts always land at instance-0-capable maps (the open world), never a dungeon.
-        let (m, _, _, _, _) = entrance_fallback(36).unwrap();
-        assert!(
-            !is_dungeon_map(m),
-            "an entrance fallback must land on an open-world map"
-        );
-    }
-
-    #[test]
-    fn every_shared_dungeon_map_has_a_dungeon_maps_record() {
-        for &m in SHARED_DUNGEON_MAP_IDS {
-            assert!(
-                dungeon(m).is_some(),
-                "map {m} is in lyracore_shared::instance::DUNGEON_MAPS (the gateway's \
-                 hosting-check set) but has no module::instance::DUNGEON_MAPS record"
-            );
-        }
-        for d in DUNGEON_MAPS {
-            assert!(
-                is_dungeon_map(d.map_id),
-                "map {} has a module::instance::DUNGEON_MAPS record but is missing from \
-                 lyracore_shared::instance::DUNGEON_MAPS — its instance-hosting would never be \
-                 checked at Gateway startup",
-                d.map_id
-            );
+    fn bootstrap_entrances_are_outside_their_dungeon() {
+        for dungeon in BOOTSTRAP_DUNGEONS {
+            assert!(is_dungeon_map(dungeon.map_id));
+            assert!(!is_dungeon_map(dungeon.entrance.0));
         }
     }
 
@@ -1309,12 +1356,25 @@ mod tests {
     }
 
     #[test]
+    fn raid_admission_uses_its_map_capacity() {
+        assert!(party_size_allows_entry(533, 40));
+        assert!(!party_size_allows_entry(533, 41));
+        assert!(party_size_allows_entry(309, 20));
+        assert!(!party_size_allows_entry(309, 21));
+        assert!(party_size_allows_entry(229, 10));
+        assert!(!party_size_allows_entry(229, 11));
+    }
+
+    #[test]
     fn party_size_cap_admits_up_to_five_and_refuses_six() {
         for n in 1..=5 {
-            assert!(party_size_allows_entry(n), "a party of {n} fits a 5-man");
+            assert!(
+                party_size_allows_entry(36, n),
+                "a party of {n} fits a 5-man"
+            );
         }
         assert!(
-            !party_size_allows_entry(6),
+            !party_size_allows_entry(36, 6),
             "a 6th player must be refused at the portal"
         );
     }

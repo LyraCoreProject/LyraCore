@@ -46,6 +46,14 @@ pub mod broadcast_chat {
     pub const CREATURE_TEXT_EMOTE: u8 = 2;
     /// A Character's `/e` custom emote (cm:ChatHandler.cpp:172-226, cm:Player.cpp:16591-16599).
     pub const EMOTE: u8 = 3;
+    pub const CREATURE_BOSS_EMOTE: u8 = 4;
+    pub const CREATURE_WHISPER: u8 = 5;
+    pub const CREATURE_ZONE_YELL: u8 = 6;
+    pub const CREATURE_ZONE_EMOTE: u8 = 7;
+
+    pub fn is_zone_wide(chat_type: u8) -> bool {
+        matches!(chat_type, CREATURE_ZONE_YELL | CREATURE_ZONE_EMOTE)
+    }
 
     /// `/e` and text-emote (`/wave`, `/dance`, …) proximity range: `ListenRange.TextEmote`
     /// (cm:mangosd.conf.dist.in:1092), same as `ListenRange.Say`.
