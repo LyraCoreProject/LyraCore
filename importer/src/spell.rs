@@ -46,12 +46,13 @@ use lyracore_shared::spell::taxonomy::{
     E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG,
     P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER,
     P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID,
-    SPEED_MOUNTED, SPEED_MOVE, SPEED_SWIM, SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION,
-    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
-    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
-    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
-    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
-    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
+    SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER,
+    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
+    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
+    SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT,
+    STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF,
+    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // cmangos/classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb:
@@ -696,15 +697,14 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
             (field, P_COMBAT_FIELD)
         }
         A_MOD_SPEED => {
-            // speed kind: 0=move, 1=swing, 2=cast, 3=mounted (derived from the variant). Mounted-speed
-            // stays A_MOD_SPEED/SPEED_MOUNTED (not a second concept) — the DBC's own EffectBasePoints
-            // for these auras is already vanilla's flat-amount −1 encoding (59/99), so the generic
-            // `dbc_flat_amount` conversion applied to every effect's base_points normalizes them to the
-            // nominal 60/100 with no extra code here.
+            // Run kinds preserve the aura's stacking rule. Mounted amounts use dbc_flat_amount
+            // like other effects, so DBC 59/99 becomes 60/100.
             let kind_v = match aura {
                 ModAttackspeed | ModMeleeHaste | ModRangedHaste | ModRangedAmmoHaste => 1,
                 ModCastingSpeedNotStack => 2,
                 ModIncreaseSwimSpeed => i32::from(SPEED_SWIM),
+                ModSpeedAlways => i32::from(SPEED_MOVE_ALWAYS),
+                ModSpeedNotStack => i32::from(SPEED_MOVE_NOT_STACK),
                 ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => {
                     i32::from(SPEED_MOUNTED)
                 }
@@ -3506,6 +3506,14 @@ mod tests {
         assert_eq!(
             resolve_aura_params(A_MOD_SPEED, ModIncreaseSpeed, 0),
             (0, P_SPEED_KIND)
+        );
+        assert_eq!(
+            resolve_aura_params(A_MOD_SPEED, ModSpeedAlways, 0),
+            (i32::from(SPEED_MOVE_ALWAYS), P_SPEED_KIND)
+        );
+        assert_eq!(
+            resolve_aura_params(A_MOD_SPEED, ModSpeedNotStack, 0),
+            (i32::from(SPEED_MOVE_NOT_STACK), P_SPEED_KIND)
         );
         // swing (melee/ranged attack speed).
         assert_eq!(

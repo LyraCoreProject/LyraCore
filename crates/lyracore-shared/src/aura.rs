@@ -40,8 +40,10 @@ pub fn move_speed_with_pct(base: f32, pct: i32) -> f32 {
 }
 
 /// Running combines movement auras with mounted speed only while a mount aura is active.
+/// Unmounted always bonuses multiply; their product competes with the strongest not-stack bonus.
 pub fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
     let (mut movement, mut slow, mut mount, mut mounted) = (0, 0, 0, false);
+    let (mut always, mut not_stack) = (1.0_f32, 1.0_f32);
     for aura in auras {
         mounted |= aura.kind == A_MOUNTED;
         if aura.kind == A_MOD_SPEED {
@@ -54,10 +56,23 @@ pub fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 
                 }
             } else if aura.parameter == i32::from(SPEED_MOUNTED) {
                 mount += stacked_amount(aura.amount, aura.stacks);
+            } else if aura.parameter == i32::from(SPEED_MOVE_ALWAYS) {
+                always *= (100 + stacked_amount(aura.amount, aura.stacks)) as f32 / 100.0;
+            } else if aura.parameter == i32::from(SPEED_MOVE_NOT_STACK) {
+                not_stack =
+                    not_stack.max((100 + stacked_amount(aura.amount, aura.stacks)) as f32 / 100.0);
             }
         }
     }
-    move_speed_with_pct(base, mounted_move_pct(movement + slow, mount, mounted))
+    let bonus = if mounted { 1.0 } else { always.max(not_stack) };
+    move_speed_with_pct(base, mounted_move_pct(movement + slow, mount, mounted)) * bonus
+}
+
+pub fn moves_run_speed(kind: u8, parameter: i32) -> bool {
+    kind == A_MOD_SPEED
+        && [SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK]
+            .into_iter()
+            .any(|speed| parameter == i32::from(speed))
 }
 
 /// Swimming uses its strongest positive speed aura and retains the movement floor.
@@ -166,6 +181,47 @@ mod tests {
             ..ghost
         };
         assert_eq!(run_speed(7.0, [ghost, wisp, snare]), 8.4);
+    }
+
+    #[test]
+    fn running_multiplies_always_bonuses_with_the_strongest_move_bonus() {
+        let movement = AuraAmount {
+            kind: A_MOD_SPEED,
+            parameter: i32::from(SPEED_MOVE),
+            amount: 50,
+            stacks: 1,
+        };
+        let always = AuraAmount {
+            parameter: i32::from(SPEED_MOVE_ALWAYS),
+            amount: 10,
+            ..movement
+        };
+        let weaker = AuraAmount {
+            amount: 25,
+            ..movement
+        };
+        assert!((run_speed(7.0, [movement, weaker, always, always]) - 12.705).abs() < 0.00001);
+    }
+
+    #[test]
+    fn running_chooses_between_always_product_and_strongest_not_stack_bonus() {
+        let always = AuraAmount {
+            kind: A_MOD_SPEED,
+            parameter: i32::from(SPEED_MOVE_ALWAYS),
+            amount: 10,
+            stacks: 1,
+        };
+        let not_stack = AuraAmount {
+            parameter: i32::from(SPEED_MOVE_NOT_STACK),
+            amount: 20,
+            ..always
+        };
+        let stronger = AuraAmount {
+            amount: 30,
+            ..not_stack
+        };
+        assert!((run_speed(7.0, [always, always, not_stack]) - 8.47).abs() < 0.00001);
+        assert!((run_speed(7.0, [always, always, not_stack, stronger]) - 9.1).abs() < 0.00001);
     }
 
     #[test]

@@ -364,9 +364,7 @@ pub(crate) fn break_auras_on_damage(
             crate::spell::stacking::dr_window_on_removal(ctx, a.target_guid, category, now_micros);
         }
     }
-    for a in to_break {
-        auras.id().delete(a.id);
-    }
+    shed_auras(ctx, target_guid, to_break);
     // Stealth breaks on ANY real damage to the stealthed unit (melee/direct-spell/DoT, since this
     // chokepoint is called from all three) — vanilla's "getting hit reveals you" rule, independent of
     // the BREAK_ON_DAMAGE header bit above (A_STEALTH is never flagged with it). The attacker-side

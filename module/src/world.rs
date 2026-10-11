@@ -1074,6 +1074,7 @@ pub(crate) fn apply_player_login(
     crate::away::at_world_entry(ctx, &mut entity, entry);
     entities.insert(entity);
     crate::ghost::restore(ctx, character_guid);
+    crate::spell::recompute_display(ctx, character_guid);
     // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
     // a nonzero start and is untouched; a pending flight begins from its source on this login.
     crate::taxi::arm_taxi_flight(ctx, character_guid);

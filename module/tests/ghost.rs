@@ -36,17 +36,21 @@ fn fixture(name: &str, race: u8) -> Standalone {
             ],
         ),
     ] {
-        shard.assert_sql(&format!(
-            "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges) VALUES ({spell}, 'Ghost', 0, 0, 0, 0, 0, 0, 4294967295, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0)"
-        ));
-        for (index, (kind, amount, parameter, parameter_kind)) in effects.into_iter().enumerate() {
-            let id = (spell as u64) * 4 + index as u64;
-            shard.assert_sql(&format!(
-                "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat) VALUES ({id}, {spell}, {index}, {kind}, {amount}, 1, 0.0, 0, 0, 0.0, 0, 0, 0, {parameter}, {parameter_kind}, 0, 0, false)"
-            ));
-        }
+        insert_spell(&shard, spell, "Ghost", &effects);
     }
     shard
+}
+
+fn insert_spell(shard: &Standalone, spell: u32, name: &str, effects: &[(u8, i32, i32, u8)]) {
+    shard.assert_sql(&format!(
+            "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, family_name, family_flags, proc_flags, proc_chance, proc_charges) VALUES ({spell}, '{name}', 0, 0, 0, 0, 0, 0, 4294967295, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0)"
+        ));
+    for (index, (kind, amount, parameter, parameter_kind)) in effects.iter().copied().enumerate() {
+        let id = (spell as u64) * 4 + index as u64;
+        shard.assert_sql(&format!(
+                "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat) VALUES ({id}, {spell}, {index}, {kind}, {amount}, 1, 0.0, 0, 0, 0.0, 0, 0, 0, {parameter}, {parameter_kind}, 0, 0, false)"
+            ));
+    }
 }
 
 fn entity(shard: &Standalone) -> Row {
@@ -182,7 +186,12 @@ fn corpse_reclaim_restores_native_form() {
 fn self_resurrection_restores_native_form() {
     let shard = fixture("ghost-self-res", 4);
     release(&shard);
-    shard.assert_sql("INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, p0, p0_kind, p1, script_id, enters_combat) VALUES (20360000, 5090000, 0, 38, 50, 1, 0.0, 0, 0, 0.0, 0, 0, 0, 0, 0, 0, 0, false)");
+    insert_spell(
+        &shard,
+        5090000,
+        "Self resurrection",
+        &[(E_SELF_RESURRECT, 50, 0, P_NONE)],
+    );
     shard.assert_sql(
         "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES (1, 5090000)",
     );
@@ -237,4 +246,81 @@ fn wisp_survives_cross_shard_transfer() {
     assert_ghost(&destination, true);
     destination.assert_call("debug_spirit_healer_res", &["1"]);
     assert_alive(&destination);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn damage_breaks_a_transform_and_restores_the_native_body() {
+    let shard = fixture("transform-damage", 1);
+    insert_spell(
+        &shard,
+        5090001,
+        "Damage breaking transform",
+        &[(A_TRANSFORM, 0, 12861, P_ENTRY)],
+    );
+    shard.assert_sql("UPDATE game_spell SET aura_interrupt = 1 WHERE spell_id = 5090001");
+    shard.assert_call("debug_cast_at", &["1", "5090001", "1"]);
+    assert_eq!(entity(&shard)["display_id"], "1825");
+    shard.assert_call("debug_apply_damage", &["1", "1", "0"]);
+    let row = entity(&shard);
+    assert_eq!(row["display_id"], row["native_display_id"]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_aura WHERE target_guid = 1 AND spell_id = 5090001")
+        .is_empty());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_living_transform_survives_logout_and_world_entry() {
+    let shard = fixture("transform-relog", 1);
+    insert_spell(
+        &shard,
+        5090001,
+        "Living transform",
+        &[(A_TRANSFORM, 0, 12861, P_ENTRY)],
+    );
+    shard.assert_call("debug_cast_at", &["1", "5090001", "1"]);
+    shard.assert_call("debug_logout_character", &["1"]);
+    bind_session(&shard);
+    shard.assert_call("gw_player_login", &["1", &actor("1")]);
+    let row = entity(&shard);
+    assert_eq!(row["dead"], "false");
+    assert_eq!(row["display_id"], "1825");
+    shard.assert_call("gw_cancel_aura", &[&actor("1"), "5090001"]);
+    assert_eq!(entity(&shard)["display_id"], row["native_display_id"]);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn accepting_resurrection_restores_native_form() {
+    let shard = fixture("ghost-accept-res", 4);
+    release(&shard);
+    shard.assert_call(
+        "debug_create_package_character",
+        &[r#""ghost-test""#, r#""Healer""#, "1", "5"],
+    );
+    let healer = shard
+        .query_rows("SELECT guid FROM game_character WHERE name = 'Healer'")
+        .remove(0)["guid"]
+        .clone();
+    shard.assert_call("debug_spawn_player_entity", &[&healer]);
+    let ghost = entity(&shard);
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET x = {}, y = {}, z = {} WHERE guid = {healer}",
+        ghost["x"], ghost["y"], ghost["z"]
+    ));
+    insert_spell(
+        &shard,
+        5090002,
+        "Resurrection",
+        &[(E_RESURRECT, 50, 0, P_NONE)],
+    );
+    shard.assert_sql("UPDATE game_spell SET range_yd = 40.0 WHERE spell_id = 5090002");
+    shard.assert_sql("UPDATE game_spell_effect SET target = 2 WHERE spell_id = 5090002");
+    shard.assert_call("debug_cast_at", &[&healer, "5090002", "1"]);
+    shard.assert_call("debug_resurrect_response", &["1", "true"]);
+    assert_alive(&shard);
+    assert!(shard
+        .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
+        .is_empty());
 }

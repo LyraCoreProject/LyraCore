@@ -4466,9 +4466,9 @@ fn resolve_scope_entries(
     purpose: ScopePurpose,
 ) -> Result<ScopeEntries> {
     let mut entries: std::collections::HashSet<u64> = spawns.iter().map(|s| s.1).collect();
-    // Spell summons have no placed spawn. Include the pet rewards and both Binding objectives.
-    const SUMMON_TEMPLATE_ENTRIES: &[u64] = &[416, 1860, 1863, 5676, 5677];
-    entries.extend(SUMMON_TEMPLATE_ENTRIES.iter().copied());
+    // Spell summons and the wisp body have no placed spawn.
+    const SPELL_TEMPLATE_ENTRIES: &[u64] = &[416, 1860, 1863, 5676, 5677, 12861];
+    entries.extend(SPELL_TEMPLATE_ENTRIES.iter().copied());
     // Forced-creature template safety net: the spawn-loop gate above already keeps a force-listed
     // entry's placed spawns, whether the profile owns it or the legacy flag extends the scope.
     // But a giver with NO `creature` row (a pure-summon/instanced NPC) produces zero spawns — extend
@@ -9035,6 +9035,28 @@ mod tests {
         }
         let focus = go_template_row(5_091_040, 8, 1, "Focus", 83, 10, 1.0).0;
         assert!(focus.contains(",83,10,0,0,0,0,1)"));
+    }
+
+    #[test]
+    fn wisp_visual_template_imports_without_a_world_spawn() {
+        let mut row = vec!["0".to_string(); ct::GOSSIP_MENU_ID + 1];
+        row[ct::ENTRY] = "12861".to_string();
+        row[ct::NAME] = "'Wisp visual'".to_string();
+        row[ct::MODEL_ID1] = "1825".to_string();
+        let dump = format!(
+            "INSERT INTO `creature_template` VALUES ({});",
+            row.join(",")
+        );
+        let plan = build_dump_plan(&dump, &test_args(), &None, &None).unwrap();
+        let templates = plan
+            .stmts
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_creature_template"))
+            .expect("the wisp body must import without any placed creature");
+        assert!(
+            templates.contains("(12861,'Wisp visual','0',1825,"),
+            "{templates}"
+        );
     }
 
     #[test]

@@ -311,18 +311,9 @@ pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity)
     swing_time_with_haste(attacker.base_attack_time_ms, speed)
 }
 
-/// A unit's EFFECTIVE movement speed (yd/s) for a `base` cadence (RUN / WALK): adjusted by every active
-/// `A_MOD_SPEED(SPEED_MOVE)` aura, using the strongest positive bonus and summed slows, — a snare (Hamstring, negative %) slows it, a speed
-/// buff quickens it — PLUS, only while `guid` carries an active `A_MOUNTED` aura, every active
-/// `A_MOD_SPEED(SPEED_MOUNTED)` aura (the mount's own speed effect; DBC-normalized to the nominal +60%/
-/// +100% tiers). A mounted-speed aura contributes nothing once the rider dismounts — the fold reads
-/// current mount state fresh on every call, so it never needs its own cleanup. The creature movement
-/// passes (chase / return / wander) compute their step + leg duration from this instead of the raw
-/// constant, so a snared creature closes/roams slower — the movement twin of `effective_swing_time`,
-/// server-verifiable via the creature's per-tick position delta. `mount::recompute_mount` folds the SAME
-/// value (base 1.0) into `run_speed_mult_bp` for the player wire relay; this copy governs SERVER-driven
-/// movement and the anti-cheat max-speed check (`world::score_and_log_movement`), so a mounted player's
-/// higher speed is never flagged as a speedhack. No move/mount aura → exactly `base` (baseline-safe). [entity]
+/// Authoritative movement speed in yards per second, folded from current aura effects.
+/// Creature motion, movement checks and the Mount Projection share this calculation.
+/// With no movement effects the result is `base`.
 pub(crate) fn effective_move_speed(ctx: &ReducerContext, guid: u64, base: f32) -> f32 {
     lyracore_shared::aura::run_speed(
         base,

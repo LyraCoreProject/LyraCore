@@ -103,24 +103,35 @@ pub(crate) fn peer_create_outbound(
     auras: &[Aura],
     movement: Option<&[u8]>,
 ) -> Result<Vec<Outbound>> {
+    use lyracore_shared::constants::speeds;
+
+    let speed_auras = auras
+        .iter()
+        .filter(|aura| aura.target_guid == view.guid)
+        .map(|aura| lyracore_shared::aura::AuraAmount {
+            kind: aura.eff_kind,
+            parameter: aura.eff_p0,
+            amount: aura.amount,
+            stacks: aura.stacks,
+        });
     let mut create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
     for object in &mut create.objects {
         if let wow_world_messages::vanilla::Object::CreateObject2 { movement2, .. } = object {
             if let Some(mut living) = movement2.update_flag.get_living().cloned() {
                 if let wow_world_messages::vanilla::MovementBlock_UpdateFlag_Living::Living {
+                    running_speed,
                     swimming_speed,
                     ..
                 } = &mut living
                 {
-                    *swimming_speed = lyracore_shared::aura::swim_speed(
-                        lyracore_shared::constants::speeds::SWIM,
-                        auras.iter().map(|aura| lyracore_shared::aura::AuraAmount {
-                            kind: aura.eff_kind,
-                            parameter: aura.eff_p0,
-                            amount: aura.amount,
-                            stacks: aura.stacks,
-                        }),
-                    );
+                    if speed_auras.clone().any(|aura| {
+                        lyracore_shared::aura::moves_run_speed(aura.kind, aura.parameter)
+                    }) {
+                        *running_speed =
+                            lyracore_shared::aura::run_speed(speeds::RUN, speed_auras.clone());
+                    }
+                    *swimming_speed =
+                        lyracore_shared::aura::swim_speed(speeds::SWIM, speed_auras.clone());
                 }
                 movement2.update_flag = movement2.update_flag.clone().set_living(living);
             }

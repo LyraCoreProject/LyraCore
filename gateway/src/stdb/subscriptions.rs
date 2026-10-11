@@ -2850,15 +2850,31 @@ mod tests {
     }
 
     #[test]
-    fn peer_create_restores_the_wisp_appearance_and_swimming_speed() {
-        use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, SPEED_SWIM};
+    fn peer_create_restores_the_wisp_appearance_and_movement_speeds() {
+        use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, SPEED_MOVE, SPEED_SWIM};
         use wow_world_messages::vanilla::{Object, UpdateMask};
         let mut entity = player_entity();
         entity.display_id = 1825;
         entity.unit_bytes_0 = 0x0000_0104;
-        entity.run_speed_mult_bp = 15_000;
+        entity.run_speed_mult_bp = 10_000;
         let view = entity_view(entity, 0);
         let auras = [
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_MOVE),
+                25,
+                0,
+                i64::MAX,
+            ),
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_MOVE),
+                50,
+                0,
+                i64::MAX,
+            ),
             aura(
                 view.guid,
                 A_MOD_SPEED,
@@ -2901,6 +2917,111 @@ mod tests {
         assert!(
             (*swimming_speed - lyracore_shared::constants::speeds::SWIM * 1.5).abs() < 0.000001
         );
+    }
+
+    #[test]
+    fn peer_create_uses_the_remaining_ghost_speed_and_restores_baseline_after_removal() {
+        use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, SPEED_MOVE, SPEED_SWIM};
+        use wow_world_messages::vanilla::{MovementBlock_UpdateFlag_Living, Object};
+        let mut entity = player_entity();
+        entity.unit_bytes_0 = 0x0000_0101;
+        entity.run_speed_mult_bp = 10_000;
+        let view = entity_view(entity, 0);
+        let ghost = vec![
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_MOVE),
+                25,
+                0,
+                i64::MAX,
+            ),
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_SWIM),
+                25,
+                0,
+                i64::MAX,
+            ),
+        ];
+        for (auras, expected_run, expected_swim) in
+            [(ghost, 8.75, 5.902_777_7), (vec![], 7.0, 4.722_222)]
+        {
+            let out = peer_create_outbound(&view, &[], &auras, None).unwrap();
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)) = &out[0] else {
+                panic!("peer CREATE");
+            };
+            let Object::CreateObject2 { movement2, .. } = &create.objects[0] else {
+                panic!("Character CREATE");
+            };
+            let MovementBlock_UpdateFlag_Living::Living {
+                running_speed,
+                swimming_speed,
+                ..
+            } = movement2.update_flag.get_living().unwrap()
+            else {
+                panic!("living movement");
+            };
+            assert_eq!(*running_speed, expected_run);
+            assert!((*swimming_speed - expected_swim).abs() < 0.000001);
+        }
+    }
+
+    #[test]
+    fn peer_create_preserves_gm_run_speed_without_movement_auras() {
+        use wow_world_messages::vanilla::{MovementBlock_UpdateFlag_Living, Object};
+        let mut entity = player_entity();
+        entity.unit_bytes_0 = 0x0000_0101;
+        entity.run_speed_mult_bp = 30_000;
+        let view = entity_view(entity, 0);
+        let out = peer_create_outbound(&view, &[], &[], None).unwrap();
+        let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)) = &out[0] else {
+            panic!("peer CREATE");
+        };
+        let Object::CreateObject2 { movement2, .. } = &create.objects[0] else {
+            panic!("Character CREATE");
+        };
+        let MovementBlock_UpdateFlag_Living::Living { running_speed, .. } =
+            movement2.update_flag.get_living().unwrap()
+        else {
+            panic!("living movement");
+        };
+        assert_eq!(*running_speed, 21.0);
+    }
+
+    #[test]
+    fn peer_create_applies_always_and_not_stack_run_bonuses() {
+        use lyracore_shared::spell::taxonomy::{
+            A_MOD_SPEED, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK,
+        };
+        use wow_world_messages::vanilla::{MovementBlock_UpdateFlag_Living, Object};
+        let mut entity = player_entity();
+        entity.unit_bytes_0 = 0x0000_0101;
+        let view = entity_view(entity, 0);
+        for speed_kind in [SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK] {
+            let auras = [aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(speed_kind),
+                50,
+                0,
+                i64::MAX,
+            )];
+            let out = peer_create_outbound(&view, &[], &auras, None).unwrap();
+            let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)) = &out[0] else {
+                panic!("peer CREATE");
+            };
+            let Object::CreateObject2 { movement2, .. } = &create.objects[0] else {
+                panic!("Character CREATE");
+            };
+            let MovementBlock_UpdateFlag_Living::Living { running_speed, .. } =
+                movement2.update_flag.get_living().unwrap()
+            else {
+                panic!("living movement");
+            };
+            assert_eq!(*running_speed, 10.5);
+        }
     }
 
     #[test]

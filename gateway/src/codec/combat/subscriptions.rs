@@ -1,5 +1,5 @@
 //! Table Relays for this Protocol Family.
-use lyracore_shared::spell::taxonomy::{A_MOD_RESISTANCE, A_MOD_SPEED, SPEED_MOVE, SPEED_SWIM};
+use lyracore_shared::spell::taxonomy::{A_MOD_RESISTANCE, A_MOD_SPEED, SPEED_SWIM};
 
 use crate::codec::entity::subscriptions::build_peer_create;
 use crate::codec::{self};
@@ -820,8 +820,7 @@ pub(crate) fn run_speed_packet(
 ) -> Option<Outbound> {
     const BASE_RUN_SPEED: f32 = 7.0; // vanilla base run yd/s
     if changed.target_guid != self_guid
-        || changed.eff_kind != A_MOD_SPEED
-        || changed.eff_p0 != i32::from(SPEED_MOVE)
+        || !lyracore_shared::aura::moves_run_speed(changed.eff_kind, changed.eff_p0)
     {
         return None;
     }
@@ -1183,6 +1182,7 @@ impl SpellCastEventKind {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::SPEED_MOVE;
     /// A minimal `Aura` row for the packet-builder tests: `target_guid`/`eff_kind`/`eff_p0`/`amount`
     /// are the fields those builders branch on; `applied_at`/`expires_at` (raw micros) drive the
     /// duration math. Everything else is a fixed, inert value.
@@ -1270,6 +1270,23 @@ pub(crate) mod tests {
         // A move-speed change on a DIFFERENT guid (a peer) never triggers self's packet.
         let peer_changed = aura(self_guid + 1, 0xA4, 0, 25, 0, i64::MAX);
         assert!(run_speed_packet(current.into_iter(), &peer_changed, self_guid).is_none());
+    }
+
+    #[test]
+    fn run_speed_packet_refreshes_always_and_not_stack_bonuses_after_removal() {
+        use lyracore_shared::spell::taxonomy::{SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK};
+        let guid = 7;
+        for speed_kind in [SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK] {
+            let changed = aura(guid, A_MOD_SPEED, i32::from(speed_kind), 50, 0, i64::MAX);
+            for (current, expected) in [(vec![changed.clone()], 10.5), (vec![], 7.0)] {
+                let Some(Outbound::One(ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(packet))) =
+                    run_speed_packet(current.into_iter(), &changed, guid)
+                else {
+                    panic!("run speed packet");
+                };
+                assert_eq!(*packet, codec::build_force_run_speed(guid, expected));
+            }
+        }
     }
 
     #[test]
