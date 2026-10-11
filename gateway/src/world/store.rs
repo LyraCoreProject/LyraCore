@@ -127,23 +127,10 @@ pub(crate) trait ShardRoutingStore: Send + Sync {
     /// already did it. Called at world entry whenever the session's home shard is not the realm.
     fn bind_shard_session(&self, account_id: u64, session_key: &[u8; 40]) -> Result<()>;
 
-    /// The **realm-core** handle: the database that owns party membership realm-wide.
-    ///
-    /// `None` is not "no realm-core configured" — it is "this gateway runs against ONE database", in
-    /// which case that database already is the authority and there is nothing to route. `world::party`
-    /// branches on exactly this, so the single-database path never reads a row it did not read before.
-    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>>;
-
-    /// Realm-core for deleted Character cleanup. An unavailable configured Realm-core is an
-    /// infrastructure failure and cannot fall back to a World Shard.
-    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
-
-    /// Realm-core for companion command authority. Configured outages fail closed.
-    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
-
-    /// Realm-core for Transfer locator authority. Only an unsharded Realm uses the local Store;
-    /// an unavailable configured Realm-core is an infrastructure failure.
-    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
+    /// Realm-core authority, or `Ok(None)` when this Realm has one Shard and this Store owns it.
+    /// An unavailable configured Realm-core is an infrastructure failure. Callers must never
+    /// substitute a World Shard for that authority.
+    fn realm_store(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>>;
 
     /// Every connected WORLD shard's handle (realm-core excluded — it owns no gameplay reads). The
     /// fan-out set for the roster mirror; empty on a single-database gateway, which is what makes the

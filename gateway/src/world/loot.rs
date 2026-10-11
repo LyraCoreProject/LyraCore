@@ -108,7 +108,7 @@ pub(crate) fn run_vote<St: LootRollStore + ShardRoutingStore + ?Sized>(
     slot: u32,
     vote: u8,
 ) -> Result<LootActionStatus> {
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         return store.loot_roll(actor, corpse_guid, slot, vote);
     };
     flush_pending_promotions(store, realm.as_ref());
@@ -190,7 +190,7 @@ pub(crate) fn flush_pending_promotions<St: ShardRoutingStore + ?Sized>(
 }
 
 /// One promotion + settlement pass. No-op on an unsharded store (`realm_store()` answers
-/// `None`), which is what makes running this on a timer free for a single-database gateway.
+/// `Ok(None)`), which is what makes running this on a timer free for a single-database gateway.
 ///
 /// `won_watermark` advances only after every settlement in the batch succeeds on every Shard.
 /// A failure leaves the result available to retry while its Realm-core event still exists.
@@ -206,8 +206,13 @@ pub(crate) fn flush_pending_promotions<St: ShardRoutingStore + ?Sized>(
 /// function's own caller's poll interval, not by anything in here — see this module's doc for why
 /// that caller is a poll rather than a persistent callback.
 pub(crate) fn relay_tick<St: ShardRoutingStore + ?Sized>(store: &St, won_watermark: &mut u64) {
-    let Some(realm) = store.realm_store() else {
-        return;
+    let realm = match store.realm_store() {
+        Ok(Some(realm)) => realm,
+        Ok(None) => return,
+        Err(error) => {
+            log::warn!("loot-roll Relay waits for Realm-core: {error:#}");
+            return;
+        }
     };
     flush_pending_promotions(store, realm.as_ref());
 

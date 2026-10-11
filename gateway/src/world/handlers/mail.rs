@@ -34,11 +34,13 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                             Box::new(codec::build_mail_list(&mails, mail::now_secs())),
                         )))
                     }
-                    Err(failure) => log::debug!(
-                        "world: mail list refused (account {}): {}",
-                        conn.account_id,
-                        failure.refusal()?
-                    ),
+                    Err(failure) => {
+                        let refusal = failure.refusal()?;
+                        log::debug!(
+                            "world: mail list refused (account {}): {refusal}",
+                            conn.account_id
+                        );
+                    }
                 }
             }
             // The periodic "do I have new mail" poll behind the minimap envelope. It names no mailbox —
@@ -49,10 +51,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                 let unread = match mail::has_unread(store, conn.actor()) {
                     Ok(unread) => unread,
                     Err(failure) => {
+                        let refusal = failure.refusal()?;
                         log::debug!(
-                            "world: mail poll answered empty (account {}): {}",
-                            conn.account_id,
-                            failure.refusal()?
+                            "world: mail poll answered empty (account {}): {refusal}",
+                            conn.account_id
                         );
                         false
                     }
@@ -81,10 +83,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                 ) {
                     Ok(body) => body,
                     Err(failure) => {
+                        let refusal = failure.refusal()?;
                         log::debug!(
-                            "world: item text query refused (account {}): {}",
-                            conn.account_id,
-                            failure.refusal()?
+                            "world: item text query refused (account {}): {refusal}",
+                            conn.account_id
                         );
                         None
                     }
@@ -104,10 +106,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                 if let Err(failure) =
                     mail::mark_read(store, actor, c.mailbox.guid(), u64::from(c.mail_id))
                 {
+                    let refusal = failure.refusal()?;
                     log::debug!(
-                        "world: mail mark-as-read refused (account {}): {}",
-                        conn.account_id,
-                        failure.refusal()?
+                        "world: mail mark-as-read refused (account {}): {refusal}",
+                        conn.account_id
                     );
                 }
             }
@@ -121,10 +123,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                 {
                     Ok(()) => true,
                     Err(failure) => {
+                        let refusal = failure.refusal()?;
                         log::debug!(
-                            "world: mail delete refused (account {}): {}",
-                            conn.account_id,
-                            failure.refusal()?
+                            "world: mail delete refused (account {}): {refusal}",
+                            conn.account_id
                         );
                         false
                     }
@@ -147,10 +149,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                 ) {
                     Ok(()) => true,
                     Err(failure) => {
+                        let refusal = failure.refusal()?;
                         log::debug!(
-                            "world: mail return refused (account {}): {}",
-                            conn.account_id,
-                            failure.refusal()?
+                            "world: mail return refused (account {}): {refusal}",
+                            conn.account_id
                         );
                         false
                     }
@@ -170,10 +172,10 @@ impl<St: CharacterStore + MailStore + SessionStore + ShardRoutingStore + SocialS
                     match mail::take_money(store, actor, c.mailbox.guid(), u64::from(c.mail_id)) {
                         Ok(()) => true,
                         Err(failure) => {
+                            let refusal = failure.refusal()?;
                             log::debug!(
-                                "world: mail take-money refused (account {}): {}",
-                                conn.account_id,
-                                failure.refusal()?
+                                "world: mail take-money refused (account {}): {refusal}",
+                                conn.account_id
                             );
                             false
                         }

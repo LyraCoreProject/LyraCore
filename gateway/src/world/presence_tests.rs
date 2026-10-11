@@ -219,6 +219,36 @@ fn a_pending_transfer_on_realm_core_is_in_transit() {
     assert_eq!(presence.whereabouts, presence::Whereabouts::InTransit);
 }
 
+#[test]
+fn realm_core_loss_leaves_negative_whereabouts_unknown() {
+    let (_realm, world) = one_shard_topology(GINGER, false);
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    for guid in [GINGER, 99_999] {
+        let error = presence::of(world.as_ref(), guid)
+            .expect_err("an unreadable pending Transfer cannot become absence");
+        assert!(presence::is_unknown(&error));
+        assert!(
+            presence::unknown_as_absent::<presence::RealmPresence>(Err(error))
+                .unwrap()
+                .is_none()
+        );
+    }
+}
+
+#[test]
+fn a_live_entity_still_answers_presence_during_realm_core_loss() {
+    let (_realm, world) = one_shard_topology(GINGER, true);
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    let presence = presence::of(world.as_ref(), GINGER).unwrap().unwrap();
+
+    assert!(matches!(
+        presence.whereabouts,
+        presence::Whereabouts::InWorld { .. }
+    ));
+}
+
 /// A Character between places on any connected Shard is in transit — the session-less bot
 /// Transfer Intent case `character_in_transit` models, here on a PEER Shard rather than the
 /// asking one.

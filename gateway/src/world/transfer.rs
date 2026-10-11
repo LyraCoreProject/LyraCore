@@ -824,7 +824,7 @@ fn bind_bot_locator(
     if intent.source_locator_revision != 0 {
         return Ok(intent.clone());
     }
-    let realm = holder.transfer_realm()?;
+    let realm = holder.realm_store()?;
     let source_revision = realm
         .as_deref()
         .unwrap_or(holder)

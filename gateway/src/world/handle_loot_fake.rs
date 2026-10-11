@@ -377,19 +377,7 @@ impl ShardRoutingStore for HandleLootFake {
         Ok(())
     }
 
-    fn realm_store(&self) -> Option<Arc<dyn WorldStore>> {
-        None
-    }
-
-    fn party_cleanup_realm(&self) -> Result<Option<Arc<dyn WorldStore>>> {
-        Ok(None)
-    }
-
-    fn party_command_realm(&self) -> Result<Option<Arc<dyn WorldStore>>> {
-        Ok(None)
-    }
-
-    fn transfer_realm(&self) -> Result<Option<Arc<dyn WorldStore>>> {
+    fn realm_store(&self) -> Result<Option<Arc<dyn WorldStore>>> {
         Ok(None)
     }
 

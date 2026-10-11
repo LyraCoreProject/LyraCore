@@ -101,46 +101,9 @@ impl ShardRoutingStore for Coordinator {
         self.establish_session(account_id, session_key, identity)
     }
 
-    /// The realm-core handle, but ONLY on a multi-database gateway.
-    ///
-    /// The `is_sharded()` short-circuit is the whole of "unset env vars ⇒ today's gateway" for the
-    /// realm-wide party plane: with one database `realm_core()` would answer THIS handle, and routing
-    /// party ops through the operator-gated realm reducers against the same database would be a
-    /// different code path, a different gate, and a different set of writes for no gain. Answering
-    /// `None` here sends `world::party` down the arm that calls exactly the reducers it called
-    /// before realm-core existed.
-    ///
-    /// Configured-but-unreachable realm-core answers `None` as well (`realm_core()` is `Err`), so a
-    /// realm-core outage degrades party ops to shard-local rather than failing them. That is a
-    /// deliberate split from the AUTH paths, which fail CLOSED: a stale auth cache lets someone in
-    /// with a revoked credential, while a shard-local party op is only ever a smaller party.
-    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
-        if !self.is_sharded() {
-            return None;
-        }
-        self.realm_core()
-            .ok()
-            .map(|rc| std::sync::Arc::new(rc) as std::sync::Arc<dyn WorldStore>)
-    }
-
-    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if !self.is_sharded() {
-            return Ok(None);
-        }
-        self.realm_core()
-            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
-    }
-
-    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if !self.is_sharded() {
-            return Ok(None);
-        }
-        self.realm_core()
-            .map(|realm| Some(std::sync::Arc::new(realm) as std::sync::Arc<dyn WorldStore>))
-    }
-
-    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if !self.is_sharded() {
+    fn realm_store(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        // A configured Realm-core may have failed its initial connection.
+        if !self.is_sharded() && self.shard_map().realm_core_db().is_none() {
             return Ok(None);
         }
         self.realm_core()

@@ -28,10 +28,8 @@ pub(crate) struct TopologyState {
     /// SHARED between a store and its `home` handle: `(shard, call)` for every instrumented
     /// player-scoped call, in order. The routing test asserts nothing lands on the wrong database.
     pub(crate) calls: std::sync::Arc<std::sync::Mutex<Vec<(String, String)>>>,
-    /// The handle `realm_store()` hands back — the database that owns party
-    /// membership realm-wide. `None` (derive-Default) is the SINGLE-DATABASE gateway, which is what
-    /// every other test in this file is, and it is what routes every party op back onto the
-    /// player-facing reducers below.
+    /// Realm-core authority when configured. `None` models a single-Shard Realm; `realm_error`
+    /// models an outage without changing which Store owns the realm-wide state.
     pub(crate) realm: Option<std::sync::Arc<WorldFake>>,
     /// The connected WORLD shards `world_stores()` fans the roster mirror out to (and the
     /// cross-shard name/presence lookups walk). Empty = single database. Behind a `Mutex` only so
@@ -40,10 +38,8 @@ pub(crate) struct TopologyState {
     pub(crate) peers: std::sync::Mutex<Vec<std::sync::Arc<WorldFake>>>,
     /// When set, the configured World Shard set is incomplete or unhealthy.
     pub(crate) world_shard_set_error: Option<String>,
-    /// When set, deleted Character cleanup cannot reach Realm-core.
-    pub(crate) party_cleanup_realm_error: Option<String>,
-    pub(crate) party_command_realm_error: Option<String>,
-    pub(crate) transfer_realm_error: Option<String>,
+    /// A configured Realm-core outage, mutable so a recovery test can restore the same authority.
+    pub(crate) realm_error: std::sync::Mutex<Option<String>>,
     /// When set, `settle_home_shard` fails with this message (a transfer that could not be
     /// driven — an unreachable destination shard, a refused import).
     pub(crate) settle_error: Option<String>,
@@ -109,32 +105,15 @@ impl ShardRoutingStore for WorldFake {
         (*m == map_id && *i == instance_id).then(|| shard.clone() as std::sync::Arc<dyn WorldStore>)
     }
 
-    fn realm_store(&self) -> Option<std::sync::Arc<dyn WorldStore>> {
-        self.topology
+    fn realm_store(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
+        if let Some(error) = self.topology.realm_error.lock().unwrap().as_ref() {
+            return Err(anyhow!(error.clone()));
+        }
+        Ok(self
+            .topology
             .realm
             .clone()
-            .map(|r| r as std::sync::Arc<dyn WorldStore>)
-    }
-
-    fn party_cleanup_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.topology.party_cleanup_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
-    }
-
-    fn party_command_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.topology.party_command_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
-    }
-
-    fn transfer_realm(&self) -> Result<Option<std::sync::Arc<dyn WorldStore>>> {
-        if let Some(error) = &self.topology.transfer_realm_error {
-            return Err(anyhow!(error.clone()));
-        }
-        Ok(self.realm_store())
+            .map(|r| r as std::sync::Arc<dyn WorldStore>))
     }
 
     fn world_stores(&self) -> Vec<std::sync::Arc<dyn WorldStore>> {

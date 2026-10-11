@@ -15,6 +15,64 @@ use lyracore_shared::loot_roll::loot_op;
 
 const SOURCE: spacetimedb_sdk::Identity = spacetimedb_sdk::Identity::from_byte_array([7; 32]);
 
+#[test]
+fn a_loot_vote_during_realm_core_loss_cannot_vote_locally() {
+    let (realm, world, _instances, _calls) = party_topology();
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    let error = loot::run_vote(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        500,
+        2,
+        lyracore_shared::loot_roll::vote_kind::NEED,
+    )
+    .expect_err("Realm-core still owns the Loot Roll");
+
+    assert_eq!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    );
+    assert!(world.loot_roll.loot_rolls.lock().unwrap().is_empty());
+    assert!(realm.loot_roll.realm_loot_ops.lock().unwrap().is_empty());
+}
+
+#[test]
+fn loot_promotion_waits_for_realm_core_recovery() {
+    let (realm, world, _instances, _calls) = party_topology();
+    world
+        .loot_roll
+        .pending_rolls
+        .lock()
+        .unwrap()
+        .push(loot::PendingLootRoll {
+            promotion_source: SOURCE,
+            roll_id: 77,
+            corpse_guid: 500,
+            slot: 2,
+            item_entry: 1234,
+            deadline_micros: 999_999,
+            recipients: vec![GINGER, TRIN],
+            random_property_id: 0,
+        });
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+    let mut watermark = 0;
+
+    loot::relay_tick(world.as_ref(), &mut watermark);
+
+    assert_eq!(watermark, 0);
+    assert_eq!(world.loot_roll.pending_rolls.lock().unwrap().len(), 1);
+    assert!(world.loot_roll.cleared_rolls.lock().unwrap().is_empty());
+    assert!(realm.loot_roll.realm_loot_ops.lock().unwrap().is_empty());
+
+    *world.topology.realm_error.lock().unwrap() = None;
+    loot::relay_tick(world.as_ref(), &mut watermark);
+    loot::relay_tick(world.as_ref(), &mut watermark);
+
+    assert!(world.loot_roll.pending_rolls.lock().unwrap().is_empty());
+    assert_eq!(realm.loot_roll.realm_loot_ops.lock().unwrap().len(), 1);
+}
+
 // ---- `run_vote` (CMSG_LOOT_ROLL routing) ----
 
 /// Unsharded → the shard-local loot path, verbatim: the vote runs on the player's own reducer, and
@@ -118,7 +176,7 @@ fn a_vote_on_a_staged_roll_reaches_realm_core_after_its_promotion() {
 
 // ---- `relay_tick` (promotion + settlement) ----
 
-/// Unsharded → no-op, before even reading a shard's pending rolls: `realm_store()` answers `None`
+/// Unsharded → no-op, before even reading a shard's pending rolls: `realm_store()` answers `Ok(None)`
 /// and `relay_tick` returns before `world_stores()` is ever consulted.
 #[test]
 fn an_unsharded_store_does_nothing_even_with_pending_rolls_on_a_connected_peer() {

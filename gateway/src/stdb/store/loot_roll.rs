@@ -78,7 +78,7 @@ impl LootRollStore for Coordinator {
     /// coordinator subscription list, so no reducer call is
     /// needed. Meaningful only on a WORLD SHARD in a sharded deployment: realm-core never has a row
     /// here that a world shard wrote (only its own `realm_loot_op` START arm inserts there), and on
-    /// an unsharded gateway the relay that calls this never runs at all (`realm_store()` is `None`).
+    /// an unsharded gateway the relay that calls this never runs at all (`realm_store()` is `Ok(None)`).
     fn pending_local_rolls(&self) -> Result<Vec<PendingLootRoll>> {
         let guard = self.0.coord();
         let db = &guard.conn.db;

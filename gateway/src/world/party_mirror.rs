@@ -70,7 +70,7 @@ impl RosterRevisionRelay {
         if parties.is_empty() {
             return;
         }
-        let realm = match store.party_cleanup_realm() {
+        let realm = match store.realm_store() {
             Ok(Some(realm)) => realm,
             Ok(None) => return,
             Err(error) => {

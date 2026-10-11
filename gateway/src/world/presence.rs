@@ -199,7 +199,7 @@ pub(crate) fn of<St: ShardRoutingStore + SocialStore + ?Sized>(
         let identity = identity.unwrap_or_else(|| CharacterIdentity::unknown(guid));
         return Ok(Some(identity.in_world(shard_name, entity)));
     }
-    if realm_transfer_pending(store, guid)? {
+    if realm_transfer_pending(store, guid).map_err(PresenceUnknown)? {
         let identity = identity.unwrap_or_else(|| CharacterIdentity::unknown(guid));
         return Ok(Some(identity.stationary(Whereabouts::InTransit)));
     }
@@ -224,9 +224,9 @@ pub(crate) fn of<St: ShardRoutingStore + SocialStore + ?Sized>(
     })
 }
 
-/// A negative claim [`of`] could not make: some configured World Shard did not vouch for the
-/// absence. That is another Shard's health, not this World Session's transport, so a caller answers
-/// as it would for a Character it cannot see.
+/// A negative claim [`of`] could not make: a configured World Shard did not vouch for absence,
+/// or Realm-core could not answer whether a Transfer is pending. A caller answers as it would
+/// for a Character it cannot see, without ending this World Session.
 #[derive(Debug)]
 pub(crate) struct PresenceUnknown(pub(crate) anyhow::Error);
 
@@ -294,9 +294,9 @@ fn live_entity_anywhere<St: ShardRoutingStore + SocialStore + ?Sized>(
 }
 
 /// Realm-core's own pending-Transfer signal for `guid`. `false` on an unsharded Gateway, which has
-/// no Realm-core to ask (`realm_store()` answers `None`).
+/// no Realm-core to ask (`realm_store()` answers `Ok(None)`).
 fn realm_transfer_pending<St: ShardRoutingStore + ?Sized>(store: &St, guid: u64) -> Result<bool> {
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(false);
     };
     Ok(realm

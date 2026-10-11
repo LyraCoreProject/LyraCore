@@ -322,7 +322,7 @@ fn configured_realm_core_unavailability_fails_closed() {
             ..Default::default()
         },
         topology: TopologyState {
-            party_command_realm_error: Some("Realm-core unavailable".into()),
+            realm_error: Some("Realm-core unavailable".into()).into(),
             ..Default::default()
         },
         ..Default::default()
@@ -1110,7 +1110,7 @@ fn an_unavailable_realm_core_preserves_party_membership() {
             shard: "world".into(),
             calls,
             realm: Some(realm.clone()),
-            party_cleanup_realm_error: Some("Realm-core is not connected".into()),
+            realm_error: Some("Realm-core is not connected".into()).into(),
             ..Default::default()
         },
         ..Default::default()
@@ -1121,6 +1121,32 @@ fn an_unavailable_realm_core_preserves_party_membership() {
 
     assert!(error.to_string().contains("not connected"));
     assert!(realm.group_roster(VIM).unwrap().is_some());
+}
+
+#[test]
+fn a_party_leave_during_realm_core_loss_preserves_authority_and_mirrors() {
+    let (realm, world, instances, _calls) = party_topology();
+    form_split_party(&world, &instances);
+    let before = realm.group_roster(VIM).unwrap().unwrap();
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    let error = party::run(
+        world.as_ref(),
+        Actor::new(GINGER).unwrap(),
+        party::Op::Leave,
+    )
+    .expect_err("a World Shard cannot become party authority");
+
+    assert_eq!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    );
+    for shard in [&realm, &world, &instances] {
+        assert_eq!(
+            shard.group_roster(VIM).unwrap().unwrap().member_guids(),
+            before.member_guids()
+        );
+    }
 }
 
 #[test]
@@ -1427,7 +1453,7 @@ fn an_unsharded_gateway_runs_every_party_op_on_the_players_own_shard() {
         ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
     });
     assert!(
-        store.realm_store().is_none(),
+        store.realm_store().unwrap().is_none(),
         "an unsharded store must not name a realm database"
     );
 
@@ -2686,7 +2712,7 @@ fn an_unsharded_deployment_still_routes_a_bot_invite_through_realm_group_op() {
         ..Default::default() // no `realm`, no `peers` — the unconfigured gateway
     });
     assert!(
-        store.realm_store().is_none(),
+        store.realm_store().unwrap().is_none(),
         "an unsharded store must not name a realm database"
     );
 

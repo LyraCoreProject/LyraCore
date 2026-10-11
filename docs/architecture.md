@@ -98,6 +98,11 @@ routing fact; module game logic never reads one, and an architecture test fails 
   `gateway/src/stdb/store/<family>.rs` calls the reducer directly. When the call fails,
   `classify` in `gateway/src/stdb/connection.rs` decides. A Refusal gets the family's answer and
   the session continues. Every other failure is a Transport Loss and ends the World Session.
+- **Realm-core routing preserves authority.** `ShardRoutingStore::realm_store` returns the local
+  case only for a single-Shard Realm. An unavailable configured Realm-core returns an infrastructure
+  failure, so Mail, party and Loot Roll operations cannot fall back to a World Shard. Cleanup,
+  Companion Orders and Transfer use the same routing contract. A Realm Presence read that cannot
+  exclude a pending Transfer reports unknown Whereabouts.
 
 ### 2.3 The honest exception: gates that live in the gateway
 
@@ -621,6 +626,11 @@ Afterwards the gateway re-pins the session: new home handle, `bind_shard_session
 `player_login`, a fresh subscription set, then it replays the movement it queued during the hop.
 
 ### 6.3b Mail attachments across the boundary
+
+Mail recovery at world entry and after quest completion is best effort. If Realm-core is unavailable,
+recovery logs the failure and leaves Escrow pending for the next recovery attempt. Explicit Mail
+requests still end the World Session on Transport Loss. Recovery never commits Mail to another
+Shard because its authority is unavailable (`gateway/src/world/mail.rs`).
 
 The same problem with different nouns: a mail row is authoritative on realm-core, the sender's purse
 and items are on their own shard, and no transaction spans the two. `module/src/mail_escrow.rs`

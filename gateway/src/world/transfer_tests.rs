@@ -1522,7 +1522,8 @@ fn a_ready_intent_keeps_retrying_when_the_local_character_is_elsewhere() {
 fn an_unbound_intent_waits_for_configured_realm_core() {
     let (src, src_db, dst_db, calls) = bot_pair(36, 7);
     let mut holder = std::sync::Arc::try_unwrap(src).ok().unwrap();
-    holder.topology.transfer_realm_error = Some("configured Realm-core is unavailable".into());
+    *holder.topology.realm_error.get_mut().unwrap() =
+        Some("configured Realm-core is unavailable".into());
     let intent = super::transfer::BotTransferIntent {
         source_locator_revision: 0,
         ..bot_intent()

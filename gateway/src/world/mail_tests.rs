@@ -172,7 +172,7 @@ fn the_realm_plane_and_the_single_database_fallback_render_the_same_mailbox() {
 fn an_unsharded_gateway_reads_the_mailbox_on_its_own_database() {
     let single = unsharded_mailbox();
     assert!(
-        single.realm_store().is_none(),
+        single.realm_store().unwrap().is_none(),
         "fixture: this is the single-database gateway"
     );
 
@@ -4051,6 +4051,13 @@ fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
     );
 
     *world.mail.mail_kill_at.lock().unwrap() = None;
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+    mail::redrive(world.as_ref(), GINGER);
+    assert!(world.mail.mails.lock().unwrap().is_empty());
+    assert_eq!(world.mail.mail_escrows.lock().unwrap().len(), 1);
+    assert_eq!(reward_letters(&realm, GINGER).len(), 1);
+
+    *world.topology.realm_error.lock().unwrap() = None;
     let visible =
         mail::open_mailbox(world.as_ref(), Actor::new(GINGER), MAILBOX).expect("the gate opens");
 
@@ -4067,6 +4074,49 @@ fn a_reward_letter_whose_drive_died_after_the_commit_is_delivered_once() {
         world.mail.mail_escrows.lock().unwrap().is_empty(),
         "settled"
     );
+}
+
+#[test]
+fn a_reward_letter_waits_for_realm_core_without_changing_its_escrow() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    let held = card_renewal_letter(GINGER, 0);
+    hold_reward_letter(&world, GINGER, held.clone());
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    mail::redrive(world.as_ref(), GINGER);
+
+    assert_eq!(
+        *world.mail.mail_escrows.lock().unwrap(),
+        vec![(GINGER, held)]
+    );
+    assert!(world.mail.mails.lock().unwrap().is_empty());
+    assert!(realm.mail.mails.lock().unwrap().is_empty());
+
+    *world.topology.realm_error.lock().unwrap() = None;
+    mail::redrive(world.as_ref(), GINGER);
+    mail::redrive(world.as_ref(), GINGER);
+
+    let letters = reward_letters(&realm, GINGER);
+    assert_eq!(letters.len(), 1);
+    assert_card_renewal(&letters[0]);
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mails.lock().unwrap().is_empty());
+}
+
+#[test]
+fn a_realm_core_outage_before_send_preserves_the_item_and_copper() {
+    let (realm, world, _instances, _calls) = sharded_send();
+    give_item(&world, GINGER, SWORD_GUID, sword());
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+
+    let failure = post_item(world.as_ref(), "Trin").expect_err("Mail authority is unavailable");
+
+    assert!(matches!(failure, mail::MailFailure::Lost(_)));
+    assert_eq!(world.bags_of(GINGER), vec![sword()]);
+    assert_eq!(*world.mail.purses.lock().unwrap(), vec![(GINGER, PURSE)]);
+    assert!(world.mail.mail_escrows.lock().unwrap().is_empty());
+    assert!(world.mail.mails.lock().unwrap().is_empty());
+    assert!(realm.mail.mails.lock().unwrap().is_empty());
 }
 
 #[test]
@@ -4224,4 +4274,96 @@ fn a_send_refusal_is_answered_and_a_transport_loss_ends_the_session() {
 
     *realm.mail.mail_kill_at.lock().unwrap() = Some("mail_commit".into());
     assert!(Mail::handle(world.as_ref(), &mut session, send("Trin").into()).is_err());
+}
+
+#[test]
+fn explicit_mail_requests_propagate_realm_core_loss() {
+    use wow_world_messages::vanilla::{
+        CMSG_GET_MAIL_LIST, CMSG_ITEM_TEXT_QUERY, CMSG_MAIL_DELETE, CMSG_MAIL_MARK_AS_READ,
+        CMSG_MAIL_RETURN_TO_SENDER, CMSG_MAIL_TAKE_MONEY,
+    };
+
+    let (_realm, world, _calls) = sharded_mailbox();
+    *world.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+    let mailbox = Guid::new(MAILBOX);
+    let requests = [
+        ClientOpcodeMessage::CMSG_GET_MAIL_LIST(CMSG_GET_MAIL_LIST { mailbox }),
+        ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME,
+        ClientOpcodeMessage::CMSG_ITEM_TEXT_QUERY(Box::new(CMSG_ITEM_TEXT_QUERY {
+            item_text_id: 1,
+            mail_id: 1,
+            unknown1: 0,
+        })),
+        ClientOpcodeMessage::CMSG_MAIL_MARK_AS_READ(Box::new(CMSG_MAIL_MARK_AS_READ {
+            mailbox,
+            mail_id: 1,
+        })),
+        ClientOpcodeMessage::CMSG_MAIL_DELETE(Box::new(CMSG_MAIL_DELETE {
+            mailbox_id: mailbox,
+            mail_id: 1,
+        })),
+        ClientOpcodeMessage::CMSG_MAIL_RETURN_TO_SENDER(Box::new(CMSG_MAIL_RETURN_TO_SENDER {
+            mailbox_id: mailbox,
+            mail_id: 1,
+        })),
+        ClientOpcodeMessage::CMSG_MAIL_TAKE_MONEY(Box::new(CMSG_MAIL_TAKE_MONEY {
+            mailbox,
+            mail_id: 1,
+        })),
+    ];
+
+    for request in requests {
+        let name = request.to_string();
+        let mut session = ProtocolSession::in_world(7, GINGER);
+        let error = Mail::handle(world.as_ref(), &mut session, request.into())
+            .err()
+            .unwrap_or_else(|| panic!("{name} must propagate Transport Loss"));
+        assert_eq!(
+            crate::stdb::classify(&error),
+            crate::stdb::DurableFailure::TransportLoss,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_mail_poll_after_realm_core_loss_ends_the_admitted_world_session() {
+    let mut home = std::sync::Arc::try_unwrap(seated_store()).ok().unwrap();
+    home.topology.realm = Some(std::sync::Arc::new(WorldFake::default()));
+    let store = std::sync::Arc::new(home);
+    let queue = std::sync::Arc::new(LoginQueue::new(1, 0));
+    let (mut client, socket) = world_session_socket_pair();
+    let (finished, result) = std::sync::mpsc::channel();
+    let server = {
+        let store = store.clone();
+        let queue = queue.clone();
+        std::thread::spawn(move || {
+            finished
+                .send(run_world_session_with_queue(socket, store, &queue))
+                .unwrap();
+        })
+    };
+    let (mut encrypt, mut decrypt) = client_handshake(&mut client, "TESTER", K);
+    CMSG_PLAYER_LOGIN { guid: Guid::new(1) }
+        .write_encrypted_client(&mut client, &mut encrypt)
+        .unwrap();
+    drain_world_entry(&mut client, &mut decrypt);
+    assert_eq!(queue.active(), 1);
+
+    *store.topology.realm_error.lock().unwrap() = Some("Realm-core unavailable".into());
+    ClientOpcodeMessage::MSG_QUERY_NEXT_MAIL_TIME
+        .write_encrypted_client(&mut client, &mut encrypt)
+        .unwrap();
+
+    let error = result
+        .recv_timeout(std::time::Duration::from_secs(5))
+        .expect("the Mail poll must end the World Session")
+        .expect_err("an unavailable Mail authority is a Transport Loss");
+    assert_eq!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    );
+    assert_eq!(queue.active(), 0);
+    assert!(ServerOpcodeMessage::read_encrypted(&mut client, &mut decrypt).is_err());
+    server.join().unwrap();
 }

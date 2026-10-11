@@ -1248,7 +1248,7 @@ const LOOT_ROLL_RELAY_POLL: Duration = Duration::from_millis(200);
 
 /// Background loop driving `world::loot::relay_tick`: promotes each world shard's freshly
 /// staged loot rolls onto realm-core, and settles resolved winners back down. A no-op on an unsharded
-/// gateway — `relay_tick` returns immediately when `Coordinator::realm_store()` answers `None` — so
+/// gateway — `relay_tick` returns immediately when `Coordinator::realm_store()` answers `Ok(None)` — so
 /// this thread costs a single-database deployment nothing but its own idle wakeups.
 fn spawn_loot_roll_relay(coordinator: Coordinator) -> std::thread::JoinHandle<()> {
     std::thread::Builder::new()
@@ -2523,7 +2523,7 @@ impl Coordinator {
         coordinator.arm_shared_world_view()?;
         // The loot-roll relay: promotes each world shard's staging loot rolls onto realm-core and settles
         // resolved winners back down. A no-op loop on an unsharded gateway (`relay_tick` returns
-        // immediately when `realm_store()` is `None`), so this costs a single-database deployment
+        // immediately when `realm_store()` is `Ok(None)`), so this costs a single-database deployment
         // nothing but one idle thread.
         spawn_loot_roll_relay(coordinator.clone());
         // Member Stats for every group mate outside a viewer's AOI, on its own 5 s thread.
@@ -2683,8 +2683,8 @@ impl Coordinator {
             .collect()
     }
 
-    /// Check current subscription health before returning the authentication authority.
-    /// The configured connection map survives disconnection and may retain stale credentials.
+    /// Check current subscription health before returning Realm-core authority.
+    /// The configured connection map survives disconnection and may retain stale rows.
     pub(crate) fn realm_core(&self) -> Result<Coordinator> {
         let db = self
             .1
@@ -2697,15 +2697,12 @@ impl Coordinator {
             })
             .map_err(|db| {
                 anyhow!(
-                    "realm-core database {db} is not connected — refusing to authenticate against \
-                     the world database's stale auth cache"
+                    "Realm-core database {db} is unavailable; refusing to use World Shard authority"
                 )
             })?;
-        let inner = self
-            .1
-            .conns
-            .get(db)
-            .ok_or_else(|| anyhow!("auth database {db} missing from the coordinator set"))?;
+        let inner = self.1.conns.get(db).ok_or_else(|| {
+            anyhow!("Realm-core authority database {db} missing from the coordinator set")
+        })?;
         Ok(Coordinator(inner.clone(), self.1.clone(), self.2.clone()))
     }
 

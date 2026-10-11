@@ -530,6 +530,8 @@ Status), in transit between two places (a pending Transfer, or a Shard's own row
 with no entity there), or offline. A negative Whereabouts, offline or no Character found at all,
 needs every configured World Shard to vouch that none of them is hiding the Character. When one
 cannot, the Whereabouts is unknown: another Shard's health, not a Transport Loss.
+An unavailable Realm-core also leaves negative Whereabouts unknown because the Gateway cannot
+exclude a pending Transfer.
 _Avoid_: presence state, location status
 
 **Away Status**:

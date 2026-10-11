@@ -388,7 +388,7 @@ pub(crate) fn mail_of<St: MailStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Vec<MailView>> {
-    let mails = match store.realm_store() {
+    let mails = match store.realm_store()? {
         Some(realm) => realm.mail_list(self_guid)?,
         None => store.mail_list(self_guid)?,
     };
@@ -436,7 +436,7 @@ pub(crate) fn mark_read<St: MailStore + ShardRoutingStore + ?Sized>(
     mail_id: u64,
 ) -> MailResult<()> {
     let actor = at_mailbox(store, actor, mailbox_guid)?;
-    match store.realm_store() {
+    match store.realm_store()? {
         Some(realm) => realm.mail_mark_read(actor, mail_id),
         None => store.mail_mark_read(actor, mail_id),
     }?;
@@ -449,7 +449,7 @@ pub(crate) fn delete<St: MailStore + ShardRoutingStore + ?Sized>(
     mail_id: u64,
 ) -> MailResult<()> {
     let actor = at_mailbox(store, actor, mailbox_guid)?;
-    match store.realm_store() {
+    match store.realm_store()? {
         Some(realm) => realm.mail_delete(actor, mail_id),
         None => store.mail_delete(actor, mail_id),
     }?;
@@ -462,7 +462,7 @@ pub(crate) fn return_to_sender<St: MailStore + ShardRoutingStore + ?Sized>(
     mail_id: u64,
 ) -> MailResult<()> {
     let actor = at_mailbox(store, actor, mailbox_guid)?;
-    let realm = store.realm_store();
+    let realm = store.realm_store()?;
     let mail = match &realm {
         Some(realm) => realm.mail_by_id(mail_id)?,
         None => store.mail_by_id(mail_id)?,
@@ -568,7 +568,7 @@ pub(crate) fn send<
     };
     let cod = mail_rules::cod_at_send(cod, item_guid != 0);
     let same_account = same_realm_account(store, sender_guid, recipient_guid)?;
-    match store.realm_store() {
+    match store.realm_store()? {
         None => store.mail_send(
             sender_actor,
             recipient_guid,
@@ -704,8 +704,18 @@ pub(crate) fn redrive<St: MailStore + ShardRoutingStore + ?Sized>(store: &St, se
     let Some(actor) = Actor::new(self_guid) else {
         return;
     };
-    let realm = store.realm_store();
-    for held in store.mail_escrows_of(self_guid).unwrap_or_default() {
+    let realm = match store.realm_store() {
+        Ok(realm) => realm,
+        Err(error) => {
+            log::warn!("mail: recovery for Character {self_guid} waits for Realm-core: {error:#}");
+            return;
+        }
+    };
+    let outgoing = store.mail_escrows_of(self_guid).unwrap_or_else(|error| {
+        log::warn!("mail: cannot read outgoing Escrow for Character {self_guid}: {error:#}");
+        Vec::new()
+    });
+    for held in outgoing {
         if held.payout {
             continue; // A payout fence never lives on a shard; ignore a stray rather than mis-drive it.
         }
@@ -723,7 +733,11 @@ pub(crate) fn redrive<St: MailStore + ShardRoutingStore + ?Sized>(store: &St, se
     let Some(realm) = realm else {
         return; // One database: a take is one transaction and files no Escrow.
     };
-    for held in realm.mail_escrows_of(self_guid).unwrap_or_default() {
+    let payouts = realm.mail_escrows_of(self_guid).unwrap_or_else(|error| {
+        log::warn!("mail: cannot read payout Escrow for Character {self_guid}: {error:#}");
+        Vec::new()
+    });
+    for held in payouts {
         if !held.payout {
             continue;
         }
@@ -770,7 +784,7 @@ pub(crate) fn take_money<St: MailStore + ShardRoutingStore + ?Sized>(
     mail_id: u64,
 ) -> MailResult<()> {
     let actor = at_mailbox(store, actor, mailbox_guid)?;
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(store.mail_take_money(actor, mail_id)?);
     };
     let amount = mail_of(store, actor.guid())?
@@ -832,7 +846,7 @@ pub(crate) fn take_item<St: MailStore + ShardRoutingStore + ?Sized>(
         return Err(refused(mail_rules::NOTHING_TO_TAKE));
     }
     let taken = (row.item_entry, row.item_stack_count);
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         store.mail_take_item(actor, mail_id)?;
         return Ok(taken);
     };
@@ -982,7 +996,7 @@ pub(crate) fn copy_letter<St: MailStore + ShardRoutingStore + ?Sized>(
     let actor = at_mailbox::<St, String>(store, actor, mailbox_guid)
         .map_err(|failure| failure.map(CopyLetterRefusal::NoMailbox))?;
     store.mail_item_room(actor)?;
-    match store.realm_store() {
+    match store.realm_store()? {
         Some(realm) => realm.mail_copy_text(actor, mail_id),
         None => store.mail_copy_text(actor, mail_id),
     }?;
@@ -990,7 +1004,7 @@ pub(crate) fn copy_letter<St: MailStore + ShardRoutingStore + ?Sized>(
     // non-empty-body case) — the copy above just proved the body is non-empty.
     let item_text_id = u32::try_from(mail_id).unwrap_or(0);
     store.mail_grant_letter(actor, item_text_id)?;
-    match store.realm_store() {
+    match store.realm_store()? {
         Some(realm) => realm.mail_mark_letter_granted(actor, mail_id),
         None => store.mail_mark_letter_granted(actor, mail_id),
     }?;
@@ -1029,7 +1043,7 @@ pub(crate) fn item_text<St: MailStore + ShardRoutingStore + ?Sized>(
     if !owns_item && own_mail_body.is_none() {
         return Ok(None);
     }
-    let copied = match store.realm_store() {
+    let copied = match store.realm_store()? {
         Some(realm) => realm.item_text(item_text_id),
         None => store.item_text(item_text_id),
     }?;

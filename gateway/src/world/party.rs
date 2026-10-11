@@ -869,7 +869,7 @@ pub(crate) fn run_party_command_intent<St: WorldStore>(
     }
 
     let owned_realm;
-    let realm: &dyn WorldStore = match source.party_command_realm()? {
+    let realm: &dyn WorldStore = match source.realm_store()? {
         Some(handle) => {
             owned_realm = handle;
             owned_realm.as_ref()
@@ -982,7 +982,7 @@ fn own_group_roster<St: PartyStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Option<GroupRoster>> {
-    match store.realm_store() {
+    match store.realm_store()? {
         Some(realm) => realm.group_roster(self_guid),
         None => store.group_roster(self_guid),
     }
@@ -1135,7 +1135,7 @@ pub(crate) fn run<
             return Ok(GroupRefusal::TargetOffline.into());
         }
     }
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         return match op {
             Op::Invite(target) => store.group_invite(actor, target),
             Op::Accept => store.group_accept(actor),
@@ -1364,7 +1364,7 @@ pub(crate) fn run_bot_invite<St: WorldStore>(
         return Ok(GroupRefusal::ActorUnavailable.into());
     };
     let owned_realm;
-    let realm: &dyn WorldStore = match store.realm_store() {
+    let realm: &dyn WorldStore = match store.realm_store()? {
         Some(r) => {
             owned_realm = r;
             owned_realm.as_ref()
@@ -1404,7 +1404,7 @@ pub(crate) fn run_bot_leave<St: WorldStore>(store: &St, leaver_guid: u64) -> Res
         return Ok(GroupRefusal::ActorUnavailable.into());
     };
     let owned_realm;
-    let realm: &dyn WorldStore = match store.realm_store() {
+    let realm: &dyn WorldStore = match store.realm_store()? {
         Some(r) => {
             owned_realm = r;
             owned_realm.as_ref()
@@ -1502,7 +1502,7 @@ pub(crate) fn cleanup_deleted_character<St: CharacterStore + ShardRoutingStore>(
     store: &St,
     character_guid: u64,
 ) -> Result<DeletedCharacterPartyCleanup> {
-    let Some(realm) = store.party_cleanup_realm()? else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(DeletedCharacterPartyCleanup::AlreadyClean);
     };
     // Guid 0 names no Character, so no party holds it.
@@ -1546,7 +1546,7 @@ pub(crate) fn cleanup_deleted_character<St: CharacterStore + ShardRoutingStore>(
 pub(crate) fn reconcile_deleted_character_parties<St: CharacterStore + ShardRoutingStore>(
     store: &St,
 ) -> Result<()> {
-    let Some(realm) = store.party_cleanup_realm()? else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(());
     };
     let mut failures = 0usize;
@@ -1756,8 +1756,16 @@ pub(crate) fn on_world_entry<
 /// own `0xFF` request does. The answer rides the group event relay onto the same session writer
 /// and so lands after the list. A failure costs only the marks, so it logs.
 fn request_target_icons<St: ShardRoutingStore + ?Sized>(store: &St, character: Actor) {
-    let Some(realm) = store.realm_store() else {
-        return;
+    let realm = match store.realm_store() {
+        Ok(Some(realm)) => realm,
+        Ok(None) => return,
+        Err(error) => {
+            log::warn!(
+                "party: cannot request Target Icons for Character {}: {error:#}",
+                character.guid()
+            );
+            return;
+        }
     };
     let op = Op::TargetIcon {
         icon: lyracore_shared::group::TARGET_ICON_LIST_REQUEST,
@@ -1782,7 +1790,7 @@ pub(crate) fn sync_arrival_mirror<St: PartyStore + ShardRoutingStore + ?Sized>(
     store: &St,
     self_guid: u64,
 ) -> Result<Option<GroupRoster>> {
-    let Some(realm) = store.realm_store() else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(None);
     };
     let roster = realm
@@ -1830,7 +1838,7 @@ pub(crate) fn sync_transfer_arrival_mirror<St: PartyStore + ShardRoutingStore + 
     store: &St,
     character_guid: u64,
 ) -> Result<()> {
-    let Some(realm) = store.party_cleanup_realm()? else {
+    let Some(realm) = store.realm_store()? else {
         return Ok(());
     };
     let roster = realm
