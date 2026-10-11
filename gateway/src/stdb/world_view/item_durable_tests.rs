@@ -62,7 +62,7 @@ fn worn_values(outbound: Outbound, heard: &mut Vec<(u32, u32, u32)>) {
         mask1: UpdateMask::Player(mask),
     }] = update.objects.as_slice()
     else {
-        panic!("private item objects reached a peer");
+        panic!("expected Character VALUES, got {:?}", update.objects);
     };
     assert_eq!(guid1.guid(), 1);
     let mut bytes = Vec::new();
@@ -103,6 +103,8 @@ fn live_worn_item_insert_enchant_and_delete_reach_a_nearby_peer() {
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
+    // Seeded Northshire creatures must not add unrelated packets to this item Relay check.
+    standalone.assert_sql("UPDATE game_character SET map_id = 1 WHERE guid = 1");
     standalone.assert_call("debug_spawn_player_entity", &["1"]);
     standalone.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1 AND slot = 15");
 
