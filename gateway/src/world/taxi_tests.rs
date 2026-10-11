@@ -51,6 +51,75 @@ fn activate_90() -> CMSG_ACTIVATETAXI {
     }
 }
 
+fn accepted_flight(tx: &SessionTx) -> WorldFake {
+    let mut store = WorldFake::default();
+    store.taxi.activation.result_code = lyracore_shared::constants::taxi_protocol::ACTIVATE_OK;
+    *store.taxi.flight_tx.lock().unwrap() = Some(tx.clone());
+    store
+}
+
+fn dispatch_activation(store: &WorldFake, tx: &SessionTx) -> Result<()> {
+    dispatch(
+        tx,
+        store,
+        &mut in_world_conn(7, 1),
+        <CMSG_ACTIVATETAXI as wow_world_messages::Message>::OPCODE,
+        ClientOpcodeMessage::from(activate_90()).into(),
+    )
+}
+
+#[test]
+fn taxi_dispatch_queues_acceptance_before_the_flight_spline() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let store = accepted_flight(&tx);
+
+    dispatch_activation(&store, &tx).unwrap();
+
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), Some(1));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))
+            if reply.reply == ActivateTaxiReply::Ok
+    ));
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::Raw { opcode: 0x00dd, .. }
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
+#[test]
+fn taxi_dispatch_does_not_arm_when_the_reply_queue_is_closed() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let store = accepted_flight(&tx);
+    drop(rx);
+
+    assert!(dispatch_activation(&store, &tx).is_err());
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), None);
+}
+
+#[test]
+fn taxi_dispatch_propagates_arming_transport_loss_after_acceptance() {
+    let (tx, rx) = SessionTx::with_depth(0);
+    let mut store = accepted_flight(&tx);
+    store.taxi.arm_error =
+        Some(|| crate::stdb::ReducerCallError::transport_lost("gw_arm_taxi_flight").into());
+
+    let error = dispatch_activation(&store, &tx).unwrap_err();
+
+    assert!(matches!(
+        crate::stdb::classify(&error),
+        crate::stdb::DurableFailure::TransportLoss
+    ));
+    assert_eq!(*store.taxi.armed_passenger.lock().unwrap(), None);
+    assert!(matches!(
+        rx.try_recv().unwrap(),
+        Outbound::One(ServerOpcodeMessage::SMSG_ACTIVATETAXIREPLY(reply))
+            if reply.reply == ActivateTaxiReply::Ok
+    ));
+    assert!(rx.try_recv().is_err());
+}
+
 #[test]
 fn taxi_status_query_returns_the_persisted_bit_without_opening() {
     // A status answer, not a node map, shows the query did not open the taxi.
