@@ -34,6 +34,10 @@ __pycache__/
 /mutants.out.old/
 .scratch/
 
+# Research notes stay local.
+/docs/research/
+/docs/verification/*-research.md
+
 # Agent-created Git worktrees are local execution state, not repository content.
 /.claude/worktrees/
 
