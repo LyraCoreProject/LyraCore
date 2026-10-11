@@ -223,6 +223,77 @@ impl Client {
 
 #[test]
 #[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+fn benilla_durable_created_character_appears_in_the_first_roster() {
+    assert_eq!(
+        crate::config::call_pipes(),
+        4,
+        "use the default call-pipe pool"
+    );
+    let realm = Realm::start("benilla-character-create");
+    let subscribed = realm.coordinator.0.coord().conn.clone();
+    let mut pipes = Vec::new();
+    for _ in 0..4 {
+        let pipe = realm.coordinator.0.call_pipe().conn.clone();
+        assert!(!Arc::ptr_eq(&pipe, &subscribed), "call-pipe pool fell back");
+        assert!(pipes.iter().all(|other| !Arc::ptr_eq(other, &pipe)));
+        pipes.push(pipe);
+    }
+    let (mut client, gateway) = realm.connect("TEST");
+    client.send(opcode::CMSG_CHAR_ENUM, &[]);
+    let ServerPacket::CharEnum { characters } = client.recv() else {
+        panic!("expected the initial Character list");
+    };
+    assert!(characters.iter().all(|character| character.name != "Fresh"));
+
+    realm.coordinator.park_pump_for_test();
+    client.send(
+        opcode::CMSG_CHAR_CREATE,
+        &messages::char_create(&messages::CharCreateReq {
+            name: "Fresh".into(),
+            race: messages::RACE_HUMAN,
+            class: messages::CLASS_WARRIOR,
+            gender: messages::GENDER_MALE,
+            skin: 0,
+            face: 0,
+            hair_style: 0,
+            hair_color: 0,
+            facial_hair: 0,
+        }),
+    );
+    let (created, completion) = std::sync::mpsc::channel();
+    let reader = std::thread::spawn(move || {
+        let result = client.recv();
+        created.send(()).unwrap();
+        client.send(opcode::CMSG_CHAR_ENUM, &[]);
+        let roster = client.recv();
+        client.socket.shutdown(std::net::Shutdown::Both).unwrap();
+        (result, roster)
+    });
+    // Call pipes can finish while the subscribed Coordinator cannot advance its cache.
+    let early = completion.recv_timeout(Duration::from_secs(1));
+    realm.coordinator.resume_pump_for_test();
+    let (result, roster) = reader.join().unwrap();
+    gateway.join().unwrap().unwrap();
+
+    assert!(
+        matches!(early, Err(std::sync::mpsc::RecvTimeoutError::Timeout)),
+        "creation completed before the subscribed Coordinator could advance"
+    );
+    assert!(matches!(
+        result,
+        ServerPacket::CharCreate {
+            result: messages::CHAR_CREATE_SUCCESS
+        }
+    ));
+    let ServerPacket::CharEnum { characters } = roster else {
+        panic!("expected the first Character list after creation");
+    };
+    assert_eq!(characters.len(), 2);
+    assert!(characters.iter().any(|character| character.name == "Fresh"));
+}
+
+#[test]
+#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
 fn benilla_durable_kill_quest_loot_rewards_and_reconnect() {
     const QUEST: u32 = 50900;
     const WOLF: u32 = 51000;
