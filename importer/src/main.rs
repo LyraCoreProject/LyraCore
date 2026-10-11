@@ -5763,6 +5763,7 @@ fn family_stamps(
         creature_casts,
         creature_rotation_rows,
         eventai,
+        quest_event_requirements,
         ..
     } = content;
     // Provenance stamps: one entry per family that ACTUALLY had its block pushed
@@ -5814,7 +5815,9 @@ fn family_stamps(
         ));
     }
     if family_active(args, "creature-ai") {
-        stamps.push(("creature-ai", eventai.row_count()));
+        let row_count = eventai.row_count() - eventai.quest_event_entries.len() as u64
+            + quest_event_requirements.len() as u64;
+        stamps.push(("creature-ai", row_count));
     }
     if family_active(args, "globals") {
         stamps.push(("globals", globals_row_count));
@@ -7896,6 +7899,10 @@ mod tests {
             complete(&west),
             "same uncredited Character can turn in on destination"
         );
+        kalimdor.family = Some("creature-ai".into());
+        let event_import = build_dump_plan(&dump, &kalimdor, &None, &None).unwrap();
+        assert_eq!(reqs(&east), reqs(&event_import));
+        assert_eq!(event_import.stamps, vec![("creature-ai", 1)]);
     }
 
     #[test]
