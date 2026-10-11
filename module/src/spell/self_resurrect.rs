@@ -5,7 +5,6 @@
 //! option reads the named spell's `E_SELF_RESURRECT` effect and revives the Character in place, with
 //! no Resurrection Sickness.
 
-use lyracore_shared::constants::{player_flags, unit_vis_flags};
 use lyracore_shared::packing::power_type;
 use spacetimedb::{ReducerContext, Table};
 
@@ -13,7 +12,7 @@ use super::{
     auras_on, game_resurrect_request, game_self_resurrect_option, game_spell_effect,
     SelfResurrectOption, A_SELF_RESURRECT, E_SELF_RESURRECT,
 };
-use crate::{game_corpse, game_world_entity};
+use crate::game_world_entity;
 
 /// Choose `character_guid`'s Self-Resurrection Option from its auras. Call it at death, before the
 /// death aura shed removes the Soulstone aura. The highest `A_SELF_RESURRECT` spell wins. Without one,
@@ -69,15 +68,8 @@ pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Re
     );
     character.health = health;
     character.power = power;
-    character.dead = false;
-    character.player_flags &= !player_flags::GHOST;
-    character.unit_bytes_1 &= !unit_vis_flags::GHOST;
     entities.guid().update(character);
-    ctx.db
-        .game_corpse()
-        .guid()
-        .delete(crate::corpse::corpse_guid_for(character_guid));
-    clear_resurrect_request_and_option(ctx, character_guid);
+    crate::ghost::finish_resurrection(ctx, character_guid);
     Ok(())
 }
 

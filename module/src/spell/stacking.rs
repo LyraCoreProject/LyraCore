@@ -477,9 +477,11 @@ pub(crate) fn apply_group_conflict(
             false
         }
         ApplyDecision::Apply { evict, .. } => {
-            for id in evict {
-                auras.id().delete(id);
-            }
+            let shed = evict
+                .into_iter()
+                .filter_map(|id| auras.id().find(id))
+                .collect();
+            crate::spell::shed_auras(ctx, target_guid, shed);
             true
         }
     }

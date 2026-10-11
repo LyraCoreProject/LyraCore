@@ -177,7 +177,7 @@ pub(crate) fn apply_reclaim_corpse(
     ctx: &ReducerContext,
     mut player: crate::WorldEntity,
 ) -> Result<(), String> {
-    use lyracore_shared::constants::{player_flags, unit_vis_flags};
+    use lyracore_shared::constants::player_flags;
     let entities = ctx.db.game_world_entity();
     let corpses = ctx.db.game_corpse();
 
@@ -224,14 +224,9 @@ pub(crate) fn apply_reclaim_corpse(
     // Resurrect at 50% (vanilla corpse-reclaim percent). Clearing dead + the GHOST flags + restoring
     // health replicates to the client, which leaves the ghost/death state (no "alive" opcode exists).
     player.health = (player.max_health / 2).max(1);
-    player.dead = false;
-    player.player_flags &= !player_flags::GHOST;
-    player.unit_bytes_1 &= !unit_vis_flags::GHOST;
     let player_guid = player.guid;
     entities.guid().update(player);
-    corpses.guid().delete(corpse_guid);
-
-    crate::spell::clear_resurrect_request_and_option(ctx, player_guid);
+    crate::ghost::finish_resurrection(ctx, player_guid);
     Ok(())
 }
 

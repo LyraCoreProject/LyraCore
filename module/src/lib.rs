@@ -330,6 +330,7 @@ mod import_meta;
 // Dungeon-instancing lifecycle: game_instance/game_instance_binding,
 // the areatrigger resolve-or-create entry, per-instance population spawn, and the reset/reap loop.
 mod combo;
+mod ghost;
 mod instance;
 mod items;
 mod load;

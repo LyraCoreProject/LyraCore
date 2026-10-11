@@ -1,4 +1,5 @@
 use super::*;
+use wow_world_messages::vanilla::SMSG_FORCE_SWIM_SPEED_CHANGE;
 
 /// The opcode of an inbound movement message, if it's one of the slice's relayed `MSG_MOVE_*`
 /// Records and relays movement under the same opcode.
@@ -238,6 +239,15 @@ pub fn build_transfer_aborted(
 /// `CMSG_FORCE_RUN_SPEED_CHANGE_ACK`, which we accept-and-ignore (we don't gate on its reply).
 pub fn build_force_run_speed(guid: u64, speed: f32) -> SMSG_FORCE_RUN_SPEED_CHANGE {
     SMSG_FORCE_RUN_SPEED_CHANGE {
+        guid: Guid::new(guid),
+        move_event: 0,
+        speed,
+    }
+}
+
+/// Tell the owning client its current swimming speed in yards per second.
+pub fn build_force_swim_speed(guid: u64, speed: f32) -> SMSG_FORCE_SWIM_SPEED_CHANGE {
+    SMSG_FORCE_SWIM_SPEED_CHANGE {
         guid: Guid::new(guid),
         move_event: 0,
         speed,

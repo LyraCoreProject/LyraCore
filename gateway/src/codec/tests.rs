@@ -3224,6 +3224,19 @@ fn mount_display_values_carries_the_display_it_is_given() {
     }
 }
 
+#[test]
+fn display_values_carries_only_the_current_appearance() {
+    for display in [1825u32, 49] {
+        let msg = build_display_values(0x1234, display);
+        let mut bytes = Vec::new();
+        msg.write_unencrypted_server(&mut bytes).unwrap();
+        let updates = lyracore_shared::values_mask::parse_values_updates(&bytes[4..]);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, 0x1234);
+        assert_eq!(updates[0].fields, vec![(131, display)]);
+    }
+}
+
 // ---- P2: visible_item_index slot-19 boundary (entity.rs) ---------------------------------------
 
 #[test]
@@ -3470,6 +3483,19 @@ fn force_run_speed_carries_guid_speed_and_zero_move_event() {
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
+}
+
+#[test]
+fn force_swim_speed_serializes_the_vanilla_opcode_and_speed() {
+    let msg = build_force_swim_speed(7, 6.0);
+    assert_eq!(msg.guid.guid(), 7);
+    assert_eq!(msg.move_event, 0);
+    let mut bytes = Vec::new();
+    msg.write_unencrypted_server(&mut bytes).unwrap();
+    assert_eq!(u16::from_le_bytes([bytes[2], bytes[3]]), 0x00e6);
+    assert_eq!(&bytes[4..6], &[1, 7]);
+    assert_eq!(&bytes[6..10], &0u32.to_le_bytes());
+    assert_eq!(&bytes[10..14], &6.0f32.to_le_bytes());
 }
 
 #[test]

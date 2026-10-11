@@ -103,7 +103,29 @@ pub(crate) fn peer_create_outbound(
     auras: &[Aura],
     movement: Option<&[u8]>,
 ) -> Result<Vec<Outbound>> {
-    let create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
+    let mut create = codec::build_create_object(view, CreateKind::Peer, inventory, &[])?;
+    for object in &mut create.objects {
+        if let wow_world_messages::vanilla::Object::CreateObject2 { movement2, .. } = object {
+            if let Some(mut living) = movement2.update_flag.get_living().cloned() {
+                if let wow_world_messages::vanilla::MovementBlock_UpdateFlag_Living::Living {
+                    swimming_speed,
+                    ..
+                } = &mut living
+                {
+                    *swimming_speed = lyracore_shared::aura::swim_speed(
+                        lyracore_shared::constants::speeds::SWIM,
+                        auras.iter().map(|aura| lyracore_shared::aura::AuraAmount {
+                            kind: aura.eff_kind,
+                            parameter: aura.eff_p0,
+                            amount: aura.amount,
+                            stacks: aura.stacks,
+                        }),
+                    );
+                }
+                movement2.update_flag = movement2.update_flag.clone().set_living(living);
+            }
+        }
+    }
     let created = match movement {
         Some(movement) => Outbound::Raw {
             opcode: 0x00a9,
@@ -645,6 +667,11 @@ pub(crate) fn entity_update_to_outbound_with_dynamic_flags(
                 codec::build_force_run_speed(new.guid, speed),
             )));
         }
+    }
+    if old.display_id != new.display_id {
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+            codec::build_display_values(new.guid, new.display_id),
+        )));
     }
     out
 }

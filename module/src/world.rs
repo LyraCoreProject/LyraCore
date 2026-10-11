@@ -1045,13 +1045,7 @@ pub(crate) fn apply_player_login(
             character.map_id
         );
     }
-    // A relog comes back ALIVE (we don't persist ghost state across a REAL logout), so clear any
-    // leftover corpse — else it orphans (rendered with no owning ghost, with a stale reclaim marker
-    // that MSG_CORPSE_QUERY keeps offering for a now-alive player). Idempotent (no-op if none).
-    // EXCEPTION: `pending_ghost` means this world entry is the rebuild half of a
-    // released ghost's despawn (a cross-map graveyard release, or a reconnect that raced the ghost's
-    // corpse run) — the corpse IS the ghost's reclaim target and MUST survive the rebuild, or a
-    // Deadmines death would silently resurrect corpseless at the Westfall graveyard.
+    // A released ghost keeps its corpse across login and Transfer.
     if !character.pending_ghost {
         ctx.db
             .game_corpse()
@@ -1079,6 +1073,7 @@ pub(crate) fn apply_player_login(
     // Away Status ends at a real login and survives a world-port (see `away::at_world_entry`).
     crate::away::at_world_entry(ctx, &mut entity, entry);
     entities.insert(entity);
+    crate::ghost::restore(ctx, character_guid);
     // Crash recovery for the narrow paid-before-gateway-arm window. A running flight already has
     // a nonzero start and is untouched; a pending flight begins from its source on this login.
     crate::taxi::arm_taxi_flight(ctx, character_guid);
@@ -1790,6 +1785,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     let (death_x, death_y, death_map_id, death_race) =
         (player.x, player.y, player.map_id, player.race());
     entities.guid().update(player);
+    crate::ghost::restore(ctx, player_guid);
 
     // Tier 3b (Warlock pet): a warlock's death dismisses its pet (vanilla — the Imp despawns when the
     // master dies). Done on release (the death→ghost transition) so the pet is gone for the corpse run.
@@ -1819,17 +1815,10 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     Ok(())
 }
 
-/// Should `pending_ghost` be stamped onto the durable Character row for this persist? True only for
-/// a RELEASED ghost (`dead` + `PLAYER_FLAGS_GHOST` — the exact pair `do_repop` sets) persisting for a
-/// reason OTHER than a real logout: a cross-map hop (`teleport_player`'s persist-then-despawn) or the
-/// stale-entity cleanup in `player_login`. A real logout/disconnect (`set_offline`) always clears it —
-/// the established "relog comes back alive" rule (`remove_from_world` deletes the corpse right after
-/// its persist, so a preserved ghost there would have nothing to reclaim). A dead-but-UNRELEASED
-/// player (death screen, no ghost flag yet) deliberately does NOT preserve: the only cross-map paths
-/// a dead-unreleased player can take are GM/debug teleports (movement is frozen pre-release), and
-/// rebuilding those alive-at-1-HP is intended for that GM edge. Pure.
-pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32, set_offline: bool) -> bool {
-    !set_offline && dead && player_flags & lyracore_shared::constants::player_flags::GHOST != 0
+/// Released ghosts survive logout and entity rebuilds. Unreleased deaths retain the
+/// existing login behavior.
+pub(crate) fn persisted_pending_ghost(dead: bool, player_flags: u32) -> bool {
+    dead && player_flags & lyracore_shared::constants::player_flags::GHOST != 0
 }
 
 /// 1× run speed in basis points — the `.speed`-off value, shared by the live entity's own default and
@@ -1926,7 +1915,7 @@ fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
 /// the actor named by guid (the client only sends this from the healer dialog, which the
 /// SPIRITHEALER flag already ghost-gates).
 pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
-    use lyracore_shared::constants::{player_flags, unit_vis_flags};
+    use lyracore_shared::constants::player_flags;
     let entities = ctx.db.game_world_entity();
     let mut player = entities
         .guid()
@@ -1942,23 +1931,14 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
     let player_level = player.level;
     player.health = health;
     player.power = power;
-    player.dead = false;
-    player.player_flags &= !player_flags::GHOST;
-    player.unit_bytes_1 &= !unit_vis_flags::GHOST;
     entities.guid().update(player);
-    // Clear the body the ghost would have run back to (irrelevant after a graveyard res); idempotent —
-    // a no-op if the player never released far enough to leave a corpse.
-    ctx.db
-        .game_corpse()
-        .guid()
-        .delete(crate::corpse::corpse_guid_for(guid));
+    crate::ghost::finish_resurrection(ctx, guid);
     // Resurrection Sickness: vanilla exempts characters below level 11 (CONFIG_UINT32_DEATH_SICKNESS_LEVEL=11).
     // Reuse the aura engine (the same path talents/buffs land through). level/rank are nominal (the debuff
     // is a flat −10 all-stats; rank 1 → the seeded base_points verbatim).
     if player_level >= 11 {
         crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
     }
-    crate::spell::clear_resurrect_request_and_option(ctx, guid);
     Ok(())
 }
 
@@ -2004,26 +1984,15 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.money = entity.money;
         // Bought bank bag slots persist like the purse they were paid from.
         c.bank_bag_slots = entity.bank_bag_slots;
-        // Persist current health/power so a relog resumes at the same vitals instead
-        // of being force-healed to full. Clamp health to >=1: the "relog comes back ALIVE" rule
-        // (see the ghost-corpse cleanup in `player_login`) means a player who logged out dead/at 0 HP
-        // must come back alive, so persist 1 rather than 0 (0 is also the "no persisted value"
-        // sentinel `build_player_entity` uses to mean "spawn at full" — persisting a real 0 would be
-        // indistinguishable from that and re-trigger the full-heal path).
+        // Zero means no persisted health to the entity builder. Keep at least one
+        // health point; pending_ghost restores the released state separately.
         c.health = entity.health.max(1);
         c.power = entity.power;
 
         c.death_expire_micros = entity.death_expire_micros;
 
         c.pending_instance_id = entity.instance_id;
-        // Released-GHOST state survives an entity despawn: a
-        // cross-map graveyard release persists-then-deletes the entity via `teleport_player`, and
-        // without this stamp the WORLDPORT_ACK rebuild came back ALIVE with no ghost and (via
-        // `player_login`'s corpse delete) no corpse — a silent free resurrect. Re-derived from the
-        // LIVE entity on every persist so a reclaim/res naturally clears it; FORCED false on a real
-        // logout/disconnect (`set_offline`) — the established "relog comes back alive" rule, whose
-        // corpse delete lives in `remove_from_world` right after this persist.
-        c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags, set_offline);
+        c.pending_ghost = persisted_pending_ghost(entity.dead, entity.player_flags);
         // GM playtest state survives an entity despawn the same way, and for the same
         // reason: a cross-map `.tele` (or a cross-database shard hop, whose `begin_transfer` freeze
         // calls this with `set_offline: false` too) persists-then-deletes the entity, and without this
@@ -2088,14 +2057,14 @@ pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
     // A live Trade Session dies with the leaver — the partner hears `TradeCanceled`.
     crate::trade::cancel_trade_for(ctx, entity.guid);
 
-    // Clear the player's corpse on leaving the world (logout/disconnect) so a dead/ghost
-    // player who quits doesn't leave an orphan body behind (corpse decay to bones rides the gc reaper). Idempotent.
-    ctx.db
-        .game_corpse()
-        .guid()
-        .delete(crate::corpse::corpse_guid_for(entity.guid));
+    if !persisted_pending_ghost(entity.dead, entity.player_flags) {
+        ctx.db
+            .game_corpse()
+            .guid()
+            .delete(crate::corpse::corpse_guid_for(entity.guid));
+    }
 
-    // A Character that leaves the world comes back alive, so nothing may resurrect it later.
+    // A logout spends any pending resurrection choice.
     crate::spell::clear_resurrect_request_and_option(ctx, entity.guid);
 
     // Stealth drops on logout (vanilla): clear A_STEALTH so a stale aura doesn't survive the disconnect.
@@ -2403,32 +2372,11 @@ mod tests {
     }
 
     #[test]
-    fn pending_ghost_persists_only_a_released_ghost_and_never_across_a_real_logout() {
+    fn pending_ghost_preserves_only_released_ghosts() {
         use lyracore_shared::constants::player_flags::GHOST;
-        // The landmine case: a released ghost (dead + GHOST flag) persisting for a cross-map hop
-        // (set_offline false) MUST carry its ghost state to the durable row — this is exactly the
-        // state `teleport_player`'s persist-then-despawn sees mid graveyard release.
-        assert!(
-            persisted_pending_ghost(true, GHOST, false),
-            "cross-map release preserves the ghost"
-        );
-        // A real logout/disconnect clears it — the relog-comes-back-alive rule (remove_from_world
-        // deletes the corpse right after its persist, so a preserved ghost would be corpseless).
-        assert!(
-            !persisted_pending_ghost(true, GHOST, true),
-            "a real logout never preserves ghost state"
-        );
-        // Alive players never stamp it, whatever their flags claim (flag hygiene).
-        assert!(
-            !persisted_pending_ghost(false, GHOST, false),
-            "alive + stale GHOST flag is not a ghost"
-        );
-        // Dead but UNRELEASED (death screen, no ghost flag): deliberately NOT preserved — see the
-        // fn's doc comment (GM-teleport edge keeps the alive-at-1-HP rebuild).
-        assert!(
-            !persisted_pending_ghost(true, 0, false),
-            "dead-unreleased does not preserve"
-        );
+        assert!(persisted_pending_ghost(true, GHOST));
+        assert!(!persisted_pending_ghost(false, GHOST));
+        assert!(!persisted_pending_ghost(true, 0));
     }
 
     // ---- GM playtest state across a cross-map / cross-shard entity rebuild --------

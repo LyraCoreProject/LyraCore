@@ -36,22 +36,22 @@ use lyracore_shared::spell::taxonomy::{
     A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALTH_POWER, A_MOD_RESISTANCE, A_MOD_SPEED,
     A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
     A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL, A_SELF_RESURRECT,
-    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE,
-    COMBAT_DODGE, COMBAT_HIT, COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT, E_DISPEL, E_DISTRACT,
-    E_DUEL, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH,
-    E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET,
-    E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT,
-    E_SET_STANCE, E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR,
-    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER,
-    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
-    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
-    SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT,
-    STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT,
+    COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT, COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO,
+    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT,
+    E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT,
+    E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG,
+    P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER,
+    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID,
+    SPEED_MOUNTED, SPEED_MOVE, SPEED_SWIM, SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION,
+    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
+    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
+    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
+    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 // cmangos/classic-db cd0c426a3b2ff56dd518bf009025299468e60fdb:
@@ -582,6 +582,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         // inert A_FLAG marker list below so `p0` carries a real resolved display id
         // instead of the raw misc value sitting dormant. See `resolve_aura_params`/`mount_display_p0`.
         Mounted => A_MOUNTED,
+        Transform => A_TRANSFORM,
         // Priest Mind Soothe (91): reduces a creature's aggro/detection radius by `amount` yards while active.
         // The aggro pass subtracts the summed amount from the creature's aggro radius. A generic aura, no p0.
         ModDetectRange => A_MOD_DETECT_RANGE,
@@ -598,7 +599,6 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | DispelImmunity
         | TrackCreatures
         | TrackResources
-        | Transform
         | ModScale
         | ModStalked
         | ModLanguage
@@ -704,7 +704,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
             let kind_v = match aura {
                 ModAttackspeed | ModMeleeHaste | ModRangedHaste | ModRangedAmmoHaste => 1,
                 ModCastingSpeedNotStack => 2,
-                ModIncreaseSwimSpeed => 2,
+                ModIncreaseSwimSpeed => i32::from(SPEED_SWIM),
                 ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => {
                     i32::from(SPEED_MOUNTED)
                 }
@@ -718,6 +718,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         // names a mount CREATURE TEMPLATE instead, through the imported creature-template presentation
         // data, so the frozen p0 is a display id in every case (the runtime never resolves anything).
         A_MOUNTED => (misc as i32, P_DISPLAY_ID),
+        A_TRANSFORM => (misc as i32, P_ENTRY),
         A_PERIODIC_ENERGIZE => ((misc & 0xFF) as i32, P_POWER_TYPE),
         A_CONTROL => {
             let mech = match aura {
@@ -3499,7 +3500,7 @@ mod tests {
     }
 
     #[test]
-    fn speed_kind_resolves_all_four_arms_from_variant() {
+    fn speed_kind_resolves_run_swim_swing_cast_and_mount() {
         use AuraMod::*;
         // move (default/generic — e.g. ModIncreaseSpeed/ModDecreaseSpeed).
         assert_eq!(
@@ -3520,6 +3521,55 @@ mod tests {
         assert_eq!(
             resolve_aura_params(A_MOD_SPEED, ModIncreaseMountedSpeed, 0),
             (3, P_SPEED_KIND)
+        );
+        assert_eq!(
+            resolve_aura_params(A_MOD_SPEED, ModIncreaseSwimSpeed, 0),
+            (i32::from(SPEED_SWIM), P_SPEED_KIND)
+        );
+    }
+
+    #[test]
+    fn transform_import_retains_the_creature_entry() {
+        assert_eq!(aura_mod_to_kind(AuraMod::Transform), A_TRANSFORM);
+        assert_eq!(
+            resolve_aura_params(A_TRANSFORM, AuraMod::Transform, 12861),
+            (12861, P_ENTRY)
+        );
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    fn actual_ghost_and_wisp_import_keep_vanilla_speed_and_transform() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &[8326, 20584], &[]).unwrap();
+        assert_eq!(rows.headers.len(), 2);
+        assert!(rows
+            .headers
+            .iter()
+            .all(|header| header.duration_ms == u32::MAX));
+        assert!(rows.effects.iter().all(|effect| effect.target == T_SELF));
+        let effects = |spell_id| {
+            rows.effects
+                .iter()
+                .filter(|effect| effect.spell_id == spell_id)
+                .map(|effect| (effect.kind, effect.p0, effect.p0_kind, effect.base_points))
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(
+            effects(8326),
+            vec![
+                (A_FLAG, 0, P_FLAG, -20),
+                (A_MOD_SPEED, i32::from(SPEED_MOVE), P_SPEED_KIND, 25),
+                (A_MOD_SPEED, i32::from(SPEED_SWIM), P_SPEED_KIND, 25),
+            ]
+        );
+        assert_eq!(
+            effects(20584),
+            vec![
+                (A_MOD_SPEED, i32::from(SPEED_MOVE), P_SPEED_KIND, 50),
+                (A_MOD_SPEED, i32::from(SPEED_SWIM), P_SPEED_KIND, 50),
+                (A_TRANSFORM, 12861, P_ENTRY, 0),
+            ]
         );
     }
 

@@ -231,11 +231,8 @@ pub(crate) fn do_resurrect_response(
                 let pct = req.points.clamp(1, 100) as u32;
                 t.health = revive_amount(t.max_health, req.points);
                 t.power = t.max_power.saturating_mul(pct) / 100;
-                t.dead = false;
-                t.player_flags &= !lyracore_shared::constants::player_flags::GHOST;
-                t.unit_bytes_1 &= !lyracore_shared::constants::unit_vis_flags::GHOST;
                 ctx.db.game_world_entity().guid().update(t);
-                crate::spell::clear_resurrect_request_and_option(ctx, target_guid);
+                crate::ghost::finish_resurrection(ctx, target_guid);
             }
         }
     }
@@ -267,6 +264,9 @@ pub(crate) fn do_cancel_aura(
     player_guid: u64,
     spell_id: u32,
 ) -> Result<(), String> {
+    if crate::ghost::is_ghost_spell(spell_id) {
+        return Err("ghost effects end on resurrection".to_string());
+    }
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
         if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
             return Err(format!(
@@ -280,6 +280,10 @@ pub(crate) fn do_cancel_aura(
         }
     }
     let auras = ctx.db.game_aura();
+    let redisplay = auras
+        .by_target()
+        .filter(&player_guid)
+        .any(|a| a.spell_id == spell_id && a.eff_kind == A_TRANSFORM);
     // Snapshot the matching aura ids (+ whether each moves a vitals pool) before deleting — never
     // mutate the table mid-iteration.
     let to_remove: Vec<(u64, bool, bool, bool)> = auras
@@ -320,6 +324,9 @@ pub(crate) fn do_cancel_aura(
     // with it because both effects share this spell id.
     if remount {
         crate::mount::recompute_mount(ctx, player_guid);
+    }
+    if redisplay {
+        recompute_display(ctx, player_guid);
     }
     Ok(())
 }
@@ -652,6 +659,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         expired.len(),
         auras.count()
     );
+    let redisplay: std::collections::BTreeSet<u64> = expired
+        .iter()
+        .filter(|a| a.eff_kind == A_TRANSFORM)
+        .map(|a| a.target_guid)
+        .collect();
     let mut revitalize: Vec<u64> = Vec::new();
     // Same expiry snapshot, wider gate — a reaped Battle Shout (or a STR/AGI/SPI stat aura) must
     // pull the sheet numbers back down too, even though it never touched a vitals pool.
@@ -708,6 +720,9 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // mount aura never enters `remount`, so this is a no-op for the common case.
     for target_guid in remount {
         crate::mount::recompute_mount(ctx, target_guid);
+    }
+    for target_guid in redisplay {
+        recompute_display(ctx, target_guid);
     }
 
     // Break-on-damage from DoTs (LAST — after the next_tick advance + expiry, so a broken aura is never

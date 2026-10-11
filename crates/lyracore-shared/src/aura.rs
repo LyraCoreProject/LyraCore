@@ -41,18 +41,40 @@ pub fn move_speed_with_pct(base: f32, pct: i32) -> f32 {
 
 /// Running combines movement auras with mounted speed only while a mount aura is active.
 pub fn run_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
-    let (mut movement, mut mount, mut mounted) = (0, 0, false);
+    let (mut movement, mut slow, mut mount, mut mounted) = (0, 0, 0, false);
     for aura in auras {
         mounted |= aura.kind == A_MOUNTED;
         if aura.kind == A_MOD_SPEED {
             if aura.parameter == i32::from(SPEED_MOVE) {
-                movement += stacked_amount(aura.amount, aura.stacks);
+                let amount = stacked_amount(aura.amount, aura.stacks);
+                if amount > 0 {
+                    movement = movement.max(amount);
+                } else {
+                    slow += amount;
+                }
             } else if aura.parameter == i32::from(SPEED_MOUNTED) {
                 mount += stacked_amount(aura.amount, aura.stacks);
             }
         }
     }
-    move_speed_with_pct(base, mounted_move_pct(movement, mount, mounted))
+    move_speed_with_pct(base, mounted_move_pct(movement + slow, mount, mounted))
+}
+
+/// Swimming uses its strongest positive speed aura and retains the movement floor.
+pub fn swim_speed(base: f32, auras: impl IntoIterator<Item = AuraAmount>) -> f32 {
+    let (mut bonus, mut slow) = (0, 0);
+    for aura in auras {
+        if aura.kind != A_MOD_SPEED || aura.parameter != i32::from(SPEED_SWIM) {
+            continue;
+        }
+        let amount = stacked_amount(aura.amount, aura.stacks);
+        if amount > 0 {
+            bonus = bonus.max(amount);
+        } else {
+            slow += amount;
+        }
+    }
+    move_speed_with_pct(base, bonus + slow)
 }
 
 pub fn mounted_move_pct(movement: i32, mount: i32, mounted: bool) -> i32 {
@@ -122,5 +144,60 @@ mod tests {
         assert_eq!(run_speed(7.0, [movement, mount, mounted]), 9.1);
         assert_eq!(run_speed(7.0, [mount, mounted]), 11.2);
         assert_eq!(run_speed(7.0, [movement, mount]), 4.9);
+    }
+
+    #[test]
+    fn ghost_speed_uses_the_strongest_positive_aura() {
+        let ghost = AuraAmount {
+            kind: A_MOD_SPEED,
+            parameter: i32::from(SPEED_MOVE),
+            amount: 25,
+            stacks: 1,
+        };
+        let wisp = AuraAmount {
+            amount: 50,
+            ..ghost
+        };
+        assert_eq!(run_speed(7.0, [ghost]), 8.75);
+        assert_eq!(run_speed(7.0, [ghost, wisp]), 10.5);
+        assert_eq!(run_speed(7.0, [wisp, ghost]), 10.5);
+        let snare = AuraAmount {
+            amount: -30,
+            ..ghost
+        };
+        assert_eq!(run_speed(7.0, [ghost, wisp, snare]), 8.4);
+    }
+
+    #[test]
+    fn swimming_uses_its_own_strongest_bonus_and_speed_floor() {
+        let ghost = AuraAmount {
+            kind: A_MOD_SPEED,
+            parameter: i32::from(SPEED_SWIM),
+            amount: 25,
+            stacks: 1,
+        };
+        let wisp = AuraAmount {
+            amount: 50,
+            ..ghost
+        };
+        let run = AuraAmount {
+            parameter: i32::from(SPEED_MOVE),
+            amount: 100,
+            ..ghost
+        };
+        let cast = AuraAmount {
+            parameter: i32::from(SPEED_CAST),
+            amount: 100,
+            ..ghost
+        };
+        assert_eq!(swim_speed(4.0, [ghost]), 5.0);
+        assert_eq!(swim_speed(4.0, [ghost, wisp, run, cast]), 6.0);
+        assert_eq!(swim_speed(4.0, [run, cast]), 4.0);
+        let snare = AuraAmount {
+            amount: -30,
+            stacks: 5,
+            ..ghost
+        };
+        assert_eq!(swim_speed(4.0, [wisp, snare]), 0.4);
     }
 }

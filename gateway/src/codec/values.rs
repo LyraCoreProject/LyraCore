@@ -212,6 +212,13 @@ pub fn build_mount_display_values(guid: u64, mount_display_id: u32) -> SMSG_UPDA
     })
 }
 
+/// Update the current appearance without replacing the unit's native appearance.
+pub fn build_display_values(guid: u64, display_id: u32) -> SMSG_UPDATE_OBJECT {
+    unit_values(guid, |unit| {
+        unit.set_unit_displayid(display_id as i32);
+    })
+}
+
 /// VALUES partial-update carrying `UNIT_FIELD_BYTES_2` so observers see a weapon DRAWN or STOWED the
 /// moment it happens — the `CMSG_SETSHEATHED` a client sends on `Z`. Unit mask, not player-gated: a
 /// creature draws its weapon on engage too. Same `dirty_reset` discipline as its siblings (the wire
@@ -657,6 +664,7 @@ mod lint_tests {
                 build_taxi_presentation_values(g, 1147, 0x0010_0000),
             ),
             ("mount_display", build_mount_display_values(g, 1147)),
+            ("display", build_display_values(g, 1825)),
             ("power", build_power_values(g, 0, 55)),
             ("target", build_target_values(g, 0xF130_0000_0000_0001)),
             ("max_vitals", build_max_vitals_values(g, 100, 0, 200)),

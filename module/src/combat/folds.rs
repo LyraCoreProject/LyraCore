@@ -312,7 +312,7 @@ pub(crate) fn effective_swing_time(ctx: &ReducerContext, attacker: &WorldEntity)
 }
 
 /// A unit's EFFECTIVE movement speed (yd/s) for a `base` cadence (RUN / WALK): adjusted by every active
-/// `A_MOD_SPEED(SPEED_MOVE)` aura (signed %, summed) — a snare (Hamstring, negative %) slows it, a speed
+/// `A_MOD_SPEED(SPEED_MOVE)` aura, using the strongest positive bonus and summed slows, — a snare (Hamstring, negative %) slows it, a speed
 /// buff quickens it — PLUS, only while `guid` carries an active `A_MOUNTED` aura, every active
 /// `A_MOD_SPEED(SPEED_MOUNTED)` aura (the mount's own speed effect; DBC-normalized to the nominal +60%/
 /// +100% tiers). A mounted-speed aura contributes nothing once the rider dismounts — the fold reads

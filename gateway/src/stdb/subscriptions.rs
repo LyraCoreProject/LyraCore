@@ -2693,6 +2693,22 @@ mod tests {
     }
 
     #[test]
+    fn appearance_change_relays_the_wisp_and_the_restored_native_display() {
+        let alive = player_entity();
+        let mut wisp = alive.clone();
+        wisp.display_id = 1825;
+        for (old, new) in [(&alive, &wisp), (&wisp, &alive)] {
+            assert_eq!(
+                entity_update_to_outbound(old, new),
+                vec![ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+                    codec::build_display_values(new.guid, new.display_id),
+                ))]
+            );
+            assert_eq!(new.native_display_id, old.native_display_id);
+        }
+    }
+
+    #[test]
     fn run_speed_mult_bp_unchanged_emits_nothing_extra() {
         let old = player_entity();
         let mut new = old.clone();
@@ -2831,6 +2847,60 @@ mod tests {
             out.as_slice(),
             [Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(_))]
         ));
+    }
+
+    #[test]
+    fn peer_create_restores_the_wisp_appearance_and_swimming_speed() {
+        use lyracore_shared::spell::taxonomy::{A_MOD_SPEED, SPEED_SWIM};
+        use wow_world_messages::vanilla::{Object, UpdateMask};
+        let mut entity = player_entity();
+        entity.display_id = 1825;
+        entity.unit_bytes_0 = 0x0000_0104;
+        entity.run_speed_mult_bp = 15_000;
+        let view = entity_view(entity, 0);
+        let auras = [
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_SWIM),
+                25,
+                0,
+                i64::MAX,
+            ),
+            aura(
+                view.guid,
+                A_MOD_SPEED,
+                i32::from(SPEED_SWIM),
+                50,
+                0,
+                i64::MAX,
+            ),
+        ];
+        let out = peer_create_outbound(&view, &[], &auras, None).unwrap();
+        let Outbound::One(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(create)) = &out[0] else {
+            panic!("peer CREATE");
+        };
+        let Object::CreateObject2 {
+            movement2,
+            mask2: UpdateMask::Player(player),
+            ..
+        } = &create.objects[0]
+        else {
+            panic!("Character CREATE");
+        };
+        assert_eq!(player.unit_displayid(), Some(1825));
+        let wow_world_messages::vanilla::MovementBlock_UpdateFlag_Living::Living {
+            running_speed,
+            swimming_speed,
+            ..
+        } = movement2.update_flag.get_living().unwrap()
+        else {
+            panic!("living movement");
+        };
+        assert_eq!(*running_speed, 10.5);
+        assert!(
+            (*swimming_speed - lyracore_shared::constants::speeds::SWIM * 1.5).abs() < 0.000001
+        );
     }
 
     #[test]

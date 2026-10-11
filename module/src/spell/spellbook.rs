@@ -168,6 +168,10 @@ pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
 /// server-side. [entity]
 pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) -> bool {
     let auras = ctx.db.game_aura();
+    let redisplay = auras
+        .by_target()
+        .filter(&guid)
+        .any(|a| a.spell_id == spell_id && a.eff_kind == super::A_TRANSFORM);
     let to_remove: Vec<(u64, bool, bool)> = auras
         .by_target()
         .filter(&guid)
@@ -192,6 +196,9 @@ pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) 
     // caller that batches several spells), so per-spell costs nothing and no call site has to know.
     if moved_mount {
         crate::mount::recompute_mount(ctx, guid);
+    }
+    if redisplay {
+        super::recompute_display(ctx, guid);
     }
     moved_vitals
 }

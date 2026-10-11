@@ -313,15 +313,12 @@ fn displace_auras(
         return;
     }
     let auras = ctx.db.game_aura();
-    let displaced: Vec<u64> = auras
+    let displaced = auras
         .by_target()
         .filter(&target_guid)
         .filter(|a| spell_ids.contains(&a.spell_id))
-        .map(|a| a.id)
         .collect();
-    for id in displaced {
-        auras.id().delete(id);
-    }
+    shed_auras(ctx, target_guid, displaced);
 }
 
 // One argument per column of the effect row being applied as an aura.
@@ -443,7 +440,8 @@ pub(crate) fn aura_apply(
             .collect();
         displace_auras(ctx, target_guid, &other_seal_spell_ids);
     }
-    if !hdr.name.is_empty() {
+    // Ghost and Wisp Spirit share a DBC name but must coexist.
+    if !hdr.name.is_empty() && !crate::ghost::is_ghost_spell(hdr.spell_id) {
         let spells = ctx.db.game_spell();
         let other_rank_ids: std::collections::HashSet<u32> = auras
             .by_target()
@@ -665,6 +663,9 @@ pub(crate) fn aura_apply(
         if caster_is_player && target_is_creature {
             crate::threat::add_threat(ctx, target_guid, caster_guid, (level as i64) * 5);
         }
+    }
+    if e.kind == A_TRANSFORM {
+        recompute_display(ctx, target_guid);
     }
 }
 
@@ -897,6 +898,7 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraMounted
         | EffectKind::AuraProcDamage
         | EffectKind::AuraSelfResurrect
+        | EffectKind::AuraTransform
         | EffectKind::AuraFlag => apply_aura_effect(
             ctx,
             e,

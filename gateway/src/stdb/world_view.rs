@@ -3951,6 +3951,21 @@ pub(crate) fn sweep_into_view(view: &Arc<WorldView>, viewer: &Arc<Viewer>) {
     let view = view.clone();
     enqueue(viewer.clone(), move |viewer| {
         let mut out = Vec::new();
+        if let Some(shard) = view
+            .spatial
+            .shard_of(EntityLayer::WorldEntity, viewer.self_guid)
+        {
+            if let Some(coord) = view.shard(shard) {
+                out.extend(crate::codec::combat::subscriptions::aura_snapshot_outbound(
+                    &coord,
+                    &view,
+                    shard,
+                    &viewer,
+                    viewer.self_guid,
+                    &[],
+                ));
+            }
+        }
         for (guid, shard) in view
             .spatial
             .visible_entities(EntityLayer::WorldEntity, viewer.session)

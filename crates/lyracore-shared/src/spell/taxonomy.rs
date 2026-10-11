@@ -97,6 +97,7 @@ effect_kinds! {
     A_MOUNTED => AuraMounted = 0xB3,
     A_PROC_DAMAGE => AuraProcDamage = 0xB4,
     A_SELF_RESURRECT => AuraSelfResurrect = 0xB5,
+    A_TRANSFORM => AuraTransform = 0xB6,
     A_FLAG => AuraFlag = 0xBE,
 }
 
@@ -159,6 +160,7 @@ pub const SPEED_MOVE: u8 = 0;
 pub const SPEED_SWING: u8 = 1;
 pub const SPEED_CAST: u8 = 2;
 pub const SPEED_MOUNTED: u8 = 3;
+pub const SPEED_SWIM: u8 = 4;
 pub const STANCE_BATTLE: u8 = 0;
 pub const STANCE_DEFENSIVE: u8 = 1;
 pub const STANCE_BERSERKER: u8 = 2;

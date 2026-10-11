@@ -195,10 +195,11 @@ pub fn debug_set_health(ctx: &ReducerContext, guid: u64, health: u32) -> Result<
     let clamped = health.min(e.max_health);
     if clamped > 0 {
         e.health = clamped;
-        // A revive-by-HP from a dead state: clear the death flag so the unit is alive again (the
-        // client comes back from death purely on health > 0). Keep it simple — no ghost/corpse here.
-        e.dead = false;
+        let was_dead = e.dead;
         entities.guid().update(e);
+        if was_dead {
+            crate::ghost::finish_resurrection(ctx, guid);
+        }
         return Ok(());
     }
 
