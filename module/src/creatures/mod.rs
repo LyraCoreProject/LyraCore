@@ -96,9 +96,9 @@ pub use spawn::{
     game_creature_spawn, game_creature_spell, game_creature_template, game_creature_waypoint,
     game_gossip_menu, game_gossip_menu_profile, game_gossip_menu_profile_option,
     game_gossip_option, game_npc_text, game_npc_text_slot, CreatureCast, CreatureFamily,
-    CreatureGossipMenuOverride, CreatureSpawn, CreatureSpell, CreatureTemplate, CreatureWaypoint,
-    GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption, NpcText, NpcTextSlot,
-    MOVEMENT_IDLE, MOVEMENT_RANDOM,
+    CreatureGossipMenuOverride, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureTemplate,
+    CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption,
+    NpcText, NpcTextSlot, MOVEMENT_IDLE, MOVEMENT_RANDOM,
 };
 
 #[cfg(test)]

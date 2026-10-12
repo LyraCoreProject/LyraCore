@@ -155,7 +155,7 @@ pub(crate) fn apply_send_chat_to(
 /// reach), message normalization, and the EMOTE-always-Universal rule (cm:Player.cpp:16594).
 fn write_chat_event(
     ctx: &ReducerContext,
-    sender: crate::WorldEntity,
+    mut sender: crate::WorldEntity,
     target_guid: u64,
     chat_type: u8,
     language: u8,
@@ -172,6 +172,12 @@ fn write_chat_event(
     } else {
         language
     };
+    if lyracore_shared::chat::broadcast_chat::is_zone_wide(chat_type) {
+        // Terrain can arrive after the creature import, and creatures can move between zones.
+        sender.zone_id =
+            crate::terrain::zone_id_at(ctx, sender.map_id, sender.x, sender.y).unwrap_or(0);
+        sender = ctx.db.game_world_entity().guid().update(sender);
+    }
     ctx.db.game_chat_event().insert(ChatEvent {
         id: 0,
         sender_guid: sender.guid,

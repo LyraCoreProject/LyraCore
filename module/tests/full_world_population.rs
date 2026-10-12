@@ -13,6 +13,78 @@ fn source_guid(map_id: u32) -> u64 {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
+    let mut shard = Standalone::start("legacy-creature-pools");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    let mut packed = Vec::new();
+    for (pool, map, count, event) in [(1069, 0, 8, ""), (46330, 230, 4, ""), (1163, 0, 3, "27")] {
+        let population = (2_u64 << 32) + pool;
+        shard.assert_sql(&format!("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES ({population},1,0,0,0,'',true)"));
+        for index in 0..count {
+            let guid = (0xF130u64 << 48) | (51000u64 << 24) | (pool * 100 + index);
+            shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({guid},{population},51000,'',0,'{event}')"));
+            packed.push(format!("{guid},51000,{map},10,20,30,0,0,1"));
+        }
+    }
+    shard.assert_call("import_creature_spawns", &[&packed.join(";")]);
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_creature_spawn WHERE source_guid = 0")
+            .len(),
+        15
+    );
+    assert!(poll_until(Duration::from_secs(10), || shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .len()
+        == 1));
+    let mut copies = Vec::new();
+    for instance in [901, 902] {
+        shard.assert_call(
+            "ensure_instance",
+            &[&instance.to_string(), "230", "0", &actor("1")],
+        );
+        let rows = shard.query_rows(&format!(
+            "SELECT guid FROM game_creature_spawn WHERE instance_id = {instance}"
+        ));
+        assert_eq!(rows.len(), 1);
+        copies.push(rows[0]["guid"].clone());
+    }
+    assert_ne!(copies[0], copies[1]);
+    shard.assert_call("debug_kill_creature", &["1", &copies[0]]);
+    assert!(poll_until(Duration::from_secs(90), || {
+        let survivor = shard.query_rows(&format!(
+            "SELECT dead FROM game_world_entity WHERE guid = {}",
+            copies[1]
+        ));
+        assert_eq!(survivor[0]["dead"], "false");
+        shard.query_rows(&format!(
+            "SELECT life_seq FROM game_creature_spawn WHERE guid = {}",
+            copies[0]
+        ))[0]["life_seq"]
+            == "2"
+    }));
+    shard.assert_call("debug_reap_instance", &["901"]);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE guid = {}",
+            copies[0]
+        ))
+        .is_empty());
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT guid FROM game_world_entity WHERE guid = {}",
+                copies[1]
+            ))
+            .len(),
+        1
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
     let mut shard = Standalone::start("full-world-population");
     shard.publish_module();
@@ -159,8 +231,8 @@ fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     let source = source_guid(0);
     let selected = (source & !(0xFF_FFFFu64 << 24)) | (51001u64 << 24);
-    shard.assert_sql("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries) VALUES (5099000,1,0,0,0,'')");
-    shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance,event_ids) VALUES ({source},5099000,0,'51001',0,'')"));
+    shard.assert_sql("INSERT INTO game_creature_population (population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool) VALUES (5099000,1,0,0,0,'',false)");
+    shard.assert_sql(&format!("INSERT INTO game_creature_population_member (source_guid,population_id,entry,choices,chance_bp,event_ids) VALUES ({source},5099000,0,'51001',0,'')"));
     shard.assert_sql(&format!("INSERT INTO game_creature_waypoint (id,creature_guid,x,y,z) VALUES (5099000,{source},11,20,30)"));
     let packed = serde_json::to_string(&format!("{source},51000,0,10,20,30,0,2,1")).unwrap();
     for _ in 0..2 {

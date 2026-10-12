@@ -4051,12 +4051,13 @@ fn build_dump_plan(
     let mut obtainable_items = creature_drop_item_set(dump, quest_loot_ids);
     obtainable_items.extend(gameobject_loot_item_set(dump, &quest_gameobjects.used_go));
     obtainable_items.extend(vendor_stock_item_set(dump, quest_entries));
-    let local_creature_entries = &population.referenced_entries;
+    let mut local_creature_entries = population.referenced_entries.clone();
+    local_creature_entries.extend(&eventai.forced_template_entries);
     let giver_entries = if args
         .world_profile
         .is_some_and(WorldImportProfile::imports_all_templates)
     {
-        local_creature_entries
+        &local_creature_entries
     } else {
         &entries
     };
@@ -7834,38 +7835,45 @@ mod tests {
             quest_template_row(500, "Placed giver"), quest_template_row(501, "Summon giver"),
             eventai_rule_row(10,100,0,0,100,0,[0,1,0,1,0,0],[[32,200,0,700],[0;4],[0;4]]),
         );
-        let mut args = parse_args_from([
-            "--dump",
-            "synthetic.sql",
-            "--world-profile",
+        for profile in [
             "starting-eastern",
-        ])
-        .unwrap();
-        let full = build_dump_plan(&dump, &args, &None, &None).unwrap();
-        args.family = Some("quests".into());
-        let partial = build_dump_plan(&dump, &args, &None, &None).unwrap();
-        let quests = |p: &DumpPlan| {
-            p.stmts
-                .iter()
-                .filter(|s| s.starts_with("INSERT INTO game_quest_template"))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        assert!(quests(&full).join("").contains("(501,"));
-        assert_eq!(
-            quests(&full),
-            quests(&partial),
-            "quest reimport must preserve shared definitions"
-        );
-        let givers = |plan: &DumpPlan| {
-            plan.stmts
-                .iter()
-                .filter(|statement| statement.starts_with("INSERT INTO game_creature_quest"))
-                .cloned()
-                .collect::<Vec<_>>()
-        };
-        assert!(givers(&full).join("").contains(",200,501,0)"));
-        assert_eq!(givers(&full), givers(&partial));
+            "full-world",
+            "full-eastern",
+            "full-instances",
+        ] {
+            let dump = if profile == "full-instances" {
+                dump.replace("(1,100,0,1,", "(1,100,36,1,")
+            } else {
+                dump.clone()
+            };
+            let mut args =
+                parse_args_from(["--dump", "synthetic.sql", "--world-profile", profile]).unwrap();
+            let full = build_dump_plan(&dump, &args, &None, &None).unwrap();
+            args.family = Some("quests".into());
+            let partial = build_dump_plan(&dump, &args, &None, &None).unwrap();
+            let quests = |p: &DumpPlan| {
+                p.stmts
+                    .iter()
+                    .filter(|s| s.starts_with("INSERT INTO game_quest_template"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert!(quests(&full).join("").contains("(501,"));
+            assert_eq!(
+                quests(&full),
+                quests(&partial),
+                "quest reimport must preserve shared definitions"
+            );
+            let givers = |plan: &DumpPlan| {
+                plan.stmts
+                    .iter()
+                    .filter(|statement| statement.starts_with("INSERT INTO game_creature_quest"))
+                    .cloned()
+                    .collect::<Vec<_>>()
+            };
+            assert!(givers(&full).join("").contains(",200,501,0)"));
+            assert_eq!(givers(&full), givers(&partial));
+        }
     }
 
     #[test]

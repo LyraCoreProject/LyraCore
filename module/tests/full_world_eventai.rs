@@ -7,16 +7,74 @@ const ENTRY: u32 = 51_000;
 const CREATURE: u64 = (0xF130_u64 << 48) | ((ENTRY as u64) << 24) | 1;
 
 fn definition(enabled: bool) -> String {
-    let subject = format!("entry:{ENTRY}");
     let rules = format!(
         "900001,health:0:100,100,4294967295,once,all,ordinary,any-posture,auto-attack:{}+sheath:2",
         u8::from(enabled)
     );
+    packed_definition(&rules)
+}
+
+fn packed_definition(rules: &str) -> String {
+    let subject = format!("entry:{ENTRY}");
     let mut hasher = blake3::Hasher::new();
     hasher.update(b"lyracore-eventai-definition-v1");
     hasher.update(format!("{subject}@{rules}").as_bytes());
     let revision = u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
     format!("{subject}@{revision}@{rules}")
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn zone_speech_resolves_terrain_imported_after_the_creature_spawn() {
+    let mut shard = Standalone::start("full-world-zone-speech");
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    let creature = shard
+        .query_rows(&format!(
+            "SELECT * FROM game_world_entity WHERE guid = {CREATURE}"
+        ))
+        .remove(0);
+    assert_eq!(creature["zone_id"], "0");
+    shard.assert_call(
+        "debug_teleport",
+        &[
+            "1",
+            &creature["map_id"],
+            &creature["x"],
+            &creature["y"],
+            &creature["z"],
+            "0",
+        ],
+    );
+    shard.assert_sql("INSERT INTO game_creature_ai_broadcast_text (id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3) VALUES (5099000,'Zone speech','',6,0,0,0,0,0,0,0)");
+    let rules = "900003,health:0:100,100,4294967295,repeat:500:500,all,ordinary,any-posture,auto-attack:0+speak:zone-yell:self:5099000";
+    shard.assert_call(
+        "debug_stage_eventai_revision_fixture",
+        &[&CREATURE.to_string(), "1", &packed_definition(rules)],
+    );
+    let cell_x = lyracore_shared::terrain::cell_index(creature["x"].parse().unwrap()).unwrap();
+    let cell_y = lyracore_shared::terrain::cell_index(creature["y"].parse().unwrap()).unwrap();
+    for zone in [5099001, 5099002] {
+        shard.assert_sql(&format!("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES ({zone},{},0,0,0,0,0,'Speech zone')", creature["map_id"]));
+        let heights = vec!["0"; 145].join(":");
+        shard.assert_call(
+            "import_terrain_chunks",
+            &[&format!(
+                "{},{cell_x},{cell_y},{},0,0,{zone},{heights}",
+                creature["map_id"], creature["z"]
+            )],
+        );
+        assert!(poll_until(POLL_TIMEOUT, || shard.query_rows(&format!(
+            "SELECT zone_id FROM game_world_entity WHERE guid = {CREATURE}"
+        ))[0]["zone_id"]
+            == zone.to_string()));
+    }
+    assert!(!shard
+        .query_rows(&format!(
+            "SELECT id FROM game_chat_event WHERE sender_guid = {CREATURE} AND chat_type = 6"
+        ))
+        .is_empty());
 }
 
 #[test]

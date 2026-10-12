@@ -74,10 +74,10 @@ pub use crate::creatures::{
     CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
     CreatureAiSummonExpiry, CreatureAiSummonOrigin, CreatureCast, CreatureFamily,
     CreatureGossipMenuOverride, CreatureMoveEvent, CreatureMoveSchedule, CreaturePresentation,
-    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpell, CreatureSpline, CreatureTemplate,
-    CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption,
-    HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule, PetCommand,
-    RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
+    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureSpline,
+    CreatureTemplate, CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption,
+    GossipOption, HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule,
+    PetCommand, RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
 };
 #[cfg(feature = "debug_reducers")]
 pub use crate::debug::{

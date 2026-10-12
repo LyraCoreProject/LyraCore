@@ -16,6 +16,8 @@ pub struct CreaturePopulation {
     pub flags: u32,
     /// Rows of entry,min_count,max_count,chance. Zero chance shares the remaining probability.
     pub entries: String,
+    #[default(false)]
+    pub is_pool: bool,
 }
 
 #[table(accessor = game_creature_population_member, index(accessor = by_population, btree(columns = [population_id])))]
@@ -26,7 +28,7 @@ pub struct CreaturePopulationMember {
     pub population_id: u64,
     pub entry: u32,
     pub choices: String,
-    pub chance: u32,
+    pub chance_bp: u32,
     /// Positive ids require an active game event; negative ids remove a spawn during that event.
     pub event_ids: String,
 }
@@ -58,7 +60,7 @@ struct Member {
     guid: u64,
     entry: u32,
     choices: Vec<u32>,
-    chance: u32,
+    chance_bp: u32,
     requires_event: bool,
 }
 
@@ -99,14 +101,14 @@ fn decode_entries(text: &str) -> Result<Vec<EntryChoice>, String> {
 fn decode_member(member: &CreaturePopulationMember) -> Result<Member, String> {
     let choices = numbers::<u32>(&member.choices)?;
     let events = numbers::<i32>(&member.event_ids)?;
-    if member.chance > 100 || choices.contains(&0) || events.contains(&0) {
+    if member.chance_bp > 10_000 || choices.contains(&0) || events.contains(&0) {
         return Err(format!("invalid population member {}", member.source_guid));
     }
     Ok(Member {
         guid: member.source_guid,
         entry: member.entry,
         choices,
-        chance: member.chance,
+        chance_bp: member.chance_bp,
         requires_event: events.iter().any(|event| *event > 0),
     })
 }
@@ -176,6 +178,46 @@ fn choose_index(len: usize, draw: &mut impl FnMut() -> u64) -> usize {
     (draw() % len as u64) as usize
 }
 
+fn select_pool(
+    limit: u32,
+    members: &[Member],
+    draw: &mut impl FnMut() -> u64,
+) -> Vec<PopulationAssignment> {
+    let mut eligible: Vec<_> = members
+        .iter()
+        .filter(|member| !member.requires_event)
+        .collect();
+    for index in (1..eligible.len()).rev() {
+        let other = choose_index(index + 1, draw);
+        eligible.swap(index, other);
+    }
+    if limit == 1 {
+        // The source compares every explicit chance with the same roll, then falls back to
+        // an equal-chance member or the first explicit member. It is not a cumulative roll.
+        let roll = draw() % 10_000;
+        let chosen = eligible
+            .iter()
+            .find(|member| member.chance_bp != 0 && roll < u64::from(member.chance_bp))
+            .or_else(|| eligible.iter().find(|member| member.chance_bp == 0))
+            .or_else(|| eligible.first())
+            .copied();
+        eligible = chosen.into_iter().collect();
+    } else {
+        eligible.truncate(limit as usize);
+    }
+    eligible
+        .into_iter()
+        .map(|member| PopulationAssignment {
+            source_guid: member.guid,
+            entry: if member.choices.is_empty() {
+                member.entry
+            } else {
+                member.choices[choose_index(member.choices.len(), draw)]
+            },
+        })
+        .collect()
+}
+
 fn select(
     population: &CreaturePopulation,
     members: &[Member],
@@ -185,11 +227,14 @@ fn select(
     if population.world_state_condition != 0 || population.world_state_expression != 0 {
         return Vec::new();
     }
+    if population.is_pool {
+        return select_pool(population.max_count, members, &mut draw);
+    }
     let mut eligible: Vec<&Member> = members
         .iter()
         .filter(|member| {
             !member.requires_event
-                && (member.chance == 0 || draw() % 100 < u64::from(member.chance))
+                && (member.chance_bp == 0 || draw() % 10_000 < u64::from(member.chance_bp))
         })
         .collect();
     for index in (1..eligible.len()).rev() {
@@ -355,6 +400,7 @@ mod tests {
             world_state_expression: 0,
             flags: 0,
             entries: entries.to_owned(),
+            is_pool: false,
         }
     }
 
@@ -363,9 +409,34 @@ mod tests {
             guid,
             entry,
             choices: Vec::new(),
-            chance: 0,
+            chance_bp: 0,
             requires_event: false,
         }
+    }
+
+    #[test]
+    fn legacy_pool_uses_one_fractional_roll_then_the_default() {
+        let mut rare = member(1, 10);
+        rare.chance_bp = 750;
+        let members = [rare, member(2, 20)];
+        assert_eq!(select_pool(1, &members, &mut || 749)[0].entry, 10);
+        assert_eq!(select_pool(1, &members, &mut || 750)[0].entry, 20);
+        assert_eq!(select_pool(1, &members, &mut || 9_999)[0].entry, 20);
+    }
+
+    #[test]
+    fn multi_member_pool_ignores_explicit_chances_and_preserves_event_gates() {
+        let members: Vec<_> = (1..=8)
+            .map(|guid| {
+                let mut member = member(guid, 10);
+                member.chance_bp = 75;
+                member.requires_event = guid > 6;
+                member
+            })
+            .collect();
+        let selected = select_pool(4, &members, &mut || 9_999);
+        assert_eq!(selected.len(), 4);
+        assert!(selected.iter().all(|choice| choice.source_guid <= 6));
     }
 
     #[test]
@@ -429,8 +500,8 @@ mod tests {
         let mut event = member(1, 10);
         event.requires_event = true;
         let mut chance = member(2, 20);
-        chance.chance = 10;
-        let selected = select(&group, &[event, chance, member(3, 30)], &[], || 50);
+        chance.chance_bp = 1_000;
+        let selected = select(&group, &[event, chance, member(3, 30)], &[], || 5_000);
         assert_eq!(selected.len(), 1);
         assert_eq!(selected[0].source_guid, 3);
     }
@@ -442,7 +513,7 @@ mod tests {
             population_id: 1,
             entry: 10,
             choices: String::new(),
-            chance: 0,
+            chance_bp: 0,
             event_ids: "-4".to_owned(),
         };
         let member = decode_member(&source).unwrap();

@@ -27,13 +27,13 @@ impl PopulationPlan {
         crate::push_insert(
             statements,
             "game_creature_population",
-            "population_id,max_count,world_state_condition,world_state_expression,flags,entries",
+            "population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool",
             &self.definition_rows,
         );
         crate::push_insert(
             statements,
             "game_creature_population_member",
-            "source_guid,population_id,entry,choices,chance,event_ids",
+            "source_guid,population_id,entry,choices,chance_bp,event_ids",
             &self.membership_rows,
         );
     }
@@ -45,6 +45,7 @@ struct Group {
     expression: u32,
     flags: u32,
     entries: Vec<(u32, u32, u32, u32)>,
+    is_pool: bool,
 }
 
 fn number<T: std::str::FromStr>(row: &[String], column: usize, table: &str) -> Result<T> {
@@ -69,6 +70,7 @@ fn source_groups(dump: &str) -> Result<BTreeMap<u64, Group>> {
                     expression: number(&row, 5, "spawn_group")?,
                     flags: number(&row, 6, "spawn_group")?,
                     entries: Vec::new(),
+                    is_pool: false,
                 },
             )
             .is_some()
@@ -106,8 +108,213 @@ fn source_groups(dump: &str) -> Result<BTreeMap<u64, Group>> {
     Ok(groups)
 }
 
+struct Pool {
+    limit: u32,
+    members: BTreeMap<u64, u32>,
+    children: Vec<(u64, u32)>,
+}
+
+fn chance_bp(row: &[String], column: usize, table: &str) -> Result<u32> {
+    let chance: f64 = number(row, column, table)?;
+    if !chance.is_finite() || !(0.0..=100.0).contains(&chance) {
+        bail!("{table}: invalid chance {chance}");
+    }
+    Ok((chance * 100.0).round() as u32)
+}
+
+/// Equal-sized, equal-chance single-selection children have the same initial distribution
+/// as one flat pool. Other nesting needs a hierarchical selector and fails before import.
+fn flatten_pool(
+    id: u64,
+    pools: &BTreeMap<u64, Pool>,
+    visiting: &mut BTreeSet<u64>,
+) -> Result<BTreeMap<u64, u32>> {
+    let pool = pools
+        .get(&id)
+        .with_context(|| format!("missing pool_template {id}"))?;
+    if !visiting.insert(id) {
+        bail!("cyclic creature pool {id}");
+    }
+    let mut members = pool.members.clone();
+    if !pool.children.is_empty() {
+        if pool.limit != 1 || !members.is_empty() {
+            bail!("creature pool {id}: unsupported nested limits or direct members");
+        }
+        let mut size = None;
+        for &(child, chance) in &pool.children {
+            let child_pool = pools
+                .get(&child)
+                .with_context(|| format!("missing pool_template {child}"))?;
+            let leaves = flatten_pool(child, pools, visiting)?;
+            if chance != 0
+                || child_pool.limit != 1
+                || leaves.values().any(|chance| *chance != 0)
+                || size.is_some_and(|size| size != leaves.len())
+            {
+                bail!("creature pool {id}: nested choices are not equal single selections");
+            }
+            size = Some(leaves.len());
+            for (guid, chance) in leaves {
+                if members.insert(guid, chance).is_some() {
+                    bail!("duplicate creature {guid} in pool {id}");
+                }
+            }
+        }
+    }
+    visiting.remove(&id);
+    Ok(members)
+}
+
+fn add_legacy_pools(
+    dump: &str,
+    groups: &mut BTreeMap<u64, Group>,
+    memberships: &mut BTreeMap<u64, (u64, u32)>,
+    events: &mut BTreeMap<u64, BTreeSet<i32>>,
+) -> Result<()> {
+    let mut pools = BTreeMap::new();
+    for row in parse_complete_table(dump, "pool_template")? {
+        let id = number(&row, 0, "pool_template")?;
+        if pools
+            .insert(
+                id,
+                Pool {
+                    limit: number(&row, 1, "pool_template")?,
+                    members: BTreeMap::new(),
+                    children: Vec::new(),
+                },
+            )
+            .is_some()
+        {
+            bail!("duplicate pool_template {id}");
+        }
+    }
+    let creatures = parse_complete_table(dump, "creature")?;
+    let mut by_entry = BTreeMap::<u64, Vec<u64>>::new();
+    let mut maps = BTreeMap::<u64, i64>::new();
+    for row in &creatures {
+        let guid = number(row, cr::GUID, "creature")?;
+        by_entry
+            .entry(number(row, cr::ID, "creature")?)
+            .or_default()
+            .push(guid);
+        maps.insert(guid, number(row, cr::MAP, "creature")?);
+    }
+    let mut used = BTreeSet::new();
+    let mut seen = BTreeSet::new();
+    for table in ["pool_creature", "pool_creature_template"] {
+        for row in parse_complete_table(dump, table)? {
+            let source = number(&row, 0, table)?;
+            let id = number(&row, 1, table)?;
+            let chance = chance_bp(&row, 2, table)?;
+            let pool = pools
+                .get_mut(&id)
+                .with_context(|| format!("{table}: missing pool_template {id}"))?;
+            let guids = if table == "pool_creature" {
+                vec![source]
+            } else {
+                by_entry.get(&source).cloned().unwrap_or_default()
+            };
+            for guid in guids {
+                if !maps.contains_key(&guid) || !seen.insert(guid) {
+                    bail!("{table}: missing or multiply pooled creature {guid}");
+                }
+                pool.members.insert(guid, chance);
+                used.insert(id);
+            }
+        }
+    }
+    let mut parents = BTreeMap::new();
+    for row in parse_complete_table(dump, "pool_pool")? {
+        let child = number(&row, 0, "pool_pool")?;
+        let parent = number(&row, 1, "pool_pool")?;
+        let chance = chance_bp(&row, 2, "pool_pool")?;
+        if parents.insert(child, parent).is_some() {
+            bail!("pool {child} has several parents");
+        }
+        if let Some(pool) = pools.get_mut(&parent) {
+            pool.children.push((child, chance));
+        }
+    }
+    let mut roots = BTreeSet::new();
+    for mut id in used {
+        let mut chain = BTreeSet::new();
+        while let Some(parent) = parents.get(&id) {
+            if !chain.insert(id) {
+                bail!("cyclic creature pool {id}");
+            }
+            id = *parent;
+        }
+        roots.insert(id);
+    }
+    let mut object_pools = BTreeSet::new();
+    for table in ["pool_gameobject", "pool_gameobject_template"] {
+        for row in parse_complete_table(dump, table)? {
+            let mut id = number(&row, 1, table)?;
+            let mut chain = BTreeSet::new();
+            while let Some(parent) = parents.get(&id) {
+                if !chain.insert(id) {
+                    bail!("cyclic GameObject pool {id}");
+                }
+                id = *parent;
+            }
+            object_pools.insert(id);
+        }
+    }
+    for root in roots {
+        if object_pools.contains(&root) {
+            bail!("pool {root} mixes creatures and GameObjects");
+        }
+        let members = flatten_pool(root, &pools, &mut BTreeSet::new())?;
+        let pool = &pools[&root];
+        if pool.limit == 0 {
+            bail!("creature pool {root}: zero limit is unsupported");
+        }
+        let map_ids: BTreeSet<_> = members.keys().map(|guid| maps[guid]).collect();
+        if map_ids.len() != 1 {
+            bail!("creature pool {root} spans several maps");
+        }
+        if pool.limit == 1
+            && members.values().all(|chance| *chance != 0)
+            && members.values().sum::<u32>() != 10_000
+        {
+            bail!("creature pool {root}: explicit chances must sum to 100 percent");
+        }
+        let positive_events: BTreeSet<i32> = members
+            .keys()
+            .filter_map(|guid| events.get(guid))
+            .flatten()
+            .copied()
+            .filter(|event| *event > 0)
+            .collect();
+        let population_id = (2_u64 << 32) + root;
+        if groups
+            .insert(
+                population_id,
+                Group {
+                    max_count: pool.limit,
+                    condition: 0,
+                    expression: 0,
+                    flags: 0,
+                    entries: Vec::new(),
+                    is_pool: true,
+                },
+            )
+            .is_some()
+        {
+            bail!("population id collision for pool {root}");
+        }
+        for (guid, chance) in members {
+            if memberships.insert(guid, (population_id, chance)).is_some() {
+                bail!("creature {guid} belongs to both a spawn group and a pool");
+            }
+            events.entry(guid).or_default().extend(&positive_events);
+        }
+    }
+    Ok(())
+}
+
 pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<PopulationPlan> {
-    let groups = source_groups(dump)?;
+    let mut groups = source_groups(dump)?;
     let mut memberships = BTreeMap::new();
     for row in parse_complete_table(dump, "spawn_group_spawn")? {
         let id = number(&row, 0, "spawn_group_spawn")?;
@@ -119,7 +326,7 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
         if chance > 100 {
             bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
         }
-        if memberships.insert(guid, (id, chance)).is_some() {
+        if memberships.insert(guid, (id, chance * 100)).is_some() {
             bail!("creature source guid {guid} belongs to several groups");
         }
     }
@@ -141,6 +348,7 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
         }
         events.entry(guid).or_default().insert(event);
     }
+    add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
     let templates: BTreeSet<u32> = parse_complete_table(dump, "creature_template")?
         .iter()
         .map(|row| number(row, 0, "creature_template"))
@@ -245,24 +453,26 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
         ));
     }
     for id in used_groups {
-        let (max, condition, expression, flags, entries) = if let Some(group) = groups.get(&id) {
-            (
-                group.max_count,
-                group.condition,
-                group.expression,
-                group.flags,
-                group
-                    .entries
-                    .iter()
-                    .map(|(e, min, max, chance)| format!("{e},{min},{max},{chance}"))
-                    .collect::<Vec<_>>()
-                    .join(";"),
-            )
-        } else {
-            (1, 0, 0, 0, String::new())
-        };
+        let (max, condition, expression, flags, entries, is_pool) =
+            if let Some(group) = groups.get(&id) {
+                (
+                    group.max_count,
+                    group.condition,
+                    group.expression,
+                    group.flags,
+                    group
+                        .entries
+                        .iter()
+                        .map(|(e, min, max, chance)| format!("{e},{min},{max},{chance}"))
+                        .collect::<Vec<_>>()
+                        .join(";"),
+                    group.is_pool,
+                )
+            } else {
+                (1, 0, 0, 0, String::new(), false)
+            };
         plan.definition_rows.push(format!(
-            "({id},{max},{condition},{expression},{flags},{})",
+            "({id},{max},{condition},{expression},{flags},{},{is_pool})",
             sql_str(&entries)
         ));
     }
@@ -348,5 +558,56 @@ mod tests {
     fn rejects_incomplete_population_source() {
         let scope = WorldImportScope::quest_catalogue().unwrap();
         assert!(collect("INSERT INTO `spawn_group` VALUES (1", &scope).is_err());
+    }
+
+    #[test]
+    fn template_and_nested_pools_keep_limits_and_fractional_chances() {
+        let dump = "INSERT INTO `creature_template` VALUES (10),(20);
+            INSERT INTO `creature` VALUES (1,10,0,0,1,2,3,0,60,60,0,0),(2,10,0,0,4,5,6,0,60,60,0,0),(3,20,0,0,4,5,6,0,60,60,0,0),(4,20,0,0,4,5,6,0,60,60,0,0);
+            INSERT INTO `pool_template` VALUES (1,1,'root'),(2,1,'child'),(3,1,'child');
+            INSERT INTO `pool_creature_template` VALUES (10,2,0,''),(20,3,0,'');
+            INSERT INTO `pool_pool` VALUES (2,1,0,''),(3,1,0,'');";
+        let plan = collect(dump, &full_scope()).unwrap();
+        assert_eq!(plan.spawns.len(), 4);
+        assert_eq!(plan.definition_rows, ["(8589934593,1,0,0,0,'',true)"]);
+        assert_eq!(plan.membership_rows.len(), 4);
+        let unequal = dump.replace("(3,1,'child')", "(3,2,'child')");
+        assert!(collect(&unequal, &full_scope())
+            .err()
+            .unwrap()
+            .to_string()
+            .contains("nested choices"));
+        let fractional = dump.split("INSERT INTO `pool_template`").next().unwrap().to_owned()
+            + "INSERT INTO `pool_template` VALUES (1,1,'rare'); INSERT INTO `pool_creature` VALUES (1,1,7.5,''),(2,1,0,''); INSERT INTO `game_event_creature` VALUES (1,27);";
+        let plan = collect(&fractional, &full_scope()).unwrap();
+        assert!(plan
+            .membership_rows
+            .iter()
+            .any(|row| row.contains(",750,'27')")));
+        assert!(plan
+            .membership_rows
+            .iter()
+            .all(|row| row.ends_with("'27')")));
+    }
+
+    #[test]
+    #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL"]
+    fn pinned_legacy_pools_cover_every_direct_and_template_position() {
+        let dump = crate::read_dump(&std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap()).unwrap();
+        let plan = collect(&dump, &full_scope()).unwrap();
+        assert_eq!(plan.spawns.len(), 66_310);
+        assert_eq!(
+            plan.definition_rows
+                .iter()
+                .filter(|row| row.ends_with(",true)"))
+                .count(),
+            270
+        );
+        let members = plan
+            .membership_rows
+            .iter()
+            .filter(|row| row.split(',').nth(1).unwrap().parse::<u64>().unwrap() >= (2_u64 << 32))
+            .count();
+        assert_eq!(members, 998);
     }
 }

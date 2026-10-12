@@ -755,7 +755,7 @@ pub(crate) fn build_creature_entity(
         sheet_crit_bp: 0,
         bank_bag_slots: 0,   // a creature owns no bank slots
         mount_display_id: 0, // creatures do not use the player taxi presentation field
-        zone_id: 0,          // unresolved: nothing routes zone-scoped delivery to a creature
+        zone_id: 0,          // resolved at emission for zone-wide creature speech
         sheet_ranged_ap: 0,
         sheet_ranged_dmg_min: 0,
         sheet_ranged_dmg_max: 0,

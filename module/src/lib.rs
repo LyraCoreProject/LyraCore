@@ -564,10 +564,10 @@ pub use tables::{
     CreatureAiRuleState, CreatureAiSpellMetadata, CreatureAiState, CreatureAiSummon,
     CreatureAiSummonExpiry, CreatureAiSummonOrigin, CreatureCast, CreatureFamily,
     CreatureGossipMenuOverride, CreatureMoveEvent, CreatureMoveSchedule, CreaturePresentation,
-    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpell, CreatureSpline, CreatureTemplate,
-    CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption, GossipOption,
-    HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule, PetCommand,
-    RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
+    CreatureRelayTemporaryFaction, CreatureSpawn, CreatureSpawnMap, CreatureSpell, CreatureSpline,
+    CreatureTemplate, CreatureWaypoint, GossipMenu, GossipMenuProfile, GossipMenuProfileOption,
+    GossipOption, HunterPet, HunterPetProtocol, LivePetKind, NpcText, NpcTextSlot, PetCareSchedule,
+    PetCommand, RelayArrival, RelayContinuation, RelayDefinition, RelayRun,
 };
 pub use tables::{game_creature_dead_callback_cast_admission, CreatureDeadCallbackCastAdmission};
 pub use tables::{game_creature_distraction, CreatureDistraction};

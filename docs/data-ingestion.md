@@ -232,6 +232,9 @@ WORLD_PROFILE=full-world DUMP=.import/classic-db-full.sql DBC=/path/to/client/Da
 
 All authored creature positions are retained, including nonselectable creatures and population
 alternatives. Population metadata retains entry choices, count limits, chances and event links.
+Legacy creature pools retain fractional chances and template-based membership. Equal-sized,
+equal-chance nested pools with single-selection limits flatten to the same initial distribution.
+Other nesting and mixed creature/GameObject pools stop the import before it writes data.
 The Module selects an initial population from that metadata. Selections last until reimport or
 Instance teardown; source pool rotation after deaths is not yet implemented. Positive game-event
 members and groups with world-state conditions remain dormant until an event system can evaluate
@@ -243,6 +246,9 @@ raid Instance copies its selected creatures and patrols into that Instance. The 
 and are removed with the Instance. This supplies map populations; it does not supply missing
 encounter scripts, raid lockouts or battleground rules. Continent terrain covers the full client
 grid; imported spawn coverage does not imply complete collision coverage for every interior.
+Zone-wide creature speech requires imported terrain and area metadata to resolve its audience.
+Reimport clears creature copies in existing Instances but retains their leases. Recreate those
+Instances before resuming play.
 
 The EventAI compatibility gate still applies to the full catalogue. A larger scope does not
 approve dropped rules or unknown behavior. Existing smaller profiles retain their shared starting

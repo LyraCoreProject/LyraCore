@@ -480,6 +480,7 @@ fn creature_chat_reaches(chat_type: u8, speaker: &WorldEntity, listener: &WorldE
     } else if lyracore_shared::chat::broadcast_chat::is_zone_wide(chat_type) {
         speaker.map_id == listener.map_id
             && speaker.instance_id == listener.instance_id
+            && speaker.zone_id != 0
             && speaker.zone_id == listener.zone_id
     } else {
         let range = chat_range_yd(chat_type);
@@ -528,6 +529,16 @@ mod creature_chat_tests {
             listener.map_id = 0;
         }
         assert!(!creature_chat_reaches(YELL, &speaker, &listener));
+        let unresolved = WorldEntity {
+            zone_id: 0,
+            ..speaker
+        };
+        listener.zone_id = 0;
+        assert!(!creature_chat_reaches(
+            CREATURE_ZONE_YELL,
+            &unresolved,
+            &listener
+        ));
     }
 
     #[test]

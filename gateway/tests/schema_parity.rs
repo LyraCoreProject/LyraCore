@@ -766,6 +766,9 @@ parity_test!(parity_game_hunter_pet_protocol, "game_hunter_pet_protocol", lyraco
 parity_test!(parity_game_config, "game_config", lyracore_module::ServerConfig, bindings::server_config_type::ServerConfig, {
     id, xp_rate, nav_enabled, hosts_instances, bots_idle, vmap_enabled, nav_coverage_enabled,
 });
+parity_test!(parity_game_creature_spawn_map, "game_creature_spawn_map", lyracore_module::CreatureSpawnMap, bindings::creature_spawn_map_type::CreatureSpawnMap, {
+    map_id,
+});
 parity_test!(parity_game_creature_template, "game_creature_template", lyracore_module::CreatureTemplate, bindings::creature_template_type::CreatureTemplate, {
     entry, name, subname, display_id, level, health, faction_template, npc_flags, unit_flags,
     creature_type, creature_family, type_flags, rank, scale, base_attack_time_ms, money_min,
@@ -1165,6 +1168,7 @@ const MANIFEST_TABLES: &[&str] = &[
     "game_hunter_pet_protocol",
     "game_config",
     "game_creature_template",
+    "game_creature_spawn_map",
     "game_taxi_node",
     "game_taxi_path",
     "game_taxi_path_node",

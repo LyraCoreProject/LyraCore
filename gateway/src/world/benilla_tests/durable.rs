@@ -81,12 +81,17 @@ impl Realm {
         self.coordinator
             .provision_account("OBSERVER", &[0; 32], &[0; 32])
             .unwrap();
-        let account = self
-            .coordinator
-            .account_by_username("OBSERVER")
-            .unwrap()
-            .unwrap()
-            .id;
+        let deadline = Instant::now() + Duration::from_secs(5);
+        let account = loop {
+            if let Some(account) = self.coordinator.account_by_username("OBSERVER").unwrap() {
+                break account.id;
+            }
+            assert!(
+                Instant::now() < deadline,
+                "Account projection did not arrive"
+            );
+            std::thread::sleep(Duration::from_millis(10));
+        };
         assert_eq!(
             self.coordinator
                 .create_character(
