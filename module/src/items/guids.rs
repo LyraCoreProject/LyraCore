@@ -1,4 +1,9 @@
 //! Item identities issued from the Shard's durable GUID Range.
+//!
+//! Characters and items share the range's high-water mark. An item GUID keeps `HIGHGUID_ITEM` in
+//! bits 48–63, sets bit 47 to mark this format, and holds the issued value in bits 0–46. It does not
+//! pack its owner's GUID. An item keeps its GUID across slot moves and Character Transfer; Trading,
+//! Mail, Auctions and Buyback create new items for the recipient.
 
 use spacetimedb::ReducerContext;
 

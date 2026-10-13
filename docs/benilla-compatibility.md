@@ -5,8 +5,8 @@ The Gateway's development dependencies pin `benilla-protocol` and `benilla-srp`
 to `c2fc3cf304075a0fa1c9accffaf5efb99be9edfe`. Tests use that revision from Cargo,
 so changes in a neighboring Benilla checkout cannot change the results.
 
-All 277 requests in the pinned Benilla writer now have a typed dispatch pattern
-or a reviewed raw route. The inventory test flags requests with neither source
+Every request in the pinned Benilla writer has a typed dispatch pattern or a
+reviewed raw route. The inventory test flags requests with neither source
 classification. This accounts for requests; it does not certify every gameplay path or every outgoing
 packet. Unsupported operations return a Refusal where the protocol defines one,
 or a System Message naming the unavailable feature.
@@ -115,10 +115,6 @@ The Headless Client scenarios cover these exchanges through the same WorldStore 
   packet's quest id, money and XP. An incomplete quest must stay on the progress
   screen and grant nothing when its reward screen is requested.
 
-The reward scenario exposed `CMSG_QUESTGIVER_REQUEST_REWARD`, which now uses the
-same durable completion evaluation as `CMSG_QUESTGIVER_COMPLETE_QUEST`. Choosing
-a reward still crosses the Store Seam and leaves the grant rules in the Module.
-
 ## Durable scenarios
 
 The ignored `benilla_durable_` tests start private SpacetimeDB instances on loopback
@@ -149,25 +145,6 @@ runs them in CI. They cover:
 - Refusing a distant, dead or wrong-kind innkeeper, then binding at the selected
   innkeeper and receiving the new hearth point during the same World Session.
 
-Module inventory regressions also check that split, destroy, use, move, merge,
-vendor sale, disenchanting and reagent consumption cannot change offered trade
-items. Quest item exchanges use the same inventory Gate. Scheduled crafting checks
-all reagents before consuming any or charging power. Automatic grants that grow
-an offered stack clear both acceptances and refresh both trade windows. Failed
-crafts also refresh the restored quantities. A completed trade delivers the newly
-accepted stack count and copper. Equipment moves refuse a two-handed weapon
-while an offhand item is equipped, and refuse the reverse combination. The
-Character must remove the conflicting item first.
-
-The XP scenario found a codec mismatch. Vanilla kill XP includes base XP and the
-group multiplier; other XP awards have no extra fields. The Gateway now writes
-that layout directly. `XpEvent.rested_bonus` is an appended field with a zero
-default so the kill packet can distinguish base XP from rested XP.
-
-The bag scenario found missing container pointers at world entry. Those pointers
-now follow the item and Character creation packets, using the same slot mapping
-as incremental inventory updates.
-
 ## Additional protocol corrections
 
 The Gateway owns these build-5875 layouts where the protocol library differs:
@@ -187,6 +164,11 @@ The Gateway owns these build-5875 layouts where the protocol library differs:
 
 Ticket requests receive Refusals after framing checks. The unavailable service
 does not decompress the optional transcript or allocate from its size headers.
+
+Kill XP carries base XP and the group multiplier; other XP awards have no extra
+fields, and the Gateway writes that layout directly. At world entry, container
+pointers follow the item and Character creation packets, with the same slot
+mapping as incremental inventory updates.
 
 At War changes reach the existing Module operation. Bind and talent-reset
 confirmations also reach existing Module operations. Selecting the gossip option
@@ -234,21 +216,6 @@ System Message. Possession and remote movement authority remain unavailable.
 The scenarios establish the behavior listed above, not every branch of the older
 handlers. Further gameplay verification includes targeted item spells, channel
 refresh and reconnect, pet spell execution, multi-shard instance flows and the
-complete outgoing opcode inventory. The source report contains 346 outgoing
-opcode rows; decoder presence alone does not require a realm to emit each one.
+complete outgoing opcode inventory. Decoder presence alone does not require a
+realm to emit an outgoing message.
 
-## Verification record
-
-The workspace run passed 4,376 tests with `lyracore-package-delta` excluded,
-using the Module's `debug_reducers` feature. All eight durable Benilla scenarios
-passed against disposable SpacetimeDB instances. Formatting, workspace Clippy with
-all targets and features, and the check of all 1,182 Gateway binding files passed.
-Plain publish from `main` at `f09dafbd` to this Module migrated a private instance
-without clearing it. Its Character rows survived, and `XpEvent.rested_bonus` was
-readable after the update.
-
-An earlier full workspace run found two unchanged package-delta fixture failures:
-`a_package_may_insert_a_quest_inside_the_package_range` and
-`an_incomplete_quest_insert_is_refused`. Their shared `WHOLE_QUEST_ROW` lacks the
-`quest_type` field required by the existing package-delta schema. Those files are
-outside this change.

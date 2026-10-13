@@ -1,74 +1,68 @@
 # Getting help
 
-LyraCore is an alpha, maintained by a very small number of people in their own time. There is no
-support contract, no SLA, and no hosted service. What there is: documentation that tries to be
-specific, and a tracker that gets read.
+LyraCore is an alpha, maintained by a few people in their spare time. There is no support contract
+and no hosted service.
 
-## The answer is often already written down
+## Look here first
 
 | Your situation | Where to look |
 |---|---|
-| "I cloned it, now what?" | [`docs/quickstart.md`](./docs/quickstart.md) — prerequisites, `./lyracore dev up`, account creation, `realmlist.wtf`, LAN play. |
-| The stack will not start, a port is busy, `doctor` complains, the client will not connect | [`docs/quickstart.md` §8](./docs/quickstart.md#8-troubleshooting) — one entry per failure mode, with the exact message each one prints. |
-| What does this CLI command do / is it safe | The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) in the `lyracore-cli` repository. |
-| How does the thing actually work | [`docs/architecture.md`](./docs/architecture.md), whose §9 indexes the rest of the documentation. |
-| I want to change something | [`CONTRIBUTING.md`](./CONTRIBUTING.md): the three documents to read first, what gets in, and how a pull request is judged. |
-| Is it safe to expose this | No — see the warning banner in [`README.md`](./README.md). |
-| Where does world content come from | [`docs/data-ingestion.md`](./docs/data-ingestion.md). |
+| You cloned it and want a running realm | [`docs/quickstart.md`](./docs/quickstart.md): prerequisites, `./lyracore dev up`, accounts, `realmlist.wtf` and LAN play. |
+| The stack does not start, a port is busy, `doctor` complains, or the client does not connect | [`docs/quickstart.md` §8](./docs/quickstart.md#8-troubleshooting), one entry per failure with the message it prints. |
+| What a CLI command does, and whether it is safe | The [CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md) in the `lyracore-cli` repository. |
+| How the server works | [`docs/architecture.md`](./docs/architecture.md). |
+| You want to change something | [`CONTRIBUTING.md`](./CONTRIBUTING.md). |
+| Where world content comes from | [`docs/data-ingestion.md`](./docs/data-ingestion.md). |
 
-Before reporting anything, run:
+Before you report a problem, run:
 
 ```bash
 ./lyracore doctor
 ./lyracore dev status
 ```
 
-Between them they distinguish most of the common failures — a wrong toolchain version, a port held
-by someone else's process, a healthy pair of processes pointed at a node where nothing was ever
-published.
+`doctor` finds a wrong toolchain version or a port held by another process. `dev status` finds a
+running stack whose node has no published Module.
 
 ## Where to ask
 
-**Bugs, questions and concrete proposals → [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues).**
-For a bug, include the quickstart step you were on, your `./lyracore doctor` output, and the log the
-failure appeared in. Those three answers turn a report into a fix. A question is welcome there too:
-say what you expected and what you saw.
+Use [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) for bugs, questions and
+proposals. For a bug, give the quickstart step you were on, your `./lyracore doctor` output and the
+log that shows the failure. For a question, say what you expected and what you saw.
 
-**Security reports → not here.** Use GitHub's private vulnerability reporting on this repository; do
-not open a public issue.
+Report a security problem through GitHub's private vulnerability reporting on this repository. Do
+not open a public issue. Report harassment or abuse privately to the maintainers too.
 
-There is no chat server, no forum, no mailing list, and no social account. If you find something
-claiming to be an official LyraCore channel, it is not one.
+There is no chat server, forum, mailing list or social account. A channel that claims to be
+official LyraCore is not.
 
 ## What is in scope
 
-Supported, and worth reporting:
+We support:
 
-- The **local development fixture** on Linux and macOS: `./lyracore` and everything
+- The local development fixture on Linux and macOS: `./lyracore` and everything
   [`docs/quickstart.md`](./docs/quickstart.md) describes.
-- A stock, unmodified **1.12.1 build 5875** client connecting over loopback or a private LAN.
-- The **seeded** world — the fixture written by the module's `init` reducer, which needs no
-  client-data import.
-- Anything in this repository being wrong: a broken command, a stale document, a dead link.
+- An unmodified 1.12.1 build 5875 client over loopback or a private LAN.
+- The seeded world that the Module's `init` reducer writes. It needs no client data import.
+- Errors in this repository, such as a broken command, a stale document or a dead link.
 
-Out of scope, and closed as such:
+We close these as out of scope:
 
-- **Public or VPS hosting.** Not supported in this alpha, at all. See the warning banner in
-  [`README.md`](./README.md).
-- **Windows and WSL.** Not covered and not tested.
-- **Any client that is not build 5875**, and any modified or launcher-patched client.
-- **Requests for game data** — a client, MPQ/DBC files, or a world-database dump. This project
-  distributes none of those and will not point you at somewhere that does.
-- **Problems that only appear after your own content import.** Say so in the report; it is still
-  worth filing, but it is a different world from the seeded fixture the test suites run against.
-- Conduct problems — harassment, abuse, or bad-faith participation. Report those privately to the maintainers rather than in a public issue.
+- Public or VPS hosting. The [`README.md`](./README.md) says why.
+- Windows and WSL. Nobody tests them.
+- A client that is not build 5875, or a modified or launcher-patched client.
+- Requests for game data: a client, MPQ or DBC files, or a world database dump. This project
+  distributes none of them and does not say where to find them.
 
-## Response expectations
+A problem that appears only after your own content import is still worth a report. Say so in it,
+because the test suites run against the seeded world, not yours.
 
-Best effort, by people with day jobs. `P1` (blocks play, or a live regression) gets looked at first;
-everything else is queued by priority label (`P1`-`P4`) on [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues).
-A quiet issue has not been rejected. An issue with **How to check** waits on a person at a real game
-client, which is scarcer here than engineering time.
+## Response times
 
-The fastest way to get something fixed is a pull request. [`CONTRIBUTING.md`](./CONTRIBUTING.md)
-says where to start and how a pull request is judged.
+We work through [issues](https://github.com/LyraCoreProject/LyraCore/issues) by priority label, `P1`
+(blocks play, or a live regression) first and `P4` last. A quiet issue is not a rejected one. An
+issue with **How to check** waits for a person with a real game client, and we have fewer of those
+than engineers.
+
+A pull request is the fastest way to get a fix. [`CONTRIBUTING.md`](./CONTRIBUTING.md) says how we
+judge one.

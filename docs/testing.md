@@ -86,6 +86,9 @@ CI also runs Gateway tests that need a node. The workflow names individual tests
 cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::party_command_durable_tests -- --ignored --test-threads=1
 ```
 
+The Headless Client scenarios, their Benilla pin and the opcode inventory are in
+[`benilla-compatibility.md`](./benilla-compatibility.md).
+
 ## Gateway bindings
 
 Before Gateway tests, checks, or Clippy on a fresh checkout, prepare its bindings:

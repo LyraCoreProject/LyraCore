@@ -51,6 +51,11 @@ pub struct LootRoll {
 
 /// One Loot Roll Promotion Receipt per source Module identity, corpse and slot. Resolution keeps
 /// this high-water mark; replacing it with a later source id also covers every older replay.
+///
+/// The source `game_loot_roll` auto-increment sequence orders generations, so content imports must
+/// not replace that table or insert explicit roll ids. Restoring an older copy under the same
+/// identity can reuse ids and needs its own recovery procedure. Receipts never expire: a retired
+/// source can still have delayed requests in flight, and nothing refuses them yet.
 #[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
 pub struct LootRollPromotionReceipt {
     #[primary_key]
