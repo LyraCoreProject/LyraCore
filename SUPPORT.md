@@ -30,11 +30,11 @@ Use [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) for bugs
 proposals. For a bug, give the quickstart step you were on, your `./lyracore doctor` output and the
 log that shows the failure. For a question, say what you expected and what you saw.
 
-Report a security problem through GitHub's private vulnerability reporting on this repository. Do
-not open a public issue. Report harassment or abuse privately to the maintainers too.
+Report a security problem in a private message to a maintainer on the
+[LyraCore Discord](https://discord.gg/wxWHS3Tbj). Do not post it in a channel or a public issue.
+Report harassment or abuse the same way.
 
-There is no chat server, forum, mailing list or social account. A channel that claims to be
-official LyraCore is not.
+This repository and that Discord server are the only official channels.
 
 ## What is in scope
 

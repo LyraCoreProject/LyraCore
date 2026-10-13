@@ -10,8 +10,8 @@ body:
         - **`docs/quickstart.md` §8** has one troubleshooting entry per known failure mode, keyed to
           the exact message each one prints. Version mismatches, busy ports, `UNREACHABLE`
           databases, "Unable to connect", and wrong-build clients are all in there.
-        - **Security problems do not go here.** Use the "Report a vulnerability" link in this repo's
-          Security tab (private advisory) — do not open a public issue.
+        - **Security problems do not go here.** Send a private message to a maintainer on the
+          [LyraCore Discord](https://discord.gg/wxWHS3Tbj). Do not open a public issue.
 
         Public/VPS hosting, Windows/WSL, non-5875 clients, and requests for game data are out of
         scope for this alpha and will be closed as such (`SUPPORT.md` has the full list).

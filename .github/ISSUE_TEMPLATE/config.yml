@@ -7,5 +7,5 @@ contact_links:
     url: https://github.com/LyraCoreProject/LyraCore/blob/main/docs/quickstart.md#8-troubleshooting
     about: One entry per known failure mode, keyed to the exact message it prints. Check here first.
   - name: Report a security vulnerability
-    url: https://github.com/LyraCoreProject/LyraCore/security/advisories/new
-    about: Private advisory thread. Do not report security problems in a public issue — several weaknesses are already known and accepted for this alpha's local-development-only posture, so check the advisory isn't a duplicate first.
+    url: https://discord.gg/wxWHS3Tbj
+    about: Send a private message to a maintainer on the LyraCore Discord. Do not report security problems in a public issue. This alpha supports local development only, and some weaknesses are known and accepted for it.
