@@ -5,6 +5,21 @@ execution of the existing Module movement rules through indexed memory tables. R
 on the benchmark machine with `bash module/prototypes/native-simulation/run.sh host-benchmark`.
 This path remains experimental and does not own durable state or Gateway publication.
 
+The next experiment commits each tick to a disposable persistent Shard and compares confirmed
+subscription updates. Its contract and limits are in [native-runtime.md](native-runtime.md).
+Run it on suitable benchmark hardware with:
+
+```sh
+bash module/prototypes/native-simulation/run.sh commit-benchmark target/committed-movement.jsonl
+python3 module/prototypes/native-simulation/summarize_commits.py target/committed-movement.jsonl
+```
+
+Both implementations use a persistent binary WebSocket connection. The native timing includes
+execution, row-change encoding and durable commit. Both include the confirmed subscription's CLI
+decoding and output. The script checks committed frames, subscription rows, duplicate delivery,
+refusal atomicity and restart behavior before measuring. These are still short movement replays;
+they do not cover the complete creature cycle or Gateway packet delivery.
+
 This throwaway prototype asks whether creature movement can run in native Rust with in-memory
 state while preserving the current Module's observable results. The reference uses movement rules
 from Core commit

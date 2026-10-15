@@ -192,7 +192,10 @@ pub fn debug_native_simulation_benchmark(
     Ok(())
 }
 
-fn benchmark_frame(ctx: &ReducerContext, request: &prototype::Request) -> serde_json::Value {
+pub(super) fn benchmark_frame(
+    ctx: &ReducerContext,
+    request: &prototype::Request,
+) -> serde_json::Value {
     prototype::snapshot(
         request.sequence,
         request.at_micros,

@@ -12,6 +12,7 @@ pub struct TableSimulation {
     guids: Vec<u64>,
     sequence: u64,
     at_micros: u64,
+    changes: Vec<lyracore_native_host::Change>,
 }
 
 impl TableSimulation {
@@ -66,6 +67,7 @@ impl TableSimulation {
             guids: scenario.entities.iter().map(|row| row.guid).collect(),
             sequence: 0,
             at_micros: scenario.start_micros,
+            changes: Vec::new(),
         })
     }
 
@@ -91,12 +93,31 @@ impl TableSimulation {
         })?;
         self.sequence = sequence;
         self.at_micros = at_micros;
+        self.changes = self.world.changes().to_vec();
         Ok(())
     }
 
     pub fn step(&mut self, request: &Request) -> Result<Value, String> {
         self.apply(request)?;
         self.snapshot()
+    }
+
+    pub fn commit_batch(&self, run: u64) -> crate::native_prototype::commit::Batch {
+        use crate::native_prototype::commit::{Batch, RowChange};
+        Batch {
+            run,
+            sequence: self.sequence,
+            at_micros: self.at_micros,
+            changes: self
+                .changes
+                .iter()
+                .map(|change| RowChange {
+                    table: change.table.clone(),
+                    before: change.before.as_deref().map(<[u8]>::to_vec),
+                    after: change.after.as_deref().map(<[u8]>::to_vec),
+                })
+                .collect(),
+        }
     }
 
     pub fn snapshot(&mut self) -> Result<Value, String> {

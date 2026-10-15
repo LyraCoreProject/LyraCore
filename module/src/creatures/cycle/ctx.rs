@@ -30,6 +30,12 @@ use crate::{
 ))]
 mod prototype_reference;
 
+#[cfg(all(
+    feature = "native_simulation_prototype",
+    any(target_arch = "wasm32", feature = "native_simulation_host")
+))]
+mod committed_reference;
+
 #[cfg(all(feature = "native_simulation_host", not(target_arch = "wasm32")))]
 pub(super) mod native_reference;
 

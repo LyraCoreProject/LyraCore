@@ -11,6 +11,7 @@ use crate::creatures::tick::{advance_needs_persist, CreatureSpline};
 use crate::{MeleeAttack, WorldEntity};
 
 pub mod benchmark;
+pub mod commit;
 mod fixtures;
 mod world;
 

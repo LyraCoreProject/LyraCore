@@ -40,7 +40,7 @@ case "$prototype_mode" in
             --test native_simulation_prototype table_backed_module_matches_the_native_trace \
             -- --ignored --test-threads=1 --nocapture
         ;;
-    benchmark|host-benchmark)
+    benchmark|host-benchmark|commit-benchmark)
         prototype_scratch=$(mktemp -d "${TMPDIR:-/tmp}/lyracore-native-benchmark.XXXXXX")
         trap 'rm -rf -- "$prototype_scratch"' EXIT
         export TMPDIR="$prototype_scratch"
@@ -49,26 +49,36 @@ case "$prototype_mode" in
         cargo build --release --locked -p lyracore-module --features native_simulation_prototype \
             --target wasm32-unknown-unknown
         prototype_native_features=native_simulation_prototype
-        if [[ "$prototype_mode" == host-benchmark ]]; then
+        prototype_example=native_simulation_benchmark
+        prototype_summary=summarize.py
+        if [[ "$prototype_mode" != benchmark ]]; then
             prototype_native_features=native_simulation_host
             cargo test --release --locked -p lyracore-native-host -- --test-threads=1
             cargo test --release --locked -p lyracore-module --features native_simulation_host \
                 --test native_simulation_host -- --test-threads=1
         fi
+        if [[ "$prototype_mode" == commit-benchmark ]]; then
+            prototype_example=native_committed_benchmark
+            prototype_summary=summarize_commits.py
+        fi
         cargo build --release --locked -p lyracore-module --features "$prototype_native_features" \
-            --example native_simulation_benchmark
+            --example "$prototype_example"
         prototype_target=$(cd -- "${CARGO_TARGET_DIR:-target}" && pwd)
         export LYRACORE_NATIVE_REFERENCE_WASM="$prototype_target/wasm32-unknown-unknown/release/lyracore_module.wasm"
         timeout 300s cargo test --release --locked -p lyracore-module --features "$prototype_native_features" \
             --test native_simulation_prototype -- --include-ignored --test-threads=1
+        if [[ "$prototype_mode" == commit-benchmark ]]; then
+            timeout 300s cargo test --release --locked -p lyracore-module --features native_simulation_host \
+                --test native_simulation_commit -- --ignored --test-threads=1
+        fi
         prototype_results=${1:-"$prototype_target/native-simulation-benchmark-$(date -u +%Y%m%dT%H%M%SZ).jsonl"}
         if (($#)); then shift; fi
-        timeout 900s "$prototype_target/release/examples/native_simulation_benchmark" \
+        timeout 900s "$prototype_target/release/examples/$prototype_example" \
             "$LYRACORE_NATIVE_REFERENCE_WASM" "$prototype_results" "$@"
-        python3 module/prototypes/native-simulation/summarize.py "$prototype_results"
+        python3 "module/prototypes/native-simulation/$prototype_summary" "$prototype_results"
         ;;
     *)
-        echo 'Usage: run.sh [demo [scenario|--list]|check|reference|benchmark|host-benchmark [output.jsonl [creatures ...]]]' >&2
+        echo 'Usage: run.sh [demo [scenario|--list]|check|reference|benchmark|host-benchmark|commit-benchmark [output.jsonl [creatures ...]]]' >&2
         exit 2
         ;;
 esac

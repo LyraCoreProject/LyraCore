@@ -10,7 +10,7 @@ use std::io::{BufRead, BufReader};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
-use std::sync::{Arc, Mutex, Weak};
+use std::sync::{mpsc, Arc, Mutex, Weak};
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
@@ -34,6 +34,36 @@ pub fn core_root() -> &'static Path {
 const POLL_INTERVAL: Duration = Duration::from_millis(50);
 
 pub const POLL_TIMEOUT: Duration = Duration::from_secs(30);
+
+pub struct SubscriptionUpdate {
+    pub received_at: Instant,
+    pub json_bytes: usize,
+    pub value: serde_json::Value,
+}
+
+pub struct TableSubscription {
+    child: Child,
+    updates: mpsc::Receiver<SubscriptionUpdate>,
+    reader: Option<thread::JoinHandle<()>>,
+}
+
+impl TableSubscription {
+    pub fn receive(&self, timeout: Duration) -> SubscriptionUpdate {
+        self.updates
+            .recv_timeout(timeout)
+            .expect("subscription update did not arrive")
+    }
+}
+
+impl Drop for TableSubscription {
+    fn drop(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(reader) = self.reader.take() {
+            let _ = reader.join();
+        }
+    }
+}
 
 const PUBLISH_ATTEMPTS: usize = 3;
 
@@ -274,42 +304,57 @@ impl Standalone {
         count: u32,
         action: impl FnOnce(),
     ) -> Vec<serde_json::Value> {
-        struct Subscription(Child);
-        impl Drop for Subscription {
-            fn drop(&mut self) {
-                let _ = self.0.kill();
-                let _ = self.0.wait();
-            }
-        }
-        let mut child = Subscription(
-            self.command()
-                .args([
-                    "subscribe",
-                    "-s",
-                    &self.server,
-                    "--print-initial-update",
-                    "--timeout",
-                    "45",
-                    &self.database,
-                    query,
-                ])
-                .stdout(Stdio::piped())
-                .spawn()
-                .expect("failed to subscribe to fixture"),
-        );
-        let mut reader = BufReader::new(child.0.stdout.take().unwrap());
-        let mut initial = String::new();
-        assert!(reader.read_line(&mut initial).unwrap() > 0);
-        serde_json::from_str::<serde_json::Value>(&initial).expect("initial subscription result");
+        let (subscription, _) = self.subscribe(&[query]);
         action();
-        // Keep the CLI alive until its asynchronous stdout write reaches the pipe.
-        let updates: Vec<_> = reader
-            .lines()
-            .take(count as usize)
-            .map(|line| serde_json::from_str(&line.unwrap()).expect("transaction update"))
-            .collect();
-        assert_eq!(updates.len(), count as usize, "subscription ended early");
-        updates
+        (0..count)
+            .map(|_| subscription.receive(Duration::from_secs(45)).value)
+            .collect()
+    }
+
+    // Disk updates require durability confirmation; the initial update fences subscription setup.
+    pub fn subscribe(&self, queries: &[&str]) -> (TableSubscription, SubscriptionUpdate) {
+        let mut child = self
+            .command()
+            .args([
+                "subscribe",
+                "-s",
+                &self.server,
+                "--confirmed",
+                if self.storage == Storage::Disk {
+                    "true"
+                } else {
+                    "false"
+                },
+                "--print-initial-update",
+                &self.database,
+            ])
+            .args(queries)
+            .stdout(Stdio::piped())
+            .spawn()
+            .expect("failed to subscribe to fixture");
+        let stdout = child.stdout.take().expect("subscription stdout is piped");
+        let (sender, updates) = mpsc::channel();
+        let reader = thread::spawn(move || {
+            for line in BufReader::new(stdout).lines() {
+                let received_at = Instant::now();
+                let line = line.expect("subscription output could not be read");
+                let update = SubscriptionUpdate {
+                    received_at,
+                    json_bytes: line.len(),
+                    value: serde_json::from_str(&line).expect("subscription output is not JSON"),
+                };
+                if sender.send(update).is_err() {
+                    break;
+                }
+            }
+        });
+        let subscription = TableSubscription {
+            child,
+            updates,
+            reader: Some(reader),
+        };
+        let initial = subscription.receive(Duration::from_secs(45));
+        (subscription, initial)
     }
 
     pub fn assert_call(&self, reducer: &str, args: &[&str]) {

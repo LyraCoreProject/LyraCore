@@ -97,3 +97,41 @@ capacity claims. Seven-tick averages remain labeled as replay averages.
 
 Completion requires the integrated runtime and its recovery path to pass these parity gates and
 show a useful measured improvement. Deployment to a live Realm is a separate operation.
+
+## Committed movement experiment
+
+The next comparison uses the same movement workloads, with one tick per transaction in a
+disposable persistent Shard. Setup stops the fixture's scheduled work before inserting rows.
+The reference executes the existing movement rules in Wasm. The native path sends the complete
+net row changes from those same rules to a feature-gated commit reducer. Both paths publish the
+existing gameplay tables through SpacetimeDB subscriptions.
+
+Define these checks before measuring:
+
+- Each committed tick has the reference's complete entity, spline and attack state.
+- Subscription updates contain the same inserted and deleted gameplay rows.
+- A repeated commit has no second effect. Reusing its sequence with different bytes fails.
+- An old run, skipped sequence or mismatched old row fails without changing any row.
+- A net batch contains at most one old row and one new row for each table and primary key.
+- A failure after applying part of a batch rolls back the batch and its progress row.
+- Restart preserves the accepted sequence and rows. Retrying the last accepted batch after restart
+  does not apply it again.
+
+An update with the same primary key must compare its old BSATN row with the committed row before
+using the indexed update operation. Inserts and deletions retain their row checks. Every operation
+and the receipt remain in one transaction.
+
+The experiment admits one outstanding tick and retains its last receipt. A new setup increments
+the run number, so delayed commits cannot enter a later run. The commit reducer accepts only the
+fixture's entity, spline, attack and movement-intent tables. This is not the complete runtime's
+ownership protocol: other gameplay entry points are not routed through it, and only an empty,
+disposable Shard with paused schedules is supported.
+
+Use a persistent binary WebSocket connection for both paths. Include request encoding, native
+execution where applicable, commit and the confirmed subscription notification in elapsed time.
+Setup and parity queries stay outside that interval. Record separate tick samples and request bytes. Subscription
+sizes are the CLI's decoded JSON output, not network bytes. Its decoding and printing time is part
+of the publication measurement. This is a disposable subscriber, not the Gateway protocol path.
+The first HTTP attempt exceeded the endpoint's request-size limit at 5,000 creatures. Both paths
+therefore use the pinned SpacetimeDB v2 binary protocol. Request sizes count the BSATN message,
+excluding WebSocket framing. A tick remains one transaction.
