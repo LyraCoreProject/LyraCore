@@ -41,6 +41,9 @@ case "$prototype_mode" in
             -- --ignored --test-threads=1 --nocapture
         ;;
     benchmark)
+        prototype_scratch=$(mktemp -d "${TMPDIR:-/tmp}/lyracore-native-benchmark.XXXXXX")
+        trap 'rm -rf -- "$prototype_scratch"' EXIT
+        export TMPDIR="$prototype_scratch"
         export CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1
         export CARGO_PROFILE_RELEASE_DEBUG=0
         cargo build --release --locked -p lyracore-module --features native_simulation_prototype \

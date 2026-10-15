@@ -142,6 +142,13 @@ also excludes per-tick commit costs, subscriptions, durability and network work.
 current movement implementation against the native prototype's complete in-memory rows. It does not
 measure a compact layout or the whole creature cycle.
 
+Fixture rows are inserted, exercised and removed in the same transaction. The Module therefore
+operates on uncommitted fixture rows, while normal movement also reads previously committed rows.
+The native adapter assumes omitted systems are absent; the Module still checks their empty tables.
+The measured difference combines storage, runtime and adapter costs. Extending the native adapter
+to cover the full game adds work. Confirm any architectural decision with committed state and the
+missing gameplay systems before projecting these ratios onto a Realm.
+
 Each workload gets three warmups and twenty measured samples. Native-first and Module-first samples
 alternate. The output retains raw samples, state digests, artifact hashes, compiler versions and CPU
 affinity. The summary reports median and p95 across the seven-tick averages. These are not individual
