@@ -172,6 +172,14 @@ fn metadata(
     let cpu = std::fs::read_to_string("/proc/cpuinfo")?;
     let status = std::fs::read_to_string("/proc/self/status")?;
     let executable = std::fs::read(std::env::current_exe()?)?;
+    let spacetime = command(
+        &std::env::var("SPACETIME_BIN").unwrap_or_else(|_| "spacetime".into()),
+        &["--version"],
+    );
+    let version = spacetime
+        .lines()
+        .find(|line| line.starts_with("spacetimedb tool version"))
+        .ok_or("cannot identify the SpacetimeDB version")?;
     Ok(
         json!({"kind": "metadata", "samples": samples, "warmups": 3, "counts": counts,
         "scenarios": SCENARIOS, "storage": "memory", "profile": "release",
@@ -182,7 +190,8 @@ fn metadata(
         "commit": command("git", &["rev-parse", "HEAD"]),
         "dirty": !command("git", &["status", "--porcelain"]).is_empty(),
         "rustc": command("rustc", &["--version"]),
-        "spacetime": command(&std::env::var("SPACETIME_BIN").unwrap_or_else(|_| "spacetime".into()), &["--version"]),
+        "spacetime": version,
+        "unix_seconds": std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH)?.as_secs(),
         "wasm_blake3": blake3::hash(wasm).to_hex().to_string(),
         "native_blake3": blake3::hash(&executable).to_hex().to_string()}),
     )
