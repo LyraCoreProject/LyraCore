@@ -101,7 +101,7 @@ behavior changes before replacing that file or its provenance. One reference run
 | Protocol | Headless Client traces through the unchanged Gateway and targeted real-client checks |
 | Capacity | Same content and activity, compare tick latency, CPU, memory, table changes and bytes per World Session after correctness passes |
 
-An authority change needs an instance ownership epoch checked by the Module on every durable
+An authority change needs a Shard ownership epoch checked by the Module on every durable
 outcome. Durable commands need stable identifiers and stored receipts so a retry cannot duplicate
 rewards. Recovery needs a defined checkpoint and command replay policy. Those mechanisms are design
 requirements, not capabilities supplied by this movement prototype. Do not route real instances to it.
@@ -206,3 +206,32 @@ The result supports continuing the movement prototype. It does not establish the
 authority change. The next comparison should use committed state and include movement publication
 through the Gateway. Keep the existing Module authoritative while adding that comparison and the
 missing gameplay and recovery behavior.
+
+## Existing Module rules in the native host
+
+Commit `106ec25c4330f8c8d5ee2db0c9161c9b7d3772de` adds a stronger comparison. The native host runs
+the same `CtxWorld` movement and pursuit code as the Module, including its table operations.
+It includes the memory transaction and collection of net row changes. Durable commits and
+subscriptions remain outside this measurement.
+
+The first host implementation lost most of the original prototype's advantage. Profiling found
+redundant row serialization and updates to indexes whose fields had not changed. Removing those
+operations improved the native host while preserving every checked frame.
+
+The fresh comparison used the same CPU and resource limits described above. At 5,000 creatures:
+
+| Scenario | Native host, ms | Module, ms | Time reduction |
+| --- | ---: | ---: | ---: |
+| Idle movement | 64.640 | 75.817 | 14.7% |
+| Movement in combat | 57.210 | 69.906 | 18.2% |
+| Pursuit of a stationary target | 120.797 | 179.099 | 32.6% |
+
+These are medians of seven-tick averages, with twenty samples after three warmups. All nine
+scenario and size combinations favored the native host. All 207 compared final-state digests
+matched, including warmups. The sixty-frame Wasm reference, scaled per-tick comparison and native
+storage checks passed before timing. Raw results are in
+[native-host-benchmark-1.jsonl](native-host-benchmark-1.jsonl).
+
+This supports the next committed-state experiment. The original prototype's much larger ratios
+do not describe the native host or a complete gameplay rewrite. These fixtures still have no
+authored encounters, spells, obstacles or active Package callbacks.
