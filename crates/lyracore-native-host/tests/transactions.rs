@@ -183,3 +183,157 @@ fn active_iterators_keep_their_rows_while_indexes_change() {
         })
         .unwrap();
 }
+
+#[table(accessor = native_host_payload_row)]
+#[derive(Clone, Debug, PartialEq)]
+struct PayloadRow {
+    #[primary_key]
+    #[auto_inc]
+    id: u64,
+    enabled: bool,
+    label: String,
+    samples: Vec<i64>,
+    detail: Option<Detail>,
+    position: f64,
+}
+
+#[derive(Clone, Debug, PartialEq, spacetimedb::SpacetimeType)]
+struct Detail {
+    label: String,
+    enabled: bool,
+}
+
+fn payload_environment() -> Environment {
+    let mut schema = Schema::default();
+    schema
+        .register(ReducerContext::__dummy().db.native_host_payload_row())
+        .unwrap();
+    Environment::new(schema).unwrap()
+}
+
+fn payload() -> PayloadRow {
+    PayloadRow {
+        id: 1,
+        enabled: true,
+        label: "x".into(),
+        samples: vec![-256, 1, 300],
+        detail: Some(Detail {
+            label: "nested".into(),
+            enabled: false,
+        }),
+        position: -0.0,
+    }
+}
+
+#[test]
+fn columns_without_indexes_survive_generation_updates_and_rollback() {
+    let mut world = payload_environment();
+    world
+        .transaction(|| {
+            let ctx = ReducerContext::__dummy();
+            let rows = ctx.db.native_host_payload_row();
+            let mut generated = payload();
+            generated.id = 0;
+            assert_eq!(rows.insert(generated), payload());
+            rows.insert(payload());
+            let mut changed = payload();
+            changed.label = "changed".into();
+            assert!(rows.try_insert(changed.clone()).is_err());
+            rows.id().update(changed.clone());
+            assert_eq!(rows.id().find(1), Some(changed));
+            Ok(())
+        })
+        .unwrap();
+    let result: Result<(), String> = world.transaction(|| {
+        ReducerContext::__dummy()
+            .db
+            .native_host_payload_row()
+            .id()
+            .update(payload());
+        Err("fixture Refusal".into())
+    });
+    assert!(result.is_err());
+    world
+        .transaction(|| {
+            let ctx = ReducerContext::__dummy();
+            let rows = ctx.db.native_host_payload_row();
+            let mut changed = payload();
+            changed.label = "changed".into();
+            assert_eq!(rows.id().find(1), Some(changed.clone()));
+            assert!(rows.delete(changed));
+            assert_eq!(rows.count(), 0);
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[test]
+fn malformed_columns_without_indexes_never_enter_the_table() {
+    use spacetimedb::{sats::bsatn, sys};
+
+    let mut world = payload_environment();
+    world
+        .transaction(|| {
+            let bytes = bsatn::to_vec(&payload()).unwrap();
+            // BSATN field offsets: enabled 8, label contents 13, detail tag 42.
+            let mut invalid_bool = bytes.clone();
+            invalid_bool[8] = 2;
+            let mut invalid_utf8 = bytes.clone();
+            invalid_utf8[13] = 0xff;
+            let mut invalid_option = bytes.clone();
+            invalid_option[42] = 2;
+            let mut trailing = bytes.clone();
+            trailing.push(0);
+            let id = sys::table_id_from_name("native_host_payload_row").unwrap();
+            for mut bad in [
+                invalid_bool,
+                invalid_utf8,
+                invalid_option,
+                trailing,
+                bytes[..bytes.len() - 1].to_vec(),
+            ] {
+                assert!(sys::datastore_insert_bsatn(id, &mut bad).is_err());
+            }
+            assert_eq!(
+                ReducerContext::__dummy()
+                    .db
+                    .native_host_payload_row()
+                    .count(),
+                0
+            );
+            Ok(())
+        })
+        .unwrap();
+}
+
+#[table(accessor = native_host_unindexed_row)]
+struct UnindexedRow {
+    value: f32,
+    label: String,
+}
+
+#[test]
+fn row_equality_without_indexes_uses_values_instead_of_float_encoding() {
+    let ctx = ReducerContext::__dummy();
+    let mut schema = Schema::default();
+    schema.register(ctx.db.native_host_unindexed_row()).unwrap();
+    let mut world = Environment::new(schema).unwrap();
+    world
+        .transaction(|| {
+            let rows = ctx.db.native_host_unindexed_row();
+            for value in [0.0, -0.0, 1.0] {
+                rows.insert(UnindexedRow {
+                    value,
+                    label: "same".into(),
+                });
+            }
+            assert_eq!(rows.count(), 2);
+            assert!(rows.delete(UnindexedRow {
+                value: -0.0,
+                label: "same".into(),
+            }));
+            assert_eq!(rows.iter().next().unwrap().value, 1.0);
+            Ok(())
+        })
+        .unwrap();
+}

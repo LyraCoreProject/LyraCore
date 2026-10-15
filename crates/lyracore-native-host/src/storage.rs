@@ -93,22 +93,6 @@ impl Storage {
             .len() as u64)
     }
 
-    fn decode_row(&self, table: u32, bytes: &[u8]) -> Result<ProductValue> {
-        let schema = &self
-            .schema
-            .tables
-            .get(&table)
-            .ok_or(errno::NO_SUCH_TABLE.get())?
-            .row;
-        let mut remaining = bytes;
-        let row =
-            bsatn::decode(schema, &mut remaining).map_err(|_| errno::BSATN_DECODE_ERROR.get())?;
-        if !remaining.is_empty() {
-            return Err(errno::BSATN_DECODE_ERROR.get());
-        }
-        Ok(row)
-    }
-
     pub fn scan(&mut self, table: u32) -> Result<u32> {
         let rows = self
             .tables
@@ -228,15 +212,33 @@ impl Storage {
         bytes: &[u8],
         update_index: Option<u32>,
     ) -> Result<Vec<u8>> {
-        let mut value = self.decode_row(table, bytes)?;
+        let table_schema = self
+            .schema
+            .tables
+            .get(&table)
+            .ok_or(errno::NO_SUCH_TABLE.get())?;
+        let mut value = table_schema.decode_projection(bytes)?;
+        let projection = &table_schema.projection;
         let mut generated = Vec::new();
-        for &column in &self.schema.tables[&table].sequences {
+        for &column in &table_schema.sequences {
             let next = self.sequences.get_mut(&(table, column)).unwrap();
-            if generate(&mut value.elements[column], *next)? {
-                generated.extend(bsatn::to_vec(&value.elements[column]).unwrap());
+            let field = &mut value.elements[projection[column]];
+            if generate(field, *next)? {
+                generated.extend(bsatn::to_vec(field).unwrap());
                 *next = next.checked_add(1).ok_or(errno::AUTO_INC_OVERFLOW.get())?;
             }
         }
+        let rewritten;
+        let bytes = if generated.is_empty() {
+            bytes
+        } else {
+            let mut full: ProductValue = bsatn::decode(&table_schema.row, &mut &*bytes).unwrap();
+            for &column in &table_schema.sequences {
+                full.elements[column] = value.elements[projection[column]].clone();
+            }
+            rewritten = bsatn::to_vec(&full).unwrap();
+            &rewritten
+        };
         let existing = if let Some(index) = update_index {
             let schema = self
                 .schema
@@ -253,7 +255,7 @@ impl Storage {
             {
                 return Err(errno::INDEX_NOT_UNIQUE.get());
             }
-            let key = project(&value, &schema.columns);
+            let key = project(&value, &schema.columns, projection);
             Some(
                 *self.indexes[&index]
                     .get(&key)
@@ -269,10 +271,14 @@ impl Storage {
                 .iter()
                 .find(|id| self.schema.indexes[id].columns == [column])
                 .ok_or(errno::NO_SUCH_INDEX.get())?;
-            if let Some(ids) = self.indexes[index].get(&vec![value.elements[column].clone()]) {
+            if let Some(ids) =
+                self.indexes[index].get(&vec![value.elements[projection[column]].clone()])
+            {
                 for &id in ids {
                     if Some(id) != existing {
-                        if existing.is_none() && self.tables[&table][&id].value == value {
+                        if existing.is_none()
+                            && self.rows_equal(table, &self.tables[&table][&id].bytes, bytes)
+                        {
                             return Ok(generated);
                         }
                         return Err(errno::UNIQUE_ALREADY_EXISTS.get());
@@ -282,7 +288,9 @@ impl Storage {
         }
         if existing.is_none()
             && self.schema.tables[&table].unique.is_empty()
-            && self.tables[&table].values().any(|row| row.value == value)
+            && self.tables[&table]
+                .values()
+                .any(|row| self.rows_equal(table, &row.bytes, bytes))
         {
             return Ok(generated);
         }
@@ -292,13 +300,19 @@ impl Storage {
             id
         });
         self.remember(table, id);
-        let bytes: Arc<[u8]> = if generated.is_empty() {
-            bytes.into()
-        } else {
-            bsatn::to_vec(&value).unwrap().into()
-        };
+        let bytes: Arc<[u8]> = bytes.into();
         self.replace(table, id, Some(Arc::new(Row { value, bytes })));
         Ok(generated)
+    }
+
+    fn rows_equal(&self, table: u32, a: &[u8], b: &[u8]) -> bool {
+        if a == b {
+            return true;
+        }
+        let ty = &self.schema.tables[&table].row;
+        let a: ProductValue = bsatn::decode(ty, &mut &*a).unwrap();
+        let b: ProductValue = bsatn::decode(ty, &mut &*b).unwrap();
+        a == b
     }
 
     fn remember(&mut self, table: u32, row: u64) {
@@ -309,18 +323,18 @@ impl Storage {
 
     fn replace(&mut self, table: u32, id: u64, replacement: Option<Arc<Row>>) {
         let old = self.tables[&table].get(&id);
+        let projection = &self.schema.tables[&table].projection;
         for index in &self.schema.tables[&table].indexes {
             let columns = &self.schema.indexes[index].columns;
             if let (Some(old), Some(new)) = (old, &replacement) {
-                if columns
-                    .iter()
-                    .all(|&column| old.value.elements[column] == new.value.elements[column])
-                {
+                if columns.iter().all(|&column| {
+                    old.value.elements[projection[column]] == new.value.elements[projection[column]]
+                }) {
                     continue;
                 }
             }
             if let Some(old) = old {
-                let key = project(&old.value, columns);
+                let key = project(&old.value, columns, projection);
                 let entries = self.indexes.get_mut(index).unwrap();
                 let ids = entries.get_mut(&key).unwrap();
                 ids.remove(&id);
@@ -329,7 +343,7 @@ impl Storage {
                 }
             }
             if let Some(row) = &replacement {
-                let key = project(&row.value, columns);
+                let key = project(&row.value, columns, projection);
                 self.indexes
                     .get_mut(index)
                     .unwrap()
@@ -377,9 +391,10 @@ impl Storage {
             return Err(errno::BSATN_DECODE_ERROR.get());
         };
         for row in values.into_vec() {
-            let id = self.tables[&table]
-                .iter()
-                .find_map(|(&id, stored)| (stored.value == row).then_some(id));
+            let bytes = bsatn::to_vec(&row).unwrap();
+            let id = self.tables[&table].iter().find_map(|(&id, stored)| {
+                self.rows_equal(table, &stored.bytes, &bytes).then_some(id)
+            });
             if let Some(id) = id {
                 self.remember(table, id);
                 self.replace(table, id, None);
@@ -455,10 +470,10 @@ impl Storage {
     }
 }
 
-fn project(row: &ProductValue, columns: &[usize]) -> Key {
+fn project(row: &ProductValue, columns: &[usize], projection: &[usize]) -> Key {
     columns
         .iter()
-        .map(|&column| row.elements[column].clone())
+        .map(|&column| row.elements[projection[column]].clone())
         .collect()
 }
 
