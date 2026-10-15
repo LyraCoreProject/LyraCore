@@ -42,6 +42,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let mut shard = Standalone::start("native-simulation-benchmark");
     shard.publish_module_bytes(&wasm);
     shard.assert_call("claim_operator", &[]);
+    shard.assert_call("debug_clear_creatures", &["0"]);
     for name in SCENARIOS {
         check_scaled_parity(&shard, name);
     }

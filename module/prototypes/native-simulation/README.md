@@ -124,6 +124,8 @@ and table-backed parity checks against that artifact. The benchmark creates its 
 SpacetimeDB process with in-memory storage. It never connects to an existing Shard. On a shared host,
 use a process scope with a memory limit, pin it to one spare CPU, and lower its scheduling priority.
 The script inherits that affinity. Artifact builds also use one Cargo job.
+The driver removes the initial map-zero demo creatures from its disposable Shard before seeding
+the benchmark. Each sample requires empty movement tables.
 
 Each workload replicates an existing scenario with independent creature identifiers. `idle_drift`
 advances a straight spline with suppressed intermediate position persistence. `combat_advance`
