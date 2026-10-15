@@ -135,3 +135,36 @@ of the publication measurement. This is a disposable subscriber, not the Gateway
 The first HTTP attempt exceeded the endpoint's request-size limit at 5,000 creatures. Both paths
 therefore use the pinned SpacetimeDB v2 binary protocol. Request sizes count the BSATN message,
 excluding WebSocket framing. A tick remains one transaction.
+
+## Alternative to a separate commit pass
+
+The committed movement experiment exposes a second cost: the native host changes its memory
+tables, then SpacetimeDB applies those changes again. Faster native row decoding and indexed
+durable updates reduce that cost, but the exploratory runs still lose to the Module for idle and
+combat movement. Pursuit improves. That mixed result does not justify expanding this authority path.
+
+The next candidate runs the native Module against SpacetimeDB's existing transaction engine.
+Storage, commit, schedules and subscriptions would keep their current implementation. The pinned
+runtime separates function execution from transaction handling through
+[`WasmInstance` and `WasmModuleInstance`](https://github.com/clockworklabs/SpacetimeDB/blob/v2.7.1/crates/core/src/host/wasm_common/module_host_actor.rs).
+The first prototype may select only the movement reducer for native execution. Every other entry
+point continues through Wasm until its native path passes the same checks.
+
+Establish these conditions before extending that prototype:
+
+- Pin the database source, SDK patch and both Module artifacts. Load native code only from an
+  operator-selected local artifact that matches the published Module and its schema.
+- Give each Module instance its own registration state and table identifier caches. A second Shard
+  or replacement instance must not reuse another instance's mutable state.
+- Preserve the actual caller, connection, logical time, structured Refusal and transaction result.
+- Catch native panics inside the native library boundary. A trap must roll back its transaction;
+  no Rust unwind may cross a C entry point.
+- Compare committed state and subscription rows with the Wasm reference after every movement tick.
+  Repeat stale-input, malformed-row, partial-update and restart checks where they apply.
+- Measure request-to-acknowledgment and confirmed publication using the same fixture and resource
+  limits. Include CPU and memory before making a capacity claim.
+
+This candidate needs a database runtime patch and a native SDK entry point. Those are maintenance
+costs, not completed work. Native execution also does not inherit Wasmtime's fuel limit. Bounded
+execution, trap recovery and instance replacement need their own proof before this path can acquire
+general authority. Keep the normal database binary and live Realms unchanged during the experiment.

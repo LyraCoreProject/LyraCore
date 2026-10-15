@@ -250,3 +250,31 @@ storage checks passed before timing. Raw results are in
 This supports the next committed-state experiment. The original prototype's much larger ratios
 do not describe the native host or a complete gameplay rewrite. These fixtures still have no
 authored encounters, spells, obstacles or active Package callbacks.
+
+## Committed movement results
+
+Commit `31af299eae76c7653680e2af5e250cd84d8ad329` includes faster native row decoding, indexed
+durable updates and checks for stale input, retries and rollback after a partial update. The clean
+comparison used persistent storage and one transaction per tick. Its timing includes request
+encoding, native work, the acknowledgment and confirmed subscription output through the CLI.
+
+The run used the same host limits described above, with twenty samples after three warmups for
+each of the three 5,000-creature workloads. Results use individual ticks:
+
+| Scenario | Module mean, ms | Native host mean, ms | Native change | Module p95, ms | Native host p95, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Idle movement | 211.203 | 220.025 | 4.2% slower | 342.773 | 396.081 |
+| Movement in combat | 281.024 | 302.178 | 7.5% slower | 365.485 | 402.413 |
+| Pursuit of a stationary target | 322.772 | 297.672 | 7.8% faster | 484.237 | 459.895 |
+
+All 483 paired ticks had matching subscription rows, and all 69 paired encounter results had
+matching committed state digests, including warmups. The five commit checks, thirteen movement
+prototype checks and 1,583 Module unit tests passed at this source revision. Raw results are in
+[native-committed-benchmark-1.jsonl](native-committed-benchmark-1.jsonl). Reproduce the summary with
+`python3 module/prototypes/native-simulation/summarize_commits.py module/prototypes/native-simulation/native-committed-benchmark-1.jsonl`.
+
+This result does not pass the performance gate for expanding the separate worker. The native host
+updates its own tables, then asks SpacetimeDB to apply the changes again. This extra work erases the
+raw execution gain in two workloads. The CLI subscriber also adds JSON decoding and printing;
+these numbers are not Gateway latency or Character capacity. The next candidate and its required
+checks are in [native-runtime.md](native-runtime.md#alternative-to-a-separate-commit-pass).
