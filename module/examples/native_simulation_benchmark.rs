@@ -148,7 +148,15 @@ fn module_sample(shard: &Standalone, name: &str, creatures: u32, sample: u32) ->
                 && value["creatures"] == creatures
                 && value["sample"] == sample
         })
-        .expect("Module benchmark result is missing");
+        .unwrap_or_else(|| {
+            let tail: Vec<String> = messages
+                .iter()
+                .rev()
+                .take(2)
+                .map(|message| message.chars().take(600).collect())
+                .collect();
+            panic!("Module benchmark result is missing for {name}/{creatures}/{sample}: {tail:?}")
+        });
     result["timer"] = json!(timer);
     result["timer_name"] = json!(timer_name);
     result
