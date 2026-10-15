@@ -1,0 +1,21 @@
+{
+  "baseline_commit": "44b04878f2050936faa61d6f087f3aa1a7a78a46",
+  "reference": "Original CtxWorld advancement and pursuit passes, with controlled fixture clock",
+  "spacetimedb_version": "2.7.1",
+  "rust_version": "1.93.0",
+  "wasm_sha256": "fed02c240dda2750c31a46aad42b7132553787d09baf69526d1898f3054852d0",
+  "trace_sha256": "2688baeada55df2fc454f217fb3039fc51837d75575c0ea1f4db70eea9cc361f",
+  "frames_by_scenario": {
+    "clock_wrap": 8,
+    "combat_advance": 8,
+    "grid_crossing": 8,
+    "idle_drift": 8,
+    "immobilized": 7,
+    "missing_mover": 4,
+    "moving_target_turn_stop": 9,
+    "stopped_target": 8
+  },
+  "commands": 52,
+  "capture_command": "bash module/prototypes/native-simulation/run.sh reference",
+  "scope": "Per-step table snapshots inside one transaction per scenario; no subscription or protocol comparison"
+}

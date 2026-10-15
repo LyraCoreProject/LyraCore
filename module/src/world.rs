@@ -83,6 +83,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
 }
 
 #[derive(PartialEq)]
+#[cfg_attr(feature = "native_simulation_prototype", derive(Clone))]
 #[table(
     accessor = game_world_entity,
     public,

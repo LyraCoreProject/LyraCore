@@ -24,6 +24,9 @@ use crate::{
     game_world_entity, MeleeAttack, WorldEntity,
 };
 
+#[cfg(all(feature = "native_simulation_prototype", target_arch = "wasm32"))]
+mod prototype_reference;
+
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
     let regen_window = crate::combat::RegenWindow::new(
         tick.now_micros / 1_000,

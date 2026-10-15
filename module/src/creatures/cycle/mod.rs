@@ -19,6 +19,8 @@ use super::tick::TickSweep;
 mod ctx;
 #[cfg(test)]
 mod harness;
+#[cfg(feature = "native_simulation_prototype")]
+pub mod native_prototype;
 
 pub(crate) use ctx::{run, stop_on_stored_leg};
 
