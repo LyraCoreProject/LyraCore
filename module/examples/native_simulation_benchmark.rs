@@ -1,12 +1,12 @@
 use std::fs::File;
 use std::io::Write;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 use lyracore_module::native_prototype::benchmark::{
     digest, workload, RESULT_PREFIX, SCENARIOS, TIMER_PREFIX,
 };
 use lyracore_module::native_prototype::compare;
-use lyracore_test_support::Standalone;
+use lyracore_test_support::{poll_until, Standalone};
 use serde_json::{json, Value};
 
 fn main() -> Result<(), Box<dyn std::error::Error>> {
@@ -132,34 +132,39 @@ fn module_sample(shard: &Standalone, name: &str, creatures: u32, sample: u32) ->
             "false",
         ],
     );
-    let messages = messages(shard);
     let timer_name = format!("{TIMER_PREFIX}/{name}/{creatures}/{sample}");
-    let timer = messages
-        .iter()
-        .find(|message| message.contains(&timer_name))
-        .expect("Module stopwatch output is missing");
-    let mut result = messages
-        .iter()
-        .rev()
-        .filter_map(|message| message.strip_prefix(RESULT_PREFIX))
-        .map(|message| serde_json::from_str::<Value>(message).unwrap())
-        .find(|value| {
-            value["scenario"] == name
-                && value["creatures"] == creatures
-                && value["sample"] == sample
-        })
-        .unwrap_or_else(|| {
-            let tail: Vec<String> = messages
-                .iter()
-                .rev()
-                .take(2)
-                .map(|message| message.chars().take(600).collect())
-                .collect();
-            panic!("Module benchmark result is missing for {name}/{creatures}/{sample}: {tail:?}")
-        });
-    result["timer"] = json!(timer);
-    result["timer_name"] = json!(timer_name);
-    result
+    let mut result = None;
+    let complete = poll_until(Duration::from_secs(5), || {
+        let messages = messages(shard);
+        let Some(timer) = messages
+            .iter()
+            .find(|message| message.contains(&timer_name))
+        else {
+            return false;
+        };
+        let Some(mut sample) = messages
+            .iter()
+            .rev()
+            .filter_map(|message| message.strip_prefix(RESULT_PREFIX))
+            .map(|message| serde_json::from_str::<Value>(message).unwrap())
+            .find(|value| {
+                value["scenario"] == name
+                    && value["creatures"] == creatures
+                    && value["sample"] == sample
+            })
+        else {
+            return false;
+        };
+        sample["timer"] = json!(timer);
+        sample["timer_name"] = json!(timer_name);
+        result = Some(sample);
+        true
+    });
+    assert!(
+        complete,
+        "Module timing and state did not arrive for {timer_name}"
+    );
+    result.unwrap()
 }
 
 fn messages(shard: &Standalone) -> Vec<String> {
