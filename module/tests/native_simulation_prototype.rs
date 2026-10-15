@@ -243,19 +243,27 @@ fn table_backed_module_matches_the_native_trace() {
             &[&format!("\"{name}\"")],
         );
     }
-    let logs = shard.module_logs(200);
-    assert!(logs.status.success());
-    let traces: Vec<Value> = String::from_utf8(logs.stdout)
-        .unwrap()
-        .lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter_map(|line| {
-            line["message"]
-                .as_str()?
-                .strip_prefix(TRACE_PREFIX)
-                .map(|message| serde_json::from_str(message).unwrap())
-        })
-        .collect();
+    let expected_count: usize = SCENARIOS.iter().map(|name| replay(name).len()).sum();
+    let mut traces: Vec<Value> = Vec::new();
+    assert!(lyracore_test_support::poll_until(
+        std::time::Duration::from_secs(5),
+        || {
+            let logs = shard.module_logs(200);
+            assert!(logs.status.success());
+            traces = String::from_utf8(logs.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|line| {
+                    line["message"]
+                        .as_str()?
+                        .strip_prefix(TRACE_PREFIX)
+                        .map(|message| serde_json::from_str(message).unwrap())
+                })
+                .collect();
+            traces.len() >= expected_count
+        }
+    ));
     assert_reference_matches(&traces);
     if let Some(path) = std::env::var_os("LYRACORE_NATIVE_REFERENCE_TRACE") {
         let mut output = String::new();
