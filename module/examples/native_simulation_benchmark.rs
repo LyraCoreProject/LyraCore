@@ -87,14 +87,21 @@ fn check_scaled_parity(shard: &Standalone, name: &str) {
         "debug_native_simulation_benchmark",
         &[&format!("\"{name}\""), "4", "0", "true"],
     );
-    let frames: Vec<Value> = messages(shard)
-        .iter()
-        .filter_map(|message| message.strip_prefix(RESULT_PREFIX))
-        .map(|message| serde_json::from_str::<Value>(message).unwrap())
-        .filter(|result| result["scenario"] == name && result["creatures"] == 4)
-        .filter_map(|mut result| result.as_object_mut().unwrap().remove("frame"))
-        .collect();
     let case = workload(name, 4).unwrap();
+    let mut frames = Vec::new();
+    assert!(
+        poll_until(Duration::from_secs(5), || {
+            frames = messages(shard)
+                .iter()
+                .filter_map(|message| message.strip_prefix(RESULT_PREFIX))
+                .map(|message| serde_json::from_str::<Value>(message).unwrap())
+                .filter(|result| result["scenario"] == name && result["creatures"] == 4)
+                .filter_map(|mut result| result.as_object_mut().unwrap().remove("frame"))
+                .collect::<Vec<_>>();
+            frames.len() >= case.requests.len()
+        }),
+        "scaled parity frames did not arrive for {name}"
+    );
     assert_eq!(
         frames.len(),
         case.requests.len(),
