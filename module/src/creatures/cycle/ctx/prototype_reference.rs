@@ -44,7 +44,7 @@ pub fn debug_native_simulation_reference(
     }
     emit_frame(ctx, scenario.name, 0, scenario.start_micros);
     for request in &scenario.requests {
-        // Only this fixture uses a synthetic clock; table access still belongs to this transaction.
+        // Fixture time is synthetic; table access still belongs to this transaction.
         let mut clock = ReducerContext::__dummy();
         clock.timestamp =
             spacetimedb::Timestamp::from_micros_since_unix_epoch(request.at_micros as i64);

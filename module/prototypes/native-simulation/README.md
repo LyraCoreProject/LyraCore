@@ -62,8 +62,8 @@ phases remain outside this slice.
 
 The prototype retains complete Module rows. The demo serializes diagnostic snapshots on every command;
 the benchmark applies the same commands without snapshots in its timed section.
-It is a parity baseline, not a capacity measurement or the final compact simulation layout. No
-throughput, memory saving, or supported Character count has been established.
+Elapsed movement-phase timings are recorded below. Memory savings and supported Character counts
+remain unmeasured. This prototype does not implement the final compact simulation layout.
 
 Everything is behind the non-default `native_simulation_prototype` feature. Normal builds and the
 Gateway keep their current behavior. The extra reference reducer exists only in prototype Wasm
@@ -166,3 +166,38 @@ python3 module/prototypes/native-simulation/summarize.py target/movement-benchma
 The output path must not already exist. `LYRACORE_BENCHMARK_SAMPLES` changes the measured sample count,
 with a range of 5 to 100. A complete run is still a movement cost comparison. A capacity claim needs
 the gameplay, persistence, recovery and protocol checks listed above.
+
+## Measurements on 2026-10-15
+
+The measured source is commit `8d63cdfcc0b8e396ec1a61afb48c8897539404aa`, with Rust 1.93.0 and
+SpacetimeDB 2.7.1. Both implementations used the same CPU on a shared 8-vCPU AMD EPYC-Rome KVM host.
+The process scope had a one-CPU quota, a 5 GiB memory limit, no swap allowance and scheduling niceness
+10. No existing Shard was accessed.
+
+The first run covered 100, 1,000 and 5,000 creatures, with twenty samples after three warmups for
+each scenario and count. At 5,000 creatures, median elapsed time per tick was:
+
+| Scenario | Native, ms | Module, ms | Module / native |
+| --- | ---: | ---: | ---: |
+| Idle movement | 0.889 | 75.908 | 85.4x |
+| Movement in combat | 0.879 | 68.901 | 78.4x |
+| Pursuit of a stationary target | 1.926 | 178.442 | 92.7x |
+
+These are medians of seven-tick averages. The pursuit workload has 5,000 creatures and 5,000 target
+entities. The other workloads have 5,000 entities each. The complete first run is
+[benchmark-run-1.jsonl](benchmark-run-1.jsonl); the summary command above also reports p95 values.
+
+A fresh process repeated the three 5,000-creature workloads with the same artifacts and twenty
+samples each. Module medians stayed within 2.5% of the first run; native medians were 4.4% to 9.2%
+lower. The repeat measured 84.0x to 104.4x, compared with 78.4x to 92.7x in the first run. Its raw
+output is [benchmark-run-2.jsonl](benchmark-run-2.jsonl).
+
+All 276 final-state digests matched across both runs, including 240 measured samples and 36 warmups.
+The scaled comparison also matched every field after each tick in both runs. All thirteen release
+parity tests passed against the same Module artifact, including the original eight-scenario trace.
+Shared host scheduling and the limited workload remain constraints on interpreting these timings.
+
+The result supports continuing the movement prototype. It does not establish the gain from a full
+authority change. The next comparison should use committed state and include movement publication
+through the Gateway. Keep the existing Module authoritative while adding that comparison and the
+missing gameplay and recovery behavior.
