@@ -292,7 +292,11 @@ impl Storage {
             id
         });
         self.remember(table, id);
-        let bytes: Arc<[u8]> = bsatn::to_vec(&value).unwrap().into();
+        let bytes: Arc<[u8]> = if generated.is_empty() {
+            bytes.into()
+        } else {
+            bsatn::to_vec(&value).unwrap().into()
+        };
         self.replace(table, id, Some(Arc::new(Row { value, bytes })));
         Ok(generated)
     }
@@ -304,9 +308,19 @@ impl Storage {
     }
 
     fn replace(&mut self, table: u32, id: u64, replacement: Option<Arc<Row>>) {
-        if let Some(old) = self.tables.get_mut(&table).unwrap().remove(&id) {
-            for index in &self.schema.tables[&table].indexes {
-                let key = project(&old.value, &self.schema.indexes[index].columns);
+        let old = self.tables[&table].get(&id);
+        for index in &self.schema.tables[&table].indexes {
+            let columns = &self.schema.indexes[index].columns;
+            if let (Some(old), Some(new)) = (old, &replacement) {
+                if columns
+                    .iter()
+                    .all(|&column| old.value.elements[column] == new.value.elements[column])
+                {
+                    continue;
+                }
+            }
+            if let Some(old) = old {
+                let key = project(&old.value, columns);
                 let entries = self.indexes.get_mut(index).unwrap();
                 let ids = entries.get_mut(&key).unwrap();
                 ids.remove(&id);
@@ -314,10 +328,8 @@ impl Storage {
                     entries.remove(&key);
                 }
             }
-        }
-        if let Some(row) = replacement {
-            for index in &self.schema.tables[&table].indexes {
-                let key = project(&row.value, &self.schema.indexes[index].columns);
+            if let Some(row) = &replacement {
+                let key = project(&row.value, columns);
                 self.indexes
                     .get_mut(index)
                     .unwrap()
@@ -325,7 +337,11 @@ impl Storage {
                     .or_default()
                     .insert(id);
             }
+        }
+        if let Some(row) = replacement {
             self.tables.get_mut(&table).unwrap().insert(id, row);
+        } else {
+            self.tables.get_mut(&table).unwrap().remove(&id);
         }
     }
 
