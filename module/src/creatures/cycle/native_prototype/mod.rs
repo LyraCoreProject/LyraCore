@@ -10,6 +10,7 @@ use crate::creatures::ai::TickScope;
 use crate::creatures::tick::{advance_needs_persist, CreatureSpline};
 use crate::{MeleeAttack, WorldEntity};
 
+pub mod benchmark;
 mod fixtures;
 mod world;
 
@@ -104,6 +105,11 @@ pub struct Simulation {
 impl Simulation {
     // For the admitted inputs, see module/prototypes/native-simulation/README.md.
     pub fn step(&mut self, request: &Request) -> Result<Value, String> {
+        self.apply(request)?;
+        Ok(self.snapshot())
+    }
+
+    pub fn apply(&mut self, request: &Request) -> Result<(), String> {
         self.admit(request)?;
         self.at_micros = request.at_micros;
         match request.action {
@@ -153,7 +159,7 @@ impl Simulation {
             }
         }
         self.sequence = request.sequence;
-        Ok(self.snapshot())
+        Ok(())
     }
 
     pub fn snapshot(&self) -> Value {

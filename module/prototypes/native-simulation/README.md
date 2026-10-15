@@ -16,7 +16,7 @@ bash module/prototypes/native-simulation/run.sh check
 The demo defaults to a moving target that turns and stops. Pass any listed scenario to replay it.
 `check` compares against the saved Module trace and never starts SpacetimeDB. The script limits Cargo
 and code generation to one job, and restricts itself and its children to one CPU when `taskset` is
-available. It uses unoptimized builds.
+available. The demo and checks use unoptimized builds.
 
 ## Parity contract, before implementation
 
@@ -60,7 +60,8 @@ Module's row projection, including suppressed intermediate position updates. It 
 `run_cycle` as a whole. Combat flags, damage, rewards, AI senses, Package execution and other cycle
 phases remain outside this slice.
 
-The prototype retains complete Module rows and serializes diagnostic snapshots on every command.
+The prototype retains complete Module rows. The demo serializes diagnostic snapshots on every command;
+the benchmark applies the same commands without snapshots in its timed section.
 It is a parity baseline, not a capacity measurement or the final compact simulation layout. No
 throughput, memory saving, or supported Character count has been established.
 
@@ -109,3 +110,50 @@ shadow run must consume copied inputs without publishing gameplay outcomes.
 Build with one Cargo job. Keep checks deterministic, small, and serial. Do not run capacity tests,
 populate a world, or start a sustained SpacetimeDB workload on the current machine. The native
 checks and the opt-in table-backed comparison are separate commands.
+
+## Movement benchmark
+
+Run this mode only on hardware suitable for sustained compilation and SpacetimeDB work:
+
+```sh
+bash module/prototypes/native-simulation/run.sh benchmark
+```
+
+It builds both implementations in release mode with one code-generation unit, then runs all native
+and table-backed parity checks against that artifact. The benchmark creates its own loopback-only
+SpacetimeDB process with in-memory storage. It never connects to an existing Shard. On a shared host,
+use a process scope with a memory limit, pin it to one spare CPU, and lower its scheduling priority.
+The script inherits that affinity. Artifact builds also use one Cargo job.
+
+Each workload replicates an existing scenario with independent creature identifiers. `idle_drift`
+advances a straight spline with suppressed intermediate position persistence. `combat_advance`
+persists each advance. `stopped_target` pursues a stationary target with one target per creature.
+The default counts are 100, 1,000 and 5,000 creatures. These are short seven-tick encounters,
+including their arrivals, not continuous movement or concurrent Character capacity tests.
+
+Before timing, four copies of each workload must match every field after every tick. For every
+timed sample, a BLAKE3 digest of the complete final state must also match exactly. A digest difference
+stops the run even if it would fit the float tolerance used by the detailed comparator.
+
+The native timer uses `Instant`; the Module uses SpacetimeDB's host-side `LogStopwatch`. Both bracket
+the seven movement ticks. Fixture construction, JSON snapshots, hashing, logging, cleanup and CLI
+calls are outside those sections. Each Module sample runs in one transaction, so this comparison
+also excludes per-tick commit costs, subscriptions, durability and network work. It measures the
+current movement implementation against the native prototype's complete in-memory rows. It does not
+measure a compact layout or the whole creature cycle.
+
+Each workload gets three warmups and twenty measured samples. Native-first and Module-first samples
+alternate. The output retains raw samples, state digests, artifact hashes, compiler versions and CPU
+affinity. The summary reports median and p95 across the seven-tick averages. These are not individual
+tick latency percentiles. Incomplete output cannot produce a summary.
+
+To select counts or rerun the summary:
+
+```sh
+bash module/prototypes/native-simulation/run.sh benchmark target/movement-benchmark.jsonl 100 1000
+python3 module/prototypes/native-simulation/summarize.py target/movement-benchmark.jsonl
+```
+
+The output path must not already exist. `LYRACORE_BENCHMARK_SAMPLES` changes the measured sample count,
+with a range of 5 to 100. A complete run is still a movement cost comparison. A capacity claim needs
+the gameplay, persistence, recovery and protocol checks listed above.
