@@ -14,6 +14,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         return Err("benchmarks require a release build".into());
     }
     let args: Vec<_> = std::env::args().skip(1).collect();
+    #[cfg(feature = "native_simulation_host")]
+    if args.first().is_some_and(|arg| arg == "--host-only") {
+        return profile_host(&args[1..]);
+    }
     if args.len() < 2 {
         return Err(
             "usage: native_simulation_benchmark <wasm> <output.jsonl> [creatures ...]".into(),
@@ -55,31 +59,70 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for name in SCENARIOS {
             eprintln!("Benchmarking {name}, {creatures} creatures");
             for sample in 0..samples + 3 {
-                let (native, module) = if sample % 2 == 0 {
-                    let native = native_sample(name, creatures);
-                    (native, module_sample(&shard, name, creatures, sample))
-                } else {
-                    let module = module_sample(&shard, name, creatures, sample);
-                    (native_sample(name, creatures), module)
-                };
-                assert_eq!(
-                    native["digest"], module["digest"],
-                    "{name}, {creatures} creatures, sample {sample}"
-                );
-                assert_eq!(native["ticks"], module["ticks"]);
-                writeln!(
-                    output,
-                    "{}",
-                    json!({"kind": "sample", "scenario": name,
-                    "creatures": creatures, "sample": sample, "warmup": sample < 3,
-                    "native": native, "module": module})
-                )?;
+                writeln!(output, "{}", measure(&shard, name, creatures, sample))?;
                 output.flush()?;
             }
         }
     }
     writeln!(output, "{}", json!({"kind": "complete"}))?;
     Ok(())
+}
+
+#[cfg(feature = "native_simulation_host")]
+fn profile_host(args: &[String]) -> Result<(), Box<dyn std::error::Error>> {
+    if args.len() != 3 {
+        return Err("usage: --host-only <scenario> <creatures> <samples>".into());
+    }
+    let creatures = args[1].parse()?;
+    let samples: u32 = args[2].parse()?;
+    if !(1..=100).contains(&samples) {
+        return Err("profiling samples must be in 1..=100".into());
+    }
+    let case = workload(&args[0], creatures)?;
+    let mut reference = case.simulation();
+    for request in &case.requests {
+        reference.apply(request)?;
+    }
+    let expected = digest(&reference.snapshot());
+    for sample in 0..samples {
+        let result = native_host_sample(&args[0], creatures);
+        assert_eq!(
+            result["digest"], expected,
+            "native profiling parity mismatch"
+        );
+        println!("{}", json!({"sample": sample, "native_host": result}));
+    }
+    Ok(())
+}
+
+fn measure(shard: &Standalone, name: &str, creatures: u32, sample: u32) -> Value {
+    let mut implementations = vec!["native", "module"];
+    if cfg!(feature = "native_simulation_host") {
+        implementations.push("native_host");
+    }
+    let count = implementations.len();
+    implementations.rotate_left(sample as usize % count);
+    let mut result = json!({"kind": "sample", "scenario": name,
+        "creatures": creatures, "sample": sample, "warmup": sample < 3,
+        "order": implementations});
+    for implementation in &implementations {
+        let value = match *implementation {
+            "native" => native_sample(name, creatures),
+            "module" => module_sample(shard, name, creatures, sample),
+            #[cfg(feature = "native_simulation_host")]
+            "native_host" => native_host_sample(name, creatures),
+            _ => unreachable!("only compiled implementations are measured"),
+        };
+        result[*implementation] = value;
+    }
+    for implementation in implementations {
+        assert_eq!(
+            result[implementation]["digest"], result["module"]["digest"],
+            "{implementation}: {name}, {creatures} creatures, sample {sample}"
+        );
+        assert_eq!(result[implementation]["ticks"], result["module"]["ticks"]);
+    }
+    result
 }
 
 fn check_scaled_parity(shard: &Standalone, name: &str) {
@@ -108,12 +151,35 @@ fn check_scaled_parity(shard: &Standalone, name: &str) {
         "wrong scaled parity frame count for {name}"
     );
     let mut simulation = case.simulation();
+    #[cfg(feature = "native_simulation_host")]
+    let mut native_host = lyracore_module::native_prototype::TableSimulation::new(&case).unwrap();
     for (request, expected) in case.requests.iter().zip(&frames) {
         let actual = simulation.step(request).unwrap();
         compare(expected, &actual).unwrap_or_else(|difference| {
             panic!("{name}, command {}: {difference}", request.sequence)
         });
+        #[cfg(feature = "native_simulation_host")]
+        compare(expected, &native_host.step(request).unwrap()).unwrap_or_else(|difference| {
+            panic!(
+                "native host {name}, command {}: {difference}",
+                request.sequence
+            )
+        });
     }
+}
+
+#[cfg(feature = "native_simulation_host")]
+fn native_host_sample(name: &str, creatures: u32) -> Value {
+    let case = workload(name, creatures).unwrap();
+    let mut simulation = lyracore_module::native_prototype::TableSimulation::new(&case).unwrap();
+    let started = Instant::now();
+    simulation
+        .apply_batch(std::hint::black_box(&case.requests))
+        .unwrap();
+    std::hint::black_box(&simulation);
+    let elapsed_ns = started.elapsed().as_nanos();
+    let snapshot = simulation.snapshot().unwrap();
+    json!({"elapsed_ns": elapsed_ns as u64, "digest": digest(&snapshot), "ticks": case.requests.len()})
 }
 
 fn native_sample(name: &str, creatures: u32) -> Value {
@@ -205,6 +271,8 @@ fn metadata(
         json!({"kind": "metadata", "samples": samples, "warmups": 3, "counts": counts,
         "scenarios": SCENARIOS, "storage": "memory", "profile": "release",
         "scope": "seven movement ticks in one transaction; setup, snapshots, cleanup and commit excluded",
+        "native_host": cfg!(feature = "native_simulation_host"),
+        "native_host_scope": "existing Module rules and table operations; memory transaction and change collection included; durable commit and publication excluded",
         "cpu": cpu.lines().find(|line| line.starts_with("model name")),
         "affinity": status.lines().find(|line| line.starts_with("Cpus_allowed_list:")),
         "architecture": std::env::consts::ARCH,

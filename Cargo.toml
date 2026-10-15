@@ -4,6 +4,7 @@ members = [
     "crates/lyracore-package-delta",
     "crates/lyracore-shared",
     "crates/lyracore-test-support",
+    "crates/lyracore-native-host",
     "module",
     "gateway",
     "importer",

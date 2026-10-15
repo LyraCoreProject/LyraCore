@@ -48,53 +48,7 @@ pub fn debug_native_simulation_reference(
         let mut clock = ReducerContext::__dummy();
         clock.timestamp =
             spacetimedb::Timestamp::from_micros_since_unix_epoch(request.at_micros as i64);
-        match request.action {
-            Action::Tick => {
-                advance(&clock, request.at_micros);
-            }
-            Action::MoveTarget {
-                x,
-                y,
-                z,
-                orientation,
-                movement_flags,
-            } => {
-                let mut target = clock
-                    .db
-                    .game_world_entity()
-                    .guid()
-                    .find(TARGET_GUID)
-                    .unwrap();
-                target.x = x;
-                target.y = y;
-                target.z = z;
-                target.orientation = orientation;
-                target.movement_flags = movement_flags;
-                target.last_move_ms = (request.at_micros / 1_000) as u32;
-                (target.grid_x, target.grid_y) = spatial::grid_cell(x, y);
-                target.cell = spatial::grid_cell_id(target.grid_x, target.grid_y);
-                clock.db.game_world_entity().guid().update(target);
-            }
-            Action::Immobilize { enabled } => {
-                eventai::movement::apply(
-                    &clock,
-                    CREATURE_GUID,
-                    DefinitionRevision { value: 1 },
-                    MovementOperation::SetImmobilized(ImmobilizationInstruction {
-                        enabled,
-                        combat_only: false,
-                    }),
-                );
-            }
-            Action::RemoveCreature => {
-                clock.db.game_world_entity().guid().delete(CREATURE_GUID);
-                clock
-                    .db
-                    .game_creature_ai_movement_intent()
-                    .creature_guid()
-                    .delete(CREATURE_GUID);
-            }
-        }
+        apply_request(&clock, request);
         emit_frame(&clock, scenario.name, request.sequence, request.at_micros);
     }
     for guid in [CREATURE_GUID, TARGET_GUID] {
@@ -109,7 +63,57 @@ pub fn debug_native_simulation_reference(
     Ok(())
 }
 
-fn advance(ctx: &ReducerContext, at_micros: u64) {
+pub(super) fn apply_request(clock: &ReducerContext, request: &prototype::Request) {
+    match request.action {
+        Action::Tick => {
+            advance(clock, request.at_micros);
+        }
+        Action::MoveTarget {
+            x,
+            y,
+            z,
+            orientation,
+            movement_flags,
+        } => {
+            let mut target = clock
+                .db
+                .game_world_entity()
+                .guid()
+                .find(TARGET_GUID)
+                .unwrap();
+            target.x = x;
+            target.y = y;
+            target.z = z;
+            target.orientation = orientation;
+            target.movement_flags = movement_flags;
+            target.last_move_ms = (request.at_micros / 1_000) as u32;
+            (target.grid_x, target.grid_y) = spatial::grid_cell(x, y);
+            target.cell = spatial::grid_cell_id(target.grid_x, target.grid_y);
+            clock.db.game_world_entity().guid().update(target);
+        }
+        Action::Immobilize { enabled } => {
+            eventai::movement::apply(
+                clock,
+                CREATURE_GUID,
+                DefinitionRevision { value: 1 },
+                MovementOperation::SetImmobilized(ImmobilizationInstruction {
+                    enabled,
+                    combat_only: false,
+                }),
+            );
+        }
+        Action::RemoveCreature => {
+            clock.db.game_world_entity().guid().delete(CREATURE_GUID);
+            clock
+                .db
+                .game_creature_ai_movement_intent()
+                .creature_guid()
+                .delete(CREATURE_GUID);
+        }
+    }
+}
+
+pub(super) fn advance(ctx: &ReducerContext, at_micros: u64) {
     let mut world = CtxWorld {
         ctx,
         regen_window: crate::combat::RegenWindow::new(at_micros / 1_000, 0),

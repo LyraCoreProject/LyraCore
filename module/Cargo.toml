@@ -16,6 +16,7 @@ crate-type = ["cdylib", "rlib"]
 debug_reducers = []
 package_test_fixture = ["debug_reducers"]
 native_simulation_prototype = ["debug_reducers", "dep:serde", "dep:serde_json", "dep:spacetimedb-sats"]
+native_simulation_host = ["native_simulation_prototype", "dep:lyracore-native-host"]
 
 [dependencies]
 blake3 = "1"
@@ -29,6 +30,9 @@ getrandom = "0.3"
 serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 spacetimedb-sats = { version = "=2.7.1", features = ["serde"], optional = true }
+
+[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
+lyracore-native-host = { path = "../crates/lyracore-native-host", optional = true }
 
 [[example]]
 name = "native_simulation_prototype"

@@ -40,7 +40,7 @@ case "$prototype_mode" in
             --test native_simulation_prototype table_backed_module_matches_the_native_trace \
             -- --ignored --test-threads=1 --nocapture
         ;;
-    benchmark)
+    benchmark|host-benchmark)
         prototype_scratch=$(mktemp -d "${TMPDIR:-/tmp}/lyracore-native-benchmark.XXXXXX")
         trap 'rm -rf -- "$prototype_scratch"' EXIT
         export TMPDIR="$prototype_scratch"
@@ -48,11 +48,18 @@ case "$prototype_mode" in
         export CARGO_PROFILE_RELEASE_DEBUG=0
         cargo build --release --locked -p lyracore-module --features native_simulation_prototype \
             --target wasm32-unknown-unknown
-        cargo build --release --locked -p lyracore-module --features native_simulation_prototype \
+        prototype_native_features=native_simulation_prototype
+        if [[ "$prototype_mode" == host-benchmark ]]; then
+            prototype_native_features=native_simulation_host
+            cargo test --release --locked -p lyracore-native-host -- --test-threads=1
+            cargo test --release --locked -p lyracore-module --features native_simulation_host \
+                --test native_simulation_host -- --test-threads=1
+        fi
+        cargo build --release --locked -p lyracore-module --features "$prototype_native_features" \
             --example native_simulation_benchmark
         prototype_target=$(cd -- "${CARGO_TARGET_DIR:-target}" && pwd)
         export LYRACORE_NATIVE_REFERENCE_WASM="$prototype_target/wasm32-unknown-unknown/release/lyracore_module.wasm"
-        timeout 300s cargo test --release --locked -p lyracore-module --features native_simulation_prototype \
+        timeout 300s cargo test --release --locked -p lyracore-module --features "$prototype_native_features" \
             --test native_simulation_prototype -- --include-ignored --test-threads=1
         prototype_results=${1:-"$prototype_target/native-simulation-benchmark-$(date -u +%Y%m%dT%H%M%SZ).jsonl"}
         if (($#)); then shift; fi
@@ -61,7 +68,7 @@ case "$prototype_mode" in
         python3 module/prototypes/native-simulation/summarize.py "$prototype_results"
         ;;
     *)
-        echo 'Usage: run.sh [demo [scenario|--list]|check|reference|benchmark [output.jsonl [creatures ...]]]' >&2
+        echo 'Usage: run.sh [demo [scenario|--list]|check|reference|benchmark|host-benchmark [output.jsonl [creatures ...]]]' >&2
         exit 2
         ;;
 esac

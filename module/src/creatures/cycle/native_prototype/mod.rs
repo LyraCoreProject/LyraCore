@@ -16,6 +16,9 @@ mod world;
 
 pub use fixtures::{scenario, SCENARIOS};
 
+#[cfg(all(feature = "native_simulation_host", not(target_arch = "wasm32")))]
+pub use super::ctx::native_reference::TableSimulation;
+
 pub const INSTANCE_ID: u64 = 900_000_001;
 pub const CREATURE_GUID: u64 = 900_000_001;
 pub const TARGET_GUID: u64 = 900_000_002;
@@ -174,43 +177,9 @@ impl Simulation {
     }
 
     fn admit(&self, request: &Request) -> Result<(), String> {
-        if self.sequence.checked_add(1) != Some(request.sequence) {
-            return Err("request sequence must follow the last accepted request".into());
-        }
-        if request.at_micros < self.at_micros || request.at_micros > i64::MAX as u64 {
-            return Err("time must be monotonic and fit the Module clock".into());
-        }
-        match request.action {
-            Action::MoveTarget {
-                x,
-                y,
-                z,
-                orientation,
-                movement_flags,
-            } => {
-                if self.entity(TARGET_GUID).is_none() {
-                    return Err("the scenario has no target".into());
-                }
-                if ![x, y, z, orientation].into_iter().all(f32::is_finite) {
-                    return Err("target coordinates and orientation must be finite".into());
-                }
-                if x.abs() > spatial::MAP_COORD_MAX || y.abs() > spatial::MAP_COORD_MAX {
-                    return Err("target coordinates must be within the map".into());
-                }
-                if z != 0.0 || movement_flags & !crate::combat::MOVE_FLAG_FORWARD != 0 {
-                    return Err(
-                        "the prototype admits flat terrain and forward movement only".into(),
-                    );
-                }
-            }
-            Action::Immobilize { .. } | Action::RemoveCreature => {
-                if self.entity(CREATURE_GUID).is_none() {
-                    return Err("the creature is absent".into());
-                }
-            }
-            Action::Tick => {}
-        }
-        Ok(())
+        admit_request(self.sequence, self.at_micros, request, |guid| {
+            self.entity(guid).is_some()
+        })
     }
 
     fn entity(&self, guid: u64) -> Option<&WorldEntity> {
@@ -309,4 +278,47 @@ fn compare_at(path: &str, expected: &Value, actual: &Value) -> Result<(), String
         _ if expected == actual => Ok(()),
         _ => Err(format!("{path}: expected {expected}, got {actual}")),
     }
+}
+
+pub(super) fn admit_request(
+    sequence: u64,
+    at_micros: u64,
+    request: &Request,
+    has_entity: impl Fn(u64) -> bool,
+) -> Result<(), String> {
+    if sequence.checked_add(1) != Some(request.sequence) {
+        return Err("request sequence must follow the last accepted request".into());
+    }
+    if request.at_micros < at_micros || request.at_micros > i64::MAX as u64 {
+        return Err("time must be monotonic and fit the Module clock".into());
+    }
+    match request.action {
+        Action::MoveTarget {
+            x,
+            y,
+            z,
+            orientation,
+            movement_flags,
+        } => {
+            if !has_entity(TARGET_GUID) {
+                return Err("the scenario has no target".into());
+            }
+            if ![x, y, z, orientation].into_iter().all(f32::is_finite) {
+                return Err("target coordinates and orientation must be finite".into());
+            }
+            if x.abs() > spatial::MAP_COORD_MAX || y.abs() > spatial::MAP_COORD_MAX {
+                return Err("target coordinates must be within the map".into());
+            }
+            if z != 0.0 || movement_flags & !crate::combat::MOVE_FLAG_FORWARD != 0 {
+                return Err("the prototype admits flat terrain and forward movement only".into());
+            }
+        }
+        Action::Immobilize { .. } | Action::RemoveCreature => {
+            if !has_entity(CREATURE_GUID) {
+                return Err("the creature is absent".into());
+            }
+        }
+        Action::Tick => {}
+    }
+    Ok(())
 }

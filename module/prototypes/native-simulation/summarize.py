@@ -29,6 +29,8 @@ def summarize(path):
             continue
         if row["native"]["digest"] != row["module"]["digest"]:
             raise ValueError("parity mismatch")
+        if metadata.get("native_host") and row["native_host"]["digest"] != row["module"]["digest"]:
+            raise ValueError("native host parity mismatch")
         if not row["warmup"]:
             groups[(row["scenario"], row["creatures"])].append(row)
     if len(groups) != len(metadata["scenarios"]) * len(metadata["counts"]):
@@ -46,6 +48,18 @@ def summarize(path):
         p95 = math.ceil(len(samples) * 0.95) - 1
         print(f"| {name} | {creatures} | {median_native:.4f} | {median_module:.4f} | "
               f"{median_module / median_native:.2f}x | {native[p95]:.4f} | {module[p95]:.4f} |")
+    if metadata.get("native_host"):
+        print("\nNative host executes the existing Module rules and table operations.")
+        print("Its memory transaction and change collection are included; durable commit and publication are excluded.\n")
+        print("| Scenario | Creatures | Native host median ms | Module / native host | Native host p95 ms |")
+        print("| --- | ---: | ---: | ---: | ---: |")
+        for (name, creatures), samples in sorted(groups.items()):
+            host = sorted(row["native_host"]["elapsed_ns"] / row["native_host"]["ticks"] / 1_000_000 for row in samples)
+            module = [module_nanoseconds(row["module"]) / row["module"]["ticks"] / 1_000_000 for row in samples]
+            median = statistics.median(host)
+            ratio = statistics.median(module) / median
+            p95 = host[math.ceil(len(host) * 0.95) - 1]
+            print(f"| {name} | {creatures} | {median:.4f} | {ratio:.2f}x | {p95:.4f} |")
 
 
 if __name__ == "__main__":

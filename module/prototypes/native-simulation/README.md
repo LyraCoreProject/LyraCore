@@ -1,5 +1,10 @@
 # Native simulation prototype
 
+The continuation uses the [native runtime parity contract](native-runtime.md). It adds native
+execution of the existing Module movement rules through indexed memory tables. Run that comparison
+on the benchmark machine with `bash module/prototypes/native-simulation/run.sh host-benchmark`.
+This path remains experimental and does not own durable state or Gateway publication.
+
 This throwaway prototype asks whether creature movement can run in native Rust with in-memory
 state while preserving the current Module's observable results. The reference uses movement rules
 from Core commit
