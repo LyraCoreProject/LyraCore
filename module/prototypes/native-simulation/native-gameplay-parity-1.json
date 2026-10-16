@@ -1,0 +1,643 @@
+{
+  "core_commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+  "dirty": true,
+  "module_source_archive_sha256": "fd23865ea0c2b301b588779fddff8f201396203562cef8d0a341e7cde4a1c79c",
+  "driver_source_archive_sha256": "0d5cabe6a7dd3e13c87edb3a582989fec46e3a6aa66c144160fd72ae1993deb2",
+  "scope": "Exact fixed-time gameplay rows and subscriptions; diagnostic timings under concurrent verification are not benchmarks",
+  "comparisons": {
+    "periodic_deaths-ordered-2": [
+      {
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "creatures": 16,
+        "dirty": true,
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "scenario": "periodic_deaths",
+        "server_blake3": "36c6e8823a4dd1e2e02356cae7c007cba06935bc39563d9b0d3d0d977e564841",
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      {
+        "digest": "12edb1c17814a203cb285540ba9e9388979b23b4aaa3fbfdd23c6efb01dfa796",
+        "frame": "initial",
+        "kind": "parity",
+        "nonempty_tables": 41
+      },
+      {
+        "elapsed_ns": 6920813,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 2355,
+        "round_trip_ns": 4590455,
+        "sequence": 1,
+        "subscription_json_bytes": 84193
+      },
+      {
+        "elapsed_ns": 6959696,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1724,
+        "round_trip_ns": 4162623,
+        "sequence": 1,
+        "subscription_json_bytes": 84193
+      },
+      {
+        "digest": "28073e49721cb5a0d29e6b1e16d9e68cd715160d7b695add3ba8bce2c3ef3c51",
+        "frame": "step 1",
+        "kind": "parity",
+        "nonempty_tables": 11
+      },
+      {
+        "elapsed_ns": 1660583,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 2405,
+        "round_trip_ns": 1656034,
+        "sequence": 2,
+        "subscription_json_bytes": 316
+      },
+      {
+        "elapsed_ns": 1299347,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1793,
+        "round_trip_ns": 1219567,
+        "sequence": 2,
+        "subscription_json_bytes": 316
+      },
+      {
+        "digest": "b54fff03b1761d4a2db1322e1a4a7ce6f4a216f64583ca4706f7cae4cfbdca5c",
+        "frame": "step 2",
+        "kind": "parity",
+        "nonempty_tables": 1
+      },
+      {
+        "digest": "70bef67949ee848641ceaeecb46e92f8fc5027dc34ed4bcf18529dfad4a1f22c",
+        "frame": "final durable state",
+        "kind": "parity",
+        "nonempty_tables": 43
+      },
+      {
+        "kind": "complete",
+        "steps": 2,
+        "tables": 296
+      }
+    ],
+    "creature_cycle-ordered-2": [
+      {
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "creatures": 16,
+        "dirty": true,
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "scenario": "creature_cycle",
+        "server_blake3": "36c6e8823a4dd1e2e02356cae7c007cba06935bc39563d9b0d3d0d977e564841",
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      {
+        "digest": "f5fba97d9c7ae93561046073e61989f654887abacff4aec2b3f3ca63edbfbfd6",
+        "frame": "initial",
+        "kind": "parity",
+        "nonempty_tables": 39
+      },
+      {
+        "elapsed_ns": 5810242,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 2855,
+        "round_trip_ns": 5350379,
+        "sequence": 1,
+        "subscription_json_bytes": 39820
+      },
+      {
+        "elapsed_ns": 4733002,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1832,
+        "round_trip_ns": 4729165,
+        "sequence": 1,
+        "subscription_json_bytes": 39820
+      },
+      {
+        "digest": "5976435ec38b1f303f140c78d09105d442efa263b5f07f389bad9205c5bab12b",
+        "frame": "step 1",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 4000638,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1603,
+        "round_trip_ns": 3997562,
+        "sequence": 2,
+        "subscription_json_bytes": 39478
+      },
+      {
+        "elapsed_ns": 3643880,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1302,
+        "round_trip_ns": 3332037,
+        "sequence": 2,
+        "subscription_json_bytes": 39478
+      },
+      {
+        "digest": "0a16b58a62c10a549cb87caf2f995f4d57ef11d9c9650d6ce86dbcb0596e18e1",
+        "frame": "step 2",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3788962,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1582,
+        "round_trip_ns": 3785846,
+        "sequence": 3,
+        "subscription_json_bytes": 28327
+      },
+      {
+        "elapsed_ns": 3151698,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1273,
+        "round_trip_ns": 3148702,
+        "sequence": 3,
+        "subscription_json_bytes": 28327
+      },
+      {
+        "digest": "97bf5a6c5514dad96482b0eece3e876f07e1dcc57c0ac46ebb2d7c10e8ba9b08",
+        "frame": "step 3",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3845940,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1243,
+        "round_trip_ns": 3843265,
+        "sequence": 4,
+        "subscription_json_bytes": 38476
+      },
+      {
+        "elapsed_ns": 3169852,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1262,
+        "round_trip_ns": 3167417,
+        "sequence": 4,
+        "subscription_json_bytes": 38476
+      },
+      {
+        "digest": "1093c71737f126669d969a61ac860b0c95b8a3e40fceba72488943a04c222b42",
+        "frame": "step 4",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3364988,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1173,
+        "round_trip_ns": 3362503,
+        "sequence": 5,
+        "subscription_json_bytes": 19608
+      },
+      {
+        "elapsed_ns": 2870801,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1202,
+        "round_trip_ns": 2867886,
+        "sequence": 5,
+        "subscription_json_bytes": 19608
+      },
+      {
+        "digest": "e2cd3e19c01de3fdf0eecc0a4d5b5a16cb52226d6daff4871ce49a400bd04139",
+        "frame": "step 5",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3501644,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1182,
+        "round_trip_ns": 2938348,
+        "sequence": 6,
+        "subscription_json_bytes": 19284
+      },
+      {
+        "elapsed_ns": 3049576,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1082,
+        "round_trip_ns": 3046861,
+        "sequence": 6,
+        "subscription_json_bytes": 19284
+      },
+      {
+        "digest": "8dfe61f4c7dadebdb502129dfdcb2dd9937c3eef4f232d3427d4fb9cec5ae664",
+        "frame": "step 6",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 5129745,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1342,
+        "round_trip_ns": 5126400,
+        "sequence": 7,
+        "subscription_json_bytes": 40959
+      },
+      {
+        "elapsed_ns": 4318036,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1312,
+        "round_trip_ns": 4315200,
+        "sequence": 7,
+        "subscription_json_bytes": 40959
+      },
+      {
+        "digest": "b67a373dec18d99e3f94aebbaac0910b2ba5693671f68fb617045786f291f5be",
+        "frame": "step 7",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 4130864,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1833,
+        "round_trip_ns": 4127247,
+        "sequence": 8,
+        "subscription_json_bytes": 22063
+      },
+      {
+        "elapsed_ns": 3892455,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1362,
+        "round_trip_ns": 3889641,
+        "sequence": 8,
+        "subscription_json_bytes": 22063
+      },
+      {
+        "digest": "974dd6fbaa09af8c93479b70cd61e68cdd93c20bddfffda4a8b46ee314bfa287",
+        "frame": "step 8",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3903527,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1242,
+        "round_trip_ns": 3900662,
+        "sequence": 9,
+        "subscription_json_bytes": 19619
+      },
+      {
+        "elapsed_ns": 2974516,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1233,
+        "round_trip_ns": 2971910,
+        "sequence": 9,
+        "subscription_json_bytes": 19619
+      },
+      {
+        "digest": "c9276a15170b20f41d1531cde666b2606d257df1be4a50bc04552900d5598d19",
+        "frame": "step 9",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3800915,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1193,
+        "round_trip_ns": 3797930,
+        "sequence": 10,
+        "subscription_json_bytes": 41334
+      },
+      {
+        "elapsed_ns": 3876747,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1232,
+        "round_trip_ns": 2706713,
+        "sequence": 10,
+        "subscription_json_bytes": 41334
+      },
+      {
+        "digest": "997bccf179887d596f84dc40c4fbed9da5287d0a80776f43323c372605c0a4a9",
+        "frame": "step 10",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3700797,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1372,
+        "round_trip_ns": 3697251,
+        "sequence": 11,
+        "subscription_json_bytes": 18971
+      },
+      {
+        "elapsed_ns": 3125209,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1943,
+        "round_trip_ns": 3121704,
+        "sequence": 11,
+        "subscription_json_bytes": 18971
+      },
+      {
+        "digest": "a8d826fa9c846d31d306f5e74ab52d0c53d379efa170ed34854a06a8608f78ca",
+        "frame": "step 11",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "elapsed_ns": 3644222,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1212,
+        "round_trip_ns": 3390145,
+        "sequence": 12,
+        "subscription_json_bytes": 22100
+      },
+      {
+        "elapsed_ns": 3430881,
+        "implementation": "native_database",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1262,
+        "round_trip_ns": 3427766,
+        "sequence": 12,
+        "subscription_json_bytes": 22100
+      },
+      {
+        "digest": "cf64e0a0edb2529ede2fcf2cab9371e861e75bea8e8fb1462f81458b5146e071",
+        "frame": "step 12",
+        "kind": "parity",
+        "nonempty_tables": 5
+      },
+      {
+        "digest": "d3dc7154114809467f8d21654482bd3913818a5acd31533e35f234f8a8f085c3",
+        "frame": "final durable state",
+        "kind": "parity",
+        "nonempty_tables": 42
+      },
+      {
+        "kind": "complete",
+        "steps": 12,
+        "tables": 296
+      }
+    ],
+    "periodic_deaths-ordered-reference-2": [
+      {
+        "candidate_implementation": "module",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "creatures": 16,
+        "dirty": true,
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "scenario": "periodic_deaths",
+        "server_blake3": "36c6e8823a4dd1e2e02356cae7c007cba06935bc39563d9b0d3d0d977e564841",
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      {
+        "digest": "12edb1c17814a203cb285540ba9e9388979b23b4aaa3fbfdd23c6efb01dfa796",
+        "frame": "initial",
+        "kind": "parity",
+        "nonempty_tables": 41
+      },
+      {
+        "elapsed_ns": 7329030,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 2565,
+        "round_trip_ns": 4930853,
+        "sequence": 1,
+        "subscription_json_bytes": 84193
+      },
+      {
+        "elapsed_ns": 7104497,
+        "implementation": "module_repeat",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 2215,
+        "round_trip_ns": 6148374,
+        "sequence": 1,
+        "subscription_json_bytes": 84193
+      },
+      {
+        "digest": "28073e49721cb5a0d29e6b1e16d9e68cd715160d7b695add3ba8bce2c3ef3c51",
+        "frame": "step 1",
+        "kind": "parity",
+        "nonempty_tables": 11
+      },
+      {
+        "elapsed_ns": 1600471,
+        "implementation": "module",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1873,
+        "round_trip_ns": 1597254,
+        "sequence": 2,
+        "subscription_json_bytes": 316
+      },
+      {
+        "elapsed_ns": 1385697,
+        "implementation": "module_repeat",
+        "kind": "step",
+        "request_bsatn_bytes": 48,
+        "request_encode_ns": 1332,
+        "round_trip_ns": 1382872,
+        "sequence": 2,
+        "subscription_json_bytes": 316
+      },
+      {
+        "digest": "b54fff03b1761d4a2db1322e1a4a7ce6f4a216f64583ca4706f7cae4cfbdca5c",
+        "frame": "step 2",
+        "kind": "parity",
+        "nonempty_tables": 1
+      },
+      {
+        "digest": "70bef67949ee848641ceaeecb46e92f8fc5027dc34ed4bcf18529dfad4a1f22c",
+        "frame": "final durable state",
+        "kind": "parity",
+        "nonempty_tables": 43
+      },
+      {
+        "kind": "complete",
+        "steps": 2,
+        "tables": 296
+      }
+    ]
+  },
+  "aura_durable": {
+    "module": {
+      "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "dirty": true,
+      "implementation": "module",
+      "passed": 2,
+      "fixtures": [
+        {
+          "fixture": "aura-death-order-3799555-1792118823667229276.log",
+          "native_reducers": []
+        },
+        {
+          "fixture": "aura-tick-death-3799555-1792118809920841123.log",
+          "native_reducers": []
+        }
+      ],
+      "errors": [],
+      "tests": [
+        "a_periodic_kill_commits_the_death_and_an_unrelated_heal",
+        "simultaneous_periodic_deaths_assign_reward_events_in_guid_order"
+      ],
+      "elapsed_seconds": 27.915524553507566,
+      "server_sha256": "52e5509e45b900e05e38c8f6f3c3ea61fecf75c1dc713fac088466af343d2571",
+      "wasm_blake3": "338ea90e0460fb29f77a494bb5c152fe2338df49b4ca7d550550d49fc3c9dd79",
+      "module_native_blake3": "41ce3923088af7fe1d11497b1fa3bd30a17f027aeed2cc3a5b057fae86462380"
+    },
+    "native_database": {
+      "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "dirty": true,
+      "implementation": "native_database",
+      "passed": 2,
+      "fixtures": [
+        {
+          "fixture": "aura-death-order-3799954-1792118851836950290.log",
+          "native_reducers": [
+            "debug_fill_aura_slots",
+            "debug_spawn_at_feet",
+            "debug_spawn_player_entity",
+            "init",
+            "on_disconnect",
+            "publish_motion",
+            "reap_movement_events",
+            "tick_auras",
+            "tick_breath",
+            "tick_duels",
+            "tick_ground_areas"
+          ]
+        },
+        {
+          "fixture": "aura-tick-death-3799954-1792118838014793957.log",
+          "native_reducers": [
+            "debug_fill_aura_slots",
+            "debug_spawn_player_entity",
+            "init",
+            "on_disconnect",
+            "publish_motion",
+            "reap_movement_events",
+            "tick_auras",
+            "tick_breath",
+            "tick_duels",
+            "tick_ground_areas"
+          ]
+        }
+      ],
+      "errors": [],
+      "tests": [
+        "a_periodic_kill_commits_the_death_and_an_unrelated_heal",
+        "simultaneous_periodic_deaths_assign_reward_events_in_guid_order"
+      ],
+      "elapsed_seconds": 28.39429862331599,
+      "server_sha256": "52e5509e45b900e05e38c8f6f3c3ea61fecf75c1dc713fac088466af343d2571",
+      "wasm_blake3": "338ea90e0460fb29f77a494bb5c152fe2338df49b4ca7d550550d49fc3c9dd79",
+      "module_native_blake3": "41ce3923088af7fe1d11497b1fa3bd30a17f027aeed2cc3a5b057fae86462380"
+    }
+  },
+  "original_ordering_failures": {
+    "periodic_deaths-1": {
+      "metadata": {
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "creatures": 16,
+        "dirty": true,
+        "kind": "metadata",
+        "native_blake3": "37126c46dd6d896e36ed3e96907a2af63e69843318242d3682f48034d9996c51",
+        "scenario": "periodic_deaths",
+        "server_blake3": "36c6e8823a4dd1e2e02356cae7c007cba06935bc39563d9b0d3d0d977e564841",
+        "wasm_blake3": "9966d7fdf0fed8b19d8a88e462720863845625bbfd7d99fe0e1632d4bba15a4b"
+      },
+      "initial_rows_equal": true,
+      "mismatch_frame": "step 1",
+      "mismatched_tables": [
+        "game_corpse_loot",
+        "game_corpse_loot_eligible",
+        "game_world_entity",
+        "game_xp_event"
+      ]
+    },
+    "periodic_deaths-reference-1": {
+      "metadata": {
+        "candidate_implementation": "module",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "creatures": 16,
+        "dirty": true,
+        "kind": "metadata",
+        "native_blake3": "37126c46dd6d896e36ed3e96907a2af63e69843318242d3682f48034d9996c51",
+        "scenario": "periodic_deaths",
+        "server_blake3": "36c6e8823a4dd1e2e02356cae7c007cba06935bc39563d9b0d3d0d977e564841",
+        "wasm_blake3": "9966d7fdf0fed8b19d8a88e462720863845625bbfd7d99fe0e1632d4bba15a4b"
+      },
+      "initial_rows_equal": true,
+      "mismatch_frame": "step 1",
+      "mismatched_tables": [
+        "game_corpse_loot",
+        "game_corpse_loot_eligible",
+        "game_world_entity",
+        "game_xp_event"
+      ]
+    }
+  }
+}

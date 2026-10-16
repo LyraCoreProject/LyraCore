@@ -192,6 +192,11 @@ work. Callback count and elapsed-time checks can mark a transaction for rollback
 interrupt native execution, including code that ignores failed callbacks. These checks are not
 general execution or memory isolation.
 
+The selected boundary keeps Wasm as the default. An Operator may opt into native execution for
+trusted Core and compiled Package code. Run that process with CPU and memory limits. A native
+abort or exhausted process budget can affect every Shard in the process; it does not have Wasm's
+per-reducer isolation. Process-failure recovery remains a required check before completion.
+
 Build the experiment only on the benchmark machine. Use a separate LyraCore checkout for the SDK
 patch and a disposable directory for its server and artifacts:
 
@@ -205,11 +210,13 @@ CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN
   cargo build --manifest-path "$prototype_scratch/server/Cargo.toml" --release --locked -p spacetimedb-standalone
 ```
 
-Build the Wasm reference with `native_simulation_prototype` and the benchmark example with
+Build the Wasm reference with `native_simulation_database` and the benchmark example with
 `native_simulation_host`, using the unmodified SDK. Then build the native Module library with
 `native_simulation_database` and Cargo's `patch.crates-io.spacetimedb.path` set to the private SDK
-copy. Keep a copy of each artifact. Use one Cargo job and one release code-generation unit for both
-Module builds. The SDK patch changes that checkout's lockfile; it must not enter the normal build.
+copy. Both Module artifacts must have the same feature set and Module description. Keep a copy of
+each artifact. Use one Cargo job and one release code-generation unit for both
+Module builds. The SDK patch adds native-only `libm` 0.2.16 and changes that checkout's lockfile;
+it must not enter the normal build.
 
 For the comparison, copy `database/spacetime-wrapper.sh` to the disposable directory and make the
 copy executable. Set `SPACETIME_BIN` to that wrapper, `LYRACORE_NATIVE_DATABASE_CLI` to the unmodified
@@ -262,7 +269,7 @@ then confirmed the gain across all nine combinations of workload and size. Its r
 
 ## Expanding beyond movement
 
-The next parity gate reuses the original eight-scenario, 60-frame movement trace, then the existing
+The expanded parity gate reuses the original eight-scenario, 60-frame movement trace, then the existing
 durable Module and Gateway tests. Preserve their expected outcomes. Run each selected test against
 both the Wasm reference and native execution on disposable loopback instances. Build both Module
 artifacts from the same source and feature set, including the inert test Package where required.
@@ -283,7 +290,7 @@ their effects must be checked rather than inferred from movement parity.
 The database engine retains authority, transaction ordering, schedules, commits and publication.
 The separate worker's ownership and commit-receipt protocol is therefore not part of this candidate.
 Gateway request and subscription interfaces stay the same, but the durable Headless Client tests
-must still establish packet behavior. Native resource limits remain a separate completion gate.
+must still establish packet behavior. Process limits and recovery remain separate completion gates.
 
 For durable tests, build the normal `debug_reducers,package_test_fixture` feature set twice. Use the
 unmodified SDK for Wasm and the private SDK copy for the native library. Restore the checkout's
@@ -321,7 +328,159 @@ execution, with no fallback. This includes initialization, scheduled creature, m
 pending casts and connection cleanup. The paired evidence is in
 [native-database-durable-1.json](native-database-durable-1.json).
 
-These are initial coverage results. The remaining durable suite, installed Official Packages,
-fixed-clock creature-cycle and reward comparisons, Gateway protocol checks and integrated load
-measurements still gate completion. The native run overlapped compilation of later test targets,
-which delayed a fixture's nested Cargo build. Its elapsed suite time is not a speed comparison.
+The remaining Core batch then passed 286 existing durable tests across 313 fixture processes in
+each implementation, with native execution evidence and no fallback in every native fixture.
+Its results are in [native-database-durable-2.json](native-database-durable-2.json). This batch uses
+the clean Core checkpoint `bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16`. Its Module artifact hashes
+match the first batch, before the aura-ordering change; the recorded runtime binary hashes differ.
+Together the batches cover 312 existing durable tests and 364 named native reducers. Installed
+Official Packages, Gateway protocol checks and integrated load measurements still gate completion. These suite durations include
+concurrent verification work and are not speed comparisons.
+
+### Fixed-time gameplay comparisons
+
+The `native_gameplay_parity` example compares full committed rows after each deterministic input.
+It publishes matching `native_simulation_database` artifacts to two disposable persistent Shards.
+The native manifest selects all reducers. Each fixture clears application tables, preserves the
+Operator claim, reseeds Core at a fixed time and disarms background schedules in one transaction.
+The schema supplies the table list, so adding a gameplay table also adds it to the comparison.
+`game_operator` is the only excluded table because the two publishers have different identities.
+
+Both implementations must have identical initial rows, identical confirmed subscription updates
+after every step, and identical final durable rows. Row order is ignored. All field values,
+including floats, must match exactly. A mismatch records both versions of each affected table and
+stops the run. Native execution markers are required for initialization, fixture setup and steps;
+fallback invalidates the result.
+
+The first reward case kills sixteen creatures in the same aura tick. It exercises the existing
+periodic damage, death, XP, money and loot rules. The complete creature-cycle case uses the real
+table-backed cycle, active cells, global maintenance, sensing, movement, melee and auras. Separate
+assertions require deaths and rewards in the first case, and awake creatures, combat events and
+damage in the second. Calling a phase with no eligible Actors does not establish coverage of that
+phase's behavior. Navigation obstacles, authored EventAI and installed Package callbacks need
+additional fixtures and their existing durable tests.
+
+The scheduled reducers retain their caller Gates and call the same rule functions as the fixture.
+The fixture passes a synthetic context to those functions to control time and timestamp-seeded
+random draws. It does not establish scheduled-caller authentication or wall-clock scheduling parity;
+the unchanged durable tests cover those boundaries. Its per-step elapsed times are diagnostic,
+not a performance comparison when other verification work shares the host.
+
+The first simultaneous-death comparison found different per-corpse money, loot rows and XP event
+IDs. The same comparison also failed between two Wasm instances with identical starting rows and
+rule times. `tick_auras` processed its pending deaths in hash-map order. The same set of money
+draws went to different corpses. The continuation orders pending aura outcomes by GUID in both
+builds. This changes the previously unspecified order between victims; reward formulas and
+aura-ID killing-blow credit stay the same. The comparator still checks each corpse and event
+exactly. It does not accept a permutation of rewards as parity.
+
+The ordered implementation passes both cases across all 296 application tables. It also passes
+the simultaneous-death comparison between two Wasm instances. The reward assertion checks the
+active world entity, which reaches level 2 with 400 XP remaining, and sixteen reward events of
+50 XP each. The saved Character row is not the active XP projection. The existing aura test and
+the new scheduled simultaneous-death ordering test pass in both implementations. The two comparator
+tests and all 1,583 Module unit tests pass. The paired results and source archive hashes are in
+[native-gameplay-parity-1.json](native-gameplay-parity-1.json).
+
+### Module publication and mixed versions
+
+The `native_database_lifecycle` example must preserve every application row through sixteen
+publications of the same Module. It checks that each replacement enables native execution and
+that the number of mapped native libraries stays bounded. It then publishes a Wasm artifact with
+an added custom section. Its instructions and schema are unchanged, but its hash differs from the
+manifest. This version must run as Wasm, preserve state, and coexist with a matching native Shard
+through a process restart. Restoring the matching artifact must enable native execution again.
+Use `--wasm` for the reference and `--versions-only` to isolate version selection.
+
+The first publication run preserved application rows but retained two native library mappings per
+update. Native process resident memory grew from 304,212 to 416,640 KiB across sixteen updates.
+These are diagnostic observations under concurrent verification, not a steady-state memory
+benchmark. The initial mapping counter also included one journal mapping; the revised counter
+accepts only native library filenames ending in `.so`.
+
+Loader tracing found a second retention cause beyond the SDK's thread-local buffers. The pinned
+`tracy-client-sys` dependency exports a `dlclose` replacement that returns success without unloading
+anything. This override is present even when no Tracy session is active. The experimental runtime
+patch disables Tracy's compiled features so native Module replacement can unload libraries. Normal
+LyraCore builds are unchanged. The experimental executable does not provide Tracy profiling.
+Publication and recovery checks pass with this executable. Performance comparisons must use
+this executable on both paths before it replaces the preceding candidate.
+
+A native manifest selects one exact Wasm artifact. Other programs run as Wasm and emit
+`LYRACORE_NATIVE_DATABASE_WASM`. A matching program still requires the native artifact hash and
+complete Module description to match. The durable evidence collector refuses both unmatched
+programs and unexpected trap fallback, so either condition cannot silently turn a native suite
+into a Wasm suite. Mixed-version behavior is checked separately by the lifecycle example.
+
+The revised runtime passes sixteen native updates with two mapped libraries throughout. All
+application rows survive both artifact mismatch checks, an unmatched Wasm update, a mixed-version
+process restart and restoration of the matching native program. The mismatch checks supply a wrong
+native hash and then change a table name in the Wasm data section while keeping registration exports
+intact. Both publications fail before changing application rows. The matching sibling Shard records
+native execution after restart.
+
+Recovery also passes with all reducers selected. Both implementations match the sixty-frame
+movement reference and twenty-one committed frames and subscription updates. Refusals and native
+panics preserve the complete pre-call frame. After the first native trap, zero, eight and sixteen
+further traps leave one mapped native library. The count decreases from the two libraries observed
+before the trap. The boundedness assertion permits unloading and forbids growth. Restart restores
+native execution, and the timed movement replay requires fresh native execution evidence with no
+fallback after its final restart. These checks and their artifact hashes are in
+[native-database-lifecycle-1.json](native-database-lifecycle-1.json). Memory readings in that file
+were collected during concurrent verification.
+
+Execution checks use the runtime output for named native markers. Module log reads sometimes
+omitted previously observed markers in these runs, while the runtime output retained every call.
+Mixed-version checks additionally inspect the matching Shard's Module log.
+
+### Complete-cycle measurements
+
+`native_gameplay_parity` also accepts `--benchmark <creatures> <samples>` for `creature_cycle`.
+It resets and reseeds each disposable Shard before every sample, adds three warmups and alternates
+which implementation runs first. Every initial snapshot, step update and final snapshot must match.
+The corrected native build passes all 96 paired steps from five samples and three warmups at each
+of 100, 1,000 and 5,000 creatures. Its timings were collected during concurrent verification and
+are diagnostic.
+
+The fixture advances rule time by one second per step and calls the creature cycle, melee and
+aura processing once each. It measures this combined workload, not the independent production
+schedule cadences. Existing durable tests exercise those scheduled boundaries. Each timing includes
+request encoding, acknowledgment and confirmed subscription output. CPU readings cover the runtime
+and driver during that interval; they exclude the separate CLI subscriber. Setup and full-row
+comparisons are outside the measured interval. No Character capacity claim follows from these
+creature counts.
+
+### Floating-point parity
+
+The first 5,000-creature comparison found one different spline destination at step nine. Wasm
+stored `dy = -126.01679`; native execution stored `-126.0168`. The native library called the
+platform's math functions, which can round differently from the Wasm implementations.
+
+The private SDK now binds the thirteen math imports observed in Core and the Official Packages
+to `libm` 0.2.16. Hidden ELF symbols keep these bindings inside each native Module library. They
+do not replace the host process's math functions. The normal Wasm build remains unchanged.
+
+`database/check_math.py <new-scratch-directory>` builds Wasm, ordinary native and corrected native
+libraries with the pinned Rust toolchain. It compares the bits of fifteen outputs from those
+thirteen functions over one million deterministic input pairs, including all four angle quadrants.
+Logarithms and powers use positive bases. Every corrected result matches Wasm; every operation
+has mismatches in the ordinary native build. This samples the stated input range, not all possible
+floating-point inputs. New math imports need the same check before native use.
+
+The full Module then passes the 100-, 1,000- and 5,000-creature comparisons, simultaneous-death
+rewards, committed movement, Refusal, panic rollback and restart checks. Artifact hashes, frame
+digests and math comparisons are in [native-gameplay-parity-2.json](native-gameplay-parity-2.json).
+
+### Gateway fixture timing
+
+The first grouped Gateway check exhausted its process file descriptors. Separate test processes
+removed that accumulation. Two Headless Client tests then exposed a setup race on the Wasm
+reference: the Session request was acknowledged before the Coordinator received its projection.
+An instrumented run observed an absent Session at that boundary. The fixtures now wait for the
+expected Session key before opening their World Sessions. The competing-session fixture waits for
+both Coordinators. Handshake, gameplay, ownership and reconnect assertions remain in place.
+
+The cross-Shard Character cleanup fixture also built a second Module with fewer test features.
+Its assertions passed, but the execution audit correctly refused to count its Wasm fallback as
+native coverage. The fixture now publishes the same built artifact to every Shard and uses
+persistent disposable storage for those named Shards. Its gameplay assertions remain unchanged.

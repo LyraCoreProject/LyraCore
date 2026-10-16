@@ -13,6 +13,10 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    run_melee(ctx);
+}
+
+pub(crate) fn run_melee(ctx: &ReducerContext) {
     leash_pass(ctx);
     aggro_pass(ctx);
     resolve_swing(ctx);

@@ -221,6 +221,10 @@ impl Standalone {
     }
 
     pub fn module_logs(&self, lines: usize) -> Output {
+        self.module_logs_database(&self.database, lines)
+    }
+
+    pub fn module_logs_database(&self, database: &str, lines: usize) -> Output {
         self.command()
             .args([
                 "logs",
@@ -230,7 +234,7 @@ impl Standalone {
                 "json",
                 "--num-lines",
                 &lines.to_string(),
-                &self.database,
+                database,
             ])
             .output()
             .expect("failed to read the test Module logs")
@@ -254,6 +258,13 @@ impl Standalone {
 
     pub fn publish_module_bytes(&mut self, wasm: &[u8]) {
         self.publish_bytes(wasm, &[]);
+    }
+
+    pub fn try_publish_module_bytes(&mut self, wasm: &[u8]) -> Result<(), String> {
+        let path = self.data_dir.join("published-module.wasm");
+        fs::write(&path, wasm).expect("failed to copy private Wasm artifact");
+        let database = self.database.clone();
+        self.try_publish(&database, &["--bin-path", path.to_str().unwrap()], &[])
     }
 
     pub fn publish_module_anonymous(&mut self) {
@@ -421,8 +432,18 @@ impl Standalone {
         );
     }
 
-    // SpacetimeDB 2.7.1 can segfault at launch; retry only for a new database.
     fn publish(&mut self, database: &str, source: &[&str], extra: &[&str]) {
+        self.try_publish(database, source, extra)
+            .unwrap_or_else(|message| panic!("{message}"));
+    }
+
+    // SpacetimeDB 2.7.1 can segfault at launch; retry only for a new database.
+    fn try_publish(
+        &mut self,
+        database: &str,
+        source: &[&str],
+        extra: &[&str],
+    ) -> Result<(), String> {
         let workspace = core_root();
         let mut attempts = Vec::new();
         let allowed_attempts = if self.published_databases.contains(database) {
@@ -442,7 +463,7 @@ impl Standalone {
             if output.status.success() {
                 self.published = true;
                 self.published_databases.insert(database.to_owned());
-                return;
+                return Ok(());
             }
             attempts.push(describe(&output));
             let node_is_running = self
@@ -455,12 +476,12 @@ impl Standalone {
             }
             self.restart();
         }
-        panic!(
+        Err(format!(
             "spacetime publish failed after {} attempt(s)\n{}{}",
             attempts.len(),
             attempts.join("\n"),
             self.log_tail(),
-        );
+        ))
     }
 
     pub fn process_id(&self) -> u32 {

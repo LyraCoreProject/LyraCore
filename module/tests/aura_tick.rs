@@ -3,7 +3,8 @@ mod support;
 use std::thread;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
-use support::Standalone;
+use lyracore_shared::spell::taxonomy::A_PERIODIC_DAMAGE;
+use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 const CHARACTER: u64 = 1;
 const WOLF: u64 = (0xF130_u64 << 48) | (51_000_u64 << 24) | 1;
@@ -80,4 +81,56 @@ fn health(standalone: &Standalone, guid: u64) -> u32 {
     ))[0]["health"]
         .parse()
         .unwrap()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn simultaneous_periodic_deaths_assign_reward_events_in_guid_order() {
+    let mut shard = Standalone::start("aura-death-order");
+    shard.publish_module();
+    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.assert_sql("DELETE FROM game_melee_schedule");
+    shard.assert_call("debug_spawn_player_entity", &["1"]);
+    for _ in 0..15 {
+        shard.assert_call("debug_spawn_at_feet", &["1", "51000", "0"]);
+    }
+    let mut victims: Vec<u64> = shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 51000")
+        .iter()
+        .map(|row| row["guid"].parse().unwrap())
+        .collect();
+    victims.sort_unstable();
+    assert_eq!(victims.len(), 16);
+    shard.assert_sql("UPDATE game_world_entity SET health = 1 WHERE entry = 51000");
+    for guid in &victims {
+        shard.assert_call(
+            "debug_fill_aura_slots",
+            &[&guid.to_string(), "1", "true", "1"],
+        );
+    }
+    let due = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap()
+        .as_micros() as i64
+        - 1_000_000;
+    shard.assert_sql(&format!(
+        "UPDATE game_aura SET eff_kind = {A_PERIODIC_DAMAGE}, amount = 7, period_ms = 600000, next_tick_micros = {due}"
+    ));
+    let mut events = Vec::new();
+    assert!(poll_until(POLL_TIMEOUT, || {
+        events = shard.query_rows("SELECT id, killed_guid, created_at FROM game_xp_event");
+        events.len() == victims.len()
+    }));
+    events.sort_unstable_by_key(|event| event["id"].parse::<u64>().unwrap());
+    assert!(
+        events
+            .iter()
+            .all(|event| event["created_at"] == events[0]["created_at"]),
+        "all deaths must come from the same scheduled aura tick"
+    );
+    let rewarded: Vec<u64> = events
+        .iter()
+        .map(|event| event["killed_guid"].parse().unwrap())
+        .collect();
+    assert_eq!(rewarded, victims);
 }

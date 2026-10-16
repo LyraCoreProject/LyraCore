@@ -45,10 +45,10 @@ impl NativeConfig {
             return Ok(None);
         };
         let config: Self = serde_json::from_slice(&std::fs::read(path)?)?;
-        ensure!(
-            blake3::hash(program).to_hex().as_str() == config.wasm_blake3,
-            "native manifest does not match the published Wasm"
-        );
+        if blake3::hash(program).to_hex().as_str() != config.wasm_blake3 {
+            log::info!("LYRACORE_NATIVE_DATABASE_WASM: no native artifact for published Wasm");
+            return Ok(None);
+        }
         Ok(Some(config))
     }
 }

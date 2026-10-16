@@ -48,6 +48,14 @@ required-features = ["native_simulation_prototype"]
 name = "native_committed_benchmark"
 required-features = ["native_simulation_host"]
 
+[[example]]
+name = "native_gameplay_parity"
+required-features = ["native_simulation_host", "native_simulation_database"]
+
+[[example]]
+name = "native_database_lifecycle"
+required-features = ["native_simulation_host", "native_simulation_database"]
+
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

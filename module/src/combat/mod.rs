@@ -38,6 +38,8 @@ pub(crate) use folds::{
     effective_miss_bp, effective_parry_bp,
 };
 
+#[cfg(feature = "native_simulation_database")]
+pub(crate) use swing::run_melee;
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     agility_crit_bp, apply_offhand_penalty, armor_mitigation_pct, attack_outcome, block_chance_bp,

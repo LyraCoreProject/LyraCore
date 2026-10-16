@@ -5,7 +5,7 @@ use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
 use crate::realm_core::RealmDb as _;
 use crate::world::party::PartyOutcome;
 use crate::world::{Actor, PartyStore};
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::{Command, Output};
 
 struct PrivateCli {
@@ -31,24 +31,6 @@ impl PrivateCli {
         let mut command = Command::new(binary);
         command.args(["--config-path", self.config.to_str().unwrap()]);
         command
-    }
-
-    fn publish(&self, server: &str, database: &str) -> Output {
-        let workspace = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-        self.command()
-            .current_dir(workspace)
-            .args([
-                "publish",
-                "-s",
-                server,
-                "--module-path",
-                workspace.join("module").to_str().unwrap(),
-                "--build-options=--features=debug_reducers",
-                "-y",
-                database,
-            ])
-            .output()
-            .unwrap()
     }
 
     fn call(&self, server: &str, database: &str, reducer: &str, args: &[&str]) -> Output {
@@ -133,12 +115,11 @@ fn another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character() {
         (OTHER_SURVIVOR, 1, 0),
     ];
 
-    let mut standalone = Standalone::start("party-cleanup-world");
+    let mut standalone = Standalone::start_persistent("party-cleanup-world");
     standalone.publish_module();
     let cli = PrivateCli::new(&standalone.owner_token());
     for database in [INSTANCES, OTHER, REALM] {
-        let output = cli.publish(standalone.server(), database);
-        standalone.assert_output_success(&output, &format!("publish {database}"));
+        standalone.publish_named_module_bytes(database, lyracore_test_support::module_bytes());
     }
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["2000000000"]);

@@ -1,0 +1,2320 @@
+{
+  "scope": "Exact fixed-time gameplay, portable native math and committed recovery; timings collected during concurrent verification are not benchmarks",
+  "module_source_archive_sha256": "fd23865ea0c2b301b588779fddff8f201396203562cef8d0a341e7cde4a1c79c",
+  "sdk_source_archive_sha256": "9111eeb00b84058ab9109e3a7c6c4ea28b5415b11668d835f43ec808df46fbe0",
+  "driver_source_archive_sha256": "2b9361dd07086904aefb1182b56ffc733467e7e7218f74152053fafddeeed672",
+  "baseline_failure": {
+    "creatures": 5000,
+    "sample": 0,
+    "step": 9,
+    "table": "game_creature_spline",
+    "guid": 17379406061533923309,
+    "field": "dy",
+    "module": -126.01679,
+    "native_before_portable_math": -126.0168
+  },
+  "math": {
+    "samples": 1000000,
+    "mismatches": {
+      "baseline": {
+        "atan": 71555,
+        "atan2": 178341,
+        "atan2f": 161512,
+        "cos": 31047,
+        "cosf": 12636,
+        "hypotf": 130295,
+        "log": 87416,
+        "pow": 96870,
+        "sin": 31143,
+        "sinf": 12580,
+        "tan": 36633,
+        "sincos_sin": 31143,
+        "sincos_cos": 31047,
+        "sincosf_sin": 12580,
+        "sincosf_cos": 12636
+      },
+      "native": {
+        "atan": 0,
+        "atan2": 0,
+        "atan2f": 0,
+        "cos": 0,
+        "cosf": 0,
+        "hypotf": 0,
+        "log": 0,
+        "pow": 0,
+        "sin": 0,
+        "sinf": 0,
+        "tan": 0,
+        "sincos_sin": 0,
+        "sincos_cos": 0,
+        "sincosf_sin": 0,
+        "sincosf_cos": 0
+      }
+    },
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)\nbinary: rustc\ncommit-hash: 254b59607d4417e9dffbc307138ae5c86280fe4c\ncommit-date: 2026-01-19\nhost: x86_64-unknown-linux-gnu\nrelease: 1.93.0\nLLVM version: 21.1.8\n",
+    "sha256": {
+      "math_check.rs": "2122fe78cdf0932af6568c3b561c3bb064148da2368690132e8451667785faa9",
+      "native_math.rs": "aeb9c4f988b1195cfd66a6387fcc2cb7b45c49240b96b56c336c21b6da81d403",
+      "baseline.so": "7ea42158aa155d801539f0c44794983f6f4804261a8922fb21ce36771484da99",
+      "native.so": "ae6d8c743ae50c0e436d7be8300b11c4baeb0c85bcb7901ef5049c4ad8b5065a",
+      "wasm": "50e5d15ff1d10b9dcd1855e1af9d4ab6bb81cd81fa9b3fddd48fd1aeb2427e83"
+    }
+  },
+  "gameplay": [
+    {
+      "raw_sha256": "1d1f4309db7feba237ed08209265b8d1a5e1f15c9f1e1d539718678606de22cc",
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 100,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "7f447c5d61d7f246abde87ac0eac47e370eb96e7de7ea0ff6741a6a4bcfcd42a",
+        "samples": 5,
+        "scenario": "creature_cycle",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 3,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "frames": [
+        {
+          "digest": "fc37633e01bb4dea21d47a560f0fc761ffa7a6e172e8d6571ef11dc4b7097d20",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "58ac9a93cf2918fb5d35605bea769b71050a25537d058239ede56df62aad3e36",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "78193afdc27279a3c72ab2e34a07edc4969ae287c975a545d8ba29792c40571e",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2bd49056e510aea8e1e106a034f4760266c25a66793e557f211208c314c09f5b",
+          "frame": "sample 0 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e083c607c7182131b43784905ffc31aa0d4ec7abaa8a46d5bac618ccaadc4e6f",
+          "frame": "sample 0 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "dc44eb65e13939113966734250a5497cfcc46316c98e7c89253852661358c8f0",
+          "frame": "sample 0 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "97980a7e39018ed0804732d510b8f40d6914ca5c63a984c8a36f155a4567b9e2",
+          "frame": "sample 0 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "19223b325296e53f0a9a415264a59a931b65412b43e562c093747b71f8b3f28a",
+          "frame": "sample 0 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a02989e6d57913b2a8e69fe11ce5916e381549cd061eb2642f7872f02dae557b",
+          "frame": "sample 0 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1ad4ba890d5bfaa20cf9bddc518b90a61e3e0d1a46646552a49c3c75795c5ceb",
+          "frame": "sample 0 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9a880675d94329908ea58063d274acf5eb68ee6e03ed8f68669de97265e443df",
+          "frame": "sample 0 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "338756b8d9bdfd649b30f46ed2733d1213258abe21dafe698b07d82d4c1295c3",
+          "frame": "sample 0 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c84b0e5f46dc003667381e5b0f7a85f21479ea4d888dfbaeaf0c5738f50aeefa",
+          "frame": "sample 0 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b419d24a490e07138f83c488bed88162c1bc80b3c767f2b88e9c7b380dbbdf6d",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "9e7071c99552859d018565d520e55dedb43175f23b76908c0fcad9df4326507b",
+          "frame": "sample 1 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "47b8a1599ddd38d71cbb58fef895cad7cc00bd7982de4ef9330b45cf14fc5c3b",
+          "frame": "sample 1 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "77c4b2da9688e10c54549c885816e8f4ecdf82cd32831ccbca71df16676a0477",
+          "frame": "sample 1 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "bdedd50e6d93fb04b45028f1bde28e3b5d93649c507caab1b9553842971a9a78",
+          "frame": "sample 1 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1d1e54f9c1cfcc60eaea7310b80b1aa2d3502cbc98eedd25790e9db074cad107",
+          "frame": "sample 1 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cfd56071faedf3c06b244ca16f5da89ce5233cdc543801645233dc7bc2eae7e1",
+          "frame": "sample 1 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e04b5b8e96e61a6ac0550f03e926d50923c56fc2445709139800e6a880ec98ca",
+          "frame": "sample 1 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e2837e5c6c86f6f19c684f236e14f7a7350ee50808a1a8bf81fbb3b54109dacf",
+          "frame": "sample 1 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c5c146228efbbc7206364c8382d53d5d4a6ffc65f922917ac9008cd82e9290f5",
+          "frame": "sample 1 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e8100ba9c6ea76e60bf19f5ffd3141c7c35a28080e705c622f164bb2ac73a41f",
+          "frame": "sample 1 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5ee53b8a4713e5a7899c15cad471ff1a947ee6825ca700ba1baf9ee58572d716",
+          "frame": "sample 1 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "80bff0418eae86dfebf85951775d9a027518d40de4b144d655efc83a96562eab",
+          "frame": "sample 1 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0ae761d580450d700db67a3b1b3db33636547ccd8a747bd4ecdd1283162d72c2",
+          "frame": "sample 1 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "53c955c92be8c04a66984b526c428222ed67124adc57416e8ee18e1099e786c4",
+          "frame": "sample 1 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "cbb753178de5cb2c4754fdf91841437d29e0518df181991df0693d92b2d006f7",
+          "frame": "sample 2 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "dc985b02baf8a863a0c0396605b6ca24de3b217e48d4516a308bc77e63d9acc4",
+          "frame": "sample 2 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "dd583640ea0e04d84fd76da784d6986819d94d2a6d6bc4c3d71c2bcc13644a68",
+          "frame": "sample 2 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f9b293aff29bfa3f60ea93e636b2fc8f040083f307ce7bae77bf188ac4ec93af",
+          "frame": "sample 2 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c69d7a8d4137273b8527045b43d1a0f5d2e6ebd470c3c0ff502f1ca638560849",
+          "frame": "sample 2 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "03098c715a09281037202fae9147c4b6f35d826d1d6eb27667ce1f9f0980d9d6",
+          "frame": "sample 2 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a6077e1fdd1729e9d5d60b6267a933345b3e5524d8dc7c98a15496285363a91a",
+          "frame": "sample 2 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2e9e229753d3720633b605ce67ac96f7ba676353820aa52f48aaef314df2f751",
+          "frame": "sample 2 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d6004a07d2768b8c4378c953f6d9a53b119ee0119685833d149fda27f1cf2d4b",
+          "frame": "sample 2 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d03d99036eac49e1f3433f6d776a850d7da6517a217a5fbf6cd0b8f81d96475c",
+          "frame": "sample 2 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "377b78ade4dad5fc6906e2811f206bc68ac80fe6c0f9c75ca0d00aa9b6a31ec2",
+          "frame": "sample 2 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d51722344f4161ddbd27fa2fa3f3382f28e2dcae2176d4c1472f190ae7b37c26",
+          "frame": "sample 2 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c4fb060bc4e26fa1d5ba2e7d79bb3b29075d2459c86c0e85fae81bb6da44761d",
+          "frame": "sample 2 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6e0302d3a09fba97ae8dd2f4c0c405f37a5437e2a39ae3d7d84e45efa92acc14",
+          "frame": "sample 2 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "20d448824b9859334cdcf65696149a6748eeaaacba439708d84695b451c3f3c2",
+          "frame": "sample 3 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "f9acc470e1db5fea7d5af5a7bb4f4bd0ed9b8258c4ba1c8a273f03f24841df22",
+          "frame": "sample 3 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "84039d091d8c7bae4e601812e5efdbcb7a0091d0f34ce9ae51fe708b66192a89",
+          "frame": "sample 3 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c4fb84f758815ff6ff438637fb12459f0b2cce60427af5d2adc58e7dd4007988",
+          "frame": "sample 3 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2ae23f9bfd717855bcdc30b84d08c86472f5b86507deb6140b4c7f2af1f677d7",
+          "frame": "sample 3 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c4847ccd4d39d276330c17b974fddd3d4eb5bde5e7721edc8c01582193ebf919",
+          "frame": "sample 3 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1fbe133d6ddced68772767b6f04722b0f41d2d7d0083d891f895566f803a3496",
+          "frame": "sample 3 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "654c71ba31996277c1230aa9755a783bbf8ef09e6964f04be4ccd9e3a4035416",
+          "frame": "sample 3 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "058e57fe074916c0b5008fd0a173b977b343af1828c705b437f31f544a954933",
+          "frame": "sample 3 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ba4890d1cb218953c876a40c344238026017238cc0c44ceb6a143ad865062cec",
+          "frame": "sample 3 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "3f374c633cf0cd1735f54e3b2a2d3db71e253695b0af9abfedd856964906bb33",
+          "frame": "sample 3 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5a0384b0d46ca00b3d997c46fe074c419981fbcf1bbfa961d2a4f75049755370",
+          "frame": "sample 3 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "293e1949b5a96b50e9beb4d257ab516a8f98111f38a2621ebc7207ce4b07d515",
+          "frame": "sample 3 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "16bdcaa949359ad32084f79f3a061d85e739f86e7d769c1c61fcc2d66128625b",
+          "frame": "sample 3 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "03579cd966c32283d6e7774c32626b60e8fde2b1c4552f879ec6c4b524cd409b",
+          "frame": "sample 4 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "5f6cb879ea5891fce150484e8471058be738071bc1be2af64eb256fd7815db33",
+          "frame": "sample 4 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0675f2b182379fae1087ec885cae61c18f7717c4cd13fedabe829b7df62d6e3d",
+          "frame": "sample 4 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "978c8185b6c80ac09a1cbcbc14ee278a53d63580735975538785173bf338d116",
+          "frame": "sample 4 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "3af383c824b2fa1bde3fd7d6193fd1a3d715a26cc2448b1c28940244706e8653",
+          "frame": "sample 4 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d8dc491d87c1f25a229c7f4a9600e8b9a7116d8e17610fd39bb817ec83d33771",
+          "frame": "sample 4 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b44abdd3f1695e92c44338dc1be1e261c9bfbac7c6aed3a27fedf3663f742918",
+          "frame": "sample 4 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "fc109a3b15b8400f6b998ce804caba73d7eea108c7cfd6f8cc1295a4b3f719cc",
+          "frame": "sample 4 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c7a122f3106e1b63d7bc2593073fb0bdbb23b758ac9a630c89fee1d50f273503",
+          "frame": "sample 4 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "00a8f064f6b6bbdb3db2fcc56417e500cf5069dbaaab4949b7d0a988645c391a",
+          "frame": "sample 4 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c9dd313699608b3e5cb635a29f5dfe38f38eeb2b85d75135980f7be3d76bcd43",
+          "frame": "sample 4 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5da9db45d4e51a345fef242462a61dbf3abb0004d08d84fa1f6252ee9a5ec2c1",
+          "frame": "sample 4 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "446910a02a2a0e427cbf9b7b74d6a8cce06dc889d3f6555d73e73bd0312f0e0f",
+          "frame": "sample 4 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a53aea6e57309af65cb9ce9537d5fef97973791e2bb7e740acb9d111f8ecc41b",
+          "frame": "sample 4 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "4fb35c0ef20d7ca53b81352266f2ca8c43abd0e0b942ee0fe6e53da59c00455b",
+          "frame": "sample 5 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "53cfa7477d4a6929f5c60d3724b0608da4a865431436cca7c8a1a80b3fa7e30e",
+          "frame": "sample 5 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ab60e031409085329ecb73ccb71dfb831fe5fd606fddd3a0ffbe8d7afb536278",
+          "frame": "sample 5 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "bc4d7abecb40c7674a3b691bc216ed50db19b1bc1ba6a610cec18798457f826c",
+          "frame": "sample 5 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c3284244fe091ddd7f9ca428691dee1f1dd8e46d1508b187a936eb42e3091fe2",
+          "frame": "sample 5 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8671830a6453406c7c88bda36a240fa9e8de4aa30d770170e9104cc413e5faf4",
+          "frame": "sample 5 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "158468f9d32f4c4ead20627260e6f39fa08717f371bba65ac9978be9664685bc",
+          "frame": "sample 5 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "15ca45bd8e55dc09b337e52605a37b383c471f2d53605c0d16ec3531ecbe893b",
+          "frame": "sample 5 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "430eee68f4bc045d5433953847ca19a0310eba2902c8ac72d310520a6996a3a8",
+          "frame": "sample 5 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "886bfff9dbc25799b9bb63f6cffba8e30a7670c1be9ae487d166db4cfc2b675b",
+          "frame": "sample 5 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d43bcf04538baa74d87ede82474618ea1e411103e9c5a1fdfe78b5e75596849f",
+          "frame": "sample 5 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "120ee6c88d76c17ec11c247033e893b93d2691407fbfd8d9f2fa38befdc7673e",
+          "frame": "sample 5 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "51c3a945a5ad81c461750c46c77a68ce7e025245121be430b1a0650c1e4a9085",
+          "frame": "sample 5 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9edfd16a320a054f30ac0c7a6b2a096480c738380865915128fb044da227a2ec",
+          "frame": "sample 5 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "f970330187403c8a7cd73931b4e1a77c4392eeb3505385f6563f184184103083",
+          "frame": "sample 6 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "78f6933a1ff0d230da0050b4c882b370929e7c49d05b3a033bce5539d6f6e7f9",
+          "frame": "sample 6 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1647fbf7bd3510771664cff45ae44d5a527ca52c2235f1bed2f494f6786b0d75",
+          "frame": "sample 6 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0865a840af71091fe9c0930faf94fff0f448e1f500be8c7397afee03a9092f20",
+          "frame": "sample 6 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a958c35ac92cd41c8abe89d965414247f3f5a05dbfd0952ce4ea81db2779ca48",
+          "frame": "sample 6 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a4dd0f5b47669ac5a373f401da215a55a66c8a3d7d848e150236a87b530ff6e9",
+          "frame": "sample 6 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "30ae9c73be68138dd6cfffe0de7351d281bc0ec8f2e9668b8eb81e2e91285b24",
+          "frame": "sample 6 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2d0b905b9c9df7d32fd861ec2897613a0fac7109750939e56796ce3a28b34239",
+          "frame": "sample 6 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cf5d9ceae33e4f2727ebbf3b2bcfc363a1e434070fd7267a8a5f206b64a95cda",
+          "frame": "sample 6 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c9f893ecafb6a91b36fdce10e60778cbd3af04d093a1fc0b27d4e1cf92935a3d",
+          "frame": "sample 6 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cef26de1cd63b0e9cea139aad5be7d6af1562ff609a04dc3aaedd89c7fe7eafa",
+          "frame": "sample 6 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "359558a18050c218ebb42a910381d998a85dc6e74dc24236eca73376de4294fb",
+          "frame": "sample 6 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cb2e815f52a710c6825bb61801691d02b8ea34ec638596f477e695a1fd04899a",
+          "frame": "sample 6 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7101d9c031640ae79182f6dfd197c87b5f315065f9ce6b532b1a74de7f6ec6f2",
+          "frame": "sample 6 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "63dfe83703976950946dcda28ca915e1c6290ecb46ce3c4c725691ab4025164a",
+          "frame": "sample 7 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "303b73f3886edddadceac0a50527a9c8e514820da168078bb835a7142f0558c7",
+          "frame": "sample 7 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7289ff7bf4b09b50de3b000bf38c20f420d7c06536e88b5231ce4ce9306f631c",
+          "frame": "sample 7 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "45f9ef7ee9422e7cc436f740514569b0d564fcdaa621948cbb25a3ec40b78c1b",
+          "frame": "sample 7 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e692262a9983052ad66c469e4c1b43f442fd057a09cecffdff58e4abdc93742b",
+          "frame": "sample 7 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d7107e4f99241514b953bad714781d36fc97f5663aaa82dc45b5f130611f603d",
+          "frame": "sample 7 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "148b84ca022d040e963aedf5fbc51c1e4491b2bd13d0145d1dd6ee5e3404ef09",
+          "frame": "sample 7 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "edda904f2c877f25aab3cfb904d51df7adbee6f6a45eca497f221af3a20c615f",
+          "frame": "sample 7 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "54476e5f84cea7965ca0fff794fb671171c08b95e2d439a8f680e2c994cc1dad",
+          "frame": "sample 7 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8e45351f65dae299f918cbfb41e30dd7960539ae23ec9ca629b8e63ae8bbc63d",
+          "frame": "sample 7 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7845451481da59676652d61a8346157546b45c949d64597fd1d5d5af984a6638",
+          "frame": "sample 7 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "498af8c57449feb33dc72d4690b3226485496483ef6a8207e0d98bf4ef970141",
+          "frame": "sample 7 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "29162c61d1a432a8bcca0394fbe833f4275959d0f77c48617a0e78957ba0afbf",
+          "frame": "sample 7 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "dae0be7a2a37568469e2690bd180093c8c68b0a74b864b9fed8dcea62e9aefc3",
+          "frame": "sample 7 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        }
+      ],
+      "completion": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 5,
+        "tables": 296,
+        "warmups": 3
+      }
+    },
+    {
+      "raw_sha256": "bc843c0c86cdff3faeb836c2d350baca056ca1b31669b9ea160e0f87b5312a2c",
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 1000,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "7f447c5d61d7f246abde87ac0eac47e370eb96e7de7ea0ff6741a6a4bcfcd42a",
+        "samples": 5,
+        "scenario": "creature_cycle",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 3,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "frames": [
+        {
+          "digest": "95ae5463b866650a242b69166d2970a7f45805172acfc0dcc1f466f905d347c4",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "401429bacd68ff25193fcbf5be771bd067d5d645292da5eaac3941fe8f617421",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "42e901b83a79e0b9a336ae010610dfd6972ca90ef339aff4b190a272e3179a05",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7e1f6b141d7fa5a14f459ee7577a8a528d2f7c7f950326ca3f2b9b7b718e720e",
+          "frame": "sample 0 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "26a9ed2c8680abf8da4bd8b8b15efe205cb02d1b26b0f68bd62bbd85a13a2bce",
+          "frame": "sample 0 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1514e08f622d272ba5d8a7819b7cc51a12dd2e20b2f50b5ec97f22a77a9b1632",
+          "frame": "sample 0 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d77e0a191d13344ec06a9de0bb03f41ad3f36aecfd750ac0fdb74d3b08ea127a",
+          "frame": "sample 0 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2f9597c5113cab30792ab58b9153297256b7e73fb927500041cc8c57f88ce932",
+          "frame": "sample 0 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c2116bf34d00fffbcecfaaf3261b8df4c383378d5073827fc58803b7493ba2f5",
+          "frame": "sample 0 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "54997400f2f750062c7916db5164100a6057e538b8924e3ebe4bc2054a0c14d1",
+          "frame": "sample 0 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ec3aa9263a970530ddb87cdf596fbf9c00ddd8793aba26e763db1965b9a5231e",
+          "frame": "sample 0 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5e4338f9d1782d808d3d65c56773cc16b9f1518fa3639266910315dfaaebf245",
+          "frame": "sample 0 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "23adcfbed9bf3fc1735e34bda6c079c34726ff2105567bbfc33561a3fddc344b",
+          "frame": "sample 0 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4e134489ac69e53bfbb4abc30e6602b89c067561e0541be2c6c4697316dbd836",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "d17028629a963bba1204098685cf3c502b0f664eaf05d9804a365d0f4808599b",
+          "frame": "sample 1 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "f92ab94a18580b8868ca425207b6e2348a35ac2497d1b20d5cb5dde74c1d0573",
+          "frame": "sample 1 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8625a5233eb52e16d2323e6d65eee0842010fd5ae1e2ad5529ae72d9abd23ddd",
+          "frame": "sample 1 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5296e0228167e86427724618e6f9152f589e05d588c90c554a1800471486da96",
+          "frame": "sample 1 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "07b81e535067cf2529359f52d5851f44eaf2ceefaa22ca8ee0cc39125d777a6a",
+          "frame": "sample 1 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ccdc2576c365d614e75f1b7cc93735a70539547696c6d39c5067bf1222d09aa0",
+          "frame": "sample 1 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4eeec33ab5737ba36463f567f3f0c004837fa53c751fecd513502eec531e0555",
+          "frame": "sample 1 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b6dd9d5b5598e0a05da7ff565bc4fc5d010e5135a43bfc0579c011cc01fcc8fb",
+          "frame": "sample 1 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c0924e3fde4e959fb2d0e139b77e4f74e95036f6900f3456e1249356152907f9",
+          "frame": "sample 1 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "21eae0b5c32c21e512a5f0dd77e7ef3d98888d6b3c764a24b6e7fc86298b0e7f",
+          "frame": "sample 1 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a2c59ce72a76145ada7e066bfe14cd487f18cc2bb8e41da18eb5fd70fea9caf4",
+          "frame": "sample 1 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f61ff146a368ce8ba080a78f2824f2b3747da5fc75cff1f837caefe0b95a9a93",
+          "frame": "sample 1 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ab5b6c77bd04b5e7713940343363f148a6827b6d76b90a109bd9482749487e06",
+          "frame": "sample 1 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0a13a9608b051b7f4c76183224c8ee8c6e887ce499f87a6d8a708f33b133a62f",
+          "frame": "sample 1 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "569ba644d604cb3ed48a855637630f286e5ab3623e66ef32c2c0996534944939",
+          "frame": "sample 2 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "8ddb9a8643cefee95aee79082bceb2aa80f7c0922e60dc67967e8e88ea1b9305",
+          "frame": "sample 2 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8412c38783e6b507b012a697b9ef21597521c4cf2e6a5a6afd9d6b4125b676cf",
+          "frame": "sample 2 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "969fa7ff47259720a7ca534cd6736d537d76ff86079c7bde70f2c580345c65f1",
+          "frame": "sample 2 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "60107d4f8b22b232b7d573ed0c6ffce56e7e0d94f9698f89a4eee3da2167f87f",
+          "frame": "sample 2 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "fbd194a5e903d8dfa5dd78963ba1bab6af1d15aba75864262bcc1ec8054a4f9f",
+          "frame": "sample 2 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "06225c30e9f4aba6b6a65283684a33f71fd2ac214036107f1e0e389108bfe37f",
+          "frame": "sample 2 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5bcfee354fb0eeaa64137498040f483ca00ac54e40aa24d5c4dfdb328992e905",
+          "frame": "sample 2 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "547801ecec3700a729d4fa9e7205e0d80099f87f2a83d3e9d34481e94b556837",
+          "frame": "sample 2 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c618985c2d966489dc509e3ad975300030815bde71308667d1e141c7a374310b",
+          "frame": "sample 2 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1f55e4f60abca2b0cb6cb8bf6752d17a675d81a440b8c04dfb69159547c09cd4",
+          "frame": "sample 2 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9db5bb9e9c23caaba53a7e6e9297579dc1f5f43878c13d50d87bfd66f811690d",
+          "frame": "sample 2 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f2e0240fc0c9a201ca23b8030cfd94e8a6722a6b5fbd34ffd25a3e7f5d026415",
+          "frame": "sample 2 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9011aee471c7f51c089677c279d09c3013a76d6543e86fa277a4b150e49ed714",
+          "frame": "sample 2 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "4814c71808a77cd6bebefd396e097a454c195dce1e6a054c57d5a719587f023b",
+          "frame": "sample 3 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "23a3674ca6c4305e38b091e997bad782551cb8c53b9b533f47a0cd22cbae0a22",
+          "frame": "sample 3 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "94cf56d641cc29b8858cf8e435e161c803b26cdf4ff4e33af0af5f7415dc0ddc",
+          "frame": "sample 3 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1782e0d7ed933eb412c4b2c8a233f14b68a892307b6e4b6d9f926cfc615975a7",
+          "frame": "sample 3 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ba8bd1ac2c6ae3bd45815148acc3046043375c0fe7f2dcaf27b77bff8701f120",
+          "frame": "sample 3 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f97a9bd09f90d6dccf38dacb1038697cf8b791384d2984a28aabb83d3b88d4ea",
+          "frame": "sample 3 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1815f8dae942e498922ab390aa2a3392894b166541a4b7eafe65d193170fba0e",
+          "frame": "sample 3 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "36d14583375e35cb6ce7856bba505623ccc661e9737d69c26ff11fb4749b9dbe",
+          "frame": "sample 3 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a2ad362abb180fc72d2208bf35d232b46af2760d9f2e624c3918df9a234df334",
+          "frame": "sample 3 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2e6b6817dbda1912d4b9685e8217cba712c0c80563705442df9ae6728e5dc9e7",
+          "frame": "sample 3 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "494c86f8617446c50b17d9d46dd5c81d0b43d9909388f67a5b35f4638b93c5a8",
+          "frame": "sample 3 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "15a15fd8f46a1ddd42ba09813b5f8fd398e4afd6f687c119c003d196f41d0822",
+          "frame": "sample 3 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "20582a963b507dc5943fadcdfa2111163b470b7ae77e247e4baf4170d8b9800f",
+          "frame": "sample 3 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "846522287a18ef5f1eeeec306d7ca4402d418eea3305db824a3c2d8ffcce9256",
+          "frame": "sample 3 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "f814e341b4feb5375a3f71957b319fe0c3b2f8628bbcb4d39cea621e45b4f660",
+          "frame": "sample 4 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "cbf95cae7abdbb88052ca116420b6523e41bb25e9b882df9c3065041b34fe1e1",
+          "frame": "sample 4 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cd914309c9e29ba5b3c03932f18d801354998fabe91abe56f362f9665d89e6eb",
+          "frame": "sample 4 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a4a85df56c8ac56e9aec6e5ab3ddd869232e900d3ab783fefe45dbe994df2608",
+          "frame": "sample 4 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8df498380ef75960c92dc596904f0097a1e2fae486da9033cbad3c24cfbfe4f1",
+          "frame": "sample 4 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c250d4ffdbc3fd11fa8e40f781a8adc74f31a957706d4563c7cbedddf60f7f77",
+          "frame": "sample 4 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "3eb3c96e7887b955f2f91cf9239e8c6342c10f8f881a9383e6f94eada6afad17",
+          "frame": "sample 4 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "010a44307d96c81d7ee2925e02965c3633b9e9dbf2e8a8288fe29d2df84138ce",
+          "frame": "sample 4 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "51fcc157280767a76299464372bbfd40076da0e3cd83957008386a5f2cf69366",
+          "frame": "sample 4 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "579e670277526e015a5218c19ca710287c1d66b667c5d33fb9b86c0405bc8895",
+          "frame": "sample 4 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d678ab96a2ff3cf611784903fcd8369dee75a7fa26976b1cfb8bcc3b8125f35d",
+          "frame": "sample 4 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0c1626a54b3480f3af5431faacd3e908d68fa3d063bd111087cbb61772392e4f",
+          "frame": "sample 4 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "3f55fdd99d62d1ddfd7b2b34d7f3a8a37187e61d4789c392dafc1e0871595be5",
+          "frame": "sample 4 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "75c2b82682752495bf6c88c977ff5adeba18d06fceb4c586da8791ca6f6984d0",
+          "frame": "sample 4 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "b00c1da6a84c64637df0df28bb7c655bfdf4ea772d05bab6e1edf6586984b5e0",
+          "frame": "sample 5 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "75f94a0a819ea7009a34f2931d1c7091fbabf96558e9783a8063106589c204bc",
+          "frame": "sample 5 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "77d1ec8ba11b9e78f01615020bee9acd1448581e78c46a5f6504d075736159d2",
+          "frame": "sample 5 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "14e580cc016e5d54503ef9f5b128c830cc3b2aec0791daba04cd8d00b7ff6992",
+          "frame": "sample 5 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "782e69c1f8b03fef3077df44f22a190bd0d180f62a6ac1bd234680a3bbcd55cc",
+          "frame": "sample 5 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5085e37e080cd09226ca5264b8c521522cff3efe075cf2ec3d8e4c24462809cf",
+          "frame": "sample 5 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "649d7cfadf114130fd0f3294ebd9a6e021cef5679801ab9003c9272f5f32b71e",
+          "frame": "sample 5 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b9a65c84613a212c5ffd974fe6f1aa3f8c1e71395d2ca27411cee9d02cc8d673",
+          "frame": "sample 5 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "76f854f0ba6c98811e5d6e18d97d001d2085f9c908592b78ed5da7624851dec0",
+          "frame": "sample 5 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6d97fc17ae25dedf9feaa4189a1779ae61e8242ff68f3149596f98155498739a",
+          "frame": "sample 5 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e898d18325e1aa499899e7de4bbd0bb4fd9d9d4f13fc7129c0b46d9514e64fef",
+          "frame": "sample 5 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "63714b345832f0ec434ddb7f95b82f7eea5c8ab01cf335c03da8313bdd33f268",
+          "frame": "sample 5 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "438ef9d97174d3b5bec17025af793eadf22511cabedfb5a7201ea1c37b9e5a69",
+          "frame": "sample 5 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "bd1f30f6868173a1fa024c6435cac2b8d667030ca488145de3ab1be2bd15271b",
+          "frame": "sample 5 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "ab52c95d4250b98c296f3d21f3fb689b9656354330865abd8a7478b4ec4c2902",
+          "frame": "sample 6 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "51b597dee724c22ea0fe1a8631718b474691c04c3d27e40e2fd06e8ec38a35c6",
+          "frame": "sample 6 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "40512c41c9d8264555b7d364bb8c442267cfd6f3aa4bcbc460fe5ba486f718dd",
+          "frame": "sample 6 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c7946751b774519913a5d128a930d522ec0555b487fa73ad08127588d2acfa96",
+          "frame": "sample 6 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c23cd778a97943d15548108d2767e9de79bc90771262cbf56e37b4ee23282958",
+          "frame": "sample 6 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e69d83b95435e3b14f7b99b6485fbc229e5c407feb9a528c12a8828c160765da",
+          "frame": "sample 6 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2ef487859b1dbd507f095952ae97fff21802013961c91389743d2b00553bcdd0",
+          "frame": "sample 6 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "94c5140e47686d1ca4dd2d129c4384ba1f40ee2e7b8127f3d283b32ba12dd07c",
+          "frame": "sample 6 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8e2ba2511f87aace87bda4420b8cb9e1db378199e0fd2be93cd8437cadd71a0b",
+          "frame": "sample 6 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7b986fc00c4fde7b5c007903b9af0308d1ba2a1917bf89b4535746a4bfbfc8cb",
+          "frame": "sample 6 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "35251e7f4ace0a6e55ffbfbc1c8c17b683730e2c0e252070e1cbf5b4da961584",
+          "frame": "sample 6 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6f2a56d10d27151b02ce8511edd59124fc00ae30df4f2e171fbd4d9df906a72e",
+          "frame": "sample 6 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "19e10677d3f2300e826ce8277a2dd1ed76d22f6463a055374f1fc90cdcb334ce",
+          "frame": "sample 6 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9ed9237008973480241b06a6b68d888029fd31bd69a5b1b6589dcc53390dda6b",
+          "frame": "sample 6 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "0a010d5bda8b1f5ad52158053f2085832a09d8a90d24a574f6a81b6329657460",
+          "frame": "sample 7 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "a06b602ffc046307a894ea01dba25f46aaba624d2d9ec92266638536de2b9f82",
+          "frame": "sample 7 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cd9eb0f2b47cffd7a2c9194ff12348a2adc463b99fecec2f68d1e7f779d9832a",
+          "frame": "sample 7 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "60af2c72b89ae869ef4059b846e87710dcae1b557697cf6ba395e06bc2a49e8f",
+          "frame": "sample 7 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "bfe0fe3fe43f548a73698cadef7da6dd4366e37e2c585f66bd6a2eaac9aa79d4",
+          "frame": "sample 7 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e922bcbd0052259912e56b647e55d2e487d72801fbf83645a0ce5799ad987856",
+          "frame": "sample 7 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8e4e5cb22138e2417f6bac0d7d8b30036e0dcc494e6a6aaaa3546e254f740561",
+          "frame": "sample 7 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d808c171063b603e360a9ec847ec2dad87e6b33e9fcff8a9249daeb28e60ced5",
+          "frame": "sample 7 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a2f258b1d88ba69ca6e7d3d5a5d8f498f0e718f734aa029ca6f6d889bfe1a7de",
+          "frame": "sample 7 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7f7595a9d5f6d987ac107f75f8c24adc26d103a04cd1b2daa0c338ebc0ff82be",
+          "frame": "sample 7 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "86cb75546470b5801b236a5c8fa59365108f019c04ebf22ef6c02fb7c04e6c1d",
+          "frame": "sample 7 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c058e66ffb23ccc6594761d0b064baf9ebdcf1d9c28dcfa516e7ab2ba30c3ef2",
+          "frame": "sample 7 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4cf1b8fe8b6205f509964c276d5096d8e77932e41b66105b450a0fe551ca2db4",
+          "frame": "sample 7 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e2de3e5758efd9b8ec5523da79fb52645725350054b3915733a8a4cb0bc72b3a",
+          "frame": "sample 7 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        }
+      ],
+      "completion": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 5,
+        "tables": 296,
+        "warmups": 3
+      }
+    },
+    {
+      "raw_sha256": "f17ed1d859d64f16ac08d25d58f6e94fa20f06da7358daa5f19a6f9ffb42a4ee",
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 5000,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "7f447c5d61d7f246abde87ac0eac47e370eb96e7de7ea0ff6741a6a4bcfcd42a",
+        "samples": 5,
+        "scenario": "creature_cycle",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 3,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "frames": [
+        {
+          "digest": "d71b5a240fdaace57d474271950aac419fa19176c2915cc30dd5483f5550e9cd",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "f56ea04c4a07eba25534af5f0572e16e1332515d059000e4e16d77d5d4272324",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2240085efe5dcbbf195f37eca34eac3e78b9faf60189a6a138b5caa54e59290a",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "327dabd42ceab73d120ec959c8983fa104de2bd22edad49509eab7b0b5ee9764",
+          "frame": "sample 0 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0dc4dd405c332b31e70b7849d8c3cb13ba5761b49be95dbefec24db02096f74e",
+          "frame": "sample 0 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "952996af22e80982a8a3440d4726d5e6843f70735c0ee75360133fc46efc29b1",
+          "frame": "sample 0 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "dc8e27172a3bf7cf803b55956641067fb99caadb892959e54ff91099cec83321",
+          "frame": "sample 0 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "531d5676456466f05cdbdccf3d9491acc86c0cc1ea7ea786318af312fda91118",
+          "frame": "sample 0 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c6282f4a45815ea99a7fb68a2c506b68c9d1e3bd5e01483467f28a402fc55fa8",
+          "frame": "sample 0 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c40fa69ca186c0616d16d3d36999ca9ac084fe7047a4e7a52a60e22a85dd7554",
+          "frame": "sample 0 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "11c2e165c77c6698f197a3fd122cd30bbb71ce5520933f5cd2199ae9c72b8d5d",
+          "frame": "sample 0 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1cff6657999c10bc1926d422445d7d161d6df2e5fbf078532b6033e02f3c2a88",
+          "frame": "sample 0 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b09318c0839a7be027a3221fcd1afe94c42445dd592aca5b4bc141c71d404e27",
+          "frame": "sample 0 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7787f982a8bf860d86c2d950a689ab5edb8417ea776797088b92cacdae0f462d",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "a0c0be9aa750c93dbc62fbe82a239557c3d30519cef34f62eeb2ca0b1489ac2c",
+          "frame": "sample 1 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "df9dbdbb746b1f91e35b5357624eeedd1aee686cc98b07c6321ad3aad517fba6",
+          "frame": "sample 1 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c2633245e57f88e7d2d11c2d05ec4c1192843768d29acd55b2a64875ed191bca",
+          "frame": "sample 1 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ac8ccb657625fd3eb31da604aba78ed3337a02c753d58f50071ab74bf23196da",
+          "frame": "sample 1 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "31efc8c8cd34aca46b8382cde77b5a437e203775dd81c871d86556b3fd9215d6",
+          "frame": "sample 1 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b3b2a729e81cdc25425bc4270e6681c05e72e6fa24255bec0cfaa1144ed190f4",
+          "frame": "sample 1 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "945e2686505af89b9ab11443202c2a0c0fe41c63111e7a6a017d6ae77534b3fb",
+          "frame": "sample 1 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2624dc0e1639f865bea5fce886e73185d8ed6aa12075e1a4e4227dbbe0e5b35b",
+          "frame": "sample 1 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5ecff11034c938e58f7bb5c959236c0a0a4ed941b2cc205937915b6278e12941",
+          "frame": "sample 1 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "71753ba628e8f559b9cc0a732baf7be200264be877933bd80dc984a49ddbf50f",
+          "frame": "sample 1 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "990ff950f996d8584daaa2270936038e4e6c64971efcbe19a5efd521928db1b1",
+          "frame": "sample 1 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "eff03fb3cdc00624280dd356dacae7b9e8efe3ce155a06095fe0781eac26b90c",
+          "frame": "sample 1 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9b1eea08aa39052afc95e7859e69b7b4cc87630b750fd5c7338a29a949e4349b",
+          "frame": "sample 1 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "dbc96143b16912c2511e4619b3fabb5608b460e4a02ae2cb464857c89f471adc",
+          "frame": "sample 1 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "c23082e42216a86ca88b6bde44bd1d09a06d8defb091254e235cfc85395962c5",
+          "frame": "sample 2 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "76af327237da8420a671a53621e3b9cee4a3d9a504991d4990b6d7c7100b3272",
+          "frame": "sample 2 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "80c89fa588d4ad3bbdec675ef750f844cc9222e48bc8c6ce5ecbfccc4c50ff5d",
+          "frame": "sample 2 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1a861f36bf736f6018f721c1710364c1f94101bd6464ff4340ff5cb11825b776",
+          "frame": "sample 2 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b617f2214bcf23e345c7305127fb9cd1ff6dc06b96c51fe262f33a194483ae48",
+          "frame": "sample 2 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "392ab380244e10a590b95193a633a42ebc2d76677e9db603039996d6b2e39bd5",
+          "frame": "sample 2 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f8f94fbb007f60dbddad7d972c63d621e2803a21fcb1f6b1fa475f08501b4383",
+          "frame": "sample 2 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "347aa76661f713e69a8d58e6baecf125cee96e17923f93aeed59a690447b4bc6",
+          "frame": "sample 2 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e85331b9f4c41170d0bb5694feb58eb8254bab477be9e100f0b8792b6c512810",
+          "frame": "sample 2 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ea1e41b79ce15d845375df43a0dc78d11325a07afc805c2e0c6d6e30cdf8f73b",
+          "frame": "sample 2 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0c9acdc4f5a7dbb52849a8241eb43f244af917e67b9945220192f99a04d9ec1b",
+          "frame": "sample 2 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b37033d228257ce373a317f6db697f7a466275ce059950de430c34c5d6816b95",
+          "frame": "sample 2 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1daeaae7703f093e48490b871f4bebd7aefc7abd6b5beec0eaff628be1960451",
+          "frame": "sample 2 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "db7a5adb2f946fe1b24012fdce950712ab7db30c284f495531242dd1f849b0b9",
+          "frame": "sample 2 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "8e1262dc8d223e5f85303c91aa6aa2df0b65507972869af329f60d1cc15dfc66",
+          "frame": "sample 3 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "3cac9c4249e9fcce6ac71cca14f1f73af5eef6fd321ee0478385d725e74c664e",
+          "frame": "sample 3 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1e45dd5483e432540f5e122a9957e6c0ab384dcb8757967a79586fd6873b7910",
+          "frame": "sample 3 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "daa394a49463607c4b37dc29762933cc4fedacfdad57ae4536118557056a4a19",
+          "frame": "sample 3 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "89bf4fcbbaf9959bc539041008170ad54c41ad81888ff98c483eebc6e3c3b752",
+          "frame": "sample 3 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2d59326e92421262cbb5237784d8785cd094533e928070fe2ef4b3736a4e76aa",
+          "frame": "sample 3 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4dbcc51bcb8395f4e015b9f33c11f5a2a3abfe0e3e787f7bfa40c412ec6f66e1",
+          "frame": "sample 3 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b49fcd65761e8501257983aa150c3f17437ceecbc5af423f73c0d9f505f2f50c",
+          "frame": "sample 3 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "50527d5c90f96388a9fe832601a53e7e61e4f38406e902df798a3d2d5dae7d3d",
+          "frame": "sample 3 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6dd9971cb030e2df02fdfd728343668b89adf2b3b8508b11e74c5994835d446e",
+          "frame": "sample 3 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2c655b673d78e2b21d4b9375ddf445efdeca400efa89a62b3bb07b86be5d44d6",
+          "frame": "sample 3 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b3309768fa4aa15d32d063d3bab646f20929ab92c7ef0564f32007eb9f0f9259",
+          "frame": "sample 3 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "9d1e8b61dd01e9732fe917f003536f6ed382759ce1ba99959a3a79193185b03d",
+          "frame": "sample 3 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4d69280c586517bde785c2f23697f7d1e5945faf88a42cf2f1f59299e622ca79",
+          "frame": "sample 3 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "723dcf2f1312bd170ec5e6c80d1a50f0014f83ab2d0297994b7173b4261ca591",
+          "frame": "sample 4 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "0cfccf6b9dae13214a87db18cfa1bffbdeb664aed5b3e472dc56b2b88934eb65",
+          "frame": "sample 4 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "38a58a562c0061c5161017ced13dd634f41fbf9baaa0fdd040152c199c533e1c",
+          "frame": "sample 4 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "35169f734a41ac9fe8e4520c3192b38db9c8c7e9ed149f07561b8496bbb481f9",
+          "frame": "sample 4 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "15de3bc9fc1e31e20c912d469b94997b2c4775e65fee41388c69b2e01c052dce",
+          "frame": "sample 4 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "5b5303bf32345ca7a3c0daf6379ec63c7d5c9e95acd222502d4dd8fe90d54ab7",
+          "frame": "sample 4 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4a219255c8a7df88f0a6e7ee236319370e7598a5dfbf1d1ac1c36b14e0a3e8aa",
+          "frame": "sample 4 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "89bb27194f6b91ff7349a577aea750cc5f433232985521a7368134abf8a7e655",
+          "frame": "sample 4 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d42e768aba4b0dcb549142a7a285a41e3062ce888ea9360cfe24f2e2c7d186fd",
+          "frame": "sample 4 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7144efb3f3cac09437a6c61d29298557eedeced2d5bb2141d98ab49f931f878c",
+          "frame": "sample 4 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c1b48ab0704ef3b8593c93ac1b4e1ed8c3655b77063135c18b1892751b8bb917",
+          "frame": "sample 4 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "634fee782010bb59cc88624aa2bf291af9f88d65763137d361f640329bc3f973",
+          "frame": "sample 4 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6367ea1e4593f9ea89681b42cdc5316abb7e2a6c17325bc15d6b7a8ebd9154ab",
+          "frame": "sample 4 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "901028824270d02739c991766c8bea19a1c44c7d51004fba70bfe471b59df0e7",
+          "frame": "sample 4 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "264f1416ada7854dddc38cee22774e5a4f2caa3892c8865cae934775cabb8b13",
+          "frame": "sample 5 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "6c50fb62c67d2db8c07909113a297b6a7d4e14689bd8ce690c2e10b67bbad305",
+          "frame": "sample 5 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2b33f389521d60978ddea7ec64640349e756925c08773f5e54b68bdfcf295a24",
+          "frame": "sample 5 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "29263d282541b8a6d8721ccebb6d9f4df7cefa6747a56961c2d006ebc889b374",
+          "frame": "sample 5 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2a7de3137012bcd19057fdc8998963c268c595e9f1d13a093c09cdf91052bd19",
+          "frame": "sample 5 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b46cc270ecb6dc5d586d4dfbb133fe6372322e50dc28f7e58e12c2ec98e71b37",
+          "frame": "sample 5 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2c00acee0e04cd919b857f85fde7fa3b04ed56558839a558145e312cd9a08474",
+          "frame": "sample 5 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8feda0a68c009deb1a435878e232696de2f85ad3cd830e8b144324db1284fdd1",
+          "frame": "sample 5 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "97a8b6eea46c21a0f2d776178e81112dfb3ab33eeb68a7fdd56c511785c66501",
+          "frame": "sample 5 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "67db7ddeede580aa51e1b967d3e2ed582be279bbbbd322dfac40b430956802eb",
+          "frame": "sample 5 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b6450222a062d4265cc0607d93e937752d20c2552a3b3248f883df345fe4960c",
+          "frame": "sample 5 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d2cb95f8910c5200fb0f80ffcd4e81cb7646c493b96cff64adbca6d46c7d01bd",
+          "frame": "sample 5 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "3e282fe948674391be5b65b99786b390c6923ee92412f8a8e64db1f914525eaa",
+          "frame": "sample 5 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b0ca2721d7926c1d49de69ca3be0aa41ad2aca3dac1b7594fecb2b6ca6d230c1",
+          "frame": "sample 5 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "54c115a505705d08fd51102b432e422cc904ae4127a34f1606130f7317974ceb",
+          "frame": "sample 6 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "564bf8b9f9ae14d82777dd10fcea04f11b76a2dc5eea571ebaef966f3a52d846",
+          "frame": "sample 6 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "59d0357c732ec07a31079e341dff2c734c5d1d716393bd6252614427e28d4a7c",
+          "frame": "sample 6 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d3b3d2ef17012740c0f1d5ffe1d6ad053b76725d8f9074a617452563b16e2312",
+          "frame": "sample 6 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a608441d52890085666cda3f20f6d40e62b74e2563307db03186a929cea203d6",
+          "frame": "sample 6 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d6561e5774a8eafd614536154ec13eb1998b6ce0d78b9b08ae5ed492f733ab84",
+          "frame": "sample 6 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "088f41868db185e07e4d8e6edb4e8ec5ebe6998438dadcb9c08d0b04e8d00d44",
+          "frame": "sample 6 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "46e44dab3afdb4c3f014bc7850b5f17efcb4f875888ba244cd4e9b4d9da5c542",
+          "frame": "sample 6 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "828b897952b93da45820c2d0f027980629cc82ff5e3e04f7908b3f80651ee4d6",
+          "frame": "sample 6 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1b8ea727918a6142f3112876c5e38ea5857a1f04e4fe29349cbf0b6cde537e70",
+          "frame": "sample 6 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2b237f99e6729e6f075798da895cd89c3fe3543f962ef9c9e95ab8056ba3f803",
+          "frame": "sample 6 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "2f55b99d5c76370ba3c87e58ce94a82e6df436a50c5acf41177867c8ac5b2281",
+          "frame": "sample 6 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "411ec5d2b825ed3637fb7927d1ab26b9117919374a2bb7d79513de260cb50600",
+          "frame": "sample 6 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4a383f93338b480ce35c923518f670e6add31b8ec98e1895c7a7df783bcabd20",
+          "frame": "sample 6 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        },
+        {
+          "digest": "70c4e2e18706c566a5b5cb0271c88641029e39190a38a8d29f161d348d647920",
+          "frame": "sample 7 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "34ac6197e836840accdf18e562732b8094f8d6a8dca8c9f60e5ae34bef1e48fd",
+          "frame": "sample 7 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4ade1686be2ff591b79bc8ee0e837b6aedf4f9114ef363ce4574443764c5449a",
+          "frame": "sample 7 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "7c38cd2186dcc2a603a4b89354ec055244e5605358b8d4d23bf6ca14d40c823a",
+          "frame": "sample 7 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "decb0ae37193d371241cb4bb38ae588ee490c6c8326c834089e896fc0b9c6013",
+          "frame": "sample 7 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d69e52230ff32a1d66c333fadc0eff54224cb900faa1f02229789b89119afb84",
+          "frame": "sample 7 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d2fd666a2d2820c2b2dd59d7a42188501004832baaec17a8453bf28db45d7371",
+          "frame": "sample 7 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a8dda7b434f6e3e985a14d461e428a4c39ef540bbd07356a92a607d1cb319455",
+          "frame": "sample 7 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "4bb7a4c7d2bb7610e6a9c683f6e24ab73d73d2294fc695b8f16c2c1fc7ea3ffe",
+          "frame": "sample 7 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "062cc12af45157df1349110611d2e3c24f2634409953373d9f913e8b023e4628",
+          "frame": "sample 7 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "ba760e884d23be4a5e301fb3951200017af8c82257a73bc09d152f4eadebd4b2",
+          "frame": "sample 7 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "f36fcc18f20cac95b67f8543c16adc6335d7ed8548da4d241bfbd4081cabbd15",
+          "frame": "sample 7 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "6e853b81f374989332af3ec1b81f89d63cb6999972b9bb43f31dbcf50c1c9c95",
+          "frame": "sample 7 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c128a35ef56a0acf8b803744c7245ea3a1f2c66650773dcfa746f2412cebb6d9",
+          "frame": "sample 7 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        }
+      ],
+      "completion": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 5,
+        "tables": 296,
+        "warmups": 3
+      }
+    },
+    {
+      "raw_sha256": "9ff116e099f29599bf7303e66b7a61090f5f1fa6018adc45f564dd9911cf7d96",
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 16,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "7f447c5d61d7f246abde87ac0eac47e370eb96e7de7ea0ff6741a6a4bcfcd42a",
+        "samples": 1,
+        "scenario": "periodic_deaths",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 0,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "frames": [
+        {
+          "digest": "12edb1c17814a203cb285540ba9e9388979b23b4aaa3fbfdd23c6efb01dfa796",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 41
+        },
+        {
+          "digest": "28073e49721cb5a0d29e6b1e16d9e68cd715160d7b695add3ba8bce2c3ef3c51",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 11
+        },
+        {
+          "digest": "b54fff03b1761d4a2db1322e1a4a7ce6f4a216f64583ca4706f7cae4cfbdca5c",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 1
+        },
+        {
+          "digest": "70bef67949ee848641ceaeecb46e92f8fc5027dc34ed4bcf18529dfad4a1f22c",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 43
+        }
+      ],
+      "completion": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 1,
+        "tables": 296,
+        "warmups": 0
+      }
+    }
+  ],
+  "recovery": {
+    "raw_sha256": "531a056e105f0bc247e7aef0115141232f79467ff5cf1132878c011bc8f9bcf4",
+    "metadata": {
+      "affinity": "Cpus_allowed_list:\t5",
+      "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "counts": [
+        100
+      ],
+      "cpu_scope": "server and benchmark driver during request and publication wait; excludes the separate CLI subscriber process and setup",
+      "cpu_ticks_per_second": 100,
+      "database_artifacts": {
+        "execution": "reducers",
+        "module_libraries_after_0_8_16_traps": [
+          0,
+          0,
+          0
+        ],
+        "module_native_blake3": "7f447c5d61d7f246abde87ac0eac47e370eb96e7de7ea0ff6741a6a4bcfcd42a",
+        "module_rss_kib_after_0_8_16_traps": [
+          155604,
+          155736,
+          155688
+        ],
+        "movement_reference_frames": 60,
+        "native_database_libraries_after_0_8_16_traps": [
+          1,
+          1,
+          1
+        ],
+        "native_database_libraries_before_trap": 2,
+        "native_database_rss_kib_after_0_8_16_traps": [
+          199008,
+          196456,
+          191144
+        ],
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba"
+      },
+      "dirty": true,
+      "kind": "metadata",
+      "native_blake3": "eab4b09d79ae897a8a6922dcca9788f46cb14562aece628b68df882bbae34788",
+      "native_implementation": "native_database",
+      "profile": "release",
+      "request_bytes": "BSATN client message, excluding websocket framing",
+      "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+      "samples": 5,
+      "scenarios": [
+        "idle_drift",
+        "combat_advance",
+        "stopped_target"
+      ],
+      "scope": "one tick per durable transaction in the existing database engine; BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded",
+      "storage": "disk",
+      "subscription_bytes": "CLI JSON bytes after decoding; not websocket wire bytes",
+      "ticks_per_replay": {
+        "combat_advance": 7,
+        "idle_drift": 7,
+        "stopped_target": 7
+      },
+      "unix_seconds": 1792124896,
+      "warmups": 3,
+      "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+    },
+    "completion": {
+      "kind": "complete"
+    }
+  }
+}

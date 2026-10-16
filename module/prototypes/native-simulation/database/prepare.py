@@ -48,7 +48,12 @@ fn describe_module_inner(description: BytesSink) {''')
 ''' + signature.replace('extern "C" fn __call_reducer__', 'fn call_reducer_inner') + source[body:]
     source += '\n#[cfg(not(target_arch = "wasm32"))]\n#[path = "native_bridge.rs"]\nmod native_bridge;\n'
     (args.sdk_copy / "src/rt.rs").write_text(source)
+    manifest = args.sdk_copy / "Cargo.toml"
+    with manifest.open("a") as output:
+        output.write('\n[target.\'cfg(not(target_arch = "wasm32"))\'.dependencies.libm]\n'
+                     'version = "=0.2.16"\n')
     shutil.copyfile(here / "sdk_bridge.rs", args.sdk_copy / "src/native_bridge.rs")
+    shutil.copyfile(here / "native_math.rs", args.sdk_copy / "src/native_math.rs")
     shutil.copyfile(here / "syscalls.rs", args.sdk_copy / "src/native_syscalls.rs")
     subprocess.run(["git", "-C", str(args.server), "apply", str(patch)], check=True)
     shutil.copyfile(here / "host.rs", args.server / "crates/core/src/host/wasmtime/native_database.rs")

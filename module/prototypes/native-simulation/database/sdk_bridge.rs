@@ -3,6 +3,9 @@ use std::ffi::c_void;
 
 include!("native_syscalls.rs");
 
+#[path = "native_math.rs"]
+mod native_math;
+
 thread_local! {
     static ACTIVE: Cell<Option<(Dispatch, *mut c_void)>> = const { Cell::new(None) };
 }

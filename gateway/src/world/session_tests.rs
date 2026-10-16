@@ -1958,7 +1958,7 @@ fn reducer_transport_loss_ends_an_admitted_session_and_frees_one_queue_seat() {
 fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
     use crate::accept::BlockingTaskCapacity;
     use crate::config::GatewayConfig;
-    use crate::durable_test_support::Standalone;
+    use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
     use crate::stdb::Coordinator;
 
     fn start(
@@ -2037,6 +2037,14 @@ fn competing_world_sessions_close_the_old_socket_without_removing_the_winner() {
     let account = a.account_by_username("TEST").unwrap().unwrap().id;
     a.establish_session(account, &[7; 40], a.bound_identity(account).unwrap())
         .unwrap();
+    for coordinator in [&a, &b] {
+        assert!(poll_until(POLL_TIMEOUT, || {
+            coordinator
+                .session_key(account)
+                .unwrap()
+                .is_some_and(|session| session.key == [7; 40])
+        }));
+    }
     let (mut first, first_done) = start(a, runtime.handle().clone());
     let _first_cipher = login(&mut first);
 

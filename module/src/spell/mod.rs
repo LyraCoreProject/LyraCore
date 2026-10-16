@@ -68,6 +68,8 @@ pub(crate) use math::{
 pub(crate) use scheduler::arm_ground_area_tick;
 #[cfg(test)]
 pub(crate) use scheduler::is_due_for_expiry;
+#[cfg(feature = "native_simulation_database")]
+pub(crate) use scheduler::run_auras;
 pub(crate) use scheduler::{
     apply_cast_spell_at, do_cancel_aura, do_cancel_cast, do_cast_spell, do_resurrect_response,
     fire_pending_cast,

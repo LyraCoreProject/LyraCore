@@ -85,6 +85,9 @@ macro_rules! character_owned {
 #[cfg(feature = "native_simulation_prototype")]
 pub use creatures::cycle::native_prototype;
 
+#[cfg(feature = "native_simulation_database")]
+mod native_gameplay_fixture;
+
 #[macro_export]
 macro_rules! game_tick_pass {
     (fn $name:ident($ctx:ident) $body:block) => {

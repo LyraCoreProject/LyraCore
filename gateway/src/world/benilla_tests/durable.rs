@@ -1,7 +1,7 @@
 use super::*;
 use crate::accept::BlockingTaskCapacity;
 use crate::config::GatewayConfig;
-use crate::durable_test_support::Standalone;
+use crate::durable_test_support::{poll_until, Standalone, POLL_TIMEOUT};
 use crate::stdb::Coordinator;
 use crate::world::CharacterStore;
 
@@ -65,6 +65,12 @@ impl Realm {
                 self.coordinator.bound_identity(account).unwrap(),
             )
             .unwrap();
+        assert!(poll_until(POLL_TIMEOUT, || {
+            self.coordinator
+                .session_key(account)
+                .unwrap()
+                .is_some_and(|session| session.key == [7; 40])
+        }));
         let (socket, gateway_socket) = world_session_socket_pair();
         let coordinator = self.coordinator.clone();
         let runtime = self.runtime.handle().clone();

@@ -15,6 +15,8 @@ def native_evidence(log):
     reducers = sorted(set(re.findall(r"LYRACORE_NATIVE_DATABASE_V1 reducer=(\w+)", log)))
     if "LYRACORE_NATIVE_DATABASE_FALLBACK" in log:
         raise ValueError("native execution fell back to Wasm")
+    if "LYRACORE_NATIVE_DATABASE_WASM" in log:
+        raise ValueError("fixture published a program without a matching native artifact")
     if not reducers:
         raise ValueError("fixture has no native reducer evidence")
     return reducers
@@ -28,6 +30,12 @@ def test_counts(log):
     if not passed:
         raise ValueError("the command ran no tests")
     return passed
+
+
+def standalone_logs(directory):
+    # Startup relay tests put Gateway output beside the standalone logs.
+    return sorted(path for path in directory.glob("*.log")
+                  if not path.name.endswith("-gateway.log"))
 
 
 def main():
@@ -71,7 +79,7 @@ def main():
             except ValueError as error:
                 errors.append(str(error))
             fixtures = []
-            for path in sorted((scratch / "lyracore-standalone-logs").glob("*.log")):
+            for path in standalone_logs(scratch / "lyracore-standalone-logs"):
                 log = path.read_text(errors="replace")
                 reducers = []
                 if args.implementation == "native_database":

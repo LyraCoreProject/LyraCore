@@ -5,12 +5,14 @@ use lyracore_module::native_prototype::benchmark::{workload, SCENARIOS};
 use lyracore_test_support::Standalone;
 use serde_json::{json, Value};
 
+use super::metrics::native_libraries;
 use super::support;
 
 pub struct Database {
     pub shard: Standalone,
     pub artifacts: Value,
     manifest: PathBuf,
+    timing_log_start: Option<usize>,
 }
 
 impl Database {
@@ -32,6 +34,7 @@ impl Database {
             "library": library,
             "native_blake3": hash(&library),
             "wasm_blake3": hash(&PathBuf::from(wasm)),
+            "execution": "reducers",
         });
         let mut file = std::fs::File::create_new(&manifest).unwrap();
         serde_json::to_writer(&mut file, &contents).unwrap();
@@ -43,9 +46,11 @@ impl Database {
             artifacts: json!({
                 "server_blake3": hash(&PathBuf::from(server)),
                 "module_native_blake3": contents["native_blake3"],
+                "execution": contents["execution"],
                 "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba",
             }),
             manifest,
+            timing_log_start: None,
         }
     }
 
@@ -219,7 +224,8 @@ impl Database {
             } else {
                 0
             };
-            assert_eq!(libraries, vec![expected; 3]);
+            assert!(libraries[0] <= expected);
+            assert!(libraries.windows(2).all(|counts| counts[1] <= counts[0]));
             eprintln!("{label} resident KiB after 0, 8 and 16 traps: {rss:?}");
         }
         let logs = self.shard.module_logs(160);
@@ -270,6 +276,23 @@ impl Database {
         std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &self.manifest);
         self.shard.restart_persistent();
         std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
+        self.timing_log_start = Some(self.runtime_log().len());
+    }
+
+    pub fn verify_measured_execution(&self) {
+        let logs = self.runtime_log();
+        let logs = &logs[self
+            .timing_log_start
+            .expect("verify recovery before measuring")..];
+        assert!(logs.contains("LYRACORE_NATIVE_DATABASE_V1 reducer=debug_native_committed_step"));
+        assert!(!logs.contains("LYRACORE_NATIVE_DATABASE_FALLBACK"));
+        assert!(!logs.contains("LYRACORE_NATIVE_DATABASE_WASM"));
+    }
+
+    fn runtime_log(&self) -> String {
+        let path =
+            lyracore_test_support::log_dir().join(format!("{}.log", self.shard.shard_name()));
+        std::fs::read_to_string(path).unwrap()
     }
 }
 
@@ -319,21 +342,6 @@ fn verify_movement_trace(shard: &Standalone, calls: &support::Calls) {
     for (expected, actual) in expected.iter().zip(&actual) {
         compare(expected, actual).unwrap_or_else(|difference| panic!("{difference}"));
     }
-}
-
-fn native_libraries(pid: u32) -> usize {
-    let mappings = std::fs::read_to_string(format!("/proc/{pid}/maps")).unwrap();
-    mappings
-        .lines()
-        .filter_map(|line| line.split_whitespace().nth(5))
-        .filter(|path| {
-            path.rsplit('/')
-                .next()
-                .unwrap()
-                .starts_with("lyracore-native-")
-        })
-        .collect::<std::collections::BTreeSet<_>>()
-        .len()
 }
 
 impl Drop for Database {

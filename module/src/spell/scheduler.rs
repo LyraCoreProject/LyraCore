@@ -268,13 +268,17 @@ pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timest
     expires_at <= now && eff_kind != A_STEALTH
 }
 
-// Run periodic effects before expiry so the final tick at the boundary is delivered.
 #[reducer]
-#[allow(clippy::too_many_lines)]
 pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    run_auras(ctx);
+}
+
+// Run periodic effects before expiry so the final tick at the boundary is delivered.
+#[allow(clippy::too_many_lines)]
+pub(crate) fn run_auras(ctx: &ReducerContext) {
     let now = ctx.timestamp;
     let now_micros = now.to_micros_since_unix_epoch();
     let auras = ctx.db.game_aura();
@@ -288,10 +292,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     // Aura id order determines killing-blow credit when several DoTs share a target.
     due.sort_unstable_by_key(|a| a.id);
 
-    let mut pending: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
-    let mut pending_power: std::collections::HashMap<u64, u32> = std::collections::HashMap::new();
-    let mut dot_damaged: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    let mut dying: std::collections::HashMap<u64, Option<u64>> = std::collections::HashMap::new();
+    // GUID order keeps reward draws, event IDs and damage hooks independent of hash entropy.
+    let mut pending: std::collections::BTreeMap<u64, u32> = std::collections::BTreeMap::new();
+    let mut pending_power: std::collections::BTreeMap<u64, u32> = std::collections::BTreeMap::new();
+    let mut dot_damaged: std::collections::BTreeSet<u64> = std::collections::BTreeSet::new();
+    let mut dying: std::collections::BTreeMap<u64, Option<u64>> = std::collections::BTreeMap::new();
     let mut finishing_duels: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_losers: std::collections::HashSet<u64> = std::collections::HashSet::new();
     let mut duel_finishes: Vec<(u64, u64, u64)> = Vec::new();
@@ -553,7 +558,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
 // Re-read each entity so flushing power preserves the earlier health flush.
 fn flush_pool(
     ctx: &ReducerContext,
-    pool: &std::collections::HashMap<u64, u32>,
+    pool: &std::collections::BTreeMap<u64, u32>,
     set: impl Fn(&mut WorldEntity, u32),
 ) {
     let entities = ctx.db.game_world_entity();

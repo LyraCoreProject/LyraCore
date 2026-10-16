@@ -201,3 +201,28 @@ index 25357dc..5db90d4 100644
  
          let call_result = call_result
              .map_err(ExecutionError::Trap)
+diff --git a/Cargo.toml b/Cargo.toml
+index 1af80d1..f176f13 100644
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -386,18 +386,8 @@ features = ["std"]
+
+ [workspace.dependencies.tracing-tracy]
+ version = "0.10.4"
+-# We use the "ondemand" feature to allow connecting after the start,
+-# and reconnecting, from the tracy client to the database.
+-# TODO(George): Need to be able to remove "broadcast" in some build configurations.
+-features = [
+-  "enable",
+-  "system-tracing",
+-  "context-switch-tracing",
+-  "sampling",
+-  "code-transfer",
+-  "broadcast",
+-  "ondemand",
+-]
++# Tracy overrides dlclose on Linux; native Module replacement requires actual library unloading.
++default-features = false
+
+ [workspace.lints.rust]
+ unexpected_cfgs = { level = "warn", check-cfg = ['cfg(tokio_unstable)'] }

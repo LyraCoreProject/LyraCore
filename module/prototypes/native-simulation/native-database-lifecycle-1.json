@@ -1,0 +1,698 @@
+{
+  "scope": "Publication, artifact integrity, mixed-version restart and trap recovery on disposable persistent Shards",
+  "measurement_note": "Resource readings were collected during concurrent verification. They are not performance comparisons.",
+  "source_archives": {
+    "module": {
+      "base": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "sha256": "fd23865ea0c2b301b588779fddff8f201396203562cef8d0a341e7cde4a1c79c"
+    },
+    "runtime_patch": {
+      "base": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "sha256": "efe1084a8ee78ffed19e15f39f3104c1c2eaaf992d8916e6865a462b86508090"
+    },
+    "verification": {
+      "base": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+      "sha256": "2b9361dd07086904aefb1182b56ffc733467e7e7218f74152053fafddeeed672"
+    }
+  },
+  "publication": {
+    "module": [
+      {
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "dirty": true,
+        "implementation": "module",
+        "kind": "metadata",
+        "module_native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "scope": "repeated publication of the same Module, preserving application rows",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      {
+        "kind": "usage",
+        "updates": 0,
+        "usage": {
+          "cpu_ticks": 1280,
+          "libraries": 0,
+          "peak_rss_kib": 269220,
+          "rss_kib": 252740
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 1,
+        "usage": {
+          "cpu_ticks": 1329,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 246680
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 2,
+        "usage": {
+          "cpu_ticks": 1385,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 245936
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 3,
+        "usage": {
+          "cpu_ticks": 1440,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 246784
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 4,
+        "usage": {
+          "cpu_ticks": 1494,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 244736
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 5,
+        "usage": {
+          "cpu_ticks": 1553,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 244740
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 6,
+        "usage": {
+          "cpu_ticks": 1609,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 242048
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 7,
+        "usage": {
+          "cpu_ticks": 1663,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 237924
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 8,
+        "usage": {
+          "cpu_ticks": 1718,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 233584
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 9,
+        "usage": {
+          "cpu_ticks": 1775,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 232244
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 10,
+        "usage": {
+          "cpu_ticks": 1831,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 232264
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 11,
+        "usage": {
+          "cpu_ticks": 1884,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 224608
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 12,
+        "usage": {
+          "cpu_ticks": 1937,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 222812
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 13,
+        "usage": {
+          "cpu_ticks": 1994,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 221708
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 14,
+        "usage": {
+          "cpu_ticks": 2047,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 220252
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 15,
+        "usage": {
+          "cpu_ticks": 2104,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 217776
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 16,
+        "usage": {
+          "cpu_ticks": 2162,
+          "libraries": 0,
+          "peak_rss_kib": 347544,
+          "rss_kib": 215044
+        }
+      },
+      {
+        "application_state_preserved": true,
+        "bounded_library_count": true,
+        "kind": "result",
+        "native_calls": 0
+      },
+      {
+        "kind": "versions",
+        "matching_program_restored": true,
+        "matching_shard_native_calls": 0,
+        "mixed_program_restart": true,
+        "unmatched_program_blake3": "b8662660fc94ac1e2dafa6cd6d3b3e760a6adacb5d98b57a415df91572d552d8",
+        "wasm_update_preserved_state": true
+      }
+    ],
+    "native_database": [
+      {
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "dirty": true,
+        "implementation": "native_database",
+        "kind": "metadata",
+        "module_native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "scope": "repeated publication of the same Module, preserving application rows",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      {
+        "kind": "usage",
+        "updates": 0,
+        "usage": {
+          "cpu_ticks": 1242,
+          "libraries": 2,
+          "peak_rss_kib": 296748,
+          "rss_kib": 293852
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 1,
+        "usage": {
+          "cpu_ticks": 1296,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 291696
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 2,
+        "usage": {
+          "cpu_ticks": 1355,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 290756
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 3,
+        "usage": {
+          "cpu_ticks": 1413,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 287380
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 4,
+        "usage": {
+          "cpu_ticks": 1471,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 284864
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 5,
+        "usage": {
+          "cpu_ticks": 1529,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 282132
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 6,
+        "usage": {
+          "cpu_ticks": 1585,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 278768
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 7,
+        "usage": {
+          "cpu_ticks": 1645,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 277060
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 8,
+        "usage": {
+          "cpu_ticks": 1703,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 265800
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 9,
+        "usage": {
+          "cpu_ticks": 1766,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 264608
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 10,
+        "usage": {
+          "cpu_ticks": 1827,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 259804
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 11,
+        "usage": {
+          "cpu_ticks": 1890,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 254692
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 12,
+        "usage": {
+          "cpu_ticks": 1959,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 248536
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 13,
+        "usage": {
+          "cpu_ticks": 2025,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 247840
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 14,
+        "usage": {
+          "cpu_ticks": 2093,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 245184
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 15,
+        "usage": {
+          "cpu_ticks": 2154,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 242364
+        }
+      },
+      {
+        "kind": "usage",
+        "updates": 16,
+        "usage": {
+          "cpu_ticks": 2216,
+          "libraries": 2,
+          "peak_rss_kib": 388580,
+          "rss_kib": 241380
+        }
+      },
+      {
+        "application_state_preserved": true,
+        "bounded_library_count": true,
+        "kind": "result",
+        "native_calls": 17
+      },
+      {
+        "application_state_preserved": true,
+        "kind": "artifacts",
+        "mismatched_schema_wasm_blake3": "1ccf8790596f257421b92911466ef317f84d9d2d878174faf191d8fabf21e5df",
+        "wrong_module_description_refused": true,
+        "wrong_native_hash_refused": true
+      },
+      {
+        "kind": "versions",
+        "matching_program_restored": true,
+        "matching_shard_native_calls": 1,
+        "mixed_program_restart": true,
+        "unmatched_program_blake3": "b8662660fc94ac1e2dafa6cd6d3b3e760a6adacb5d98b57a415df91572d552d8",
+        "wasm_update_preserved_state": true
+      }
+    ]
+  },
+  "recovery": {
+    "affinity": "Cpus_allowed_list:\t5",
+    "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+    "counts": [
+      100
+    ],
+    "cpu_scope": "server and benchmark driver during request and publication wait; excludes the separate CLI subscriber process and setup",
+    "cpu_ticks_per_second": 100,
+    "database_artifacts": {
+      "execution": "reducers",
+      "module_libraries_after_0_8_16_traps": [
+        0,
+        0,
+        0
+      ],
+      "module_native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+      "module_rss_kib_after_0_8_16_traps": [
+        158708,
+        158692,
+        158580
+      ],
+      "movement_reference_frames": 60,
+      "native_database_libraries_after_0_8_16_traps": [
+        1,
+        1,
+        1
+      ],
+      "native_database_libraries_before_trap": 2,
+      "native_database_rss_kib_after_0_8_16_traps": [
+        214280,
+        210608,
+        209716
+      ],
+      "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+      "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba"
+    },
+    "dirty": true,
+    "kind": "metadata",
+    "native_blake3": "eab4b09d79ae897a8a6922dcca9788f46cb14562aece628b68df882bbae34788",
+    "native_implementation": "native_database",
+    "profile": "release",
+    "request_bytes": "BSATN client message, excluding websocket framing",
+    "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+    "samples": 5,
+    "scenarios": [
+      "idle_drift",
+      "combat_advance",
+      "stopped_target"
+    ],
+    "scope": "one tick per durable transaction in the existing database engine; BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded",
+    "storage": "disk",
+    "subscription_bytes": "CLI JSON bytes after decoding; not websocket wire bytes",
+    "ticks_per_replay": {
+      "combat_advance": 7,
+      "idle_drift": 7,
+      "stopped_target": 7
+    },
+    "unix_seconds": 1792123345,
+    "warmups": 3,
+    "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+  },
+  "recovery_completed": true,
+  "gameplay": {
+    "periodic_deaths": {
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 16,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "samples": 1,
+        "scenario": "periodic_deaths",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 0,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "comparisons": [
+        {
+          "digest": "12edb1c17814a203cb285540ba9e9388979b23b4aaa3fbfdd23c6efb01dfa796",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 41
+        },
+        {
+          "digest": "28073e49721cb5a0d29e6b1e16d9e68cd715160d7b695add3ba8bce2c3ef3c51",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 11
+        },
+        {
+          "digest": "b54fff03b1761d4a2db1322e1a4a7ce6f4a216f64583ca4706f7cae4cfbdca5c",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 1
+        },
+        {
+          "digest": "70bef67949ee848641ceaeecb46e92f8fc5027dc34ed4bcf18529dfad4a1f22c",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 43
+        }
+      ],
+      "complete": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 1,
+        "tables": 296,
+        "warmups": 0
+      }
+    },
+    "creature_cycle": {
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 16,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "samples": 1,
+        "scenario": "creature_cycle",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 0,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "comparisons": [
+        {
+          "digest": "f5fba97d9c7ae93561046073e61989f654887abacff4aec2b3f3ca63edbfbfd6",
+          "frame": "sample 0 initial",
+          "kind": "parity",
+          "nonempty_tables": 39
+        },
+        {
+          "digest": "5976435ec38b1f303f140c78d09105d442efa263b5f07f389bad9205c5bab12b",
+          "frame": "sample 0 step 1",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "0a16b58a62c10a549cb87caf2f995f4d57ef11d9c9650d6ce86dbcb0596e18e1",
+          "frame": "sample 0 step 2",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "97bf5a6c5514dad96482b0eece3e876f07e1dcc57c0ac46ebb2d7c10e8ba9b08",
+          "frame": "sample 0 step 3",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "1093c71737f126669d969a61ac860b0c95b8a3e40fceba72488943a04c222b42",
+          "frame": "sample 0 step 4",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "e2cd3e19c01de3fdf0eecc0a4d5b5a16cb52226d6daff4871ce49a400bd04139",
+          "frame": "sample 0 step 5",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "8dfe61f4c7dadebdb502129dfdcb2dd9937c3eef4f232d3427d4fb9cec5ae664",
+          "frame": "sample 0 step 6",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "b67a373dec18d99e3f94aebbaac0910b2ba5693671f68fb617045786f291f5be",
+          "frame": "sample 0 step 7",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "974dd6fbaa09af8c93479b70cd61e68cdd93c20bddfffda4a8b46ee314bfa287",
+          "frame": "sample 0 step 8",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "c9276a15170b20f41d1531cde666b2606d257df1be4a50bc04552900d5598d19",
+          "frame": "sample 0 step 9",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "997bccf179887d596f84dc40c4fbed9da5287d0a80776f43323c372605c0a4a9",
+          "frame": "sample 0 step 10",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "a8d826fa9c846d31d306f5e74ab52d0c53d379efa170ed34854a06a8608f78ca",
+          "frame": "sample 0 step 11",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "cf64e0a0edb2529ede2fcf2cab9371e861e75bea8e8fb1462f81458b5146e071",
+          "frame": "sample 0 step 12",
+          "kind": "parity",
+          "nonempty_tables": 5
+        },
+        {
+          "digest": "d3dc7154114809467f8d21654482bd3913818a5acd31533e35f234f8a8f085c3",
+          "frame": "sample 0 final durable state",
+          "kind": "parity",
+          "nonempty_tables": 42
+        }
+      ],
+      "complete": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 1,
+        "tables": 296,
+        "warmups": 0
+      }
+    },
+    "creature_cycle_100": {
+      "metadata": {
+        "affinity": "Cpus_allowed_list:\t5",
+        "candidate_implementation": "native_database",
+        "clock": "fixed rule time; real transaction; synthetic caller context inside fixture",
+        "commit": "bffd6b1b81ae5b2c3b61c6fec029d5d9e34bfd16",
+        "comparison": "all application tables except game_operator, with complete rows and no numeric tolerance",
+        "cpu_scope": "runtime and driver during request and publication wait; excludes the separate CLI subscriber process",
+        "cpu_ticks_per_second": 100,
+        "creatures": 100,
+        "dirty": true,
+        "driver_blake3": "b4fae1d3d25d3c0c7feee533ca9230a177753579497201301ca43398ce3abb68",
+        "kind": "metadata",
+        "native_blake3": "2c1d5f8c8634235e648b75e0fc4310a25a0145a41db22635fde76c9100f4a213",
+        "samples": 5,
+        "scenario": "creature_cycle",
+        "scope": "one complete gameplay step per durable transaction; BSATN encoding, binary WebSocket acknowledgment and confirmed CLI subscription output; excludes setup and parity comparisons",
+        "server_blake3": "c74da5610f213b48855551092d18ee8c74c6b0bd3381bb4a031c0e04340eb95c",
+        "storage": "disk",
+        "subscription_bytes": "CLI JSON bytes after decoding; not WebSocket wire bytes",
+        "warmups": 3,
+        "wasm_blake3": "790a886c13aca30c351a2425ab18478f32ffeb82d0d898608bfa2bc0587d5996"
+      },
+      "paired_steps": 96,
+      "complete": {
+        "kind": "complete",
+        "native_libraries": [
+          0,
+          2
+        ],
+        "samples": 5,
+        "tables": 296,
+        "warmups": 3
+      }
+    }
+  }
+}

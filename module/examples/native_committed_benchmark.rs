@@ -9,8 +9,12 @@ use lyracore_module::native_prototype::TableSimulation;
 use lyracore_test_support::Standalone;
 use serde_json::{json, Value};
 
+use metrics::process_usage;
+
 #[path = "support/database.rs"]
 mod database;
+#[path = "support/metrics.rs"]
+mod metrics;
 #[path = "support/committed.rs"]
 mod support;
 
@@ -64,7 +68,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         for &scenario in SCENARIOS {
             eprintln!("Committed comparison: {scenario}, {creatures} creatures");
             for sample in 0..samples + 3 {
-                let order = if sample % 2 == 0 {
+                let order = if sample.is_multiple_of(2) {
                     [false, true]
                 } else {
                     [true, false]
@@ -109,6 +113,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         }
+    }
+    if let Some(database) = &database {
+        database.verify_measured_execution();
     }
     writeln!(output, "{}", json!({"kind": "complete"}))?;
     Ok(())
@@ -204,40 +211,6 @@ fn run_series(
         updates,
         timings,
         digest: final_frame["digest"].clone(),
-    }
-}
-
-struct ProcessUsage {
-    cpu_ticks: u64,
-    rss_kib: u64,
-    peak_rss_kib: u64,
-}
-
-fn process_usage(pid: u32) -> ProcessUsage {
-    let stat = std::fs::read_to_string(format!("/proc/{pid}/stat")).unwrap();
-    let fields: Vec<_> = stat
-        .rsplit_once(')')
-        .unwrap()
-        .1
-        .split_whitespace()
-        .collect();
-    let status = std::fs::read_to_string(format!("/proc/{pid}/status")).unwrap();
-    let memory = |label| -> u64 {
-        status
-            .lines()
-            .find_map(|line| line.strip_prefix(label))
-            .unwrap()
-            .split_whitespace()
-            .next()
-            .unwrap()
-            .parse()
-            .unwrap()
-    };
-    ProcessUsage {
-        // Linux stat fields 14 and 15 count user and system CPU, including all process threads.
-        cpu_ticks: fields[11].parse::<u64>().unwrap() + fields[12].parse::<u64>().unwrap(),
-        rss_kib: memory("VmRSS:"),
-        peak_rss_kib: memory("VmHWM:"),
     }
 }
 
