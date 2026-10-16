@@ -278,3 +278,34 @@ updates its own tables, then asks SpacetimeDB to apply the changes again. This e
 raw execution gain in two workloads. The CLI subscriber also adds JSON decoding and printing;
 these numbers are not Gateway latency or Character capacity. The next candidate and its required
 checks are in [native-runtime.md](native-runtime.md#alternative-to-a-separate-commit-pass).
+
+## Native execution in the database engine
+
+Commit `3d62194fb9cf59b38fe9ffd364a53b22d5ad8ac5` executes the native Module against the existing
+SpacetimeDB transaction engine. Commit, storage and subscription handling use the same code as the
+Wasm reference. There is no second row store or commit-batch application.
+
+The clean comparison used twenty samples after three warmups at 100, 1,000 and 5,000 creatures.
+It retained the same resource limits, persistent storage and confirmed CLI subscription timing.
+All nine combinations improved in both mean and p95 time. At 5,000 creatures:
+
+| Scenario | Wasm mean, ms | Native mean, ms | Time reduction | Wasm p95, ms | Native p95, ms |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Idle movement | 224.249 | 196.811 | 12.2% | 359.269 | 334.244 |
+| Movement in combat | 288.635 | 264.553 | 8.3% | 367.940 | 341.113 |
+| Pursuit of a stationary target | 337.325 | 275.066 | 18.5% | 499.647 | 426.785 |
+
+Measured database process CPU time fell by 24.8%, 19.3% and 27.8%, respectively. These CPU counts
+exclude the separate CLI subscriber. Maximum sampled resident memory was about 11 to 12 MiB higher
+for native execution. All 1,449 paired ticks had matching subscription rows, and all 207 paired
+encounters had matching committed state digests, including warmups.
+
+Before timing, the run passed complete committed-frame comparisons, authorization, stale-input,
+Refusal, panic rollback and restart checks. After a trap, replacement instances use the Wasm
+Module. Sixteen further traps added no library mappings, and native resident memory remained
+within 200 KiB of its first post-trap sample. Both processes restarted before timing.
+
+Raw measurements and artifact hashes are in
+[native-database-benchmark-2.jsonl](native-database-benchmark-2.jsonl). This passes the movement
+performance gate for expanding native execution. It still measures movement fixtures and CLI
+publication, not the complete creature cycle, Gateway latency or Character capacity.
