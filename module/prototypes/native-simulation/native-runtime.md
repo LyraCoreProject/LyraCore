@@ -35,6 +35,9 @@ per Module host, because the SDK retains thread-local state until the host threa
 prevents repeated traps from accumulating native libraries. A process restart or a new Module host
 can enable native execution again. A gameplay Refusal does not disable native execution.
 
+The runtime patch disables Tracy's default features. Its Linux `dlclose` replacement otherwise
+keeps replaced libraries mapped; the bounded library-count check requires actual unloading.
+
 An abort, native memory fault or exhausted process memory budget can end the process. Restart
 uses the existing persistent database recovery. A request whose acknowledgment was lost remains
 an unknown outcome; the Gateway must not replay it as a fresh gameplay request.
@@ -116,9 +119,12 @@ Run heavy builds and benchmarks on authorized benchmark hardware, in disposable 
 and memory limits. Keep hostnames, account paths and access details out of published artifacts.
 Pause other owned test work between tests during clean performance measurements.
 
-Compare the same artifacts, content, persistence settings and inputs. Alternate execution order,
-include warmups and use fresh processes. Exact parity and native execution evidence gate each run.
-Keep raw calculation timings separate from committed and published outcomes.
+Compare the same artifacts, content, persistence settings and inputs. Alternate execution order
+and use fresh processes. Fixed-step comparisons include unmeasured warmups; scheduled-load records
+state whether they exclude any initial measurement window. Require exact parity for deterministic
+replays and passing behavior checks for accepted load points. Retain failed load points as overload
+observations. Audit native execution in every run. Keep raw calculation timings separate from
+committed and published outcomes.
 
 The complete-cycle benchmark advances rule time by one second and calls creature, melee and aura
 processing once each. It measures that combined transaction, not the independent production

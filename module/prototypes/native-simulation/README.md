@@ -126,24 +126,62 @@ These commands create disposable loopback Shards. They do not use the live Realm
 | Movement performance gate, 20 samples at each size | [native-database-benchmark-2.jsonl](native-database-benchmark-2.jsonl) |
 | 312 existing Core durable tests | [first batch](native-database-durable-1.json), [remaining batch](native-database-durable-2.json) |
 | Exact complete-cycle and math parity | [native-gameplay-parity-2.json](native-gameplay-parity-2.json) |
-| Clean complete-cycle benchmark, 20 samples at each size | [native-full-cycle-benchmark-1.json](native-full-cycle-benchmark-1.json) |
+| Complete-cycle benchmark before prototype removal | [native-full-cycle-benchmark-1.json](native-full-cycle-benchmark-1.json) |
+| Final complete-cycle benchmark, 20 samples at each size | [native-full-cycle-benchmark-2.json](native-full-cycle-benchmark-2.json) |
+| Scheduled Package travel load, three samples per size and format | [native-package-load-benchmark-1.json](native-package-load-benchmark-1.json) |
 | Repeated publication and mixed versions | [native-database-lifecycle-1.json](native-database-lifecycle-1.json) |
 | Gateway behavior and ordinary tests | [native-gateway-parity-1.json](native-gateway-parity-1.json) |
+| 303 native Package cases and two mixed-version cases | [native-package-parity-1.json](native-package-parity-1.json) |
+| Six Package Gateway and two Headless Client cases | [native-package-client-parity-1.json](native-package-client-parity-1.json) |
 | Process limits, abort and forced termination | [native-process-recovery-1.json](native-process-recovery-1.json) |
 | Parity and recovery after prototype removal | [native-cleanup-parity-1.json](native-cleanup-parity-1.json) |
 
-The clean complete-cycle comparison at `dc52dde8` used three warmups and twenty measured samples
-per size. Every one of its 828 paired steps matched across all 296 application tables.
+The final clean complete-cycle comparison at `04dde129` used three warmups and twenty measured
+samples per size. Every one of its 828 paired steps matched across all 296 application tables.
 
 | Creatures | Wasm mean, ms | Native mean, ms | Mean time reduction | Runtime CPU reduction |
 | --- | ---: | ---: | ---: | ---: |
-| 100 | 14.84 | 11.24 | 24.3% | 30.9% |
-| 1,000 | 125.15 | 95.48 | 23.7% | 29.7% |
-| 5,000 | 632.40 | 475.83 | 24.8% | 30.4% |
+| 100 | 14.57 | 11.07 | 24.0% | 30.1% |
+| 1,000 | 126.29 | 91.27 | 27.7% | 33.5% |
+| 5,000 | 638.51 | 476.56 | 25.4% | 31.1% |
 
-At 5,000 creatures, per-step p95 fell from 823.91 to 605.77 ms. Process peak memory was similar,
-about 310 to 312 MiB, but native resident memory was not uniformly lower at smaller sizes.
+At 5,000 creatures, per-step p95 fell from 828.06 to 616.96 ms. Process peak memory was about
+310 MiB for Wasm and 328 MiB for native execution. Native resident memory was not uniformly lower.
 These are Core gameplay fixtures and CLI subscription measurements, not Character capacity.
-Package verification, scheduled load and the repeat after prototype removal remain separate gates.
 Each record identifies its source and artifacts; results from different checkpoints must not be
 presented as one run.
+
+The scheduled Package comparison uses Core `0f6d2560`, the final runtime patch and the same pinned
+Collection as the Package verification below. It runs the existing `playerbots_capacity_profile_travel`
+test with `PLAYERBOTS_CAPACITY_WORLDS=1` and `PLAYERBOTS_CAPACITY_COUNT` set to each size. Each of
+three fresh-process samples runs scheduled navigation and Package decisions for 45 seconds in one
+in-memory Shard. Both formats share a one-CPU quota, a 5 GiB memory limit and disabled swap.
+Setup is excluded from runtime CPU; the measured window includes the final evidence queries and
+has no warmup exclusion. The fixture has no Gateway or connected clients.
+
+| Automated Characters | Wasm CPU, % of one CPU | Native CPU, % of one CPU | Wasm passes | Native passes |
+| --- | ---: | ---: | ---: | ---: |
+| 100 | 13.61 | 10.30 | 3/3 | 3/3 |
+| 500 | 47.36 | 32.46 | 3/3 | 3/3 |
+| 1,000 | 53.78 | 36.05 | 0/3 | 0/3 |
+
+Runtime CPU fell by 24.3% at 100 Characters and 31.5% at 500. Decision-interval p95 stayed near
+one second in both formats at those passing sizes. At 1,000, every sample failed the existing
+travel-progress assertion, and decision-interval p95 exceeded two seconds. The Package retains
+its limits of 256 decisions and 32 path searches per pass. The highest tested passing load is
+500 automated Characters in this fixture; these results do not establish connected-player capacity.
+The record retains all six failed samples and their assertion failures.
+
+The broad Package run covers 305 existing tests from Official Package Collection commit
+`5248c22835053bf88e97d0d19a31526fdd387140`. All passed on Wasm. Native execution passed 303 cases.
+The other two deliberately publish a different Wasm hash, exercise the default Wasm path after
+replacement and preserve their gameplay assertions. The strict execution audit reports those two
+as mixed-version checks. The record retains interrupted batches, failed attempts and successful
+serial rechecks, and lists the cases that need additional fixtures or earlier Module artifacts.
+
+The final runtime patch also passed six Package Gateway cases and two Headless Client cases under
+both execution formats. These cover companion commands, combat, death, resurrection, instance
+entry and exit, Transfer, process restart and lost acknowledgments. Together, the Package records
+cover 313 passing cases: 311 fully native and two intentional mixed-version checks. All 313 passed
+on Wasm. Another 21 cases were not run because they need earlier Module artifacts, composed
+evidence manifests or imported navigation and client data; the client record lists each one.
