@@ -1,5 +1,5 @@
 use std::ffi::c_void;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{
     Arc,
     atomic::{AtomicBool, Ordering},
@@ -49,8 +49,37 @@ impl NativeConfig {
             log::info!("LYRACORE_NATIVE_DATABASE_WASM: no native artifact for published Wasm");
             return Ok(None);
         }
+        require_process_limits()?;
         Ok(Some(config))
     }
+}
+
+fn require_process_limits() -> anyhow::Result<()> {
+    let membership = std::fs::read_to_string("/proc/self/cgroup")
+        .context("native execution requires Linux cgroup v2 process limits")?;
+    let relative = membership
+        .lines()
+        .find_map(|line| line.strip_prefix("0::"))
+        .context("native execution requires Linux cgroup v2 process limits")?;
+    let root = Path::new("/sys/fs/cgroup");
+    let mut group = root.join(relative.trim_start_matches('/'));
+    let (mut cpu, mut memory, mut swap) = (false, false, false);
+    while group.starts_with(root) {
+        let finite = |name: &str| {
+            std::fs::read_to_string(group.join(name))
+                .ok()
+                .and_then(|limit| limit.split_whitespace().next()?.parse::<u64>().ok())
+                .is_some()
+        };
+        cpu |= finite("cpu.max");
+        memory |= finite("memory.max");
+        swap |= finite("memory.swap.max");
+        if cpu && memory && swap {
+            return Ok(());
+        }
+        group.pop();
+    }
+    bail!("native execution requires finite cgroup v2 cpu.max, memory.max and memory.swap.max")
 }
 
 pub(super) struct NativeInstance {

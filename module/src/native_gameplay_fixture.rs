@@ -224,3 +224,41 @@ pub fn debug_native_gameplay_step(ctx: &ReducerContext, sequence: u64) -> Result
     ctx.db.game_native_gameplay_state().id().update(state);
     Ok(())
 }
+
+#[reducer]
+pub fn debug_native_gameplay_process_fault(ctx: &ReducerContext, spin: bool) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if ctx.db.game_session().count() != 0 || ctx.db.game_native_gameplay_state().count() != 0 {
+        return Err("process faults require an unused disposable gameplay fixture".into());
+    }
+    let mut character = ctx
+        .db
+        .game_character()
+        .guid()
+        .find(1)
+        .ok_or("fixture Character is missing")?;
+    character.money = character
+        .money
+        .checked_add(1)
+        .ok_or("fixture money overflow")?;
+    ctx.db.game_character().guid().update(character);
+    ctx.db
+        .game_native_gameplay_state()
+        .insert(NativeGameplayState {
+            id: 0,
+            scenario: "process_fault".into(),
+            creatures: 0,
+            sequence: 1,
+            at_micros: START_MICROS,
+            awake: 0,
+            phases: Vec::new(),
+            visited: Vec::new(),
+        });
+    if spin {
+        spacetimedb::log::info!("LYRACORE_NATIVE_PROCESS_SPIN_READY");
+        loop {
+            std::hint::spin_loop();
+        }
+    }
+    std::process::abort()
+}

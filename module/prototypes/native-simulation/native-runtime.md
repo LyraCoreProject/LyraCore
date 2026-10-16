@@ -193,9 +193,29 @@ interrupt native execution, including code that ignores failed callbacks. These 
 general execution or memory isolation.
 
 The selected boundary keeps Wasm as the default. An Operator may opt into native execution for
-trusted Core and compiled Package code. Run that process with CPU and memory limits. A native
-abort or exhausted process budget can affect every Shard in the process; it does not have Wasm's
-per-reducer isolation. Process-failure recovery remains a required check before completion.
+trusted Core and compiled Package code. Native activation checks for finite Linux cgroup v2 CPU,
+memory and swap limits, including limits inherited from a parent group. Wasm execution does
+not require that opt-in configuration. A native abort or exhausted process budget can affect every
+Shard in the process; it does not have Wasm's per-reducer isolation.
+
+`database/run_native.py` creates a user scope with explicit CPU and memory limits, disables swap
+and enables group termination on an out-of-memory kill. Pass `--manifest`, `--cpu-percent` and
+`--memory-mib`, then the standalone command after `--`. A CPU quota of 100 percent allows one CPU's
+execution time. It throttles a runaway reducer; it cannot make that reducer return. The launcher
+requires systemd 253 or later for the [scope OOM policy](https://github.com/systemd/systemd/blob/v259/man/systemd.scope.xml#L97).
+
+The `native_database_lifecycle --process-failures` check changes Character money and a fixture row
+before aborting or entering a busy loop. Native abort ends the process with signal 6. The loop check
+kills the owned process with signal 9 after its ready marker arrives. Both native cases preserve all
+previously committed application rows and the sibling Shard's money after restart. Native execution
+then resumes. Wasm abort traps within the process; its loop check uses the same forced termination.
+The check does not wait for Wasm fuel exhaustion.
+
+Native activation is refused separately when CPU, memory or swap limits are missing. The Wasm
+reference runs without those opt-in limits. The launcher check reads the actual cgroup settings,
+including swap disabled and group termination on memory exhaustion. These checks establish the
+selected process boundary; they do not restore per-reducer native isolation. Results and artifact
+hashes are in [native-process-recovery-1.json](native-process-recovery-1.json).
 
 Build the experiment only on the benchmark machine. Use a separate LyraCore checkout for the SDK
 patch and a disposable directory for its server and artifacts:
@@ -484,3 +504,9 @@ The cross-Shard Character cleanup fixture also built a second Module with fewer 
 Its assertions passed, but the execution audit correctly refused to count its Wasm fallback as
 native coverage. The fixture now publishes the same built artifact to every Shard and uses
 persistent disposable storage for those named Shards. Its gameplay assertions remain unchanged.
+
+The corrected fixtures pass all 30 selected behavior checks with native execution in all 31
+fixture processes and no fallback. The reference passes the same checks across the main run and
+the two focused fixture reruns. The ordinary Gateway suite passes 2,278 tests, and Clippy passes
+for all Gateway targets with warnings denied. The combined evidence records the earlier reference
+failure and its successful rerun in [native-gateway-parity-1.json](native-gateway-parity-1.json).

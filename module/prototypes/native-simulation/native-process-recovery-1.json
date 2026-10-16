@@ -1,0 +1,156 @@
+{
+  "scope": "Trusted native execution requires process limits; interrupted native transactions preserve previous commits on persistent disposable Shards",
+  "source_archive_sha256": "910e453136c9361a31a62cfff0644fdf5cfed52a9bace60e37f1f7d31c3d35d8",
+  "reference_driver_sha256": "c7c400516fe8937a8a09fcc461c6ce7a9791cad940dd65753cec8decff7c01ef",
+  "checks": {
+    "native_database": {
+      "records": [
+        {
+          "commit": "0f6d25601e3ae54c6fef7d7c761ae6e582e29f09",
+          "dirty": true,
+          "implementation": "native_database",
+          "kind": "metadata",
+          "module_native_blake3": "3f603a52c449ace229b766e51e6b1dd32512e442775e377b24373df6fa854f4e",
+          "scope": "repeated publication of the same Module, preserving application rows",
+          "server_blake3": "b730c158d1c88ed6109c04a9c0d900d1008668574073381853135005f9824f52",
+          "wasm_blake3": "dfd7babfcbc21fc3cd0f4c76859bd5af65749ea6b5c330983b34574baf65090a"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1262,
+            "libraries": 2,
+            "peak_rss_kib": 280392,
+            "rss_kib": 277836
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 1
+        },
+        {
+          "application_state_preserved": true,
+          "kind": "artifacts",
+          "mismatched_schema_wasm_blake3": "c17f8a6499934cbf0cca17490639e55899bcece4e088e0a54577822e92b2d895",
+          "wrong_module_description_refused": true,
+          "wrong_native_hash_refused": true
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 1,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "3cac6d1c94285ba25422e87cb864ea06ca8da4791a57d1496c688e46a3094ae3",
+          "wasm_update_preserved_state": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "abort",
+          "kind": "process_failure",
+          "native_after_restart": true,
+          "process_signal": 6,
+          "sibling_state_preserved": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "loop",
+          "kind": "process_failure",
+          "native_after_restart": true,
+          "process_signal": 9,
+          "sibling_state_preserved": true
+        }
+      ],
+      "raw_sha256": "9e835f579ef3374862a5f586ac3c04a2ffdfebca651b6caf6b550f1b398cfd5b"
+    },
+    "module": {
+      "records": [
+        {
+          "commit": "0f6d25601e3ae54c6fef7d7c761ae6e582e29f09",
+          "dirty": true,
+          "implementation": "module",
+          "kind": "metadata",
+          "module_native_blake3": "3f603a52c449ace229b766e51e6b1dd32512e442775e377b24373df6fa854f4e",
+          "process_failures": true,
+          "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+          "server_blake3": "b730c158d1c88ed6109c04a9c0d900d1008668574073381853135005f9824f52",
+          "updates": 0,
+          "wasm_blake3": "dfd7babfcbc21fc3cd0f4c76859bd5af65749ea6b5c330983b34574baf65090a"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1269,
+            "libraries": 0,
+            "peak_rss_kib": 281028,
+            "rss_kib": 270580
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 0
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 0,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "3cac6d1c94285ba25422e87cb864ea06ca8da4791a57d1496c688e46a3094ae3",
+          "wasm_update_preserved_state": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "abort",
+          "kind": "process_failure",
+          "native_after_restart": false,
+          "process_signal": null,
+          "sibling_state_preserved": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "loop",
+          "kind": "process_failure",
+          "native_after_restart": false,
+          "process_signal": 9,
+          "sibling_state_preserved": true
+        }
+      ],
+      "raw_sha256": "b0d85805a8bc161600448d3b5c08a88c13cbe8cc2110b13ce3e8d4c9734db261"
+    }
+  },
+  "budget_gates": [
+    {
+      "missing_limit": "cpu",
+      "status": 101,
+      "expected_outcome": true
+    },
+    {
+      "missing_limit": "memory",
+      "status": 101,
+      "expected_outcome": true
+    },
+    {
+      "missing_limit": "swap",
+      "status": 101,
+      "expected_outcome": true
+    },
+    {
+      "missing_limit": "all_wasm",
+      "status": 0,
+      "expected_outcome": true
+    }
+  ],
+  "launcher_limits": {
+    "cpu.max": "100000 100000",
+    "memory.max": "536870912",
+    "memory.swap.max": "0",
+    "memory.oom.group": "1"
+  },
+  "reference_note": "Abort traps within Wasm. The busy-loop case explicitly kills the owned process in both implementations; it does not wait for fuel exhaustion. An earlier Wasm loop run was stopped and replaced with that bounded termination check.",
+  "measurement_note": "Resource observations were collected during concurrent verification and are not benchmarks."
+}

@@ -1,8 +1,10 @@
 use std::fs::File;
 use std::io::Write;
+use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
+use std::time::Duration;
 
-use lyracore_test_support::Standalone;
+use lyracore_test_support::{poll_until, Standalone};
 use serde_json::{json, Value};
 
 #[path = "support/metrics.rs"]
@@ -11,16 +13,20 @@ mod metrics;
 fn main() -> Result<(), Box<dyn std::error::Error>> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     if args.len() < 3
-        || args[3..]
-            .iter()
-            .any(|arg| !matches!(arg.as_str(), "--wasm" | "--versions-only"))
+        || args[3..].iter().any(|arg| {
+            !matches!(
+                arg.as_str(),
+                "--wasm" | "--versions-only" | "--process-failures"
+            )
+        })
     {
         return Err(
-            "usage: native_database_lifecycle <wasm> <library> <output.jsonl> [--wasm] [--versions-only]".into(),
+            "usage: native_database_lifecycle <wasm> <library> <output.jsonl> [--wasm] [--versions-only | --process-failures]".into(),
         );
     }
     let wasm_only = args[3..].iter().any(|arg| arg == "--wasm");
-    let updates = if args[3..].iter().any(|arg| arg == "--versions-only") {
+    let process_failures = args[3..].iter().any(|arg| arg == "--process-failures");
+    let updates = if process_failures || args[3..].iter().any(|arg| arg == "--versions-only") {
         0
     } else {
         16
@@ -64,7 +70,8 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             "commit": git(&["rev-parse", "HEAD"]), "dirty": !git(&["status", "--porcelain"]).is_empty(),
             "wasm_blake3": artifacts["wasm_blake3"], "module_native_blake3": artifacts["native_blake3"],
             "server_blake3": hash(&std::fs::read(std::env::var_os("LYRACORE_NATIVE_DATABASE_SERVER").unwrap())?),
-            "scope": "repeated publication of the same Module, preserving application rows",
+            "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+            "updates": updates, "process_failures": process_failures,
         })
     )?;
     let before = usage(shard.process_id());
@@ -122,7 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut output,
         )?;
     }
-    verify_program_versions(
+    let sibling = verify_program_versions(
         &mut shard,
         &wasm,
         &queries,
@@ -130,6 +137,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         wasm_only,
         &mut output,
     )?;
+    if process_failures {
+        verify_process_failures(&mut shard, &sibling, &queries, wasm_only, &mut output)?;
+    }
     Ok(())
 }
 
@@ -220,7 +230,7 @@ fn verify_program_versions(
     initial: &Value,
     wasm_only: bool,
     output: &mut File,
-) -> std::io::Result<()> {
+) -> std::io::Result<String> {
     let mut other_version = wasm.to_vec();
     let name = b"lyracore-native-version-test";
     // A custom section changes the artifact identity without changing its schema or instructions.
@@ -274,7 +284,81 @@ fn verify_program_versions(
             "wasm_update_preserved_state": true, "mixed_program_restart": true,
             "matching_program_restored": true, "matching_shard_native_calls": sibling_native_calls,
         })
-    )
+    )?;
+    Ok(sibling)
+}
+
+fn verify_process_failures(
+    shard: &mut Standalone,
+    sibling: &str,
+    queries: &[&str],
+    wasm_only: bool,
+    output: &mut File,
+) -> std::io::Result<()> {
+    let initial = snapshot(shard, queries);
+    for spin in [false, true] {
+        let response = std::thread::scope(|scope| {
+            let request = scope.spawn(|| {
+                shard.call(
+                    "debug_native_gameplay_process_fault",
+                    &[if spin { "true" } else { "false" }],
+                )
+            });
+            if spin {
+                assert!(poll_until(Duration::from_secs(10), || {
+                    let logs = shard.module_logs(100);
+                    logs.status.success()
+                        && String::from_utf8_lossy(&logs.stdout)
+                            .contains("LYRACORE_NATIVE_PROCESS_SPIN_READY")
+                }));
+                assert!(std::process::Command::new("kill")
+                    .args(["-KILL", &shard.process_id().to_string()])
+                    .status()
+                    .unwrap()
+                    .success());
+            }
+            request.join().unwrap()
+        });
+        assert!(
+            !response.status.success(),
+            "a failed transaction was acknowledged as accepted"
+        );
+        let signal = if wasm_only && !spin {
+            assert!(shard.exit_status().is_none());
+            None
+        } else {
+            assert!(poll_until(Duration::from_secs(5), || shard
+                .exit_status()
+                .is_some()));
+            let status = shard.exit_status().unwrap();
+            assert_eq!(status.signal(), Some(if spin { 9 } else { 6 }));
+            shard.restart_persistent();
+            status.signal()
+        };
+        assert_eq!(snapshot(shard, queries), initial);
+        assert_eq!(
+            shard.query_database_rows(sibling, "SELECT money FROM game_character WHERE guid = 1")
+                [0]["money"],
+            "67890"
+        );
+        let calls_before = native_address_calls(shard, shard.shard_name());
+        shard.assert_call("set_realm_address", &["\"example.invalid:8085\""]);
+        assert_eq!(
+            native_address_calls(shard, shard.shard_name()),
+            calls_before + usize::from(!wasm_only)
+        );
+        writeln!(
+            output,
+            "{}",
+            json!({
+                "kind": "process_failure", "fault": if spin { "loop" } else { "abort" },
+                "process_signal": signal, "application_state_preserved": true,
+                "sibling_state_preserved": true, "native_after_restart": !wasm_only,
+            })
+        )?;
+        output.flush()?;
+    }
+    Ok(())
 }
 
 fn native_address_calls(shard: &Standalone, name: &str) -> usize {

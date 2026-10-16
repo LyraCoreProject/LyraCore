@@ -488,10 +488,18 @@ impl Standalone {
         self.child.id()
     }
 
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        self.child
+            .try_wait()
+            .expect("failed to poll owned standalone")
+    }
+
     pub fn restart_persistent(&mut self) {
         assert!(self.storage == Storage::Disk, "restart needs disk storage");
         assert!(self.published, "restart needs a published Module");
-        self.child.kill().expect("failed to stop owned standalone");
+        if self.exit_status().is_none() {
+            self.child.kill().expect("failed to stop owned standalone");
+        }
         self.restart();
     }
 

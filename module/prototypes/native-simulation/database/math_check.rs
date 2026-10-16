@@ -3,9 +3,9 @@ mod native_math;
 
 static mut RESULTS: [u64; 15] = [0; 15];
 
-// The verifier calls this on one thread and copies the results before the next call.
+// The caller must use one thread and copy the results before the next call.
 #[unsafe(no_mangle)]
-pub extern "C" fn evaluate(seed: u32) -> *const u64 {
+pub unsafe extern "C" fn evaluate(seed: u32) -> *const u64 {
     let next = seed.wrapping_mul(1_664_525).wrapping_add(1_013_904_223);
     let sign_x = if seed & 1 == 0 { 1.0 } else { -1.0 };
     let sign_y = if seed & 2 == 0 { 1.0 } else { -1.0 };
