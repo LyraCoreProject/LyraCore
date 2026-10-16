@@ -62,6 +62,11 @@ The same wasm is published to **every** database. A shard is a database *name*, 
 routing fact; module game logic never reads one, and an architecture test fails the build if it starts to
 (`no_module_game_logic_reads_a_shard_id` in `module/src/tripwires.rs`).
 
+Wasm is the default execution format. The opt-in [native Module path](../module/prototypes/native-simulation/README.md)
+runs matching trusted Core and Package code inside the same SpacetimeDB transaction engine.
+It requires process CPU and memory limits and shares the process's failure boundary. It does not
+change the Shard Boundary, Gateway Stores, schedules, commit or subscription handling.
+
 ---
 
 ## 2. What runs where — the authority boundary, precisely

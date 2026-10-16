@@ -25,17 +25,8 @@ pub fn scenario(name: &str) -> Result<Scenario, String> {
     } else {
         60_000_000
     };
-    let mut creature = entity(CREATURE_GUID, 10.0, 0.0);
-    if name == "grid_crossing" {
-        place(
-            &mut creature,
-            Point {
-                x: 16.0,
-                y: 0.0,
-                z: 0.0,
-            },
-        );
-    }
+    let x = if name == "grid_crossing" { 16.0 } else { 10.0 };
+    let mut creature = entity(CREATURE_GUID, x, 0.0);
     if name == "combat_advance" {
         creature.unit_flags |= unit_flags::IN_COMBAT;
     }
@@ -43,18 +34,27 @@ pub fn scenario(name: &str) -> Result<Scenario, String> {
     let splines = if pursuing {
         Vec::new()
     } else {
-        vec![super::world::spline(
-            &creature,
-            Point {
-                x: creature.x + 12.0,
-                y: 0.0,
-                z: 0.0,
-            },
-            3_000,
-            false,
-            (start_micros / 1_000) as u32,
+        vec![CreatureSpline {
+            guid: creature.guid,
             start_micros,
-        )]
+            dur_ms: 3_000,
+            sx: creature.x,
+            sy: creature.y,
+            sz: creature.z,
+            dx: creature.x + 12.0,
+            dy: 0.0,
+            dz: 0.0,
+            map_id: creature.map_id,
+            instance_id: creature.instance_id,
+            grid_x: creature.grid_x,
+            grid_y: creature.grid_y,
+            spline_id: (start_micros / 1_000) as u32,
+            run: false,
+            cell: creature.cell,
+            facing: false,
+            facing_angle: 0.0,
+            path: None,
+        }]
     };
     let mut entities = vec![creature];
     let attacks = if pursuing {

@@ -802,7 +802,7 @@ mod partition_discipline_tripwire {
         ("packages/deadmines/src/choreography.rs", 1, "single instance-scoped boss-liveness check inside one encounter"),
         ("module/src/creatures/tick/mod.rs", 3, "Active-cell classification snapshots all players. Diagnostic counters measure total rows and narrowed pass candidates."),
         ("module/src/creatures/cycle/ctx.rs", 2, "Aggro snapshots all players and regeneration selects entities with health or power. Neither predicate has its own index."),
-        ("module/src/creatures/cycle/ctx/prototype_reference.rs", 2, "The feature-gated benchmark requires an empty disposable Shard and compares its complete fixture state."),
+        ("module/src/creatures/cycle/ctx/prototype_reference.rs", 1, "The feature-gated benchmark requires an empty disposable Shard and compares its complete fixture state."),
         ("module/src/spell/cast/targeting.rs", 1, "AoE/chain target resolution by full-iter + squared distance; a textbook `helpers::entities_near` call (perf-catalog Tier 1)"),
     ];
 

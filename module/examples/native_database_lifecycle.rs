@@ -4,7 +4,7 @@ use std::os::unix::process::ExitStatusExt;
 use std::path::PathBuf;
 use std::time::Duration;
 
-use lyracore_test_support::{poll_until, Standalone};
+use lyracore_test_support::{poll_until, Standalone, POLL_TIMEOUT};
 use serde_json::{json, Value};
 
 #[path = "support/metrics.rs"]
@@ -39,7 +39,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let manifest = Manifest(manifest_path);
     let artifacts = json!({
         "library": library, "native_blake3": hash(&std::fs::read(&library)?),
-        "wasm_blake3": hash(&wasm), "execution": "reducers",
+        "wasm_blake3": hash(&wasm),
     });
     serde_json::to_writer(File::create_new(&manifest.0)?, &artifacts)?;
     if !wasm_only {
@@ -129,6 +129,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             &mut output,
         )?;
     }
+    assert_native_address_calls(&shard, shard.shard_name(), native_calls);
     let sibling = verify_program_versions(
         &mut shard,
         &wasm,
@@ -266,14 +267,15 @@ fn verify_program_versions(
         "67890"
     );
     shard.assert_call_database(&sibling, "set_realm_address", &["\"example.invalid:8085\""]);
-    let sibling_native_calls = native_address_calls(shard, &sibling);
-    assert_eq!(sibling_native_calls, usize::from(!wasm_only));
+    let sibling_native_calls = usize::from(!wasm_only);
+    assert_native_address_calls(shard, &sibling, sibling_native_calls);
 
     shard.publish_module_bytes(wasm);
     shard.assert_call("set_realm_address", &["\"example.invalid:8085\""]);
-    assert_eq!(
-        native_address_calls(shard, shard.shard_name()),
-        native_before + usize::from(!wasm_only)
+    assert_native_address_calls(
+        shard,
+        shard.shard_name(),
+        native_before + usize::from(!wasm_only),
     );
     assert_eq!(&snapshot(shard, queries), initial);
     writeln!(
@@ -343,9 +345,10 @@ fn verify_process_failures(
         );
         let calls_before = native_address_calls(shard, shard.shard_name());
         shard.assert_call("set_realm_address", &["\"example.invalid:8085\""]);
-        assert_eq!(
-            native_address_calls(shard, shard.shard_name()),
-            calls_before + usize::from(!wasm_only)
+        assert_native_address_calls(
+            shard,
+            shard.shard_name(),
+            calls_before + usize::from(!wasm_only),
         );
         writeln!(
             output,
@@ -361,17 +364,25 @@ fn verify_process_failures(
     Ok(())
 }
 
+fn assert_native_address_calls(shard: &Standalone, name: &str, expected: usize) {
+    let mut observed = 0;
+    assert!(
+        poll_until(POLL_TIMEOUT, || {
+            observed = native_address_calls(shard, name);
+            observed == expected
+        }),
+        "expected {expected} native entries for {name}, observed {observed}"
+    );
+}
+
 fn native_address_calls(shard: &Standalone, name: &str) -> usize {
-    let logs = shard.module_logs_database(name, 10_000);
+    // CLI 2.7.1 can exit before flushing JSON stdout; its text writer is synchronous.
+    let logs = shard.module_logs_database(name, 10_000, "text");
     assert!(logs.status.success());
     let logs = String::from_utf8(logs.stdout).unwrap();
     assert!(!logs.contains("LYRACORE_NATIVE_DATABASE_FALLBACK"));
     logs.lines()
-        .filter_map(|line| serde_json::from_str::<Value>(line).ok())
-        .filter(|line| {
-            line["message"] == "LYRACORE_NATIVE_DATABASE_V1"
-                && line["function"] == "set_realm_address"
-        })
+        .filter(|line| line.ends_with(" INFO: set_realm_address: LYRACORE_NATIVE_DATABASE_V1"))
         .count()
 }
 

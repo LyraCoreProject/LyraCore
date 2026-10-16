@@ -221,17 +221,17 @@ impl Standalone {
     }
 
     pub fn module_logs(&self, lines: usize) -> Output {
-        self.module_logs_database(&self.database, lines)
+        self.module_logs_database(&self.database, lines, "json")
     }
 
-    pub fn module_logs_database(&self, database: &str, lines: usize) -> Output {
+    pub fn module_logs_database(&self, database: &str, lines: usize, format: &str) -> Output {
         self.command()
             .args([
                 "logs",
                 "--server",
                 &self.server,
                 "--format",
-                "json",
+                format,
                 "--num-lines",
                 &lines.to_string(),
                 database,

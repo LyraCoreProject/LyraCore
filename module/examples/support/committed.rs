@@ -1,27 +1,13 @@
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
-use lyracore_module::native_prototype::commit::{
-    Batch, GAMEPLAY_TABLES, SNAPSHOT_PREFIX, STATE_TABLE,
-};
+use lyracore_module::native_prototype::commit::{GAMEPLAY_TABLES, SNAPSHOT_PREFIX, STATE_TABLE};
 use lyracore_test_support::{poll_until, Standalone, TableSubscription};
 use serde_json::Value;
-use spacetimedb::sats::bsatn;
 
 #[path = "calls.rs"]
 mod calls;
 pub use calls::Calls;
-
-impl Calls {
-    pub fn commit(&self, batch: &Batch) -> calls::Outcome {
-        let encoded_at = Instant::now();
-        let payload = bsatn::to_vec(batch).unwrap();
-        let encode_ns = encoded_at.elapsed().as_nanos();
-        let mut outcome = self.call("debug_native_committed_apply", &(payload,));
-        outcome.encode_ns += encode_ns;
-        outcome
-    }
-}
 
 pub fn start() -> Standalone {
     let artifact = std::env::var_os("LYRACORE_NATIVE_REFERENCE_WASM")
@@ -33,17 +19,11 @@ pub fn start() -> Standalone {
     shard
 }
 
-pub fn setup(
-    shard: &Standalone,
-    calls: &Calls,
-    scenario: &str,
-    creatures: u32,
-    native: bool,
-) -> u64 {
+pub fn setup(shard: &Standalone, calls: &Calls, scenario: &str, creatures: u32) -> u64 {
     calls
         .call(
             "debug_native_committed_setup",
-            &(scenario.to_owned(), creatures, native),
+            &(scenario.to_owned(), creatures),
         )
         .assert_accepted();
     let rows = shard.query_rows(&format!("SELECT run FROM {STATE_TABLE}"));

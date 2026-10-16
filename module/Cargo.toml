@@ -15,9 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 debug_reducers = []
 package_test_fixture = ["debug_reducers"]
-native_simulation_prototype = ["debug_reducers", "dep:serde", "dep:serde_json", "dep:spacetimedb-sats", "dep:spacetimedb-primitives"]
-native_simulation_host = ["native_simulation_prototype", "dep:lyracore-native-host"]
-native_simulation_database = ["native_simulation_prototype"]
+native_simulation_database = ["debug_reducers", "dep:serde_json", "dep:spacetimedb-sats"]
 
 [dependencies]
 blake3 = "1"
@@ -28,33 +26,20 @@ lyracore-package-delta.workspace = true
 # Fuel budgets and library behavior depend on this exact interpreter version.
 piccolo = "=0.3.3"
 getrandom = "0.3"
-serde = { version = "1", features = ["derive"], optional = true }
 serde_json = { version = "1", optional = true }
 spacetimedb-sats = { version = "=2.7.1", features = ["serde"], optional = true }
-spacetimedb-primitives = { version = "=2.7.1", optional = true }
-
-[target.'cfg(not(target_arch = "wasm32"))'.dependencies]
-lyracore-native-host = { path = "../crates/lyracore-native-host", optional = true }
-
-[[example]]
-name = "native_simulation_prototype"
-required-features = ["native_simulation_prototype"]
-
-[[example]]
-name = "native_simulation_benchmark"
-required-features = ["native_simulation_prototype"]
 
 [[example]]
 name = "native_committed_benchmark"
-required-features = ["native_simulation_host"]
+required-features = ["native_simulation_database"]
 
 [[example]]
 name = "native_gameplay_parity"
-required-features = ["native_simulation_host", "native_simulation_database"]
+required-features = ["native_simulation_database"]
 
 [[example]]
 name = "native_database_lifecycle"
-required-features = ["native_simulation_host", "native_simulation_database"]
+required-features = ["native_simulation_database"]
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

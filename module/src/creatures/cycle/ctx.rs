@@ -24,28 +24,11 @@ use crate::{
     game_world_entity, MeleeAttack, WorldEntity,
 };
 
-#[cfg(all(
-    feature = "native_simulation_prototype",
-    any(
-        target_arch = "wasm32",
-        feature = "native_simulation_host",
-        feature = "native_simulation_database"
-    )
-))]
+#[cfg(feature = "native_simulation_database")]
 mod prototype_reference;
 
-#[cfg(all(
-    feature = "native_simulation_prototype",
-    any(
-        target_arch = "wasm32",
-        feature = "native_simulation_host",
-        feature = "native_simulation_database"
-    )
-))]
+#[cfg(feature = "native_simulation_database")]
 mod committed_reference;
-
-#[cfg(all(feature = "native_simulation_host", not(target_arch = "wasm32")))]
-pub(super) mod native_reference;
 
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
     let regen_window = crate::combat::RegenWindow::new(

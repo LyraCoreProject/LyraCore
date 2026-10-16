@@ -243,7 +243,7 @@ pub(crate) fn melee_combatant_guids(ctx: &ReducerContext) -> Vec<u64> {
 
     index(accessor = by_target, btree(columns = [target_guid]))
 )]
-#[cfg_attr(feature = "native_simulation_prototype", derive(Clone))]
+#[cfg_attr(feature = "native_simulation_database", derive(Clone))]
 pub struct MeleeAttack {
     #[primary_key]
     pub attacker_guid: u64,

@@ -5,7 +5,6 @@ use std::time::{Duration, Instant};
 
 use lyracore_module::native_prototype::benchmark::{digest, workload, SCENARIOS};
 use lyracore_module::native_prototype::commit::STATE_TABLE;
-use lyracore_module::native_prototype::TableSimulation;
 use lyracore_test_support::Standalone;
 use serde_json::{json, Value};
 
@@ -48,22 +47,15 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     std::env::set_var("LYRACORE_NATIVE_REFERENCE_WASM", &args[0]);
     let mut output = File::create_new(&args[1])?;
     let mut shard = support::start();
-    let mut database = std::env::var_os("LYRACORE_NATIVE_DATABASE_LIBRARY")
-        .map(|library| database::Database::start(&args[0], &library));
+    let library = std::env::var_os("LYRACORE_NATIVE_DATABASE_LIBRARY")
+        .ok_or("set LYRACORE_NATIVE_DATABASE_LIBRARY to the native Module artifact")?;
+    let mut database = database::Database::start(&args[0], &library);
     let mut metadata = metadata(&args[0], &counts, samples)?;
-    if let Some(database) = &mut database {
-        metadata["native_implementation"] = json!("native_database");
-        metadata["scope"] = json!("one tick per durable transaction in the existing database engine; BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded");
-        database.verify(&mut shard);
-        metadata["database_artifacts"] = database.artifacts.clone();
-    } else {
-        metadata["native_implementation"] = json!("native_host");
-    }
+    database.verify(&mut shard);
+    metadata["database_artifacts"] = database.artifacts.clone();
     writeln!(output, "{metadata}")?;
     let calls = support::Calls::new(&shard);
-    let database_calls = database
-        .as_ref()
-        .map(|database| support::Calls::new(&database.shard));
+    let database_calls = support::Calls::new(&database.shard);
     for &creatures in &counts {
         for &scenario in SCENARIOS {
             eprintln!("Committed comparison: {scenario}, {creatures} creatures");
@@ -76,19 +68,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                 let mut previous = None;
                 for native in order {
                     let series = if native {
-                        if let Some(database) = &database {
-                            run_series(
-                                &database.shard,
-                                database_calls.as_ref().unwrap(),
-                                scenario,
-                                creatures,
-                                false,
-                            )
-                        } else {
-                            run_series(&shard, &calls, scenario, creatures, true)
-                        }
+                        run_series(&database.shard, &database_calls, scenario, creatures)
                     } else {
-                        run_series(&shard, &calls, scenario, creatures, false)
+                        run_series(&shard, &calls, scenario, creatures)
                     };
                     if let Some((updates, digest)) = &previous {
                         assert_eq!(&series.updates, updates, "{scenario}: subscription parity");
@@ -103,7 +85,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
                             json!({
                                 "kind": "tick", "scenario": scenario, "creatures": creatures,
                                 "sample": sample, "warmup": sample < 3, "sequence": tick + 1,
-                                "implementation": if native { metadata["native_implementation"].as_str().unwrap() } else { "module" },
+                                "implementation": if native { "native_database" } else { "module" },
                                 "native_first": order[0], "timing": timing,
                                 "final_digest": series.digest,
                             })
@@ -114,9 +96,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
     }
-    if let Some(database) = &database {
-        database.verify_measured_execution();
-    }
+    database.verify_measured_execution();
     writeln!(output, "{}", json!({"kind": "complete"}))?;
     Ok(())
 }
@@ -127,35 +107,20 @@ struct Series {
     digest: Value,
 }
 
-fn run_series(
-    shard: &Standalone,
-    calls: &support::Calls,
-    name: &str,
-    creatures: u32,
-    native: bool,
-) -> Series {
+fn run_series(shard: &Standalone, calls: &support::Calls, name: &str, creatures: u32) -> Series {
     let case = workload(name, creatures).unwrap();
-    let run = support::setup(shard, calls, name, creatures, native);
+    let run = support::setup(shard, calls, name, creatures);
     let subscription = support::subscribe(shard);
-    let mut simulation = native.then(|| TableSimulation::new(&case).unwrap());
     let mut updates = Vec::new();
     let mut timings = Vec::new();
     for request in &case.requests {
         let server_before = process_usage(shard.process_id());
         let driver_before = process_usage(std::process::id());
         let start = Instant::now();
-        let mut native_work_ns = 0;
-        let outcome = if let Some(simulation) = &mut simulation {
-            simulation.apply(request).unwrap();
-            let batch = simulation.commit_batch(run);
-            native_work_ns = start.elapsed().as_nanos();
-            calls.commit(&batch)
-        } else {
-            calls.call(
-                "debug_native_committed_step",
-                &(run, request.sequence, request.at_micros),
-            )
-        };
+        let outcome = calls.call(
+            "debug_native_committed_step",
+            &(run, request.sequence, request.at_micros),
+        );
         let acknowledgment_ns = start.elapsed().as_nanos();
         outcome.assert_accepted();
         let update = subscription.receive(Duration::from_secs(30));
@@ -184,7 +149,6 @@ fn run_series(
             "subscription_json_bytes": update.json_bytes,
             "changed_rows": rows,
             "subscription_digest": subscription_digest,
-            "native_work_ns": native_work_ns,
             "request_encode_ns": outcome.encode_ns,
             "round_trip_ns": outcome.round_trip_ns,
             "server_cpu_ticks": server_after.cpu_ticks - server_before.cpu_ticks,
@@ -201,12 +165,6 @@ fn run_series(
         case.requests.last().unwrap().sequence,
         false,
     );
-    if let Some(simulation) = &mut simulation {
-        assert_eq!(
-            final_frame["digest"],
-            digest(&simulation.snapshot().unwrap())
-        );
-    }
     Series {
         updates,
         timings,
@@ -226,13 +184,14 @@ fn metadata(wasm: &str, counts: &[u32], samples: u32) -> Result<Value, Box<dyn s
         .collect();
     Ok(json!({
         "kind": "metadata", "commit": command("git", &["rev-parse", "HEAD"]),
+        "native_implementation": "native_database",
         "dirty": !command("git", &["status", "--porcelain"]).is_empty(),
         "rustc": command("rustc", &["--version"]), "profile": "release", "storage": "disk",
         "wasm_blake3": blake3::hash(&std::fs::read(wasm)?).to_hex().to_string(),
         "native_blake3": blake3::hash(&std::fs::read(std::env::current_exe()?)?).to_hex().to_string(),
         "counts": counts, "samples": samples, "warmups": 3, "scenarios": SCENARIOS,
         "ticks_per_replay": ticks,
-        "scope": "one tick per durable transaction; native work, BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded",
+        "scope": "one tick per durable transaction in the existing database engine; BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded",
         "request_bytes": "BSATN client message, excluding websocket framing",
         "cpu_ticks_per_second": command("getconf", &["CLK_TCK"]).parse::<u64>()?,
         "cpu_scope": "server and benchmark driver during request and publication wait; excludes the separate CLI subscriber process and setup",

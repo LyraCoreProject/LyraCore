@@ -9,9 +9,16 @@ class EvidenceTests(unittest.TestCase):
     def test_startup_gateway_output_is_not_module_execution_evidence(self):
         with tempfile.TemporaryDirectory() as temporary:
             directory = Path(temporary)
-            for name in ("startup-relays-42.log", "startup-relays-42-gateway.log"):
+            for name in ("startup-relays-42-123.log", "startup-relays-42-123-gateway.log"):
                 (directory / name).touch()
-            self.assertEqual(standalone_logs(directory), [directory / "startup-relays-42.log"])
+            self.assertEqual(standalone_logs(directory), [directory / "startup-relays-42-123.log"])
+
+    def test_package_gateway_phase_logs_are_not_module_execution_evidence(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            directory = Path(temporary)
+            for name in ("transfer-42-123.log", "transfer-42-123-gateway-transfer-arrival.log"):
+                (directory / name).touch()
+            self.assertEqual(standalone_logs(directory), [directory / "transfer-42-123.log"])
 
     def test_later_wasm_success_cannot_hide_native_fallback(self):
         with self.assertRaisesRegex(ValueError, "fell back"):

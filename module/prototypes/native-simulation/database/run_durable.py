@@ -33,9 +33,9 @@ def test_counts(log):
 
 
 def standalone_logs(directory):
-    # Startup relay tests put Gateway output beside the standalone logs.
+    # Standalone fixture names end in their process ID and timestamp.
     return sorted(path for path in directory.glob("*.log")
-                  if not path.name.endswith("-gateway.log"))
+                  if re.search(r"-\d+-\d+\.log$", path.name))
 
 
 def main():
@@ -51,8 +51,6 @@ def main():
     if not command:
         parser.error("supply a Rust test command after --")
     manifest = json.loads(args.manifest.read_text())
-    if manifest.get("execution") != "reducers":
-        parser.error("the manifest must select all reducers")
     environment = os.environ.copy()
     environment.pop("LYRACORE_NATIVE_DATABASE_MANIFEST", None)
     if args.implementation == "native_database":

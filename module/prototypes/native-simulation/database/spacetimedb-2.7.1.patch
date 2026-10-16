@@ -151,7 +151,7 @@ index 25357dc..5db90d4 100644
 +                .start_funcall(reducer_name, args_bytes.clone(), op.timestamp, op.call_type());
 +
 +        let mut native_error = None;
-+        let call_result = if self.native.as_ref().is_some_and(|native| native.handles(&op.name)) {
++        let call_result = if self.native.is_some() {
 +            if !self.native_verified {
 +                Err(anyhow::anyhow!("native Module description was not verified"))
 +            } else {

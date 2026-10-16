@@ -82,7 +82,7 @@ macro_rules! character_owned {
     };
 }
 
-#[cfg(feature = "native_simulation_prototype")]
+#[cfg(feature = "native_simulation_database")]
 pub use creatures::cycle::native_prototype;
 
 #[cfg(feature = "native_simulation_database")]

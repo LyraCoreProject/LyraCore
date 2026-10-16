@@ -1,0 +1,620 @@
+{
+  "scope": "Cleanup of the separate native executor and commit-batch path; retained existing-engine native execution, movement parity, lifecycle and process recovery.",
+  "source_base_commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+  "source_state": "Cleanup candidate with the log-reader correction; final clean benchmark records the committed source.",
+  "checks": {
+    "module_unit_tests": 1583,
+    "fixture_unit_tests": 15,
+    "comparator_tests": 1,
+    "gameplay_example_tests": 2,
+    "clippy_warnings_denied": true
+  },
+  "runs": {
+    "lifecycle-complete-native_database": {
+      "raw_sha256": "7276512e89c07676d49291a46beddbb1d9eb0c9f18b34283b838df55312fffe6",
+      "records": [
+        {
+          "commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+          "dirty": true,
+          "implementation": "native_database",
+          "kind": "metadata",
+          "module_native_blake3": "2e18fe139ef786ed37ffc5d8333d30dd20581972b472975c24b5e2587748dc4d",
+          "process_failures": false,
+          "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+          "server_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c",
+          "updates": 16,
+          "wasm_blake3": "a77a80cf16aa6dcd694a521a4ac4ea855ad689432df0b4ebb88c8988c6e67917"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1247,
+            "libraries": 2,
+            "peak_rss_kib": 304576,
+            "rss_kib": 296504
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 1,
+          "usage": {
+            "cpu_ticks": 1306,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 290528
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 2,
+          "usage": {
+            "cpu_ticks": 1364,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 288588
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 3,
+          "usage": {
+            "cpu_ticks": 1421,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 281508
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 4,
+          "usage": {
+            "cpu_ticks": 1479,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 281404
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 5,
+          "usage": {
+            "cpu_ticks": 1536,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 276972
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 6,
+          "usage": {
+            "cpu_ticks": 1593,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 271020
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 7,
+          "usage": {
+            "cpu_ticks": 1653,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 268348
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 8,
+          "usage": {
+            "cpu_ticks": 1712,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 265840
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 9,
+          "usage": {
+            "cpu_ticks": 1769,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 262724
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 10,
+          "usage": {
+            "cpu_ticks": 1828,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 261628
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 11,
+          "usage": {
+            "cpu_ticks": 1887,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 255292
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 12,
+          "usage": {
+            "cpu_ticks": 1944,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 254456
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 13,
+          "usage": {
+            "cpu_ticks": 2003,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 247440
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 14,
+          "usage": {
+            "cpu_ticks": 2065,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 246244
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 15,
+          "usage": {
+            "cpu_ticks": 2124,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 243804
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 16,
+          "usage": {
+            "cpu_ticks": 2181,
+            "libraries": 2,
+            "peak_rss_kib": 388388,
+            "rss_kib": 240432
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 17
+        },
+        {
+          "application_state_preserved": true,
+          "kind": "artifacts",
+          "mismatched_schema_wasm_blake3": "612593768d0e91e2ca2744f861f0e7939a89f53b98123ecbb8de06597554d078",
+          "wrong_module_description_refused": true,
+          "wrong_native_hash_refused": true
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 1,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "e95237f173c439ba12eb7acb04ff5f825354305a99bda81e519ab5277c7163ec",
+          "wasm_update_preserved_state": true
+        }
+      ]
+    },
+    "process-complete-native_database": {
+      "raw_sha256": "b64397899905bfa8ee99dfc0ad757bcc7c7d3b88f8288e732ec36843d72c930f",
+      "records": [
+        {
+          "commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+          "dirty": true,
+          "implementation": "native_database",
+          "kind": "metadata",
+          "module_native_blake3": "2e18fe139ef786ed37ffc5d8333d30dd20581972b472975c24b5e2587748dc4d",
+          "process_failures": true,
+          "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+          "server_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c",
+          "updates": 0,
+          "wasm_blake3": "a77a80cf16aa6dcd694a521a4ac4ea855ad689432df0b4ebb88c8988c6e67917"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1260,
+            "libraries": 2,
+            "peak_rss_kib": 288072,
+            "rss_kib": 283028
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 1
+        },
+        {
+          "application_state_preserved": true,
+          "kind": "artifacts",
+          "mismatched_schema_wasm_blake3": "612593768d0e91e2ca2744f861f0e7939a89f53b98123ecbb8de06597554d078",
+          "wrong_module_description_refused": true,
+          "wrong_native_hash_refused": true
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 1,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "e95237f173c439ba12eb7acb04ff5f825354305a99bda81e519ab5277c7163ec",
+          "wasm_update_preserved_state": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "abort",
+          "kind": "process_failure",
+          "native_after_restart": true,
+          "process_signal": 6,
+          "sibling_state_preserved": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "loop",
+          "kind": "process_failure",
+          "native_after_restart": true,
+          "process_signal": 9,
+          "sibling_state_preserved": true
+        }
+      ]
+    },
+    "lifecycle-complete-module": {
+      "raw_sha256": "a0fd9b3a8a6960b3435495b41792a1d27d9750b43657d26735895ba34ae206b5",
+      "records": [
+        {
+          "commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+          "dirty": true,
+          "implementation": "module",
+          "kind": "metadata",
+          "module_native_blake3": "2e18fe139ef786ed37ffc5d8333d30dd20581972b472975c24b5e2587748dc4d",
+          "process_failures": false,
+          "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+          "server_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c",
+          "updates": 16,
+          "wasm_blake3": "a77a80cf16aa6dcd694a521a4ac4ea855ad689432df0b4ebb88c8988c6e67917"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1262,
+            "libraries": 0,
+            "peak_rss_kib": 279376,
+            "rss_kib": 267404
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 1,
+          "usage": {
+            "cpu_ticks": 1314,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 262272
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 2,
+          "usage": {
+            "cpu_ticks": 1367,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 260240
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 3,
+          "usage": {
+            "cpu_ticks": 1420,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 257692
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 4,
+          "usage": {
+            "cpu_ticks": 1474,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 256600
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 5,
+          "usage": {
+            "cpu_ticks": 1528,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 254200
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 6,
+          "usage": {
+            "cpu_ticks": 1584,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 248588
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 7,
+          "usage": {
+            "cpu_ticks": 1636,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 244136
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 8,
+          "usage": {
+            "cpu_ticks": 1688,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 237288
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 9,
+          "usage": {
+            "cpu_ticks": 1739,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 233948
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 10,
+          "usage": {
+            "cpu_ticks": 1794,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 229988
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 11,
+          "usage": {
+            "cpu_ticks": 1848,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 226040
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 12,
+          "usage": {
+            "cpu_ticks": 1902,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 219740
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 13,
+          "usage": {
+            "cpu_ticks": 1953,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 218076
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 14,
+          "usage": {
+            "cpu_ticks": 2005,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 218076
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 15,
+          "usage": {
+            "cpu_ticks": 2059,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 215664
+          }
+        },
+        {
+          "kind": "usage",
+          "updates": 16,
+          "usage": {
+            "cpu_ticks": 2114,
+            "libraries": 0,
+            "peak_rss_kib": 361984,
+            "rss_kib": 200656
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 0
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 0,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "e95237f173c439ba12eb7acb04ff5f825354305a99bda81e519ab5277c7163ec",
+          "wasm_update_preserved_state": true
+        }
+      ]
+    },
+    "process-complete-module": {
+      "raw_sha256": "850ed02a4b6517b54c9c2c9c2a8287fe322fd190829ea5538cfbba37d0f51cac",
+      "records": [
+        {
+          "commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+          "dirty": true,
+          "implementation": "module",
+          "kind": "metadata",
+          "module_native_blake3": "2e18fe139ef786ed37ffc5d8333d30dd20581972b472975c24b5e2587748dc4d",
+          "process_failures": true,
+          "scope": "Module publication, artifact selection, mixed-version restart and optional process-failure recovery",
+          "server_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c",
+          "updates": 0,
+          "wasm_blake3": "a77a80cf16aa6dcd694a521a4ac4ea855ad689432df0b4ebb88c8988c6e67917"
+        },
+        {
+          "kind": "usage",
+          "updates": 0,
+          "usage": {
+            "cpu_ticks": 1276,
+            "libraries": 0,
+            "peak_rss_kib": 301440,
+            "rss_kib": 297184
+          }
+        },
+        {
+          "application_state_preserved": true,
+          "bounded_library_count": true,
+          "kind": "result",
+          "native_calls": 0
+        },
+        {
+          "kind": "versions",
+          "matching_program_restored": true,
+          "matching_shard_native_calls": 0,
+          "mixed_program_restart": true,
+          "unmatched_program_blake3": "e95237f173c439ba12eb7acb04ff5f825354305a99bda81e519ab5277c7163ec",
+          "wasm_update_preserved_state": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "abort",
+          "kind": "process_failure",
+          "native_after_restart": false,
+          "process_signal": null,
+          "sibling_state_preserved": true
+        },
+        {
+          "application_state_preserved": true,
+          "fault": "loop",
+          "kind": "process_failure",
+          "native_after_restart": false,
+          "process_signal": 9,
+          "sibling_state_preserved": true
+        }
+      ]
+    }
+  },
+  "movement": {
+    "raw_sha256": "c2c79af3db79477a5d0e298cc8541a6d847ef8443a03a40dd778acb76d274b05",
+    "metadata": {
+      "affinity": "Cpus_allowed_list:\t4",
+      "commit": "dc52dde84c9fc870b4b79a2d685ac5a562abe272",
+      "counts": [
+        100
+      ],
+      "cpu_scope": "server and benchmark driver during request and publication wait; excludes the separate CLI subscriber process and setup",
+      "cpu_ticks_per_second": 100,
+      "database_artifacts": {
+        "module_libraries_after_0_8_16_traps": [
+          0,
+          0,
+          0
+        ],
+        "module_native_blake3": "2e18fe139ef786ed37ffc5d8333d30dd20581972b472975c24b5e2587748dc4d",
+        "module_rss_kib_after_0_8_16_traps": [
+          156528,
+          156524,
+          156452
+        ],
+        "movement_reference_frames": 60,
+        "native_database_libraries_after_0_8_16_traps": [
+          1,
+          1,
+          1
+        ],
+        "native_database_libraries_before_trap": 2,
+        "native_database_rss_kib_after_0_8_16_traps": [
+          206836,
+          197428,
+          194700
+        ],
+        "server_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c",
+        "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba"
+      },
+      "dirty": true,
+      "kind": "metadata",
+      "native_blake3": "444e3d9f6f31d75f99de18ba93d5c7b22962682635ca79b801a723337a97dba0",
+      "native_implementation": "native_database",
+      "profile": "release",
+      "request_bytes": "BSATN client message, excluding websocket framing",
+      "rustc": "rustc 1.93.0 (254b59607 2026-01-19)",
+      "samples": 5,
+      "scenarios": [
+        "idle_drift",
+        "combat_advance",
+        "stopped_target"
+      ],
+      "scope": "one tick per durable transaction in the existing database engine; BSATN request encoding, binary WebSocket acknowledgment and confirmed CLI subscription output included; setup and parity queries excluded",
+      "storage": "disk",
+      "subscription_bytes": "CLI JSON bytes after decoding; not websocket wire bytes",
+      "ticks_per_replay": {
+        "combat_advance": 7,
+        "idle_drift": 7,
+        "stopped_target": 7
+      },
+      "unix_seconds": 1792133644,
+      "warmups": 3,
+      "wasm_blake3": "a77a80cf16aa6dcd694a521a4ac4ea855ad689432df0b4ebb88c8988c6e67917"
+    },
+    "paired_ticks_including_warmups": 168,
+    "complete": true
+  },
+  "earlier_attempts": [
+    {
+      "result": "failed",
+      "reason": "A test-only Character read bypassed the Transfer gate and the removed benchmark left a stale scan allowance. Both were corrected before the passing unit run."
+    },
+    {
+      "result": "failed",
+      "reason": "Lifecycle log counts were unstable because CLI 2.7.1 returns from JSON output without flushing asynchronous stdout. The check uses its synchronous text writer and fences expected entries; all state and library-count assertions remain."
+    }
+  ],
+  "runtime_blake3": "b7c4ea1846c3142d8cec14ef9921907701025d9fe54b053eae5253373735886c"
+}

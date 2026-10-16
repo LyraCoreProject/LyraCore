@@ -364,7 +364,7 @@ impl Manifest {
             File::create_new(&path)?,
             &json!({
                 "library": library, "wasm_blake3": hash(wasm),
-                "native_blake3": hash(&std::fs::read(library)?), "execution": "reducers",
+                "native_blake3": hash(&std::fs::read(library)?),
             }),
         )?;
         Ok(Self { path })

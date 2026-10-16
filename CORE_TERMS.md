@@ -28,7 +28,9 @@ The shard that holds realm-wide state: accounts, sessions, Account Claims, group
 The shard that currently holds a Character's row.
 
 **Module**:
-The wasm that holds all durable state and all game logic. The same wasm runs on every shard.
+The compiled Core and Package rules that own durable state and game logic. The same Wasm artifact
+is published to every Shard. Wasm is the default execution format; an Operator can opt into a
+matching native library for trusted code under process limits.
 
 **Gateway**:
 The trusted protocol tier between clients and shards. Holds no durable state.
@@ -111,7 +113,7 @@ Mail Escrow carries a Character's letter, a take from a Mail, and a Reward Lette
 ## Extending the server
 
 **Package**:
-A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. Either half alone is a valid Package.
+A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. Either half alone is a valid Package.
 Its data changes ship as Package Deltas rather than as edits to the base data.
 Package-specific tests live with the Package. Core supplies reusable private integration fixtures;
 the Package's test runner selects the Core checkout and owns its compatibility checks.

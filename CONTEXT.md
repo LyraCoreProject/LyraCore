@@ -140,7 +140,9 @@ The shard that holds realm-wide state: accounts, sessions, Account Claims, group
 The trusted protocol tier between clients and shards. Holds no durable state.
 
 **Module**:
-The wasm that holds all durable state and all game logic. The same wasm runs on every shard.
+The compiled Core and Package rules that own durable state and game logic. The same Wasm artifact
+is published to every Shard. Wasm is the default execution format; an Operator can opt into a
+matching native library for trusted code under process limits.
 
 **Operator**:
 The identity that publishes and owns the shards, and the only caller of Gateway Verbs.
@@ -1001,7 +1003,7 @@ _Avoid_: weather event, weather state table
 ### Packages
 
 **Package**:
-A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module wasm by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. A Package can also carry Runtime Scripts in `scripts/`, Datascripts in `datascripts/`, and generated artifacts in `data/.generated/`. Any one of these parts is enough.
+A drop-in folder under `packages/<name>/` that adds content to the realm with no core-file edits. Its `src/` is compiled into the Module by the build's own discovery; its `client/` half supplies addons, whole-file client overrides and UI Transforms to the client packer. A Package can also carry Runtime Scripts in `scripts/`, Datascripts in `datascripts/`, and generated artifacts in `data/.generated/`. Any one of these parts is enough.
 Its data changes ship as Package Deltas rather than as edits to the base data.
 Package-specific tests live with the Package. Core supplies reusable private integration fixtures;
 the Package's test runner selects the Core checkout and owns its compatibility checks.

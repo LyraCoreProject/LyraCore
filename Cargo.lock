@@ -1873,7 +1873,6 @@ version = "0.1.0"
 dependencies = [
  "blake3",
  "getrandom 0.3.4",
- "lyracore-native-host",
  "lyracore-package-delta",
  "lyracore-shared",
  "lyracore-test-support",
@@ -1882,18 +1881,8 @@ dependencies = [
  "serde_json",
  "spacetimedb",
  "spacetimedb-client-api-messages",
- "spacetimedb-primitives",
  "spacetimedb-sats",
  "tungstenite",
-]
-
-[[package]]
-name = "lyracore-native-host"
-version = "0.1.0"
-dependencies = [
- "blake3",
- "spacetimedb",
- "spacetimedb-primitives",
 ]
 
 [[package]]

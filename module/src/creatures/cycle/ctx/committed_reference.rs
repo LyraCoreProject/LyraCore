@@ -1,13 +1,8 @@
-use std::collections::BTreeSet;
-
-use spacetimedb::sats::bsatn;
-use spacetimedb::table::IndexAlgo;
 use spacetimedb::{reducer, sys, table, ReducerContext, Table, Timestamp};
-use spacetimedb_primitives::{IndexId, TableId};
 
 use super::prototype_reference::{apply_request, benchmark_frame};
 use crate::creatures::cycle::native_prototype::benchmark::{digest, workload};
-use crate::creatures::cycle::native_prototype::commit::{Batch, GAMEPLAY_TABLES, SNAPSHOT_PREFIX};
+use crate::creatures::cycle::native_prototype::commit::{GAMEPLAY_TABLES, SNAPSHOT_PREFIX};
 use crate::creatures::cycle::native_prototype::{self as prototype, Action, Request};
 use crate::tables::*;
 
@@ -18,10 +13,8 @@ pub struct NativeBenchmarkState {
     pub run: u64,
     pub scenario: String,
     pub creatures: u32,
-    pub native: bool,
     pub sequence: u64,
     pub at_micros: u64,
-    pub last_commit: Vec<u8>,
 }
 
 #[reducer]
@@ -29,7 +22,6 @@ pub fn debug_native_committed_setup(
     ctx: &ReducerContext,
     scenario: String,
     creatures: u32,
-    native: bool,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let case = workload(&scenario, creatures)?;
@@ -73,10 +65,8 @@ pub fn debug_native_committed_setup(
         run,
         scenario,
         creatures,
-        native,
         sequence: 0,
         at_micros: case.start_micros,
-        last_commit: Vec::new(),
     };
     if previous.is_some() {
         ctx.db.game_native_benchmark_state().id().update(state);
@@ -94,7 +84,7 @@ pub fn debug_native_committed_step(
     at_micros: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let mut state = progress(ctx, run, false)?;
+    let mut state = progress(ctx, run)?;
     check_next(&state, sequence, at_micros)?;
     let mut clock = ReducerContext::__dummy();
     clock.timestamp = Timestamp::from_micros_since_unix_epoch(at_micros as i64);
@@ -129,44 +119,15 @@ pub fn debug_native_database_fault(ctx: &ReducerContext, trap: bool) -> Result<(
     Err("native database rollback fixture".into())
 }
 
-#[reducer]
-pub fn debug_native_committed_apply(ctx: &ReducerContext, payload: Vec<u8>) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    if payload.len() > 32 * 1024 * 1024 {
-        return Err("benchmark commit exceeds 32 MiB".into());
-    }
-    let mut remaining = payload.as_slice();
-    let batch: Batch = bsatn::from_reader(&mut remaining).map_err(|e| e.to_string())?;
-    if !remaining.is_empty() {
-        return Err("benchmark commit has trailing bytes".into());
-    }
-    let mut state = progress(ctx, batch.run, true)?;
-    let fingerprint = blake3::hash(&payload).as_bytes().to_vec();
-    if batch.sequence == state.sequence {
-        return if state.last_commit == fingerprint {
-            Ok(())
-        } else {
-            Err("benchmark commit sequence was reused with different input".into())
-        };
-    }
-    check_next(&state, batch.sequence, batch.at_micros)?;
-    apply_changes(ctx, &batch)?;
-    state.sequence = batch.sequence;
-    state.at_micros = batch.at_micros;
-    state.last_commit = fingerprint;
-    ctx.db.game_native_benchmark_state().id().update(state);
-    Ok(())
-}
-
-fn progress(ctx: &ReducerContext, run: u64, native: bool) -> Result<NativeBenchmarkState, String> {
+fn progress(ctx: &ReducerContext, run: u64) -> Result<NativeBenchmarkState, String> {
     let state = ctx
         .db
         .game_native_benchmark_state()
         .id()
         .find(0)
         .ok_or("committed benchmark is not initialized")?;
-    if state.run != run || state.native != native {
-        return Err("benchmark run or execution mode is stale".into());
+    if state.run != run {
+        return Err("benchmark run is stale".into());
     }
     Ok(state)
 }
@@ -183,118 +144,6 @@ fn check_next(state: &NativeBenchmarkState, sequence: u64, at_micros: u64) -> Re
         .ok_or("benchmark has no such tick")?;
     if request.at_micros != at_micros {
         return Err("benchmark tick time does not match its input".into());
-    }
-    Ok(())
-}
-
-struct CommitTable {
-    name: &'static str,
-    table: TableId,
-    primary: IndexId,
-}
-
-fn commit_table<T: Table>(_: &T) -> Result<CommitTable, String> {
-    if T::PRIMARY_KEY != Some(0) || T::UNIQUE_COLUMNS.iter().any(|&column| column != 0) {
-        return Err(format!(
-            "benchmark table has unsupported keys: {}",
-            T::TABLE_NAME
-        ));
-    }
-    let index = T::INDEXES
-        .iter()
-        .find(|index| match index.algo {
-            IndexAlgo::BTree { columns } | IndexAlgo::Hash { columns } => columns == [0],
-            IndexAlgo::Direct { column } => column == 0,
-        })
-        .ok_or("benchmark primary index is missing")?;
-    Ok(CommitTable {
-        name: T::TABLE_NAME,
-        table: T::table_id(),
-        primary: sys::index_id_from_name(index.source_name).map_err(|e| e.to_string())?,
-    })
-}
-
-// Each movement fixture table starts with a u64 primary key in its BSATN row.
-fn row_key(row: &[u8]) -> Result<u64, String> {
-    Ok(u64::from_le_bytes(
-        row.get(..8)
-            .ok_or("benchmark row has no primary key")?
-            .try_into()
-            .unwrap(),
-    ))
-}
-
-fn apply_changes(ctx: &ReducerContext, batch: &Batch) -> Result<(), String> {
-    let tables = [
-        commit_table(ctx.db.game_world_entity())?,
-        commit_table(ctx.db.game_creature_spline())?,
-        commit_table(ctx.db.game_melee_attack())?,
-        commit_table(ctx.db.game_creature_ai_movement_intent())?,
-    ];
-    let mut old_keys = BTreeSet::new();
-    let mut new_keys = BTreeSet::new();
-    let operations = batch
-        .changes
-        .iter()
-        .map(|change| {
-            let table = tables
-                .iter()
-                .position(|table| table.name == change.table)
-                .ok_or_else(|| {
-                    format!("table is outside the movement benchmark: {}", change.table)
-                })?;
-            let before = change.before.as_deref().map(row_key).transpose()?;
-            let after = change.after.as_deref().map(row_key).transpose()?;
-            if before.is_some_and(|key| !old_keys.insert((table, key)))
-                || after.is_some_and(|key| !new_keys.insert((table, key)))
-            {
-                return Err("benchmark batch repeats a row".into());
-            }
-            Ok((table, before.is_some() && before == after))
-        })
-        .collect::<Result<Vec<_>, String>>()?;
-    let mut current = Vec::new();
-    for (change, &(table, update)) in batch.changes.iter().zip(&operations) {
-        if let Some(before) = &change.before {
-            let table = &tables[table];
-            if update {
-                current.clear();
-                let mut rows = sys::datastore_index_scan_point_bsatn(table.primary, &before[..8])
-                    .map_err(|e| e.to_string())?;
-                while !rows.is_exhausted() {
-                    rows.read(&mut current);
-                }
-                if &current != before {
-                    return Err(format!("benchmark old row changed: {}", change.table));
-                }
-                continue;
-            }
-            // BSATN arrays begin with the element count as a little-endian u32.
-            let mut relation = Vec::with_capacity(4 + before.len());
-            relation.extend_from_slice(&1u32.to_le_bytes());
-            relation.extend_from_slice(before);
-            if sys::datastore_delete_all_by_eq_bsatn(table.table, &relation)
-                .map_err(|e| e.to_string())?
-                != 1
-            {
-                return Err(format!("benchmark old row changed: {}", change.table));
-            }
-        }
-    }
-    for (change, &(table, update)) in batch.changes.iter().zip(&operations) {
-        if let Some(after) = &change.after {
-            let mut row = after.clone();
-            let table = &tables[table];
-            let generated = if update {
-                sys::datastore_update_bsatn(table.table, table.primary, &mut row)
-            } else {
-                sys::datastore_insert_bsatn(table.table, &mut row)
-            }
-            .map_err(|e| e.to_string())?;
-            if !generated.is_empty() {
-                return Err("movement benchmark cannot generate durable keys".into());
-            }
-        }
     }
     Ok(())
 }

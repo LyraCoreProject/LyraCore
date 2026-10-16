@@ -1,8 +1,6 @@
 use super::{scenario, Action, Scenario};
 
 pub const SCENARIOS: &[&str] = &["idle_drift", "combat_advance", "stopped_target"];
-pub const RESULT_PREFIX: &str = "NATIVE_SIMULATION_BENCHMARK ";
-pub const TIMER_PREFIX: &str = "native-simulation-benchmark";
 
 pub fn workload(name: &str, creatures: u32) -> Result<Scenario, String> {
     if !SCENARIOS.contains(&name) || !(1..=5_000).contains(&creatures) {

@@ -231,12 +231,8 @@ pub fn debug_native_gameplay_process_fault(ctx: &ReducerContext, spin: bool) -> 
     if ctx.db.game_session().count() != 0 || ctx.db.game_native_gameplay_state().count() != 0 {
         return Err("process faults require an unused disposable gameplay fixture".into());
     }
-    let mut character = ctx
-        .db
-        .game_character()
-        .guid()
-        .find(1)
-        .ok_or("fixture Character is missing")?;
+    let mut character =
+        crate::helpers::character_by_guid(ctx, 1).ok_or("fixture Character is missing")?;
     character.money = character
         .money
         .checked_add(1)

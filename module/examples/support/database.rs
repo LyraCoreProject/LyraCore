@@ -34,7 +34,6 @@ impl Database {
             "library": library,
             "native_blake3": hash(&library),
             "wasm_blake3": hash(&PathBuf::from(wasm)),
-            "execution": "reducers",
         });
         let mut file = std::fs::File::create_new(&manifest).unwrap();
         serde_json::to_writer(&mut file, &contents).unwrap();
@@ -46,7 +45,6 @@ impl Database {
             artifacts: json!({
                 "server_blake3": hash(&PathBuf::from(server)),
                 "module_native_blake3": contents["native_blake3"],
-                "execution": contents["execution"],
                 "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba",
             }),
             manifest,
@@ -66,8 +64,8 @@ impl Database {
         eprintln!("Native database: both implementations match the 60-frame movement reference");
         for &scenario in SCENARIOS {
             let case = workload(scenario, 4).unwrap();
-            let expected_run = support::setup(reference, reference_calls, scenario, 4, false);
-            let native_run = support::setup(&self.shard, native_calls, scenario, 4, false);
+            let expected_run = support::setup(reference, reference_calls, scenario, 4);
+            let native_run = support::setup(&self.shard, native_calls, scenario, 4);
             let expected_updates = support::subscribe(reference);
             let native_updates = support::subscribe(&self.shard);
             for request in &case.requests {
@@ -138,8 +136,8 @@ impl Database {
         self.artifacts["native_database_libraries_before_trap"] = json!(loaded_libraries);
 
         let case = workload("combat_advance", 4).unwrap();
-        let expected_run = support::setup(reference, &reference_calls, case.name, 4, false);
-        let native_run = support::setup(&self.shard, &native_calls, case.name, 4, false);
+        let expected_run = support::setup(reference, &reference_calls, case.name, 4);
+        let native_run = support::setup(&self.shard, &native_calls, case.name, 4);
         for (shard, calls, run) in [
             (&*reference, &reference_calls, expected_run),
             (&self.shard, &native_calls, native_run),
@@ -149,7 +147,7 @@ impl Database {
             for (args, message) in [
                 (
                     (run + 1, request.sequence, request.at_micros),
-                    "benchmark run or execution mode is stale",
+                    "benchmark run is stale",
                 ),
                 (
                     (run, request.sequence + 1, request.at_micros),

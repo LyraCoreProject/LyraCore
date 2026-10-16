@@ -25,18 +25,8 @@ pub(super) struct NativeConfig {
     library: PathBuf,
     native_blake3: String,
     wasm_blake3: String,
-    #[serde(default)]
-    execution: Execution,
     #[serde(skip)]
     claimed: Arc<AtomicBool>,
-}
-
-#[derive(Clone, Copy, Default, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-enum Execution {
-    #[default]
-    Movement,
-    Reducers,
 }
 
 impl NativeConfig {
@@ -86,7 +76,6 @@ pub(super) struct NativeInstance {
     entry: Entry,
     description: Vec<u8>,
     pool: ChunkPool,
-    execution: Execution,
     reported: std::collections::BTreeSet<u64>,
     _library: Library,
     _file: tempfile::NamedTempFile,
@@ -139,7 +128,6 @@ impl NativeInstance {
             entry,
             description: scope.sink,
             pool: scope.pool,
-            execution: config.execution,
             reported: std::collections::BTreeSet::new(),
             _library: library,
             _file: file,
@@ -152,18 +140,6 @@ impl NativeInstance {
             "native and Wasm Module descriptions differ"
         );
         Ok(())
-    }
-
-    pub(super) fn handles(&self, reducer: &str) -> bool {
-        match self.execution {
-            Execution::Reducers => true,
-            Execution::Movement => matches!(
-                reducer,
-                "debug_native_committed_step"
-                    | "debug_native_database_fault"
-                    | "debug_native_simulation_reference"
-            ),
-        }
     }
 
     pub(super) fn call(

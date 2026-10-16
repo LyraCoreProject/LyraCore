@@ -40,7 +40,7 @@ pub struct CreatureMoveEvent {
     // AOI subscriptions require three equality columns in SpacetimeDB 2.7.1.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
-#[cfg_attr(feature = "native_simulation_prototype", derive(Clone))]
+#[cfg_attr(feature = "native_simulation_database", derive(Clone))]
 pub struct CreatureSpline {
     #[primary_key]
     pub guid: u64,
