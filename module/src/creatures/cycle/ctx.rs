@@ -26,13 +26,21 @@ use crate::{
 
 #[cfg(all(
     feature = "native_simulation_prototype",
-    any(target_arch = "wasm32", feature = "native_simulation_host")
+    any(
+        target_arch = "wasm32",
+        feature = "native_simulation_host",
+        feature = "native_simulation_database"
+    )
 ))]
 mod prototype_reference;
 
 #[cfg(all(
     feature = "native_simulation_prototype",
-    any(target_arch = "wasm32", feature = "native_simulation_host")
+    any(
+        target_arch = "wasm32",
+        feature = "native_simulation_host",
+        feature = "native_simulation_database"
+    )
 ))]
 mod committed_reference;
 

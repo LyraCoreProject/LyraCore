@@ -113,6 +113,23 @@ pub fn debug_native_committed_step(
 }
 
 #[reducer]
+pub fn debug_native_database_fault(ctx: &ReducerContext, trap: bool) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mut state = ctx
+        .db
+        .game_native_benchmark_state()
+        .id()
+        .find(0)
+        .ok_or("benchmark is not initialized")?;
+    state.sequence += 1;
+    ctx.db.game_native_benchmark_state().id().update(state);
+    if trap {
+        panic!("native database rollback fixture");
+    }
+    Err("native database rollback fixture".into())
+}
+
+#[reducer]
 pub fn debug_native_committed_apply(ctx: &ReducerContext, payload: Vec<u8>) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     if payload.len() > 32 * 1024 * 1024 {

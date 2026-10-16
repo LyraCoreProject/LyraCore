@@ -17,6 +17,7 @@ debug_reducers = []
 package_test_fixture = ["debug_reducers"]
 native_simulation_prototype = ["debug_reducers", "dep:serde", "dep:serde_json", "dep:spacetimedb-sats", "dep:spacetimedb-primitives"]
 native_simulation_host = ["native_simulation_prototype", "dep:lyracore-native-host"]
+native_simulation_database = ["native_simulation_prototype"]
 
 [dependencies]
 blake3 = "1"

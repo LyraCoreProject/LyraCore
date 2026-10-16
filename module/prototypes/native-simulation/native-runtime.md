@@ -168,3 +168,68 @@ This candidate needs a database runtime patch and a native SDK entry point. Thos
 costs, not completed work. Native execution also does not inherit Wasmtime's fuel limit. Bounded
 execution, trap recovery and instance replacement need their own proof before this path can acquire
 general authority. Keep the normal database binary and live Realms unchanged during the experiment.
+
+The prototype files are in `database/`. They patch SpacetimeDB commit
+`8ecd3c3bac427a49a9d9b13671bf83324afa59ba` and a private copy of the crates.io 2.7.1 SDK. The normal
+dependency remains unchanged. The server selects native execution only for
+`debug_native_committed_step` and the rollback fixture `debug_native_database_fault`.
+Both implementations use the existing transaction, commit and subscription code. Native table
+operations call `InstanceEnv` directly. They do not copy rows into a second authoritative store.
+
+The loader checks both artifact hashes and the complete Module description. It loads a separate
+library copy for each Module instance. The native SDK catches reducer and description panics inside
+the library. Unsupported host operations trap the transaction, including immediate scheduling and
+procedure calls. The prototype does not accept an arbitrary native Module as a replacement for Wasm.
+Generated registration functions still use the SDK's existing C entry points.
+
+The driver compares 21 complete committed frames and subscription updates before timing. It also
+checks authorization, stale runs, skipped input, structured Refusals, panic rollback and persistent
+restart. A Module log marker proves that the selected reducer used the native entry point. Timed
+samples retain server and driver CPU ticks, server resident memory and its process peak. CPU counts
+exclude the separate CLI subscriber. Wasmtime fuel and linear-memory metrics do not include native
+work. A host-call count and elapsed-time limit bound callback work, but cannot interrupt native code
+that makes no callbacks. These limits are not general execution or memory isolation.
+
+Build the experiment only on the benchmark machine. Use a separate LyraCore checkout for the SDK
+patch and a disposable directory for its server and artifacts:
+
+```sh
+prototype_dir="$PWD/module/prototypes/native-simulation/database"
+prototype_scratch=/path/to/disposable-native-database
+prototype_sdk=/path/to/registry/spacetimedb-2.7.1
+git clone --depth 1 --branch v2.7.1 https://github.com/clockworklabs/SpacetimeDB.git "$prototype_scratch/server"
+python3 "$prototype_dir/prepare.py" "$prototype_scratch/server" "$prototype_sdk" "$prototype_scratch/sdk"
+CARGO_BUILD_JOBS=1 CARGO_PROFILE_RELEASE_LTO=false CARGO_PROFILE_RELEASE_CODEGEN_UNITS=16 \
+  cargo build --manifest-path "$prototype_scratch/server/Cargo.toml" --release --locked -p spacetimedb-standalone
+```
+
+Build the Wasm reference with `native_simulation_prototype` and the benchmark example with
+`native_simulation_host`, using the unmodified SDK. Then build the native Module library with
+`native_simulation_database` and Cargo's `patch.crates-io.spacetimedb.path` set to the private SDK
+copy. Keep a copy of each artifact. Use one Cargo job and one release code-generation unit for both
+Module builds. The SDK patch changes that checkout's lockfile; it must not enter the normal build.
+
+For the comparison, copy `database/spacetime-wrapper.sh` to the disposable directory and make the
+copy executable. Set `SPACETIME_BIN` to that wrapper, `LYRACORE_NATIVE_DATABASE_CLI` to the unmodified
+2.7.1 CLI, `LYRACORE_NATIVE_DATABASE_SERVER` to the experimental server and
+`LYRACORE_NATIVE_DATABASE_LIBRARY` to the native Module library. Run `native_committed_benchmark`
+with the Wasm artifact, a new output path and creature counts as its arguments. Use a private
+`TMPDIR` and the same CPU and memory limits as the preceding measurements. Both comparison servers
+run the experimental binary; only one receives the native artifact manifest. The wrapper passes
+other CLI operations to the original CLI. Each server uses its own disposable data directory.
+
+The first exploratory run passed the 21-frame comparison, structured Refusal, panic rollback and
+restart checks. All six timed scenario and size combinations favored native execution. At 5,000
+creatures, mean time through confirmed CLI publication fell by 12.6% to 20.0%, and measured server
+CPU time fell by 24.5% to 31.6%. The run used five measured samples after three warmups. All 336
+paired ticks and 48 paired encounter results matched, including warmups. This source included
+uncommitted prototype changes; its metadata records that fact. The raw samples and artifact hashes
+are in [native-database-benchmark-1.jsonl](native-database-benchmark-1.jsonl).
+
+The recovery probe found retained native library memory. After zero, eight and sixteen further
+traps, native process resident memory was 247,708, 294,608 and 341,548 KiB. The Wasm reference stayed
+at about 161,644 KiB. Fresh native library copies retain thread-local state until the executor
+thread ends. Repeated native instance replacement therefore cannot remain the recovery policy.
+The next check must bound this memory use before the native path expands. Both servers restarted
+after the recovery probe and before timing. Timed native process resident memory was about 6 to
+13 MiB higher than the reference, depending on the workload.

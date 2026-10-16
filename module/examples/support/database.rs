@@ -1,0 +1,223 @@
+use std::path::PathBuf;
+use std::time::Duration;
+
+use lyracore_module::native_prototype::benchmark::{workload, SCENARIOS};
+use lyracore_test_support::Standalone;
+use serde_json::{json, Value};
+
+use super::support;
+
+pub struct Database {
+    pub shard: Standalone,
+    pub artifacts: Value,
+    manifest: PathBuf,
+}
+
+impl Database {
+    pub fn start(wasm: &str, library: &std::ffi::OsStr) -> Self {
+        assert!(std::env::var_os("LYRACORE_NATIVE_DATABASE_MANIFEST").is_none());
+        let library = std::fs::canonicalize(library).unwrap();
+        let server = std::env::var_os("LYRACORE_NATIVE_DATABASE_SERVER")
+            .expect("set LYRACORE_NATIVE_DATABASE_SERVER to the experimental standalone binary");
+        let hash = |path: &std::path::Path| {
+            blake3::hash(&std::fs::read(path).unwrap())
+                .to_hex()
+                .to_string()
+        };
+        let manifest = std::env::temp_dir().join(format!(
+            "native-database-manifest-{}.json",
+            std::process::id()
+        ));
+        let contents = json!({
+            "library": library,
+            "native_blake3": hash(&library),
+            "wasm_blake3": hash(&PathBuf::from(wasm)),
+        });
+        let mut file = std::fs::File::create_new(&manifest).unwrap();
+        serde_json::to_writer(&mut file, &contents).unwrap();
+        std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &manifest);
+        let shard = support::start();
+        std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
+        Self {
+            shard,
+            artifacts: json!({
+                "server_blake3": hash(&PathBuf::from(server)),
+                "module_native_blake3": contents["native_blake3"],
+                "server_revision": "8ecd3c3bac427a49a9d9b13671bf83324afa59ba",
+            }),
+            manifest,
+        }
+    }
+
+    pub fn verify(&mut self, reference: &mut Standalone) {
+        let reference_calls = support::Calls::new(reference);
+        let mut native_calls = support::Calls::new(&self.shard);
+        for &scenario in SCENARIOS {
+            let case = workload(scenario, 4).unwrap();
+            let expected_run = support::setup(reference, &reference_calls, scenario, 4, false);
+            let native_run = support::setup(&self.shard, &native_calls, scenario, 4, false);
+            let expected_updates = support::subscribe(reference);
+            let native_updates = support::subscribe(&self.shard);
+            for request in &case.requests {
+                for (calls, run) in [
+                    (&reference_calls, expected_run),
+                    (&native_calls, native_run),
+                ] {
+                    calls
+                        .call(
+                            "debug_native_committed_step",
+                            &(run, request.sequence, request.at_micros),
+                        )
+                        .assert_accepted();
+                }
+                assert_eq!(
+                    support::gameplay_update(
+                        expected_updates.receive(Duration::from_secs(30)).value
+                    ),
+                    support::gameplay_update(native_updates.receive(Duration::from_secs(30)).value),
+                    "{scenario}, tick {}: subscription parity",
+                    request.sequence,
+                );
+                let expected = support::snapshot(
+                    reference,
+                    &reference_calls,
+                    expected_run,
+                    request.sequence,
+                    true,
+                );
+                let actual = support::snapshot(
+                    &self.shard,
+                    &native_calls,
+                    native_run,
+                    request.sequence,
+                    true,
+                );
+                assert_eq!(
+                    expected["frame"], actual["frame"],
+                    "{scenario}: committed frame parity"
+                );
+                assert_eq!(expected["digest"], actual["digest"]);
+            }
+        }
+        let logs = self.shard.module_logs(100);
+        assert!(logs.status.success());
+        assert!(String::from_utf8(logs.stdout)
+            .unwrap()
+            .contains("LYRACORE_NATIVE_DATABASE_V1"));
+        eprintln!("Native database: 21 committed frames and subscription updates match Wasm");
+
+        let case = workload("combat_advance", 4).unwrap();
+        let expected_run = support::setup(reference, &reference_calls, case.name, 4, false);
+        let native_run = support::setup(&self.shard, &native_calls, case.name, 4, false);
+        for (shard, calls, run) in [
+            (&*reference, &reference_calls, expected_run),
+            (&self.shard, &native_calls, native_run),
+        ] {
+            let before = support::snapshot(shard, calls, run, 0, true);
+            let request = &case.requests[0];
+            for (args, message) in [
+                (
+                    (run + 1, request.sequence, request.at_micros),
+                    "benchmark run or execution mode is stale",
+                ),
+                (
+                    (run, request.sequence + 1, request.at_micros),
+                    "benchmark commits must arrive in sequence",
+                ),
+            ] {
+                let outcome = calls.call("debug_native_committed_step", &args);
+                assert!(outcome.refusal);
+                assert_eq!(outcome.message, message);
+            }
+            let anonymous = shard.call_anonymous(
+                "debug_native_committed_step",
+                &[
+                    &run.to_string(),
+                    &request.sequence.to_string(),
+                    &request.at_micros.to_string(),
+                ],
+            );
+            assert!(
+                !anonymous.status.success(),
+                "anonymous movement must be refused"
+            );
+            for trap in [false, true] {
+                let outcome = calls.call("debug_native_database_fault", &(trap,));
+                assert!(!outcome.accepted);
+                assert_eq!(outcome.refusal, !trap);
+                if !trap {
+                    assert_eq!(outcome.message, "native database rollback fixture");
+                }
+                let after = support::snapshot(shard, calls, run, 0, true);
+                assert_eq!(before["frame"], after["frame"]);
+            }
+            calls
+                .call(
+                    "debug_native_committed_step",
+                    &(run, request.sequence, request.at_micros),
+                )
+                .assert_accepted();
+        }
+        for (label, shard, calls, run) in [
+            ("module", &*reference, &reference_calls, expected_run),
+            ("native_database", &self.shard, &native_calls, native_run),
+        ] {
+            let before = support::snapshot(shard, calls, run, 1, true);
+            let mut rss = vec![super::process_usage(shard.process_id()).rss_kib];
+            for _ in 0..2 {
+                for _ in 0..8 {
+                    let outcome = calls.call("debug_native_database_fault", &(true,));
+                    assert!(!outcome.accepted && !outcome.refusal);
+                }
+                assert_eq!(
+                    before["frame"],
+                    support::snapshot(shard, calls, run, 1, true)["frame"]
+                );
+                rss.push(super::process_usage(shard.process_id()).rss_kib);
+            }
+            self.artifacts[format!("{label}_rss_kib_after_0_8_16_traps")] = json!(rss);
+            eprintln!("{label} resident KiB after 0, 8 and 16 traps: {rss:?}");
+        }
+        let before = support::snapshot(&self.shard, &native_calls, native_run, 1, true);
+        drop(native_calls);
+        std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &self.manifest);
+        self.shard.restart_persistent();
+        std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
+        native_calls = support::Calls::new(&self.shard);
+        assert_eq!(
+            before["frame"],
+            support::snapshot(&self.shard, &native_calls, native_run, 1, true)["frame"]
+        );
+        for request in &case.requests[1..] {
+            reference_calls
+                .call(
+                    "debug_native_committed_step",
+                    &(expected_run, request.sequence, request.at_micros),
+                )
+                .assert_accepted();
+            native_calls
+                .call(
+                    "debug_native_committed_step",
+                    &(native_run, request.sequence, request.at_micros),
+                )
+                .assert_accepted();
+        }
+        assert_eq!(
+            support::snapshot(reference, &reference_calls, expected_run, 7, true)["frame"],
+            support::snapshot(&self.shard, &native_calls, native_run, 7, true)["frame"],
+        );
+        eprintln!("Native database: authorization, stale input, Refusal, panic rollback and restart checks pass");
+        drop(native_calls);
+        drop(reference_calls);
+        reference.restart_persistent();
+        std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &self.manifest);
+        self.shard.restart_persistent();
+        std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
+    }
+}
+
+impl Drop for Database {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.manifest);
+    }
+}

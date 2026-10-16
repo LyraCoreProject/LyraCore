@@ -1,0 +1,206 @@
+diff --git a/Cargo.lock b/Cargo.lock
+index 41920bb..2627b77 100644
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -8080,6 +8080,7 @@ dependencies = [
+  "indexmap 2.12.0",
+  "itertools 0.12.1",
+  "lazy_static",
++ "libloading",
+  "log",
+  "memchr",
+  "nix 0.30.1",
+diff --git a/crates/core/Cargo.toml b/crates/core/Cargo.toml
+index b9c2184..a7c2380 100644
+--- a/crates/core/Cargo.toml
++++ b/crates/core/Cargo.toml
+@@ -15,6 +15,7 @@ path = "src/lib.rs"  # The source file of the target.
+ bench = false
+ 
+ [dependencies]
++libloading = "=0.8.9"
+ spacetimedb-auth.workspace = true
+ spacetimedb-data-structures.workspace = true
+ spacetimedb-lib = { workspace = true, features = ["serde", "metrics_impls"] }
+diff --git a/crates/core/src/host/wasmtime/mod.rs b/crates/core/src/host/wasmtime/mod.rs
+index 8deff0a..7432cee 100644
+--- a/crates/core/src/host/wasmtime/mod.rs
++++ b/crates/core/src/host/wasmtime/mod.rs
+@@ -14,6 +14,7 @@ pub(in crate::host) use wasm_instance_env::WasmMemoryBytesMetric;
+ use wasmtime::{self, Engine, Linker, StoreContext, StoreContextMut};
+ pub use wasmtime_module::{WasmtimeAsyncModule, WasmtimeInstance, WasmtimeModule};
+ 
++mod native_database;
+ #[cfg(unix)]
+ mod pooling_stack_creator;
+ mod wasm_instance_env;
+@@ -174,7 +175,8 @@ impl WasmtimeRuntime {
+             .instantiate_pre(&procedure_module)
+             .map_err(InitializationError::Instantiation)?;
+ 
+-        let module = WasmtimeModule::new(module);
++        let mut module = WasmtimeModule::new(module);
++        module.native = native_database::NativeConfig::for_program(program_bytes)?;
+         let procedure_module = WasmtimeAsyncModule::new(procedure_module);
+         let thread_name = wasm_worker_thread_name(&mcc.replica_ctx.database_identity);
+ 
+diff --git a/crates/core/src/host/wasmtime/wasmtime_module.rs b/crates/core/src/host/wasmtime/wasmtime_module.rs
+index 25357dc..2d88204 100644
+--- a/crates/core/src/host/wasmtime/wasmtime_module.rs
++++ b/crates/core/src/host/wasmtime/wasmtime_module.rs
+@@ -43,6 +43,7 @@ fn log_traceback(func_type: &str, func: &str, e: &wasmtime::Error) {
+ #[derive(Clone)]
+ pub struct WasmtimeModule {
+     module: InstancePre<WasmInstanceEnv>,
++    pub(super) native: Option<super::native_database::NativeConfig>,
+ }
+ 
+ #[derive(Clone)]
+@@ -52,7 +53,7 @@ pub struct WasmtimeAsyncModule {
+ 
+ impl WasmtimeModule {
+     pub(super) fn new(module: InstancePre<WasmInstanceEnv>) -> Self {
+-        WasmtimeModule { module }
++        WasmtimeModule { module, native: None }
+     }
+ 
+     pub const IMPLEMENTED_ABI: abi::VersionTuple = abi::VersionTuple::new(10, 5);
+@@ -296,6 +297,7 @@ impl module_host_actor::WasmInstancePre for WasmtimeModule {
+             false,
+             // Instantiate an async-disabled wasmtime instance
+             instantiate_sync,
++            self.native.as_ref(),
+         )
+     }
+ }
+@@ -311,6 +313,7 @@ impl module_host_actor::WasmInstancePre for WasmtimeAsyncModule {
+             true,
+             // Instantiate an async-enabled wasmtime instance
+             instantiate_async,
++            None,
+         )
+     }
+ }
+@@ -342,6 +345,7 @@ fn instantiate_wasmtime_instance(
+         &InstancePre<WasmInstanceEnv>,
+         &mut Store<WasmInstanceEnv>,
+     ) -> Result<Instance, InitializationError>,
++    native_config: Option<&super::native_database::NativeConfig>,
+ ) -> Result<WasmtimeInstance, InitializationError> {
+     let env = WasmInstanceEnv::new(env);
+     let mut store = Store::new(module.module().engine(), env);
+@@ -418,7 +422,14 @@ fn instantiate_wasmtime_instance(
+         .set_call_view_exports(call_view.clone(), call_view_anon.clone());
+     let call_http_handler = get_call_http_handler(&mut store, &instance);
+ 
++    let native = native_config
++        .map(|config| super::native_database::NativeInstance::load(config, store.data().instance_env(), func_names))
++        .transpose()
++        .map_err(InitializationError::Instantiation)?;
++
+     Ok(WasmtimeInstance {
++        native,
++        native_verified: false,
+         store,
+         instance,
+         call_reducer,
+@@ -584,6 +595,8 @@ pub(super) type CallHttpHandlerType = TypedFunc<
+ >;
+ 
+ pub struct WasmtimeInstance {
++    native: Option<super::native_database::NativeInstance>,
++    native_verified: bool,
+     store: Store<WasmInstanceEnv>,
+     instance: Instance,
+     call_reducer: CallReducerType,
+@@ -612,6 +625,10 @@ impl module_host_actor::WasmInstance for WasmtimeInstance {
+         // Fetch the bsatn returned by the describer call.
+         let bytes = self.store.data_mut().take_bytes_sink(sink);
+ 
++        if let Some(native) = &self.native {
++            native.validate(&bytes).map_err(DescribeError::Setup)?;
++            self.native_verified = true;
++        }
+         let desc: RawModuleDef = bsatn::from_slice(&bytes).map_err(DescribeError::Decode)?;
+ 
+         Ok(desc)
+@@ -646,27 +663,60 @@ impl module_host_actor::WasmInstance for WasmtimeInstance {
+         let (args_source, errors_sink) =
+             store
+                 .data_mut()
+-                .start_funcall(reducer_name, args_bytes, op.timestamp, op.call_type());
+-
+-        let call_result = call_sync_typed_func(
+-            &self.call_reducer,
+-            &mut *store,
+-            (
+-                op.id.0,
+-                sender_0,
+-                sender_1,
+-                sender_2,
+-                sender_3,
+-                conn_id_0,
+-                conn_id_1,
+-                op.timestamp.to_micros_since_unix_epoch() as u64,
+-                args_source.0,
+-                errors_sink,
+-            ),
+-            self.supports_async,
+-        );
++                .start_funcall(reducer_name, args_bytes.clone(), op.timestamp, op.call_type());
++
++        let mut native_error = None;
++        let call_result = if matches!(
++            op.name.as_ref(),
++            "debug_native_committed_step" | "debug_native_database_fault"
++        ) && self.native.is_some()
++        {
++            if !self.native_verified {
++                Err(anyhow::anyhow!("native Module description was not verified"))
++            } else {
++                let result = self.native.as_mut().unwrap().call(
++                    store.data().instance_env(),
++                    &args_bytes,
++                    [
++                        op.id.0 as u64,
++                        sender_0,
++                        sender_1,
++                        sender_2,
++                        sender_3,
++                        conn_id_0,
++                        conn_id_1,
++                        op.timestamp.to_micros_since_unix_epoch() as u64,
++                        0,
++                        0,
++                    ],
++                );
++                result.map(|(code, error)| {
++                    native_error = Some(error);
++                    code
++                })
++            }
++        } else {
++            call_sync_typed_func(
++                &self.call_reducer,
++                &mut *store,
++                (
++                    op.id.0,
++                    sender_0,
++                    sender_1,
++                    sender_2,
++                    sender_3,
++                    conn_id_0,
++                    conn_id_1,
++                    op.timestamp.to_micros_since_unix_epoch() as u64,
++                    args_source.0,
++                    errors_sink,
++                ),
++                self.supports_async,
++            )
++        };
+ 
+         let (stats, error) = finish_opcall(store, budget, errors_sink);
++        let error = native_error.unwrap_or(error);
+ 
+         let call_result = call_result
+             .map_err(ExecutionError::Trap)

@@ -12,6 +12,9 @@ def summarize(path):
     if not rows or rows[0]["kind"] != "metadata" or rows[-1]["kind"] != "complete":
         raise ValueError("incomplete committed benchmark")
     metadata = rows[0]
+    native_kind = metadata.get("native_implementation", "native_host")
+    if native_kind not in {"native_host", "native_database"}:
+        raise ValueError("unknown native implementation")
     groups = collections.defaultdict(list)
     seen = set()
     digests = {}
@@ -39,19 +42,20 @@ def summarize(path):
         for name in metadata["scenarios"]
         for count in metadata["counts"]
         for sample in range(metadata["samples"] + metadata["warmups"])
-        for implementation in ("module", "native_host")
+        for implementation in ("module", native_kind)
         for sequence in range(1, metadata["ticks_per_replay"][name] + 1)
     }
     if seen != expected:
         raise ValueError("missing or unexpected tick samples")
     print("One tick per durable transaction, including confirmed subscription output.")
     print("Mean and p95 use individual ticks. Requests use binary WebSockets; publication includes CLI JSON decoding.\n")
-    print("| Scenario | Creatures | Module mean ms | Native host mean ms | Ratio | Module p95 ms | Native host p95 ms |")
+    label = "Native database" if native_kind == "native_database" else "Native host"
+    print(f"| Scenario | Creatures | Module mean ms | {label} mean ms | Ratio | Module p95 ms | {label} p95 ms |")
     print("| --- | ---: | ---: | ---: | ---: | ---: | ---: |")
     for name in sorted(metadata["scenarios"]):
         for count in metadata["counts"]:
             module = sorted(t["elapsed_ns"] / 1e6 for t in groups[(name, count, "module")])
-            native = sorted(t["elapsed_ns"] / 1e6 for t in groups[(name, count, "native_host")])
+            native = sorted(t["elapsed_ns"] / 1e6 for t in groups[(name, count, native_kind)])
             p95 = math.ceil(len(module) * 0.95) - 1
             ratio = statistics.mean(module) / statistics.mean(native)
             print(f"| {name} | {count} | {statistics.mean(module):.3f} | {statistics.mean(native):.3f} | "

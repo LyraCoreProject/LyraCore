@@ -23,14 +23,23 @@ pub struct Outcome {
     pub request_bytes: usize,
     pub encode_ns: u128,
     pub round_trip_ns: u128,
+    pub refusal: bool,
 }
 
 impl Outcome {
     pub fn assert_accepted(&self) {
         assert!(
             self.accepted,
-            "Durable Request of {} bytes failed after {} ns encoding and {} ns round trip: {}",
-            self.request_bytes, self.encode_ns, self.round_trip_ns, self.message
+            "Durable Request of {} bytes returned {} after {} ns encoding and {} ns round trip: {}",
+            self.request_bytes,
+            if self.refusal {
+                "a Refusal"
+            } else {
+                "an internal failure"
+            },
+            self.encode_ns,
+            self.round_trip_ns,
+            self.message
         );
     }
 }
@@ -102,13 +111,14 @@ impl Calls {
         };
         let round_trip_ns = sent_at.elapsed().as_nanos();
         assert_eq!(response.request_id, request_id);
-        let (accepted, message) = match response.result {
-            ws::ReducerOutcome::Ok(_) | ws::ReducerOutcome::OkEmpty => (true, String::new()),
+        let (accepted, message, refusal) = match response.result {
+            ws::ReducerOutcome::Ok(_) | ws::ReducerOutcome::OkEmpty => (true, String::new(), false),
             ws::ReducerOutcome::Err(bytes) => (
                 false,
                 bsatn::from_slice::<String>(&bytes).expect("reducer Refusal is a string"),
+                true,
             ),
-            ws::ReducerOutcome::InternalError(message) => (false, message.into()),
+            ws::ReducerOutcome::InternalError(message) => (false, message.into(), false),
         };
         Outcome {
             accepted,
@@ -116,6 +126,7 @@ impl Calls {
             request_bytes,
             encode_ns,
             round_trip_ns,
+            refusal,
         }
     }
 
