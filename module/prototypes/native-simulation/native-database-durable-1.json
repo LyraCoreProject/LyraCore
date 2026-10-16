@@ -1,0 +1,853 @@
+{
+  "scope": "Existing durable tests with unchanged expected outcomes; normal debug_reducers,package_test_fixture Module features; suite elapsed time is not a performance benchmark",
+  "module": {
+    "commit": "3d62194fb9cf59b38fe9ffd364a53b22d5ad8ac5",
+    "dirty": true,
+    "implementation": "module",
+    "passed": 26,
+    "fixtures": [
+      {
+        "fixture": "aura-tick-death-3734893-1792113886389162564.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "cancelled-cast-global-cooldown-3734958-1792113939817581793.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "cast-miss-3735400-1792113980378517978.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "creature-advance-persist-3735576-1792114006743634435.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "creature-death-stop-3736059-1792114027707184406.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "creature-path-renewal-3736181-1792114043777827104.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "energize-log-3735400-1792113967555145123.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "eventai-revision-3736236-1792114057828394710.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "eventai-runtime-boundaries-3736366-1792114072194460487.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "eventai-summon-expiry-boundaries-3736366-1792114084718419311.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "fireball-global-cooldown-3734958-1792113952640700833.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "instant-cast-global-cooldown-3734958-1792113926953069879.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "operator-gates-3736549-1792114102798297708.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "package-runtime-scripts-3737056-1792114166413496404.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "package-runtime-scripts-conflict-3737056-1792114128286695166.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "package-runtime-scripts-fire-3737056-1792114153626170911.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "package-runtime-scripts-package-event-3737056-1792114141031573360.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "package-runtime-scripts-typed-levelup-3737056-1792114179239711929.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "pending-cast-replacement-3737433-1792114192031630723.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "periodic-aura-log-3735400-1792113993493783358.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "refused-cast-global-cooldown-3734958-1792113899930991564.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "scripted-effect-gate-3737483-1792114219826905997.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "scripted-effect-heal-3737483-1792114246585312902.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "scripted-effect-noop-3737483-1792114233768926222.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "scripted-effect-partial-failure-3737483-1792114205455417745.log",
+        "native_reducers": []
+      },
+      {
+        "fixture": "short-cast-global-cooldown-3734958-1792113913366384181.log",
+        "native_reducers": []
+      }
+    ],
+    "errors": [],
+    "tests": [
+      "a_periodic_kill_commits_the_death_and_an_unrelated_heal",
+      "a_refused_cast_does_not_start_a_global_cooldown",
+      "a_short_cast_finishes_during_its_original_global_cooldown",
+      "an_instant_cast_still_starts_a_global_cooldown",
+      "cancelling_a_timed_cast_releases_its_global_cooldown",
+      "fireball_can_be_cast_again_when_its_cast_bar_finishes",
+      "a_direct_energize_records_the_power_given_on_the_go",
+      "a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist",
+      "damage_heal_and_energize_ticks_each_log_their_outcome",
+      "a_walking_creature_stores_its_position_past_four_yards_and_on_arrival",
+      "a_creature_killed_mid_leg_stops_where_the_client_renders_it",
+      "a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover",
+      "scheduled_visits_preserve_state_then_clean_a_reloaded_definition",
+      "empty_relay_catalogue_and_spell_guardian_cleanup_apply_through_real_reducers",
+      "obsolete_callbacks_leave_replacement_summons_and_living_summons_expire_naturally",
+      "every_operator_reducer_refuses_an_anonymous_caller",
+      "a_conflicting_plan_leaves_the_shard_exactly_as_it_was",
+      "a_package_binds_its_own_event_and_never_another_packages",
+      "a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_next",
+      "a_packages_runtime_scripts_reconcile_onto_a_shard",
+      "a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook",
+      "a_new_timed_cast_replaces_only_the_casters_pending_rows",
+      "a_failing_scripted_effect_discards_only_its_own_staged_effects",
+      "a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent",
+      "a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op",
+      "an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_caster"
+    ],
+    "elapsed_seconds": 526.3978497022763,
+    "server_sha256": "3001a86d7e5a6cb15a271fa2bd465ee651bdba3136c73c60892897bb8ef35865",
+    "wasm_blake3": "869a90c83df32a61efc2dc0a78e0d0f497902904fffa5930fa04e2d0fe22826d",
+    "module_native_blake3": "bc1c774272b99612cf018f2204d51fd500be94a406fa05d8ec88b5ee634c3312"
+  },
+  "native_database": {
+    "commit": "3d62194fb9cf59b38fe9ffd364a53b22d5ad8ac5",
+    "dirty": true,
+    "implementation": "native_database",
+    "passed": 26,
+    "fixtures": [
+      {
+        "fixture": "aura-tick-death-3737840-1792114260241004595.log",
+        "native_reducers": [
+          "debug_fill_aura_slots",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_duels",
+          "tick_ground_areas"
+        ]
+      },
+      {
+        "fixture": "cancelled-cast-global-cooldown-3737922-1792114313362212757.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_learn_spell",
+          "debug_spawn_player_entity",
+          "gw_cancel_cast",
+          "gw_cast_spell",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "cast-miss-3738498-1792114616226734817.log",
+        "native_reducers": [
+          "debug_cast_at",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_duels",
+          "tick_ground_areas"
+        ]
+      },
+      {
+        "fixture": "creature-advance-persist-3740123-1792114642437315567.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_encounter_move",
+          "debug_seed_scenario_fixtures",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "remind_queued_parties",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee",
+          "tick_pet_care"
+        ]
+      },
+      {
+        "fixture": "creature-death-stop-3740570-1792114663300961226.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_encounter_move",
+          "debug_kill_creature",
+          "debug_seed_scenario_fixtures",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "creature-path-renewal-3740712-1792114679266896751.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_creature_path",
+          "debug_seed_scenario_fixtures",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "energize-log-3738498-1792114340860746510.log",
+        "native_reducers": [
+          "debug_cast_at",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_duels",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "eventai-revision-3740774-1792114693341827538.log",
+        "native_reducers": [
+          "debug_spawn_player_entity",
+          "debug_stage_eventai_revision_fixture",
+          "debug_verify_eventai_revision_fixture",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "eventai-runtime-boundaries-3740872-1792114707445009091.log",
+        "native_reducers": [
+          "debug_verify_eventai_spell_guardian_cleanup",
+          "init",
+          "on_disconnect",
+          "publish_motion"
+        ]
+      },
+      {
+        "fixture": "eventai-summon-expiry-boundaries-3740872-1792114719570624084.log",
+        "native_reducers": [
+          "debug_verify_eventai_summon_expiry",
+          "expire_eventai_summon",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "remind_queued_parties",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "fireball-global-cooldown-3737922-1792114326186466335.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_learn_spell",
+          "debug_spawn_player_entity",
+          "fire_pending_cast",
+          "gw_cast_spell",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "instant-cast-global-cooldown-3737922-1792114300432077828.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_learn_spell",
+          "debug_spawn_player_entity",
+          "gw_cancel_cast",
+          "gw_cast_spell",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "operator-gates-3741036-1792114737223726968.log",
+        "native_reducers": [
+          "activate_vmap_generation",
+          "admit_party_command_authority",
+          "admit_sessionless_group_action",
+          "append_vmap_generation_chunks",
+          "apply_admitted_party_command",
+          "apply_package_deltas",
+          "arm_all_pools",
+          "begin_character_shard_transfer",
+          "begin_transfer",
+          "begin_world_import",
+          "bind_bot_transfer_locator",
+          "check_world_content",
+          "claim_account",
+          "claim_bot_invite_intent",
+          "claim_bot_transfer_intent",
+          "claim_guid_range",
+          "claim_operator",
+          "claim_party_command_intent",
+          "clear_promoted_loot_roll",
+          "close_account_fence",
+          "complete_bot_transfer_intent",
+          "complete_world_import",
+          "confirm_import",
+          "confirm_party_command_holder",
+          "confirm_party_command_receipt",
+          "create_character",
+          "debug_spawn_player_entity",
+          "defer_party_command_intent",
+          "delete_character",
+          "discard_vmap_generation",
+          "ensure_instance",
+          "establish_session",
+          "evict_instance_population",
+          "fence_account",
+          "finalize_vmap_nav_coverage",
+          "finish_character_shard_transfer",
+          "finish_party_command_intent",
+          "finish_pending_character_shard_transfer",
+          "finish_transfer",
+          "grant_alpha_test_tools",
+          "gw_abandon_quest",
+          "gw_accept_group_invite",
+          "gw_accept_quest",
+          "gw_accept_trade",
+          "gw_ack_taxi_reply",
+          "gw_activate_taxi",
+          "gw_add_friend",
+          "gw_add_ignore",
+          "gw_admit_meeting_stone",
+          "gw_arm_taxi_flight",
+          "gw_attack",
+          "gw_auction_bid_local",
+          "gw_auction_cancel_local",
+          "gw_auction_confirm_bid_refund",
+          "gw_auction_finish_bid",
+          "gw_auction_hold_bid",
+          "gw_auction_hold_cancel",
+          "gw_auction_hold_listing",
+          "gw_auction_list_local",
+          "gw_auction_release_listing_hold",
+          "gw_auto_bank_item",
+          "gw_begin_trade",
+          "gw_bind_home",
+          "gw_busy_trade",
+          "gw_buy_bank_slot",
+          "gw_buy_item",
+          "gw_buyback_item",
+          "gw_cancel_aura",
+          "gw_cancel_cast",
+          "gw_cancel_trade",
+          "gw_cast_at",
+          "gw_cast_item_target",
+          "gw_cast_spell",
+          "gw_cast_spell_at",
+          "gw_clear_trade_item",
+          "gw_client_command",
+          "gw_del_friend",
+          "gw_del_ignore",
+          "gw_destroy_guild_charter",
+          "gw_destroy_item",
+          "gw_disenchant",
+          "gw_duel_accept",
+          "gw_duel_cancel",
+          "gw_enchant_item",
+          "gw_enter_areatrigger",
+          "gw_equip_item",
+          "gw_fish",
+          "gw_force_zone_weather",
+          "gw_gm_command",
+          "gw_gossip_select",
+          "gw_group_decline",
+          "gw_group_invite",
+          "gw_group_leave",
+          "gw_group_loot_method",
+          "gw_group_uninvite",
+          "gw_guild_fee_finish",
+          "gw_guild_fee_hold",
+          "gw_heartbeat",
+          "gw_ignore_trade",
+          "gw_initiate_trade",
+          "gw_inspect",
+          "gw_learn_talent",
+          "gw_loot_master_give",
+          "gw_loot_money",
+          "gw_loot_roll",
+          "gw_mail_grant_letter",
+          "gw_move_item",
+          "gw_movement_batch",
+          "gw_movement_update",
+          "gw_open_creature_loot",
+          "gw_open_taxi",
+          "gw_pet_command",
+          "gw_pet_rename",
+          "gw_pick_lock",
+          "gw_player_login",
+          "gw_player_world_port",
+          "gw_push_quest_to_party",
+          "gw_ranged_attack",
+          "gw_reclaim_corpse",
+          "gw_repair_item",
+          "gw_repop",
+          "gw_reset_talents",
+          "gw_respond_resurrect",
+          "gw_self_resurrect",
+          "gw_sell_item",
+          "gw_send_chat",
+          "gw_send_emote",
+          "gw_set_action_button",
+          "gw_set_away",
+          "gw_set_faction_at_war",
+          "gw_set_sheathed",
+          "gw_set_stand_state",
+          "gw_set_target",
+          "gw_set_trade_gold",
+          "gw_set_trade_item",
+          "gw_set_watched_faction",
+          "gw_skin",
+          "gw_spirit_res",
+          "gw_split_item",
+          "gw_stop_attack",
+          "gw_take_loot",
+          "gw_taxi_node_status",
+          "gw_trainer_buy",
+          "gw_turn_in_quest",
+          "gw_unaccept_trade",
+          "gw_unequip_item",
+          "gw_use_gameobject",
+          "gw_use_item",
+          "import_bot_character_blob",
+          "import_character",
+          "import_character_blob",
+          "import_creature_ai_definitions",
+          "import_creature_ai_definitions_append",
+          "import_creature_ai_relay_definitions",
+          "import_creature_spawns",
+          "import_creature_spawns_append",
+          "import_gameobjects",
+          "import_gameobjects_append",
+          "import_go_models",
+          "import_go_models_append",
+          "import_map_regions",
+          "import_nav_chunks",
+          "import_nav_chunks_append",
+          "import_player_character_blob",
+          "import_terrain_chunks",
+          "import_terrain_chunks_append",
+          "import_vmap_chunks",
+          "import_vmap_chunks_append",
+          "init",
+          "install_guid_range",
+          "mark_bot_transfer_arrival_ready",
+          "on_disconnect",
+          "party_command_fixture_apply",
+          "party_command_fixture_apply_after_gate_change",
+          "party_command_fixture_drive",
+          "party_command_fixture_expire",
+          "party_command_fixture_expire_after_receipt_window",
+          "party_command_fixture_finish",
+          "party_command_fixture_release_receipt",
+          "prepare_vmap_nav_coverage",
+          "provision_account",
+          "provision_realm",
+          "publish_motion",
+          "realm_auction_commit_listing",
+          "realm_auction_confirm_listing",
+          "realm_auction_decide_bid",
+          "realm_auction_decide_cancel",
+          "realm_auction_refund_bid",
+          "realm_auction_refund_listing",
+          "realm_auction_settle_listing",
+          "realm_channel_op",
+          "realm_chat",
+          "realm_group_op",
+          "realm_guild_fee_decide",
+          "realm_guild_op",
+          "realm_loot_op",
+          "realm_mail_commit",
+          "realm_mail_confirm_delivery",
+          "realm_mail_copy_text",
+          "realm_mail_delete",
+          "realm_mail_fence",
+          "realm_mail_item_payout",
+          "realm_mail_item_room",
+          "realm_mail_mark_letter_granted",
+          "realm_mail_mark_read",
+          "realm_mail_payout",
+          "realm_mail_return",
+          "realm_mail_send",
+          "realm_mail_settle",
+          "realm_mail_take_item",
+          "realm_mail_take_item_fence",
+          "realm_mail_take_money",
+          "realm_mail_take_money_fence",
+          "realm_meeting_stone_op",
+          "realm_whisper",
+          "reap_movement_events",
+          "rebuild_go_colliders",
+          "record_region_load",
+          "record_shard_load",
+          "release_account_claim",
+          "release_bot_transfer_arrival",
+          "release_player_transfer_arrival",
+          "release_transfer",
+          "remind_queued_parties",
+          "renew_account_claim",
+          "renew_account_fence",
+          "restore_taxi_fixture",
+          "revoke_alpha_test_tools",
+          "set_alpha_test_tools_enrollment",
+          "set_character_shard",
+          "set_gm_level",
+          "set_motion_tick_ms",
+          "set_package_config",
+          "set_realm_address",
+          "set_region_assignment",
+          "settle_loot_roll",
+          "stage_vmap_generation",
+          "stamp_import_meta",
+          "sync_group_mirror",
+          "teardown_package",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee",
+          "tick_pet_care",
+          "verify_vmap_generation"
+        ]
+      },
+      {
+        "fixture": "package-runtime-scripts-3741598-1792114802992127724.log",
+        "native_reducers": [
+          "apply_package_deltas",
+          "claim_operator",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "package-runtime-scripts-conflict-3741598-1792114763693255304.log",
+        "native_reducers": [
+          "apply_package_deltas",
+          "claim_operator",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "tick_duels",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "package-runtime-scripts-fire-3741598-1792114789224664896.log",
+        "native_reducers": [
+          "apply_package_deltas",
+          "claim_operator",
+          "debug_grant_quest",
+          "debug_seed_scenario_fixtures",
+          "debug_spawn_player_entity",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "tick_duels",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "package-runtime-scripts-package-event-3741598-1792114776494369130.log",
+        "native_reducers": [
+          "apply_package_deltas",
+          "claim_operator",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "tick_duels",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "package-runtime-scripts-typed-levelup-3741598-1792114816465642628.log",
+        "native_reducers": [
+          "apply_package_deltas",
+          "claim_operator",
+          "debug_grant_quest",
+          "debug_seed_scenario_fixtures",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "debug_turn_in_quest",
+          "init",
+          "install_guid_range",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "pending-cast-replacement-3741938-1792114829429095233.log",
+        "native_reducers": [
+          "debug_cast_spell_at",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "periodic-aura-log-3738498-1792114629094822086.log",
+        "native_reducers": [
+          "debug_fill_aura_slots",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_duels",
+          "tick_ground_areas"
+        ]
+      },
+      {
+        "fixture": "refused-cast-global-cooldown-3737922-1792114274101732162.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_learn_spell",
+          "debug_set_power",
+          "debug_spawn_player_entity",
+          "gw_cast_spell",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "scripted-effect-gate-3742006-1792114855065780869.log",
+        "native_reducers": [
+          "debug_force_cast_at",
+          "debug_set_power",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "scripted-effect-heal-3742006-1792114881177057029.log",
+        "native_reducers": [
+          "debug_force_cast_at",
+          "debug_set_power",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "scripted-effect-noop-3742006-1792114868031295750.log",
+        "native_reducers": [
+          "debug_force_cast_at",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "scripted-effect-partial-failure-3742006-1792114842169155402.log",
+        "native_reducers": [
+          "debug_force_cast_at",
+          "debug_set_power",
+          "debug_spawn_at_feet",
+          "debug_spawn_player_entity",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      },
+      {
+        "fixture": "short-cast-global-cooldown-3737922-1792114287028394171.log",
+        "native_reducers": [
+          "claim_operator",
+          "debug_learn_spell",
+          "debug_spawn_player_entity",
+          "fire_pending_cast",
+          "gw_cast_spell",
+          "init",
+          "on_disconnect",
+          "publish_motion",
+          "reap_movement_events",
+          "tick_auras",
+          "tick_breath",
+          "tick_creatures",
+          "tick_duels",
+          "tick_ground_areas",
+          "tick_melee"
+        ]
+      }
+    ],
+    "errors": [],
+    "tests": [
+      "a_periodic_kill_commits_the_death_and_an_unrelated_heal",
+      "a_refused_cast_does_not_start_a_global_cooldown",
+      "a_short_cast_finishes_during_its_original_global_cooldown",
+      "an_instant_cast_still_starts_a_global_cooldown",
+      "cancelling_a_timed_cast_releases_its_global_cooldown",
+      "fireball_can_be_cast_again_when_its_cast_bar_finishes",
+      "a_direct_energize_records_the_power_given_on_the_go",
+      "a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist",
+      "damage_heal_and_energize_ticks_each_log_their_outcome",
+      "a_walking_creature_stores_its_position_past_four_yards_and_on_arrival",
+      "a_creature_killed_mid_leg_stops_where_the_client_renders_it",
+      "a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover",
+      "scheduled_visits_preserve_state_then_clean_a_reloaded_definition",
+      "empty_relay_catalogue_and_spell_guardian_cleanup_apply_through_real_reducers",
+      "obsolete_callbacks_leave_replacement_summons_and_living_summons_expire_naturally",
+      "every_operator_reducer_refuses_an_anonymous_caller",
+      "a_conflicting_plan_leaves_the_shard_exactly_as_it_was",
+      "a_package_binds_its_own_event_and_never_another_packages",
+      "a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_next",
+      "a_packages_runtime_scripts_reconcile_onto_a_shard",
+      "a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook",
+      "a_new_timed_cast_replaces_only_the_casters_pending_rows",
+      "a_failing_scripted_effect_discards_only_its_own_staged_effects",
+      "a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent",
+      "a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op",
+      "an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_caster"
+    ],
+    "elapsed_seconds": 634.1316087525338,
+    "server_sha256": "3001a86d7e5a6cb15a271fa2bd465ee651bdba3136c73c60892897bb8ef35865",
+    "wasm_blake3": "869a90c83df32a61efc2dc0a78e0d0f497902904fffa5930fa04e2d0fe22826d",
+    "module_native_blake3": "bc1c774272b99612cf018f2204d51fd500be94a406fa05d8ec88b5ee634c3312"
+  }
+}

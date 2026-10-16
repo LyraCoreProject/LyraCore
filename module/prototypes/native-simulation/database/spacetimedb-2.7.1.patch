@@ -45,7 +45,7 @@ index 8deff0a..7432cee 100644
          let thread_name = wasm_worker_thread_name(&mcc.replica_ctx.database_identity);
  
 diff --git a/crates/core/src/host/wasmtime/wasmtime_module.rs b/crates/core/src/host/wasmtime/wasmtime_module.rs
-index 25357dc..514ef96 100644
+index 25357dc..5db90d4 100644
 --- a/crates/core/src/host/wasmtime/wasmtime_module.rs
 +++ b/crates/core/src/host/wasmtime/wasmtime_module.rs
 @@ -43,6 +43,7 @@ fn log_traceback(func_type: &str, func: &str, e: &wasmtime::Error) {
@@ -125,7 +125,7 @@ index 25357dc..514ef96 100644
          let desc: RawModuleDef = bsatn::from_slice(&bytes).map_err(DescribeError::Decode)?;
  
          Ok(desc)
-@@ -646,27 +664,60 @@ impl module_host_actor::WasmInstance for WasmtimeInstance {
+@@ -646,27 +664,56 @@ impl module_host_actor::WasmInstance for WasmtimeInstance {
          let (args_source, errors_sink) =
              store
                  .data_mut()
@@ -151,11 +151,7 @@ index 25357dc..514ef96 100644
 +                .start_funcall(reducer_name, args_bytes.clone(), op.timestamp, op.call_type());
 +
 +        let mut native_error = None;
-+        let call_result = if matches!(
-+            op.name.as_ref(),
-+            "debug_native_committed_step" | "debug_native_database_fault"
-+        ) && self.native.is_some()
-+        {
++        let call_result = if self.native.as_ref().is_some_and(|native| native.handles(&op.name)) {
 +            if !self.native_verified {
 +                Err(anyhow::anyhow!("native Module description was not verified"))
 +            } else {

@@ -20,12 +20,23 @@ type Dispatch = unsafe extern "C" fn(*mut c_void, u32, *const usize, usize) -> i
 type Entry = unsafe extern "C" fn(Dispatch, *mut c_void, *const u64, bool) -> i16;
 
 #[derive(Clone, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 pub(super) struct NativeConfig {
     library: PathBuf,
     native_blake3: String,
     wasm_blake3: String,
+    #[serde(default)]
+    execution: Execution,
     #[serde(skip)]
     claimed: Arc<AtomicBool>,
+}
+
+#[derive(Clone, Copy, Default, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum Execution {
+    #[default]
+    Movement,
+    Reducers,
 }
 
 impl NativeConfig {
@@ -46,7 +57,8 @@ pub(super) struct NativeInstance {
     entry: Entry,
     description: Vec<u8>,
     pool: ChunkPool,
-    reported: bool,
+    execution: Execution,
+    reported: std::collections::BTreeSet<u64>,
     _library: Library,
     _file: tempfile::NamedTempFile,
 }
@@ -58,6 +70,7 @@ impl NativeInstance {
         names: &FuncNames,
     ) -> anyhow::Result<Option<Self>> {
         if config.claimed.swap(true, Ordering::AcqRel) {
+            log::warn!("LYRACORE_NATIVE_DATABASE_FALLBACK: replacement uses Wasm");
             env.console_log_simple_message(
                 1_u8.into(),
                 None,
@@ -97,7 +110,8 @@ impl NativeInstance {
             entry,
             description: scope.sink,
             pool: scope.pool,
-            reported: false,
+            execution: config.execution,
+            reported: std::collections::BTreeSet::new(),
             _library: library,
             _file: file,
         }))
@@ -111,19 +125,34 @@ impl NativeInstance {
         Ok(())
     }
 
+    pub(super) fn handles(&self, reducer: &str) -> bool {
+        match self.execution {
+            Execution::Reducers => true,
+            Execution::Movement => matches!(
+                reducer,
+                "debug_native_committed_step"
+                    | "debug_native_database_fault"
+                    | "debug_native_simulation_reference"
+            ),
+        }
+    }
+
     pub(super) fn call(
         &mut self,
         env: &InstanceEnv,
         args: &[u8],
         mut context: [u64; 10],
     ) -> anyhow::Result<(i32, Vec<u8>)> {
-        if !self.reported {
+        if self.reported.insert(context[0]) {
+            log::info!(
+                "LYRACORE_NATIVE_DATABASE_V1 reducer={}",
+                env.log_record_function().unwrap_or("unknown")
+            );
             env.console_log_simple_message(
                 2.into(),
                 env.log_record_function(),
                 "LYRACORE_NATIVE_DATABASE_V1",
             );
-            self.reported = true;
         }
         let mut scope = CallScope::new(env, args, std::mem::take(&mut self.pool));
         context[8] = if args.is_empty() { 0 } else { 1 };
@@ -188,7 +217,7 @@ impl<'a> CallScope<'a> {
             "native ABI argument mismatch"
         );
         self.calls += 1;
-        // This bounds host work only; native code without host calls has no Wasmtime fuel limit.
+        // A failed limit prevents commit; it cannot interrupt native execution.
         ensure!(
             self.calls <= 2_000_000
                 && (self.calls % 1024 != 0 || self.started.elapsed() < Duration::from_secs(10)),

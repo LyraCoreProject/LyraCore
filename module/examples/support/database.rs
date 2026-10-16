@@ -49,20 +49,24 @@ impl Database {
         }
     }
 
-    pub fn verify(&mut self, reference: &mut Standalone) {
-        let reference_calls = support::Calls::new(reference);
-        let mut native_calls = support::Calls::new(&self.shard);
+    fn verify_movement(
+        &mut self,
+        reference: &Standalone,
+        reference_calls: &support::Calls,
+        native_calls: &support::Calls,
+    ) {
+        verify_movement_trace(reference, reference_calls);
+        verify_movement_trace(&self.shard, native_calls);
+        self.artifacts["movement_reference_frames"] = json!(60);
+        eprintln!("Native database: both implementations match the 60-frame movement reference");
         for &scenario in SCENARIOS {
             let case = workload(scenario, 4).unwrap();
-            let expected_run = support::setup(reference, &reference_calls, scenario, 4, false);
-            let native_run = support::setup(&self.shard, &native_calls, scenario, 4, false);
+            let expected_run = support::setup(reference, reference_calls, scenario, 4, false);
+            let native_run = support::setup(&self.shard, native_calls, scenario, 4, false);
             let expected_updates = support::subscribe(reference);
             let native_updates = support::subscribe(&self.shard);
             for request in &case.requests {
-                for (calls, run) in [
-                    (&reference_calls, expected_run),
-                    (&native_calls, native_run),
-                ] {
+                for (calls, run) in [(reference_calls, expected_run), (native_calls, native_run)] {
                     calls
                         .call(
                             "debug_native_committed_step",
@@ -80,14 +84,14 @@ impl Database {
                 );
                 let expected = support::snapshot(
                     reference,
-                    &reference_calls,
+                    reference_calls,
                     expected_run,
                     request.sequence,
                     true,
                 );
                 let actual = support::snapshot(
                     &self.shard,
-                    &native_calls,
+                    native_calls,
                     native_run,
                     request.sequence,
                     true,
@@ -99,12 +103,31 @@ impl Database {
                 assert_eq!(expected["digest"], actual["digest"]);
             }
         }
-        let logs = self.shard.module_logs(100);
+        let logs = self.shard.module_logs(200);
         assert!(logs.status.success());
-        assert!(String::from_utf8(logs.stdout)
+        let native_reducers: std::collections::BTreeSet<String> = String::from_utf8(logs.stdout)
             .unwrap()
-            .contains("LYRACORE_NATIVE_DATABASE_V1"));
+            .lines()
+            .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+            .filter(|record| record["message"] == "LYRACORE_NATIVE_DATABASE_V1")
+            .map(|record| record["function"].as_str().unwrap().to_owned())
+            .collect();
+        for reducer in [
+            "debug_native_simulation_reference",
+            "debug_native_committed_step",
+        ] {
+            assert!(
+                native_reducers.contains(reducer),
+                "no native evidence for {reducer}"
+            );
+        }
         eprintln!("Native database: 21 committed frames and subscription updates match Wasm");
+    }
+
+    pub fn verify(&mut self, reference: &mut Standalone) {
+        let reference_calls = support::Calls::new(reference);
+        let mut native_calls = support::Calls::new(&self.shard);
+        self.verify_movement(reference, &reference_calls, &native_calls);
         let loaded_libraries = native_libraries(self.shard.process_id());
         assert!(loaded_libraries > 0);
         self.artifacts["native_database_libraries_before_trap"] = json!(loaded_libraries);
@@ -247,6 +270,54 @@ impl Database {
         std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &self.manifest);
         self.shard.restart_persistent();
         std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
+    }
+}
+
+fn verify_movement_trace(shard: &Standalone, calls: &support::Calls) {
+    use lyracore_module::native_prototype::{compare, SCENARIOS, TRACE_PREFIX};
+
+    let mut expected: Vec<Value> =
+        include_str!("../../prototypes/native-simulation/reference.jsonl")
+            .lines()
+            .map(|line| serde_json::from_str(line).unwrap())
+            .collect();
+    for name in SCENARIOS {
+        calls
+            .call("debug_native_simulation_reference", &(name,))
+            .assert_accepted();
+    }
+    let mut actual: Vec<Value> = Vec::new();
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || {
+            let logs = shard.module_logs(200);
+            assert!(logs.status.success());
+            actual = String::from_utf8(logs.stdout)
+                .unwrap()
+                .lines()
+                .filter_map(|line| serde_json::from_str::<Value>(line).ok())
+                .filter_map(|record| {
+                    record["message"]
+                        .as_str()?
+                        .strip_prefix(TRACE_PREFIX)
+                        .map(|frame| serde_json::from_str(frame).unwrap())
+                })
+                .collect();
+            actual.len() >= expected.len()
+        }
+    ));
+    let key = |frame: &Value| {
+        (
+            frame["scenario"].as_str().unwrap().to_owned(),
+            frame["frame"]["sequence"].as_u64().unwrap(),
+        )
+    };
+    expected.sort_by_key(&key);
+    actual.sort_by_key(key);
+    assert_eq!(expected.len(), 60);
+    assert_eq!(expected.len(), actual.len());
+    for (expected, actual) in expected.iter().zip(&actual) {
+        compare(expected, actual).unwrap_or_else(|difference| panic!("{difference}"));
     }
 }
 

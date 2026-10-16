@@ -171,8 +171,9 @@ general authority. Keep the normal database binary and live Realms unchanged dur
 
 The prototype files are in `database/`. They patch SpacetimeDB commit
 `8ecd3c3bac427a49a9d9b13671bf83324afa59ba` and a private copy of the crates.io 2.7.1 SDK. The normal
-dependency remains unchanged. The server selects native execution only for
-`debug_native_committed_step` and the rollback fixture `debug_native_database_fault`.
+dependency remains unchanged. The default mode selects `debug_native_committed_step`, the
+movement reference `debug_native_simulation_reference` and rollback fixture
+`debug_native_database_fault`. The manifest can select all reducers for the next parity checks.
 Both implementations use the existing transaction, commit and subscription code. Native table
 operations call `InstanceEnv` directly. They do not copy rows into a second authoritative store.
 
@@ -187,8 +188,9 @@ checks authorization, stale runs, skipped input, structured Refusals, panic roll
 restart. A Module log marker proves that the selected reducer used the native entry point. Timed
 samples retain server and driver CPU ticks, server resident memory and its process peak. CPU counts
 exclude the separate CLI subscriber. Wasmtime fuel and linear-memory metrics do not include native
-work. A host-call count and elapsed-time limit bound callback work, but cannot interrupt native code
-that makes no callbacks. These limits are not general execution or memory isolation.
+work. Callback count and elapsed-time checks can mark a transaction for rollback. They cannot
+interrupt native execution, including code that ignores failed callbacks. These checks are not
+general execution or memory isolation.
 
 Build the experiment only on the benchmark machine. Use a separate LyraCore checkout for the SDK
 patch and a disposable directory for its server and artifacts:
@@ -254,4 +256,72 @@ well as the persistent host, so the check compares against the initial count. Th
 remained near 159,000 KiB. Rollback, the fallback marker, subsequent requests and restart all
 passed. The raw five-sample, 100-creature check is in
 [native-database-recovery-1.jsonl](native-database-recovery-1.jsonl). This run also records
-uncommitted changes. A clean, longer run must confirm the performance result before expansion.
+uncommitted changes. The clean, twenty-sample run at `3d62194fb9cf59b38fe9ffd364a53b22d5ad8ac5`
+then confirmed the gain across all nine combinations of workload and size. Its results are in
+[README.md](README.md#native-execution-in-the-database-engine).
+
+## Expanding beyond movement
+
+The next parity gate reuses the original eight-scenario, 60-frame movement trace, then the existing
+durable Module and Gateway tests. Preserve their expected outcomes. Run each selected test against
+both the Wasm reference and native execution on disposable loopback instances. Build both Module
+artifacts from the same source and feature set, including the inert test Package where required.
+
+The artifact manifest must opt into all reducers separately from the movement experiment. This
+includes initialization, connection lifecycle and scheduled reducers. Each first native reducer
+invocation must leave a named marker in the owned process log. A suite pass without native execution
+evidence does not count. Unexpected fallback invalidates a native suite result, even if Wasm later
+completes the test. The deliberate trap test remains a separate recovery check.
+
+Use the existing tests for creature movement, combat, spell scheduling, Runtime Scripts and EventAI
+first. Then cover inventory, rewards, Packages, lifecycle, Transfer and cross-Shard Gateway work.
+Keep random and time-dependent gameplay assertions at their existing contract. Add fixed-clock
+comparisons for the complete creature cycle before extending its benchmark. Native hash iteration
+and Runtime Script entropy are separate from the timestamp-seeded gameplay random generator;
+their effects must be checked rather than inferred from movement parity.
+
+The database engine retains authority, transaction ordering, schedules, commits and publication.
+The separate worker's ownership and commit-receipt protocol is therefore not part of this candidate.
+Gateway request and subscription interfaces stay the same, but the durable Headless Client tests
+must still establish packet behavior. Native resource limits remain a separate completion gate.
+
+For durable tests, build the normal `debug_reducers,package_test_fixture` feature set twice. Use the
+unmodified SDK for Wasm and the private SDK copy for the native library. Restore the checkout's
+normal lockfile before compiling the integration tests. The manifest contains `library`,
+`native_blake3`, `wasm_blake3` and `"execution": "reducers"`. Keep its absolute artifact path local.
+Set the CLI wrapper variables as above and run the same test command through `database/run_durable.py`:
+
+```sh
+python3 module/prototypes/native-simulation/database/run_durable.py \
+  module /path/to/private-manifest.json /path/to/reference-result.json -- \
+  cargo test --release --locked -p lyracore-module --test eventai_runtime_boundaries \
+  -- --ignored --test-threads=1
+python3 module/prototypes/native-simulation/database/run_durable.py \
+  native_database /path/to/private-manifest.json /path/to/native-result.json -- \
+  cargo test --release --locked -p lyracore-module --test eventai_runtime_boundaries \
+  -- --ignored --test-threads=1
+```
+
+The runner records artifact hashes, test names and native reducer coverage. It keeps command output
+beside the result, retains fixture logs on failure and removes successful scratch storage. It
+requires passing Rust test results and native evidence from every owned fixture process. These
+suite durations are verification timings, not gameplay performance measurements.
+
+The first expanded check passed the original sixty-frame movement reference on both implementations,
+then repeated the committed-frame, subscription and recovery checks. Its five-sample movement
+comparison at 100 creatures remained positive. The run used the default movement selection and
+uncommitted changes. Its raw results are in
+[native-database-expansion-1.jsonl](native-database-expansion-1.jsonl).
+
+The first all-reducer batch passed the same 26 existing durable tests in both implementations.
+The tests cover aura death and healing, cast cooldowns and replacement, combat logs, movement
+persistence, death stops, path renewal, EventAI revision and summon expiry, Operator Gates, Package
+Runtime Scripts and scripted spell effects. All 26 native fixture processes recorded native
+execution, with no fallback. This includes initialization, scheduled creature, melee and aura work,
+pending casts and connection cleanup. The paired evidence is in
+[native-database-durable-1.json](native-database-durable-1.json).
+
+These are initial coverage results. The remaining durable suite, installed Official Packages,
+fixed-clock creature-cycle and reward comparisons, Gateway protocol checks and integrated load
+measurements still gate completion. The native run overlapped compilation of later test targets,
+which delayed a fixture's nested Cargo build. Its elapsed suite time is not a speed comparison.
