@@ -1,5 +1,9 @@
 use std::ffi::c_void;
 use std::path::PathBuf;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 use std::time::{Duration, Instant};
 
 use anyhow::{Context, bail, ensure};
@@ -20,6 +24,8 @@ pub(super) struct NativeConfig {
     library: PathBuf,
     native_blake3: String,
     wasm_blake3: String,
+    #[serde(skip)]
+    claimed: Arc<AtomicBool>,
 }
 
 impl NativeConfig {
@@ -50,7 +56,15 @@ impl NativeInstance {
         config: &NativeConfig,
         env: &InstanceEnv,
         names: &FuncNames,
-    ) -> anyhow::Result<Self> {
+    ) -> anyhow::Result<Option<Self>> {
+        if config.claimed.swap(true, Ordering::AcqRel) {
+            env.console_log_simple_message(
+                1_u8.into(),
+                None,
+                "LYRACORE_NATIVE_DATABASE_FALLBACK: replacement uses Wasm",
+            );
+            return Ok(None);
+        }
         let bytes = std::fs::read(&config.library)?;
         ensure!(
             blake3::hash(&bytes).to_hex().as_str() == config.native_blake3,
@@ -79,14 +93,14 @@ impl NativeInstance {
         };
         scope.check(code)?;
         ensure!(code == 0, "native description failed");
-        Ok(Self {
+        Ok(Some(Self {
             entry,
             description: scope.sink,
             pool: scope.pool,
             reported: false,
             _library: library,
             _file: file,
-        })
+        }))
     }
 
     pub(super) fn validate(&self, reference: &[u8]) -> anyhow::Result<()> {

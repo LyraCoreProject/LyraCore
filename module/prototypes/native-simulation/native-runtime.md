@@ -233,3 +233,25 @@ thread ends. Repeated native instance replacement therefore cannot remain the re
 The next check must bound this memory use before the native path expands. Both servers restarted
 after the recovery probe and before timing. Timed native process resident memory was about 6 to
 13 MiB higher than the reference, depending on the workload.
+
+An isolated library probe reproduced the lifetime issue. A library stayed mapped after `dlclose`
+while its calling thread lived. It unloaded after the thread exited and the loader collected it.
+The SDK's buffer pool uses thread-local storage. [Rust's destructor registration](https://github.com/rust-lang/rust/blob/1.93.0/library/std/src/sys/thread_local/destructors/linux_like.rs)
+and [glibc's unload check](https://github.com/bminor/glibc/blob/master/elf/dl-close.c) account for
+that lifetime.
+
+The recovery policy now permits one native library load per Module host. If an instance traps, its
+replacement uses the published Wasm Module and the same database. The failed transaction still
+rolls back. Subsequent requests retain the existing gameplay behavior. This bounds retained native
+library memory to one library per Module host; it does not force Rust thread-local destructors to
+run while their thread is active. A process restart or new Module host can enable native execution
+again. A Refusal does not replace the instance or disable native execution.
+
+The repeated recovery check passed with this policy. Native resident memory was 244,032, 244,264
+and 244,260 KiB after zero, eight and sixteen further traps. Its two library mappings remained
+unchanged from before the first trap. Initial publication creates a temporary validation host as
+well as the persistent host, so the check compares against the initial count. The Wasm reference
+remained near 159,000 KiB. Rollback, the fallback marker, subsequent requests and restart all
+passed. The raw five-sample, 100-creature check is in
+[native-database-recovery-1.jsonl](native-database-recovery-1.jsonl). This run also records
+uncommitted changes. A clean, longer run must confirm the performance result before expansion.

@@ -105,6 +105,9 @@ impl Database {
             .unwrap()
             .contains("LYRACORE_NATIVE_DATABASE_V1"));
         eprintln!("Native database: 21 committed frames and subscription updates match Wasm");
+        let loaded_libraries = native_libraries(self.shard.process_id());
+        assert!(loaded_libraries > 0);
+        self.artifacts["native_database_libraries_before_trap"] = json!(loaded_libraries);
 
         let case = workload("combat_advance", 4).unwrap();
         let expected_run = support::setup(reference, &reference_calls, case.name, 4, false);
@@ -141,6 +144,15 @@ impl Database {
                 !anonymous.status.success(),
                 "anonymous movement must be refused"
             );
+            assert!(
+                format!(
+                    "{}{}",
+                    String::from_utf8_lossy(&anonymous.stdout),
+                    String::from_utf8_lossy(&anonymous.stderr)
+                )
+                .contains("operator only"),
+                "anonymous movement must return the authorization Refusal"
+            );
             for trap in [false, true] {
                 let outcome = calls.call("debug_native_database_fault", &(trap,));
                 assert!(!outcome.accepted);
@@ -164,6 +176,7 @@ impl Database {
         ] {
             let before = support::snapshot(shard, calls, run, 1, true);
             let mut rss = vec![super::process_usage(shard.process_id()).rss_kib];
+            let mut libraries = vec![native_libraries(shard.process_id())];
             for _ in 0..2 {
                 for _ in 0..8 {
                     let outcome = calls.call("debug_native_database_fault", &(true,));
@@ -174,10 +187,23 @@ impl Database {
                     support::snapshot(shard, calls, run, 1, true)["frame"]
                 );
                 rss.push(super::process_usage(shard.process_id()).rss_kib);
+                libraries.push(native_libraries(shard.process_id()));
             }
             self.artifacts[format!("{label}_rss_kib_after_0_8_16_traps")] = json!(rss);
+            self.artifacts[format!("{label}_libraries_after_0_8_16_traps")] = json!(libraries);
+            let expected = if label == "native_database" {
+                loaded_libraries
+            } else {
+                0
+            };
+            assert_eq!(libraries, vec![expected; 3]);
             eprintln!("{label} resident KiB after 0, 8 and 16 traps: {rss:?}");
         }
+        let logs = self.shard.module_logs(160);
+        assert!(logs.status.success());
+        assert!(String::from_utf8(logs.stdout)
+            .unwrap()
+            .contains("LYRACORE_NATIVE_DATABASE_FALLBACK"));
         let before = support::snapshot(&self.shard, &native_calls, native_run, 1, true);
         drop(native_calls);
         std::env::set_var("LYRACORE_NATIVE_DATABASE_MANIFEST", &self.manifest);
@@ -202,9 +228,17 @@ impl Database {
                 )
                 .assert_accepted();
         }
+        let final_sequence = case.requests.last().unwrap().sequence;
         assert_eq!(
-            support::snapshot(reference, &reference_calls, expected_run, 7, true)["frame"],
-            support::snapshot(&self.shard, &native_calls, native_run, 7, true)["frame"],
+            support::snapshot(
+                reference,
+                &reference_calls,
+                expected_run,
+                final_sequence,
+                true
+            )["frame"],
+            support::snapshot(&self.shard, &native_calls, native_run, final_sequence, true)
+                ["frame"],
         );
         eprintln!("Native database: authorization, stale input, Refusal, panic rollback and restart checks pass");
         drop(native_calls);
@@ -214,6 +248,21 @@ impl Database {
         self.shard.restart_persistent();
         std::env::remove_var("LYRACORE_NATIVE_DATABASE_MANIFEST");
     }
+}
+
+fn native_libraries(pid: u32) -> usize {
+    let mappings = std::fs::read_to_string(format!("/proc/{pid}/maps")).unwrap();
+    mappings
+        .lines()
+        .filter_map(|line| line.split_whitespace().nth(5))
+        .filter(|path| {
+            path.rsplit('/')
+                .next()
+                .unwrap()
+                .starts_with("lyracore-native-")
+        })
+        .collect::<std::collections::BTreeSet<_>>()
+        .len()
 }
 
 impl Drop for Database {
