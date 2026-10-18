@@ -1,5 +1,8 @@
 # Wave Defense browser hosting
 
+The browser game is paused. HTTPS currently returns a maintenance message. See
+[the pause record](PAUSED.md) for the preserved configuration and service state.
+
 The browser address is `https://159.69.88.70`. Use a browser with WebGPU support.
 The host serves Manila with the WaveDefense addon installed. Native Benilla remains usable
 through the existing game ports.

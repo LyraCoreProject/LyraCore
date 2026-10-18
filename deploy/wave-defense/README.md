@@ -1,5 +1,8 @@
 # Argus Wave Defense realm
 
+Wave Defense is paused as of 2026-10-18 21:12 UTC. The original LyraCore test realm owns the
+game ports again. See [the pause record](PAUSED.md) before resuming these services.
+
 The defense realm runs as Unix account `wave-defense` on Argus, `159.69.88.70`.
 Cutover completed on 2026-10-18. See [verification](VERIFICATION.md) for checks and limits.
 Browser hosting and admin access are described in [the browser runbook](BROWSER.md).
