@@ -124,7 +124,8 @@ pub use crate::gw::{
 pub use crate::import_meta::{game_import_meta, game_world_import, ImportMeta, WorldImport};
 pub use crate::instance::{
     game_instance, game_instance_binding, game_instance_reaper_schedule, game_instance_removal,
-    GameInstance, GameInstanceBinding, InstanceReaperSchedule, InstanceRemoval,
+    game_package_instance, GameInstance, GameInstanceBinding, InstanceReaperSchedule,
+    InstanceRemoval, PackageInstance,
 };
 pub use crate::items::{
     game_character_buyback, game_item_enchantment, game_item_instance, game_item_property_weight,
@@ -164,8 +165,10 @@ pub use crate::motion::{
 };
 pub use crate::nav::{game_nav_chunk, game_navigation_revision, NavChunk, NavigationRevision};
 pub use crate::package_account::{game_package_account, PackageAccount};
+pub use crate::package_combat::{game_package_combat_rule, PackageCombatRule};
 pub use crate::package_config::{game_package_config, PackageConfig};
 pub use crate::package_import::{game_package_import, PackageImport};
+pub use crate::package_party::{game_package_party_authority, PackagePartyAuthority};
 pub use crate::package_teardown::{game_package_teardown, PackageTeardown};
 pub use crate::quest::{
     game_areatrigger_teleport, game_character_quest, game_character_quest_event_credit,

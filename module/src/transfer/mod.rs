@@ -208,6 +208,8 @@ pub(crate) fn bot_transfer_intent_gate(
     controller_generation: u64,
 ) -> Result<Option<u64>, crate::actor::ActionRefusal> {
     use crate::actor::{ActionRefusal, ActionRefusalKind};
+    crate::package_combat::require_transfer_allowed(ctx, bot_guid)
+        .map_err(|reason| ActionRefusal::new(ActionRefusalKind::TransferPending, reason))?;
     let intents = ctx.db.game_bot_transfer_intent();
     let pending: Vec<_> = intents.by_bot().filter(bot_guid).take(2).collect();
     if pending.len() > 1 {
@@ -811,6 +813,7 @@ pub fn begin_transfer(
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    crate::package_combat::require_transfer_allowed(ctx, character_guid)?;
     if crate::taxi::is_in_flight(ctx, character_guid) {
         return Err("PLAYER_IN_TAXI_FLIGHT".to_string());
     }

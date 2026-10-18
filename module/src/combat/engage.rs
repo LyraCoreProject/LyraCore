@@ -598,6 +598,7 @@ pub(crate) fn apply_start_ranged_attack(
         use crate::items::weapon_subclass as ws;
         if matches!(ranged_weapon.3, ws::BOW | ws::GUN | ws::CROSSBOW)
             && find_ammo(ctx, attacker.guid).is_none()
+            && !crate::package_combat::active(ctx, attacker.guid)
         {
             return Err("no ammo for ranged weapon".to_string());
         }

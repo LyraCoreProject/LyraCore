@@ -219,6 +219,9 @@ pub(crate) fn award_xp(
     rank: u8,
     share_count: u32,
 ) {
+    if crate::package_combat::active(ctx, attacker_guid) {
+        return;
+    }
     let entities = ctx.db.game_world_entity();
     let Some(mut p) = entities.guid().find(attacker_guid) else {
         return;

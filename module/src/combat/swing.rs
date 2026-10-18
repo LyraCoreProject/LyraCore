@@ -580,14 +580,17 @@ fn fire_ranged_shot(
                     .find(a.entry)
                     .map(|t| t.display_id)
                     .unwrap_or(0);
-                a.stack_count -= 1;
-                if a.stack_count == 0 {
-                    ctx.db.game_item_instance().guid().delete(a.guid);
-                } else {
-                    ctx.db.game_item_instance().guid().update(a);
+                if !crate::package_combat::active(ctx, attacker_guid) {
+                    a.stack_count -= 1;
+                    if a.stack_count == 0 {
+                        ctx.db.game_item_instance().guid().delete(a.guid);
+                    } else {
+                        ctx.db.game_item_instance().guid().update(a);
+                    }
                 }
                 disp
             }
+            None if crate::package_combat::active(ctx, attacker_guid) => 0,
             None => {
                 melee.attacker_guid().delete(attacker_guid);
                 return;

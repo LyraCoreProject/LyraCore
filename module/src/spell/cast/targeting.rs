@@ -630,6 +630,8 @@ pub(crate) fn apply_effect(
         }
         EffectKind::Resurrect
         | EffectKind::SummonPet
+        | EffectKind::RevivePet
+        | EffectKind::DismissPet
         | EffectKind::TameCreature
         | EffectKind::SetStance => apply_character_effect(ctx, e, caster_guid, target_guid, points),
         EffectKind::Trigger | EffectKind::Scripted => {
@@ -1209,6 +1211,20 @@ fn apply_character_effect(
             crate::creatures::summon_pet(ctx, caster_guid, entry);
             EffectHit::none()
         }
+        E_REVIVE_PET => {
+            if let Err(reason) = crate::creatures::restore_hunter_pet(
+                ctx,
+                caster_guid,
+                Some(points.clamp(1, 100) as u8),
+            ) {
+                log::info!("Hunter pet revive refused for {caster_guid}: {reason}");
+            }
+            EffectHit::none()
+        }
+        E_DISMISS_PET => {
+            crate::creatures::despawn_pets(ctx, caster_guid);
+            EffectHit::none()
+        }
         E_TAME_CREATURE => {
             if let Err(error) = crate::creatures::tame_creature(ctx, caster_guid, target_guid) {
                 log::info!("tame completion for caster {caster_guid} and target {target_guid} failed: {error}");
@@ -1217,24 +1233,13 @@ fn apply_character_effect(
         }
         E_SET_STANCE => {
             let new_stance = e.p0.clamp(0, u8::MAX as i32) as u8;
-            if let Some(mut c) = ctx.db.game_world_entity().guid().find(caster_guid) {
-                if c.stance != new_stance {
-                    let power_type = lyracore_shared::packing::power_type::for_class(c.class());
-                    let clears_power = stance_switch_clears_power(c.stance, new_stance, power_type);
-                    c.stance = new_stance;
-                    if clears_power {
-                        c.power = 0;
-                    }
-                    // Preserve byte 3, which carries the ghost visibility flag.
-                    let form_id = client_form_for_stance(new_stance) << 16;
-                    c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
-                    c.update(ctx);
-                } else if form_recast_toggles_off(c.stance, new_stance) {
-                    // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
-                    c.stance = 0;
-                    c.unit_bytes_1 &= 0xFF00_0000;
-                    c.update(ctx);
-                }
+            if let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) {
+                let next = if form_recast_toggles_off(caster.stance, new_stance) {
+                    0
+                } else {
+                    new_stance
+                };
+                crate::spell::form::change(ctx, caster_guid, next);
             }
             EffectHit::none()
         }

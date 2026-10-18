@@ -25,6 +25,7 @@ pub(crate) fn runs(ctx: &ReducerContext, package: &str) -> bool {
 }
 
 pub(crate) fn forget_removed_packages(ctx: &ReducerContext) {
+    crate::package_combat::clear_removed_packages(ctx);
     let torn_down = ctx.db.game_package_teardown();
     if torn_down.count() == 0 {
         return;
@@ -66,6 +67,7 @@ pub fn teardown_package(ctx: &ReducerContext, package_name: String) -> Result<()
             package_name: ident.clone(),
         });
     }
+    crate::package_combat::clear_package(ctx, &package_name);
     for guid in characters {
         make_dormant(ctx, guid);
     }

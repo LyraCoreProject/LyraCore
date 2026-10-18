@@ -46,12 +46,68 @@ which must be written literally.
 | `crate::game_hook!(EVENT, fn NAME(ctx, payload) { .. })` | a notify handler for one hook event |
 | `crate::game_tick_pass!(fn NAME(ctx) { .. })` | a periodic pass, run at the end of every `tick_creatures` tick (0.5s), after every core pass |
 | `crate::game_client_command!(PARSE, APPLY, REPLY)` | the single Package parser, admitted apply operation and reply command name for authenticated addon commands |
+| `crate::game_addon_command!(NAMESPACE, HANDLER)` | a namespaced Package Addon Command handler for the authenticated Character |
 | `crate::character_owned!(delete \| restamp \| transfer \| not_transported, ..)` | a Package table's character-keyed sweeps and its cross-shard transport arm |
 | `crate::encounter_package!(BINDING, fn NAME(ctx, instance_id, signal) { .. })` | encounter authority for one Encounter Binding |
 | `crate::game_package_characters!(fn NAME(ctx) { .. })` | the guids of the Characters the Package controls on this Shard, read by Package Teardown |
 
 A Package table that is keyed by `character_guid` needs a `delete` marker and a transport arm. Without
 them a despawned character leaves rows behind, and a character that crosses a shard loses them.
+
+### Package Addon Commands
+
+`game_addon_command` registers one namespace per Package. The handler has the signature
+`fn(&ReducerContext, u64, &str, &str) -> Result<String, String>`: authenticated Character guid,
+action, payload, and private reply. The wire command is `package.NAMESPACE.ACTION`; namespace and
+action use ASCII letters, digits and underscores. Command names are limited to 64 bytes and payloads
+and replies to 1024 bytes. The `fixture` namespace belongs to debug fixtures.
+
+Core requires a current World Session Token and checks Character ownership before dispatch. A
+successful handler replies only to that Character on `COMMAND.result`. A Refusal rolls back the
+whole Durable Request; the Gateway sends a private `Refused|reason` reply. Handlers must propagate
+Refusals after changing state. Transport sequence numbers do not suppress duplicate requests: a
+Package that grants power must retain its own request fence. The wave-defense protocol is specified
+in [wave-defense-protocol.md](wave-defense-protocol.md).
+
+### Package Instances and cooperative matches
+
+`package::instance::create_empty(ctx, package, map, party)` allocates an empty Package Instance.
+Ordinary imported populations do not enter it. `create_lobby(ctx, package, map)` creates or reuses an
+empty shared lobby with no owning Party. The lobby holds its lease until explicit close.
+`enter(ctx, package, character, instance, position)` requires a living Character on the same map,
+the owning Party for a match, and space below 200 live Characters for a lobby. Session-less entry
+requires a Package-owned Account and current Sessionless Action Consent.
+`close(ctx, package, instance)` requires an empty Character population and removes owned content.
+
+`package::party::require_authority(ctx)` requires a live Package Party Authority. A Gateway renews
+this certificate every 15 seconds with a 45-second lifetime, and certifies only a single-Shard Realm
+that cohosts Realm-core and Characters. All live certificates must agree. Package Party operations
+refuse split topology.
+`form(ctx, package, members)` preserves whole premades and creates a Party of two through five
+distinct living Characters in one partition. The caller establishes each human's consent.
+`replace(ctx, package, party, departing, incoming)` replaces exactly one slot in a full Party whose
+live Instance belongs to that Package. These operations preserve one authoritative Roster Revision.
+Manual roster changes refuse while a Package owns the match; internal replacement and Character
+deletion remain available.
+
+`package::combat::enable(ctx, package, character, instance, essential_spells)` requires admission to
+the owning match Instance. It enables Package Combat Rules: essential spells bypass their minimum
+level, ammunition, reagent and durability costs stop, ordinary resurrection works in combat with a shared
+120-second cooldown, and normal kill XP and manual talent spending stop. Release Spirit refuses so
+the Package can own respawn timing. Match members and their pets share a friendly faction projection;
+`disable` restores the previous faction. Instance closure and Package Teardown also clear the rules.
+
+`package::character` supplies operations for a dedicated mode Realm. `reset_loadout` erases carried
+and banked gear, buyback, gold, XP, spells, talents, skills, pets, auras and cooldowns, then restores
+the level 1 class starting kit. It requires Package Party Authority. `return_to_lobby` takes the
+map, owned lobby Instance and position; it stores an offline destination, or completes a cross-map
+World Session before admission. The caller retries admission after that World Session returns.
+`advance_match_level` sets level 1 through 60 and raises combat skills to that level's cap.
+`grant_spell` learns dependencies and passives. `grant_talent` grants the imported full rank after
+checking class ownership; the caller owns draft, level and prerequisite policy.
+`provision_hunter_pet` uses an imported tameable creature, shares the match level, and can restore the
+pet during preparation. `refill` restores a living Character's health and normal starting resource;
+`respawn` resurrects and relocates within its current partition. Callers propagate every Refusal.
 
 ### Hook catalogue
 

@@ -28,7 +28,7 @@ pub(crate) fn raw_table_reads(
     let code = lyracore_test_support::source_scan::code_only(content);
     let content = code.as_str();
     let mut out = Vec::new();
-    let mut handles: Vec<(String, &'static str)> = Vec::new();
+    let mut handles: Vec<(String, &'static str, std::ops::Range<usize>)> = Vec::new();
     for accessor in accessors {
         let call = format!("{accessor}()");
         for (idx, _) in content.match_indices(&call) {
@@ -52,14 +52,29 @@ pub(crate) fn raw_table_reads(
             if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 continue;
             }
-            if !handles.iter().any(|(n, _)| n == name) {
-                handles.push((name.to_string(), *accessor));
-            }
+            let start = idx + bind.len();
+            let mut depth = 0;
+            let end = content[start..]
+                .char_indices()
+                .find_map(|(offset, ch)| match ch {
+                    '{' => {
+                        depth += 1;
+                        None
+                    }
+                    '}' if depth == 0 => Some(start + offset),
+                    '}' => {
+                        depth -= 1;
+                        None
+                    }
+                    _ => None,
+                })
+                .unwrap_or(content.len());
+            handles.push((name.to_string(), *accessor, start..end));
         }
     }
-    for (name, accessor) in &handles {
+    for (name, accessor, scope) in &handles {
         for (idx, _) in content.match_indices(name.as_str()) {
-            if !is_standalone_ident(content, idx, name) {
+            if !scope.contains(&idx) || !is_standalone_ident(content, idx, name) {
                 continue;
             }
             if opens(content, idx + name.len()) {
@@ -114,6 +129,15 @@ pub(crate) fn read_scanned(rel: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn table_handles_do_not_escape_their_block_or_match_before_the_binding() {
+        let src = "fn f() {\n    rows.insert(other);\n    {\n        let rows = ctx.db.game_world_entity();\n        rows.insert(entity);\n    }\n    rows.insert(other);\n}\nfn g() {\n    let rows = ctx.db.game_gameobject();\n    rows.insert(other);\n}";
+        let found = raw_table_reads(src, &["game_world_entity"], |content, offset| {
+            content[offset..].starts_with(".insert(")
+        });
+        assert_eq!(found, [(5, "game_world_entity")]);
+    }
 
     #[test]
     fn raw_table_reads_ignores_comments_and_literals_but_keeps_live_reads() {

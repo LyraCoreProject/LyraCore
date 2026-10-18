@@ -10,3 +10,4 @@ pub(crate) use crate::nav::{
     LEG_MAX_EXPANSIONS,
 };
 pub(crate) use crate::terrain::{ground_z, snap_z, zone_id_at};
+pub(crate) use crate::vmap::floor_z;

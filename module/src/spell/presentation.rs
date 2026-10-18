@@ -19,7 +19,7 @@ pub(crate) fn recompute_display(ctx: &ReducerContext, guid: u64) {
         })
         .max_by_key(|&(applied_at, id, _)| (applied_at, id))
         .map(|(_, _, display)| display)
-        .unwrap_or(entity.native_display_id);
+        .unwrap_or_else(|| super::form::display(&entity).unwrap_or(entity.native_display_id));
     if entity.display_id != display {
         entity.display_id = display;
         entity.update(ctx);

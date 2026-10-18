@@ -1357,6 +1357,12 @@ pub fn gw_client_command(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
+    if cmd.starts_with("package.") {
+        if request_actor.ownership.is_none() {
+            return Err("Package command requires a World Session Token".into());
+        }
+        return crate::bridge::apply_package_command(ctx, actor_guid, &cmd, &payload);
+    }
     crate::bridge::apply_client_command(ctx, actor_guid, &cmd, &payload)
 }
 

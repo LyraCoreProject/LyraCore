@@ -313,9 +313,19 @@ pub(crate) fn apply_spell_mod(base: u32, flat: i32, pct: i32) -> u32 {
 }
 
 pub(crate) fn combat_field_bonus(ctx: &ReducerContext, unit_guid: u64, field: u8) -> i32 {
-    sum_active_auras(ctx, unit_guid, |a| {
+    let aura_bonus = sum_active_auras(ctx, unit_guid, |a| {
         a.eff_kind == A_MOD_COMBAT && a.eff_p0 == field as i32
-    })
+    });
+    let form_bonus = if field == COMBAT_THREAT {
+        ctx.db
+            .game_world_entity()
+            .guid()
+            .find(unit_guid)
+            .map_or(0, |entity| super::form::threat_bonus(ctx, &entity))
+    } else {
+        0
+    };
+    aura_bonus.saturating_add(form_bonus)
 }
 
 pub(crate) fn combat_health_regen_pct(ctx: &ReducerContext, unit_guid: u64) -> i32 {

@@ -252,6 +252,9 @@ pub(crate) fn do_learn_talent(
     owner: Identity,
     talent_id: u32,
 ) -> Result<u8, String> {
+    if crate::package_combat::active(ctx, guid) {
+        return Err("Package combat talents must be selected through the Package".to_string());
+    }
     let talent = ctx
         .db
         .game_talent()

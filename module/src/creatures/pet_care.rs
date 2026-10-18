@@ -305,6 +305,8 @@ pub(crate) fn on_pet_death(ctx: &ReducerContext, pet_guid: u64) {
         return;
     };
     if let Some(mut pet) = ctx.db.game_hunter_pet().pet_id().find(kind.hunter_pet_id) {
+        pet.dead = true;
+        pet.saved_health = 0;
         pet.happiness = pet.happiness.saturating_sub(HAPPINESS_BAND);
         ctx.db.game_hunter_pet().pet_id().update(pet.clone());
         super::publish_hunter_pet_protocol(ctx, &pet, pet_guid);

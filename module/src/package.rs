@@ -12,10 +12,30 @@ pub(crate) use crate::helpers::require_operator;
 pub(crate) use crate::package_account::create_package_character as create_character;
 pub(crate) use crate::package_config::ensure_package_config_default as ensure_config_default;
 
+pub(crate) mod instance {
+    pub(crate) use crate::instance::{
+        close_package_instance as close, create_empty, create_lobby,
+        enter_package_instance as enter,
+    };
+}
+
 pub(crate) mod character {
     pub(crate) use crate::creatures::build_player_entity;
+    pub(crate) use crate::items::grant_item;
+    pub(crate) use crate::package_character::{
+        advance_match_level, grant_spell, grant_talent, provision_hunter_pet, refill,
+        reset_loadout, respawn, return_to_lobby,
+    };
     pub(crate) use crate::stats::set_character_level;
     pub(crate) use crate::world::cascade_delete_character;
+}
+
+pub(crate) mod party {
+    pub(crate) use crate::package_party::{form_party as form, replace, require_authority};
+}
+
+pub(crate) mod combat {
+    pub(crate) use crate::package_combat::{disable, enable};
 }
 
 pub(crate) mod encounter {

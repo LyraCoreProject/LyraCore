@@ -217,6 +217,8 @@ fn main() {
     if registries.client_commands.len() > 1 {
         panic!("build.rs: more than one installed package registered `game_client_command!`");
     }
+    registries.addon_commands.sort();
+    check_addon_namespaces(&registries.addon_commands);
     for duplicate in registries.encounter_packages.windows(2) {
         if duplicate[0].0 == duplicate[1].0 {
             panic!(
@@ -300,6 +302,17 @@ fn main() {
             "pub const GAME_CLIENT_COMMAND: Option<crate::bridge::ClientCommandHandler> = None;\n",
         ),
     }
+    out.push_str("pub(crate) const GAME_ADDON_COMMANDS: &[(&str, crate::bridge::PackageCommandHandler)] = &[\n");
+    for (namespace, handler) in &registries.addon_commands {
+        let handler = gated(
+            handler,
+            "ctx: &spacetimedb::ReducerContext, actor_guid: u64, action: &str, payload: &str",
+            "ctx, actor_guid, action, payload",
+            "Err(\"PackageDisabled\".into())",
+        );
+        out.push_str(&format!("    (\"{namespace}\", {handler}),\n"));
+    }
+    out.push_str("];\n");
     out.push_str("pub const GAME_HOOK_EVENT_NAMES: &[&str] = &[\n");
     for HookEvent { event, .. } in &*HOOK_EVENTS {
         out.push_str(&format!("    \"{event}\",\n"));
@@ -409,8 +422,23 @@ struct Registries {
     hooks: Vec<(String, String)>,
     encounter_packages: Vec<(String, String)>,
     client_commands: Vec<(String, String, String)>,
+    addon_commands: Vec<(String, String)>,
     package_tables: Vec<(String, String)>,
     package_characters: Vec<(String, String)>,
+}
+
+fn check_addon_namespaces(commands: &[(String, String)]) {
+    let mut namespaces = std::collections::BTreeSet::new();
+    for (namespace, _) in commands {
+        assert!(
+            namespace != "fixture",
+            "build.rs: fixture is a reserved addon namespace"
+        );
+        assert!(
+            namespaces.insert(namespace),
+            "build.rs: addon command namespace {namespace} has more than one Package handler"
+        );
+    }
 }
 
 fn gated(path: &str, params: &str, args: &str, otherwise: &str) -> String {
@@ -663,6 +691,25 @@ fn try_match_client_command(head: &str) -> Option<(String, String, String)> {
     Some((ident_before(',')?, ident_before(',')?, ident_before(')')?))
 }
 
+fn try_match_addon_command(head: &str) -> Option<(String, String)> {
+    let rest = head.strip_prefix('(')?;
+    let (namespace, rest) = rest.split_once(',')?;
+    let (handler, rest) = rest.split_once(')')?;
+    let namespace = namespace.trim();
+    let handler = handler.trim();
+    if [namespace, handler].iter().any(|part| {
+        part.is_empty()
+            || !part
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
+            || part.as_bytes()[0].is_ascii_digit()
+    }) || !rest.trim_start().starts_with(';')
+    {
+        return None;
+    }
+    Some((namespace.to_string(), handler.to_string()))
+}
+
 fn try_match_encounter_package(head: &str) -> Option<(String, String)> {
     let rest = head.strip_prefix('(')?.trim_start();
     let binding_end = rest.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
@@ -805,6 +852,22 @@ fn scan_file(file: &Path, scan_root: &Path, in_package: bool, prefix: &str, reg:
         }
     });
 
+    scan_marker(&content, file, "game_addon_command!", |head, line| {
+        let (namespace, handler) = try_match_addon_command(head).unwrap_or_else(|| {
+            panic!(
+                "build.rs: malformed `game_addon_command!` in {}:{line}; expected `game_addon_command!(NAMESPACE, HANDLER)`",
+                file.display()
+            )
+        });
+        assert!(
+            in_package,
+            "build.rs: addon commands must belong to a Package"
+        );
+        check_facade_reexport(file, scan_root, in_package, &handler);
+        reg.addon_commands
+            .push((namespace, format!("{prefix}::{handler}")));
+    });
+
     if let Some(package) = prefix.strip_prefix("crate::pkg_") {
         for table in table_accessors(&content) {
             reg.package_tables.push((package.to_string(), table));
@@ -931,6 +994,33 @@ mod build_script_tests {
             try_match_client_command("(parse_order, apply_order, ORDER_RESULT, extra);"),
             None
         );
+    }
+
+    #[test]
+    fn addon_command_markers_name_one_namespace_and_handler() {
+        assert_eq!(
+            try_match_addon_command("(wave_defense, handle_addon);"),
+            Some(("wave_defense".into(), "handle_addon".into()))
+        );
+        for malformed in [
+            "(, handler);",
+            "(wave,);",
+            "(wave, handler, other);",
+            "(wave.extra, handler);",
+            "(wave, handler)",
+            "(1wave, handler);",
+        ] {
+            assert_eq!(try_match_addon_command(malformed), None);
+        }
+    }
+
+    #[test]
+    #[should_panic(expected = "more than one Package handler")]
+    fn two_packages_cannot_own_one_addon_namespace() {
+        check_addon_namespaces(&[
+            ("wave".into(), "crate::pkg_one::handle".into()),
+            ("wave".into(), "crate::pkg_two::handle".into()),
+        ]);
     }
 
     #[test]

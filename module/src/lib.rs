@@ -112,6 +112,11 @@ macro_rules! game_client_command {
 }
 
 #[macro_export]
+macro_rules! game_addon_command {
+    ($namespace:ident, $handler:ident) => {};
+}
+
+#[macro_export]
 macro_rules! encounter_package {
     ($binding:ident, fn $name:ident($ctx:ident, $instance_id:ident, $signal:ident) $body:block) => {
         pub(crate) fn $name(
@@ -203,11 +208,17 @@ mod package;
 
 mod package_account;
 
+mod package_character;
+
+mod package_combat;
+
 mod package_config;
 #[cfg(feature = "debug_reducers")]
 pub(crate) mod package_fixture;
 
 mod package_import;
+
+mod package_party;
 
 mod package_teardown;
 
@@ -435,7 +446,8 @@ pub use tables::{
 pub use tables::{game_import_meta, game_world_import, ImportMeta, WorldImport};
 pub use tables::{
     game_instance, game_instance_binding, game_instance_reaper_schedule, game_instance_removal,
-    GameInstance, GameInstanceBinding, InstanceReaperSchedule, InstanceRemoval,
+    game_package_instance, GameInstance, GameInstanceBinding, InstanceReaperSchedule,
+    InstanceRemoval, PackageInstance,
 };
 pub use tables::{game_item_text, ItemText};
 pub use tables::{game_levelup_event, game_xp_event, LevelupEvent, XpEvent};
@@ -457,8 +469,10 @@ pub use tables::{
 };
 pub use tables::{game_nav_chunk, game_navigation_revision, NavChunk, NavigationRevision};
 pub use tables::{game_package_account, PackageAccount};
+pub use tables::{game_package_combat_rule, PackageCombatRule};
 pub use tables::{game_package_config, PackageConfig};
 pub use tables::{game_package_import, PackageImport};
+pub use tables::{game_package_party_authority, PackagePartyAuthority};
 pub use tables::{game_package_teardown, PackageTeardown};
 pub use tables::{game_player_reputation, PlayerReputation};
 pub use tables::{game_player_skill, PlayerSkill};

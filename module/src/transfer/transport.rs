@@ -33,6 +33,10 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_group_member_partition",
     "game_group_target_icon",
     "game_instance_removal",
+    // These rules require a local Package Instance and never follow a Character through Transfer.
+    "game_package_combat_rule",
+    // Transfer persists caster mana in the Character row and drops the current form.
+    "game_druid_form_mana",
     "game_pet_command",
     "game_mail_delivery",
     "game_character_shard",

@@ -12,7 +12,8 @@ pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid:
     let chosen = auras_on(ctx, character_guid)
         .filter(|a| a.eff_kind == A_SELF_RESURRECT && a.eff_p0 > 0)
         .map(|a| a.eff_p0 as u32)
-        .max();
+        .max()
+        .or_else(|| package_reincarnation(ctx, character_guid));
     let options = ctx.db.game_self_resurrect_option();
     options.character_guid().delete(character_guid);
     if let Some(spell_id) = chosen {
@@ -21,6 +22,20 @@ pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid:
             spell_id,
         });
     }
+}
+
+fn package_reincarnation(ctx: &ReducerContext, character_guid: u64) -> Option<u32> {
+    const REINCARNATION_PASSIVE: u32 = 20608;
+    const REINCARNATION_EFFECT: u32 = 21169;
+    (crate::package_combat::essential_spell(ctx, character_guid, REINCARNATION_PASSIVE)
+        && crate::spell::knows_spell(ctx, character_guid, REINCARNATION_PASSIVE)
+        && ctx
+            .db
+            .game_spell_effect()
+            .by_spell()
+            .filter(REINCARNATION_EFFECT)
+            .any(|effect| effect.kind == E_SELF_RESURRECT))
+    .then_some(REINCARNATION_EFFECT)
 }
 
 pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
@@ -32,6 +47,7 @@ pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Re
     if !character.dead {
         return Err("caller is not dead".to_string());
     }
+    crate::package_combat::resurrection_gate(ctx, character_guid)?;
     let option = ctx
         .db
         .game_self_resurrect_option()
@@ -57,6 +73,7 @@ pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Re
     character.power = power;
     character.update(ctx);
     crate::ghost::finish_resurrection(ctx, character_guid);
+    crate::package_combat::commit_resurrection(ctx, character_guid);
     Ok(())
 }
 

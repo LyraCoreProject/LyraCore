@@ -12,6 +12,7 @@ pub(crate) enum WorldImportProfile {
     StartingEastern,
     StartingKalimdor,
     Instances,
+    ScarletCourtyard,
 }
 
 impl WorldImportProfile {
@@ -26,6 +27,7 @@ impl WorldImportProfile {
         "starting-eastern",
         "starting-kalimdor",
         "instances",
+        "scarlet-courtyard",
     ];
 
     pub(crate) fn parse(name: &str) -> Result<Self> {
@@ -40,6 +42,7 @@ impl WorldImportProfile {
             "starting-eastern" => Ok(Self::StartingEastern),
             "starting-kalimdor" => Ok(Self::StartingKalimdor),
             "instances" => Ok(Self::Instances),
+            "scarlet-courtyard" => Ok(Self::ScarletCourtyard),
             _ => bail!(
                 "--world-profile {name}: unknown profile (valid: {})",
                 Self::NAMES.join(", ")
@@ -59,13 +62,18 @@ impl WorldImportProfile {
             Self::StartingEastern => "starting-eastern",
             Self::StartingKalimdor => "starting-kalimdor",
             Self::Instances => "instances",
+            Self::ScarletCourtyard => "scarlet-courtyard",
         }
     }
 
     pub(crate) fn imports_all_templates(self) -> bool {
         matches!(
             self,
-            Self::FullWorld | Self::FullEastern | Self::FullKalimdor | Self::FullInstances
+            Self::FullWorld
+                | Self::FullEastern
+                | Self::FullKalimdor
+                | Self::FullInstances
+                | Self::ScarletCourtyard
         )
     }
 }
@@ -240,6 +248,19 @@ impl WorldImportScope {
                     )
                 }
                 WorldImportProfile::Instances => (vec![], vec![36], deadmines(), vec![]),
+                WorldImportProfile::ScarletCourtyard => (
+                    vec![],
+                    vec![189],
+                    vec![InstanceVmapSlice {
+                        name: "scarlet-courtyard-defense".to_owned(),
+                        map_id: 189,
+                        entry: [909.251, 1378.57, 18.0794],
+                        exit: [947.376, 1375.67, 18.1066],
+                        exit_radius: 6.0,
+                        collar_cells: 2,
+                    }],
+                    vec![68, 299, 416, 1525, 1530],
+                ),
             };
         Self::new(
             profile.name(),
@@ -590,6 +611,28 @@ fn bounds_covers(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn scarlet_courtyard_imports_one_map_and_covers_all_defense_fronts() {
+        let profile = WorldImportProfile::parse("scarlet-courtyard").unwrap();
+        let scope = WorldImportScope::canonical(profile).unwrap();
+        assert!(profile.imports_all_templates());
+        assert_eq!(scope.whole_maps, [189]);
+        assert!(scope.bounded_slices.is_empty());
+        assert!(!scope.contains_map(0));
+        assert!(!scope.contains_map(1));
+        assert!(scope.forced_creature_entries.contains(&299));
+        assert!(scope.forced_creature_entries.contains(&416));
+        assert_eq!(scope.instance_vmap_slices.len(), 1);
+        let slice = &scope.instance_vmap_slices[0];
+        let (x0, x1, y0, y1) = slice.cell_range().unwrap();
+        for (x, y) in [(909.251, 1366.57), (909.251, 1390.57), (953.376, 1375.67)] {
+            let cx = lyracore_shared::terrain::cell_index(x).unwrap();
+            let cy = lyracore_shared::terrain::cell_index(y).unwrap();
+            assert!((x0..=x1).contains(&cx));
+            assert!((y0..=y1).contains(&cy));
+        }
+    }
 
     #[test]
     fn bounds_are_normalized_and_membership_is_map_fenced() {

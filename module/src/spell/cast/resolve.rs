@@ -70,19 +70,20 @@ pub(crate) fn resolve_cast_at_typed(
         check_distract_destination(ctx, &caster, dest, hdr.range_yd)?;
     }
 
-    // Scheduled Refusals retain state, so consume all reagents before charging power.
+    // Scheduled Refusals retain state, so charge required reagents before power.
     let creates_items = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
     let inventory_before_craft =
         creates_items.then(|| crate::items::carried_items(ctx, caster_guid));
-    if creates_items {
+    if creates_items && !crate::package_combat::active(ctx, caster_guid) {
         crate::items::exchange_items(ctx, caster_guid, &recipe_reagents(ctx, spell_id), &[])
             .map_err(String::from)?;
     }
 
     // Flush the cost before effects so self-heals read the charged caster row.
-    if caster.is_player() && hdr.cost > 0 && !queues_next_swing(&effects) {
+    let cost = crate::spell::form::cast_cost(ctx, &caster, &hdr);
+    if caster.is_player() && cost > 0 && !queues_next_swing(&effects) {
         let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
-        caster.power = caster.power.saturating_sub(hdr.cost);
+        crate::spell::form::spend_cast_power(ctx, &mut caster, &hdr, cost);
         if hdr.power_type == lyracore_shared::packing::power_type::MANA {
             caster.mana_regen_paused_until_ms = now_ms + 5000;
         }
@@ -132,10 +133,18 @@ pub(crate) fn resolve_cast_at_typed(
         start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     }
 
-    if hdr.cooldown_ms > 0 {
+    let package_resurrection = effects.iter().any(|effect| effect.kind == E_RESURRECT)
+        && crate::package_combat::active(ctx, caster_guid);
+    let cooldown_ms = if package_resurrection {
+        crate::package_combat::commit_resurrection(ctx, caster_guid);
+        crate::package_combat::RESURRECTION_COOLDOWN_MS
+    } else {
+        hdr.cooldown_ms
+    };
+    if cooldown_ms > 0 {
         let ready_at = ctx
             .timestamp
-            .checked_add(TimeDuration::from_micros((hdr.cooldown_ms as i64) * 1000))
+            .checked_add(TimeDuration::from_micros((cooldown_ms as i64) * 1000))
             .unwrap_or(ctx.timestamp);
         let cds = ctx.db.game_spell_cd();
         if let Some(mut row) = cds
@@ -329,7 +338,13 @@ fn run_spell_effects(
         miss_info: cast_miss(primary_missed, hdr.school_mask),
         energized: total_energized,
         power_type: energized_power_type,
-        cooldown_ms: hdr.cooldown_ms,
+        cooldown_ms: if effects.iter().any(|effect| effect.kind == E_RESURRECT)
+            && crate::package_combat::active(ctx, caster_guid)
+        {
+            crate::package_combat::RESURRECTION_COOLDOWN_MS
+        } else {
+            hdr.cooldown_ms
+        },
         client_initiated,
         ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
     });
@@ -667,6 +682,14 @@ fn check_cast_gate_prefix(
 ) -> Result<(), CastRefusal> {
     let caster_guid = caster.guid;
 
+    if effects.iter().any(|effect| effect.kind == E_RECALL_HOME)
+        && crate::package_combat::active(ctx, caster_guid)
+    {
+        return Err("Leave the Package match before recalling home"
+            .to_string()
+            .into());
+    }
+
     if is_action_blocked(ctx, caster_guid) {
         return Err(CastRefusal::new(
             CastRefusalKind::CannotAct,
@@ -683,6 +706,20 @@ fn check_cast_gate_prefix(
 
     if effects.iter().any(|effect| effect.kind == E_TAME_CREATURE) {
         crate::creatures::validate_tame(ctx, caster, target_guid)?;
+    }
+    if effects
+        .iter()
+        .any(|effect| effect.kind == E_SUMMON_PET && effect.p0 == 0)
+    {
+        crate::creatures::check_hunter_pet_restore(ctx, caster, false)?;
+    }
+    if effects.iter().any(|effect| effect.kind == E_REVIVE_PET) {
+        crate::creatures::check_hunter_pet_restore(ctx, caster, true)?;
+    }
+    if effects.iter().any(|effect| effect.kind == E_DISMISS_PET)
+        && crate::creatures::pet_of(ctx, caster_guid).is_none()
+    {
+        return Err("No active pet to dismiss".to_string().into());
     }
 
     Ok(())
@@ -855,7 +892,9 @@ fn check_cast_gate_suffix(
         crate::creatures::check_hostile_summon(ctx, caster, hdr, effect)?;
     }
 
-    if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
+    if level_gate_blocks(caster.is_player(), hdr.spell_level, level)
+        && !crate::package_combat::essential_spell(ctx, caster_guid, spell_id)
+    {
         return Err(CastRefusal::from(format!(
             "spell {spell_id} requires level {} (caster is level {level})",
             hdr.spell_level
@@ -889,7 +928,12 @@ fn check_cast_gate_suffix(
         )));
     }
 
-    if hdr.cooldown_ms > 0 {
+    let package_resurrection = effects.iter().any(|effect| effect.kind == E_RESURRECT)
+        && crate::package_combat::active(ctx, caster_guid);
+    if package_resurrection {
+        crate::package_combat::resurrection_gate(ctx, caster_guid)?;
+    }
+    if hdr.cooldown_ms > 0 && !package_resurrection {
         if let Some(cd) = ctx
             .db
             .game_spell_cd()
@@ -1074,11 +1118,19 @@ fn check_cast_gate_suffix(
         }
     }
 
+    if crate::spell::form::wrong_resource(caster, hdr) {
+        return Err(CastRefusal::from(
+            "Spell requires a different form resource".to_string(),
+        ));
+    }
+
     // Creatures have no managed power pool, so only Characters pay spell costs.
-    if cost_gate_blocks(caster.is_player(), caster.power, hdr.cost) {
+    let cost = crate::spell::form::cast_cost(ctx, caster, hdr);
+    let power = crate::spell::form::cast_power(ctx, caster, hdr);
+    if cost_gate_blocks(caster.is_player(), power, cost) {
         return Err(CastRefusal::new(
             CastRefusalKind::InsufficientPower,
-            format!("not enough power: have {}, need {}", caster.power, hdr.cost),
+            format!("not enough power: have {power}, need {cost}"),
         ));
     }
 

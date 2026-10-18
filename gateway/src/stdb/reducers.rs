@@ -6,6 +6,17 @@ use super::bindings::*;
 use super::connection::{call_reducer, Coordinator};
 
 impl Coordinator {
+    pub(crate) fn certify_package_party_authority(&self) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "gw_certify_package_party_authority",
+            gw_certify_package_party_authority_then(
+                self.1.package_party_gateway_id.clone(),
+                self.is_single_shard_realm()
+            )
+        )
+    }
+
     pub fn claim_bot_transfer_intent(
         &self,
         intent_id: u64,
@@ -64,6 +75,14 @@ impl Coordinator {
                     if let Err(e) = guard.conn.reducers.gw_heartbeat() {
                         log::warn!(
                             "gateway heartbeat send failed on {shard_name} (will retry next beat): {e}"
+                        );
+                    }
+                    if let Err(error) = guard.conn.reducers.gw_certify_package_party_authority(
+                        coord.1.package_party_gateway_id.clone(),
+                        coord.is_single_shard_realm(),
+                    ) {
+                        log::warn!(
+                            "Package Party authority renewal failed on {shard_name}: {error}"
                         );
                     }
                 }

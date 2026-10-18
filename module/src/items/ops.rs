@@ -692,6 +692,9 @@ pub(crate) fn death_durability_loss(max_durability: u32, durability: u32) -> u32
 }
 
 pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64) -> bool {
+    if crate::package_combat::active(ctx, player_guid) {
+        return false;
+    }
     let mut any_lost = false;
     let instances = ctx.db.game_item_instance();
     let templates = ctx.db.game_item_template();

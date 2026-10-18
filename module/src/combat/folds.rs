@@ -60,8 +60,17 @@ pub(crate) fn effective_block_bp(
 }
 
 pub(crate) fn aura_attack_power_bonus(ctx: &ReducerContext, unit_guid: u64) -> u32 {
-    crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER).max(0)
-        as u32
+    let form_bonus = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(unit_guid)
+        .map_or(0, |entity| {
+            crate::spell::form::attack_power_bonus(ctx, &entity)
+        });
+    crate::spell::combat_field_bonus(ctx, unit_guid, crate::spell::COMBAT_ATTACK_POWER)
+        .saturating_add(form_bonus)
+        .max(0) as u32
 }
 
 pub(crate) fn seal_holy_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
@@ -153,7 +162,8 @@ pub(crate) fn effective_agility(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
 pub(crate) fn effective_armor(ctx: &ReducerContext, e: &WorldEntity) -> u32 {
     lyracore_shared::resistance::effective_resistance(
         e.armor,
-        crate::spell::resistance_bonus(ctx, e.guid, crate::spell::RESIST_ARMOR),
+        crate::spell::resistance_bonus(ctx, e.guid, crate::spell::RESIST_ARMOR)
+            .saturating_add(crate::spell::form::armor_bonus(ctx, e)),
     )
 }
 
@@ -282,14 +292,27 @@ pub(crate) fn find_ammo(ctx: &ReducerContext, player_guid: u64) -> Option<ItemIn
 
 const DURABILITY_WEAR_CHANCE_PCT: u32 = 10;
 
+fn weapon_durability_after_swing(durability: u32, package_combat: bool, roll: u32) -> u32 {
+    if package_combat || roll % 100 >= DURABILITY_WEAR_CHANCE_PCT {
+        durability
+    } else {
+        durability.saturating_sub(1)
+    }
+}
+
 pub(crate) fn wear_weapon(ctx: &ReducerContext, player_guid: u64) {
     if let Some(mut inst) = crate::items::item_in_slot(
         ctx,
         player_guid,
         lyracore_shared::constants::starter_item::MAINHAND_SLOT,
     ) {
-        if inst.durability > 0 && ctx.random::<u32>() % 100 < DURABILITY_WEAR_CHANCE_PCT {
-            inst.durability -= 1;
+        let durability = weapon_durability_after_swing(
+            inst.durability,
+            crate::package_combat::active(ctx, player_guid),
+            ctx.random::<u32>(),
+        );
+        if durability != inst.durability {
+            inst.durability = durability;
             ctx.db.game_item_instance().guid().update(inst);
         }
     }
@@ -467,7 +490,18 @@ pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {
 
 #[cfg(test)]
 mod weapon_damage_tests {
-    use super::add_weapon_damage;
+    use super::{add_weapon_damage, weapon_durability_after_swing};
+
+    #[test]
+    fn package_combat_prevents_wear_and_normal_swings_keep_the_ten_percent_chance() {
+        assert_eq!(weapon_durability_after_swing(100, true, 0), 100);
+        assert_eq!(weapon_durability_after_swing(100, true, 9), 100);
+        assert_eq!(weapon_durability_after_swing(100, false, 0), 99);
+        assert_eq!(weapon_durability_after_swing(100, false, 9), 99);
+        assert_eq!(weapon_durability_after_swing(100, false, 10), 100);
+        assert_eq!(weapon_durability_after_swing(100, false, 99), 100);
+        assert_eq!(weapon_durability_after_swing(0, false, 0), 0);
+    }
 
     #[test]
     fn flat_weapon_damage_applies_after_template_rounding_and_clamps() {

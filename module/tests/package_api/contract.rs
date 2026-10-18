@@ -16,6 +16,7 @@ const ROOT_ITEMS: &[&str] = &[
     "CHARACTER_OWNED_TABLES",
     "character_owned",
     "encounter_package",
+    "game_addon_command",
     "game_client_command",
     "game_hook",
     "game_package_characters",

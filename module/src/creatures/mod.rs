@@ -63,6 +63,7 @@ pub(crate) use hunter_pet::{
 };
 
 pub(crate) use pet::{apply_pet_command, despawn_pets, pet_of, summon_pet};
+pub(crate) use pet::{check_hunter_pet_restore, restore_hunter_pet};
 pub use pet::{game_pet_command, PetCommand};
 
 pub use pet_care::{game_pet_care_schedule, PetCareSchedule, CARE_INTERVAL_MICROS};

@@ -243,6 +243,18 @@ fn group_op_error(error: GroupOpError, detail: &str) -> String {
     }
 }
 
+fn package_party_request_gate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), GroupOpError> {
+    if group_of(ctx, character_guid)
+        .is_some_and(|member| crate::package_party::protects_group(ctx, member.group_id))
+    {
+        return Err(GroupRefusal::ActionSuppressed.into());
+    }
+    Ok(())
+}
+
 use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause, GroupRefusal};
 
 #[table(accessor = game_group_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
@@ -998,6 +1010,8 @@ fn invite_core_on(
     inviter_guid: u64,
     target_guid: u64,
 ) -> Result<(), GroupOpError> {
+    package_party_request_gate(ctx, inviter_guid)?;
+    package_party_request_gate(ctx, target_guid)?;
     if target_guid == inviter_guid {
         return Err(GroupRefusal::InviteSelf.into());
     }
@@ -1089,12 +1103,16 @@ fn accept_invite_on(
     acceptor_guid: u64,
     class: u8,
 ) -> Result<(), GroupOpError> {
+    package_party_request_gate(ctx, acceptor_guid)?;
     let invites = ctx.db.game_group_invite();
     let invite = invites
         .by_target()
         .filter(&acceptor_guid)
         .next()
         .ok_or(GroupRefusal::NoPendingInvite)?;
+    if crate::package_party::protects_group(ctx, invite.group_id) {
+        return Err(GroupRefusal::ActionSuppressed.into());
+    }
     invites.id().delete(invite.id);
     let target = match invite.group_id {
         0 => JoinTarget::NewParty {
@@ -1285,6 +1303,9 @@ pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<
 }
 
 fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(), GroupOpError> {
+    if cause != leave_cause::CHARACTER_DELETED {
+        package_party_request_gate(ctx, leaver_guid)?;
+    }
     if checked_group_membership(ctx, leaver_guid)?.is_none() {
         return Err(GroupRefusal::NotInGroup.into());
     }
@@ -1310,6 +1331,7 @@ fn uninvite_on(
     actor_guid: u64,
     target_guid: u64,
 ) -> Result<(), GroupOpError> {
+    package_party_request_gate(ctx, actor_guid)?;
     let (m, group) = checked_group_membership(ctx, actor_guid)?.ok_or(GroupRefusal::NotInGroup)?;
     if !manages_raid(&group, &m) {
         return Err(GroupRefusal::NotLeader.into());
@@ -1353,6 +1375,7 @@ fn set_loot_method_on(
     master_guid: u64,
     loot_threshold: u8,
 ) -> Result<(), GroupOpError> {
+    package_party_request_gate(ctx, leader_guid)?;
     let (m, mut group) = led_group_of(ctx, leader_guid)?;
     if !valid_loot_method(loot_setting) || !valid_loot_threshold(loot_threshold) {
         return Err(GroupRefusal::InvalidLootRules.into());
@@ -1391,6 +1414,7 @@ pub(crate) fn valid_loot_threshold(threshold: u8) -> bool {
 }
 
 fn raid_convert_on(ctx: &ReducerContext, actor_guid: u64) -> Result<RosterChange, GroupOpError> {
+    package_party_request_gate(ctx, actor_guid)?;
     let (member, mut group) = led_group_of(ctx, actor_guid)?;
     if group_kind_of(&group) == GroupKind::Raid {
         return Ok(RosterChange::Unchanged);
@@ -1411,6 +1435,7 @@ fn set_leader_on(
     actor_guid: u64,
     target_guid: u64,
 ) -> Result<RosterChange, GroupOpError> {
+    package_party_request_gate(ctx, actor_guid)?;
     let (member, mut group) = led_group_of(ctx, actor_guid)?;
     if target_guid == actor_guid {
         return Err(GroupRefusal::TargetIsSelf.into());
@@ -1433,6 +1458,7 @@ fn set_assistant_on(
     target_guid: u64,
     promote: bool,
 ) -> Result<RosterChange, GroupOpError> {
+    package_party_request_gate(ctx, actor_guid)?;
     let (member, group) = led_group_of(ctx, actor_guid)?;
     if group_kind_of(&group) != GroupKind::Raid {
         return Err(GroupRefusal::NotRaid.into());

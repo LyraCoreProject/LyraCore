@@ -55,11 +55,22 @@ pub(crate) fn aura_armor_positive(live: &LiveConn, guid: u64) -> u32 {
 pub(crate) fn effective_resistances(live: &LiveConn, guid: u64) -> [u32; 7] {
     live.with_cache_snapshot(|| {
         let db = &live.conn.db;
-        let base_armor = db
-            .game_world_entity()
-            .guid()
-            .find(&guid)
-            .map_or(0, |e| e.armor);
+        let entity = db.game_world_entity().guid().find(&guid);
+        let base_armor = entity.as_ref().map_or(0, |e| e.armor);
+        let form_spell = entity.as_ref().and_then(|entity| {
+            use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_DIRE_BEAR};
+            if (entity.unit_bytes_0 >> 8) & 0xFF != 11 {
+                return None;
+            }
+            match entity.stance {
+                STANCE_BEAR => Some(1178u64),
+                STANCE_DIRE_BEAR => Some(9635u64),
+                _ => None,
+            }
+        });
+        let form_armor_percent = form_spell
+            .and_then(|spell| db.game_spell_effect().id().find(&(spell << 2)))
+            .map_or(0, |effect| effect.base_points.max(0));
         let auras = aura_values(live, guid);
         let items: Vec<_> = live
             .inventory
@@ -95,24 +106,31 @@ pub(crate) fn effective_resistances(live: &LiveConn, guid: u64) -> [u32; 7] {
                 })
             })
             .collect();
+        let enchant_stat = |id, kind| {
+            lyracore_shared::item_property::enchant_stat(
+                kind,
+                u32::MAX,
+                live.combat_reads
+                    .read()
+                    .unwrap()
+                    .enchantments(db, id)
+                    .into_iter()
+                    .map(|effect| (effect.kind, effect.amount, effect.school_mask)),
+            )
+        };
+        let gear_armor = resistance::resistance_bonus(1, [], items.iter().copied(), enchant_stat);
+        let form_armor = (i64::from(gear_armor.max(0)) * i64::from(form_armor_percent) / 100)
+            .min(i64::from(i32::MAX)) as i32;
         std::array::from_fn(|index| {
-            let bonus = resistance::resistance_bonus(
+            let mut bonus = resistance::resistance_bonus(
                 resistance::SCHOOL_BITS[index],
                 auras.iter().copied(),
                 items.iter().copied(),
-                |id, kind| {
-                    lyracore_shared::item_property::enchant_stat(
-                        kind,
-                        u32::MAX,
-                        live.combat_reads
-                            .read()
-                            .unwrap()
-                            .enchantments(db, id)
-                            .into_iter()
-                            .map(|effect| (effect.kind, effect.amount, effect.school_mask)),
-                    )
-                },
+                enchant_stat,
             );
+            if index == 0 {
+                bonus = bonus.saturating_add(form_armor);
+            }
             resistance::effective_resistance(if index == 0 { base_armor } else { 0 }, bonus)
         })
     })

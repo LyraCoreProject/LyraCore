@@ -436,7 +436,9 @@ pub(crate) fn teleport_player(
     z: f32,
     o: f32,
 ) {
-    if crate::taxi::movement_is_suppressed(ctx, player_guid) {
+    if !crate::package_combat::relocation_allowed(ctx, player_guid, map_id, instance_id)
+        || crate::taxi::movement_is_suppressed(ctx, player_guid)
+    {
         return;
     }
     let entities = ctx.db.game_world_entity();
@@ -559,6 +561,9 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
     let Some(mut c) = crate::helpers::character_by_guid(ctx, guid) else {
         return;
     };
+    if !crate::package_combat::relocation_allowed(ctx, guid, c.home_map, 0) {
+        return;
+    }
     if ctx.db.game_world_entity().guid().find(guid).is_some() {
         teleport_player(
             ctx,
@@ -669,6 +674,7 @@ pub(crate) fn apply_player_login(
             .delete(crate::corpse::corpse_guid_for(character_guid));
     }
 
+    crate::spell::form::forget(ctx, character_guid);
     let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =
@@ -1084,6 +1090,9 @@ pub(crate) fn apply_inspect(
 }
 
 pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+    if crate::package_combat::active(ctx, guid) {
+        return Err("Wait for the match respawn or a resurrection".into());
+    }
     use lyracore_shared::constants::{player_flags, unit_vis_flags};
     let entities = ctx.db.game_world_entity();
     let mut player = entities
@@ -1284,7 +1293,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.bank_bag_slots = entity.bank_bag_slots;
         // Zero means uninitialized health; pending_ghost restores a released ghost separately.
         c.health = entity.health.max(1);
-        c.power = entity.power;
+        c.power = crate::spell::form::mana_for_persist(ctx, entity);
 
         c.death_expire_micros = entity.death_expire_micros;
 

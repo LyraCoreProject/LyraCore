@@ -869,7 +869,24 @@ fn build_instance_plan(
     if scan.placements.is_empty() {
         bail!("instance route {} has no ADT model placements", slice.name);
     }
-    let calibration = crate::nav::calibrate_from_placements_with_evidence(chain, &scan.placements)?;
+    let calibration = if slice.map_id == 189 {
+        let calibration_scan = crate::nav::scan_tiles(
+            chain,
+            &source.map_name,
+            slice.map_id,
+            (
+                (i32::from(x0 / 16) - 2).max(0) * 16,
+                ((i32::from(x1 / 16) + 3) * 16 - 1).min(1023),
+                (i32::from(y0 / 16) - 2).max(0) * 16,
+                ((i32::from(y1 / 16) + 3) * 16 - 1).min(1023),
+            ),
+        )?;
+        println!("vmap: instance calibration includes adjacent map tiles");
+        print_instance_adt_evidence(&calibration_scan.sources);
+        crate::nav::calibrate_from_placements_with_evidence(chain, &calibration_scan.placements)?
+    } else {
+        crate::nav::calibrate_from_placements_with_evidence(chain, &scan.placements)?
+    };
     let mut inspections = Vec::new();
     let mut placement_findings = Vec::new();
     for placement in scan.placements.iter().filter(|placement| placement.is_wmo) {
@@ -1529,7 +1546,11 @@ fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
 
 pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
     let generation = generation_info(args, generation_id)?;
-    preflight_map_ownership(args, generation.map_id)?;
+    if generation.map_id == 189 {
+        preflight_instance_ownership(args, generation.map_id)?;
+    } else {
+        preflight_map_ownership(args, generation.map_id)?;
+    }
     if !matches!(generation.state, VERIFIED | ACTIVE) {
         bail!("vmap generation {generation_id} is not verified or active (state {}) — coverage preparation refused", generation.state);
     }

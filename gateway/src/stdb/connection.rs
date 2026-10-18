@@ -28,6 +28,7 @@ pub struct Coordinator(
 
 pub(crate) struct ShardSet {
     map: ShardMap,
+    pub(crate) package_party_gateway_id: String,
     conns: HashMap<String, Arc<CoordinatorInner>>,
     world: Arc<super::world_view::WorldView>,
     pub(crate) deleted_character_reconciliation_requested: AtomicBool,
@@ -2542,10 +2543,18 @@ impl Coordinator {
         let world = Arc::new(super::world_view::WorldView::new(
             crate::config::aoi_enabled(),
         ));
+        let mut authority_nonce = [0u8; 16];
+        getrandom::fill(&mut authority_nonce)
+            .map_err(|error| anyhow!("OS randomness unavailable: {error}"))?;
+        let package_party_gateway_id = authority_nonce
+            .iter()
+            .map(|byte| format!("{byte:02x}"))
+            .collect();
         let coordinator = Self(
             home,
             Arc::new(ShardSet {
                 map,
+                package_party_gateway_id,
                 conns,
                 world,
                 deleted_character_reconciliation_requested: AtomicBool::new(false),
@@ -2554,6 +2563,10 @@ impl Coordinator {
             }),
             None,
         );
+        for inner in coordinator.1.conns.values() {
+            let shard = Self(inner.clone(), coordinator.1.clone(), None);
+            shard.certify_package_party_authority()?;
+        }
         coordinator.arm_shared_world_view()?;
         spawn_loot_roll_relay(coordinator.clone());
         super::member_stats_relay::spawn_member_stats_relay(coordinator.clone());
@@ -2567,6 +2580,10 @@ impl Coordinator {
 
     pub(crate) fn world_view(&self) -> Arc<super::world_view::WorldView> {
         self.1.world.clone()
+    }
+
+    pub(crate) fn is_single_shard_realm(&self) -> bool {
+        self.1.map.databases().len() == 1
     }
 
     /// Register before any World Session; shard-vector order fixes stable ShardIds.

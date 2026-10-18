@@ -164,12 +164,106 @@ pub(crate) fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntit
 
 // Clear combat and threat before motion, entity and command state.
 fn despawn_pet_entity(ctx: &ReducerContext, pet: WorldEntity) {
+    save_hunter_pet_body(ctx, &pet);
     crate::combat::disengage(ctx, pet.guid);
     crate::motion::drop_pending(ctx, pet.guid);
     ctx.db.game_entity_motion().guid().delete(pet.guid);
     ctx.db.game_world_entity().guid().delete(pet.guid);
     super::clear_live_pet_kind(ctx, pet.guid);
     super::distraction::clear(ctx, pet.guid);
+}
+
+fn save_hunter_pet_body(ctx: &ReducerContext, body: &WorldEntity) {
+    use super::hunter_pet::game_hunter_pet;
+    if let Some(mut pet) = super::hunter_pet_for_owner(ctx, body.owner_guid).filter(|pet| {
+        super::live_pet_kind(ctx, body.guid) == super::PetKind::Hunter { pet_id: pet.pet_id }
+    }) {
+        pet.dead = body.dead;
+        pet.saved_health = body.health;
+        pet.saved_max_health = body.max_health;
+        pet.saved_damage_min = body.sheet_dmg_min;
+        pet.saved_damage_max = body.sheet_dmg_max;
+        ctx.db.game_hunter_pet().pet_id().update(pet);
+    }
+}
+
+pub(crate) fn check_hunter_pet_restore(
+    ctx: &ReducerContext,
+    owner: &WorldEntity,
+    revive: bool,
+) -> Result<(), String> {
+    if owner.class() != 3 || !owner.is_player() {
+        return Err("Only a Hunter can call or revive a Hunter pet".into());
+    }
+    let pet = super::hunter_pet_for_owner(ctx, owner.guid).ok_or("No Hunter pet to restore")?;
+    if ctx
+        .db
+        .game_creature_template()
+        .entry()
+        .find(pet.creature_entry)
+        .is_none()
+    {
+        return Err("Hunter pet template is unavailable".into());
+    }
+    let body = pet_of(ctx, owner.guid);
+    let dead = body.as_ref().map_or(pet.dead, |body| body.dead);
+    if revive != dead {
+        return Err(if dead {
+            "Revive the dead pet before calling it"
+        } else {
+            "The pet is alive"
+        }
+        .into());
+    }
+    if !revive && body.is_some() {
+        return Err("The Hunter already has an active pet".into());
+    }
+    Ok(())
+}
+
+pub(crate) fn restore_hunter_pet(
+    ctx: &ReducerContext,
+    guid: u64,
+    revive_percent: Option<u8>,
+) -> Result<(), String> {
+    use super::hunter_pet::{game_hunter_pet, game_live_pet_kind, LivePetKind};
+    let owner = crate::helpers::live_entity(ctx, guid)?;
+    check_hunter_pet_restore(ctx, &owner, revive_percent.is_some())?;
+    despawn_pets(ctx, guid);
+    let mut pet = super::hunter_pet_for_owner(ctx, guid).ok_or("No Hunter pet to restore")?;
+    let mut body = build_pet_entity(ctx, &owner, pet.creature_entry)
+        .ok_or("Hunter pet template is unavailable")?;
+    body.faction_template = owner.faction_template;
+    body.level = pet.level;
+    if pet.saved_max_health != 0 {
+        body.max_health = pet.saved_max_health;
+        body.sheet_dmg_min = pet.saved_damage_min;
+        body.sheet_dmg_max = pet.saved_damage_max;
+    }
+    body.health = match revive_percent {
+        Some(percent) => {
+            (u64::from(body.max_health) * u64::from(percent.clamp(1, 100)) / 100).max(1) as u32
+        }
+        None => {
+            if pet.saved_max_health == 0 {
+                body.max_health
+            } else {
+                pet.saved_health.max(1).min(body.max_health)
+            }
+        }
+    };
+    pet.dead = false;
+    pet.saved_health = body.health;
+    pet.care_updated_at = ctx.timestamp;
+    let pet_guid = body.guid;
+    super::spawn::insert_creature_entity(ctx, body);
+    ctx.db.game_live_pet_kind().insert(LivePetKind {
+        pet_guid,
+        hunter_pet_id: pet.pet_id,
+    });
+    ctx.db.game_hunter_pet().pet_id().update(pet.clone());
+    super::publish_hunter_pet_protocol(ctx, &pet, pet_guid);
+    Ok(())
 }
 
 pub(crate) fn despawn_pets(ctx: &ReducerContext, owner_guid: u64) {
@@ -200,14 +294,17 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
     };
     let mut pet = build_creature_entity(&spawn, &tmpl, ctx.random(), owner.instance_id);
     pet.owner_guid = owner.guid;
+    if crate::package_combat::active(ctx, owner.guid) {
+        pet.faction_template = owner.faction_template;
+    }
     Some(pet)
 }
 
 pub(crate) fn summon_pet(ctx: &ReducerContext, caster_guid: u64, entry: u32) {
     if entry == 0 {
-        spacetimedb::log::info!(
-            "E_SUMMON_PET with no creature entry (p0=0) for {caster_guid} — skipped"
-        );
+        if let Err(reason) = restore_hunter_pet(ctx, caster_guid, None) {
+            spacetimedb::log::info!("Hunter pet call refused for {caster_guid}: {reason}");
+        }
         return;
     }
     let entities = ctx.db.game_world_entity();

@@ -426,7 +426,9 @@ fn process_frame(
                 addon.refill_at = now;
                 if addon.tokens >= 1.0 {
                     addon.tokens -= 1.0;
-                    handle_addon_message(&*conn.store.current(), conn, &text)?;
+                    for reply in handle_addon_message(&*conn.store.current(), conn, &text)? {
+                        send(tx, reply)?;
+                    }
                 } else if addon
                     .drop_logged_at
                     .is_none_or(|t| now.duration_since(t).as_secs() >= 60)
@@ -534,27 +536,41 @@ fn handle_addon_message<St: SessionStore + ?Sized>(
     store: &St,
     conn: &WorldConn,
     text: &str,
-) -> Result<()> {
+) -> Result<Vec<Outbound>> {
     let Some((cmd, payload)) = codec::addon::parse_bridge_envelope(text) else {
         log::debug!("addon bridge: non-STC or malformed frame dropped: {text:?}");
-        return Ok(());
+        return Ok(vec![]);
     };
     let Some(actor) = conn.actor() else {
         log::info!(
             "addon bridge: command {cmd:?} from account {} dropped outside the world",
             conn.account_id
         );
-        return Ok(());
+        return Ok(vec![]);
     };
     match store.client_command(actor, cmd.clone(), payload) {
-        Ok(()) => Ok(()),
+        Ok(()) => Ok(vec![]),
         Err(e) => match crate::stdb::classify(&e) {
-            crate::stdb::DurableFailure::Refusal { .. } => {
+            crate::stdb::DurableFailure::Refusal { reason } => {
                 log::info!(
                     "addon bridge: command {cmd:?} from account {} refused: {e:#}",
                     conn.account_id
                 );
-                Ok(())
+                if cmd.starts_with("package.") {
+                    let reason: String = reason
+                        .chars()
+                        .filter(|character| !character.is_control())
+                        .take(240)
+                        .collect();
+                    let text = codec::addon::build_bridge_envelope(
+                        &format!("{cmd}.result"),
+                        &format!("Refused|{reason}"),
+                    );
+                    let (opcode, body) = codec::addon::build_addon_smsg_raw(actor.guid(), &text);
+                    Ok(vec![Outbound::Raw { opcode, body }])
+                } else {
+                    Ok(vec![])
+                }
             }
             crate::stdb::DurableFailure::TransportLoss => Err(e),
         },

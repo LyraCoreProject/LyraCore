@@ -33,7 +33,7 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 **O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](#realm-topology) · [Owner Token](#gateway-and-module)
 
-**P** [Package](#packages) · [Package API](#packages) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#sharding-and-transfer) · [Party Partition](#sharding-and-transfer) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#gateway-and-module) · [Property Pool](#random-properties) · [Protocol Family](#working-method) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#sharding-and-transfer) · [Public Note](#guilds)
+**P** [Package Addon Command](#packages) · [Package Combat Rules](#packages) · [Package Instance](#packages) · [Package Party Authority](#packages) · [Package](#packages) · [Package API](#packages) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#sharding-and-transfer) · [Party Partition](#sharding-and-transfer) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#gateway-and-module) · [Property Pool](#random-properties) · [Protocol Family](#working-method) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#sharding-and-transfer) · [Public Note](#guilds)
 
 **R** [Raid](#sharding-and-transfer) · [Raid Quest](#sharding-and-transfer) · [Raid Slot](#sharding-and-transfer) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#sharding-and-transfer) · [Realm](#realm-topology) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#chat) · [Realm-core](#realm-topology) · [Recorded Revision](#packages) · [Recovery Attempt](#sharding-and-transfer) · [Recovery Scan](#sharding-and-transfer) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](#gateway-and-module) · [Relay](#gateway-and-module) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roster Revision](#sharding-and-transfer) · [Roster Revision Relay](#sharding-and-transfer) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](#runtime-scripts) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
@@ -71,7 +71,8 @@ The shard that hosts instanced maps.
 A stable name for the import plan assigned to one World Shard or Instance Pool destination. The
 canonical profiles are `alliance-eastern`, `alliance-kalimdor`, `alliance-single`,
 `starting-eastern`, `starting-kalimdor`, `instances`, `full-world`, `full-eastern`,
-`full-kalimdor`, and `full-instances`. Full profiles share every creature definition and build a shared quest catalogue from the
+`full-kalimdor`, `full-instances`, and `scarlet-courtyard`. The courtyard profile imports map 189
+and a bounded WMO route for cooperative defense, with no overland maps. Full profiles share every creature definition and build a shared quest catalogue from the
 full source. Their spawn positions follow the selected maps; `full-world` accepts
 every source map. Partitioned full profiles compile AI for local populations and their summoned
 creatures. The starting profiles retain the Alliance scope and add the Horde starting areas on
@@ -308,8 +309,9 @@ _Avoid_: transfer request, move order
 **Group Intent**:
 A row a Package writes to ask the Gateway to run one party operation for a Character that has no
 Session: invite that Character, or leave the party it leads. Party membership is authoritative on
-realm-core, which a Package can never reach, so the Package decides and the Gateway executes against
-the correct authority. Reaped on the shared event TTL, so it is a request, never a record. Held in
+Realm-core, so the Package decides and the Gateway executes against the correct authority. A
+Package Party Authority permits direct cooperative match operations only when Realm-core and
+Characters share one Shard. Reaped on the shared event TTL, so it is a request, never a record. Held in
 `game_bot_invite_intent`, which kept its name through the change that gave it a second operation.
 _Avoid_: invite intent, group request, party order
 
@@ -335,6 +337,8 @@ replace a retained cast or its identity. Deferring Quest work can select another
 The accepted Quest and its bounded Recovery Attempt remain available for retry.
 Selected return-home movement retains its Bot Objective while queued or travelling, including path
 leg changes. Quest selection resumes after arrival, movement cancellation or the objective deadline.
+A wave-defense Bot Objective instead retains a match partition, base position and current wave
+targets. It uses the existing controller's combat and healing actions inside that partition.
 
 **Companion Order**:
 An authenticated human leader's retained Follow, Stay, Assist, or Target instruction for one bot.
@@ -1018,6 +1022,25 @@ named `package_api_lint` test checks every Package Rust file against it and repo
 that contract. CI runs it with the Official Packages installed. It is a compatibility contract, never a
 sandbox: compiled Package code is trusted either way.
 _Avoid_: SDK, plugin API, public API, allowlist
+
+**Package Addon Command**:
+A `package.NAMESPACE.ACTION` request from an authenticated World Session to one registered Package
+handler. Core checks the Character's ownership and delivers a private result. The Package owns
+gameplay Gates and duplicate-request handling.
+
+**Package Instance**:
+An Instance whose empty population and lease belong to a Package. A match admits its owning Party;
+a shared lobby admits ungrouped Characters up to its capacity. Imported dungeon population stays
+outside both.
+
+**Package Party Authority**:
+A short-lived Gateway certificate that Realm-core and Characters share one Shard. All live
+certificates must agree before a Package forms or replaces a cooperative Party directly.
+
+**Package Combat Rules**:
+Rules attached to an admitted Character in a Package Instance: guaranteed role spells, shared
+resurrection cooldown, no ammunition, reagent or durability cost, a friendly match faction, and Package-owned
+XP, talent choices and respawn timing. Leaving the mode clears the rules and restores the faction.
 
 **Package Fixture**:
 Package code that stages or observes state for the Package's own durable tests. It compiles only

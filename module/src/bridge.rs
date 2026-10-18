@@ -1,6 +1,10 @@
 use lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
+mod package_commands;
+
+pub(crate) use package_commands::{apply_package_command, PackageCommandHandler};
+
 #[cfg(feature = "debug_reducers")]
 use crate::{game_group, game_world_entity};
 

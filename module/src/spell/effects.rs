@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use crate::game_world_entity;
+use crate::{game_world_entity, WorldEntity};
 
 use crate::game_melee_attack;
 
@@ -108,6 +108,22 @@ pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8
     removed
 }
 
+pub(super) fn max_mana(ctx: &ReducerContext, entity: &WorldEntity) -> u32 {
+    let base = crate::stats::max_power_for(ctx, entity.race(), entity.class(), entity.level);
+    let intellect = stat_bonus(ctx, entity.guid, STAT_INT).saturating_add(
+        crate::items::equipped_stat_bonus(ctx, entity.guid, crate::items::EquipStat::Intellect),
+    );
+    add_flat_pool_bonus(
+        rederive_pool(
+            base,
+            entity.intellect,
+            intellect,
+            crate::stats::mana_from_intellect,
+        ),
+        crate::items::equipped_stat_bonus(ctx, entity.guid, crate::items::EquipStat::Mana),
+    )
+}
+
 pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
     let entities = ctx.db.game_world_entity();
     let Some(mut e) = entities.guid().find(unit_guid) else {
@@ -130,27 +146,18 @@ pub(crate) fn recompute_vitals(ctx: &ReducerContext, unit_guid: u64) {
             sta_bonus,
             crate::stats::hp_from_stamina,
         ),
-        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Health),
+        crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Health)
+            .saturating_add(super::form::health_bonus(ctx, &e)),
     );
 
-    let is_mana = lyracore_shared::packing::power_type::for_class(class)
-        == lyracore_shared::packing::power_type::MANA;
+    let power_kind = super::form::power_kind(class, e.stance);
+    let is_mana = power_kind == lyracore_shared::packing::power_type::MANA;
     let new_max_power = if is_mana {
-        let login_max_power = crate::stats::max_power_for(ctx, race, class, e.level);
-        let int_bonus = stat_bonus(ctx, unit_guid, STAT_INT).saturating_add(
-            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Intellect),
-        );
-        add_flat_pool_bonus(
-            rederive_pool(
-                login_max_power,
-                e.intellect,
-                int_bonus,
-                crate::stats::mana_from_intellect,
-            ),
-            crate::items::equipped_stat_bonus(ctx, unit_guid, crate::items::EquipStat::Mana),
-        )
+        max_mana(ctx, &e)
+    } else if power_kind == lyracore_shared::packing::power_type::ENERGY {
+        100
     } else {
-        e.max_power
+        1000
     };
 
     let base_spirit = i128::from(crate::stats::base_attributes_for(ctx, race, class, e.level).4);

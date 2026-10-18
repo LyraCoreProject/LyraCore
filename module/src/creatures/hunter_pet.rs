@@ -35,6 +35,16 @@ pub struct HunterPet {
     /// Name-cache stamp in Unix seconds; zero falls back to `created_at` for existing rows.
     #[default(0u32)]
     pub name_timestamp: u32,
+    #[default(false)]
+    pub dead: bool,
+    #[default(0u32)]
+    pub saved_health: u32,
+    #[default(0u32)]
+    pub saved_max_health: u32,
+    #[default(0u32)]
+    pub saved_damage_min: u32,
+    #[default(0u32)]
+    pub saved_damage_max: u32,
 }
 
 #[table(
@@ -330,6 +340,10 @@ pub(crate) fn tame_creature(
         ctx.db.game_creature_spawn().guid().update(spawn);
     }
     target.guid = pet_guid;
+    let saved_health = target.health;
+    let saved_max_health = target.max_health;
+    let saved_damage_min = target.sheet_dmg_min;
+    let saved_damage_max = target.sheet_dmg_max;
     super::spawn::insert_creature_entity(ctx, target);
 
     let now = ctx.timestamp;
@@ -349,6 +363,11 @@ pub(crate) fn tame_creature(
         care_updated_at: now,
         loyalty_updated_at: now,
         name_timestamp: unix_seconds(now),
+        dead: false,
+        saved_health,
+        saved_max_health,
+        saved_damage_min,
+        saved_damage_max,
     };
     ctx.db.game_hunter_pet().pet_id().delete(pet_id);
     let hunter_pet = ctx.db.game_hunter_pet().insert(hunter_pet);

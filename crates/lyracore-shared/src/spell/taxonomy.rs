@@ -68,6 +68,8 @@ effect_kinds! {
     E_SUMMON_HOSTILE => SummonHostile = 0x24,
     E_DISTRACT => Distract = 0x25,
     E_SELF_RESURRECT => SelfResurrect = 0x26,
+    E_REVIVE_PET => RevivePet = 0x27,
+    E_DISMISS_PET => DismissPet = 0x28,
     A_PERIODIC_DAMAGE => AuraPeriodicDamage = 0x90,
     A_PERIODIC_HEAL => AuraPeriodicHeal = 0x91,
     A_PERIODIC_ENERGIZE => AuraPeriodicEnergize = 0x92,

@@ -74,11 +74,23 @@ pub fn parse_bridge_envelope(text: &str) -> Option<(String, String)> {
     if v != "v1" || parts != "1/1" || cmd.is_empty() {
         return None;
     }
+    if cmd.starts_with("package.")
+        && (cmd.len() > 64
+            || text.len() > 2304
+            || !cmd
+                .bytes()
+                .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'_' | b'.')))
+    {
+        return None;
+    }
     let payload = if escaped {
         payload.replace("||", "|")
     } else {
         payload.to_string()
     };
+    if cmd.starts_with("package.") && (payload.len() > 1024 || payload.contains('\0')) {
+        return None;
+    }
     Some((cmd.to_string(), payload))
 }
 

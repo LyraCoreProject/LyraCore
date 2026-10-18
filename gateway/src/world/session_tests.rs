@@ -1973,8 +1973,77 @@ fn an_addon_command_refusal_is_dropped_and_a_transport_loss_ends_the_session() {
     };
 
     let refusing = answering(|op| crate::stdb::ReducerCallError::refused(op, "UNKNOWN_COMMAND"));
-    assert!(handle_addon_message(&refusing, &conn, text).is_ok());
+    assert!(handle_addon_message(&refusing, &conn, text)
+        .unwrap()
+        .is_empty());
 
     let lost = answering(crate::stdb::ReducerCallError::transport_lost);
     assert!(handle_addon_message(&lost, &conn, text).is_err());
+}
+
+#[test]
+fn a_package_command_uses_the_world_session_actor_without_a_party_gate() {
+    let store = WorldFake::default();
+    let conn = in_world_conn(42, 1);
+    let text = "STC\tv1|package.wave_defense.select|1|1/1|healer|999";
+    assert!(handle_addon_message(&store, &conn, text)
+        .unwrap()
+        .is_empty());
+    assert_eq!(
+        *store.session.client_commands.lock().unwrap(),
+        vec![(1, "package.wave_defense.select".into(), "healer|999".into())]
+    );
+}
+
+#[test]
+fn a_package_refusal_replies_privately_and_transport_loss_ends_the_world_session() {
+    let conn = in_world_conn(42, 1);
+    let text = "STC\tv1|package.wave_defense.ready|1|1/1|yes";
+    let store = WorldFake {
+        session: SessionState {
+            client_command_error: Some(|op| {
+                crate::stdb::ReducerCallError::refused(op, "NotQueued")
+            }),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let replies = handle_addon_message(&store, &conn, text).unwrap();
+    let [Outbound::Raw { opcode, body }] = replies.as_slice() else {
+        panic!("expected one private addon reply");
+    };
+    assert_eq!(*opcode, codec::addon::SMSG_MESSAGECHAT_OPCODE);
+    assert_eq!(body[0], 6);
+    assert_eq!(&body[5..13], &1u64.to_le_bytes());
+    assert_eq!(
+        &body[17..body.len() - 2],
+        b"STC\tv1|package.wave_defense.ready.result|0|1/1|Refused|NotQueued"
+    );
+    let lost = WorldFake {
+        session: SessionState {
+            client_command_error: Some(crate::stdb::ReducerCallError::transport_lost),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    assert!(handle_addon_message(&lost, &conn, text).is_err());
+}
+
+#[test]
+fn oversized_and_malformed_package_frames_do_not_reach_the_store() {
+    let store = WorldFake::default();
+    let conn = in_world_conn(42, 1);
+    for frame in [
+        "STC\tv2|package.wave_defense.status|1|1/1|".into(),
+        "STC\tv1|package.wave_defense.status|1|1/2|".into(),
+        format!(
+            "STC\tv1|package.wave_defense.select|1|1/1|{}",
+            "x".repeat(1025)
+        ),
+    ] {
+        assert!(handle_addon_message(&store, &conn, &frame)
+            .unwrap()
+            .is_empty());
+    }
+    assert!(store.session.client_commands.lock().unwrap().is_empty());
 }

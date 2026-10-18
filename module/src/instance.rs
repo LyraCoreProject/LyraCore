@@ -159,6 +159,13 @@ pub struct GameInstance {
     pub reset_requested: bool,
 }
 
+#[table(accessor = game_package_instance)]
+pub struct PackageInstance {
+    #[primary_key]
+    pub instance_id: u64,
+    pub package_name: String,
+}
+
 #[table(
     accessor = game_instance_binding,
     index(accessor = by_character, btree(columns = [character_guid])),
@@ -317,6 +324,9 @@ pub(crate) fn instance_removal_due(
 }
 
 fn live_instance_for(ctx: &ReducerContext, instance_id: u64, map_id: u32) -> bool {
+    if is_package_instance(ctx, instance_id) {
+        return false;
+    }
     ctx.db
         .game_instance()
         .instance_id()
@@ -380,7 +390,11 @@ pub(crate) fn resolve_or_create_instance(
             .game_instance()
             .by_party()
             .filter(&g.group_id)
-            .find(|i| i.map_id == target_map && !i.reset_requested)
+            .find(|i| {
+                i.map_id == target_map
+                    && !i.reset_requested
+                    && !is_package_instance(ctx, i.instance_id)
+            })
             .map(|i| i.instance_id)
     });
 
@@ -408,6 +422,9 @@ pub(crate) fn admit_existing_party_instance(
     target_map: u32,
     expected_instance: u64,
 ) -> Result<u64, String> {
+    if is_package_instance(ctx, expected_instance) {
+        return Err("Package instance requires Package admission".to_string());
+    }
     let group = crate::group::group_of(ctx, character_guid)
         .ok_or("Character has no party for the expected instance")?;
     let member_count = ctx
@@ -445,8 +462,237 @@ fn instance_is_ownerless(ctx: &ReducerContext, party_id: u64) -> bool {
     party_id == 0 || ctx.db.game_group().group_id().find(party_id).is_none()
 }
 
+fn is_package_instance(ctx: &ReducerContext, instance_id: u64) -> bool {
+    ctx.db
+        .game_package_instance()
+        .instance_id()
+        .find(instance_id)
+        .is_some()
+}
+
+const PACKAGE_LOBBY_CAPACITY: usize = 200;
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn create_lobby(
+    ctx: &ReducerContext,
+    package_name: &str,
+    map_id: u32,
+) -> Result<u64, String> {
+    if package_name.is_empty() || !is_dungeon_map(map_id) || !hosts_instance_populations(ctx) {
+        return Err("Package lobby requires a Package name and a hosted dungeon map".into());
+    }
+    if let Some(instance) = ctx
+        .db
+        .game_instance()
+        .by_map()
+        .filter(map_id)
+        .find(|instance| {
+            instance.party_id == 0
+                && !instance.reset_requested
+                && ctx
+                    .db
+                    .game_package_instance()
+                    .instance_id()
+                    .find(instance.instance_id)
+                    .is_some_and(|owner| owner.package_name == package_name)
+        })
+    {
+        return Ok(instance.instance_id);
+    }
+    let instance_id = insert_instance(ctx, 0, map_id, 0, false)?;
+    ctx.db.game_package_instance().insert(PackageInstance {
+        instance_id,
+        package_name: package_name.to_string(),
+    });
+    Ok(instance_id)
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn create_empty(
+    ctx: &ReducerContext,
+    package_name: &str,
+    map_id: u32,
+    party_id: u64,
+) -> Result<u64, String> {
+    if package_name.is_empty() || !is_dungeon_map(map_id) {
+        return Err("Package instance needs a Package name and a dungeon map".to_string());
+    }
+    if !hosts_instance_populations(ctx) {
+        return Err("Package instances require their Instance Pool".to_string());
+    }
+    let group = ctx
+        .db
+        .game_group()
+        .group_id()
+        .find(party_id)
+        .ok_or("Package instance needs an existing Party")?;
+    let members = crate::group::members_of(ctx, party_id);
+    if group.group_type != 0
+        || members.is_empty()
+        || members.len() > crate::group::GROUP_MAX_MEMBERS
+    {
+        return Err("Package instance needs a Party of at most five Characters".to_string());
+    }
+    let instance_id = insert_instance(ctx, 0, map_id, party_id, false)?;
+    ctx.db.game_package_instance().insert(PackageInstance {
+        instance_id,
+        package_name: package_name.to_string(),
+    });
+    Ok(instance_id)
+}
+
+fn owned_instance(
+    ctx: &ReducerContext,
+    package_name: &str,
+    instance_id: u64,
+) -> Result<GameInstance, String> {
+    let owner = ctx
+        .db
+        .game_package_instance()
+        .instance_id()
+        .find(instance_id)
+        .ok_or("Instance is not owned by a Package")?;
+    if owner.package_name != package_name {
+        return Err("Instance belongs to another Package".to_string());
+    }
+    ctx.db
+        .game_instance()
+        .instance_id()
+        .find(instance_id)
+        .ok_or_else(|| "Package instance lease is missing".to_string())
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn enter_package_instance(
+    ctx: &ReducerContext,
+    package_name: &str,
+    character_guid: u64,
+    instance_id: u64,
+    position: (f32, f32, f32, f32),
+) -> Result<(), String> {
+    let instance = owned_instance(ctx, package_name, instance_id)?;
+    if !crate::package_combat::relocation_allowed(ctx, character_guid, instance.map_id, instance_id)
+    {
+        return Err("Leave the Package match before entering another instance".into());
+    }
+    if instance.reset_requested {
+        return Err("Package instance is closing".to_string());
+    }
+    if instance.party_id != 0 {
+        let group = crate::group::group_of(ctx, character_guid)
+            .ok_or("Character has no Party for the Package instance")?;
+        if group.group_id != instance.party_id {
+            return Err("Package instance belongs to another Party".to_string());
+        }
+        let party = ctx
+            .db
+            .game_group()
+            .group_id()
+            .find(group.group_id)
+            .ok_or("Package instance Party is unavailable")?;
+        if party.group_type != 0
+            || !party_size_allows_entry(
+                instance.map_id,
+                crate::group::members_of(ctx, group.group_id).len(),
+            )
+        {
+            return Err("Package instance requires a Party within map capacity".to_string());
+        }
+    }
+    let character = crate::helpers::character_by_guid(ctx, character_guid)
+        .ok_or("Character is unavailable or in Transfer")?;
+    if !character.online {
+        use crate::package_account::game_package_account;
+        if ctx
+            .db
+            .game_package_account()
+            .account_id()
+            .find(character.account_id)
+            .is_none()
+        {
+            return Err("Session-less admission requires a Package-owned Account".to_string());
+        }
+        crate::sessionless::transfer_authority_gate(ctx, character_guid)
+            .map_err(|refusal| refusal.to_string())?;
+    }
+    let entity = crate::helpers::live_entity(ctx, character_guid)?;
+    if !hosts_instance_populations(ctx) || entity.map_id != instance.map_id {
+        return Err(
+            "Package instance admission requires the same map on its Instance Pool".to_string(),
+        );
+    }
+    if instance.party_id == 0 && entity.instance_id != instance_id {
+        let occupants = ctx
+            .db
+            .game_world_entity()
+            .by_cell()
+            .filter((instance.map_id, instance_id))
+            .filter(|entity| entity.is_player())
+            .take(PACKAGE_LOBBY_CAPACITY)
+            .count();
+        if occupants >= PACKAGE_LOBBY_CAPACITY {
+            return Err("Package lobby is at its 200-Character capacity".into());
+        }
+    }
+    if entity.dead || entity.health == 0 || !entity.is_player() {
+        return Err("Package instance admission requires a living Character".to_string());
+    }
+    if crate::taxi::movement_is_suppressed(ctx, character_guid)
+        || crate::spell::is_action_blocked(ctx, character_guid)
+        || crate::spell::pending_cast(ctx, character_guid).is_some()
+    {
+        return Err("Character cannot enter the Package instance now".to_string());
+    }
+    let (x, y, z, o) = position;
+    if ![x, y, z, o].into_iter().all(f32::is_finite) {
+        return Err("Package instance position must be finite".to_string());
+    }
+    crate::combat::disengage(ctx, character_guid);
+    crate::creatures::despawn_pets(ctx, character_guid);
+    crate::world::teleport_player(
+        ctx,
+        character_guid,
+        instance.map_id,
+        instance_id,
+        x,
+        y,
+        z,
+        o,
+    );
+    Ok(())
+}
+
+// Closing blocks admission immediately; live Characters and Transfer claims delay teardown.
+#[cfg_attr(not(has_packages), allow(dead_code))]
+pub(crate) fn close_package_instance(
+    ctx: &ReducerContext,
+    package_name: &str,
+    instance_id: u64,
+) -> Result<bool, String> {
+    if ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(instance_id)
+        .is_none()
+        && !is_package_instance(ctx, instance_id)
+    {
+        return Ok(true);
+    }
+    let mut instance = owned_instance(ctx, package_name, instance_id)?;
+    instance.reset_requested = true;
+    ctx.db.game_instance().instance_id().update(instance);
+    teardown_instance(ctx, instance_id);
+    Ok(ctx
+        .db
+        .game_instance()
+        .instance_id()
+        .find(instance_id)
+        .is_none())
+}
+
 fn adopt_instance_for_party(ctx: &ReducerContext, instance_id: u64, party_id: u64) {
-    if party_id == 0 {
+    if party_id == 0 || is_package_instance(ctx, instance_id) {
         return;
     }
     let instances = ctx.db.game_instance();
@@ -482,6 +728,16 @@ pub(crate) fn create_instance_with_id(
     map_id: u32,
     party_id: u64,
 ) -> Result<u64, String> {
+    insert_instance(ctx, instance_id, map_id, party_id, true)
+}
+
+fn insert_instance(
+    ctx: &ReducerContext,
+    instance_id: u64,
+    map_id: u32,
+    party_id: u64,
+    copy_population: bool,
+) -> Result<u64, String> {
     let inst = ctx.db.game_instance().insert(GameInstance {
         instance_id,
         map_id,
@@ -492,6 +748,9 @@ pub(crate) fn create_instance_with_id(
     });
     let instance_id = inst.instance_id;
 
+    if !copy_population {
+        return Ok(instance_id);
+    }
     if !hosts_instance_populations(ctx) {
         log::info!(
             "create_instance: instance {instance_id} map {map_id} party {party_id} — LEASE only \
@@ -646,6 +905,9 @@ pub fn ensure_instance(
         return Err("instance 0 is the open world — it is never mirrored".to_string());
     }
     if let Some(mut existing) = ctx.db.game_instance().instance_id().find(instance_id) {
+        if is_package_instance(ctx, instance_id) {
+            return Err("Package instance requires Package mirroring".to_string());
+        }
         if existing.map_id != map_id {
             return Err(format!(
                 "instance {instance_id} already exists here on map {} — refusing to mirror it as \
@@ -711,6 +973,10 @@ pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
     let occupied = occupied_instances(ctx);
     let mut reaped = 0usize;
     for mut inst in instances {
+        if inst.party_id == 0 && !inst.reset_requested && is_package_instance(ctx, inst.instance_id)
+        {
+            continue;
+        }
         match occupancy_action(
             occupied.contains(&inst.instance_id),
             inst.last_empty_at_micros,
@@ -767,6 +1033,11 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     if instance_id == 0 {
         return;
     }
+    if crate::transfer::in_transit_instances(ctx)
+        .map_or(true, |claimed| claimed.contains(&instance_id))
+    {
+        return;
+    }
     let entities = ctx.db.game_world_entity();
     if entities
         .iter()
@@ -781,6 +1052,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .filter(|e| e.instance_id == instance_id && !e.is_player())
         .map(|e| e.guid)
         .collect();
+    clear_instance_spell_state(ctx, instance_id, &doomed);
     for guid in &doomed {
         crate::creatures::despawn_creature_entity(ctx, *guid);
     }
@@ -800,6 +1072,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .map(|c| c.guid)
         .collect();
     for guid in dead_bodies {
+        crate::loot::reap_corpse_loot_family(ctx, guid);
         corpses.guid().delete(guid);
     }
 
@@ -810,7 +1083,13 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
         .map(|g| g.guid)
         .collect();
     for guid in &copies {
+        use crate::gameobject::{game_gameobject_trap_cooldown, game_gameobject_unlocked};
         crate::loot::reap_corpse_loot_family(ctx, *guid);
+        ctx.db
+            .game_gameobject_trap_cooldown()
+            .go_guid()
+            .delete(*guid);
+        ctx.db.game_gameobject_unlocked().go_guid().delete(*guid);
         crate::go_collider::remove(ctx, *guid);
         gos.guid().delete(guid);
     }
@@ -847,12 +1126,196 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     for id in stale {
         bindings.id().delete(id);
     }
+    crate::package_combat::clear_instance(ctx, instance_id);
+    ctx.db
+        .game_package_instance()
+        .instance_id()
+        .delete(instance_id);
     ctx.db.game_instance().instance_id().delete(instance_id);
     log::info!(
         "teardown_instance: instance {instance_id} reaped ({} entities, {} GO copies)",
         doomed.len(),
         copies.len()
     );
+}
+
+fn clear_instance_spell_state(ctx: &ReducerContext, instance_id: u64, doomed: &[u64]) {
+    use crate::game_ranged_impact_schedule;
+    use crate::spell::{
+        game_aura, game_dynamic_object, game_ground_area, game_pending_cast,
+        game_pending_spell_impact, game_school_lockout, game_spell_cd, game_spell_cooldown,
+    };
+
+    let doomed: HashSet<u64> = doomed.iter().copied().collect();
+    let mut shed: HashMap<u64, HashMap<u64, crate::spell::Aura>> = HashMap::new();
+    let auras = ctx.db.game_aura();
+    for &guid in &doomed {
+        ctx.db.game_spell_cooldown().caster_guid().delete(guid);
+        for aura in auras
+            .by_target()
+            .filter(guid)
+            .chain(auras.by_caster().filter(guid))
+        {
+            shed.entry(aura.target_guid)
+                .or_default()
+                .insert(aura.id, aura);
+        }
+        for cast in ctx
+            .db
+            .game_pending_cast()
+            .by_caster()
+            .filter(guid)
+            .collect::<Vec<_>>()
+        {
+            crate::spell::cancel_cast_attempt(ctx, guid, cast.scheduled_id);
+        }
+        for cooldown in ctx
+            .db
+            .game_spell_cd()
+            .by_caster()
+            .filter(guid)
+            .collect::<Vec<_>>()
+        {
+            ctx.db.game_spell_cd().id().delete(cooldown.id);
+        }
+        for lockout in ctx
+            .db
+            .game_school_lockout()
+            .by_caster()
+            .filter(guid)
+            .collect::<Vec<_>>()
+        {
+            ctx.db.game_school_lockout().id().delete(lockout.id);
+        }
+    }
+    for (guid, auras) in shed {
+        crate::spell::shed_auras(ctx, guid, auras.into_values().collect());
+    }
+    let impacts = ctx.db.game_pending_spell_impact();
+    for impact in impacts
+        .iter()
+        .filter(|impact| {
+            doomed.contains(&impact.caster_guid) || doomed.contains(&impact.target_guid)
+        })
+        .collect::<Vec<_>>()
+    {
+        impacts.scheduled_id().delete(impact.scheduled_id);
+    }
+    let ranged = ctx.db.game_ranged_impact_schedule();
+    for impact in ranged
+        .iter()
+        .filter(|impact| {
+            doomed.contains(&impact.attacker_guid) || doomed.contains(&impact.target_guid)
+        })
+        .collect::<Vec<_>>()
+    {
+        ranged.scheduled_id().delete(impact.scheduled_id);
+    }
+    let areas = ctx.db.game_ground_area();
+    for area in areas
+        .iter()
+        .filter(|area| area.instance_id == instance_id)
+        .collect::<Vec<_>>()
+    {
+        ctx.db
+            .game_dynamic_object()
+            .guid()
+            .delete(crate::spell::cast::dynamic_object_guid(area.id));
+        areas.id().delete(area.id);
+    }
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_create_instance(
+    ctx: &ReducerContext,
+    package_name: String,
+    map_id: u32,
+    party_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    create_empty(ctx, &package_name, map_id, party_id).map(|_| ())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_create_lobby(
+    ctx: &ReducerContext,
+    package_name: String,
+    map_id: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    create_lobby(ctx, &package_name, map_id).map(|_| ())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_fill_lobby(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let instance = owned_instance(ctx, "fixture.defense", instance_id)?;
+    if instance.party_id != 0 {
+        return Err("Fixture needs a shared lobby".into());
+    }
+    for index in 0..PACKAGE_LOBBY_CAPACITY {
+        let mut character =
+            crate::helpers::character_by_guid(ctx, 1).ok_or("Fixture Character is unavailable")?;
+        character.guid = 509_929_000 + index as u64;
+        character.map_id = instance.map_id;
+        character.pending_instance_id = instance_id;
+        let body =
+            crate::creatures::build_player_entity(ctx, &character, spacetimedb::Identity::ZERO);
+        ctx.db.game_world_entity().guid().delete(character.guid);
+        body.insert(ctx);
+    }
+    Ok(())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_enter_instance(
+    ctx: &ReducerContext,
+    package_name: String,
+    character_guid: u64,
+    instance_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    enter_package_instance(
+        ctx,
+        &package_name,
+        character_guid,
+        instance_id,
+        (10.0, 20.0, 30.0, 0.0),
+    )
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_close_instance(
+    ctx: &ReducerContext,
+    package_name: String,
+    instance_id: u64,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    close_package_instance(ctx, &package_name, instance_id).map(|_| ())
+}
+
+#[cfg(feature = "debug_reducers")]
+#[reducer]
+pub fn debug_defense_spawn_wave(ctx: &ReducerContext, instance_id: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let instance = owned_instance(ctx, "fixture.defense", instance_id)?;
+    crate::encounter::spawn_wave(
+        ctx,
+        instance_id,
+        1,
+        instance.map_id,
+        &[51000],
+        10.0,
+        20.0,
+        30.0,
+        0.0,
+    );
+    Ok(())
 }
 
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
@@ -937,6 +1400,9 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
 
 fn adopt_for_regrouped_member(ctx: &ReducerContext, character_guid: u64) -> Option<u64> {
     let standing = instance_removal_standing(ctx, character_guid)?;
+    if is_package_instance(ctx, standing.instance_id) {
+        return None;
+    }
     let own_group = crate::group::group_of(ctx, character_guid)?.group_id;
     if !instance_is_ownerless(ctx, standing.group_id) {
         return None;

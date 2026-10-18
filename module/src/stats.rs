@@ -150,7 +150,11 @@ pub(crate) fn apply_level_stats(
     e.spirit = spirit;
     e.armor = agility * 2;
     e.max_health = max_health_for(ctx, race, class, level);
-    e.max_power = max_power_for(ctx, race, class, level);
+    e.max_power = match crate::spell::form::power_kind(class, e.stance) {
+        power_type::RAGE => 1000,
+        power_type::ENERGY => 100,
+        _ => max_power_for(ctx, race, class, level),
+    };
     old
 }
 
@@ -178,8 +182,13 @@ pub(crate) fn set_character_level(
         e.next_level_xp = crate::xp::xp_to_next_level(level);
         apply_level_stats(ctx, &mut e, race, class, level);
         e.health = e.max_health;
-        e.power = e.max_power;
+        e.power = if e.power_type() == power_type::RAGE {
+            e.power.min(e.max_power)
+        } else {
+            e.max_power
+        };
         e.update(ctx);
+        crate::spell::recompute_vitals(ctx, character_guid);
         crate::spell::recompute_sheet(ctx, character_guid);
     }
 
