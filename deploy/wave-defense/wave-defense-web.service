@@ -1,0 +1,26 @@
+[Unit]
+Description=Wave Defense browser client
+After=network-online.target wave-defense-gateway.service
+Wants=network-online.target
+
+[Service]
+User=wave-defense-web
+Group=wave-defense-web
+EnvironmentFile=/etc/wave-defense/web.env
+ExecStart=/opt/wave-defense-web/bin/wenilla-realm
+WorkingDirectory=/var/lib/wave-defense-web
+StateDirectory=wave-defense-web
+StateDirectoryMode=0700
+UMask=0077
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ProtectKernelTunables=true
+ProtectControlGroups=true
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target

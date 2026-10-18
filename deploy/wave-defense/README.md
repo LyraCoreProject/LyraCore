@@ -2,6 +2,7 @@
 
 The defense realm runs as Unix account `wave-defense` on Argus, `159.69.88.70`.
 Cutover completed on 2026-10-18. See [verification](VERIFICATION.md) for checks and limits.
+Browser hosting and admin access are described in [the browser runbook](BROWSER.md).
 It uses one database, `wave-defense`, on its own SpacetimeDB node at `127.0.0.1:3001`.
 Realm-core, Character state and the Instance Pool share that database. This topology is required
 by the mode's Party admission rules. Every match still has a separate Instance.

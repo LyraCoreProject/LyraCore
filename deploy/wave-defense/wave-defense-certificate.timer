@@ -1,0 +1,10 @@
+[Unit]
+Description=Check Wave Defense HTTPS certificate every four hours
+
+[Timer]
+OnCalendar=*-*-* 00,04,08,12,16,20:00:00
+RandomizedDelaySec=15m
+Persistent=true
+
+[Install]
+WantedBy=timers.target

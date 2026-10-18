@@ -1,0 +1,8 @@
+[Unit]
+Description=Renew Wave Defense browser HTTPS certificate
+After=network-online.target nginx.service
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/opt/wave-defense-certbot/bin/certbot renew --cert-name wave-defense-browser --quiet --deploy-hook "/usr/bin/systemctl reload nginx"
