@@ -1,0 +1,23 @@
+[Unit]
+Description=Wave Defense Discord account signup
+After=network-online.target wave-defense-gateway.service
+Wants=network-online.target
+
+[Service]
+User=wave-defense
+Group=wave-defense
+EnvironmentFile=/etc/wave-defense/discord-bot.env
+ExecStart=/home/wave-defense/botenv/bin/python /home/wave-defense/bot.py
+Restart=on-failure
+RestartSec=10s
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/home/wave-defense
+PrivateDevices=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

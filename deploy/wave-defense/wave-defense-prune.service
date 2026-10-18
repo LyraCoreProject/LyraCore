@@ -1,0 +1,10 @@
+[Unit]
+Description=Prune recoverable Wave Defense database history
+After=wave-defense-spacetimedb.service
+
+[Service]
+Type=oneshot
+User=wave-defense
+Group=wave-defense
+WorkingDirectory=/var/lib/wave-defense/spacetimedb
+ExecStart=/opt/lyracore/bin/spacetimedb-prune --apply /var/lib/wave-defense/spacetimedb

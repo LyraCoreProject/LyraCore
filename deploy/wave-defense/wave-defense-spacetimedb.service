@@ -1,0 +1,22 @@
+[Unit]
+Description=Wave Defense SpacetimeDB standalone
+Wants=network-online.target
+After=network-online.target
+StartLimitIntervalSec=300s
+StartLimitBurst=5
+
+[Service]
+Type=simple
+User=wave-defense
+Group=wave-defense
+WorkingDirectory=/var/lib/wave-defense/spacetimedb
+ExecStart=/home/wave-defense/.local/bin/spacetimedb-standalone start --listen-addr 127.0.0.1:3001 --data-dir /var/lib/wave-defense/spacetimedb --jwt-pub-key-path /var/lib/wave-defense/keys/public.pem --jwt-priv-key-path /var/lib/wave-defense/keys/private.pem --non-interactive
+Restart=always
+RestartSec=30s
+LimitNOFILE=524288
+StandardError=append:/var/log/wave-defense/spacetimedb.log
+NoNewPrivileges=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

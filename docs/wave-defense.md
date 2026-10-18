@@ -63,7 +63,9 @@ bot replacement and reconnect, and account progress without permanent stats. A r
 check map routes, targeting, shops, addon messages and five-person combat. Isolated integration tests
 must not publish into an existing realm.
 
-Hosting is deferred. Source implementation and local verification do not constitute deployment.
+The prototype is deployed on Argus. [Deployment notes](../deploy/wave-defense/README.md) record the
+service layout and rollback procedure. Authenticated login, matchmaking, the initial draft and
+lobby return pass through a Headless Client. Attended Benilla combat remains unverified.
 
 ## Form data
 

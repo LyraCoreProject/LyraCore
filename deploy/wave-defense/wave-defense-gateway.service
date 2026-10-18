@@ -1,0 +1,28 @@
+[Unit]
+Description=LyraCore Wave Defense Gateway
+Requires=wave-defense-spacetimedb.service
+After=wave-defense-spacetimedb.service network-online.target
+
+[Service]
+Type=simple
+User=wave-defense
+Group=wave-defense
+WorkingDirectory=/home/wave-defense/LyraCore
+EnvironmentFile=/etc/wave-defense/gateway.env
+ExecStart=/home/wave-defense/LyraCore/target/debug/lyracore-gateway
+Restart=on-failure
+RestartSec=5s
+LimitNOFILE=65536
+StandardOutput=append:/var/log/wave-defense/gateway.log
+StandardError=append:/var/log/wave-defense/gateway.log
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=read-only
+InaccessiblePaths=-/home/wave-defense/.config/spacetime
+PrivateDevices=true
+ProtectKernelTunables=true
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target

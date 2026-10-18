@@ -1,0 +1,11 @@
+[Unit]
+Description=Prune Wave Defense history every fifteen minutes
+
+[Timer]
+OnCalendar=*:0/15
+RandomizedDelaySec=30s
+AccuracySec=10s
+Persistent=true
+
+[Install]
+WantedBy=timers.target

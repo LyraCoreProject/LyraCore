@@ -1,0 +1,13 @@
+[Unit]
+Description=Protect Realm disk reserve and playerbot capacity
+After=wave-defense-spacetimedb.service
+
+[Service]
+Type=oneshot
+User=wave-defense
+Group=wave-defense
+WorkingDirectory=/home/wave-defense/LyraCore
+ExecStart=/usr/bin/python3 /home/wave-defense/disk-guard.py /etc/wave-defense/disk-guard.json
+TimeoutStartSec=55s
+StateDirectory=wave-defense-disk-guard
+UMask=0077
