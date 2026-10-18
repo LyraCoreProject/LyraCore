@@ -4,14 +4,15 @@ use anyhow::{bail, Context, Result};
 use wow_srp::normalized_string::{NormalizedString, MAXIMUM_STRING_LENGTH_IN_BYTES};
 use zeroize::Zeroizing;
 
-pub(crate) const PROVISION_USAGE: &str = "usage: gateway provision <USERNAME> --password-stdin";
+pub(crate) const PROVISION_USAGE: &str =
+    "usage: gateway provision <USERNAME> --password-stdin [--create-only]";
 const MAX_PASSWORD_BYTES: usize = MAXIMUM_STRING_LENGTH_IN_BYTES as usize;
 const MAX_PASSWORD_STDIN_BYTES: usize = MAX_PASSWORD_BYTES + 2;
 
 #[derive(Debug, PartialEq, Eq)]
 pub(crate) enum GatewayMode {
     Serve,
-    Provision { username: String },
+    Provision { username: String, create_only: bool },
 }
 
 pub(crate) fn parse_gateway_mode(mut args: impl Iterator<Item = String>) -> Result<GatewayMode> {
@@ -20,18 +21,30 @@ pub(crate) fn parse_gateway_mode(mut args: impl Iterator<Item = String>) -> Resu
     };
 
     if command != "provision" {
-        bail!("usage: gateway [provision <USERNAME> --password-stdin]");
+        bail!("usage: gateway [provision <USERNAME> --password-stdin [--create-only]]");
     }
 
     let Some(username) = args.next() else {
         bail!("{PROVISION_USAGE}");
     };
-    if args.next().as_deref() != Some("--password-stdin") || args.next().is_some() {
-        // This argument may be a legacy plaintext password; never include it in diagnostics.
+    let mut password_stdin = false;
+    let mut create_only = false;
+    for argument in args {
+        match argument.as_str() {
+            "--password-stdin" if !password_stdin => password_stdin = true,
+            "--create-only" if !create_only => create_only = true,
+            // An argument may be a plaintext password; never include it in diagnostics.
+            _ => bail!("{PROVISION_USAGE}"),
+        }
+    }
+    if !password_stdin {
         bail!("{PROVISION_USAGE}");
     }
 
-    Ok(GatewayMode::Provision { username })
+    Ok(GatewayMode::Provision {
+        username,
+        create_only,
+    })
 }
 
 pub(crate) fn read_password_line(reader: &mut impl Read) -> Result<Zeroizing<Vec<u8>>> {
@@ -108,9 +121,26 @@ mod tests {
         assert_eq!(
             parse(&["provision", "alice", "--password-stdin"]).unwrap(),
             GatewayMode::Provision {
-                username: "alice".to_owned()
+                username: "alice".to_owned(),
+                create_only: false,
             }
         );
+    }
+
+    #[test]
+    fn create_only_accepts_both_flag_orders() {
+        for args in [
+            ["provision", "alice", "--password-stdin", "--create-only"],
+            ["provision", "alice", "--create-only", "--password-stdin"],
+        ] {
+            assert_eq!(
+                parse(&args).unwrap(),
+                GatewayMode::Provision {
+                    username: "alice".to_owned(),
+                    create_only: true,
+                }
+            );
+        }
     }
 
     #[test]
@@ -129,6 +159,15 @@ mod tests {
             &["provision"][..],
             &["provision", "alice"][..],
             &["provision", "alice", "--password-stdin", "extra"][..],
+            &["provision", "alice", "--create-only"][..],
+            &["provision", "alice", "--password-stdin", "--password-stdin"][..],
+            &[
+                "provision",
+                "alice",
+                "--password-stdin",
+                "--create-only",
+                "--create-only",
+            ][..],
         ] {
             assert_eq!(parse(args).unwrap_err().to_string(), PROVISION_USAGE);
         }

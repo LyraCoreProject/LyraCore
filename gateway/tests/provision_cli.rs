@@ -109,38 +109,62 @@ fn provision_writes_the_account_to_the_world_shard_and_realm_core() {
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call_database(REALM, "claim_operator", &[]);
 
-    let mut child = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"))
-        .args(["provision", "NEWHERO", "--password-stdin"])
-        .env("LYRACORE_COORDINATOR_TOKEN", standalone.owner_token())
-        .env("LYRACORE_DATABASE", standalone.shard_name())
-        .env("LYRACORE_SPACETIMEDB_URL", standalone.server())
-        .env("LYRACORE_REALM_CORE", REALM)
-        .env_remove("LYRACORE_SHARD_MAP")
-        .env_remove("LYRACORE_SHARD_MAP_FILE")
-        .stdin(Stdio::piped())
-        .stdout(Stdio::piped())
-        .stderr(Stdio::piped())
-        .spawn()
-        .expect("spawn gateway");
-    child
-        .stdin
-        .take()
-        .unwrap()
-        .write_all(b"hero pass\n")
-        .unwrap();
-    let output = child.wait_with_output().expect("wait for gateway");
+    let provision = |username: &str, password: &[u8], create_only: bool| {
+        let mut command = Command::new(env!("CARGO_BIN_EXE_lyracore-gateway"));
+        command.args(["provision", username, "--password-stdin"]);
+        if create_only {
+            command.arg("--create-only");
+        }
+        let mut child = command
+            .env("LYRACORE_COORDINATOR_TOKEN", standalone.owner_token())
+            .env("LYRACORE_DATABASE", standalone.shard_name())
+            .env("LYRACORE_SPACETIMEDB_URL", standalone.server())
+            .env("LYRACORE_REALM_CORE", REALM)
+            .env_remove("LYRACORE_SHARD_MAP")
+            .env_remove("LYRACORE_SHARD_MAP_FILE")
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn gateway");
+        child.stdin.take().unwrap().write_all(password).unwrap();
+        child.wait_with_output().expect("wait for gateway")
+    };
+    let output = provision("NEWHERO", b"hero pass\n", true);
     assert!(
         output.status.success(),
         "provision failed: {}",
         String::from_utf8_lossy(&output.stderr)
     );
 
-    let query = "SELECT username FROM game_account WHERE username = 'NEWHERO'";
-    for database in [standalone.shard_name().to_owned(), REALM.to_owned()] {
-        assert_eq!(
-            standalone.query_database_rows(&database, query).len(),
-            1,
-            "{database} has no NEWHERO account"
-        );
+    let query = "SELECT * FROM game_account WHERE username = 'NEWHERO'";
+    let databases = [standalone.shard_name().to_owned(), REALM.to_owned()];
+    let original: Vec<_> = databases
+        .iter()
+        .map(|database| standalone.query_database_rows(database, query))
+        .collect();
+    for rows in &original {
+        assert_eq!(rows.len(), 1);
+    }
+
+    let output = provision("newhero", b"different pass\n", true);
+    assert!(!output.status.success());
+    assert!(String::from_utf8_lossy(&output.stderr).contains("account already exists"));
+    for (database, accounts) in databases.iter().zip(&original) {
+        assert_eq!(standalone.query_database_rows(database, query), *accounts);
+    }
+
+    let output = provision("newhero", b"rotated pass\n", false);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    for (database, accounts) in databases.iter().zip(&original) {
+        let rotated = standalone.query_database_rows(database, query);
+        assert_eq!(rotated.len(), 1);
+        assert_eq!(rotated[0]["id"], accounts[0]["id"]);
+        assert_ne!(rotated[0]["salt"], accounts[0]["salt"]);
+        assert_ne!(rotated[0]["verifier"], accounts[0]["verifier"]);
     }
 }

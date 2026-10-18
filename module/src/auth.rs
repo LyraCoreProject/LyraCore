@@ -217,10 +217,33 @@ pub fn provision_account(
     salt: Vec<u8>,
     verifier: Vec<u8>,
 ) -> Result<(), String> {
+    store_account(ctx, username, salt, verifier, false)
+}
+
+#[reducer]
+pub fn create_account(
+    ctx: &ReducerContext,
+    username: String,
+    salt: Vec<u8>,
+    verifier: Vec<u8>,
+) -> Result<(), String> {
+    store_account(ctx, realm_account_name(&username), salt, verifier, true)
+}
+
+fn store_account(
+    ctx: &ReducerContext,
+    username: String,
+    salt: Vec<u8>,
+    verifier: Vec<u8>,
+    create_only: bool,
+) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let accounts = ctx.db.game_account();
     match accounts.username().find(&username) {
         Some(mut acc) => {
+            if create_only {
+                return Err("account already exists".to_string());
+            }
             acc.salt = salt;
             acc.verifier = verifier;
             accounts.id().update(acc);

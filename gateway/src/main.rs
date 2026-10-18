@@ -49,11 +49,15 @@ async fn run() -> Result<()> {
     let mode = parse_gateway_mode(std::env::args().skip(1))?;
     let cfg = GatewayConfig::from_env();
 
-    if let GatewayMode::Provision { username } = mode {
+    if let GatewayMode::Provision {
+        username,
+        create_only,
+    } = mode
+    {
         let stdin = std::io::stdin();
         let mut stdin = stdin.lock();
         let password = read_password_line(&mut stdin)?;
-        return provision(&cfg, &username, &password).await;
+        return provision(&cfg, &username, &password, create_only).await;
     }
 
     let login_queue = std::sync::Arc::new(world::login_queue::LoginQueue::from_env()?);
@@ -120,7 +124,12 @@ fn warn_on_unreachable_realm_address(coordinator: &stdb::Coordinator, cfg: &Gate
     }
 }
 
-async fn provision(cfg: &GatewayConfig, username: &str, password: &[u8]) -> Result<()> {
+async fn provision(
+    cfg: &GatewayConfig,
+    username: &str,
+    password: &[u8],
+    create_only: bool,
+) -> Result<()> {
     use wow_srp::server::SrpVerifier;
 
     let (username, password) = provision_cli::normalize_provision_credentials(username, password)?;
@@ -130,11 +139,18 @@ async fn provision(cfg: &GatewayConfig, username: &str, password: &[u8]) -> Resu
     let pw_verifier = *verifier.password_verifier();
 
     let coordinator = stdb::Coordinator::connect(cfg).await?;
-    coordinator.provision_account(&user, &salt, &pw_verifier)?;
-
     let rc = coordinator.realm_core()?;
-    if rc.shard_name() != coordinator.shard_name() {
-        rc.provision_account(&user, &salt, &pw_verifier)?;
+    if create_only {
+        // Across Shards a later Refusal can leave a new Account only on Realm-core.
+        rc.create_account(&user, &salt, &pw_verifier)?;
+        if rc.shard_name() != coordinator.shard_name() {
+            coordinator.create_account(&user, &salt, &pw_verifier)?;
+        }
+    } else {
+        coordinator.provision_account(&user, &salt, &pw_verifier)?;
+        if rc.shard_name() != coordinator.shard_name() {
+            rc.provision_account(&user, &salt, &pw_verifier)?;
+        }
     }
     log::info!(
         "provisioned account {user} on {} and {} (salt {} bytes, verifier {} bytes)",

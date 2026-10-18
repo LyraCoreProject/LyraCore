@@ -98,6 +98,14 @@ impl Coordinator {
         )
     }
 
+    pub fn create_account(&self, username: &str, salt: &[u8], verifier: &[u8]) -> Result<()> {
+        call_reducer!(
+            self.0.call_pipe().conn.reducers,
+            "create_account",
+            create_account_then(username.to_string(), salt.to_vec(), verifier.to_vec())
+        )
+    }
+
     pub fn establish_session(
         &self,
         account_id: u64,
