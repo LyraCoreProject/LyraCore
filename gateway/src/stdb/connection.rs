@@ -2436,9 +2436,17 @@ impl Coordinator {
         {
             let inner = inner.clone();
             tokio::spawn(async move {
-                let mut tick = tokio::time::interval(Duration::from_millis(40));
+                // ponytail: benchmark-only knob, never merged; keep the winner as the constant.
+                let millis = std::env::var("LYRACORE_MOVEMENT_BATCH_MS")
+                    .ok()
+                    .and_then(|value| value.parse::<u16>().ok())
+                    .filter(|millis| (5..=1000).contains(millis))
+                    .unwrap_or(40);
+                log::info!("movement batch interval: {millis} ms");
+                let metric_ticks = (10_000 / millis).max(1);
+                let mut tick = tokio::time::interval(Duration::from_millis(u64::from(millis)));
                 tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-                let mut ticks_until_metrics = 250u16;
+                let mut ticks_until_metrics = metric_ticks;
                 loop {
                     tick.tick().await;
                     let failures = inner.motion_batch.drain(|chunk| {
@@ -2464,7 +2472,7 @@ impl Coordinator {
                                 .snapshot()
                                 .log_line()
                         );
-                        ticks_until_metrics = 250;
+                        ticks_until_metrics = metric_ticks;
                     }
                 }
             });
