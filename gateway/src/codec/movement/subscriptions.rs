@@ -693,6 +693,195 @@ fn relay_rows<T>(
         .sum()
 }
 
+// ponytail: benchmark-only movement compression, never merged; LYRACORE_MOVE_COMPRESSION sets
+// the zlib level (unset or 0 is off) and LYRACORE_MOVE_COMPRESSION_MIN the smallest packed run.
+pub(crate) struct MoveCompression {
+    level: u32,
+    min_packets: usize,
+}
+
+pub(crate) static MOVE_COMPRESS_IN: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static MOVE_COMPRESS_OUT: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static MOVE_COMPRESS_RUNS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+pub(crate) static MOVE_COMPRESS_NANOS: std::sync::atomic::AtomicU64 =
+    std::sync::atomic::AtomicU64::new(0);
+
+const COMPRESSED_MOVES: u16 = 0x02fb;
+// Keeps the compressed body well inside one frame.
+const RUN_BYTES: usize = 32 * 1024;
+
+fn move_compression() -> Option<&'static MoveCompression> {
+    static CONFIG: OnceLock<Option<MoveCompression>> = OnceLock::new();
+    CONFIG
+        .get_or_init(|| {
+            let level = std::env::var("LYRACORE_MOVE_COMPRESSION")
+                .ok()?
+                .parse::<u32>()
+                .ok()
+                .filter(|level| (1..=9).contains(level))?;
+            let min_packets = std::env::var("LYRACORE_MOVE_COMPRESSION_MIN")
+                .ok()
+                .and_then(|value| value.parse::<usize>().ok())
+                .unwrap_or(8)
+                .max(2);
+            log::info!("movement compression: level {level}, runs of {min_packets}+ packets");
+            Some(MoveCompression { level, min_packets })
+        })
+        .as_ref()
+}
+
+/// Packs runs of small movement packets into SMSG_COMPRESSED_MOVES, keeping packet order.
+fn pack_moves(out: Vec<Outbound>, config: &MoveCompression) -> Vec<Outbound> {
+    if out.len() < config.min_packets {
+        return out;
+    }
+    let mut packed = Vec::new();
+    let mut run = Vec::new();
+    let mut originals = Vec::new();
+    for outbound in out {
+        let Outbound::Shared { opcode, body } = &outbound else {
+            flush_run(&mut run, &mut originals, config, &mut packed);
+            packed.push(outbound);
+            continue;
+        };
+        // The client reads each packed size as one byte.
+        if body.len() + 2 > 0xFF {
+            flush_run(&mut run, &mut originals, config, &mut packed);
+            packed.push(outbound);
+            continue;
+        }
+        if run.len() + body.len() + 3 > RUN_BYTES {
+            flush_run(&mut run, &mut originals, config, &mut packed);
+        }
+        run.push((body.len() + 2) as u8);
+        run.extend_from_slice(&opcode.to_le_bytes());
+        run.extend_from_slice(body);
+        originals.push(outbound);
+    }
+    flush_run(&mut run, &mut originals, config, &mut packed);
+    packed
+}
+
+fn flush_run(
+    run: &mut Vec<u8>,
+    originals: &mut Vec<Outbound>,
+    config: &MoveCompression,
+    packed: &mut Vec<Outbound>,
+) {
+    let compressed = (originals.len() >= config.min_packets)
+        .then(|| deflate(run, config.level))
+        .flatten();
+    match compressed {
+        Some(body) => {
+            MOVE_COMPRESS_IN.fetch_add((run.len() + originals.len()) as u64, Ordering::Relaxed);
+            MOVE_COMPRESS_OUT.fetch_add(4 + body.len() as u64, Ordering::Relaxed);
+            MOVE_COMPRESS_RUNS.fetch_add(1, Ordering::Relaxed);
+            packed.push(Outbound::Raw {
+                opcode: COMPRESSED_MOVES,
+                body,
+            });
+            originals.clear();
+        }
+        None => packed.append(originals),
+    }
+    run.clear();
+}
+
+fn deflate(run: &[u8], level: u32) -> Option<Vec<u8>> {
+    use flate2::{Compress, Compression, FlushCompress, Status};
+    thread_local! {
+        static DEFLATE: std::cell::RefCell<Option<(u32, Compress)>> =
+            const { std::cell::RefCell::new(None) };
+    }
+    let started = std::time::Instant::now();
+    let mut body = Vec::with_capacity(4 + run.len() + run.len() / 1000 + 64);
+    body.extend_from_slice(&(run.len() as u32).to_le_bytes());
+    let status = DEFLATE.with_borrow_mut(|deflate| {
+        let compress = match deflate {
+            Some((cached, compress)) if *cached == level => {
+                compress.reset();
+                compress
+            }
+            _ => {
+                &mut deflate
+                    .insert((level, Compress::new(Compression::new(level), true)))
+                    .1
+            }
+        };
+        compress.compress_vec(run, &mut body, FlushCompress::Finish)
+    });
+    MOVE_COMPRESS_NANOS.fetch_add(started.elapsed().as_nanos() as u64, Ordering::Relaxed);
+    matches!(status, Ok(Status::StreamEnd)).then_some(body)
+}
+
+#[cfg(test)]
+mod compression_tests {
+    use super::*;
+
+    #[test]
+    fn packed_runs_decompress_to_the_original_packets_in_order() {
+        let config = MoveCompression {
+            level: 1,
+            min_packets: 2,
+        };
+        let shared = |opcode: u16, len: usize| Outbound::Shared {
+            opcode,
+            body: vec![opcode as u8; len].into(),
+        };
+        let out = vec![
+            shared(0xb5, 30),
+            shared(0xb6, 31),
+            shared(0xdd, 300),
+            shared(0xee, 32),
+            shared(0xee, 33),
+            shared(0xee, 34),
+        ];
+        let packed = pack_moves(out, &config);
+        let [Outbound::Raw {
+            opcode: 0x02fb,
+            body: first,
+        }, Outbound::Shared { opcode: 0xdd, .. }, Outbound::Raw {
+            opcode: 0x02fb,
+            body: second,
+        }] = packed.as_slice()
+        else {
+            panic!("two packed runs around the oversized packet");
+        };
+        let inflate = |body: &[u8]| {
+            let mut plain = Vec::new();
+            std::io::Read::read_to_end(&mut flate2::read::ZlibDecoder::new(&body[4..]), &mut plain)
+                .unwrap();
+            assert_eq!(
+                u32::from_le_bytes(body[..4].try_into().unwrap()) as usize,
+                plain.len()
+            );
+            let mut packets = Vec::new();
+            let mut rest = plain.as_slice();
+            while let [size, lo, hi, tail @ ..] = rest {
+                let len = usize::from(*size) - 2;
+                packets.push((u16::from_le_bytes([*lo, *hi]), tail[..len].to_vec()));
+                rest = &tail[len..];
+            }
+            packets
+        };
+        assert_eq!(
+            inflate(first),
+            vec![(0xb5, vec![0xb5; 30]), (0xb6, vec![0xb6; 31])]
+        );
+        assert_eq!(
+            inflate(second),
+            vec![
+                (0xee, vec![0xee; 32]),
+                (0xee, vec![0xee; 33]),
+                (0xee, vec![0xee; 34])
+            ]
+        );
+    }
+}
+
 // A nearby mover the viewer does not show gets at most one CREATE offer per interval.
 const MISSING_CREATE_INTERVAL: std::time::Duration = std::time::Duration::from_secs(1);
 
@@ -759,7 +948,10 @@ fn queue_motion_flush(view: &Arc<WorldView>, shard: ShardId, viewer: Arc<Viewer>
         MOTION_CALLS.fetch_add(calls, Ordering::Relaxed);
         MOTION_SENT.fetch_add(sent, Ordering::Relaxed);
         offer_missing_creates(&view, shard, &viewer, missing);
-        out
+        match move_compression() {
+            Some(config) => pack_moves(out, config),
+            None => out,
+        }
     });
     let _ = tx.send(Outbound::Motion(flush));
 }

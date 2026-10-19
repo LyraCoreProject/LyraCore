@@ -741,6 +741,27 @@ fn send(tx: &SessionTx, out: Outbound) -> Result<()> {
         .map_err(|_| anyhow!("world writer gone (client disconnected)"))
 }
 
+/// Benchmark-only: movement compression totals over the last ten-second window.
+fn log_move_compression() {
+    use crate::codec::movement::subscriptions as moves;
+    use std::sync::atomic::Ordering::Relaxed;
+    let runs = moves::MOVE_COMPRESS_RUNS.swap(0, Relaxed);
+    if runs > 0 {
+        let wire_in = moves::MOVE_COMPRESS_IN.swap(0, Relaxed);
+        let wire_out = moves::MOVE_COMPRESS_OUT.swap(0, Relaxed);
+        let nanos = moves::MOVE_COMPRESS_NANOS.swap(0, Relaxed);
+        log::info!(
+            "MOVECOMPRESS runs={:.1}/s in={:.0}B/s out={:.0}B/s ratio={:.3} deflate_cpu={:.3}cores mean={:.1}us",
+            runs as f64 / 10.0,
+            wire_in as f64 / 10.0,
+            wire_out as f64 / 10.0,
+            wire_out as f64 / wire_in as f64,
+            nanos as f64 / 10e9,
+            nanos as f64 / runs as f64 / 1e3,
+        );
+    }
+}
+
 pub async fn run(
     cfg: GatewayConfig,
     coordinator: Coordinator,
@@ -821,6 +842,7 @@ pub async fn run(
                 log::info!("MOTIONSTAT calls={c} sent={s} dropped={d} — relay went idle");
                 idle_logged = true;
             }
+            log_move_compression();
             let handoffs = crate::accept::BLOCKING_HANDOFFS.load(Relaxed);
             let encoded = egress::ENCODED_ENTRIES.load(Relaxed);
             let (d_handoffs, d_encoded) = (handoffs - prev_handoffs, encoded - prev_encoded);

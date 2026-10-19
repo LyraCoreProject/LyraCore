@@ -1829,6 +1829,7 @@ dependencies = [
  "blake3",
  "dhat",
  "env_logger",
+ "flate2",
  "getrandom 0.3.4",
  "libc",
  "log",
