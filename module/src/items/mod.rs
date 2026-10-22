@@ -32,11 +32,11 @@ pub(crate) use inventory::{
     is_carried_slot, validate_bag_dest_slot,
 };
 pub(crate) use ops::{
-    apply_death_durability_loss, apply_item_use, apply_take_loot, carried_items,
-    equipped_school_stat_bonus, equipped_stat_bonus, grant_item, grant_item_property,
-    grant_letter_item, grant_starter_item, has_free_slot, item_count, item_stat_bonus,
-    remove_items, request_grant_item, request_profile_item, request_take_loot, resistance_items,
-    restore_carried_items, store_instance_state, ItemSnapshot,
+    apply_death_durability_loss, apply_item_use, apply_spirit_healer_durability_loss,
+    apply_take_loot, carried_items, equipped_school_stat_bonus, equipped_stat_bonus, grant_item,
+    grant_item_property, grant_letter_item, grant_starter_item, has_free_slot, item_count,
+    item_stat_bonus, remove_items, request_grant_item, request_profile_item, request_take_loot,
+    resistance_items, restore_carried_items, store_instance_state, ItemSnapshot,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,

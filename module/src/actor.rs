@@ -192,7 +192,7 @@ debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
     pub(crate) use crate::world::do_repop as repop;
-    pub(crate) use crate::world::do_spirit_healer_res as spirit_res;
+    pub(crate) use crate::world::do_spirit_res as spirit_res;
     pub(crate) use crate::spell::do_self_resurrect as self_resurrect;
 }
 

@@ -683,26 +683,43 @@ pub(crate) fn equipped_school_stat_bonus(
     equipped_stat_bonus_for_school(ctx, owner_guid, which, u32::from(school_mask))
 }
 
-pub(crate) fn death_durability_loss(max_durability: u32, durability: u32) -> u32 {
+const DEATH_DURABILITY_LOSS_PERCENT: u32 = 10;
+const SPIRIT_HEALER_DURABILITY_LOSS_PERCENT: u32 = 25;
+
+pub(crate) fn durability_loss(max_durability: u32, durability: u32, percent: u32) -> u32 {
     if max_durability == 0 || durability == 0 {
         return durability;
     }
-    let loss = (max_durability / 10).max(1);
+    let loss = (max_durability * percent / 100).max(1);
     durability.saturating_sub(loss)
 }
 
 pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64) -> bool {
-    let mut any_lost = false;
-    let instances = ctx.db.game_item_instance();
-    let templates = ctx.db.game_item_template();
-    let equipped: Vec<_> = instances
+    let equipped = ctx
+        .db
+        .game_item_instance()
         .by_owner_guid()
         .filter(&player_guid)
         .filter(|i| i.slot <= equip_slot::END)
         .collect();
-    for mut inst in equipped {
+    lose_durability(ctx, equipped, DEATH_DURABILITY_LOSS_PERCENT)
+}
+
+pub(crate) fn apply_spirit_healer_durability_loss(ctx: &ReducerContext, player_guid: u64) {
+    lose_durability(
+        ctx,
+        carried_items(ctx, player_guid),
+        SPIRIT_HEALER_DURABILITY_LOSS_PERCENT,
+    );
+}
+
+fn lose_durability(ctx: &ReducerContext, items: Vec<ItemInstance>, percent: u32) -> bool {
+    let mut any_lost = false;
+    let instances = ctx.db.game_item_instance();
+    let templates = ctx.db.game_item_template();
+    for mut inst in items {
         if let Some(tmpl) = templates.entry().find(inst.entry) {
-            let new_durability = death_durability_loss(tmpl.max_durability, inst.durability);
+            let new_durability = durability_loss(tmpl.max_durability, inst.durability, percent);
             if new_durability != inst.durability {
                 inst.durability = new_durability;
                 instances.guid().update(inst);
@@ -892,8 +909,8 @@ pub(crate) fn apply_take_loot(
 #[cfg(test)]
 mod tests {
     use super::{
-        bandage_cooldown_blocks, death_durability_loss, profile_item_target_admitted,
-        use_spell_for, RECENTLY_BANDAGED_SPELL,
+        bandage_cooldown_blocks, durability_loss, profile_item_target_admitted, use_spell_for,
+        RECENTLY_BANDAGED_SPELL,
     };
 
     #[test]
@@ -947,12 +964,14 @@ mod tests {
     }
 
     #[test]
-    fn death_durability_loss_is_ten_percent_of_max_floored_at_one_and_saturating() {
-        assert_eq!(death_durability_loss(100, 100), 90);
-        assert_eq!(death_durability_loss(10, 10), 9);
-        assert_eq!(death_durability_loss(5, 5), 4);
-        assert_eq!(death_durability_loss(100, 5), 0);
-        assert_eq!(death_durability_loss(100, 0), 0);
-        assert_eq!(death_durability_loss(0, 50), 50);
+    fn durability_loss_is_a_percent_of_max_floored_at_one_and_saturating() {
+        assert_eq!(durability_loss(100, 100, 10), 90);
+        assert_eq!(durability_loss(10, 10, 10), 9);
+        assert_eq!(durability_loss(5, 5, 10), 4);
+        assert_eq!(durability_loss(100, 5, 10), 0);
+        assert_eq!(durability_loss(100, 0, 10), 0);
+        assert_eq!(durability_loss(0, 50, 10), 50);
+        assert_eq!(durability_loss(100, 100, 25), 75);
+        assert_eq!(durability_loss(3, 3, 25), 2);
     }
 }

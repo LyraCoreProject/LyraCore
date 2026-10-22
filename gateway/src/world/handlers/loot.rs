@@ -372,15 +372,7 @@ impl<St: DeathStore + LootRollStore + LootWindowStore + NpcStore + ShardRoutingS
             ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(s) => {
                 if let Some(actor) = actor {
                     let result = store.spirit_healer_res(actor, s.guid.guid());
-                    let revived = result.is_ok();
                     ignore_refusal("spirit_healer_res", session.account_id, result)?;
-                    if revived {
-                        outbound.push(Outbound::One(
-                            ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(
-                                SMSG_SPIRIT_HEALER_CONFIRM { guid: s.guid },
-                            ),
-                        ));
-                    }
                 }
             }
             other => return Err(anyhow!("request routed to Loot: {other}")),

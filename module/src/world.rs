@@ -6,7 +6,8 @@ use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
 use crate::{
-    game_character, game_character_buyback, game_corpse, game_creature_spline, game_instance,
+    game_aura, game_character, game_character_buyback, game_corpse, game_creature_spline,
+    game_instance,
 };
 
 mod simulation;
@@ -1244,26 +1245,63 @@ fn spirit_res_vitals(max_health: u32, max_power: u32) -> (u32, u32) {
     ((max_health / 2).max(1), max_power / 2)
 }
 
-pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+// None below level 11; one minute per level above 10, up to the spell's ten minutes.
+fn resurrection_sickness_micros(level: u32) -> Option<i64> {
+    const MINUTE_MICROS: i64 = 60_000_000;
+    (level >= 11).then(|| i64::from(level.min(20) - 10) * MINUTE_MICROS)
+}
+
+pub(crate) fn do_spirit_healer_res(
+    ctx: &ReducerContext,
+    guid: u64,
+    healer_guid: u64,
+) -> Result<(), String> {
+    let (ghost, _) = crate::ghost::spirit_healer_gate(ctx, guid, healer_guid)?;
+    resurrect_with_spirit_healer_penalties(ctx, ghost);
+    Ok(())
+}
+
+pub(crate) fn do_spirit_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::player_flags;
-    let entities = ctx.db.game_world_entity();
-    let mut player = entities
+    let player = ctx
+        .db
+        .game_world_entity()
         .guid()
         .find(guid)
         .ok_or_else(|| "caller not in world".to_string())?;
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
         return Err("caller is not a ghost".to_string());
     }
+    resurrect_with_spirit_healer_penalties(ctx, player);
+    Ok(())
+}
+
+fn resurrect_with_spirit_healer_penalties(ctx: &ReducerContext, mut player: WorldEntity) {
+    let guid = player.guid;
     let (health, power) = spirit_res_vitals(player.max_health, player.max_power);
     let player_level = player.level;
     player.health = health;
     player.power = power;
     player.update(ctx);
     crate::ghost::finish_resurrection(ctx, guid);
-    if player_level >= 11 {
-        crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
+    crate::items::apply_spirit_healer_durability_loss(ctx, guid);
+    let Some(sickness_micros) = resurrection_sickness_micros(player_level) else {
+        return;
+    };
+    crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
+    let expires_at = spacetimedb::Timestamp::from_micros_since_unix_epoch(
+        ctx.timestamp.to_micros_since_unix_epoch() + sickness_micros,
+    );
+    let auras = ctx.db.game_aura();
+    for mut aura in auras
+        .by_target()
+        .filter(&guid)
+        .filter(|aura| aura.spell_id == RESURRECTION_SICKNESS_SPELL)
+        .collect::<Vec<_>>()
+    {
+        aura.expires_at = expires_at;
+        auras.id().update(aura);
     }
-    Ok(())
 }
 
 fn accrue_played_on_persist(now_micros: i64, session_start_micros: u64, pool: u32) -> u32 {
@@ -1407,9 +1445,10 @@ mod tests {
     use super::{
         accrue_played_on_persist, can_inspect, ghost_restored_fields, is_cross_map_teleport,
         movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
-        resolve_environmental_damage, snapshot_needs_persist, spirit_res_vitals, zone_transition,
-        MovementDelta, INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED, MOVE_VIOLATION_TELEPORT,
-        PERSIST_MAX_DRIFT_YD, RESURRECTION_SICKNESS_SPELL, RUN_SPEED_BP_1X,
+        resolve_environmental_damage, resurrection_sickness_micros, snapshot_needs_persist,
+        spirit_res_vitals, zone_transition, MovementDelta, INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED,
+        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD, RESURRECTION_SICKNESS_SPELL,
+        RUN_SPEED_BP_1X,
     };
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
@@ -1684,5 +1723,15 @@ mod tests {
             "the .max(1) floor keeps a 0-max res alive"
         );
         assert_eq!(RESURRECTION_SICKNESS_SPELL, 15007);
+    }
+
+    #[test]
+    fn resurrection_sickness_lasts_a_minute_per_level_above_ten_up_to_ten_minutes() {
+        const MINUTE: i64 = 60_000_000;
+        assert_eq!(resurrection_sickness_micros(10), None);
+        assert_eq!(resurrection_sickness_micros(11), Some(MINUTE));
+        assert_eq!(resurrection_sickness_micros(15), Some(5 * MINUTE));
+        assert_eq!(resurrection_sickness_micros(20), Some(10 * MINUTE));
+        assert_eq!(resurrection_sickness_micros(60), Some(10 * MINUTE));
     }
 }

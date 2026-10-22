@@ -284,6 +284,35 @@ fn gossip_select_on_a_petitioner_option_opens_the_charter_list() {
 }
 
 #[test]
+fn gossip_select_on_a_spirit_healer_option_asks_for_confirmation() {
+    use lyracore_shared::constants::gossip_option;
+    let mut s = quest_store();
+    s.npc.gossip_opts = vec![opt(0, "Return me to life.", gossip_option::SPIRITHEALER)];
+    let store = std::sync::Arc::new(s);
+    let (mut client, mut c_enc, mut c_dec, server) = enter_world(store, 1);
+    gossip_hello(&mut client, &mut c_enc, &mut c_dec, 90);
+    CMSG_GOSSIP_SELECT_OPTION {
+        guid: Guid::new(90),
+        gossip_list_id: 0,
+        unknown: None,
+    }
+    .write_encrypted_client(&mut client, &mut c_enc)
+    .unwrap();
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE => {}
+        other => panic!("expected SMSG_GOSSIP_COMPLETE, got {other}"),
+    }
+    match ServerOpcodeMessage::read_encrypted(&mut client, &mut c_dec).unwrap() {
+        ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(confirm) => {
+            assert_eq!(confirm.guid.guid(), 90)
+        }
+        other => panic!("expected SMSG_SPIRIT_HEALER_CONFIRM, got {other}"),
+    }
+    drop(client);
+    server.join().unwrap();
+}
+
+#[test]
 fn gossip_select_on_a_vendor_opens_the_inventory_window() {
     let mut s = quest_store();
     s.vendor.vendor_stock = vec![codec::VendorItemView {

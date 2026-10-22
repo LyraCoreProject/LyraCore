@@ -43,12 +43,12 @@ impl DeathStore for Coordinator {
         )
     }
 
-    fn spirit_healer_res(&self, actor: Actor, _healer_guid: u64) -> Result<()> {
+    fn spirit_healer_res(&self, actor: Actor, healer_guid: u64) -> Result<()> {
         let coord = self.0.call_pipe();
         call_reducer!(
             coord.conn.reducers,
             "gw_spirit_res",
-            gw_spirit_res_then(self.session_actor(actor))
+            gw_spirit_res_then(self.session_actor(actor), healer_guid)
         )
     }
 

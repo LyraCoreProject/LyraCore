@@ -112,7 +112,7 @@ fn a_refused_self_res_sends_nothing_and_keeps_the_session() {
 }
 
 #[test]
-fn spirit_healer_revives_the_ghost_and_confirms_the_healer_guid() {
+fn spirit_healer_activation_revives_the_ghost_without_a_second_confirmation() {
     let store = HandleLootFake::default()
         .with_life(SELF_GUID, Life::Ghost)
         .with_spirit_healer(888);
@@ -125,11 +125,7 @@ fn spirit_healer_revives_the_ghost_and_confirms_the_healer_guid() {
         }),
     );
 
-    let [Outbound::One(ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(confirm))] = sent.as_slice()
-    else {
-        panic!("expected one SMSG_SPIRIT_HEALER_CONFIRM");
-    };
-    assert_eq!(confirm.guid, Guid::new(888), "echoes the healer's own guid");
+    assert!(sent.is_empty());
     assert_eq!(store.life(SELF_GUID), Life::Alive);
 }
 
