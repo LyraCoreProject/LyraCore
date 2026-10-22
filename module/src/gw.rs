@@ -523,11 +523,12 @@ pub fn gw_self_resurrect(
 pub fn gw_spirit_res(
     ctx: &ReducerContext,
     request_actor: crate::account_ownership::SessionActor,
+    healer_guid: u64,
 ) -> Result<(), String> {
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::spirit_res(ctx, actor_guid)
+    crate::actor::spirit_res(ctx, actor_guid, healer_guid)
 }
 
 #[reducer]

@@ -385,6 +385,14 @@ impl<
                         }
                     }
                     gossip_option::BANKER => outbound.push(super::show_bank(npc)),
+                    gossip_option::SPIRITHEALER => {
+                        outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE));
+                        outbound.push(Outbound::One(
+                            ServerOpcodeMessage::SMSG_SPIRIT_HEALER_CONFIRM(
+                                SMSG_SPIRIT_HEALER_CONFIRM { guid: c.guid },
+                            ),
+                        ));
+                    }
                     gossip_option::TABARDDESIGNER => {
                         outbound.push(Outbound::One(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE));
                         outbound.push(super::guild::tabard_designer_window(npc));

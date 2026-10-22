@@ -323,3 +323,103 @@ fn accepting_resurrection_restores_native_form() {
         .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
         .is_empty());
 }
+
+const SPIRIT_HEALER_OPTION: u32 = 509_6740;
+const SPIRIT_HEALER_ENTRY: u32 = 51004;
+const BLADE: &str = "5090050";
+
+fn creature_guids(shard: &Standalone) -> Vec<String> {
+    shard
+        .query_rows(&format!(
+            "SELECT guid FROM game_world_entity WHERE entry = {SPIRIT_HEALER_ENTRY}"
+        ))
+        .into_iter()
+        .map(|row| row["guid"].clone())
+        .collect()
+}
+
+fn spirit_healer(shard: &Standalone, offset: f32) -> String {
+    let before = creature_guids(shard);
+    shard.assert_call(
+        "debug_spawn_at_feet",
+        &["1", &SPIRIT_HEALER_ENTRY.to_string(), &offset.to_string()],
+    );
+    let healer = creature_guids(shard)
+        .into_iter()
+        .find(|guid| !before.contains(guid))
+        .expect("a new Spirit Healer");
+    shard.assert_sql(&format!(
+        "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {healer}",
+        lyracore_shared::constants::npc_flags::SPIRITHEALER
+    ));
+    healer
+}
+
+fn select_spirit_healer(shard: &Standalone, healer: &str) -> bool {
+    shard
+        .call(
+            "debug_gossip_select",
+            &[
+                "1",
+                healer,
+                "0",
+                &SPIRIT_HEALER_OPTION.to_string(),
+                "0",
+                &lyracore_shared::constants::gossip_option::SPIRITHEALER.to_string(),
+            ],
+        )
+        .status
+        .success()
+}
+
+fn spirit_res(shard: &Standalone, healer: &str) -> bool {
+    shard
+        .call("gw_spirit_res", &[&actor("1"), healer])
+        .status
+        .success()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_spirit_healer_resurrects_a_ghost_in_reach_only_after_confirmation() {
+    let shard = fixture("ghost-spirit-healer", 1);
+    shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({SPIRIT_HEALER_OPTION},{SPIRIT_HEALER_ENTRY},0,0,'Return me to life.',{},0,0,0,0)", lyracore_shared::constants::gossip_option::SPIRITHEALER));
+    let beside_the_living = spirit_healer(&shard, 2.0);
+    assert!(
+        !select_spirit_healer(&shard, &beside_the_living),
+        "a living Character cannot choose the resurrection"
+    );
+    shard.assert_call("debug_grant_item", &["1", BLADE, "1"]);
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET max_durability = 100 WHERE entry = {BLADE}"
+    ));
+    shard.assert_sql(&format!(
+        "UPDATE game_item_instance SET slot = 15, durability = 100 WHERE owner_guid = 1 AND entry = {BLADE}"
+    ));
+    release(&shard);
+    let healer = spirit_healer(&shard, 2.0);
+    let distant = spirit_healer(&shard, 30.0);
+
+    assert!(select_spirit_healer(&shard, &healer));
+    assert_ghost(&shard, false);
+    assert!(!spirit_res(&shard, &distant), "the healer is out of reach");
+    assert!(
+        !spirit_res(&shard, "1"),
+        "a Character is not a Spirit Healer"
+    );
+    assert_ghost(&shard, false);
+
+    assert!(spirit_res(&shard, &healer));
+    assert_alive(&shard);
+    let blade = shard.query_rows(&format!(
+        "SELECT durability FROM game_item_instance WHERE owner_guid = 1 AND entry = {BLADE}"
+    ));
+    assert_eq!(
+        blade[0]["durability"], "65",
+        "ten percent at death, then twenty-five percent at the Spirit Healer"
+    );
+    assert!(
+        !spirit_res(&shard, &healer),
+        "a repeated activation is refused"
+    );
+}
