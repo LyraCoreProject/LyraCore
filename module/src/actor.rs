@@ -189,11 +189,10 @@ package_only! {
     pub(crate) use crate::gameobject::request_use_gameobject as request_use_gameobject;
 }
 debug_only! { pub(crate) use crate::trainer::apply_trainer_buy as trainer_buy; }
-debug_only! { pub(crate) use crate::world::do_debug_spirit_healer_res as debug_spirit_res; }
 package_only! {
     pub(crate) use crate::spell::do_resurrect_response as respond_resurrect;
     pub(crate) use crate::world::do_repop as repop;
-    pub(crate) use crate::world::do_spirit_healer_res as spirit_res;
+    pub(crate) use crate::world::do_spirit_res as spirit_res;
     pub(crate) use crate::spell::do_self_resurrect as self_resurrect;
 }
 

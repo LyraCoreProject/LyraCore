@@ -162,7 +162,7 @@ pub fn debug_repop(ctx: &ReducerContext, character_guid: u64) -> Result<(), Stri
 
 #[reducer]
 pub fn debug_spirit_healer_res(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::debug_spirit_res(ctx, character_guid)
+    crate::actor::spirit_res(ctx, character_guid)
 }
 
 #[reducer]

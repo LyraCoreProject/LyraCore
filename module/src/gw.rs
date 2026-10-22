@@ -528,7 +528,7 @@ pub fn gw_spirit_res(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::spirit_res(ctx, actor_guid, healer_guid)
+    crate::world::do_spirit_healer_res(ctx, actor_guid, healer_guid)
 }
 
 #[reducer]

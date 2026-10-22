@@ -1261,7 +1261,7 @@ pub(crate) fn do_spirit_healer_res(
     Ok(())
 }
 
-pub(crate) fn do_debug_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+pub(crate) fn do_spirit_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     use lyracore_shared::constants::player_flags;
     let player = ctx
         .db
