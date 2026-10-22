@@ -48,7 +48,7 @@ pub(crate) fn update_breath_edge(ctx: &ReducerContext, mover: &WorldEntity, subm
         Some(mut state) => {
             let elapsed = now_micros - state.last_evaluated.to_micros_since_unix_epoch();
             let advanced = advance_breath(state.remaining_air_micros, state.draining, elapsed);
-            state.remaining_air_micros = advanced.remaining_air_micros;
+            state.remaining_air_micros = advanced.remaining_micros;
             state.last_evaluated = now;
             if state.draining != submerged {
                 if submerged {
@@ -77,6 +77,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    crate::fatigue::tick_fatigue(ctx);
     let now = ctx.timestamp;
     let now_micros = now.to_micros_since_unix_epoch();
     let states = ctx.db.game_breath_state();
@@ -97,7 +98,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         }
         let elapsed = now_micros - state.last_evaluated.to_micros_since_unix_epoch();
         let advanced = advance_breath(state.remaining_air_micros, state.draining, elapsed);
-        state.remaining_air_micros = advanced.remaining_air_micros;
+        state.remaining_air_micros = advanced.remaining_micros;
         state.last_evaluated = now;
 
         if !state.draining && state.remaining_air_micros == FULL_AIR_MICROS {
@@ -106,12 +107,12 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         }
         states.entity_guid().update(state);
 
-        if advanced.drowning_ticks == 0 {
+        if advanced.expired_ticks == 0 {
             continue;
         }
         let mut health = entity.health;
         let mut died = false;
-        for _ in 0..advanced.drowning_ticks {
+        for _ in 0..advanced.expired_ticks {
             let nominal = drowning_damage(entity.max_health);
             let actual = nominal.min(health);
             let (_, lethal) = crate::world::resolve_environmental_damage(nominal, health);
@@ -145,22 +146,22 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use lyracore_shared::env::{BreathAdvance, MAX_DROWNING_CATCHUP_TICKS};
+    use lyracore_shared::env::{MirrorTimerAdvance, MAX_CATCHUP_TICKS};
 
     #[test]
     fn breath_drains_then_crosses_zero_once() {
         assert_eq!(
             advance_breath(FULL_AIR_MICROS, true, 12_000_000),
-            BreathAdvance {
-                remaining_air_micros: 48_000_000,
-                drowning_ticks: 0
+            MirrorTimerAdvance {
+                remaining_micros: 48_000_000,
+                expired_ticks: 0
             }
         );
         assert_eq!(
             advance_breath(200_000, true, 300_000),
-            BreathAdvance {
-                remaining_air_micros: 0,
-                drowning_ticks: 1
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: 1
             }
         );
     }
@@ -169,9 +170,9 @@ mod tests {
     fn long_stall_has_bounded_one_second_damage_ticks() {
         assert_eq!(
             advance_breath(0, true, 20_000_000),
-            BreathAdvance {
-                remaining_air_micros: 0,
-                drowning_ticks: MAX_DROWNING_CATCHUP_TICKS
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: MAX_CATCHUP_TICKS
             }
         );
     }
@@ -180,9 +181,9 @@ mod tests {
     fn empty_bar_counts_one_tick_per_elapsed_second() {
         assert_eq!(
             advance_breath(0, true, 1_000_000),
-            BreathAdvance {
-                remaining_air_micros: 0,
-                drowning_ticks: 1
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: 1
             }
         );
     }
@@ -191,9 +192,9 @@ mod tests {
     fn refill_clamps_to_full() {
         assert_eq!(
             advance_breath(54_000_000, false, 2_000_000),
-            BreathAdvance {
-                remaining_air_micros: FULL_AIR_MICROS,
-                drowning_ticks: 0
+            MirrorTimerAdvance {
+                remaining_micros: FULL_AIR_MICROS,
+                expired_ticks: 0
             }
         );
     }

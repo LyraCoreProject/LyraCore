@@ -88,13 +88,14 @@ pub(crate) struct CellRow {
     pub(crate) holes: u32,
     pub(crate) area_id: u32,
     pub(crate) heights: Vec<f32>,
+    pub(crate) deep_water_tiles: u64,
 }
 
 impl CellRow {
     fn packed(&self) -> String {
         let hs: Vec<String> = self.heights.iter().map(|h| format!("{h}")).collect();
         format!(
-            "{},{},{},{},{},{},{},{}",
+            "{},{},{},{},{},{},{},{},{}",
             self.map_id,
             self.cell_x,
             self.cell_y,
@@ -102,7 +103,8 @@ impl CellRow {
             if self.has_liquid { 1 } else { 0 },
             self.holes,
             self.area_id,
-            hs.join(":")
+            hs.join(":"),
+            self.deep_water_tiles
         )
     }
 }
@@ -354,9 +356,13 @@ pub(crate) fn collect_cells(
         }
         let heights: Vec<f32> = mcvt.heights.iter().map(|h| h + pz).collect();
         // MCLQ max_height supplies the scalar liquid surface for near-flat classic liquids.
-        let (has_liquid, liquid_level) = match &mcnk.liquid {
-            Some(l) => (true, l.max_height),
-            None => (false, 0.0),
+        let (has_liquid, liquid_level, deep_water_tiles) = match &mcnk.liquid {
+            Some(l) => (
+                true,
+                l.max_height,
+                lyracore_shared::terrain::deep_water_tiles(&l.tile_flags),
+            ),
+            None => (false, 0.0, 0),
         };
         rows.push(CellRow {
             map_id,
@@ -367,6 +373,7 @@ pub(crate) fn collect_cells(
             holes: mcnk.header.holes_low_res as u32,
             area_id: mcnk.header.area_id,
             heights,
+            deep_water_tiles,
         });
     }
     Ok(())
@@ -554,6 +561,7 @@ mod tests {
             holes: 0,
             area_id: 0,
             heights: vec![0.0; 145],
+            deep_water_tiles: 0,
         };
 
         let rows = dedup_rows(vec![

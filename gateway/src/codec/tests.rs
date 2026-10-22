@@ -733,6 +733,49 @@ fn drowning_damage_log_roundtrips_with_the_actual_damage() {
 }
 
 #[test]
+fn fatigue_mirror_timer_drains_recovers_and_stops_on_the_vanilla_wire() {
+    for (in_deep_water, scale) in [(true, u32::MAX), (false, 10)] {
+        let start = build_fatigue_timer_start(in_deep_water, 42_000, 60_000);
+        let mut bytes = Vec::new();
+        start.write_unencrypted_server(&mut bytes).unwrap();
+        match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+            ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
+                assert_eq!(msg.timer, TimerType::Fatigue);
+                assert_eq!(msg.time_remaining, 42_000);
+                assert_eq!(msg.duration, 60_000);
+                assert_eq!(msg.scale, scale);
+            }
+            other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
+        }
+    }
+    let mut bytes = Vec::new();
+    build_fatigue_timer_stop()
+        .write_unencrypted_server(&mut bytes)
+        .unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
+            assert_eq!(msg.timer, TimerType::Fatigue)
+        }
+        other => panic!("expected SMSG_STOP_MIRROR_TIMER, got {other}"),
+    }
+}
+
+#[test]
+fn exhaustion_damage_log_roundtrips_with_the_actual_damage() {
+    let msg = build_exhaustion_damage_log(0xF00D, 212);
+    let mut bytes = Vec::new();
+    msg.write_unencrypted_server(&mut bytes).unwrap();
+    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
+            assert_eq!(log.guid.guid(), 0xF00D);
+            assert_eq!(log.damage_type, EnvironmentalDamageType::Exhausted);
+            assert_eq!(log.damage, 212);
+        }
+        other => panic!("expected SMSG_ENVIRONMENTAL_DAMAGE_LOG, got {other}"),
+    }
+}
+
+#[test]
 fn attacker_state_update_is_one_physical_normal_swing() {
     let player = 1u64;
     let chicken = (0xF130u64 << 48) | (620u64 << 24) | 1;

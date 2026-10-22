@@ -1225,10 +1225,11 @@ fn the_instance_removal_dies_with_the_source_copy_and_is_not_carried() {
     assert!(NOT_TRANSPORTED.contains(&"game_instance_removal"));
 }
 
-const OLD_BLOBS_MAY_LACK: [&str; 6] = [
+const OLD_BLOBS_MAY_LACK: [&str; 7] = [
     "game_auction_bid_hold",
     "game_auction_hold",
     "game_character_away",
+    "game_fatigue_state",
     "game_group_target_icon",
     "game_guild_fee_hold",
     "game_instance_removal",
@@ -1265,7 +1266,7 @@ fn a_blob_lacking_any_listed_table_imports_with_it_empty() {
         );
     }
     let oldest = manifest_without(&OLD_BLOBS_MAY_LACK);
-    assert_eq!(oldest.len() + 6, manifest().len());
+    assert_eq!(oldest.len() + OLD_BLOBS_MAY_LACK.len(), manifest().len());
     assert_eq!(check_manifest(7, &oldest), Ok(()));
     let mut filled = vec![carried.clone()];
     filled.extend(OLD_BLOBS_MAY_LACK.map(empty));
@@ -1319,6 +1320,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         ("game_auction_bid_hold", count),
         ("game_auction_hold", count),
         ("game_character_away", count),
+        ("game_fatigue_state", count),
         ("game_group_target_icon", count),
         ("game_guild_fee_hold", count),
         ("game_instance_removal", count),
@@ -1336,7 +1338,7 @@ fn a_filled_old_payload_covers_every_transport_arm() {
         arms,
     )
     .expect("the filled payload imports");
-    assert_eq!(applied.get(), 7);
+    assert_eq!(applied.get(), 8);
 }
 
 #[test]
@@ -1350,7 +1352,7 @@ fn the_tables_old_blobs_may_lack_are_pinned() {
     }
     #[cfg(not(has_packages))]
     {
-        assert_eq!(manifest().len(), 44);
+        assert_eq!(manifest().len(), 45);
         assert_eq!(manifest_without(&OLD_BLOBS_MAY_LACK).len(), 38);
     }
 }

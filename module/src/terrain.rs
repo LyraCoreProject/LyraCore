@@ -17,6 +17,14 @@ pub struct TerrainChunk {
     pub area_id: u32,
 }
 
+// One row per terrain chunk with deep water; each bit is one MCLQ tile.
+#[table(accessor = game_terrain_deep_water)]
+pub struct TerrainDeepWater {
+    #[primary_key]
+    pub key: u64,
+    pub tiles: u64,
+}
+
 pub(crate) fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
     let (cx, cy) = (cell_index(x)?, cell_index(y)?);
     let chunk = ctx
@@ -81,6 +89,20 @@ pub(crate) fn liquid_level_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32)
     chunk.has_liquid.then_some(chunk.liquid_level)
 }
 
+pub(crate) fn deep_water_level_at(
+    ctx: &ReducerContext,
+    map_id: u32,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let (cx, cy) = (cell_index(x)?, cell_index(y)?);
+    let key = cell_key(map_id, cx, cy);
+    let tiles = ctx.db.game_terrain_deep_water().key().find(key)?.tiles;
+    let chunk = ctx.db.game_terrain_chunk().key().find(key)?;
+    (chunk.has_liquid && lyracore_shared::terrain::is_deep_water_at(tiles, cx, cy, x, y))
+        .then_some(chunk.liquid_level)
+}
+
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
@@ -133,9 +155,10 @@ fn load_terrain_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String>
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();
-        if f.len() != 8 {
+        // The ninth field, the deep-water tile mask, is optional.
+        if !(8..=9).contains(&f.len()) {
             return Err(format!(
-                "terrain row needs 8 fields, got {}: {row}",
+                "terrain row needs 8 or 9 fields, got {}: {row}",
                 f.len()
             ));
         }
@@ -152,8 +175,22 @@ fn load_terrain_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String>
         let pu32 = |s: &str| s.parse::<u32>().map_err(|_| format!("bad u32: {s}"));
         let pu16 = |s: &str| s.parse::<u16>().map_err(|_| format!("bad u16: {s}"));
         let (map_id, cell_x, cell_y) = (pu32(f[0])?, pu16(f[1])?, pu16(f[2])?);
+        let key = cell_key(map_id, cell_x, cell_y);
+        let deep_water_tiles = f
+            .get(8)
+            .map(|s| s.parse::<u64>().map_err(|_| format!("bad u64: {s}")))
+            .transpose()?
+            .unwrap_or(0);
+        let deep_water = ctx.db.game_terrain_deep_water();
+        deep_water.key().delete(key);
+        if deep_water_tiles != 0 {
+            deep_water.insert(TerrainDeepWater {
+                key,
+                tiles: deep_water_tiles,
+            });
+        }
         chunks.insert(TerrainChunk {
-            key: cell_key(map_id, cell_x, cell_y),
+            key,
             map_id,
             cell_x,
             cell_y,
@@ -177,6 +214,10 @@ pub fn import_terrain_chunks(ctx: &ReducerContext, packed: String) -> Result<(),
     let keys: Vec<u64> = chunks.iter().map(|c| c.key).collect();
     for k in keys {
         chunks.key().delete(k);
+    }
+    let deep_water = ctx.db.game_terrain_deep_water();
+    for k in deep_water.iter().map(|row| row.key).collect::<Vec<_>>() {
+        deep_water.key().delete(k);
     }
     if load_terrain_batch(ctx, &packed)? == 0 {
         return Err("terrain import payload was empty".to_string());
