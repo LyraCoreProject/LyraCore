@@ -15,6 +15,8 @@ pub struct TerrainChunk {
     pub has_liquid: bool,
     pub holes: u32,
     pub area_id: u32,
+    #[default(0u64)]
+    pub deep_water_tiles: u64,
 }
 
 pub(crate) fn ground_z(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> Option<f32> {
@@ -81,6 +83,23 @@ pub(crate) fn liquid_level_at(ctx: &ReducerContext, map_id: u32, x: f32, y: f32)
     chunk.has_liquid.then_some(chunk.liquid_level)
 }
 
+pub(crate) fn deep_water_level_at(
+    ctx: &ReducerContext,
+    map_id: u32,
+    x: f32,
+    y: f32,
+) -> Option<f32> {
+    let (cx, cy) = (cell_index(x)?, cell_index(y)?);
+    let chunk = ctx
+        .db
+        .game_terrain_chunk()
+        .key()
+        .find(cell_key(map_id, cx, cy))?;
+    (chunk.has_liquid
+        && lyracore_shared::terrain::is_deep_water_at(chunk.deep_water_tiles, cx, cy, x, y))
+    .then_some(chunk.liquid_level)
+}
+
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_check_submerged(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
@@ -133,9 +152,10 @@ fn load_terrain_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String>
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();
-        if f.len() != 8 {
+        // The ninth field, the deep-water tile mask, is optional.
+        if !(8..=9).contains(&f.len()) {
             return Err(format!(
-                "terrain row needs 8 fields, got {}: {row}",
+                "terrain row needs 8 or 9 fields, got {}: {row}",
                 f.len()
             ));
         }
@@ -164,6 +184,11 @@ fn load_terrain_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String>
             has_liquid: f[4] == "1",
             holes: pu32(f[5])?,
             area_id: pu32(f[6])?,
+            deep_water_tiles: f
+                .get(8)
+                .map(|s| s.parse::<u64>().map_err(|_| format!("bad u64: {s}")))
+                .transpose()?
+                .unwrap_or(0),
         });
         loaded += 1;
     }

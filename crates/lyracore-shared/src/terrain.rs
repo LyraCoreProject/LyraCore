@@ -37,9 +37,52 @@ pub fn interpolate(heights: &[f32], cell_x: u16, cell_y: u16, x: f32, y: f32) ->
     Some(top * (1.0 - fx) + bot * fx)
 }
 
+// MCLQ tile flag bit 0x80 marks deep water; a low nibble of 0x0F marks a tile without liquid.
+pub fn deep_water_tiles(tile_flags: &[u8; 64]) -> u64 {
+    tile_flags
+        .iter()
+        .enumerate()
+        .filter(|(_, flags)| **flags & 0x0F != 0x0F && **flags & 0x80 != 0)
+        .fold(0, |mask, (tile, _)| mask | 1 << tile)
+}
+
+// Tiles follow the MCVT row order: eight rows along x, eight tiles along y.
+pub fn is_deep_water_at(deep_water_tiles: u64, cell_x: u16, cell_y: u16, x: f32, y: f32) -> bool {
+    if cell_index(x) != Some(cell_x) || cell_index(y) != Some(cell_y) {
+        return false;
+    }
+    let row = ((((MAP_COORD_MAX - x) - cell_x as f32 * CELL_SIZE) / QUAD) as u32).min(7);
+    let column = ((((MAP_COORD_MAX - y) - cell_y as f32 * CELL_SIZE) / QUAD) as u32).min(7);
+    deep_water_tiles & 1 << (row * 8 + column) != 0
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn deep_water_tiles_keep_flagged_liquid_tiles_only() {
+        let mut flags = [0u8; 64];
+        flags[0] = 0x80;
+        flags[9] = 0x84;
+        flags[10] = 0x8F;
+        flags[63] = 0x04;
+        assert_eq!(deep_water_tiles(&flags), 1 | 1 << 9);
+    }
+
+    #[test]
+    fn deep_water_lookup_finds_the_tile_under_the_position() {
+        let (x0, y0) = (-8949.95f32, -132.493f32);
+        let (cx, cy) = (cell_index(x0).unwrap(), cell_index(y0).unwrap());
+        let corner_x = MAP_COORD_MAX - cx as f32 * CELL_SIZE;
+        let corner_y = MAP_COORD_MAX - cy as f32 * CELL_SIZE;
+        let row_two_column_five = 1 << (2 * 8 + 5);
+        let (x, y) = (corner_x - 2.5 * QUAD, corner_y - 5.5 * QUAD);
+        assert!(is_deep_water_at(row_two_column_five, cx, cy, x, y));
+        assert!(!is_deep_water_at(row_two_column_five, cx, cy, x - QUAD, y));
+        assert!(!is_deep_water_at(row_two_column_five, cx, cy, x, y - QUAD));
+        assert!(!is_deep_water_at(u64::MAX, cx + 1, cy, x, y));
+    }
 
     #[test]
     fn bilinear_recovers_a_sloped_plane() {

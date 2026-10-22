@@ -975,6 +975,13 @@ pub(crate) fn apply_movement_update(
         );
         crate::breath::update_breath_edge(ctx, &mover, submerged);
     }
+    if crate::fatigue::feels_fatigue(&mover) && (move_time_ms / 1000 != old_move_ms / 1000) {
+        let deep_water_level =
+            crate::terrain::deep_water_level_at(ctx, mover.map_id, mover.x, mover.y);
+        let in_deep_water =
+            lyracore_shared::env::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
+        crate::fatigue::update_fatigue_edge(ctx, &mover, in_deep_water);
+    }
     let mount_indoor_due = mover.is_player()
         && mover.mount_display_id != 0
         && crate::mount::indoor_check_is_due(old_move_ms, move_time_ms);

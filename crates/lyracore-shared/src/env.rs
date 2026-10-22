@@ -17,35 +17,79 @@ pub fn is_submerged(
         && player_z + UNDERWATER_HEAD_HEIGHT < liquid_level
 }
 
+// Deep water still counts this far above its surface.
+pub const DEEP_WATER_SURFACE_REACH: f32 = 2.0;
+
+pub fn is_in_deep_water(player_z: f32, deep_water_level: Option<f32>, movement_flags: u32) -> bool {
+    deep_water_level.is_some_and(|level| {
+        movement_flags & MOVEMENT_FLAG_ON_TRANSPORT == 0
+            && player_z <= level + DEEP_WATER_SURFACE_REACH
+    })
+}
+
 pub const FULL_AIR_MICROS: i64 = 60_000_000;
 pub const REFILL_MICROS: i64 = 10_000_000;
 pub const DROWNING_INTERVAL_MICROS: i64 = 1_000_000;
-pub const MAX_DROWNING_CATCHUP_TICKS: u32 = 5;
+pub const MAX_CATCHUP_TICKS: u32 = 5;
+
+pub const FULL_FATIGUE_MICROS: i64 = 60_000_000;
+// Fatigue recovers ten times faster than it drains.
+pub const FATIGUE_RECOVERY_MICROS: i64 = FULL_FATIGUE_MICROS / 10;
 
 #[derive(Debug, PartialEq, Eq)]
-pub struct BreathAdvance {
-    pub remaining_air_micros: i64,
-    pub drowning_ticks: u32,
+pub struct MirrorTimerAdvance {
+    pub remaining_micros: i64,
+    pub expired_ticks: u32,
 }
 
 pub fn advance_breath(
-    remaining_air_micros: i64,
+    remaining_micros: i64,
     draining: bool,
     elapsed_micros: i64,
-) -> BreathAdvance {
+) -> MirrorTimerAdvance {
+    advance_mirror_timer(
+        remaining_micros,
+        FULL_AIR_MICROS,
+        REFILL_MICROS,
+        draining,
+        elapsed_micros,
+    )
+}
+
+pub fn advance_fatigue(
+    remaining_micros: i64,
+    in_deep_water: bool,
+    elapsed_micros: i64,
+) -> MirrorTimerAdvance {
+    advance_mirror_timer(
+        remaining_micros,
+        FULL_FATIGUE_MICROS,
+        FATIGUE_RECOVERY_MICROS,
+        in_deep_water,
+        elapsed_micros,
+    )
+}
+
+fn advance_mirror_timer(
+    remaining_micros: i64,
+    full_micros: i64,
+    refill_micros: i64,
+    draining: bool,
+    elapsed_micros: i64,
+) -> MirrorTimerAdvance {
     let elapsed = elapsed_micros.max(0);
-    let remaining = remaining_air_micros.clamp(0, FULL_AIR_MICROS);
+    let remaining = remaining_micros.clamp(0, full_micros);
     if !draining {
-        let restored = elapsed.saturating_mul(FULL_AIR_MICROS) / REFILL_MICROS;
-        return BreathAdvance {
-            remaining_air_micros: remaining.saturating_add(restored).min(FULL_AIR_MICROS),
-            drowning_ticks: 0,
+        let restored = elapsed.saturating_mul(full_micros) / refill_micros;
+        return MirrorTimerAdvance {
+            remaining_micros: remaining.saturating_add(restored).min(full_micros),
+            expired_ticks: 0,
         };
     }
     if remaining >= elapsed {
-        return BreathAdvance {
-            remaining_air_micros: remaining - elapsed,
-            drowning_ticks: 0,
+        return MirrorTimerAdvance {
+            remaining_micros: remaining - elapsed,
+            expired_ticks: 0,
         };
     }
     let after_empty = elapsed - remaining;
@@ -54,14 +98,18 @@ pub fn advance_breath(
     } else {
         1 + after_empty / DROWNING_INTERVAL_MICROS
     };
-    BreathAdvance {
-        remaining_air_micros: 0,
-        drowning_ticks: ticks.min(MAX_DROWNING_CATCHUP_TICKS as i64) as u32,
+    MirrorTimerAdvance {
+        remaining_micros: 0,
+        expired_ticks: ticks.min(MAX_CATCHUP_TICKS as i64) as u32,
     }
 }
 
 pub fn drowning_damage(max_health: u32) -> u32 {
     max_health.saturating_mul(20).saturating_add(99) / 100
+}
+
+pub fn exhaustion_damage(max_health: u32, level: u32, roll: u32) -> u32 {
+    (max_health / 5).saturating_add(roll % level.max(1))
 }
 
 // Client fall_time_ms includes jump ascent; gravity is about 19.29 yd/s^2.
@@ -131,33 +179,84 @@ mod tests {
     }
 
     #[test]
+    fn deep_water_counts_below_and_just_above_the_surface_but_not_on_a_transport() {
+        assert!(is_in_deep_water(-30.0, Some(0.0), MOVEMENT_FLAG_SWIMMING));
+        assert!(is_in_deep_water(2.0, Some(0.0), 0));
+        assert!(!is_in_deep_water(2.01, Some(0.0), 0));
+        assert!(!is_in_deep_water(-1.0, None, MOVEMENT_FLAG_SWIMMING));
+        assert!(!is_in_deep_water(
+            -1.0,
+            Some(0.0),
+            MOVEMENT_FLAG_ON_TRANSPORT
+        ));
+    }
+
+    #[test]
+    fn fatigue_drains_for_a_minute_then_exhausts_each_second() {
+        assert_eq!(
+            advance_fatigue(FULL_FATIGUE_MICROS, true, 59_000_000),
+            MirrorTimerAdvance {
+                remaining_micros: 1_000_000,
+                expired_ticks: 0
+            }
+        );
+        assert_eq!(
+            advance_fatigue(1_000_000, true, 3_000_000),
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: 3
+            }
+        );
+    }
+
+    #[test]
+    fn fatigue_recovers_in_six_seconds_outside_deep_water() {
+        assert_eq!(
+            advance_fatigue(0, false, 3_000_000).remaining_micros,
+            30_000_000
+        );
+        assert_eq!(
+            advance_fatigue(0, false, 6_000_000).remaining_micros,
+            FULL_FATIGUE_MICROS
+        );
+    }
+
+    #[test]
+    fn exhaustion_damage_is_a_fifth_of_health_plus_a_level_roll() {
+        assert_eq!(exhaustion_damage(1000, 60, 0), 200);
+        assert_eq!(exhaustion_damage(1000, 60, 59), 259);
+        assert_eq!(exhaustion_damage(1000, 60, 60), 200);
+        assert_eq!(exhaustion_damage(1000, 1, 7), 200);
+    }
+
+    #[test]
     fn breath_state_machine_drains_refills_and_bounds_catchup() {
         assert_eq!(
             advance_breath(FULL_AIR_MICROS, true, 12_000_000),
-            BreathAdvance {
-                remaining_air_micros: 48_000_000,
-                drowning_ticks: 0
+            MirrorTimerAdvance {
+                remaining_micros: 48_000_000,
+                expired_ticks: 0
             }
         );
         assert_eq!(
             advance_breath(200_000, true, 300_000),
-            BreathAdvance {
-                remaining_air_micros: 0,
-                drowning_ticks: 1
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: 1
             }
         );
         assert_eq!(
             advance_breath(0, true, 20_000_000),
-            BreathAdvance {
-                remaining_air_micros: 0,
-                drowning_ticks: MAX_DROWNING_CATCHUP_TICKS
+            MirrorTimerAdvance {
+                remaining_micros: 0,
+                expired_ticks: MAX_CATCHUP_TICKS
             }
         );
         assert_eq!(
             advance_breath(54_000_000, false, 2_000_000),
-            BreathAdvance {
-                remaining_air_micros: FULL_AIR_MICROS,
-                drowning_ticks: 0
+            MirrorTimerAdvance {
+                remaining_micros: FULL_AIR_MICROS,
+                expired_ticks: 0
             }
         );
         assert_eq!(drowning_damage(100).saturating_mul(10).min(100), 100);

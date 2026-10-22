@@ -15,6 +15,10 @@ pub(crate) fn relay_breath_event(
         0 => codec::build_breath_timer_start(time_remaining_ms, duration_ms),
         1 => codec::build_breath_timer_stop(),
         2 => codec::build_drowning_damage_log(character_guid, damage),
+        3 => codec::build_fatigue_timer_start(true, time_remaining_ms, duration_ms),
+        4 => codec::build_fatigue_timer_start(false, time_remaining_ms, duration_ms),
+        5 => codec::build_fatigue_timer_stop(),
+        6 => codec::build_exhaustion_damage_log(character_guid, damage),
         unknown => {
             log::warn!("breath relay: dropping unknown kind {unknown} for {character_guid}");
             return Vec::new();
