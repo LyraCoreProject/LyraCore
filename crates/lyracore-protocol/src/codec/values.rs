@@ -419,43 +419,9 @@ pub fn build_container_slot_values(
     build_values_update_raw(bag_guid, &mask)
 }
 
-#[allow(clippy::too_many_arguments)]
-pub fn build_levelup_values(
-    guid: u64,
-    level: u32,
-    health: u32,
-    max_health: u32,
-    xp: u32,
-    next_level_xp: u32,
-    power_b: u8,
-    max_power: u32,
-) -> SMSG_UPDATE_OBJECT {
-    let max_p = max_power as i32;
+pub fn build_level_values(guid: u64, level: u32) -> SMSG_UPDATE_OBJECT {
     player_values(guid, |player| {
         player.set_unit_level(level as i32);
-        player.set_unit_maxhealth(max_health as i32);
-        player.set_unit_health(health as i32);
-        match power_b {
-            1 => {
-                player.set_unit_maxpower2(max_p);
-            }
-            2 => {
-                player.set_unit_maxpower3(max_p);
-            }
-            3 => {
-                player.set_unit_maxpower4(max_p);
-            }
-            4 => {
-                player.set_unit_maxpower5(max_p);
-            }
-            _ => {
-                player.set_unit_maxpower1(max_p);
-            }
-        }
-        player.set_player_xp(xp as i32);
-        player.set_player_next_level_xp(next_level_xp as i32);
-
-        player.set_player_character_points1((level as i32 - 9).max(0));
     })
 }
 

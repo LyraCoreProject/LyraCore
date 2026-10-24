@@ -953,6 +953,7 @@ pub(crate) fn apply_movement_update(
             let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
             mover.health = health;
             fall_lethal = lethal;
+            crate::native::fall_damage(ctx, mover.guid, dmg);
         }
     }
     if mover.is_player() && !mover.dead && (grid_x != old_gx || grid_y != old_gy) {

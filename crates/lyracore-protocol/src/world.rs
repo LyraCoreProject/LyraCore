@@ -37,9 +37,46 @@ pub fn client_frame(opcode: u32, body: &[u8]) -> Result<Vec<u8>> {
 
 pub fn decode(opcode: u32, body: &[u8]) -> Result<ClientOpcodeMessage> {
     ensure!(
-        opcode != crate::codec::auth_session::CMSG_AUTH_SESSION_OPCODE,
-        "authentication requires the bounded auth decoder"
+        !matches!(
+            opcode,
+            crate::codec::auth_session::CMSG_AUTH_SESSION_OPCODE | 0x0205 | 0x020b
+        ),
+        "compressed requests require a bounded raw handler"
     );
+    if let Some(message) = crate::codec::read_movement_client(opcode, body)? {
+        return Ok(message);
+    }
+    let boolean = match opcode {
+        0x0253 => body.first(),
+        0x028f | 0x023e => body.get(8),
+        0x02f3 => body.get(12),
+        0x02ee => body.get(16),
+        0x0317 => body.get(4),
+        _ => None,
+    };
+    ensure!(
+        boolean.is_none_or(|value| *value <= 1),
+        "invalid world request boolean"
+    );
+    if opcode == 0x01ca {
+        let mut input = body.get(4..).context("missing bug report kind")?;
+        for _ in 0..2 {
+            let size = u32::from_le_bytes(
+                input
+                    .get(..4)
+                    .context("missing bug report string size")?
+                    .try_into()?,
+            ) as usize;
+            input = &input[4..];
+            ensure!(
+                size > 0 && size <= input.len(),
+                "invalid bug report string size"
+            );
+            ensure!(input[size - 1] == 0, "unterminated bug report string");
+            input = &input[size..];
+        }
+        ensure!(input.is_empty(), "trailing bug report bytes");
+    }
     // Build 5875 acknowledges teleport with an unpacked GUID, unlike the generated reader.
     if opcode == 0x00c7 {
         ensure!(body.len() == 16, "invalid teleport acknowledgement size");
@@ -133,6 +170,55 @@ pub fn matches_world_proof(
 mod tests {
     use super::*;
     use wow_world_messages::vanilla::SMSG_PONG;
+
+    #[test]
+    fn malformed_boolean_and_sized_string_requests_return_errors_without_panicking() {
+        let mut cases = Vec::new();
+        for (opcode, offset) in [
+            (0x0253, 0),
+            (0x028f, 8),
+            (0x02f3, 12),
+            (0x02ee, 16),
+            (0x0317, 4),
+            (0x023e, 8),
+        ] {
+            let mut body = vec![0; offset + 1];
+            body[offset] = 2;
+            cases.push((opcode, body));
+        }
+        let mut bug = vec![0; 4];
+        bug.extend_from_slice(&1u32.to_le_bytes());
+        bug.push(0);
+        bug.extend_from_slice(&1u32.to_le_bytes());
+        bug.push(0);
+        assert!(matches!(
+            decode(0x01ca, &bug).unwrap(),
+            ClientOpcodeMessage::CMSG_BUG(_)
+        ));
+        for offset in [4, 9] {
+            for size in [0, u32::MAX] {
+                let mut invalid = bug.clone();
+                invalid[offset..offset + 4].copy_from_slice(&size.to_le_bytes());
+                cases.push((0x01ca, invalid));
+            }
+            let mut invalid = bug.clone();
+            invalid[offset + 4] = 2;
+            cases.push((0x01ca, invalid));
+        }
+        let mut ticket = vec![0; 19];
+        ticket[0] = 2;
+        ticket.extend_from_slice(&u32::MAX.to_le_bytes());
+        ticket.extend_from_slice(&[0xff; 16]);
+        cases.push((0x0205, ticket));
+        for (opcode, body) in cases {
+            assert!(
+                std::panic::catch_unwind(|| decode(opcode, &body))
+                    .expect("untrusted request must not panic")
+                    .is_err(),
+                "{opcode:#x}"
+            );
+        }
+    }
 
     #[test]
     fn who_counts_and_strings_must_fit_the_payload_before_allocation() {

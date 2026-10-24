@@ -90,3 +90,23 @@ pub(crate) fn breath_event(ctx: &ReducerContext, row: &BreathRelayEvent) {
         lyracore_protocol::world::encode(message).expect("breath event fits a world frame");
     super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
 }
+
+pub(crate) fn fall_damage(ctx: &ReducerContext, guid: u64, damage: u32) {
+    if damage == 0 {
+        return;
+    }
+    if let Some(owner) = ctx.db.game_native_player().character_guid().find(guid) {
+        let message = ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(Box::new(
+            lyracore_protocol::messages::vanilla::SMSG_ENVIRONMENTAL_DAMAGE_LOG {
+                guid: lyracore_protocol::messages::Guid::new(guid),
+                damage_type: lyracore_protocol::messages::vanilla::EnvironmentalDamageType::Fall,
+                damage,
+                absorb: 0,
+                resist: 0,
+            },
+        ));
+        if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
+            spacetimedb::log::error!("native fall damage failed for {guid}: {error}");
+        }
+    }
+}

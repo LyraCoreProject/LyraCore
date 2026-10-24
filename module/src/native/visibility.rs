@@ -267,6 +267,32 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
         if old.level != new.level {
             super::book::talent_points(ctx, new.guid, new.level);
         }
+        if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
+            let mut private = Vec::new();
+            if old.xp != new.xp || old.next_level_xp != new.next_level_xp {
+                private.push(codec::build_player_xp_values(
+                    new.guid,
+                    new.xp,
+                    new.next_level_xp,
+                ));
+            }
+            if old.money != new.money {
+                private.push(codec::build_coinage_values(new.guid, new.money));
+            }
+            for values in private {
+                if let Err(error) = super::send(
+                    ctx,
+                    owner.connection_id,
+                    ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(values)),
+                    false,
+                ) {
+                    spacetimedb::log::error!(
+                        "native private VALUES failed for {}: {error}",
+                        new.guid
+                    );
+                }
+            }
+        }
         if old.player_bytes_2 != new.player_bytes_2 {
             if let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) {
                 let (opcode, body) = codec::build_rest_state_values(new.guid, new.player_bytes_2);
@@ -372,84 +398,59 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<ServerOpcodeMessage> {
     let mut out = Vec::new();
     let is_player = new.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
     if is_player && old.level != new.level {
-        let m = codec::build_levelup_values(
-            new.guid,
-            new.level,
-            new.health,
-            new.max_health,
-            new.xp,
-            new.next_level_xp,
-            (new.unit_bytes_0 >> 24) as u8,
-            new.max_power,
-        );
+        let m = codec::build_level_values(new.guid, new.level);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if old.health != new.health {
+        let m = codec::build_health_values(new.guid, new.health);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if old.target_guid != new.target_guid {
+        let m = codec::build_target_values(new.guid, new.target_guid);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if old.max_health != new.max_health || old.max_power != new.max_power {
+        let power_b = (new.unit_bytes_0 >> 24) as u8;
+        let m = codec::build_max_vitals_values(new.guid, new.max_health, power_b, new.max_power);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    // Mount display and TAXI_FLIGHT must reach the client in one mask.
+    let taxi_flight_toggled = (old.unit_flags ^ new.unit_flags)
+        & lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        != 0;
+    if old.mount_display_id != new.mount_display_id && taxi_flight_toggled {
+        let m =
+            codec::build_taxi_presentation_values(new.guid, new.mount_display_id, new.unit_flags);
         out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
     } else {
-        if old.health != new.health {
-            let m = codec::build_health_values(new.guid, new.health);
+        if old.mount_display_id != new.mount_display_id {
+            let m = codec::build_mount_display_values(new.guid, new.mount_display_id);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        if old.target_guid != new.target_guid {
-            let m = codec::build_target_values(new.guid, new.target_guid);
+        if old.unit_flags != new.unit_flags {
+            let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
             out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
         }
-        if old.max_health != new.max_health || old.max_power != new.max_power {
-            let power_b = (new.unit_bytes_0 >> 24) as u8;
-            let m =
-                codec::build_max_vitals_values(new.guid, new.max_health, power_b, new.max_power);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        // Mount display and TAXI_FLIGHT must reach the client in one mask.
-        let taxi_flight_toggled = (old.unit_flags ^ new.unit_flags)
-            & lyracore_shared::constants::unit_flags::TAXI_FLIGHT
-            != 0;
-        if old.mount_display_id != new.mount_display_id && taxi_flight_toggled {
-            let m = codec::build_taxi_presentation_values(
-                new.guid,
-                new.mount_display_id,
-                new.unit_flags,
-            );
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        } else {
-            if old.mount_display_id != new.mount_display_id {
-                let m = codec::build_mount_display_values(new.guid, new.mount_display_id);
-                out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-            }
-            if old.unit_flags != new.unit_flags {
-                let m = codec::build_unit_flags_values(new.guid, new.unit_flags);
-                out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-            }
-        }
-        if old.unit_bytes_2 != new.unit_bytes_2 {
-            let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        let xp_changed = old.xp != new.xp || old.next_level_xp != new.next_level_xp;
-        if xp_changed && is_player {
-            let m = codec::build_player_xp_values(new.guid, new.xp, new.next_level_xp);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        if old.money != new.money && is_player {
-            let m = codec::build_coinage_values(new.guid, new.money);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        if is_player
-            && (old.player_flags != new.player_flags || old.unit_bytes_1 != new.unit_bytes_1)
-        {
-            let m = codec::build_player_flags_values(new.guid, new.player_flags, new.unit_bytes_1);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        if is_player && old.power != new.power {
-            let power_b = (new.unit_bytes_0 >> 24) as u8;
-            let m = codec::build_power_values(new.guid, power_b, new.power);
-            out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
-        }
-        if old.run_speed_mult_bp != new.run_speed_mult_bp {
-            const BASE_RUN_SPEED: f32 = 7.0;
-            let speed = BASE_RUN_SPEED * (new.run_speed_mult_bp as f32 / 10_000.0);
-            out.push(ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(Box::new(
-                codec::build_force_run_speed(new.guid, speed),
-            )));
-        }
+    }
+    if old.unit_bytes_2 != new.unit_bytes_2 {
+        let m = codec::build_sheath_values(new.guid, new.unit_bytes_2);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if is_player && (old.player_flags != new.player_flags || old.unit_bytes_1 != new.unit_bytes_1) {
+        let m = codec::build_player_flags_values(new.guid, new.player_flags, new.unit_bytes_1);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if is_player && old.power != new.power {
+        let power_b = (new.unit_bytes_0 >> 24) as u8;
+        let m = codec::build_power_values(new.guid, power_b, new.power);
+        out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
+    }
+    if old.run_speed_mult_bp != new.run_speed_mult_bp {
+        const BASE_RUN_SPEED: f32 = 7.0;
+        let speed = BASE_RUN_SPEED * (new.run_speed_mult_bp as f32 / 10_000.0);
+        out.push(ServerOpcodeMessage::SMSG_FORCE_RUN_SPEED_CHANGE(Box::new(
+            codec::build_force_run_speed(new.guid, speed),
+        )));
     }
     if old.display_id != new.display_id {
         out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(

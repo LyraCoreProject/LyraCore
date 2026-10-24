@@ -1,7 +1,6 @@
 pub mod codec;
 pub mod packet_lint;
 pub mod srp;
-pub mod unavailable;
 pub mod who;
 pub mod world;
 pub use wow_login_messages as login_messages;

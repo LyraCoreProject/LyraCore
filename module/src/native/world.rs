@@ -259,7 +259,7 @@ pub(super) fn receive(
             }
         }
     }
-    if lyracore_shared::opcodes::movement::is_relayed_move(opcode) {
+    if lyracore_shared::opcodes::movement::is_slice_move(opcode) {
         let info = codec::bytes_to_movement_info(body).map_err(|error| error.to_string())?;
         let entity = ctx
             .db
@@ -285,28 +285,22 @@ pub(super) fn receive(
     if matches!(opcode, 0x0125 | 0x0318) {
         return super::reputation::receive(ctx, guid, opcode, body);
     }
-    if let Some(packets) = lyracore_protocol::unavailable::raw_responses(opcode, body)
-        .map_err(|error| error.to_string())?
-    {
-        for packet in packets {
-            super::send_raw(
-                ctx,
-                connection.connection_id,
-                packet.opcode,
-                packet.body,
-                false,
-            );
-        }
-        return Ok(());
-    }
     let message =
         lyracore_protocol::world::decode(opcode, body).map_err(|error| error.to_string())?;
-    if lyracore_protocol::unavailable::is_control_receipt(&message) {
+    if matches!(
+        &message,
+        ClientOpcodeMessage::CMSG_FORCE_MOVE_ROOT_ACK(_)
+            | ClientOpcodeMessage::CMSG_FORCE_MOVE_UNROOT_ACK(_)
+            | ClientOpcodeMessage::CMSG_MOVE_WATER_WALK_ACK(_)
+    ) {
+        return movement_receipt(ctx, guid, &message);
+    }
+    if super::unavailable::is_control_receipt(&message) {
         return Ok(());
     }
     let previous_notices = connection.unavailable_notices;
     if let Some(packets) =
-        lyracore_protocol::unavailable::responses(&message, &mut connection.unavailable_notices)
+        super::unavailable::responses(&message, &mut connection.unavailable_notices)
     {
         for packet in packets {
             super::send_raw(
@@ -704,11 +698,44 @@ pub(super) fn receive(
             }
             return Ok(());
         }
-        _ => {
-            return Err(format!(
-                "native world opcode {opcode:#06x} is not implemented"
-            ))
-        }
+        _ => return Ok(()),
     };
     super::send(ctx, connection.connection_id, response, false)
+}
+
+fn movement_receipt(
+    ctx: &ReducerContext,
+    guid: u64,
+    message: &ClientOpcodeMessage,
+) -> Result<(), String> {
+    let Some((mover, opcode, mut info)) = codec::acknowledged_move(message) else {
+        return Ok(());
+    };
+    if mover != guid {
+        return Ok(());
+    }
+    let entity = crate::helpers::live_entity(ctx, guid)?;
+    if entity.dead && entity.player_flags & lyracore_shared::constants::player_flags::GHOST == 0 {
+        info.position.x = entity.x;
+        info.position.y = entity.y;
+        info.position.z = entity.z;
+        info.orientation = entity.orientation;
+        let bytes = codec::movement_info_to_bytes(&info).map_err(|error| error.to_string())?;
+        if let Some((opcode, body)) = codec::build_movement_relay_raw(opcode, guid, &bytes) {
+            super::visibility::broadcast(ctx, guid, opcode, body, true);
+        }
+        return Ok(());
+    }
+    let bytes = codec::movement_info_to_bytes(&info).map_err(|error| error.to_string())?;
+    crate::world::apply_movement_update(
+        ctx,
+        entity,
+        opcode as u16,
+        bytes,
+        info.position.x,
+        info.position.y,
+        info.position.z,
+        info.orientation,
+        info.timestamp,
+    )
 }

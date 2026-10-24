@@ -17,6 +17,7 @@ debug_reducers = []
 package_test_fixture = ["debug_reducers"]
 
 [dependencies]
+anyhow = "1"
 blake3 = "1"
 # Pin the Module, SDK and CLI to the same SpacetimeDB version.
 spacetimedb = { version = "=2.7.1", features = ["unstable"] }

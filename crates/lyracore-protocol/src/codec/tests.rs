@@ -640,8 +640,8 @@ fn resurrect_request_names_the_caster_without_sickness_or_delay() {
 }
 
 #[test]
-fn levelup_values_is_player_mask_without_object_type() {
-    let msg = build_levelup_values(1, 2, 75, 75, 0, 900, 0, 1000);
+fn level_values_is_player_mask_without_object_type() {
+    let msg = build_level_values(1, 2);
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
             assert_eq!(guid1.guid(), 1);
@@ -657,20 +657,7 @@ fn levelup_values_is_player_mask_without_object_type() {
     let type_word = [0x09u8, 0x00, 0x00, 0x00];
     assert!(
         !buf.windows(4).any(|w| w == type_word),
-        "build_levelup_values must not re-send OBJECT_FIELD_TYPE (0x09 word present); body {:02x?}",
-        buf
-    );
-}
-
-#[test]
-fn levelup_values_sets_character_points1_at_l10() {
-    let msg_l10 = build_levelup_values(1, 10, 100, 100, 0, 1500, 0, 1500);
-    let mut buf = Vec::new();
-    msg_l10.write_unencrypted_server(&mut buf).unwrap();
-    let one_word = [0x01u8, 0x00, 0x00, 0x00];
-    assert!(
-        buf.windows(4).any(|w| w == one_word),
-        "build_levelup_values(level=10) must emit PLAYER_CHARACTER_POINTS1=1 word; body {:02x?}",
+        "build_level_values must not re-send OBJECT_FIELD_TYPE (0x09 word present); body {:02x?}",
         buf
     );
 }

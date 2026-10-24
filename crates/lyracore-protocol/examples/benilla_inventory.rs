@@ -13,6 +13,7 @@ type References = BTreeMap<String, BTreeSet<String>>;
 #[derive(Default)]
 struct SourceScan {
     references: References,
+    references_only: bool,
     dispatch: References,
     ignored: BTreeSet<String>,
     client_variants: BTreeSet<String>,
@@ -38,6 +39,9 @@ fn test_only(attributes: &[syn::Attribute]) -> bool {
 
 impl SourceScan {
     fn record_pattern(&mut self, pat: &syn::Pat, ignored: bool) {
+        if self.references_only {
+            return;
+        }
         let mut pattern = SourceScan::default();
         pattern.visit_pat(pat);
         for name in pattern.client_variants {
@@ -266,27 +270,29 @@ fn row(
         "explicitly_ignored"
     } else if dispatch.is_some() {
         "dispatch_pattern_present"
-    } else if matches!(
-        opcode,
-        0x003d
-            | 0x005a
-            | 0x00f9
-            | 0x0107
-            | 0x0109
-            | 0x021f
-            | 0x0220
-            | 0x0336
-            | 0x0125
-            | 0x01ed
-            | 0x0200
-            | 0x0205
-            | 0x0207
-            | 0x023e
-            | 0x0258
-            | 0x0312
-            | 0x0317
-            | 0x0318
-    ) {
+    } else if lyracore_shared::opcodes::movement::is_slice_move(u32::from(opcode))
+        || matches!(
+            opcode,
+            0x003d
+                | 0x005a
+                | 0x00f9
+                | 0x0107
+                | 0x0109
+                | 0x021f
+                | 0x0220
+                | 0x0336
+                | 0x0125
+                | 0x01ed
+                | 0x0200
+                | 0x0205
+                | 0x0207
+                | 0x023e
+                | 0x0258
+                | 0x0312
+                | 0x0317
+                | 0x0318
+        )
+    {
         "raw_route_review_required"
     } else {
         "no_dispatch_pattern_found"
@@ -346,10 +352,12 @@ fn inventory() -> Result<Value> {
     let mut receives = SourceScan::default();
     receives.scan(&benilla_root.join("src/messages/parse.rs"), benilla_repo)?;
     let mut lyra = SourceScan::default();
-    for directory in ["module/src/native", "crates/lyracore-protocol/src"] {
-        for path in rust_files(&root.join(directory))? {
-            lyra.scan(&path, root)?;
-        }
+    for path in rust_files(&root.join("module/src/native"))? {
+        lyra.scan(&path, root)?;
+    }
+    lyra.references_only = true;
+    for path in rust_files(&root.join("crates/lyracore-protocol/src"))? {
+        lyra.scan(&path, root)?;
     }
 
     let mut rows = Vec::new();
@@ -415,6 +423,38 @@ mod tests {
         assert!(
             missing.is_empty(),
             "requests need protocol review: {missing:?}"
+        );
+    }
+
+    #[test]
+    fn an_unused_protocol_match_cannot_supply_module_dispatch_evidence() {
+        let mut scan = SourceScan {
+            references_only: true,
+            ..Default::default()
+        };
+        scan.visit_file(&syn::parse_file("fn unused(m: Message) { match m { ClientOpcodeMessage::CMSG_FORCE_MOVE_ROOT_ACK(_) => (), _ => () } }").unwrap());
+        assert!(scan.references.contains_key("CMSG_FORCE_MOVE_ROOT_ACK"));
+        assert_eq!(
+            row(
+                "client_to_module",
+                0x00e9,
+                &[],
+                &SourceScan::default(),
+                &scan
+            )["handling"],
+            "no_dispatch_pattern_found"
+        );
+        scan.references_only = false;
+        scan.visit_file(&syn::parse_file("fn receive(m: Message) { match m { ClientOpcodeMessage::CMSG_FORCE_MOVE_ROOT_ACK(_) => handle(), _ => () } }").unwrap());
+        assert_eq!(
+            row(
+                "client_to_module",
+                0x00e9,
+                &[],
+                &SourceScan::default(),
+                &scan
+            )["handling"],
+            "dispatch_pattern_present"
         );
     }
 

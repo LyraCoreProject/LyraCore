@@ -39,6 +39,7 @@ mod taxi;
 mod teleport;
 mod trade;
 mod trainer;
+mod unavailable;
 mod view;
 mod visibility;
 mod world;
@@ -58,7 +59,7 @@ pub(crate) use death::{
     corpse_changed, corpse_created, corpse_removed, resurrect_offered, self_resurrection_changed,
 };
 pub(crate) use duel::event as duel_event;
-pub(crate) use environment::{breath_event, weather_changed};
+pub(crate) use environment::{breath_event, fall_damage, weather_changed};
 pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
 pub(crate) use instance::removal_changed as instance_removal_changed;
 pub(crate) use inventory::changed as item_changed;
@@ -237,7 +238,7 @@ fn send_raw(
     close_after: bool,
 ) {
     if !close_after
-        && !matches!(opcode, 0x003e | 0x003f | 0x0040 | 0x01dd)
+        && !matches!(opcode, 0x003e | 0x003f | 0x0040 | 0x01dd | 0x0096)
         && ctx
             .db
             .game_native_player()
@@ -413,6 +414,16 @@ pub fn native_world_receive(
         )
     {
         return Ok(());
+    }
+    if !matches!(connection.state, NativeWorldState::AwaitingProof) {
+        if let Some(packets) =
+            unavailable::raw_responses(opcode, &body).map_err(|error| error.to_string())?
+        {
+            for packet in packets {
+                send_raw(ctx, connection_id, packet.opcode, packet.body, false);
+            }
+            return Ok(());
+        }
     }
     match connection.state {
         NativeWorldState::AwaitingProof => authenticate(ctx, connection, opcode, &body),

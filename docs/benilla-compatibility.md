@@ -24,13 +24,14 @@ cargo run --locked --quiet -p lyracore-protocol --example benilla_inventory \
 ```
 
 The inventory reads the pinned Benilla writer, movement selectors and decoder. It matches their
-numeric opcodes against Module dispatch and the shared protocol source. Every request emitted by
+numeric opcodes against Module dispatch. Shared protocol source contributes references,
+but cannot supply dispatch evidence through an unused codec match. Every request emitted by
 that Benilla revision has a typed dispatch pattern, a reviewed raw route or an explicit ignore.
 The inventory test fails when none applies.
 
 Each message records its direction, source references and handling classification:
 
-- `dispatch_pattern_present`: a typed dispatch pattern exists.
+- `dispatch_pattern_present`: a typed dispatch pattern exists in the Module.
 - `explicitly_ignored`: the request is deliberately dropped.
 - `raw_route_review_required`: a known numeric route needs manual inspection.
 - `no_dispatch_pattern_found`: no typed pattern or reviewed route was found.
@@ -68,6 +69,16 @@ build-5875 layout too, so a transport tail does not end the session. This does
 not establish boat simulation, transport membership or acknowledgement counter
 enforcement.
 
+Malformed boolean fields, sized strings and counted arrays fail before generated decoding.
+Compressed authentication and ticket requests use bounded raw handlers. Tickets reach the same
+handler in the Login Queue, at Character selection and in the world. The Module ignores decoded
+in-world requests without a handler, including Help UI bug reports.
+
+Character CREATE and VALUES expose XP, coinage, inventory pointers, skills and Character-sheet
+stats only to the owner. Observers receive public fields such as health, level and visible equipment.
+Whispers remain deliverable while the recipient waits for a world-port acknowledgement.
+Fall damage sends the owner an environmental damage log packet with the fall damage.
+
 ## Movement controls
 
 Pitch changes (`MSG_MOVE_START_PITCH_UP`, `_DOWN`, `MSG_MOVE_STOP_PITCH` and
@@ -78,7 +89,8 @@ Character's own client with `SMSG_FORCE_MOVE_ROOT`. The last of them to end send
 `SMSG_FORCE_MOVE_UNROOT`. A ghost walks on water. World entry restores both
 states. When the client acknowledges a root, unroot or water walk, observers
 receive `MSG_MOVE_ROOT`, `MSG_MOVE_UNROOT` or `MSG_MOVE_WATER_WALK` with the
-acknowledged pose. Observers see a creature's stun, root or polymorph as
+acknowledged pose. A dead body keeps its Module position when it acknowledges a control.
+Observers see a creature's stun, root or polymorph as
 `SMSG_SPLINE_MOVE_ROOT` and its end as `SMSG_SPLINE_MOVE_UNROOT`.
 
 An acknowledgement that arrives after a same-map teleport and before the
@@ -142,7 +154,7 @@ after the failed transaction has rolled back.
 
 ## Missing gameplay and deliberate responses
 
-`crates/lyracore-protocol/src/unavailable.rs` defines responses for services that remain absent.
+`module/src/native/unavailable.rs` defines responses for services that remain absent.
 A Refusal or an empty reply does not establish a working gameplay feature.
 
 | Service | Response |

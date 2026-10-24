@@ -1,12 +1,13 @@
-use crate::{
+use anyhow::{anyhow, Result};
+use lyracore_protocol::{
     codec,
     messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
     world::Packet,
 };
-use anyhow::{anyhow, Result};
 
 fn message(value: ServerOpcodeMessage) -> Packet {
-    crate::world::encode(value).expect("bounded unavailable-service response fits a world frame")
+    lyracore_protocol::world::encode(value)
+        .expect("bounded unavailable-service response fits a world frame")
 }
 
 fn word(opcode: u16, value: u32) -> Packet {

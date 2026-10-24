@@ -271,40 +271,44 @@ pub fn build_create_object(
             .set_player_features(skin, face, hair_style, hair_color)
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
             .set_player_bytes_3(pb3_a, pb3_b, pb3_c, pb3_d)
-            .set_player_flags(entity.player_flags as i32)
-            .set_player_xp(entity.xp as i32)
-            .set_player_next_level_xp(entity.next_level_xp as i32)
-            .set_player_field_coinage(entity.money as i32)
-            .set_player_character_points1(
-                lyracore_shared::talent::points_available(entity.level, 0) as i32,
-            )
-            .set_unit_strength(entity.strength as i32)
-            .set_unit_agility(entity.agility as i32)
-            .set_unit_stamina(entity.stamina as i32)
-            .set_unit_intellect(entity.intellect as i32)
-            .set_unit_spirit(entity.spirit as i32)
-            .set_unit_normal_resistance(entity.effective_armor as i32)
-            .set_unit_holy_resistance(entity.magic_resistances[0] as i32)
-            .set_unit_fire_resistance(entity.magic_resistances[1] as i32)
-            .set_unit_nature_resistance(entity.magic_resistances[2] as i32)
-            .set_unit_frost_resistance(entity.magic_resistances[3] as i32)
-            .set_unit_shadow_resistance(entity.magic_resistances[4] as i32)
-            .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
-            // Unset damage fields become uninitialized floats in the build 5875 paperdoll.
-            .set_unit_attack_power(entity.sheet_ap_base as i32)
-            .set_unit_attack_power_mods(
-                entity.sheet_ap_mods.max(0) as u16,
-                (-entity.sheet_ap_mods).max(0) as u16,
-            )
-            // Attack power uses 1 + multiplier; setting 1.0 doubles displayed AP.
-            .set_unit_mindamage(entity.sheet_dmg_min as f32)
-            .set_unit_maxdamage(entity.sheet_dmg_max as f32)
-            .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
-            .set_unit_ranged_attack_power_mods(0, 0)
-            .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
-            .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
-            // The paperdoll divides damage by this multiplier; zero produces infinities.
-            .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
+            .set_player_flags(entity.player_flags as i32);
+        if matches!(kind, CreateKind::SelfPlayer) {
+            builder = builder
+                .set_player_xp(entity.xp as i32)
+                .set_player_next_level_xp(entity.next_level_xp as i32)
+                .set_player_field_coinage(entity.money as i32)
+                .set_player_character_points1(lyracore_shared::talent::points_available(
+                    entity.level,
+                    0,
+                ) as i32)
+                .set_unit_strength(entity.strength as i32)
+                .set_unit_agility(entity.agility as i32)
+                .set_unit_stamina(entity.stamina as i32)
+                .set_unit_intellect(entity.intellect as i32)
+                .set_unit_spirit(entity.spirit as i32)
+                .set_unit_normal_resistance(entity.effective_armor as i32)
+                .set_unit_holy_resistance(entity.magic_resistances[0] as i32)
+                .set_unit_fire_resistance(entity.magic_resistances[1] as i32)
+                .set_unit_nature_resistance(entity.magic_resistances[2] as i32)
+                .set_unit_frost_resistance(entity.magic_resistances[3] as i32)
+                .set_unit_shadow_resistance(entity.magic_resistances[4] as i32)
+                .set_unit_arcane_resistance(entity.magic_resistances[5] as i32)
+                // Unset damage fields become uninitialized floats in the build 5875 paperdoll.
+                .set_unit_attack_power(entity.sheet_ap_base as i32)
+                .set_unit_attack_power_mods(
+                    entity.sheet_ap_mods.max(0) as u16,
+                    (-entity.sheet_ap_mods).max(0) as u16,
+                )
+                // Attack power uses 1 + multiplier; setting 1.0 doubles displayed AP.
+                .set_unit_mindamage(entity.sheet_dmg_min as f32)
+                .set_unit_maxdamage(entity.sheet_dmg_max as f32)
+                .set_unit_ranged_attack_power(entity.sheet_ranged_ap as i32)
+                .set_unit_ranged_attack_power_mods(0, 0)
+                .set_unit_minrangeddamage(entity.sheet_ranged_dmg_min as f32)
+                .set_unit_maxrangeddamage(entity.sheet_ranged_dmg_max as f32)
+                // The paperdoll divides damage by this multiplier; zero produces infinities.
+                .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
+        }
 
         // Explicit zero clears Guild fields cached by the client.
         builder = builder
@@ -337,16 +341,20 @@ pub fn build_create_object(
                 .set_unit_maxpower1(power_max),
         };
 
-        let skill_lines = skill_slot_layout(class_b, learned_skills);
-        for (i, &(skill, min, max)) in skill_lines.iter().enumerate() {
-            if let Ok(idx) = SkillInfoIndex::try_from(i as u8) {
-                builder =
-                    builder.set_player_skill_info(SkillInfo::new(skill, 0, min, max, 0, 0), idx);
+        if matches!(kind, CreateKind::SelfPlayer) {
+            let skill_lines = skill_slot_layout(class_b, learned_skills);
+            for (i, &(skill, min, max)) in skill_lines.iter().enumerate() {
+                if let Ok(idx) = SkillInfoIndex::try_from(i as u8) {
+                    builder = builder
+                        .set_player_skill_info(SkillInfo::new(skill, 0, min, max, 0, 0), idx);
+                }
             }
         }
         for item in inventory {
-            if let Ok(s) = ItemSlot::try_from(item.slot) {
-                builder = builder.set_player_field_inv(s, Guid::new(item.guid));
+            if matches!(kind, CreateKind::SelfPlayer) {
+                if let Ok(s) = ItemSlot::try_from(item.slot) {
+                    builder = builder.set_player_field_inv(s, Guid::new(item.guid));
+                }
             }
             if let Some(vi_index) = visible_item_index(item.slot) {
                 builder = builder.set_player_visible_item(visible_item_of(item), vi_index);

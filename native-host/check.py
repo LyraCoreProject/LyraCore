@@ -212,12 +212,18 @@ def destroys(packets):
     return [struct.unpack('<Q', body)[0] for opcode, body in packets if opcode == 0xaa]
 
 
-def values(packets, guid):
+def values(packets, guid, create=False):
     fields = {}
     for opcode, body in packets:
-        if opcode != 0xa9 or body[:6] != struct.pack('<IBB', 1, 0, 0) or packed_guid(body[6:]) != guid:
+        if opcode != 0xa9 or body[:5] != struct.pack('<IB', 1, 0) or body[5] not in ((3,) if create else (0,)) or packed_guid(body[6:]) != guid:
             continue
         offset = 7 + body[6].bit_count()
+        if create:
+            assert body[offset] == 4  # TYPEID_PLAYER.
+            assert body[offset + 1] in (0x30, 0x31)  # LIVING, ALL and optional SELF.
+            flags = struct.unpack_from('<I', body, offset + 2)[0]
+            assert flags & ~0x13f == 0, 'Character fixture must have a flat movement block'
+            offset += 2 + 52 + 4
         words = body[offset]
         mask = int.from_bytes(body[offset + 1:offset + 1 + words * 4], 'little')
         offset += 1 + words * 4
@@ -235,6 +241,28 @@ def item_pointer(fields, slot):
     return fields[index] | fields[index + 1] << 32
 
 
+def acknowledge_controls(client, peer, sql, guid, packets):
+    expected = []
+    for opcode, body in packets:
+        if opcode not in (0xe8, 0xea, 0xde, 0xdf):
+            continue
+        counter = struct.unpack_from('<I', body, 1 + body[0].bit_count())[0]
+        x, y, z, orientation, timestamp = sql(f'SELECT x,y,z,orientation,last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0]
+        movement = struct.pack('<IIffffI', 0, (timestamp + 1) & 0xffffffff, x, y, z, orientation, 0)
+        request, relay = {0xe8: (0xe9, 0xec), 0xea: (0xeb, 0xed), 0xde: (0x2d0, 0x2b1), 0xdf: (0x2d0, 0x2b1)}[opcode]
+        trailer = struct.pack('<I', int(opcode == 0xde)) if opcode in (0xde, 0xdf) else b''
+        client.send(request, struct.pack('<QI', guid, counter) + movement + trailer)
+        client.collect()
+        expected.append(relay)
+    observed = []
+    for _ in range(40):
+        observed += peer.collect()
+        if all(any(opcode == relay and packed_guid(body) == guid for opcode, body in observed) for relay in expected):
+            return observed
+        time.sleep(0.01)
+    raise AssertionError(('missing movement receipt Relay', expected, [hex(opcode) for opcode, _ in observed]))
+
+
 def check_death(client, peer, call, sql, guid, peer_guid):
     corpse = 0xf101_0000_0000_0000 | guid
     sql("INSERT INTO game_graveyard (id,map_id,x,y,z,o,name) VALUES (5090401,0,20,0,0,0,'Native graveyard')")
@@ -250,6 +278,7 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     assert values(dying, guid)[22] == 0
     assert any(opcode == 0xe8 for opcode, _ in dying)
     assert not any(opcode == 0x269 for opcode, _ in dying)
+    acknowledge_controls(client, peer, sql, guid, dying)
     client.send(0x15a)
     released = client.collect()
     assert corpse in creates(released)
@@ -258,7 +287,7 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     assert healer in creates(released)
     delay = next(struct.unpack('<I', body)[0] for opcode, body in released if opcode == 0x269)
     assert 29000 <= delay <= 30000, (delay, sql(f'SELECT reclaim_delay_micros, created_at FROM game_corpse WHERE guid = {corpse}'))
-    observed = peer.collect()
+    observed = acknowledge_controls(client, peer, sql, guid, released)
     assert corpse in creates(observed)
     assert healer not in creates(observed)
     assert not any(opcode == 0x269 for opcode, _ in observed)
@@ -313,7 +342,7 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     assert corpse in destroys(reclaimed)
     assert any(opcode == 0xdf for opcode, _ in reclaimed)
     assert healer in destroys(reclaimed)
-    assert corpse in destroys(peer.collect())
+    assert corpse in destroys(acknowledge_controls(client, peer, sql, guid, reclaimed))
     assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[False]]
     assert not sql(f'SELECT guid FROM game_corpse WHERE guid = {corpse}')[0]['rows']
     for spell, kind, points, target, parameter in [(51991, 14, 40, 3, 0), (51992, 38, 40, 0, 0), (51993, 181, 0, 0, 51992)]:
@@ -398,6 +427,19 @@ def check_death(client, peer, call, sql, guid, peer_guid):
 
 
 def check_environment(client, peer, call, sql, guid, peer_guid):
+    health = sql(f'SELECT max_health FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0][0]
+    call('debug_set_health', [guid, health])
+    client.collect()
+    peer.collect()
+    x, y, z, orientation, timestamp = sql(f'SELECT x,y,z,orientation,last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0]
+    client.send(0xc9, struct.pack('<IIffffI', 0, timestamp + 1, x, y, z, orientation, 2500))
+    landed = client.collect()
+    remaining = sql(f'SELECT health FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0][0]
+    assert remaining < health
+    assert (0x1fc, struct.pack('<QBIII', guid, 2, health - remaining, 0, 0)) in landed
+    assert not any(opcode == 0x1fc for opcode, _ in peer.collect())
+    call('debug_set_health', [guid, health])
+    client.collect()
     for zone in (12, 40):
         if not sql(f'SELECT id FROM game_area WHERE id = {zone}')[0]['rows']:
             sql(f"INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES ({zone},0,0,-1,0,0,0,'Native weather')")
@@ -3364,8 +3406,13 @@ def check_chat(client, peer, call, sql, guid, peer_guid):
     client.collect()
     assert not chat(peer.collect())
     call('debug_teleport', [peer_guid, 1, 11, 0, 0, 0])
-    peer.collect()
+    assert any(opcode == 0x3e for opcode, _ in peer.collect(auto_ack=False))
     client.collect()
+    send(client, 6, 'loading whisper', target='Peer')
+    assert chat(client.collect()) == [line(7, peer_guid, 'loading whisper')]
+    assert chat(peer.collect(auto_ack=False)) == [line(6, guid, 'loading whisper')]
+    peer.send(0xdc)
+    peer.collect()
     send(client, 5, 'other map')
     client.collect()
     assert not chat(peer.collect())
@@ -3576,6 +3623,51 @@ def check_who_bounds(world_port, call, sql, await_empty):
         for client in clients:
             client.close()
     await_empty('game_native_player')
+
+
+def check_decoder_bounds(world_port, call, sql, await_empty, log_path):
+    call('provision_account', ['DECODER', [0] * 32, [1] * 32])
+    account = sql("SELECT id FROM game_account WHERE username = 'DECODER'")[0]['rows'][0][0]
+    call('establish_session', [account, list(KEY), [f'0x{account + 11000:064x}']])
+    call('create_character', [account, 'Decoder', 1, 1, 0, 0, 0, 0, 0, 0])
+    guid = sql("SELECT guid FROM game_character WHERE name = 'Decoder'")[0]['rows'][0][0]
+    cases = [(opcode, bytes(offset) + b'\x02') for opcode, offset in [(0x253, 0), (0x28f, 8), (0x2f3, 12), (0x2ee, 16)]]
+    cases += [(0x1ca, struct.pack('<III', 0, 0, 1) + b'\0'),
+              (0x1ca, struct.pack('<II', 0, 2) + b'a\x02' + struct.pack('<I', 1) + b'\0')]
+    before = len(log_path.read_text())
+    for in_world in [False, True]:
+        for opcode, body in cases:
+            client = World(world_port, username='DECODER')
+            try:
+                assert client.read()[0] == 0x1ee
+                if in_world:
+                    client.send(0x3d, struct.pack('<Q', guid))
+                    client.collect()
+                client.send(opcode, body)
+                client.socket.settimeout(3)
+                try:
+                    while True:
+                        client.read()
+                except EOFError:
+                    pass
+            finally:
+                client.close()
+            await_empty('game_native_player')
+        client = World(world_port, username='DECODER')
+        try:
+            assert client.read()[0] == 0x1ee
+            if in_world:
+                client.send(0x3d, struct.pack('<Q', guid))
+                client.collect()
+            ticket = b'\x02' + bytes(18) + struct.pack('<I', 0xffffffff) + bytes([0xff]) * 16
+            client.send(0x205, ticket)
+            assert (0x206, struct.pack('<I', 3)) in client.collect()
+        finally:
+            client.close()
+        await_empty('game_native_player')
+    await_empty('game_native_world_connection')
+    errors = log_path.read_text()[before:]
+    assert 'fatal error' not in errors and 'panicked' not in errors, errors
 
 
 def check_session_revocation(world_port, call, sql, await_empty):
@@ -3848,6 +3940,7 @@ def main():
                     return
                 if args.check_sessions:
                     call('debug_seed_scenario_fixtures', [])
+                    check_decoder_bounds(world_port, call, sql, await_empty, run / 'host.log')
                     check_session_revocation(world_port, call, sql, await_empty)
                     print('PASS native Session revocation before in-world actions')
                     return
@@ -3968,7 +4061,24 @@ def main():
                 initial = peer.collect()
                 assert creates(initial).count(peer_guid) == 1
                 assert creates(initial).count(guid) == 1
+                private_fields = {716, 717, 1176, *range(150, 163), 165, 166, 169, 170, 171, *range(486, 612), *range(718, 1102)}
+                assert not private_fields.intersection(values(initial, guid, create=True))
+                assert {716, 717, 1176}.issubset(values(initial, peer_guid, create=True))
                 assert creates(client.collect()).count(peer_guid) == 1
+                client.send(0x1ca, struct.pack('<II', 0, 9) + b'stuck in\0' + struct.pack('<I', 4) + b'Map\0')
+                assert client.collect() == []
+                call('debug_set_money', [guid, 123456])
+                assert values(client.collect(), guid)[1176] == 123456
+                assert not private_fields.intersection(values(peer.collect(), guid))
+                call('debug_set_level', [guid, 2])
+                leveled = client.collect()
+                assert 717 in values(leveled, guid)
+                observed = values(peer.collect(), guid)
+                assert observed[34] == 2
+                assert not private_fields.intersection(observed)
+                call('debug_set_level', [guid, 1])
+                client.collect()
+                peer.collect()
                 call('debug_grant_item', [guid, 5090052, 6])
                 food_guid, food_slot = sql(f'SELECT guid, slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052')[0]['rows'][0]
                 grant = client.collect()
@@ -4687,6 +4797,7 @@ def main():
                     connection.close()
                 await_empty('game_native_logon_connection')
                 assert all(row[0] == 0 for row in sql('SELECT active FROM game_native_logon_address')[0]['rows'])
+                check_decoder_bounds(world_port, call, sql, await_empty, run / 'host.log')
                 check_session_revocation(world_port, call, sql, await_empty)
                 import admission
                 admission.run(world_port, call, sql, await_empty)
