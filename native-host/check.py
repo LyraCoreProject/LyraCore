@@ -248,10 +248,13 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     call('debug_set_health', [guid, 0])
     dying = client.collect()
     assert values(dying, guid)[22] == 0
+    assert any(opcode == 0xe8 for opcode, _ in dying)
     assert not any(opcode == 0x269 for opcode, _ in dying)
     client.send(0x15a)
     released = client.collect()
     assert corpse in creates(released)
+    assert any(opcode == 0xea for opcode, _ in released)
+    assert any(opcode == 0xde for opcode, _ in released)
     assert healer in creates(released)
     delay = next(struct.unpack('<I', body)[0] for opcode, body in released if opcode == 0x269)
     assert 29000 <= delay <= 30000, (delay, sql(f'SELECT reclaim_delay_micros, created_at FROM game_corpse WHERE guid = {corpse}'))
@@ -301,12 +304,14 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     client.send(0x3d, struct.pack('<Q', guid))
     relogged = client.collect()
     assert corpse in creates(relogged)
+    assert any(opcode == 0xde for opcode, _ in relogged)
     assert healer in creates(relogged)
     assert (0x269, bytes(4)) in relogged
     peer.collect()
     client.send(0x1d2, struct.pack('<Q', corpse))
     reclaimed = client.collect()
     assert corpse in destroys(reclaimed)
+    assert any(opcode == 0xdf for opcode, _ in reclaimed)
     assert healer in destroys(reclaimed)
     assert corpse in destroys(peer.collect())
     assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[False]]
@@ -3456,7 +3461,126 @@ def free_port():
         return listener.getsockname()[1]
 
 
+def check_accept_recovery(host, world_port, logon_port, log_path, sql):
+    import resource
+    resource.prlimit(host.pid, resource.RLIMIT_NOFILE, (256, 256))
+    for kind in ['World', 'Logon']:
+        clients = []
+        before = log_path.read_text().count(f'native {kind} accept:')
+        try:
+            for _ in range(300):
+                try:
+                    clients.append(socket.create_connection(('127.0.0.1', world_port), timeout=1))
+                except OSError:
+                    break
+            if kind == 'Logon':
+                clients.append(socket.create_connection(('127.0.0.1', logon_port), timeout=1))
+            for _ in range(60):
+                if log_path.read_text().count(f'native {kind} accept:') > before:
+                    break
+                time.sleep(0.05)
+            else:
+                raise AssertionError(f'{kind} listener did not reach descriptor exhaustion')
+        finally:
+            for client in clients:
+                client.close()
+        deadline = time.monotonic() + 15
+        while True:
+            try:
+                with socket.create_connection(('127.0.0.1', world_port), timeout=2) as recovered:
+                    assert read_exact(recovered, 4) == bytes.fromhex('0006ec01')
+                recovered = Logon(logon_port)
+                try:
+                    assert recovered.challenge('UNKNOWN') == 4
+                finally:
+                    recovered.close()
+                assert sql('SELECT id FROM game_account')
+                break
+            except (OSError, EOFError):
+                if time.monotonic() >= deadline:
+                    raise AssertionError(f'{kind} listener failed to recover') from None
+                time.sleep(0.1)
+    print('PASS native world and logon listeners recover after descriptor exhaustion')
+
+
+def check_session_expiry(world_port, call, sql, await_empty):
+    for username in ['ACTIVEEXPIRY', 'IDLEEXPIRY']:
+        call('provision_account', [username, [0] * 32, [1] * 32])
+        account = sql(f"SELECT id FROM game_account WHERE username = '{username}'")[0]['rows'][0][0]
+        call('establish_session', [account, list(KEY), [f'0x{account + 9000:064x}']])
+    active = sql("SELECT id FROM game_account WHERE username = 'ACTIVEEXPIRY'")[0]['rows'][0][0]
+    idle = account
+    call('create_character', [active, 'Expiry', 1, 1, 0, 0, 0, 0, 0, 0])
+    guid = sql("SELECT guid FROM game_character WHERE name = 'Expiry'")[0]['rows'][0][0]
+    client = World(world_port, username='ACTIVEEXPIRY')
+    try:
+        assert client.read()[0] == 0x1ee
+        client.send(0x3d, struct.pack('<Q', guid))
+        assert guid in creates(client.collect())
+        call('debug_expire_session', [active])
+        call('debug_expire_session', [idle])
+        call('debug_accelerate_session_reaper', [])
+        for _ in range(100):
+            if not sql(f'SELECT account_id FROM game_session WHERE account_id = {idle}')[0]['rows']:
+                break
+            time.sleep(0.05)
+        else:
+            raise AssertionError('Session reaper did not remove the expired idle Session')
+        client.collect()
+        assert sql(f'SELECT account_id FROM game_session WHERE account_id = {active}')[0]['rows']
+        expired = World(world_port, username='ACTIVEEXPIRY')
+        try:
+            assert expired.read(False) == (0x1ee, bytes([13]))
+        finally:
+            expired.close()
+        client.collect()
+    finally:
+        client.close()
+    await_empty('game_native_player')
+    for _ in range(100):
+        if not sql(f'SELECT account_id FROM game_session WHERE account_id = {active}')[0]['rows']:
+            break
+        time.sleep(0.05)
+    else:
+        raise AssertionError('Expired Session remained after its World Session closed')
+
+
+def check_who_bounds(world_port, call, sql, await_empty):
+    clients = []
+    try:
+        for name in ['Healthywho', 'Zonewho', 'Stringwho']:
+            username = name.upper()
+            call('provision_account', [username, [0] * 32, [1] * 32])
+            account = sql(f"SELECT id FROM game_account WHERE username = '{username}'")[0]['rows'][0][0]
+            call('establish_session', [account, list(KEY), [f'0x{account + 10000:064x}']])
+            call('create_character', [account, name, 1, 1, 0, 0, 0, 0, 0, 0])
+            guid = sql(f"SELECT guid FROM game_character WHERE name = '{name}'")[0]['rows'][0][0]
+            client = World(world_port, username=username)
+            clients.append(client)
+            assert client.read()[0] == 0x1ee
+            client.send(0x3d, struct.pack('<Q', guid))
+            assert guid in creates(client.collect())
+        for client, offset in zip(clients[1:], [18, 22]):
+            malformed = bytearray(26)
+            struct.pack_into('<I', malformed, offset, 0xffffffff)
+            client.send(0x62, malformed)
+            client.socket.settimeout(3)
+            try:
+                while True:
+                    client.read()
+            except EOFError:
+                pass
+            clients[0].collect()
+            assert sql('SELECT COUNT(*) AS n FROM game_native_player')[0]['rows'][0][0] >= 1
+    finally:
+        for client in clients:
+            client.close()
+    await_empty('game_native_player')
+
+
 def check_session_revocation(world_port, call, sql, await_empty):
+    check_session_expiry(world_port, call, sql, await_empty)
+    check_who_bounds(world_port, call, sql, await_empty)
     for index, cause in enumerate(['ban', 'missing', 'replaced', 'banignored']):
         username, name = 'REVOKE' + cause.upper(), 'Revoked' + chr(ord('a') + index)
         call('provision_account', [username, [0] * 32, [1] * 32])
@@ -3630,12 +3754,13 @@ def main():
     parser.add_argument('--check-slow-readers', action='store_true')
     parser.add_argument('--check-sessions', action='store_true')
     parser.add_argument('--check-admission', action='store_true')
+    parser.add_argument('--check-accept-recovery', action='store_true')
     args = parser.parse_args()
     if (not 0 <= args.load_clients <= 4096 or args.load_group_size <= 0
             or any(not math.isfinite(value) or value <= 0 for value in [args.load_seconds, args.load_hz])):
         parser.error('load bounds require 0-4096 clients and positive duration, frequency and group size')
-    if sum([bool(args.load_clients), args.check_recovery, args.check_slow_readers, args.check_sessions, args.check_admission]) > 1:
-        parser.error('select one of load measurement, crash recovery, slow readers, Sessions or admission')
+    if sum([bool(args.load_clients), args.check_recovery, args.check_slow_readers, args.check_sessions, args.check_admission, args.check_accept_recovery]) > 1:
+        parser.error('select one load measurement or behavior check')
     with tempfile.TemporaryDirectory(prefix='lyracore-native-check-') as directory:
         run = Path(directory)
         private, public = run / 'private.pem', run / 'public.pem'
@@ -3713,6 +3838,9 @@ def main():
                     else:
                         raise AssertionError(f'{name} accepted an anonymous caller')
                 call('install_guid_range', [0])
+                if args.check_accept_recovery:
+                    check_accept_recovery(host, world_port, logon_port, run / 'host.log', sql)
+                    return
                 if args.check_admission:
                     import admission
                     call('debug_seed_scenario_fixtures', [])

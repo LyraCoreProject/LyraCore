@@ -243,11 +243,15 @@ unfinished entry releases that slot after 20 seconds. The World Session retains 
 until disconnect. A new authenticated connection replaces an older connection for the same Account
 and joins behind existing waiters.
 Session revocation Gates run before admission and every authenticated request, including ignored
-controls.
+controls. The one-hour Session expiry limits new world authentication. An established World Session
+continues past that deadline, and the reaper retains its Session until the connection closes.
+Account bans, deleted Sessions and replacement login proofs still revoke established connections.
 
 The Host treats completed reads and writes as socket activity. Queue position updates keep waiting
 clients connected. Idle sockets and incomplete world frames time out after 90 seconds. The handshake
-still has a 10-second deadline, and writes retain their 2-second deadline.
+still has a 10-second deadline, and writes retain their 2-second deadline. Listener accept errors
+retry with backoff capped at two seconds. The `--check-accept-recovery` check exhausts a disposable
+Host's descriptors and requires both game listeners to recover after sockets close.
 
 ## Durable state and extension points
 
@@ -301,5 +305,5 @@ capacity and a controlled comparison with the removed Gateway remain unmeasured.
 The crash check kills its own disposable Host with a Character online. Restart clears stale
 native connections, channel membership and AOI, preserves committed position and inventory, and
 permits world entry with the saved Session key. The slow-reader check fills one client's output
-while another sends requests. Its final local run closed the blocked client in 3.66 seconds; the
-healthy client's slowest request took 6.38 ms while other validation work ran.
+while another sends requests. With bounded NPC text replies, the repaired check closed the blocked
+client in 2.06 seconds; the healthy client's slowest request took 1.68 ms.

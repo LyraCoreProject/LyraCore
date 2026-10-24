@@ -242,6 +242,7 @@ pub(crate) fn entity_changed(ctx: &ReducerContext, old: &WorldEntity, new: &Worl
         return;
     }
     if new.is_player() {
+        super::aura::life_changed(ctx, old, new);
         if let Some(update) = codec::stand_state_changed(old.unit_bytes_1, new.unit_bytes_1) {
             if let Some(owner) = ctx
                 .db

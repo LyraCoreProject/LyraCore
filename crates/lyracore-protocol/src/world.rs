@@ -1,6 +1,6 @@
 use std::io::Cursor;
 
-use anyhow::{ensure, Result};
+use anyhow::{ensure, Context, Result};
 use sha1::{Digest, Sha1};
 use subtle::ConstantTimeEq;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
@@ -53,16 +53,19 @@ pub fn decode(opcode: u32, body: &[u8]) -> Result<ClientOpcodeMessage> {
             },
         )));
     }
-    if opcode == 0x0264 {
+    if matches!(opcode, 0x0264 | 0x0312) {
         ensure!(
             (16..=10_240).contains(&body.len()),
-            "invalid auction bidder query size"
+            "invalid counted world request size"
         );
         let count = u32::from_le_bytes(body[12..16].try_into()?);
         ensure!(
             u64::from(count) * 4 == (body.len() - 16) as u64,
-            "invalid auction bidder query count"
+            "invalid counted world request count"
         );
+    }
+    if opcode == 0x0062 {
+        bounded_who(body)?;
     }
     let frame = client_frame(opcode, body)?;
     let mut input = Cursor::new(&frame);
@@ -72,6 +75,40 @@ pub fn decode(opcode: u32, body: &[u8]) -> Result<ClientOpcodeMessage> {
         "trailing world request bytes"
     );
     Ok(message)
+}
+
+fn bounded_who(body: &[u8]) -> Result<()> {
+    fn string(input: &mut &[u8]) -> Result<()> {
+        let end = input
+            .iter()
+            .position(|byte| *byte == 0)
+            .context("unterminated WHO string")?;
+        *input = &input[end + 1..];
+        Ok(())
+    }
+    fn count(input: &mut &[u8]) -> Result<usize> {
+        let bytes = input.get(..4).context("missing WHO count")?;
+        let count = u32::from_le_bytes(bytes.try_into()?) as usize;
+        *input = &input[4..];
+        Ok(count)
+    }
+    let mut input = body.get(8..).context("missing WHO level range")?;
+    string(&mut input)?;
+    string(&mut input)?;
+    input = input.get(8..).context("missing WHO race and class masks")?;
+    let zones = count(&mut input)?;
+    ensure!(
+        zones <= input.len().saturating_sub(4) / 4,
+        "WHO zones exceed payload"
+    );
+    input = &input[zones * 4..];
+    let strings = count(&mut input)?;
+    ensure!(strings <= input.len(), "WHO strings exceed payload");
+    for _ in 0..strings {
+        string(&mut input)?;
+    }
+    ensure!(input.is_empty(), "trailing WHO bytes");
+    Ok(())
 }
 
 pub fn matches_world_proof(
@@ -96,6 +133,49 @@ pub fn matches_world_proof(
 mod tests {
     use super::*;
     use wow_world_messages::vanilla::SMSG_PONG;
+
+    #[test]
+    fn who_counts_and_strings_must_fit_the_payload_before_allocation() {
+        let empty = vec![0; 26];
+        assert!(decode(0x0062, &empty).is_ok());
+        for offset in [18, 22] {
+            let mut invalid = empty.clone();
+            invalid[offset..offset + 4].copy_from_slice(&u32::MAX.to_le_bytes());
+            assert!(decode(0x0062, &invalid).is_err());
+            invalid[offset..offset + 4].copy_from_slice(&1u32.to_le_bytes());
+            assert!(decode(0x0062, &invalid).is_err());
+        }
+        let mut query = empty[..18].to_vec();
+        query.extend_from_slice(&1u32.to_le_bytes());
+        query.extend_from_slice(&12u32.to_le_bytes());
+        query.extend_from_slice(&2u32.to_le_bytes());
+        query.extend_from_slice(b"Elwynn\0Human\0");
+        assert!(matches!(
+            decode(0x0062, &query).unwrap(),
+            ClientOpcodeMessage::CMSG_WHO(_)
+        ));
+        query.pop();
+        assert!(decode(0x0062, &query).is_err());
+        for length in 0..26 {
+            assert!(decode(0x0062, &empty[..length]).is_err());
+        }
+    }
+
+    #[test]
+    fn taxi_node_count_must_fit_the_packet_even_before_world_entry() {
+        let mut body = vec![0; 16];
+        assert!(decode(0x0312, &body).is_ok());
+        body[12..16].copy_from_slice(&u32::MAX.to_le_bytes());
+        assert!(decode(0x0312, &body).is_err());
+        body[12..16].copy_from_slice(&1u32.to_le_bytes());
+        assert!(decode(0x0312, &body).is_err());
+        body.extend_from_slice(&41u32.to_le_bytes());
+        let ClientOpcodeMessage::CMSG_ACTIVATETAXIEXPRESS(query) = decode(0x0312, &body).unwrap()
+        else {
+            panic!("expected taxi query");
+        };
+        assert_eq!(query.nodes, [41]);
+    }
 
     #[test]
     fn bidder_query_count_must_fit_the_bounded_packet_before_allocation() {

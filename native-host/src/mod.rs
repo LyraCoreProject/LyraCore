@@ -47,12 +47,18 @@ pub async fn start(ctx: Arc<StandaloneEnv>) -> Result<()> {
 fn accept(ctx: Arc<StandaloneEnv>, listener: TcpListener, database: String, kind: Listener) {
     let slots = Arc::new(tokio::sync::Semaphore::new(4096));
     tokio::spawn(async move {
+        let mut retry = Duration::from_millis(100);
         loop {
             let (socket, _) = match listener.accept().await {
-                Ok(pair) => pair,
+                Ok(pair) => {
+                    retry = Duration::from_millis(100);
+                    pair
+                }
                 Err(error) => {
-                    log::error!("native {kind:?} accept: {error}");
-                    break;
+                    log::warn!("native {kind:?} accept: {error}; retrying in {retry:?}");
+                    tokio::time::sleep(retry).await;
+                    retry = (retry * 2).min(Duration::from_secs(2));
+                    continue;
                 }
             };
             let Ok(slot) = slots.clone().try_acquire_owned() else {

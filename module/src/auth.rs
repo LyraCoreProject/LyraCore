@@ -120,8 +120,11 @@ pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> 
             .map(|s| (s.account_id, s.expires_at.to_micros_since_unix_epoch())),
         ctx.timestamp.to_micros_since_unix_epoch(),
     );
+    let active = crate::native::active_session_accounts(ctx);
     for account_id in expired {
-        sessions.account_id().delete(account_id);
+        if !active.contains(&account_id) {
+            sessions.account_id().delete(account_id);
+        }
     }
     Ok(())
 }

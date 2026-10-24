@@ -199,6 +199,36 @@ fn movement(
     out
 }
 
+pub(super) fn life_changed(
+    ctx: &ReducerContext,
+    old: &crate::WorldEntity,
+    new: &crate::WorldEntity,
+) {
+    const GHOST: u32 = lyracore_shared::constants::player_flags::GHOST;
+    let was_ghost = old.player_flags & GHOST != 0;
+    let ghost = new.player_flags & GHOST != 0;
+    if old.dead == new.dead && was_ghost == ghost {
+        return;
+    }
+    let Some(owner) = ctx.db.game_native_player().character_guid().find(new.guid) else {
+        return;
+    };
+    if owner.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
+        return;
+    }
+    let held = crate::spell::auras_on(ctx, new.guid)
+        .any(|aura| lyracore_shared::aura::holds_in_place(aura.eff_kind, aura.eff_p0));
+    let rooted = (new.dead && !ghost) || held;
+    if old.dead != new.dead || ((old.dead && !was_ghost) || held) != rooted {
+        let (opcode, body) = codec::build_force_move_root_raw(new.guid, rooted);
+        super::send_raw(ctx, owner.connection_id, opcode, body, false);
+    }
+    if was_ghost != ghost {
+        let packet = packet(codec::build_move_water_walk(new.guid, ghost));
+        super::send_raw(ctx, owner.connection_id, packet.opcode, packet.body, false);
+    }
+}
+
 pub(super) fn armor(ctx: &ReducerContext, guid: u64, current: &[Aura]) -> Option<Packet> {
     let entity = ctx.db.game_world_entity().guid().find(guid)?;
     let resistances = std::array::from_fn(|index| {
@@ -299,6 +329,14 @@ pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64, 
         packets.extend(auras.iter().filter_map(|aura| duration(ctx, aura)));
         packets.extend(armor(ctx, guid, &auras));
         if let Some(entity) = ctx.db.game_world_entity().guid().find(guid) {
+            let ghost = entity.player_flags & lyracore_shared::constants::player_flags::GHOST != 0;
+            if entity.dead && !ghost {
+                let (opcode, body) = codec::build_force_move_root_raw(guid, true);
+                packets.push(Packet { opcode, body });
+            }
+            if ghost {
+                packets.push(packet(codec::build_move_water_walk(guid, true)));
+            }
             packets.push(packet(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
                 codec::build_sheet_stats_values(guid, &super::view::sheet_stats(&entity)),
             ))));

@@ -625,7 +625,6 @@ fn current_account(
         .try_into()
         .map_err(|_| "invalid world proof")?;
     if account.banned
-        || session.expires_at <= ctx.timestamp
         || session.identity.is_none()
         || session.identity != account.identity
         || !lyracore_protocol::world::matches_world_proof(
@@ -639,6 +638,25 @@ fn current_account(
         return Err("authenticated Session is no longer current".into());
     }
     Ok(account)
+}
+
+// Login-proof expiry does not revoke an established World Session; see docs/architecture.md.
+pub(crate) fn active_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64> {
+    ctx.db
+        .game_native_world_connection()
+        .iter()
+        .filter_map(|connection| {
+            let account_id = match connection.state {
+                NativeWorldState::AwaitingProof => return None,
+                NativeWorldState::Queued { account_id }
+                | NativeWorldState::CharacterSelection { account_id }
+                | NativeWorldState::InWorld(NativeActive { account_id, .. }) => account_id,
+            };
+            current_account(ctx, &connection, account_id)
+                .is_ok()
+                .then_some(account_id)
+        })
+        .collect()
 }
 
 pub(crate) fn close(ctx: &ReducerContext) {
