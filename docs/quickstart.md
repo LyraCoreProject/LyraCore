@@ -207,6 +207,12 @@ in `.lyracore/native-owner-token`, an existing SpacetimeDB login, or a new ident
 local node. It saves the credential and publisher configuration in `.lyracore/native-owner-token`
 and `.lyracore/native-cli.toml`, with mode `0600`.
 
+To publish to a native node using a different HTTP port, keep that node's publisher configuration
+in `.lyracore/native-cli.toml` and run `./lyracore publish --server http://127.0.0.1:13000`.
+The explicit target must use a numeric loopback address and a nonzero port. An SSH tunnel can
+connect that address to a remote test Realm. `publish` does not start the Host or change its
+listener addresses. Provision the Realm's advertised world address separately.
+
 Keep both files with the Realm's data. A new identity cannot replace the existing publisher or
 Operator. No spacetimedb.com account is required.
 
