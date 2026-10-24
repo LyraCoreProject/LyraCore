@@ -536,9 +536,10 @@ Package changes that alter the Module definition need the same transition.
 
 The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
 Host requires a restart; the watcher only publishes the Module.
-Each replacement stores the WASM in the local commit log. Frequent edits can consume substantial
-disk space under `.lyracore/native-data/`; the build cache is separate. Do not delete individual
-commit-log files to reclaim space from a Realm you intend to keep.
+Each replacement writes the old and new WASM to the local commit log, about 66 MB per reload with
+the current 33 MB development artifact. Frequent edits can consume substantial disk space under
+`.lyracore/native-data/`; the build cache is separate. Do not delete individual commit-log files
+to reclaim space from a Realm you intend to keep.
 
 Native startup requires OpenSSL 3 or newer. The CLI keeps local signing keys in the private
 `.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
