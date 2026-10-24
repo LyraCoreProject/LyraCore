@@ -29,6 +29,10 @@ of Gateway leases and Account Claims. Local native startup creates its own data 
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
    - The native runtime has no generated Gateway bindings. `./lyracore preflight` still extracts
      the schema offline with the pinned SpacetimeDB and Rust versions.
+   - `./lyracore dev watch` permits only an unchanged Module definition. Its development Host
+     compares all reducer arguments and private table layouts before replacing the Module.
+     SpacetimeDB's normal migration check does not compare reducer arguments. Use a planned
+     update for schema changes; see [development reload](quickstart.md#development-reload).
 
    **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
    `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate

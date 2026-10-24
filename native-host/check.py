@@ -3915,6 +3915,7 @@ def main():
     parser.add_argument('--load-hz', type=float, default=10)
     parser.add_argument('--load-group-size', type=int, default=16)
     parser.add_argument('--check-recovery', action='store_true')
+    parser.add_argument('--check-reload', action='store_true')
     parser.add_argument('--check-slow-readers', action='store_true')
     parser.add_argument('--check-sessions', action='store_true')
     parser.add_argument('--check-admission', action='store_true')
@@ -3923,7 +3924,7 @@ def main():
     if (not 0 <= args.load_clients <= 4096 or args.load_group_size <= 0
             or any(not math.isfinite(value) or value <= 0 for value in [args.load_seconds, args.load_hz])):
         parser.error('load bounds require 0-4096 clients and positive duration, frequency and group size')
-    if sum([bool(args.load_clients), args.check_recovery, args.check_slow_readers, args.check_sessions, args.check_admission, args.check_accept_recovery]) > 1:
+    if sum([bool(args.load_clients), args.check_recovery, args.check_reload, args.check_slow_readers, args.check_sessions, args.check_admission, args.check_accept_recovery]) > 1:
         parser.error('select one load measurement or behavior check')
     with tempfile.TemporaryDirectory(prefix='lyracore-native-check-') as directory:
         run = Path(directory)
@@ -3938,6 +3939,8 @@ def main():
         database = f'disposable-native-{time.time_ns()}'
         address = f'http://127.0.0.1:{http_port}'
         env = dict(os.environ, LYRACORE_NATIVE_WORLD_ADDR=f'127.0.0.1:{world_port}', LYRACORE_NATIVE_LOGON_ADDR=f'127.0.0.1:{logon_port}', LYRACORE_NATIVE_DATABASE=database, RUST_LOG='warn')
+        if args.check_reload:
+            env['LYRACORE_NATIVE_DEV'] = '1'
         token = None
 
         def request(path, body=None, method='GET', content_type='application/json', authenticated=True):
@@ -4002,6 +4005,20 @@ def main():
                     else:
                         raise AssertionError(f'{name} accepted an anonymous caller')
                 call('install_guid_range', [0])
+                if args.check_reload:
+                    import reload
+                    call('debug_seed_scenario_fixtures', [])
+
+                    def publish(candidate):
+                        return request(f'/v1/database/{database}?host_type=Wasm', candidate, 'PUT', 'application/wasm')
+
+                    def commitlog_bytes():
+                        return sum(path.stat().st_size for path in (run / 'data/replicas').glob('*/clog/*.log'))
+
+                    before = commitlog_bytes()
+                    reload.run(world_port, call, sql, publish, wasm.read_bytes())
+                    print(f'Reload storage: WASM {wasm.stat().st_size} bytes; commit log grew {commitlog_bytes() - before} bytes')
+                    return
                 if args.check_accept_recovery:
                     check_accept_recovery(host, world_port, logon_port, run / 'host.log', sql)
                     return

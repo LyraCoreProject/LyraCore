@@ -1,0 +1,121 @@
+diff --git i/crates/core/src/host/wasmtime/mod.rs w/crates/core/src/host/wasmtime/mod.rs
+index 8deff0a..fd8fdff 100644
+--- i/crates/core/src/host/wasmtime/mod.rs
++++ w/crates/core/src/host/wasmtime/mod.rs
+@@ -89,8 +89,13 @@ impl WasmtimeRuntime {
+ 
+ fn wasmtime_config(data_dir: Option<&ServerDataDir>, async_support: bool) -> wasmtime::Config {
+     let mut config = wasmtime::Config::new();
++    let optimization = if std::env::var_os("LYRACORE_NATIVE_DEV").is_some_and(|value| value == "1") {
++        wasmtime::OptLevel::None
++    } else {
++        wasmtime::OptLevel::Speed
++    };
+     config
+-        .cranelift_opt_level(wasmtime::OptLevel::Speed)
++        .cranelift_opt_level(optimization)
+         .consume_fuel(true)
+         .epoch_interruption(true)
+         .wasm_backtrace_details(wasmtime::WasmBacktraceDetails::Enable);
+diff --git i/crates/schema/src/auto_migrate.rs w/crates/schema/src/auto_migrate.rs
+index 12acc9c..122a074 100644
+--- i/crates/schema/src/auto_migrate.rs
++++ w/crates/schema/src/auto_migrate.rs
+@@ -351,6 +351,12 @@ pub struct ChangeColumnTypeParts {
+ /// Something that might prevent an automatic migration.
+ #[derive(thiserror::Error, Debug, PartialEq, Eq, PartialOrd, Ord)]
+ pub enum AutoMigrateError {
++    #[error("Development reload requires an unchanged Module definition; use a planned update for schema changes")]
++    DevelopmentSchemaChange,
++
++    #[error("Cannot compare Module definitions for development reload: {0}")]
++    DevelopmentSchemaEncoding(String),
++
+     #[error("Adding a column {column} to table {table} requires a default value annotation")]
+     AddColumn { table: Identifier, column: Identifier },
+ 
+@@ -494,15 +500,27 @@ pub enum AutoMigrateError {
+     },
+ }
+ 
+-/// Construct a migration plan.
+-/// If `new` has an `__update__` reducer, return a manual migration plan.
+-/// Otherwise, try to plan an automatic migration. This may fail.
++/// Plan an update; development reload requires an identical Module definition.
+ pub fn ponder_migrate<'def>(old: &'def ModuleDef, new: &'def ModuleDef) -> Result<MigratePlan<'def>> {
+-    // TODO(1.0): Implement this function.
+-    // Currently we only can do automatic migrations.
++    if std::env::var_os("LYRACORE_NATIVE_DEV").is_some_and(|value| value == "1") {
++        check_development_schema(old, new)?;
++    }
+     ponder_auto_migrate(old, new).map(MigratePlan::Auto)
+ }
+ 
++fn check_development_schema(old: &ModuleDef, new: &ModuleDef) -> Result<()> {
++    use spacetimedb_lib::db::raw_def::v10::RawModuleDefV10;
++
++    let encode = |definition: &ModuleDef| {
++        spacetimedb_sats::bsatn::to_vec(&RawModuleDefV10::from(definition.clone()))
++            .map_err(|error| AutoMigrateError::DevelopmentSchemaEncoding(error.to_string()))
++    };
++    if old.raw_module_def_version() != new.raw_module_def_version() || encode(old)? != encode(new)? {
++        return Err(AutoMigrateError::DevelopmentSchemaChange.into());
++    }
++    Ok(())
++}
++
+ /// Construct an automatic migration plan, or reject with reasons why automatic migration can't be performed.
+ pub fn ponder_auto_migrate<'def>(old: &'def ModuleDef, new: &'def ModuleDef) -> Result<AutoMigratePlan<'def>> {
+     // Both the old and new database definitions have already been validated (this is enforced by the types).
+@@ -1389,6 +1407,51 @@ mod tests {
+             .expect("new_def should be a valid database definition")
+     }
+ 
++    #[test]
++    fn development_reload_accepts_an_unchanged_definition() {
++        let build = |builder: &mut RawModuleDefV9Builder| {
++            builder.add_reducer(
++                "native_world_open",
++                ProductType::from([("seed", AlgebraicType::U32)]),
++                None,
++            );
++            builder
++                .build_table_with_new_type("delivery", ProductType::from([("body", AlgebraicType::U8)]), true)
++                .with_access(TableAccess::Private)
++                .finish();
++        };
++        let old = create_module_def(build);
++        for _ in 0..20 {
++            check_development_schema(&old, &create_module_def(build)).unwrap();
++        }
++    }
++
++    #[test]
++    fn development_reload_refuses_a_reducer_argument_change() {
++        let build = |argument| {
++            create_module_def(|builder| {
++                builder.add_reducer("native_world_open", ProductType::from([("seed", argument)]), None);
++            })
++        };
++        let old = build(AlgebraicType::U32);
++        let new = build(AlgebraicType::I32);
++        assert!(ponder_auto_migrate(&old, &new).is_ok());
++        assert!(check_development_schema(&old, &new).is_err());
++    }
++
++    #[test]
++    fn development_reload_refuses_a_private_table_addition() {
++        let old = create_module_def(|_| {});
++        let new = create_module_def(|builder| {
++            builder
++                .build_table_with_new_type("delivery", ProductType::from([("body", AlgebraicType::U8)]), true)
++                .with_access(TableAccess::Private)
++                .finish();
++        });
++        assert!(ponder_auto_migrate(&old, &new).is_ok());
++        assert!(check_development_schema(&old, &new).is_err());
++    }
++
+     fn outbox_module_def(outbox: Option<(&str, Vec<ColId>, Option<&str>, &str)>) -> ModuleDef {
+         outbox_module_def_with_target(outbox, ColId(1))
+     }

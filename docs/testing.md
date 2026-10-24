@@ -96,6 +96,7 @@ cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-modul
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-admission
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-recovery
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-reload
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-slow-readers
 ```
 
@@ -103,6 +104,15 @@ The normal check covers authentication, Character lifecycle and the gameplay pat
 [the architecture](./architecture.md#native-host-migration). The recovery check kills its own Host
 and checks committed state after restart. The slow-reader check fills one connection's output while
 another remains responsive. Native builds use no generated Gateway bindings.
+
+The reload check changes the WASM program hash with a custom section and replaces the Module
+20 times under the development Host's definition check and confirms each installed program hash.
+Two Headless Clients exchange movement and pings during each replacement and retain their World
+Sessions, movement Relays, Speech and items. It also checks malformed WASM and a private-table
+rename, which must fail with the development compatibility error in the running Host.
+This check preserves gameplay semantics; it does not measure source rebuild time. The patched
+Host's `spacetimedb-schema` tests named `development_reload` cover reducer argument changes and
+private table additions that ordinary automatic migration permits.
 
 For a Linux movement load measurement, add `--load-clients 1000 --load-seconds 30
 --load-group-size 16` to the check command. The report includes Host and driver CPU, sampled RSS,

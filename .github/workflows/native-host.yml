@@ -35,6 +35,8 @@ jobs:
         run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
       - name: Check native protocol behavior
         run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone
+      - name: Check development reload with connected clients
+        run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-reload
       - name: Check long Login Queue waits
         run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-admission
       - name: Check crash recovery

@@ -39,13 +39,14 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
 | **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
+| **openssl** command | OpenSSL 3 or newer | Native startup creates and checks its persistent signing keys with this command. LibreSSL is not supported. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
 ### Ubuntu 24.04
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev git curl
+sudo apt-get install -y build-essential pkg-config libssl-dev openssl git curl
 ```
 
 Install `libssl-dev` and `pkg-config` for the native Rust dependencies that link against OpenSSL.
@@ -65,8 +66,17 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 ```
 
-No Homebrew packages and no OpenSSL are needed — on Apple platforms `native-tls` uses
-Security.framework, not OpenSSL.
+On Apple platforms, `native-tls` uses Security.framework. Native startup requires genuine OpenSSL
+for its signing keys. With Homebrew installed, use [the OpenSSL 3 formula](https://formulae.brew.sh/formula/openssl@3):
+
+```bash
+brew install openssl@3
+export PATH="$(brew --prefix openssl@3)/bin:$PATH"
+openssl version
+```
+
+Keep that PATH entry in your shell configuration. `openssl version` must report OpenSSL 3 or newer.
+The CLI refuses LibreSSL before writing key files.
 
 ### SpacetimeDB 2.7.1 (both platforms)
 
@@ -486,6 +496,57 @@ invocation or not inside a checkout.
 ---
 
 ## Updating
+
+### Development reload
+
+For Module code changes, start the local development Realm and watcher:
+
+```bash
+./lyracore dev watch
+```
+
+The first run builds the Native Host and development WASM. Connect the client, edit Module or
+Package Rust source, and save. Later edits rebuild only the WASM and publish it to the running
+Host. The command prints build and publish times. It combines rapid saves and rebuilds again if
+source changes during a build. Each successful build publishes its artifact; the Host skips
+replacement when that artifact is already installed.
+
+If a normal `dev up` Host is already running, stop it with `./lyracore dev down` before starting
+watch. This one-time mode switch ends existing World Sessions. Ctrl+C stops the watcher and leaves
+the development Host running. `./lyracore dev down` stops that Host and keeps its durable data.
+
+A failed Rust build leaves the current Module running. Fix the source and save again. The
+development Host also refuses any change to the Module definition, including private tables and
+reducer arguments. Handle those changes through a planned update. A compatible code edit keeps
+the same client connection, but it can still change gameplay or contain a bug. This workflow does
+not replace `./lyracore preflight` or the tests required for a PR.
+
+For a schema change that SpacetimeDB can migrate automatically, stop watch with Ctrl+C, then run:
+
+```bash
+./lyracore dev down
+./lyracore dev up
+./lyracore dev down
+./lyracore dev watch
+```
+
+The normal `dev up` publishes through the usual migration checks. If they refuse the change,
+resolve the migration before returning to watch. This sequence ends existing World Sessions.
+Package changes that alter the Module definition need the same transition.
+
+The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
+Host requires a restart; the watcher only publishes the Module.
+Each replacement writes the old and new WASM to the local commit log, about 66 MB per reload with
+the current 33 MB development artifact. Frequent edits can consume substantial disk space under
+`.lyracore/native-data/`; the build cache is separate. Do not delete individual commit-log files
+to reclaim space from a Realm you intend to keep.
+
+Native startup requires OpenSSL 3 or newer. The CLI keeps local signing keys in the private
+`.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
+does not match, startup stops without replacing it. An existing certificate authority in the
+Host's configuration takes precedence over these fallback keys.
+
+### Checkout updates
 
 ```bash
 ./lyracore update
