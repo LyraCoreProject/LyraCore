@@ -513,6 +513,11 @@ not replace `./lyracore preflight` or the tests required for a PR.
 The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
 Host requires a restart; the watcher only publishes the Module.
 
+Native startup requires OpenSSL with EC support. The CLI keeps local signing keys in the private
+`.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
+does not match, startup stops without replacing it. An existing certificate authority in the
+Host's configuration takes precedence over these fallback keys.
+
 ### Checkout updates
 
 ```bash
