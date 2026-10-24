@@ -51,9 +51,17 @@ failures close the connection.
 
 `./lyracore dev watch` runs a local Native Host with `LYRACORE_NATIVE_DEV=1`. It watches Module
 source and builds the `dev-reload` WASM profile incrementally. Dependencies use optimization level
-1; the Module uses level 0. Debug information is off. The Host uses Cranelift without optimization
+1; the Module uses level 0, and build scripts and procedural macros use level 3. Watch requests only
+the WASM library from Cargo. Debug information is off. The Host uses Cranelift without optimization
 and retains fuel metering and epoch interruption. These settings shorten development builds and
 WASM compilation; they are not the release performance configuration.
+The development engines share a bounded in-memory Cranelift function cache. Unchanged functions
+can reuse machine code across different WASM files. Cached keys and records occupy at most 256 MiB,
+plus collection bookkeeping. It evicts the oldest entries when full, which can make later edits
+recompile functions. The cache disappears when the Host stops. Normal Hosts do not enable
+it. This uses Wasmtime 39's experimental incremental compiler cache.
+Local measurements and their limits are in
+[`development-reload-speed.json`](../native-host/results/development-reload-speed.json).
 The profile also keeps Rust's development assertions and integer overflow checks. These can stop
 a reducer where a release build would continue, so a development build can expose additional bugs.
 
@@ -64,6 +72,9 @@ that SpacetimeDB's normal migration check permits. Type ordering changes can als
 update. SpacetimeDB's normal compatibility check alone does not protect the Native Host's binary
 argument and delivery BSATN types. It cannot check semantic contracts encoded in strings or packet
 bodies, such as the `native_reply:` envelope.
+Watch sends a single authenticated PUT to the loopback Host with compatible migration policy and
+`clear=false`. It skips the CLI's separate pre-publish request. The Host checks compatibility before
+replacement and confirms the checked program hash inside the transaction.
 
 A compatible update replaces the Module in the running Host. The sockets, header ciphers and
 World Session rows remain. A Rust build failure sends no update. A malformed WASM or changed

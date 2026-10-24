@@ -1,0 +1,60 @@
+--- a/Cargo.toml
++++ b/Cargo.toml
+@@ -394,6 +394,7 @@
+   "async",
+   "cache",
+   "cranelift",
++  "incremental-cache",
+   "demangle",
+   "parallel-compilation",
+   "runtime",
+--- a/crates/core/src/host/wasmtime/mod.rs
++++ b/crates/core/src/host/wasmtime/mod.rs
+@@ -16,6 +16,7 @@
+ 
+ #[cfg(unix)]
+ mod pooling_stack_creator;
++mod compile_cache;
+ mod wasm_instance_env;
+ mod wasmtime_module;
+ 
+@@ -49,8 +50,13 @@
+ 
+ impl WasmtimeRuntime {
+     pub fn new(data_dir: Option<&ServerDataDir>, runtime_config: WasmConfig) -> Self {
+-        let sync_config = wasmtime_config(data_dir, false);
+-        let async_config = wasmtime_config(data_dir, true);
++        let mut sync_config = wasmtime_config(data_dir, false);
++        let mut async_config = wasmtime_config(data_dir, true);
++        if std::env::var_os("LYRACORE_NATIVE_DEV").is_some_and(|value| value == "1") {
++            let cache = std::sync::Arc::new(compile_cache::CompileCache::new(256 * 1024 * 1024));
++            sync_config.enable_incremental_compilation(cache.clone()).unwrap();
++            async_config.enable_incremental_compilation(cache).unwrap();
++        }
+ 
+         let sync_engine = Engine::new(&sync_config).unwrap();
+         let async_engine = Engine::new(&async_config).unwrap();
+--- a/Cargo.lock
++++ b/Cargo.lock
+@@ -1671,10 +1671,13 @@
+  "gimli",
+  "hashbrown 0.15.5",
+  "log",
++ "postcard",
+  "pulley-interpreter",
+  "regalloc2",
+  "rustc-hash",
+  "serde",
++ "serde_derive",
++ "sha2 0.10.9",
+  "smallvec",
+  "target-lexicon",
+  "wasmtime-internal-math",
+@@ -6642,6 +6645,7 @@
+  "hashbrown 0.15.5",
+  "log",
+  "rustc-hash",
++ "serde",
+  "smallvec",
+ ]
+ 

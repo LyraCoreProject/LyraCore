@@ -33,19 +33,28 @@ def main():
             raise RuntimeError(f'unexpected upstream file: {name}')
         desired = original.replace(old, new, 1)
         target = checkout / name
-        if target.read_text() not in (original, desired):
+        current = target.read_text()
+        if current not in (original, desired):
             raise RuntimeError(f'refusing to overwrite unrelated changes in {target}')
-        target.write_text(desired)
-    for name in ('host-lock.patch', 'dev-reload.patch'):
+        if current != desired:
+            target.write_text(desired)
+    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch'):
         patch = str(ROOT / name)
         check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
         if check.returncode == 0:
             subprocess.run(['git', 'apply', patch], cwd=checkout, check=True)
         else:
             subprocess.run(['git', 'apply', '--reverse', '--check', patch], cwd=checkout, check=True)
-    shutil.copyfile(ROOT / 'src/mod.rs', checkout / 'crates/standalone/src/native_world.rs')
-    for name in ('feed', 'wire'):
-        shutil.copyfile(ROOT / f'src/{name}.rs', checkout / f'crates/standalone/src/native_{name}.rs')
+    sources = {
+        'compile_cache': 'crates/core/src/host/wasmtime/compile_cache.rs',
+        'mod': 'crates/standalone/src/native_world.rs',
+        'feed': 'crates/standalone/src/native_feed.rs',
+        'wire': 'crates/standalone/src/native_wire.rs',
+    }
+    for name, destination in sources.items():
+        source, target = ROOT / f'src/{name}.rs', checkout / destination
+        if not target.is_file() or source.read_bytes() != target.read_bytes():
+            shutil.copyfile(source, target)
     if args.build:
         env = dict(os.environ, CARGO_BUILD_JOBS=os.environ.get('CARGO_BUILD_JOBS', '3'),
             CARGO_PROFILE_RELEASE_DEBUG='0', CARGO_PROFILE_RELEASE_LTO='false')

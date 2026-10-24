@@ -36,3 +36,6 @@ incremental = true
 
 [profile.dev-reload.package.lyracore-module]
 opt-level = 0
+
+[profile.dev-reload.build-override]
+opt-level = 3

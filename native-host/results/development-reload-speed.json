@@ -1,0 +1,94 @@
+{
+  "recorded_at": "2026-10-24",
+  "core_base": "6fa83fee6ef1803b65cddbe1fcbefd54dd27df8d",
+  "cli_base": "b1f7d83d695f21268af2e236ddf5c2def4d496dc",
+  "scope": "Disposable local Realms with minimal fixtures and Headless Clients; five Cargo jobs; no recording",
+  "host_toolchain": "1.97.1",
+  "module_toolchain": "1.93.0",
+  "upstream_revision": "08e1aba133671f9c631c6e70133a82faa0e7b283",
+  "baseline_host_sha256": "82679bbbd92600a74121d4ab6db6aca5dfea0efadf20206ace682fa3f9d7188c",
+  "benchmark_host_sha256": "25f108934054a1fab500cfed5d745191e8d5ba9d1a393872f53986cdcefbe967",
+  "final_host_sha256": "aed0f99bf52bc004ba03079f888cf6c93eeb464dac6f94c4f69e897a920b7ed7",
+  "build_comparison": {
+    "edit": "Speech length 255 to 254 to 253",
+    "baseline_seconds": [
+      10.815501,
+      10.523149
+    ],
+    "wasm_only_optimized_build_tools_seconds": [
+      8.036144,
+      8.115037
+    ],
+    "warm_noop_seconds": 0.111298
+  },
+  "publish_comparison": {
+    "artifact_bytes": 33251283,
+    "same_candidates_for_each_mode": true,
+    "baseline_host_stock_cli_seconds": [
+      10.0412,
+      10.291465
+    ],
+    "baseline_host_single_put_seconds": [
+      8.646379,
+      8.570496
+    ],
+    "cached_host_single_put_seconds": [
+      5.664688,
+      5.617208
+    ],
+    "cached_host_identical_artifact_seconds": 0.140076,
+    "driver": "Python HTTP driver for direct PUT; pinned spacetime 2.7.1 for stock publish"
+  },
+  "real_cli_watch": {
+    "fresh_creation_and_initialization": true,
+    "speech_sampling_seconds": 1.1,
+    "edits": [
+      {
+        "change": "Add a Speech prefix",
+        "build_seconds": 12.24,
+        "publish_seconds": 7.45,
+        "total_seconds": 19.96,
+        "save_to_received_seconds": 20.903058186006092
+      },
+      {
+        "change": "Fix a compile error with a second prefix",
+        "build_seconds": 9.65,
+        "publish_seconds": 6.18,
+        "total_seconds": 16.1,
+        "save_to_received_seconds": 17.602893440001935
+      }
+    ],
+    "compile_failure_kept_previous_behavior": true,
+    "added_reducer_refused_without_replacement": true,
+    "same_host_process_and_world_session": true,
+    "speech_after_ctrl_c": true
+  },
+  "cache_audit": {
+    "body_edit_hit_fraction": 0.968,
+    "literal_and_added_function_hit_fraction_range": [
+      0.832,
+      0.934
+    ],
+    "full_modules_checked_for_equal_function_code": 5,
+    "key_and_record_capacity_bytes": 268435456
+  },
+  "configuration_only": {
+    "existing_set_package_config_seconds": 0.010339,
+    "module_hash_unchanged": true,
+    "driver": "Operator reducer call; no WASM build or publish"
+  },
+  "limits": [
+    "Build and publish comparison phases were timed separately; their sum is not a measured watcher round.",
+    "Two warm edits per build or publication mode are not a capacity or statistical performance study.",
+    "The complete watcher uses larger Speech-prefix edits than the isolated arithmetic comparison.",
+    "The final Host rebuild changed only cache tests from the benchmark Host.",
+    "This does not update the earlier Benilla footage or establish equivalent timings while recording.",
+    "Cold builds, full imported content, macOS and production load were not measured.",
+    "The function cache is experimental in Wasmtime 39 and is enabled only for Development reload.",
+    "Long edit runs that fill the FIFO cache were not timed; eviction can recompile frequently used functions.",
+    "The real watcher run precedes the final HTTP error-message repair; the final CLI has focused HTTP tests."
+  ],
+  "cli_revision": "af05d02336b722acd6a70295a67da3f2b8477c07",
+  "runtime_cli_sha256": "0ded9fa29ec308c1ed1d84cb535a8bfa61c8cca2aa69c1e943df6c0da6f514c8",
+  "final_cli_sha256": "d83b38b42c3eb9dd4bdba11ea310180dfc4739372e07cd4b3409ea90134f4c22"
+}

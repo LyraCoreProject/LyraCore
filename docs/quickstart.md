@@ -536,7 +536,16 @@ Package changes that alter the Module definition need the same transition.
 
 The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
 Host requires a restart; the watcher only publishes the Module.
-Each replacement writes the old and new WASM to the local commit log, about 66 MB per reload with
+Development reload builds only the WASM library and optimizes build scripts and procedural macros.
+The Host keeps a bounded function cache between edits. After installing a Host change, stop it once
+with `./lyracore dev down` and start `./lyracore dev watch` to use that change.
+
+For a value already exposed as Package Config, use `./lyracore packages config NAME KEY VALUE`.
+That changes a row through the running Module without compiling or publishing WASM. Rust constants
+still require a code edit. Package Deltas and Runtime Scripts use `packages apply`, which can also
+publish Rust Packages; it is a separate workflow from watching Rust source.
+
+Each replacement writes the old and new WASM to the local commit log, about 66 MB in total with
 the current 33 MB development artifact. Frequent edits can consume substantial disk space under
 `.lyracore/native-data/`; the build cache is separate. Do not delete individual commit-log files
 to reclaim space from a Realm you intend to keep.
