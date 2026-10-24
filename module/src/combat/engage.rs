@@ -255,7 +255,7 @@ pub struct MeleeAttack {
     pub leash_x: f32,
     #[default(0.0)]
     pub leash_y: f32,
-    /// `SWING_ERROR_*`; the Gateway relays each change to the attacker.
+    /// `SWING_ERROR_*`; the Module sends each change only to the attacker.
     #[default(0u8)]
     pub swing_error: u8,
 }
