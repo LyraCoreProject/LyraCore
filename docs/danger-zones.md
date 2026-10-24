@@ -32,7 +32,7 @@ of Gateway leases and Account Claims. Local native startup creates its own data 
    - `./lyracore dev watch` permits only an unchanged Module definition. Its development Host
      compares all reducer arguments and private table layouts before replacing the Module.
      SpacetimeDB's normal migration check does not compare reducer arguments. Use a planned
-     update for schema changes; see [developer reload](quickstart.md#developer-reload).
+     update for schema changes; see [development reload](quickstart.md#development-reload).
 
    **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
    `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate

@@ -4012,7 +4012,12 @@ def main():
                     def publish(candidate):
                         return request(f'/v1/database/{database}?host_type=Wasm', candidate, 'PUT', 'application/wasm')
 
+                    def commitlog_bytes():
+                        return sum(path.stat().st_size for path in (run / 'data/replicas').glob('*/clog/*.log'))
+
+                    before = commitlog_bytes()
                     reload.run(world_port, call, sql, publish, wasm.read_bytes())
+                    print(f'Reload storage: WASM {wasm.stat().st_size} bytes; commit log grew {commitlog_bytes() - before} bytes')
                     return
                 if args.check_accept_recovery:
                     check_accept_recovery(host, world_port, logon_port, run / 'host.log', sql)

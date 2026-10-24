@@ -13,7 +13,7 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 **C** [Cancellation](#auctions) · [Candidate](#sharding-and-transfer) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](#accounts-characters-and-sessions) · [Character Relocation](#sharding-and-transfer) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#sharding-and-transfer) · [Companion Order](#sharding-and-transfer) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#requests-and-delivery) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](#requests-and-delivery) · [Durable Request](#requests-and-delivery) · [DynamicObject](#requests-and-delivery)
+**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](#realm-topology) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](#requests-and-delivery) · [Durable Request](#requests-and-delivery) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#sharding-and-transfer) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
 
@@ -57,6 +57,10 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 The SpacetimeDB process that accepts WoW TCP connections. It handles transport and cryptographic
 scratch state, then applies the Module's ordered packet delivery instructions. The native runtime
 uses one Shard for all Realm state.
+
+**Development reload**:
+The local `dev watch` workflow that rebuilds Module code and publishes it while keeping the Native
+Host and World Sessions running. The Module definition must stay unchanged.
 
 **Realm**:
 The game world and Accounts that clients see as one server. The native runtime stores a Realm in

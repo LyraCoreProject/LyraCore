@@ -12,6 +12,10 @@ The SpacetimeDB process that accepts WoW TCP connections. It handles transport a
 scratch state, then applies the Module's ordered packet delivery instructions. The native runtime
 uses one Shard for all Realm state.
 
+**Development reload**:
+The local `dev watch` workflow that rebuilds Module code and publishes it while keeping the Native
+Host and World Sessions running. The Module definition must stay unchanged.
+
 **Realm**:
 The game world and Accounts that clients see as one server. The native runtime stores a Realm in
 one Shard.

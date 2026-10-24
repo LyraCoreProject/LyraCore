@@ -106,8 +106,10 @@ and checks committed state after restart. The slow-reader check fills one connec
 another remains responsive. Native builds use no generated Gateway bindings.
 
 The reload check changes the WASM program hash with a custom section and replaces the Module
-three times under the development Host's definition check. Two connected Headless Clients retain
-their World Sessions, movement Relays, Speech and items. It also checks a malformed-WASM update.
+20 times under the development Host's definition check and confirms each installed program hash.
+Two Headless Clients exchange movement and pings during each replacement and retain their World
+Sessions, movement Relays, Speech and items. It also checks malformed WASM and a private-table
+rename, which must fail with the development compatibility error in the running Host.
 This check preserves gameplay semantics; it does not measure source rebuild time. The patched
 Host's `spacetimedb-schema` tests named `development_reload` cover reducer argument changes and
 private table additions that ordinary automatic migration permits.

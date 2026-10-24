@@ -487,7 +487,7 @@ invocation or not inside a checkout.
 
 ## Updating
 
-### Developer reload
+### Development reload
 
 For Module code changes, start the local development Realm and watcher:
 
@@ -498,7 +498,8 @@ For Module code changes, start the local development Realm and watcher:
 The first run builds the Native Host and development WASM. Connect the client, edit Module or
 Package Rust source, and save. Later edits rebuild only the WASM and publish it to the running
 Host. The command prints build and publish times. It combines rapid saves and rebuilds again if
-source changes during a build. An unchanged WASM needs no further publish within that watch run.
+source changes during a build. Each successful build publishes its artifact; the Host skips
+replacement when that artifact is already installed.
 
 If a normal `dev up` Host is already running, stop it with `./lyracore dev down` before starting
 watch. This one-time mode switch ends existing World Sessions. Ctrl+C stops the watcher and leaves
@@ -510,8 +511,24 @@ reducer arguments. Handle those changes through a planned update. A compatible c
 the same client connection, but it can still change gameplay or contain a bug. This workflow does
 not replace `./lyracore preflight` or the tests required for a PR.
 
+For a schema change that SpacetimeDB can migrate automatically, stop watch with Ctrl+C, then run:
+
+```bash
+./lyracore dev down
+./lyracore dev up
+./lyracore dev down
+./lyracore dev watch
+```
+
+The normal `dev up` publishes through the usual migration checks. If they refuse the change,
+resolve the migration before returning to watch. This sequence ends existing World Sessions.
+Package changes that alter the Module definition need the same transition.
+
 The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
 Host requires a restart; the watcher only publishes the Module.
+Each replacement stores the WASM in the local commit log. Frequent edits can consume substantial
+disk space under `.lyracore/native-data/`; the build cache is separate. Do not delete individual
+commit-log files to reclaim space from a Realm you intend to keep.
 
 Native startup requires OpenSSL with EC support. The CLI keeps local signing keys in the private
 `.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
