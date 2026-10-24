@@ -1330,8 +1330,7 @@ pub fn gw_enter_areatrigger(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::quest::apply_enter_areatrigger(ctx, actor_guid, trigger_id);
-    Ok(())
+    crate::quest::request_enter_areatrigger(ctx, actor_guid, trigger_id)
 }
 
 #[reducer]

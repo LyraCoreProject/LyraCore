@@ -85,7 +85,7 @@ targets core `main`.
    real client, or the behaviour of an established emulator all count.
 3. The code follows [`CODING_STANDARDS.md`](CODING_STANDARDS.md) and uses the glossary terms.
 4. A schema change follows [`docs/danger-zones.md`](docs/danger-zones.md): append new columns at
-   the end with a default, and regenerate the Gateway bindings for a new table.
+   the end with a default. Native delivery type changes must pass the native protocol check.
 5. The title follows the repository's convention, for example
    `fix(loot): taking an item from the loot window adds it to the bag`.
 

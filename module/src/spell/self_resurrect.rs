@@ -1,9 +1,9 @@
 use lyracore_shared::packing::power_type;
-use spacetimedb::{ReducerContext, Table};
+use spacetimedb::ReducerContext;
 
 use super::{
-    auras_on, game_resurrect_request, game_self_resurrect_option, game_spell_effect,
-    SelfResurrectOption, A_SELF_RESURRECT, E_SELF_RESURRECT,
+    auras_on, game_self_resurrect_option, game_spell_effect, SelfResurrectOption, A_SELF_RESURRECT,
+    E_SELF_RESURRECT,
 };
 use crate::game_world_entity;
 
@@ -13,14 +13,7 @@ pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid:
         .filter(|a| a.eff_kind == A_SELF_RESURRECT && a.eff_p0 > 0)
         .map(|a| a.eff_p0 as u32)
         .max();
-    let options = ctx.db.game_self_resurrect_option();
-    options.character_guid().delete(character_guid);
-    if let Some(spell_id) = chosen {
-        options.insert(SelfResurrectOption {
-            character_guid,
-            spell_id,
-        });
-    }
+    SelfResurrectOption::set(ctx, character_guid, chosen);
 }
 
 pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
@@ -83,18 +76,12 @@ pub(crate) fn self_resurrect_vitals(
 }
 
 pub(crate) fn clear_resurrect_request(ctx: &ReducerContext, character_guid: u64) {
-    ctx.db
-        .game_resurrect_request()
-        .target_guid()
-        .delete(character_guid);
+    super::ResurrectRequest::delete(ctx, character_guid);
 }
 
 pub(crate) fn clear_resurrect_request_and_option(ctx: &ReducerContext, character_guid: u64) {
     clear_resurrect_request(ctx, character_guid);
-    ctx.db
-        .game_self_resurrect_option()
-        .character_guid()
-        .delete(character_guid);
+    SelfResurrectOption::set(ctx, character_guid, None);
 }
 
 #[cfg(test)]

@@ -37,6 +37,7 @@ pub struct HunterPet {
     pub name_timestamp: u32,
 }
 
+#[derive(PartialEq, Eq)]
 #[table(
     accessor = game_hunter_pet_protocol,
     public,
@@ -145,11 +146,16 @@ pub(crate) fn publish_hunter_pet_protocol(
         loyalty_level: pet.loyalty_level,
     };
     let table = ctx.db.game_hunter_pet_protocol();
-    if table.pet_id().find(row.pet_id).is_some() {
-        table.pet_id().update(row);
-    } else {
-        table.insert(row);
+    let previous = table.pet_id().find(row.pet_id);
+    if previous.as_ref() == Some(&row) {
+        return;
     }
+    let row = if previous.is_some() {
+        table.pet_id().update(row)
+    } else {
+        table.insert(row)
+    };
+    crate::native::hunter_pet_changed(ctx, previous.as_ref(), &row);
 }
 
 pub(crate) fn live_pet_kind(ctx: &ReducerContext, pet_guid: u64) -> PetKind {

@@ -1,13 +1,10 @@
-use lyracore_shared::guild::{event_kind, GuildRefusal, LEADER_RANK};
+use lyracore_shared::guild::{event_kind, LEADER_RANK};
 use spacetimedb::ReducerContext;
 
 use super::membership::{disband_guild, game_guild_invite};
 use super::{game_guild, game_guild_member, member, petition, push_event, GuildMember};
 
-pub(super) fn forget_deleted_character(
-    ctx: &ReducerContext,
-    character_guid: u64,
-) -> Result<(), GuildRefusal> {
+pub(crate) fn forget_deleted_character(ctx: &ReducerContext, character_guid: u64) {
     ctx.db
         .game_guild_invite()
         .target_guid()
@@ -16,16 +13,12 @@ pub(super) fn forget_deleted_character(
         leave_guild(ctx, departed);
     }
     petition::withdraw(ctx, character_guid);
-    Ok(())
 }
 
 fn leave_guild(ctx: &ReducerContext, departed: GuildMember) {
     let guild_id = departed.guild_id;
     let Some(mut guild) = ctx.db.game_guild().guild_id().find(guild_id) else {
-        ctx.db
-            .game_guild_member()
-            .character_guid()
-            .delete(departed.character_guid);
+        GuildMember::delete(ctx, departed.character_guid);
         return;
     };
     if guild.leader_guid == departed.character_guid {
@@ -41,7 +34,7 @@ fn leave_guild(ctx: &ReducerContext, departed: GuildMember) {
             return;
         };
         heir.rank_id = LEADER_RANK;
-        let heir = ctx.db.game_guild_member().character_guid().update(heir);
+        let heir = heir.update(ctx);
         guild.leader_guid = heir.character_guid;
         ctx.db.game_guild().guild_id().update(guild);
         push_event(
@@ -54,10 +47,7 @@ fn leave_guild(ctx: &ReducerContext, departed: GuildMember) {
             vec![departed.name.clone(), heir.name],
         );
     }
-    ctx.db
-        .game_guild_member()
-        .character_guid()
-        .delete(departed.character_guid);
+    GuildMember::delete(ctx, departed.character_guid);
     push_event(
         ctx,
         guild_id,

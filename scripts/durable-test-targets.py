@@ -8,8 +8,8 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
-# Seconds from Actions run 38090384855, including builds and Gateway checks.
-JOB_SECONDS = (615, 240, 135)
+# Job 2 also compiles the populated-upgrade baseline.
+JOB_SECONDS = (0, 0, 135)
 DEFAULT_TARGET_SECONDS = 20
 
 

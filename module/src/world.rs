@@ -5,9 +5,7 @@ use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 use crate::faction::game_faction_template;
 use crate::graveyard;
 use crate::helpers::entity_by_owner;
-use crate::{
-    game_character, game_character_buyback, game_corpse, game_creature_spline, game_instance,
-};
+use crate::{game_character, game_character_buyback, game_creature_spline, game_instance};
 
 mod simulation;
 pub(crate) use simulation::backfill_simulation;
@@ -445,10 +443,14 @@ pub(crate) fn teleport_player(
     };
     let recipient_identity = e.owner_identity;
     let cross_map = is_cross_map_teleport(e.map_id, map_id);
+    let sessionless = crate::helpers::character_by_guid(ctx, player_guid)
+        .is_some_and(|character| !character.online);
     let changes_partition = e.map_id != map_id || e.instance_id != instance_id;
     if changes_partition {
         crate::duel::interrupt_duel_for(ctx, player_guid);
+        crate::trade::cancel_trade_for(ctx, player_guid);
     }
+    let teleport_counter = crate::native::begin_teleport(ctx, player_guid, cross_map);
     // Drop queued pre-teleport motion so the next publish cannot snap peers back.
     crate::motion::drop_pending(ctx, player_guid);
 
@@ -459,15 +461,20 @@ pub(crate) fn teleport_player(
         crate::combat::disengage(ctx, player_guid);
         crate::spell::break_stealth(ctx, player_guid);
         ctx.db.game_entity_motion().guid().delete(player_guid);
-        entities.guid().delete(player_guid);
+    }
+    if cross_map && !sessionless {
+        crate::WorldEntity::delete(ctx, player_guid);
     } else {
         let (grid_x, grid_y) = spatial::grid_cell(x, y);
-        let mut e = e;
+        let Some(mut e) = entities.guid().find(player_guid) else {
+            return;
+        };
         e.map_id = map_id;
         e.x = x;
         e.y = y;
         e.z = z;
         e.orientation = o;
+        e.movement_flags = 0;
         e.grid_x = grid_x;
         e.grid_y = grid_y;
         e.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
@@ -512,6 +519,7 @@ pub(crate) fn teleport_player(
             map_id,
             instance_id,
             spatial::grid_cell(x, y),
+            None,
         );
     }
 
@@ -522,7 +530,7 @@ pub(crate) fn teleport_player(
         },
     );
 
-    ctx.db.game_teleport_event().insert(TeleportEvent {
+    let event = ctx.db.game_teleport_event().insert(TeleportEvent {
         id: 0,
         recipient_identity,
         mover_guid: player_guid,
@@ -534,6 +542,7 @@ pub(crate) fn teleport_player(
         created_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
         cross_map,
     });
+    crate::native::teleport_changed(ctx, &event, teleport_counter);
 
     if changes_partition {
         crate::instance::reconcile_instance_removal(ctx, player_guid);
@@ -618,7 +627,7 @@ pub(crate) fn apply_player_login(
     // Persist the previous live entity before replacement so ghost relog cannot lose progression.
     if let Some(stale) = entities.guid().find(character_guid) {
         persist_entity(ctx, &stale, false);
-        entities.guid().delete(character_guid);
+        crate::WorldEntity::delete(ctx, character_guid);
         character = chars.guid().find(character_guid).unwrap_or(character);
     }
 
@@ -663,10 +672,7 @@ pub(crate) fn apply_player_login(
         );
     }
     if !character.pending_ghost {
-        ctx.db
-            .game_corpse()
-            .guid()
-            .delete(crate::corpse::corpse_guid_for(character_guid));
+        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     }
 
     let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
@@ -744,6 +750,7 @@ fn restamp_owned_data(ctx: &ReducerContext, character_guid: u64, identity: Ident
 pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64) {
     // Preserve the issued GUID floor before deleting the last row that refers to it.
     crate::auth::bump_guid_high_water(ctx, character_guid);
+    crate::guild::forget_deleted_character(ctx, character_guid);
     for sweep in crate::CHARACTER_OWNED_DELETE_SWEEPS {
         sweep(ctx, character_guid);
     }
@@ -762,13 +769,10 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
     }
 
     crate::combat::disengage(ctx, character_guid);
-    ctx.db
-        .game_corpse()
-        .guid()
-        .delete(crate::corpse::corpse_guid_for(character_guid));
+    crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     crate::motion::drop_pending(ctx, character_guid);
     ctx.db.game_entity_motion().guid().delete(character_guid);
-    ctx.db.game_world_entity().guid().delete(character_guid);
+    crate::WorldEntity::delete(ctx, character_guid);
     ctx.db.game_character().guid().delete(character_guid);
 }
 
@@ -1114,9 +1118,8 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
         crate::corpse::escalated_reclaim(player.death_expire_micros, now_micros);
 
     let corpse_guid = crate::corpse::corpse_guid_for(player.guid);
-    let corpses = ctx.db.game_corpse();
-    corpses.guid().delete(corpse_guid);
-    corpses.insert(crate::Corpse {
+    crate::Corpse::delete(ctx, corpse_guid);
+    crate::Corpse {
         guid: corpse_guid,
         owner_guid: player.guid,
         map_id: player.map_id,
@@ -1131,7 +1134,9 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
         reclaim_delay_micros: delay_micros,
         is_bones: false,
         instance_id: player.instance_id,
-    });
+        cell: 0,
+    }
+    .insert(ctx);
 
     player.health = 1;
     player.player_flags |= player_flags::GHOST;
@@ -1308,10 +1313,10 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
             c.played_total_secs,
         );
         c.session_start_micros = 0;
+        c.resting = entity.resting;
         if set_offline {
             c.online = false;
             c.last_logout_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-            c.resting = entity.resting;
             crate::rest::materialize_on_logout(&mut c, ctx.timestamp.to_micros_since_unix_epoch());
         }
         chars.guid().update(c);
@@ -1336,36 +1341,54 @@ pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
     crate::duel::interrupt_duel_for(ctx, entity.guid);
     persist_entity(ctx, &entity, true);
 
-    crate::combat::disengage(ctx, entity.guid);
+    finish_logout(
+        ctx,
+        entity.guid,
+        persisted_pending_ghost(entity.dead, entity.player_flags),
+    );
+}
 
-    crate::trade::cancel_trade_for(ctx, entity.guid);
+pub(crate) fn remove_loading_character(ctx: &ReducerContext, guid: u64) {
+    crate::hooks::fire_on_logout(
+        ctx,
+        &crate::hooks::LogoutPayload {
+            character_guid: guid,
+        },
+    );
+    let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) else {
+        return;
+    };
+    character.online = false;
+    character.last_logout_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    character.pending_godmode = false;
+    character.pending_run_speed_mult_bp = RUN_SPEED_BP_1X;
+    crate::rest::materialize_on_logout(&mut character, ctx.timestamp.to_micros_since_unix_epoch());
+    let keep_corpse = character.pending_ghost;
+    ctx.db.game_character().guid().update(character);
+    finish_logout(ctx, guid, keep_corpse);
+}
 
-    if !persisted_pending_ghost(entity.dead, entity.player_flags) {
-        ctx.db
-            .game_corpse()
-            .guid()
-            .delete(crate::corpse::corpse_guid_for(entity.guid));
+fn finish_logout(ctx: &ReducerContext, guid: u64, keep_corpse: bool) {
+    crate::combat::disengage(ctx, guid);
+    crate::trade::cancel_trade_for(ctx, guid);
+    if !keep_corpse {
+        crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
     }
-
-    crate::spell::clear_resurrect_request_and_option(ctx, entity.guid);
-
-    crate::spell::break_stealth(ctx, entity.guid);
-
-    crate::creatures::despawn_pets(ctx, entity.guid);
-
+    crate::spell::clear_resurrect_request_and_option(ctx, guid);
+    crate::spell::break_stealth(ctx, guid);
+    crate::creatures::despawn_pets(ctx, guid);
     for row in ctx
         .db
         .game_character_buyback()
         .by_player_guid()
-        .filter(&entity.guid)
+        .filter(&guid)
         .collect::<Vec<_>>()
     {
         ctx.db.game_character_buyback().id().delete(row.id);
     }
-
-    crate::motion::drop_pending(ctx, entity.guid);
-    ctx.db.game_entity_motion().guid().delete(entity.guid);
-    ctx.db.game_world_entity().guid().delete(entity.guid);
+    crate::motion::drop_pending(ctx, guid);
+    ctx.db.game_entity_motion().guid().delete(guid);
+    crate::WorldEntity::delete(ctx, guid);
 }
 
 pub(crate) fn apply_gossip_select(
@@ -1399,7 +1422,12 @@ pub(crate) fn apply_gossip_select(
 
 #[reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
-    remove_from_world(ctx, ctx.sender());
+    crate::native::close(ctx);
+    if let Some(entity) = entity_by_owner(ctx, ctx.sender()) {
+        if !crate::native::is_player(ctx, entity.guid) {
+            remove_live_character(ctx, entity);
+        }
+    }
 }
 
 #[cfg(test)]

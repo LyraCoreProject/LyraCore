@@ -5,13 +5,12 @@ use spacetimedb::{reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDura
 use crate::{
     game_account, game_aura_schedule, game_breath_schedule, game_character, game_config,
     game_creature_loot, game_creature_move_schedule, game_creature_spawn, game_creature_template,
-    game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule, game_gameobject,
-    game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
-    game_gateway_lease_reaper_schedule, game_graveyard, game_graveyard_zone,
-    game_ground_area_schedule, game_instance_reaper_schedule, game_item_template,
-    game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule, game_realm,
-    game_spell, game_spell_effect, game_start_position, Account, AuraSchedule, BreathSchedule,
-    Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
+    game_creature_waypoint, game_duel_schedule, game_event_reaper_schedule, game_gameobject_pool,
+    game_gameobject_pool_member, game_gameobject_template, game_gateway_lease_reaper_schedule,
+    game_graveyard, game_graveyard_zone, game_ground_area_schedule, game_instance_reaper_schedule,
+    game_item_template, game_melee_schedule, game_motion_publish_schedule, game_pet_care_schedule,
+    game_realm, game_spell, game_spell_effect, game_start_position, Account, AuraSchedule,
+    BreathSchedule, Character, CreatureLoot, CreatureMoveSchedule, CreatureSpawn, CreatureTemplate,
     CreatureWaypoint, EventReaperSchedule, GameObject, GameObjectPool, GameObjectPoolMember,
     GameObjectTemplate, GraveyardLoc, GraveyardZone, GroundAreaSchedule, ItemTemplate,
     MeleeSchedule, PetCareSchedule, Realm, ServerConfig, Spell, SpellEffect, StartPosition,
@@ -416,7 +415,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             lock_id: 0,
             size: 0.0,
         });
-    ctx.db.game_gameobject().insert(GameObject {
+    GameObject {
         guid: GO_HIGH | 1,
         template_entry: 50100,
         map_id: hw::MAP_ID,
@@ -435,7 +434,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
@@ -451,7 +451,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             lock_id: 0,
             size: 0.0,
         });
-    ctx.db.game_gameobject().insert(GameObject {
+    GameObject {
         guid: GO_HIGH | 2,
         template_entry: 50101,
         map_id: hw::MAP_ID,
@@ -470,7 +470,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
 
     ctx.db
         .game_gameobject_template()
@@ -487,7 +488,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             lock_id: 0,
             size: 0.0,
         });
-    ctx.db.game_gameobject().insert(GameObject {
+    GameObject {
         guid: GO_HIGH | 3,
         template_entry: 50102,
         map_id: hw::MAP_ID,
@@ -506,7 +507,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
@@ -522,7 +524,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             lock_id: 0,
             size: 0.0,
         });
-    ctx.db.game_gameobject().insert(GameObject {
+    GameObject {
         guid: GO_HIGH | 4,
         template_entry: 50103,
         map_id: hw::MAP_ID,
@@ -541,7 +543,8 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
 
     for (e, name, item, req) in [
         (1731u32, "Copper Vein", 2770u32, 1u32),

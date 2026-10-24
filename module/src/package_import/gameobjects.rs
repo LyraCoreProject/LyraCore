@@ -145,7 +145,7 @@ pub(super) fn clear_package_range(ctx: &ReducerContext) {
         .filter(|guid| is_package_spawn_guid(*guid))
         .collect();
     for guid in package_guids {
-        spawns.guid().delete(guid);
+        crate::GameObject::delete(ctx, guid);
     }
 
     let traps = ctx.db.game_gameobject_trap();
@@ -226,10 +226,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
                 apply_spawn_field(&mut spawn, field, value)
             })?;
             stamp_cell(&mut spawn);
-            ctx.db
-                .game_gameobject()
-                .try_insert(spawn)
-                .map_err(|e| insert_failed(row, &e))?;
+            spawn.try_insert(ctx).map_err(|e| insert_failed(row, &e))?;
         }
         (ClaimTable::GameobjectSpawn, Operation::Update) => {
             let spawns = ctx.db.game_gameobject();
@@ -238,7 +235,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
                 apply_spawn_field(&mut spawn, field, value)
             })?;
             stamp_cell(&mut spawn);
-            spawns.guid().update(spawn);
+            spawn.update(ctx);
         }
         (other, _) => unreachable!(
             "`check_claims_belong_to` refuses a non-gameobjects row before the gameobjects \

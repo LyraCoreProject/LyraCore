@@ -1,6 +1,6 @@
 # Testing
 
-CI runs three workflows on every pull request, forks included. This page lists their commands in
+CI runs four workflows on every pull request, forks included. This page lists their commands in
 the order to run them locally. A green unit tier does not prove the durable tier, and neither proves
 what a real client shows.
 
@@ -11,7 +11,7 @@ what a real client shows.
   checkout.
 - On Linux, a C toolchain, `pkg-config` and the OpenSSL headers (`build-essential pkg-config
   libssl-dev` on Ubuntu). macOS needs only the Xcode Command Line Tools.
-- For Gateway binding preparation and the durable tier: the SpacetimeDB CLI 2.7.1 on `PATH`
+- For the durable tier and schema checks: the SpacetimeDB CLI 2.7.1 on `PATH`
   as `spacetime`, with the matching standalone. [`quickstart.md`](./quickstart.md) gives the
   install. Durable test fixtures also accept `SPACETIME_BIN` to locate the CLI.
 - For the Runtime Script check: Bun 1.4.3.
@@ -25,7 +25,6 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 
 ```bash
 cargo fmt --all -- --check
-./lyracore bindings
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
@@ -33,7 +32,7 @@ cargo test -p lyracore-module --test build_script
 cargo test -p lyracore-module --test notification_tables
 cargo test -p lyracore-module --test package_api_lint
 cargo test -p lyracore-package-delta
-cargo test -p lyracore-gateway
+cargo test -p lyracore-protocol
 cargo test -p lyracore-shared
 cargo test -p lyracore-test-support
 cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
@@ -74,7 +73,7 @@ runs must skip that test unless the baseline Wasm is available.
 
 `scripts/durable-test-targets.py` assigns targets by the durations in
 `.github/durable-test-seconds.json`. It includes every current target once and estimates 20 seconds
-for a new target. `JOB_SECONDS` reserves time for each job's builds, setup and Gateway checks.
+for a new target. `JOB_SECONDS` reserves extra time for the populated-upgrade baseline.
 To refresh the estimates, use a successful main run: record each Module target's reported test
 duration, rounded up to whole seconds, in the JSON file. Set each job's `JOB_SECONDS` entry to its
 total duration minus those target durations. Keep the run reference in the script current.
@@ -85,44 +84,33 @@ on its private fixture. It then checks two real scheduled cleanups without a fiv
 The Operator-only `debug_accelerate_session_reaper` control is for disposable test instances;
 its shorter interval persists if used on an existing Shard.
 
-CI also runs Gateway tests that need a node. The workflow names individual tests with
-`--ignored --exact` and runs the party command test group with:
+## Native protocol tier
+
+`.github/workflows/native-host.yml` builds the pinned SpacetimeDB Host extension with Rust 1.97.1,
+then runs the real Module through WoW TCP connections. These checks own temporary standalone
+processes and data directories. They do not use an existing Realm.
 
 ```bash
-cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::party_command_durable_tests -- --ignored --test-threads=1
+python3 native-host/prepare-host.py --checkout .lyracore/native-host/SpacetimeDB --build
+cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-admission
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-recovery
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-slow-readers
 ```
 
-The Headless Client scenarios, their Benilla pin and the opcode inventory are in
+The normal check covers authentication, Character lifecycle and the gameplay paths listed in
+[the architecture](./architecture.md#native-host-migration). The recovery check kills its own Host
+and checks committed state after restart. The slow-reader check fills one connection's output while
+another remains responsive. Native builds use no generated Gateway bindings.
+
+For a Linux movement load measurement, add `--load-clients 1000 --load-seconds 30
+--load-group-size 16` to the check command. The report includes Host and driver CPU, sampled RSS,
+latencies, closed connections and final observer positions. This fixture has no imported world or
+Package AI, so it does not establish populated-world capacity.
+
+The independent Benilla codec checks and opcode inventory are described in
 [`benilla-compatibility.md`](./benilla-compatibility.md).
-
-## Gateway bindings
-
-Before Gateway tests, checks, or Clippy on a fresh checkout, prepare its bindings:
-
-```bash
-./lyracore bindings
-cargo test -p lyracore-gateway
-```
-
-Preparation needs the pinned SpacetimeDB CLI and standalone, builds the local Module with
-`debug_reducers`, and includes private tables. It does not contact a Realm. The Rust and durable
-CI workflows prepare bindings before compiling the Gateway. Schema generation and CLI publishing
-use Rust flags from the checkout's Cargo configuration and ignore ambient Rust-flag overrides.
-
-Generated files stay in `.lyracore/generated/gateway/`. The CLI reuses complete output while its
-inputs and generated files match their recorded hashes. Module sources, installed Package sources,
-workspace crates, Cargo manifests and lockfile, Cargo configuration, the Runtime Script event
-catalogue, and toolchain pins are inputs. Source edits, Package additions and removals, and edits
-through Package symlinks require preparation again.
-
-`./lyracore bindings --check` checks freshness without running Cargo or SpacetimeDB. It prints JSON
-with the generated directory and watched paths for the Gateway build script. Direct Cargo builds
-use the installed CLI binary for this check, so they never install tools or start a nested build.
-Prepare bindings before opening the Gateway in an editor on a fresh checkout.
-
-A failed generation preserves the previous complete directory, but stale output cannot pass a
-build. Old directories remain available to compilers already reading them. Delete
-`.lyracore/generated/gateway/` to clear this cache, then prepare again.
 
 ## Runtime Scripts
 
@@ -166,5 +154,5 @@ A Package test runner sets `LYRACORE_TEST_CORE` to the Core checkout it builds a
 ## Higher rungs
 
 A live stack, a real client and a load run each catch what the tiers above cannot.
-[`architecture.md`](./architecture.md#8-verification) describes the ladder, and
+[`architecture.md`](./architecture.md#verification) describes the ladder, and
 [`verification/`](./verification/README.md) holds the written checks.

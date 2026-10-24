@@ -31,14 +31,18 @@ fn manifest_is_the_generated_enumeration_minus_the_machinery() {
 }
 
 #[test]
-fn manifest_exclude_holds_only_transfer_machinery() {
+fn manifest_exclude_holds_only_local_runtime_state() {
     assert_eq!(
         MANIFEST_EXCLUDE,
-        ["game_transfer_out"],
-        "MANIFEST_EXCLUDE changed. Every name on it is dropped from the transfer manifest, from \
-             every export blob, AND from the set an arriving payload must cover — so a \
-             character-owned table added here loses its rows at every shard crossing, silently and \
-             with no other test failing. Only transfer MACHINERY may be listed."
+        [
+            "game_transfer_out",
+            "game_aoi_grant",
+            "game_aoi_viewer",
+            "game_native_player",
+            "game_native_member_stats",
+            "game_character_relocation",
+        ],
+        "Only local relocation, Transfer machinery and connection state may be excluded."
     );
 }
 

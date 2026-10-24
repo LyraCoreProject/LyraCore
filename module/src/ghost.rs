@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use crate::{game_aura, game_corpse, game_world_entity};
+use crate::{game_aura, game_world_entity};
 use lyracore_shared::constants::{player_flags, unit_vis_flags};
 
 const GHOST: u32 = 8326;
@@ -40,9 +40,6 @@ pub(crate) fn finish_resurrection(ctx: &ReducerContext, guid: u64) {
         .collect();
     crate::spell::shed_auras(ctx, guid, auras);
     crate::spell::recompute_display(ctx, guid);
-    ctx.db
-        .game_corpse()
-        .guid()
-        .delete(crate::corpse::corpse_guid_for(guid));
+    crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));
     crate::spell::clear_resurrect_request_and_option(ctx, guid);
 }

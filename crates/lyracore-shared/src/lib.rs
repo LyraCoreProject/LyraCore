@@ -34,10 +34,10 @@ pub mod transfer;
 pub mod values_mask;
 pub mod vmap;
 
-// The Gateway maps this exact text to SMSG_ATTACKSWING_DEADTARGET.
+// The native Module handler maps this exact text to SMSG_ATTACKSWING_DEADTARGET.
 pub const ERR_ATTACK_TARGET_DEAD: &str = "target is dead";
 
-// The Gateway maps this exact text to SMSG_ATTACKSWING_CANT_ATTACK.
+// The native Module handler maps this exact text to SMSG_ATTACKSWING_CANT_ATTACK.
 pub const ERR_ATTACK_FRIENDLY: &str = "target is friendly";
 
 pub mod item_property;

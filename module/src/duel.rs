@@ -211,7 +211,7 @@ fn push_event(
 ) {
     let bound = crate::helpers::character_by_guid(ctx, recipient_guid)
         .map(|character| character.owner_identity);
-    ctx.db.game_duel_event().insert(DuelEvent {
+    let event = ctx.db.game_duel_event().insert(DuelEvent {
         id: 0,
         recipient_identity: crate::helpers::event_recipient_identity(bound),
         recipient_guid,
@@ -238,6 +238,7 @@ fn push_event(
             .map(|character| character.name)
             .unwrap_or_default(),
     });
+    crate::native::duel_event(ctx, &event);
 }
 
 fn push_both(ctx: &ReducerContext, duel: &Duel, kind: u8) {

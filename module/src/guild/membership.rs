@@ -3,7 +3,7 @@ use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 use super::{
     add_member, game_guild, game_guild_member, game_guild_rank, lowest_rank, member, push_event,
-    GuildAcceptRequest, GuildInviteRequest,
+    GuildAcceptRequest, GuildInviteRequest, GuildMember,
 };
 
 const OFFICER_RANK: u32 = 1;
@@ -174,10 +174,7 @@ pub(crate) fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), GuildRe
     match leave_outcome(is_leader, member_count)? {
         LeaveOutcome::Disband => disband_guild(ctx, actor.guild_id),
         LeaveOutcome::RemoveSelf => {
-            ctx.db
-                .game_guild_member()
-                .character_guid()
-                .delete(actor_guid);
+            GuildMember::delete(ctx, actor_guid);
             push_event(
                 ctx,
                 actor.guild_id,
@@ -216,10 +213,7 @@ pub(crate) fn remove(
         .filter(|row| row.guild_id == actor.guild_id)
         .ok_or(GuildRefusal::TargetNotInGuild)?;
     remove_gate(actor.rank_id, target.rank_id)?;
-    ctx.db
-        .game_guild_member()
-        .character_guid()
-        .delete(target_guid);
+    GuildMember::delete(ctx, target_guid);
     push_event(
         ctx,
         actor.guild_id,
@@ -261,7 +255,7 @@ pub(crate) fn promote(
         .ok_or(GuildRefusal::TargetNotInGuild)?;
     let new_rank = promote_target_rank(actor.rank_id, target.rank_id, target_guid == actor_guid)?;
     target.rank_id = new_rank;
-    let target = ctx.db.game_guild_member().character_guid().update(target);
+    let target = target.update(ctx);
     let rank_name = rank_name(ctx, actor.guild_id, new_rank);
     push_event(
         ctx,
@@ -314,7 +308,7 @@ pub(crate) fn demote(
         target_guid == actor_guid,
     )?;
     target.rank_id = new_rank;
-    let target = ctx.db.game_guild_member().character_guid().update(target);
+    let target = target.update(ctx);
     let rank_name = rank_name(ctx, actor.guild_id, new_rank);
     push_event(
         ctx,
@@ -353,13 +347,10 @@ pub(crate) fn set_leader(
     let old_leader_name = actor.name.clone();
     let new_leader_name = target.name.clone();
     target.rank_id = LEADER_RANK;
-    ctx.db.game_guild_member().character_guid().update(target);
+    target.update(ctx);
     let mut old_leader = actor;
     old_leader.rank_id = OFFICER_RANK;
-    ctx.db
-        .game_guild_member()
-        .character_guid()
-        .update(old_leader);
+    old_leader.update(ctx);
     guild.leader_guid = target_guid;
     ctx.db.game_guild().guild_id().update(guild);
     push_event(
@@ -410,7 +401,7 @@ pub(super) fn disband_guild(ctx: &ReducerContext, guild_id: u32) {
         );
     }
     for guid in member_guids {
-        ctx.db.game_guild_member().character_guid().delete(guid);
+        GuildMember::delete(ctx, guid);
     }
     let rank_ids: Vec<u64> = ctx
         .db

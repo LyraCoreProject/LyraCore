@@ -1,0 +1,2 @@
+# Unified diffs represent empty context lines with a single space.
+**/host-lock.patch whitespace=-blank-at-eol

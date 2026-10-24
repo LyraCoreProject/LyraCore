@@ -10,877 +10,296 @@ will bite you*.
 
 ---
 
-## 1. The shape of the system in one page
-
-LyraCore serves **unmodified World of Warcraft 1.12.1 clients (build 5875)**. It is two tiers and
-one rule.
-
-| Tier | What it is | What it owns |
-|---|---|---|
-| **SpacetimeDB module** (`module/`, crate `lyracore-module`, compiles to wasm) | Relational tables + reducers | **All durable game state and essentially all game logic.** |
-| **Gateway** (`gateway/`, crate + binary `lyracore-gateway`, native) | The 1.12.1 wire protocol, both listeners, the SpacetimeDB client | **No durable game state.** Protocol framing, ciphers, codecs, routing, and the cross-database gates the module structurally cannot answer. |
-
-The rule: **a client never speaks SpacetimeDB.** A 1.12.1 client speaks SRP6 + TCP + WoW opcodes,
-so the gateway is the only legitimate SpacetimeDB client, and every mutation the world can undergo
-is a reducer call.
-
-```mermaid
-flowchart TB
-    subgraph clients["unmodified 1.12.1 clients (build 5875)"]
-        C1["WoW client"]
-        C2["headless client (real protocol)"]
-    end
-
-    subgraph gw["GATEWAY — lyracore-gateway (stateless, native)"]
-        LOGON["logon listener :3724<br/>SRP6 + realm list (wow_login_messages version_3)"]
-        WORLD["world listener :8085<br/>header cipher + codec + session loop"]
-        SUBS["stdb/ — subscriptions, AOI tracker, relays"]
-    end
-
-    subgraph stdb["SPACETIMEDB — authority (all state, all game logic)"]
-        W0[("lyracore<br/>default world shard")]
-        W1[("lyracore-world-1<br/>world shard (map rule)")]
-        INST[("lyracore-instances<br/>instance pool")]
-        RC[("lyracore-realm: realm-core<br/>accounts · sessions · claims ·<br/>groups · guilds · chat channels ·<br/>Realm Chat Lines · mail ·<br/>auctions · loot rolls ·<br/>Meeting Stone Queue · load samples")]
-    end
-
-    C1 -- "raw TCP · SRP6 · header-encrypted opcodes" --> LOGON
-    C1 --> WORLD
-    C2 --> WORLD
-    LOGON --- SUBS
-    WORLD --- SUBS
-    SUBS -- "reducer calls (gw_* verbs, actor named by guid)" --> W0
-    SUBS -- "subscription deltas (owner token, RLS bypass)" --> W0
-    SUBS <--> W1
-    SUBS <--> INST
-    SUBS <--> RC
-```
-
-Four databases, one gateway tier, one wasm.
-
-The same wasm is published to **every** database. A shard is a database *name*, which is a gateway
-routing fact; module game logic never reads one, and an architecture test fails the build if it starts to
-(`no_module_game_logic_reads_a_shard_id` in `module/src/tripwires.rs`).
-
----
-
-## 2. What runs where — the authority boundary, precisely
-
-### 2.1 The module owns
-
-- **Every durable table** — every `#[table]` declaration lives in `module/src/**`, plus any an
-  installed extension package contributes. §4 and [`schema.md`](./schema.md) §2 hold the summary;
-  `grep -rn '^#\[table(' module/src --include='*.rs' | wc -l` is the count that cannot go stale.
-- **Every state transition** — every `#[reducer]` function, likewise:
-  `grep -rn '^#\[reducer' module/src --include='*.rs' | wc -l`. Roughly a third of them are behind
-  the `debug_reducers` feature and absent from a plain build (§8).
-- **All periodic work** — scheduled tables drive combat swings, creature AI, aura ticks, ground
-  areas, motion republishing, weather, and every reaper.
-  [`schema.md`](./schema.md) §6 lists them all. Nothing on a gateway timer decides gameplay.
-- **All authorization of writes** — a reducer derives its actor from `ctx.sender`.
-
-The [creature cycle](../module/src/creatures/cycle/mod.rs) advances splines before behavior phases check range,
-so those phases read the position the client renders. On sensing firings, aggro precedes assist and
-pet engagement, then EventAI gets casting authority before compatibility casts and threat retargeting.
-Casting and retargeting precede chase, so a ready caster can cast and a chaser follows its current
-target in the same firing. Combat entry precedes regeneration and combat exit; regeneration precedes
-exit, so a unit that leaves combat recovers from the next firing. Returning home takes priority over
-idle wandering. Rout and fear movement follow regeneration. On other firings, EventAI runs after
-rout and fear movement. Package passes run after the Core phases.
-
-The active-cell sweep limits idle and proximity work. Engaged phases use their live engagement rows
-and firing scope, so a Character cannot freeze a fight by moving beyond every active cell. Global
-due-time maintenance, regeneration, combat exit and Package passes run only on the catch-all firing;
-dedicated Instance firings must not repeat them. The
-[maintenance adapter](../module/src/creatures/cycle/ctx.rs) runs decay before respawn, and
-[decay](../module/src/creatures/tick/lifecycle.rs) arms a future respawn deadline to prevent a corpse
-from returning in the same firing.
-
-Simulation candidates come from maintained WorldEntity predicates. Entity insert/update methods stamp
-`regeneration_pending`, `combat_active` and `simulation_indexed` in the same transaction as the game
-fields. A migrated row defaults to `simulation_indexed=false`. Each creature firing backfills at most
-512 rows through an index. Creature phases pause until all rows have current predicates; other
-scheduled reducers and ordinary gameplay continue. The upgrade pause grows with the existing entity
-count, so test it on an isolated copy of the target Shard before rollout. Rows whose health and power
-need no regeneration leave the work set; Rage stays pending until depleted. Pet sensing uses the owner
-index, Character snapshots use the entry index, and dedicated Instance firings advance only that
-Instance's splines. The phase order stays unchanged.
-Operator SQL that changes health, power, death or combat flags must also set
-`simulation_indexed=false`; ordinary reducer writes stamp these predicates automatically.
-
-Creature firings reuse decoded static collision cells within the firing, keyed by generation and cell.
-The cache holds at most 128 cells or 4 MiB of triangles. Dynamic GameObject colliders remain fresh.
-Uncached queries keep owned triangle vectors, and no cache persists across reducer transactions.
-
-#### Navigation legs
-
-The [shared leg search](../crates/lyracore-shared/src/nav.rs) plans short movement legs. Callers
-replan after partial progress. `find_leg_ex` returns waypoints, the number of expanded search nodes,
-and whether the search reached the goal. `find_leg` discards the count and completeness, so `Some`
-alone does not prove that the leg reaches its destination. `None` means the search found no usable
-leg, including invalid coordinates or blocked movement.
-
-Waypoints omit the starting point and a complete exact-target leg ends at `to`. When the target
-condition already holds, the result is `[from]`. A direct leg uses zero expansions. A search that
-cannot reach the goal can return a partial leg to the explored node nearest it; callers must retain
-the distinction between partial progress and reaching the goal.
-
-`find_leg_in_range_ex` uses `LegOutcome` to preserve completeness and retains the expansion count
-even for a blocked search. Its target condition is reaching a walkable point within `stop_dist`
-of `to`, with `[from]` returned immediately when already in range.
-
-### 2.2 The gateway owns
-
-- **Socket IO and protocol state only.** Per-connection: the SRP6 scratch, the header-cipher
-  counters, the current character guid, the set of guids already `CREATE_OBJECT`'d to this client,
-  the issued server seed, and the Chat Flood Limiter's count and mute
-  (`gateway/src/world/chat_flood.rs`). All of it is reconstructable on reconnect; none of it is
-  game state. cmangos keeps the flood mute in memory too and never saves it.
-- **Encoding and decoding.** `wow_login_messages` (`version_3` for 5875) on the logon port,
-  `wow_world_messages::vanilla` on the world port, plus one hand-rolled UpdateMask encoder where
-  gtker 0.3's builder walls the descriptor setters.
-- **Routing across databases.** Which database owns this position, which database holds this
-  character, and the nine-boundary Transfer driver. See §6.
-- **The subscription plane** — the AOI tracker and every `on_insert` relay that turns a table delta
-  into an SMSG. See §5.
-- **Durable Requests in one hop.** A family handler in `gateway/src/world/handlers/` resolves its
-  session facts to an `Actor` once and calls its Store trait. The trait's `Coordinator` impl in
-  `gateway/src/stdb/store/<family>.rs` calls the reducer directly. When the call fails,
-  `classify` in `gateway/src/stdb/connection.rs` decides. A Refusal gets the family's answer and
-  the session continues. Every other failure is a Transport Loss and ends the World Session.
-- **Realm-core routing preserves authority.** `ShardRoutingStore::realm_store` returns the local
-  case only for a single-Shard Realm. An unavailable configured Realm-core returns an infrastructure
-  failure, so Mail, party and Loot Roll operations cannot fall back to a World Shard. Cleanup,
-  Companion Orders and Transfer use the same routing contract. A Realm Presence read that cannot
-  exclude a pending Transfer reports unknown Whereabouts.
-
-### 2.3 The honest exception: gates that live in the gateway
-
-The slogan "no game logic in the gateway" is true of *state*, and very nearly true of *logic* — but
-not perfectly, and the exceptions are structural rather than accidental. A module reducer runs
-inside one database and cannot read another. So a handful of gates that are logically module rules
-are answered by the gateway, which is the only component that can see the whole realm:
-
-| Gate | Why it cannot live in the module | Where |
-|---|---|---|
-| "does this character exist" / "is this character online" for party invites, and "is the new leader online" when the lead passes | realm-core holds no characters and no live entities; one world shard sees only its own | `gateway/src/world/presence.rs` (`of`, `live_anywhere`) |
-| whisper target resolution by name, realm-wide, plus the ignore verdict and the Auto-Reply | same | `presence.rs` (`resolve_all_by_name`, `of`, `auto_reply`), `gateway/src/world/whisper.rs` (`target_facts`, `ignored_anywhere`) |
-| `CMSG_NAME_QUERY` resolution | same | `presence.rs` (`character_anywhere`) |
-| friend/ignore add target resolution by name, realm-wide, plus the friend's race for the Enemy Gate. This is the existence check the Module no longer performs, since Realm-core holds no Character rows for it to check | same | `presence.rs` (`resolve_by_name`, `of`), `gateway/src/world/social.rs` (`resolve_add_contact`) |
-| Speaker Facts: the speaker's race and chat tag for every Realm Chat Line and Chat Channel op | Realm-core holds no Characters and no live entities | `gateway/src/world/handlers/chat.rs` (`speaker_facts`), `stdb/store/chat.rs` |
-| Seeker facts: the race and class of the Character that uses a Meeting Stone, or of every member of the Party it leads, and the class of a Character that accepts an invite into a queued Party. Also whether the client can name the stone's dungeon area, checked before any state changes | Realm-core holds no Characters, and only the Gateway knows which areas the client protocol encodes | `gateway/src/world/handlers/meeting_stone.rs` (`facts_for_join`, the `Area` check in `join`), `gateway/src/world/party.rs` (`AcceptorFacts`) |
-| channel moderation target names, realm-wide, plus whether the target ignores the actor for an invite | same | `gateway/src/world/handlers/channel.rs` (`resolve_online_character`, `ignores`) |
-| the per-listener ignore filter on an ignorable Realm Chat Line | the ignore list is on each listener's Home Shard; the line is on Realm-core | `gateway/src/stdb/world_view.rs` (`realm_chat_appeared`, `Viewer::ignores`) |
-| loot-roll promotion and settlement fan-out across shards | a kill's transaction cannot reach realm-core | `gateway/src/world/loot.rs` |
-| recipient's Account for the mail Delivery Delay | the recipient may be on another shard | `gateway/src/world/mail.rs` (`same_realm_account`) |
-| the Character facts a guild Gate needs: name, team, Realm Account, GM level, online state for the roster | Realm-core holds the guild rows and no Characters | `gateway/src/world/handlers/guild.rs`, Realm Presence through `stdb/reads/guild.rs` (`guild_character_facts`) |
-| "is this Character a Guild Leader" before `CMSG_CHAR_DELETE` | the Home Shard deletes the Character and cannot read Realm-core | `gateway/src/world/handlers/char.rs` (`leads_a_guild`) |
-| "was this guild member, Petition owner or signer deleted" | Realm-core cannot see a World Shard delete a Character | `reconcile_deleted_guild_characters` in `handlers/guild.rs`, run by the character-gone worker in `stdb/subscriptions.rs` |
-
-Each of these re-implements *the read the module gate performed*, not a new rule, and each returns
-the module's own error strings so the client sees identical behaviour on a single-database
-deployment. The rationale is recorded in the maintainers' internal security analysis.
-
-One narrower class sits alongside them. A Durable Read has no reducer to refuse it, so the faction
-refusal that closes an NPC window is answered by the Gateway on the read paths: vendor stock,
-trainer lists, the bank window, and the auction window and its browse pages all call
-`npc_refuses_interaction`. Every other interaction condition stays in the Module: alive,
-selectable, in range, on the same map, and carrying the right `npc_flags`. The Module applies them
-inside the Durable Request the packet drives. The Gateway does not restate them, because two copies
-of one Gate drift.
-
-Account-owned Alpha Test Tools follows a narrower cross-shard path. On every dot-Say command, the
-Gateway reads the current Account authority from Realm-core and conveys it in the one Durable
-Request to the Character's Home Shard. The Module combines that value with the Character's GM level
-and applies the final Gate. World-shard Account rows are not authority, and the Gateway keeps no
-Character authority projection.
-
-Guild Durable Requests take the same path in the other direction. Realm-core holds every guild row
-and no Character rows, so the Gateway reads the Character facts a guild Gate needs from the World
-Shards and conveys them in `realm_guild_op`: the name, the team from the race, the Realm Account, and
-the acting Character's GM level from its Home Shard. The Module applies every guild Gate on
-Realm-core (`module/src/guild/mod.rs`). `.guild create` and `CMSG_GUILD_CREATE` need a GM level
-above 0. The Gateway also answers a GM level of 0 early, before it resolves a leader name
-realm-wide, and the Module refuses the same request if one arrives. The realm-wide reads are
-`resolve_all_by_name` for the leader and Realm Presence for each roster line: a member in the world
-or in transit lists online (`gateway/src/world/handlers/guild.rs`).
-
-A Guild Leader is not deleted. The Gateway reads the membership from its Realm-core cache before it
-asks the Home Shard to delete, and answers `CHAR_DELETE_FAILED` (0x3A, FAILED_GUILD_LEADER in
-mangos). Any other deleted Character is forgotten on Realm-core by the character-gone worker, which
-already reconciles parties. At startup and after a reconnect it checks every Character a Guild, a
-Petition or a Signature names; after a `game_character` delete it checks only that Character. A
-Character row in any Shard's cache ends the check at once. Otherwise a Character absent from two
-durable snapshots of every configured World Shard is sent as `ForgetDeletedCharacter`, as itself,
-with no ownership token. The Module removes the Guild Invite it holds, its membership and its
-Petitions and Signatures. A Guild Invite it sent stays, as in mangos. A deleted Guild Leader passes leadership to the member with the highest Guild Rank,
-earliest join first, and a Guild with nobody left disbands. The op finds nothing on a second call,
-so a pass that a restart interrupts is repeated whole.
-
-Each durable presence snapshot uses a temporary filtered subscription. The ordinary Coordinator
-cache can lag a commit made through another Gateway. The temporary subscription's `on_applied`
-callback samples presence after the server snapshot reaches the cache. Removing the temporary
-subscription leaves the main subscription owning the Character rows. Replacing this step with
-ordinary cache reads could make a live Character appear absent and remove its Guild membership.
-
-The mail Delivery Delay is the same shape. The Gateway reads the Realm Account of the sender and of
-the recipient from the World Shards: the Account Character Owner name, else the name of a local
-Account that is not a shadow Account. It conveys one `same_account` flag in `realm_mail_send`,
-`realm_mail_fence` or `realm_mail_return`. An Account that no Shard can name counts as another
-Account. The Module turns the flag into the delay: the fence stores it in
-`game_mail_escrow.delivery_delay_secs`, and `realm_mail_commit` counts it from the commit.
-
-Account ownership is durable. `stdb/account_sessions.rs` obtains an Account Claim from Realm-core,
-installs its Account Fence on every configured World Shard, and binds the resulting World Session
-Token to the Store. Claims last 60 seconds and renew every 15 seconds. A live claim refuses a second
-login. Renewal failure closes the old socket; the Module already refuses expired or superseded
-requests, including queued movement, mail, auctions, party operations and Transfer completions.
-Release closes matching Shard fences and removes their Character before closing the Realm-core
-claim. Delayed cleanup cannot close a newer generation. Bound identity remains deterministic.
-Each Shard also retains the exact Realm Account id, Account name and Character guid installed by
-admission. A transferred Character may use that provenance with a local shadow Account. A real
-local Account with another name still refuses admission. The provenance survives logout, Transfer
-and Character deletion because Character guids are never reused.
-
-The Module applies two authority checks. `require_operator(ctx)` authorizes the calling Operator
-through `ctx.sender`. `require_actor(ctx, request_actor)` checks the Character and captured World
-Session Token against the Account Claim or Account Fence. An Operator identity is distinct from a
-Character identity.
-
-Account admission requires every configured World Shard and Instance Pool to be available. The
-Character-to-Shard index is a hint; fencing only its current answer would leave an in-flight Transfer
-able to create a second live copy elsewhere. A partial admission starts no renewal. After its claim
-expires, another generation can finish fencing all Shards. Completed fences retain their generation
-so delayed delivery cannot reopen them. The Module's existing Gateway lease schedule closes up to
-64 expired Account Fences and removes their Characters per 15-second pass. A new generation removes
-every live Character retained for that Realm Account, including Characters behind different shadow
-Accounts. A backlog takes additional passes; expired tokens are refused even while their entities
-await cleanup. Gateway routing
-preserves the bound token across Transfer.
-
----
-
-## 3. The realm is several databases
-
-### 3.1 Today's topology
-
-The realm runs as **four SpacetimeDB databases** behind one gateway tier:
-
-| Database | Role |
-|---|---|
-| `lyracore` | default database + world shard |
-| `lyracore-world-1` | world shard (map 1, Kalimdor) |
-| `lyracore-instances` | instance pool (map 36 / Deadmines and friends) |
-| `lyracore-realm` | realm-core: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, the Meeting Stone Queue, load samples |
-
-The **local developer fixture has one database per tier above** (#108) — `lyracore`,
-`lyracore-kalimdor`, `lyracore-instances`, `lyracore-realm` — brought up by `./lyracore dev up`;
-`dev up --single` collapses it to one. Only the second-continent shard is renamed
-(`lyracore-kalimdor`, one shard where production has a growing set); the other three names are
-production's own. What keeps a fixture off a production node is the **node** it is published to —
-every `dev` publish is `-s local`, against the SpacetimeDB on loopback:3000 that `dev up` starts —
-never the name. See "Sharded out of the box, on purpose" in the
-[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
-
-**Direction:** the **region tier** — sub-map seams, the seam menu, region→shard assignments, warm
-mid-walk handoff — was **removed 2026-08-08 (#471)**, an operator decision to keep the alpha on the
-broad splits above (continents, the instance pool, realm-core) and nothing finer. The two region
-tables stay in the module schema, unused, because dropping a table is a destructive migration.
-
-⚠ **All four databases run on one SpacetimeDB node, and that is a licensing constraint as well as a
-deployment fact.** Seven `spacetimedb-*` crates are BSL-1.1, whose Additional Use Grant permits
-production use with "no more than one SpacetimeDB instance". Four *databases* on one *instance* stays
-inside it. Standing up additional SpacetimeDB instances to scale past one node — or running the
-module on behalf of third parties — falls outside that reading and needs a fresh licence review
-before it ships.
-
-### 3.2 The configuration is entirely environment variables, and they fail silently
-
-This is the single sharpest edge in operating LyraCore. The topology lives nowhere but the
-gateway's environment. Omit one and you get a **working-looking single-database gateway**.
-
-| Variable | Controls | Default if unset | Failure mode |
-|---|---|---|---|
-| `LYRACORE_SHARD_MAP` | `(map, bucket) → database` routing rules | `""` → one database | **Silent.** No Kalimdor, no instance pool. |
-| `LYRACORE_SHARD_MAP_FILE` | file fallback for the above (the env var wins) | unset | unreadable file logs an error, then single shard |
-| `LYRACORE_REALM_CORE` | the auth / session / character-index database | `None` | **Silent.** Auth, parties and chat fall back to the world database. |
-| `LYRACORE_COORDINATOR_TOKEN` | the owner token the coordinator connects with | `None` → anonymous | warns, then cannot read `game_account` / `game_session` |
-| `LYRACORE_DATABASE` | default / home database name | `lyracore` | **Silent.** A wrong name connects cleanly to the wrong place. |
-| `LYRACORE_SPACETIMEDB_URL` | node URI, also the base for `/v1/metrics` | `http://127.0.0.1:3000` | loud (connect fails) |
-| `LYRACORE_LOGON_BIND` / `LYRACORE_WORLD_BIND` | listener binds | `0.0.0.0:3724` / `0.0.0.0:8085` | loud |
-| `LYRACORE_AOI` | AOI-scoped subscriptions | **on** (`=0` disables) | — |
-| `LYRACORE_QUEST_LOG` | quest-log descriptor fields | **on** | — |
-| `LYRACORE_MAX_SESSIONS` / `LYRACORE_ADMIT_CONCURRENCY` / `LYRACORE_MAX_ENTERING` | Established World Sessions / queued admissions per tick / admitted World Sessions still entering the world, per Gateway process. Divide the intended realm-wide limit by the Gateway count. | Unset or `0` = unlimited | Malformed values stop serving startup before Coordinator connection or listener binding. Surrounding whitespace is allowed; signs, separators, empty values and overflow are refused. Provision mode does not use these limits. |
-| `LYRACORE_MAX_BLOCKING_THREADS` | Blocking game actions, logon handshakes and Relay encoding | `512` | Malformed or zero falls back to `512`; startup logs the resolved value. |
-| `LYRACORE_MAX_WORLD_CONNECTIONS` | All accepted World sockets, including pre-auth and queued clients | `16384` | Malformed or zero falls back to `16384`; excess sockets close at accept. |
-| `LYRACORE_LOAD_SAMPLE_SECS` | shard load sampling cadence | `30` | — |
-| `LYRACORE_METRICS_DB_IDS` | `<shard>=<hex-identity-prefix>` map for `/v1/metrics` | `""` | warns loudly at startup; occupancy unmeasured |
-| `LYRACORE_WRITER_TRACE` | per-session writer black-box ring | off | — |
-| `LYRACORE_TRANSFER_ABORT_AFTER` | crash-injection harness (aborts a named transfer step) | unset | an unknown step name logs an error and nothing fires |
-| `LYRACORE_PROFILE_SECS` | `--features dhat-heap` builds only | `120` | — |
-
-Each World Session uses one client socket descriptor. Add the shared Coordinator and call-pipe
-sockets, listeners and logon handshakes when setting descriptor limits.
-
-`RUST_LOG` controls logging through `env_logger`. `MALLOC_ARENA_MAX` controls glibc allocation arenas.
-
-### World Session concurrency and limits
-
-World socket reads, writes and authenticated login-queue waits use asynchronous tasks. An idle
-World Session holds no blocking worker. Each session submits one game action at a time to a bounded
-pool shared with logon handshakes. Store interfaces remain synchronous, including Durable Request
-completion waits. The pool bounds those active waits independently of connected player count.
-
-Relay encoding has a separate permit pool, capped at eight workers and one quarter of
-`LYRACORE_MAX_BLOCKING_THREADS`, with a minimum of one. Both pools use Tokio's blocking executor.
-This reserves encoding capacity when game actions await database completion. A one-thread executor
-still serializes both kinds of work. No capacity measurement for this implementation is recorded yet.
-
-The World listener bounds accepted sockets independently through `LYRACORE_MAX_WORLD_CONNECTIONS`.
-`LYRACORE_MAX_SESSIONS` controls admitted players and the authenticated queue. `LYRACORE_MAX_ENTERING`
-limits how many admitted sessions are entering the world at once. A session leaves that state when the
-writer reaches its first world view, when it ends, or after 20 seconds. Later arrivals wait in the Login
-Queue with their position. None of these values is a measured player capacity. Logon still refuses a
-new handshake when it cannot obtain a worker permit.
-
-Pre-auth has a total deadline of ten seconds for logon and fifteen seconds for World. The World budget
-includes socket reads, writes and the session lookup in one asynchronous timeout, then ends before the
-authenticated queue. Queue writes have their own timeout. A queue seat returns on cancellation,
-including when admission races with cancellation.
-
-Each World Session has a non-waiting outbound queue with a 4 MiB reservation budget, capped at 16,384
-entries. Raw frames reserve their wire size, each typed frame reserves 4 KiB and each deferred Relay Job
-reserves 256 bytes until encoding. Compression stays on encoding workers. Each encoded projection is
-also limited to 4 MiB. The writer encodes up to 32 entries per batch; entries after 4 MiB of encoded
-output move to its next batch. A batch with a typed message or a general Relay Job uses a blocking
-hand-off. A batch of movement flushes and encoded packets encodes on the writer task.
-These are queue and encoded-output limits, not an exact bound on arbitrary captured Rust objects.
-A queue entry has ten seconds to finish encoding and writing. Exceeding a limit closes the session;
-critical packets are not silently discarded. Movement keeps its existing coalescing and shedding. Its
-pending Character and creature collections also cap each viewer at 4,096 movers and 2 MiB of estimated
-row storage per collection. Overflow closes the session.
-The SDK pump encodes each movement and creature path row once and hands each SDK message's rows to
-its Shard's movement fan-out thread. That thread finds the nearby viewers and queues one flush per
-viewer. When it falls behind, it takes up to 64 waiting messages at once. The pump waits only when
-64 messages are waiting. A reconnect drains the old thread before it starts a new one, so movement
-keeps its order. A flush can reach a writer after Relay Jobs from later SDK messages. The writer
-checks the created set at flush time, so a DESTROY still wins, but a CREATE can be followed by an
-older movement or path row until the mover's next row.
-
-One writer owns each session's header cipher and preserves FIFO order and contiguous entry batches.
-It combines frames into writes of about 64 KiB. Common movement and combat payloads share immutable
-encoded bodies across observers; visibility and private-recipient checks still run per viewer.
-A supervisor retains cleanup ownership when its caller is cancelled. Accepted game actions finish
-before logout cleanup, so a delayed login cannot recreate a departed session after cleanup. A clean
-read EOF drains direct replies from accepted actions within the outbound age budget before returning
-the admission seat. Cleanup invalidates queued viewer Relays, as it does during Transfer.
-
-Two related startup behaviours have no environment variable, because there is no case for turning
-them off:
-
-- **`RLIMIT_NOFILE` soft is raised to hard** before the runtime is built (`gateway/src/fd_limit.rs`).
-  A stock Docker container is soft 1024 / hard 524288, and #447 died at ~200 sessions with
-  `Too many open files (os error 24)` against 512× of unclaimed headroom. World Sessions now use one
-  client descriptor each. Failure logs and continues — it never blocks startup.
-- **A transient `accept(2)` errno costs one connection, not the realm** (`gateway/src/accept.rs`).
-  `EMFILE`, `ENFILE`, `ECONNABORTED`, `EINTR`, `ENOBUFS`, `ENOMEM` and every unenumerated errno are
-  logged and skipped, with a backoff that settles at one attempt per second under sustained
-  pressure; only `EBADF` / `ENOTSOCK` / `EINVAL` / `EFAULT` — the listener itself being unusable —
-  end the task. Previously any non-`WouldBlock` errno propagated through `try_join!` and ended the
-  process.
-
-The three startup lines to look for, in order:
-
-```text
-INFO  fd limit: RLIMIT_NOFILE soft raised 1024 -> 524288 (hard 524288)
-INFO  tokio blocking pool: max_blocking_threads=512 (LYRACORE_MAX_BLOCKING_THREADS; default 512). ...
-INFO  gateway starting: logon=... world=... db=...@...
-```
-
-All of the above are parsed in `gateway/src/config.rs` (the topology section, then the feature-flag
-section) and `gateway/src/load_sample.rs`.
-
-There are **no `GW_*` compatibility aliases.** Every variable carries the `LYRACORE_` prefix, and an
-un-renamed one is simply unset rather than reported.
-
-**Do not hand-roll the launch.** Use the recipe in [`danger-zones.md`](./danger-zones.md) §3
-verbatim, or the `./lyracore` development CLI documented in
-[CLI command reference](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md).
-
-### 3.3 Syntax of the routing variables
-
-```bash
-# rules: <map_id>:<bucket>=<database>, first match wins; `*` wildcards either side;
-# `<map_id>=<db>` is shorthand for `<map_id>:*=<db>`; separators are , ; or newline; # comments.
-# NOTE: open world is instance_id 0 == bucket 0, so `*:0=<db>` moves every open-world location too.
-LYRACORE_SHARD_MAP="36:*=lyracore-instances, 1:*=lyracore-world-1"
-
-# a single database name; blank, absent, or equal to LYRACORE_DATABASE all mean "unconfigured"
-LYRACORE_REALM_CORE=lyracore-realm
-```
-
-### 3.4 Verifying the topology came up
-
-```
-coordinator connected to shard <db>                       # gateway/src/stdb/connection.rs — per success, reliable
-realm-core active: accounts, sessions, and the ...        # connection.rs
-shard map active: N databases [...]                       # connection.rs — printed ONLY when N > 1
-world listening on 0.0.0.0:8085                           # gateway/src/world/mod.rs — the health marker
-```
-
-⚠ Two traps in that list. `shard map active` is behind an `if conns.len() > 1` guard, so a
-single-database gateway prints **no database list at all** — an empty grep result is
-indistinguishable from a wrong grep pattern. And the line prints the *configured* set
-(`map.databases()`), not the connected one: a shard that failed to connect is still listed, and its
-failure is a separate `log::error!`. Count `coordinator connected to shard` lines to prove
-connectivity.
-
----
-
-## 4. The data model
-
-Full inventory and the load-bearing row shapes are covered in depth in the maintainers' internal
-docs. The summary:
-
-- **281 tables on 2026-09-25**, `game_`-prefixed for core and `pkg_<name>_`-prefixed for packages.
-  External gtker crates keep their `wow_` names and are never renamed. Recount with
-  `grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l`; the per-domain
-  breakdown is [`schema.md`](./schema.md) §2.
-- **128 public / 153 private.** `public` means "subscribable by a client connection". Private tables
-  (`game_account`, `game_session`, `game_operator`, every region/transfer/instance/realm-core table,
-  every Chat Channel table and `game_realm_chat_event`) are readable only over the owner token.
-- **No `#[client_visibility_filter]` RLS filters.** The sixteen owner-scoped filters this document
-  used to list went out in commit `7fda35a` (2026-08-11), with the per-player client connections
-  they were the only thing that applied to. §5.4 and [`schema.md`](./schema.md) §4 give the
-  consequences.
-- **Spatial partitioning is baked into the rows.** `game_world_entity` carries `grid_x`/`grid_y`
-  cell columns and indexes `(map_id, instance_id, grid_x, grid_y)`; seven event/motion tables carry
-  the identical 4-column grid key so an AOI box query is a range scan.
-- **Some entity columns are projections, not state.** A land mount is the clearest case: the
-  `A_MOUNTED` aura row is the mounted state, while `WorldEntity.mount_display_id` and
-  `run_speed_mult_bp` are re-derived from the current aura set by one `mount::recompute_mount`. The
-  module has no single aura-deletion boundary, so every removal path collects a predicate while
-  deleting and calls that recompute afterwards, exactly as vitals and the character sheet already do.
-  Because it re-derives rather than applies a delta, every dismount trigger is idempotent by
-  construction and an expiry cleans up the same way a manual cancellation does. A taxi flight owns the
-  same display field for its duration, and the mount entry points refuse a player in flight.
-- **The indoor rule fails open.** `game_vmap_indoor_cell` is a derived per-cell marker written inside
-  `verify_vmap_generation`. A missing row means outdoors, as does a disabled vmap, an absent active
-  generation, or a probe that finds no WMO group. Features built on it, including the indoor mount
-  refusal and the indoor dismount, are correct and fully shippable with vmap off. A generation
-  verified before the table existed carries no markers until it is verified or imported again.
-
-**Migration discipline** (the law is `danger-zones.md` §1.2): a new column is END-appended with
-`#[default(...)]` — which **cannot** default a `String`, so string data goes in a new table — and a
-new table requires regenerating the gateway bindings. Every schema change must reach **every**
-shard; a partial publish presents as an unrelated mid-session hang, not a loud error.
-
----
-
-## 5. The read plane: subscriptions, AOI, and relays
-
-### 5.1 One kind of connection
-
-Every gateway↔database connection is a **coordinator connection**: one per database in the
-topology (plus a small call-pipe pool per shard for reducer calls, `LYRACORE_CALL_PIPES`),
-authenticated with the **owner token** (bypasses RLS), created in `gateway/src/stdb/connection.rs`.
-It serves every read (it is the cache the gateway reads through) and every reducer call — player
-verbs go through the module's operator-gated `gw_*` surface with the actor named by guid, so no
-per-player connection exists anywhere (#483; the account's "bound identity" is now the derived
-`synthetic_owner_identity`, minted by no connection and presented by no client).
-
-A Coordinator subscribes literal table queries and the Relay table declarations in
-`gateway/src/stdb/connection.rs`. Multi-database configurations also subscribe the Shard control
-tables. A dedicated Realm-core connection omits 30 world catalogues, including creatures, spells,
-quests and taxi routes. It retains item catalogues needed by Mail and auctions, faction relationships,
-and every dynamic, control and Relay table. If Realm-core also hosts a configured World Shard, it
-keeps the full query set. Idle World Shards keep their subscriptions. Reconnect preserves the role.
-
-Publish a Module that contains the required tables before starting this Gateway. An unknown table
-causes subscription setup to fail; it does not produce an empty optional cache.
-
-### 5.2 Area of interest — default on
-
-| Fact | Value | Source |
-|---|---|---|
-| Cell size | 50 yd | `GRID_CELL_SIZE`, `crates/lyracore-shared/src/spatial.rs` |
-| Box | 5×5 cells (`BOX_HALF_SPAN = 2`) | `BOX_HALF_SPAN`, `spatial.rs` |
-| Guaranteed-visible radius | 100 yd (box spans ~250 yd; culls past ~150 yd on an axis) | `GRID_CELL_SIZE * BOX_HALF_SPAN` in `spatial.rs` |
-| Recenter | on map change or leaving the anchor cell — roughly every 7 s of walking | `gateway/src/stdb/aoi.rs` (`GridBox`/recenter logic) |
-| Kill switch | `LYRACORE_AOI=0`; **default on since 2026-07-10** | `gateway/src/config.rs` |
-
-AOI is resolved **in-gateway**: the coordinator connections hold each shard's full cache, and the
-shared `WorldView` cell index (`gateway/src/stdb/world_view.rs` + `world_index.rs`) routes each
-row delta to the sessions whose AOI box covers it. A recenter is an in-memory set diff on the
-shared index — no subscription churn.
-
-> Historical note: the original AOI design used 3×3 boxes of 533 yd cells and was default off. None
-> of those numbers are current; the table above is.
-
-### 5.3 The coordinator-relay law
-
-Every relay hangs off a coordinator connection. Row-driven relays take one of two shapes:
-
-- **Shared per-shard dispatch** (`world_view::arm_shard`, armed once per shard connection and
-  re-armed through `CoordinatorInner::on_reconnect` after a watchdog swap): the broadcast-shaped
-  families (entities, motion, combat, chat, auras, corpses, casts), the recipient-keyed PRIVATE
-  tier (group/resurrect/auction notice/Mail Arrival), and owner-addressed XP, level-up,
-  exploration, quest, item, teleport, addon, reputation, and Instance Removal rows. GUID and bound-identity indexes select one
-  viewer directly; the callback enqueues packet work on that session's FIFO writer. Combat, cast,
-  impact, and emote rows carry the actor's cell. Melee stance uses the attacker's indexed cell, chat
-  uses the sender's, and auras use the target's. The shared cell index selects nearby viewers and
-  named owners on the source Shard, and the job's per-viewer gate stays the final filter. Only
-  corpses, dynamic objects and weather still fan out per shard. `/roll` is a Group Broadcast on the
-  group event relay. The cross-shard group/auction-notice/Mail Arrival twins, Realm Chat
-  Lines (whispers included), Channel Notices and the Account Claim Relay (friend online/offline notices) ride the same
-  dispatchers on the realm-core connection (`arm_realm_private`), armed only when realm-core is a
-  distinct database. The guild relays register in both places too (`wire_guild_relays`):
-  `game_guild_event` rows go to their addressed recipient or to every online member of the Guild on
-  this Gateway, a petition kind (`0x70..=0x7F`) goes through `petition_event_appeared`,
-  `game_guild_member` changes drive the Guild Projection below, and a `game_guild_petition` insert
-  sends the new Petition id to the owner's Guild Charter as ITEM_FIELD_ENCHANTMENT. A relay reads
-  the Realm-core cache once per event through keyed finds and the Gateway-side `GuildIndex` (ranks
-  and members by Guild), never once per recipient.
-- **Realm Chat Lines** (`realm_chat_appeared`). The Module decides who hears a party, raid, guild,
-  officer, channel or whisper line in the transaction that validates it, and writes one
-  `game_realm_chat_event` row with the whole recipient list. Every Gateway gets the row once and
-  delivers it to its own recipients' World Sessions, on any Shard. The one per-listener filter is
-  the listener's own ignore set (`Viewer::ignores`), and only for a line the Module marked
-  ignorable. Channel lines no longer fan out per Shard. Channel Notices
-  (`game_chat_channel_notice_event`) take the same shape. The Account Claim Relay turns a Realm-core
-  claim that opens or closes into friend online and offline notices for same-team viewers who list
-  the Character. A recipient with no registered viewer misses the line, and that includes one on a
-  loading screen during a Transfer. Nothing buffers it.
-- **Group events in insert order** (`group_event_appeared`). The SDK fires one transaction's
-  inserts in hash order, so the first `game_group_event` callback of a transaction takes every row
-  of that transaction for its recipient from the cache, in id order, and the later callbacks find
-  theirs taken (`GroupEventCursor`, one cursor per source database). A filled Meeting Stone Party's
-  `COMPLETE` therefore reaches the client before its `SETQUEUE(0, NONE)`.
-- **Roster Revision Relay** (`world/party_mirror.rs`). Realm-core can change a party that no actor
-  of the op belongs to: a Stone Add moves Seekers into a Party from any World Shard. Realm-core's
-  `game_group_roster_revision` callbacks only mark the party dirty. One worker thread per Gateway
-  reads Realm-core's revision and pushes the roster to each World Shard whose mirror holds an older
-  revision or none, through the retries of `sync_group_mirrors_required`. It arms only when
-  Realm-core is a distinct database and healthy at Gateway start. A change missed while Realm-core
-  is disconnected is the reconnect reconciliation pass's.
-- **Viewer lifetime** (`subscribe_player_events`): world entry prepares relay state, registers one
-  viewer, and performs resident-state sweeps. `PlayerSubscriptions` owns only that registration;
-  dropping it removes the viewer. It owns no row callbacks. A world-port removes the source viewer
-  before cross-shard transfer cascade deletes, then destination entry registers a fresh viewer.
-
-Member Stats run on a timer, not a row callback (`stdb/member_stats_relay.rs`). Every 5 s one
-Gateway thread queues a job on each viewer's writer. The job reads the party authority's membership
-index and every World Shard's entity cache, then sends the fields that changed for each group mate
-outside the viewer's AOI. No shard pump does this work. The viewer keeps the last values it was
-sent, and only writer jobs change that record. A new viewer, an `SMSG_GROUP_LIST` and a
-`CMSG_REQUEST_PARTY_MEMBER_STATS` answer each reset it, so the next tick sends every field. Offline
-follows the absence rule: every configured World Shard must be healthy, or the tick is skipped.
-
-The Guild Projection is PLAYER_GUILDID and PLAYER_GUILDRANK. No Shard stores them. The Gateway
-reads Realm-core membership when it encodes a player CREATE (self in `enter_world`, peers in
-`build_peer_create`) and writes both fields, 0 outside a Guild, so a re-CREATE clears a guild id
-the client kept from a missed removal. It re-sends both fields as a raw VALUES update when a
-`game_guild_member` row is inserted, updated or deleted. That relay queues one job for the member's
-own session and one per viewer near the member's live entity. The job sends only to the member and
-to viewers whose `created` set holds the guid, and it reads membership when it runs, so a late job
-never writes an older value. World entry re-sends the member's own values after viewer
-registration when membership changed between the CREATE read and registration. A World Session
-that signed on also signs off when it leaves, even after a failed world-port.
-
-`game_bot_invite_intent` carries a short-lived party decision and uses a connection callback.
-`game_bot_transfer_intent` is durable work. One bounded dispatcher per World Shard polls through the
-current connection, claims an exact row with a lease, resumes the Escrow sequence, and deletes that
-row only after the destination party mirror is ready and the arrival fence is released. Another
-Gateway process or a restarted process can take an expired claim and repeat the idempotent steps.
-The source row records destination readiness before release. The destination import writes the
-source Module identity, intent id, controller generation and creation time onto the fence in the
-same transaction as the Character. An old retry can therefore distinguish its released arrival
-from a newer crossing that reused the Character-guid transfer id, and it cannot adopt a blank or
-newer fence after its lease expires.
-
-Authenticated Companion Orders use a different relay because target application and the source
-reply can commit on different World Shards. `game_party_command_intent` remains pending in a fixed
-set of fair dispatch lanes while the Gateway certifies the exact current Realm-core roster and
-compares the target Shard's local Group mirror. The target transaction keeps a Command Receipt
-keyed by source Module Identity and intent id. The bounded receipt window travels with its Character
-through Escrow. A retry confirms the receipt on every healthy World Shard before applying gameplay,
-then finishes the source intent and addon reply in one transaction. An unavailable Shard leaves the
-intent pending; an intent recovered after its receipt guarantee ends reports an unknown outcome
-instead of claiming that gameplay did not run. The authenticated issuer's Character-owned sequence
-also travels through Escrow. The target records that causal fence even for an unchanged order and
-refuses a delayed older command before it can replace newer intent.
-
-The owner token bypasses recipient RLS, so delivery is gated gateway-side: recipient-keyed lookups
-plus the `private_recipient_audience` predicate for the private tier, per-viewer gates for the
-broadcast tier.
-
-The SDK cache has only unique-index finders, and a whole-table `iter()` copies every row under the
-lock the pump needs. So relays and per-request reads use Gateway-side indexes, each kept from its
-table's insert, update and delete callbacks and registered before the subscription applies:
-`PartyMembershipIndex`, `ChannelIndex`, `GuildIndex`, `MailEscrowIndex`, `AuctionIndex`,
-`ContactIndex`, `CharacterNameIndex`, and indexes for inventory, skills, quest progress, loot
-entitlement, target auras and enchantment effects. Each lives on its connection generation, so a
-reconnect rebuilds it from the fresh subscription. Indexed inventory and projection reads hold a
-snapshot read guard. The pump holds the write guard only while polling an SDK update, so these reads
-see both the committed cache and all of that update's index callbacks. The guard releases while the
-SDK awaits network input. Pump callbacks enqueue these guarded projections instead of reading them
-synchronously.
-
-Combat, spell cast, spell impact, Speech and emote notifications use native `*_event_live` tables.
-The ordinary predecessors retain their published schemas for additive upgrades and expire through the
-event reaper. The Gateway handles inserts without caching or replaying notification rows. Group events
-still use their ordered committed batch, and login still reads retained System Messages. Read
-[danger-zones.md](./danger-zones.md) before publishing the matching Module and Gateway.
-
-### 5.4 RLS is not a universal backstop — state this plainly
-
-- **Anyone who can reach the node's `:3000` port** can connect with no token, get a minted
-  identity, and call any reducer that is not operator-gated. The player-verb surface is
-  operator-gated (`gw_*`, `require_operator`), and the sender-path player reducers are deleted
-  (#483) — but **the model's safety still rests on `:3000` being unreachable**, and nothing in
-  this repository enforces that today.
-- **RLS does not gate delivery, and there is no RLS left.** The gateway reads every table through
-  the owner token and gates visibility with its own predicates (§5.3). The
-  `client_visibility_filter` rules only ever applied to client-identity subscriptions; those
-  subscriptions are gone, and commit `7fda35a` (2026-08-11) deleted the rules with them.
-- **RLS validation is partial, and knowing which half matters.** Preflight's RLS-filter validation
-  step checks every filter against the generated bindings and **fails** if a filter names an
-  unknown table or column — so an identifier typo no longer survives to production. What preflight
-  still cannot check is whether the node's RLS engine *accepts the query shape*: SpacetimeDB stores
-  this SQL as raw text at schema-extraction time, and a filter it rejects fails `subscribe()` and
-  breaks **every login**. Treat a new filter *shape* as a live-verification item; a renamed column is
-  now caught offline.
-- **The coordinator bypasses RLS by design.** It is the owner. Every read the gateway performs is
-  through that cache, so RLS protects *clients of SpacetimeDB*, not the gateway from itself.
-
----
-
-## 6. Sharding: routing and transfer
-
-This is the sharding model in full: the hierarchy, routing, and transfer.
-
-> **The region tier was removed 2026-08-08 (#471).** Sub-map regions, the seam menu, region→shard
-> assignments, and mid-walk seam detection with its warm handoff are gone from the gateway, by
-> operator decision: the alpha runs on the broad splits alone — the static shard map (continents),
-> the instance pool, and realm-core. `game_map_region` and `game_region_assignment` stay in the
-> module schema, unused, because dropping a table is a destructive migration.
-
-### 6.1 The hierarchy
-
-| Rung | What it is | Where it lives | Who reads it |
-|---|---|---|---|
-| **Cell** | 50 yd square | baked into every spatial row as `grid_x`/`grid_y` | module + gateway |
-| **Shard** | a SpacetimeDB database | `LYRACORE_SHARD_MAP` rules (plus the instance pool's #21 stickiness) | **gateway routing only** |
-
-### 6.2 Resolving "which database owns this position"
-
-```
-world entry:  ShardRoutingStore::settle_home_shard   (gateway/src/stdb/store/shard_routing.rs)
-   1. realm-core's character→shard index — a HINT, confirmed against the shard that
-      actually holds the row, self-healing on disagreement
-   2. the (map_id, instance_id) shard map — shard_for, with instance-pool routing
-      pinning a live instance to the shard that already hosts it (#21)
-```
-
-### 6.3 A cross-database transfer, end to end
-
-A transfer fires when a session's destination resolves to a different database — entering or
-leaving an instance, or a world port onto another continent's shard. (Mid-walk seam crossings,
-which used to drive this same machinery from the movement path, went with the region tier — #471.)
-When it fires, `run_transfer`
-(`gateway/src/world/transfer.rs`) drives nine named boundaries:
-
-| # | Gateway | Module reducer (`module/src/`) |
-|---|---|---|
-| 1 | `src.begin_transfer(plan)` — writes the escrow row, deletes the live entity | `transfer/mod.rs` (`begin_transfer`) |
-| 2 | `dst.ensure_instance(...)` (only when the destination is an instance) | `instance.rs` (`ensure_instance`) |
-| 3 | `dst.import_character_blob(id, blob)` | `transfer/mod.rs` (`import_character_blob`) |
-| 4 | `src.confirm_import(id)` | `transfer/mod.rs` (`confirm_import`) |
-| 5 | `src.finish_transfer(id)` — **delete last** | `transfer/mod.rs` (`finish_transfer`) |
-| 6 | publish the character→shard index to realm-core | `realm_core.rs` |
-| 7 | synchronize the destination party mirror | `world/party.rs` |
-| 8 | `dst.release_transfer(id)`, the arrival fence drops | `transfer/mod.rs` (`release_transfer`) |
-| 9 | `src.evict_instance_population(...)`, best effort and never fails the hop | `instance.rs` (`evict_instance_population`) |
-
-**The escrow row on disk is the authority**, and the transfer id **is** the character guid
-(`transfer_id_for` in `gateway/src/world/transfer.rs`) so recovery needs nothing from gateway RAM.
-While either escrow row exists the character is *in transit*, and four chokepoints refuse to act on
-it: `helpers::entity_by_owner`, `world::player_login`, `begin_transfer`'s own target-side delete, and
-`helpers::character_by_guid`/`character_by_name` (checked in `module/src/transfer/tests.rs`). A scheduled
-reaper sweeps abandoned escrows every 5 s. `LYRACORE_TRANSFER_ABORT_AFTER=<step>` injects a crash
-after any named step for testing.
-
-Afterwards the gateway re-pins the session: new home handle, `bind_shard_session`, a fresh
-`player_login`, a fresh subscription set, then it replays the movement it queued during the hop.
-
-### 6.3b Mail attachments across the boundary
-
-Mail recovery at world entry and after quest completion is best effort. If Realm-core is unavailable,
-recovery logs the failure and leaves Escrow pending for the next recovery attempt. Explicit Mail
-requests still end the World Session on Transport Loss. Recovery never commits Mail to another
-Shard because its authority is unavailable (`gateway/src/world/mail.rs`).
-
-The same problem with different nouns: a mail row is authoritative on realm-core, the sender's purse
-and items are on their own shard, and no transaction spans the two. `module/src/mail_escrow.rs`
-answers it with the same escrow shape — `realm_mail_fence` (the value leaves the purse INTO the
-escrow row, on the sender's shard), `realm_mail_commit` (the mail row plus a delivery receipt keyed
-by the same **caller-chosen** escrow id, on the mail plane), `realm_mail_confirm_delivery` (the
-attestation), `realm_mail_settle` (**delete last** — it refuses without the attestation).
-
-Two things differ from a character transfer and both are deliberate. Recovery is **forward only**:
-the escrow row carries the whole letter, so a stalled fence is re-driven rather than refunded, and
-`reap_mail_escrows` has no rollback arm at all — a source-side read that finds no attestation has
-learned "not yet attested", never "not delivered". And a **single-database** send by a Character does
-not come here: purse and mail row share one transaction there, so `mail::apply_send` writes both
-directly.
-
-A Reward Letter (`module/src/mail_reward.rs`) uses the escrow on every plane. `gw_turn_in_quest`
-files it as a `game_mail_escrow` row held for the recipient, in the turn-in's own transaction, with
-the quest giver in `sender_kind`/`sender_entry` and the Mail Template in `mail_template_id`. No
-purse pays for it. The escrow id comes from the Home Shard's GUID Range, a slot no Gateway mints
-from. The Gateway then drives commit, confirm and settle: at once after the turn-in, at world entry
-and at a mailbox visit (`world::mail::redrive`). On a single-database realm it commits on that
-database. A playerbot's turn-in files none, because no Gateway drives a playerbot's mail.
-
-A Home Shard escrow row, a send or a Reward Letter, travels with its Character across a Transfer,
-keeping its escrow id. The new Home Shard's drive finishes it, and the receipt on Realm-core keeps a
-drive that races the hop to one letter.
-
-Mail Expiry can delete a mail row while a take is in flight. The take fence already moved that
-copper or item out of the row into the escrow row, so expiry cannot delete it. The payout on the
-home shard reads only the escrow row and still completes. A COD payment is fenced on the payer's
-shard before realm-core commits it. If the priced Mail expired, went back or was paid in between,
-the commit sends the payment back to the payer as a Returned Mail, so the fence still settles.
-
-A Letter Copy (`module/src/mail_text.rs`) crosses the same boundary without the escrow shape above.
-`realm_mail_copy_text` sets COPIED and files the item text on the mail plane; `gw_mail_grant_letter`
-then grants the Plain Letter on the Home Shard. Nothing fences the value in between: the Plain Letter
-sells for 0, so a grant lost to a race with the Gateway's own bag-room check costs nothing, and a
-two-step write is simpler than an escrow that protects value nobody can lose.
-
-### 6.4 Cross-shard visibility
-
-Since #468 this is not a feature but a consequence of the shared AOI index: every shard's
-coordinator stream feeds ONE in-process cell index keyed by `(map_id, instance_id, cell)`, and
-guids are globally unique across databases (#103/#108), so a peer on any connected shard renders
-through the same dispatch. With the region tier gone (#471), no open-world map has two owners — the
-remaining splits are per-map and per-instance, whose populations never share an AOI box, so nothing
-straddles a database boundary mid-walk.
-
-### 6.5 Load sampling
-
-A background task samples every connected shard's writer occupancy (from each node's `/v1/metrics`)
-and its live session count every `LYRACORE_LOAD_SAMPLE_SECS` (default 30 s),
-and writes them to realm-core as `game_shard_load` — a ring buffer of
-the last 20 samples per shard, about ten minutes of history, which is what distinguishes sustained
-load from a spike. One `spacetime sql` query against realm-core's `game_shard_load` answers "which
-shard is hot". (Per-region population sampling — `game_region_load`, the `regions=` gauge on the
-SHARDLOAD line — went with the region tier, #471; the table stays in the schema, unwritten.)
-
----
-
-## 7. Extending the server: packages
-
-A package is a self-contained folder of Rust source, discovered by `module/build.rs` at build time
-and codegenned into the module crate under a `pkg_<name>` prefix. Enabling a package is the folder
-existing; disabling is deleting it and republishing. The example packages that exist in the
-maintainers' tree — the playerbots simulation among them — are maintainer-side and are not part of
-this repository.
-
-**Tier-1 packages are trusted compiled module code, not sandboxed code.** A package's Rust compiles
-into the same wasm and runs with full module privileges and an unrestricted `&ReducerContext`.
-`ctx.sender` gates a reducer's *entry*, not a package's table access once inside: one of the
-maintainer-side packages writes other guids' entities directly, and nothing stops it. Installing a
-package is therefore equivalent to accepting a patch to the server, and should be reviewed as one.
-The WASM sandbox around the module is a determinism and blast-radius property, not a safety
-guarantee about what a package may touch — safe untrusted modding is **not** built.
-
-Four `build.rs` text-scanned registry markers are the extension points — `character_owned!(delete |
-restamp | transfer, …)`, `game_tick_pass!`, and `game_hook!(<event>, …)`. A malformed marker or an
-unknown hook event fails the build loudly. Mutating/decorator hooks, a Lua script host, and a
-data-patch layer are explicitly **not** built.
-
----
-
-## 8. Verification
-
-The ladder, and the rule that no rung substitutes for another:
-
-> unit-test green **is not** suite green **is not** played green **is not** measured green.
-
-| Rung | Tool | Catches |
-|---|---|---|
-| Unit / integration | `cargo test --workspace` | logic, planners, codec round-trips, and the source-scan architecture tests |
-| Deploy shape | `lyracore preflight` — the repo's `./lyracore` CLI shim, fully offline | schema and `#[default(...)]` encoding breaks no test can see |
-| Server state | `spacetime sql` | did the transaction actually do it |
-| Wire | the pinned wire-protocol test suite — the real 5875 protocol, no wine (maintainer tooling, not in this repository) | did the server send the right packet |
-| Client | a real 5875 client | visual residue only |
-| Measurement | the maintainers' capacity benchmark + `/v1/metrics` | does it hold up under load |
-
-**Live wire tests against a running stack are operator-gated in attended sessions.** Offline tests
-are unrestricted.
-
-Two rungs are recorded as reproducible verification documents rather than as tooling:
-[`vmap-rollout.md`](./verification/vmap-rollout.md) for exact collision, and
-[`cc-diminishing-returns-probe.md`](./verification/cc-diminishing-returns-probe.md) for crowd-control diminishing
-returns, whose persisted state and removal-time window only a live database can show.
-
-The build carries source-scan architecture tests that fail on architectural drift rather than on
-behaviour, all in `module/src/tripwires.rs` (#379 pulled them out of `lib.rs`): no module code
-outside `region.rs`/`load.rs` may read a shard id; no whole-table `.iter()` over a spatial
-table outside a shrinking whitelist; every character-keyed table must carry
-`character_owned!` markers; character lookups must go through the two chokepoint helpers.
-Each has a companion ratchet test that fails when its whitelist names something that no
-longer needs to be there.
-
-**Debug reducers are compiled out by default.** `module/Cargo.toml` declares `debug_reducers = []`
-with no `default`, and `module/src/debug/` is `#![cfg(feature = "debug_reducers")]` in its entirety.
-Enabling the feature adds 127 reducers: 112 in `debug/`, and 15 more gated one function at a time
-across ten other files, including the not-obviously-named `set_guid_floor` in `auth.rs`.
-`grep -rn 'cfg(feature = "debug_reducers")' module/src` finds every one of them.
-
-What a real deploy actually publishes is not decided here.
-[`danger-zones.md`](./danger-zones.md) §3 is authoritative, and today it publishes **with**
-`--features=debug_reducers` and runs the unoptimized `./target/debug/lyracore-gateway` binary on
-every realm, production included. That is an accepted posture of the alpha, which the README's
-warning banner states plainly, not a contradiction to resolve in this document.
-
----
-
-## 9. Document index
-
-### Architecture and internals
-
-| Document | What it is |
-|---|---|
-| [`../CONTRIBUTING.md`](../CONTRIBUTING.md) | Where a contributor starts, and the three required reads. |
-| **`architecture.md`** (this file) | The current system: tiers, topology, data model, read plane, sharding, packages. |
-| [`../CORE_TERMS.md`](../CORE_TERMS.md) | The thirty-odd terms a contributor meets first. |
-| [`../CONTEXT.md`](../CONTEXT.md) | The full glossary, with an alphabetical index. The words this document and the code use, and the words to avoid. |
-| [`danger-zones.md`](./danger-zones.md) | **Authoritative.** Traps, tooling gotchas, and the exact deploy/verify procedure. |
-| [`testing.md`](./testing.md) | The test tiers and the commands CI runs. |
-| Recipes | Step lists for common changes: [add an opcode](./recipes/add-an-opcode.md), [add a spell effect](./recipes/add-a-spell-effect.md). |
-| [`schema.md`](./schema.md) | The table-level data model. |
-| [`package-api.md`](./package-api.md) | The Package API, version 2: what a Package's Rust half may call, and what core promises about it. |
-| [`actor-verbs.md`](./actor-verbs.md) | Before adding Actor verbs or changing their Gates. |
-| [`package-delta-format.md`](./package-delta-format.md) | Before changing artifact parsing, canonicalization or claim conflicts. |
-| [`accept-policy.md`](./accept-policy.md) | Before changing listener retries or blocking-task capacity. |
-| [`realm-loot-routing.md`](./realm-loot-routing.md) | Before changing Loot Roll promotion, voting or settlement across Shards. |
-| [`instance-lifecycle.md`](./instance-lifecycle.md) | Before changing Instance allocation, Group bindings or pool routing. |
-| [`runtime-script-host.md`](./runtime-script-host.md) | Before changing Runtime Script execution or compiler compatibility. |
-
-### Operating and building
-
-| Document | What it is |
-|---|---|
-| [`quickstart.md`](./quickstart.md) | The shortest path from a clean checkout to a running realm. |
-| [`development-cli.md`](./development-cli.md) | Where the `./lyracore` CLI and its command reference live. |
-| [`data-ingestion.md`](./data-ingestion.md) | Where vanilla content comes from and the licensing firewall. |
-| [`operator-content-api.md`](./operator-content-api.md) | The reducers a tool calls to edit one spawn on a running realm. |
-
-### Verification write-ups
-
-[`verification/`](./verification/README.md) holds the records of behaviour checked against a live
-stack or a real client.
-
-**The work queue is GitHub Issues**, which is the single source of truth for what is open.
+## Native host migration
+
+The replacement runtime uses one Shard for the Realm. Accounts, Characters, maps, Instances and
+Realm-wide state share one Module. Map and Instance identifiers remain gameplay partitions. The
+runtime removes Gateway routing, cross-Shard Transfer and cross-Shard coordination. Its handlers
+and Relays run in the Module; the Gateway crate and process have been removed.
+
+The [native Module](../module/src/native/mod.rs) owns SRP proof verification, logon limits, Sessions,
+world authentication, connection state, request dispatch and response packets. The host supplies
+fresh cryptographic entropy for each SRP challenge. The [AOI tables](../module/src/aoi.rs) maintain
+stable AOI Grants through entity, GameObject, Corpse, DynamicObject and stealth changes. Packet codecs live in the WASM-compatible
+[protocol crate](../crates/lyracore-protocol/src/lib.rs).
+
+The [host extension](../native-host/src/mod.rs) adds logon and world TCP listeners to SpacetimeDB
+standalone. It uses in-process Core connections and one private output subscription for all native clients. It has no
+SDK or WebSocket connection to the Module. The host owns secure random seeds, header ciphers, framing,
+socket deadlines and bounded output queues. It applies Module-issued grant and revoke instructions;
+it does not calculate spatial visibility or gameplay Gates.
+
+`game_native_packet.id` orders delivery instructions within a transaction. A grant's CREATE precedes
+the packets delivered through that grant. A revoke removes its recipient before later packets can
+use it. Logout clears all delivery permissions for that connection before it returns to Character
+selection. The host applies these instructions in order. A failed output subscription closes its
+native clients; the host cannot continue from a missed delivery instruction.
+
+World entry registers its Character as an AOI viewer after self CREATE and before grant replay.
+Sessionless Characters remain AOI subjects but do not allocate viewer Grants. Companion populations
+therefore do not create packet-delivery subscriptions for Characters without native connections.
+
+An expected request failure returns a `native_reply:` envelope containing Module-encoded packets.
+The list is empty for a silent Refusal. The failed transaction rolls back. The host submits that
+envelope to `native_world_reply` on the same connection, which emits the refusal through the ordered output stream. The host does
+not classify gameplay errors. Other failures close the connection.
+
+The native protocol check covers SRP logon, world proof authentication, Character creation,
+enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTROY, stealth visibility,
+melee stance and damage messages, spell casts and interruptions, delayed spell damage, Aura timers,
+pet commands, action bars, Hunter pet rename, care and progression updates,
+inventory gains, swaps and equipment, quest acceptance, credit, rewards, expiry and abandonment,
+vendor purchases, partial sales and buyback, bank access and storage, training, spellbook and skill
+notifications, talent learning and reset, gossip menus and home binding, taxi discovery, fares,
+flight splines and landing, XP and level-up notifications, exploration and rest updates, reputation
+and watched factions, Loot Tags, corpse loot, local Loot Rolls and group money shares,
+object queries, control receipts, unavailable-service replies, same-map teleports and map changes,
+release and reclaim, resurrection offers, Soulstone, spirit-healer interaction, corpse decay,
+zone weather, breath timers and drowning, Speech, whispers, away status, Realm Chat Lines,
+flood limits, Chat Channel operations, friends and ignores, friend presence notifications, `/who`,
+party and raid requests, rosters, target icons, ready checks, minimap pings, random rolls and member stats,
+guild creation, membership, settings, rosters, presence, charters, petitions and emblem purchases,
+trade proposals, offers, acceptance and item and copper exchanges,
+duel requests, countdowns, boundaries, completion and winner announcements,
+Meeting Stone admission, queues, Stone Adds, reminders and party rosters,
+mailbox access, delivery, COD payment, returns, private text and Letter Copies,
+auction browsing, listings, bids, buyouts, cancellation, expiry and private notices,
+AreaTrigger exploration and dungeon entry, creature movement and facing splines,
+GameObject changes, encounter equipment, ground-effect visuals and Instance-removal notices,
+Addon bridge requests and local Companion command admission,
+logout and replacement of a World Session.
+[The native check](../native-host/check.py) runs these paths
+against a disposable Shard and the real Module. It checks rollback after partial Character creation,
+stale Session keys, logon limits, menu changes between display and selection, ordered taxi takeoff,
+stale teleport acknowledgements, recovery after connection loss during loading,
+and failed crafts that send no inventory notifications. Crafts plan reagent consumption and every
+product before committing inventory changes. A triggered inventory change invalidates that plan.
+The check does not establish every gameplay path or real-client presentation. The Gateway crate
+has been removed. Existing multi-Shard deployments still need a separate data migration. Cutover must
+retire old Gateway leases and Account Claims before opening native listeners on an existing Realm.
+Their expiry paths can remove Characters or channel memberships.
+Pending guild Fee Holds must settle before native purchases can proceed. Old Mail Escrows must
+settle before cutover; native mail does not resume the Gateway's cross-Shard delivery steps.
+Old auction Holds must also settle before cutover. Native auctions do not resume those operations.
+The disposable checks do not yet establish safety for that migration.
+
+Corpse AOI uses map, Instance and cell indexes. Bodies and bones keep the same AOI Grant until
+visibility ends or the Corpse expires. Reclaim selects the Actor's own Corpse and checks distance,
+map, Instance, ghost state and the remaining delay. Resurrection offers and self-resurrection fields
+go only to the owner. The native spirit-healer handler checks the selected NPC and interaction range.
+See the [Corpse migration](./danger-zones.md#corpse-aoi-migration) before publishing existing rows.
+
+Weather delivery uses the Module's terrain-derived zone and an index of native connections in that
+zone. Entry sends the current weather; later changes reach only that zone. Client zone claims do not
+change this state. Breath notifications go only to the owner. Death, godmode and world removal clear
+the active breath timer through the WorldEntity lifecycle.
+
+The [chat handler](../module/src/native/chat.rs) resolves whisper targets, reads ignore and away
+state, and selects Speech recipients. Speech queries indexed Character cells independently of AOI
+Grants, so a yell can reach 300 yards. Zone-wide creature messages use the native zone index and
+check map and Instance. Realm Chat Lines use the existing group, guild and channel Gates, with
+ignore checks at delivery. The [channel handler](../module/src/native/channel.rs) resolves named
+targets and sends notices through the Module. Native channel membership survives map changes and
+ends on logout or connection loss. A departing owner hands ownership to a remaining member.
+The [social handler](../module/src/native/social.rs) reads contacts and current native presence.
+Friend notifications use the contact target index. `/who` lists native Characters in the world and
+uses the shared protocol filters; its one-second limit survives Character logout.
+Flood limits belong to the native connection and survive Character logout. Chat Refusals that occur
+before gameplay changes return normally, retaining the flood count. GM command Refusals still use
+transaction rollback. System messages emitted during world entry replay after the connection joins.
+
+The [party handler](../module/src/native/party.rs) resolves names, applies the Module's group rules
+and sends group events to native members. Invites check presence and faction in the same Shard.
+Companions answer invites through their consent Gate. Roster updates include current presence;
+world entry restores the roster and target icons. Ready checks, minimap pings and random rolls have
+independent one-second limits on the native connection.
+The [member-stat handler](../module/src/native/member_stats.rs) answers full requests only for group
+members. A five-second scheduled update per grouped native connection sends deltas for members
+outside AOI. Private snapshots retain the prior Aura and pet fields so removals clear the client.
+Loading members keep their previous snapshot; full requests report that they are loading. Logout
+and group destruction delete the connection's scheduled updates.
+
+The [guild handler](../module/src/native/guild.rs) reads Character facts and applies membership and
+rank permissions in the same transaction. Native rosters include loading Characters as online and
+filter officer notes by the recipient's rank. Guild events select native recipients in the Module;
+membership changes update guild ID and rank through AOI. Login sends the MOTD to the Character and
+sign-on to other members. Map changes do not announce a guild sign-off.
+[Charter and emblem purchases](../module/src/native/petition.rs) commit copper, items, guild state
+and notifications in one transaction. Native purchases create no
+Fee Hold or Fee Decision. Petition signatures use the actual Account and Character facts in the
+Shard. Turn-in creates the Guild and removes its charter and signatures atomically. World entry
+restores charter petition fields and removes inert charters when no legacy Fee Hold is pending.
+
+The [trade handler](../module/src/native/trade.rs) applies requests to the Module's Trade Session.
+Offer and status events select the two native recipients in the same transaction. Exchanges commit
+items, copper and client notifications together. Death, logout, map changes and Instance changes
+cancel trading. Cancellation reaches the departing Character before map loading clears delivery.
+
+The [duel handler](../module/src/native/duel.rs) sends the flag and duel state to its participants.
+The Module's scheduled Duel transitions emit native packets in the same transaction. Completion
+clears both participants' arbiter and team fields, then removes the flag. A winner announcement
+also reaches other native Characters in nearby AOI cells on the same map and Instance.
+
+The [meeting-stone handler](../module/src/native/meeting_stone.rs) reads race and class from the
+Character rows and applies stone admission and queue changes in one transaction. Native Seekers
+use their World Session for presence. Logout removes solo Seekers. Stone Adds send party rosters
+directly, and queue events, reminders and completion select native recipients in the Module.
+
+The [mail handler](../module/src/native/mail.rs) checks the mailbox, resolves the recipient and
+applies the send, take, return or Letter Copy in one transaction. Native mail uses no Escrow.
+Delivery timers send arrival notices to the recipient's World Session. Mail bodies require the
+recipient or possession of the matching Plain Letter. The shared codec bounds inbox replies by
+both the 50-letter limit and the WoW frame size. The item-text query's 32-bit item hint matches
+against owned items and the requested text ID. This avoids comparing the hint with a full 64-bit
+item GUID. The generated request and [CMaNGOS's reader](https://github.com/cmangos/mangos-classic/blob/master/src/game/Mails/MailHandler.cpp)
+leave the following word unnamed; it grants no access to text.
+
+The [pet handler](../module/src/native/pet.rs) applies Hunter pet rename Gates in the Module.
+Pet CREATE sends the owner's summon link and action bar. Removing that AOI Grant clears both.
+Hunter pet state changes send name-cache fields through AOI and care and progression fields only
+to the owner while its AOI Grant holds. Grant replay restores the same recipient-specific fields.
+
+The [auction handler](../module/src/native/auction.rs) checks the actual auctioneer and Character
+before browsing or changing a listing. Listing, bidding and cancellation commit purse changes,
+items, Auction Mail and recipient notices in one transaction. Native requests create no Hold or
+Decision rows. A listing receipt supports a repeated sell request and retains the snapshot for
+expiry. Buyouts require the full offer to be affordable but debit only the accepted price.
+Owner and bidder pages use their Character indexes. Browse filters and usable-item checks run in
+the Module. Native notices go only to their named recipient, including scheduled expiry notices.
+
+The [teleport state](../module/src/native/teleport.rs) belongs to the Module. Near teleports require
+the current counter and mover GUID before movement and gameplay requests resume. Map changes clear
+delivery permissions before removing the live Character. The world-port acknowledgement rebuilds
+the Character in the same Shard and sends self CREATE before AOI replays. Connection loss during
+loading marks the Character offline and retains its destination for the next login. The decoder
+uses the unpacked acknowledgement GUID in build 5875, as read by
+[CMaNGOS](https://github.com/cmangos/mangos-classic/blob/master/src/game/MotionGenerators/MovementHandler.cpp#L240).
+
+AreaTrigger requests check the Actor's map and position against the imported sphere or rotated box
+before exploration credit or teleport. Dungeon entry resolves party ownership and Character
+bindings in the same Shard. Separate Instances retain separate AOI Grants even on the same map.
+
+The [creature movement handler](../module/src/native/creature.rs) sends spline changes through AOI.
+Curved movement stores its complete path before delivery. A late viewer receives CREATE followed
+by the remaining path and duration, with the original spline ID. Completed legs and stops do not
+replay; stationary facing does. Replay requires the creature's current map and Instance to match
+the spline. Unrepresentable curves send a stop instead of malformed path bytes.
+Run-speed changes send the forced-speed packet to the owner and the spline-speed form to
+observers. Stand-state changes acknowledge the owner, including forced standing after damage.
+
+GameObject CREATE is followed by all four rotation fields. Later changes send VALUES through the
+object's AOI Grants, without replacing the client object or its Grant. Encounter equipment changes
+send virtual item displays through creature AOI; late entry restores those displays after CREATE.
+DynamicObjects use a separate AOI layer and a map, Instance and cell index. Ground-area expiry
+removes their Grants and sends DESTROY. Existing rows require the
+[DynamicObject cell backfill](./danger-zones.md#dynamicobject-aoi-migration) before native cutover.
+
+Instance Removal inserts and cancellations send the countdown only to the affected Character.
+World entry replays the remaining time, or clears a stale countdown when none remains. Scheduled
+removal clears the countdown before recalling the Character home.
+
+The native Addon bridge parses STC envelopes before ordinary chat. Its connection limit allows a
+burst of twenty commands, then two per second, and survives Character logout. Replies use the
+recipient Identity's live Character and its native connection. Malformed STC envelopes cannot enter
+ordinary party chat. Commands received at Character selection or during teleport do not run.
+
+Native Companion commands use the local Group roster, leader, Sessionless Action Consent and current
+map and Instance. The Module checks the optional authority member and exact combat target before
+calling the Package command handler. Application, the finished result and the private reply commit
+in one transaction. They need no dispatch lane, claim lease or cross-Shard Command Receipt. The
+Character's issuer sequence and the Package command contract remain in use. A Package result of
+`WaitingForCapacity` rolls back the request.
+
+Companion-initiated invitations and departures run as local Group actions. Consent is checked in
+the same transaction, and a sessionless invitee accepts only when its own consent permits it. The
+existing Package operation names remain, but they create no pending Group Intent.
+
+Sessionless AreaTrigger crossings admit the existing party Instance, move the live entity and
+persist the Character in one transaction. They retain vitals and generate AOI departures and arrivals
+for native observers. A Character Relocation row records the latest completed crossing for a repeat
+call. Controller selection clears it. Party facts prefer live entities over old Realm-core mirrors.
+These crossings complete locally. Published coordination tables and their debug fixtures remain
+for schema compatibility. The native runtime does not coordinate cross-Shard Transfers.
+
+The local CLI starts this native runtime by default. It builds one host, publishes the single
+`lyracore` Shard, and provisions Accounts directly through the Module. Native data lives in
+`.lyracore/native-data`. Startup does not consolidate old Shards or change an existing deployment.
+See [local setup](./quickstart.md#3-start-the-realm) for process ownership and credential files.
+
+The host extension pins SpacetimeDB 2.13.0 at `08e1aba133671f9c631c6e70133a82faa0e7b283`.
+The Module still targets 2.7.1 and passes this native-host compatibility check. Prepare the host with
+`python3 native-host/prepare-host.py --checkout <path> --build`. Build the Module with debug reducers,
+then run `python3 native-host/check.py --host <path>/target/release/spacetimedb-standalone`.
+The listeners read `LYRACORE_NATIVE_LOGON_ADDR`, `LYRACORE_NATIVE_WORLD_ADDR` and
+`LYRACORE_NATIVE_DATABASE`. Each listener is disabled when its address is absent. These local checks
+do not change a deployed Realm.
+
+Admission policy also runs in the Module. The Operator calls `native_set_admission_limits` with
+maximum World Sessions, maximum concurrent entries and admissions per second. Each zero disables
+that limit. Limits default to zero and persist across restarts. Lowering a limit keeps admitted
+World Sessions connected. The Login Queue sends a position on arrival, updates waiting positions
+every second, and admits tickets in order. A finished world entry releases its entry slot; an
+unfinished entry releases that slot after 20 seconds. The World Session retains its capacity slot
+until disconnect. A new authenticated connection replaces an older connection for the same Account
+and joins behind existing waiters.
+Session revocation Gates run before admission and every authenticated request, including ignored
+controls.
+
+The Host treats completed reads and writes as socket activity. Queue position updates keep waiting
+clients connected. Idle sockets and incomplete world frames time out after 90 seconds. The handshake
+still has a 10-second deadline, and writes retain their 2-second deadline.
+
+## Durable state and extension points
+
+The Module owns Characters, Accounts, inventory, groups, guilds, Mail and auction state in one
+Shard. Maps and Instances remain independent gameplay partitions. Spatial reads use the indexed
+partition helpers, and AOI uses map, Instance and cell indexes. Whole-world scans remain subject to
+the Architecture Tests in `module/src/tripwires.rs`.
+
+Native connection, cipher and delivery tables are private. The Host connects in process as the
+Shard publisher. WoW clients receive only the packets selected by the Module. HTTP access still
+requires the existing Operator Gates. Public tables are not a substitute for those Gates.
+
+Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
+source and registry markers. The supported operations and compatibility rules are in
+[the Package API](./package-api.md). Existing Package gameplay code uses the same named operations;
+external test programs that launch the removed Gateway must change to the native Host. Core no
+longer exports `lyracore_test_support::gateway_binary`.
+
+## Verification
+
+Each check establishes a different property. Passing a codec test does not establish native TCP
+behavior, and a protocol check does not establish real-client presentation or world capacity.
+
+| Check | Command or source | Establishes |
+| --- | --- | --- |
+| Module and protocol tests | `cargo test -p lyracore-module --lib --features=debug_reducers`, `cargo test -p lyracore-protocol` | Gameplay calculations, packet layouts and Architecture Tests |
+| Durable Module tests | `module/tests/` with `--ignored` | Transactions in disposable Shards |
+| Build and schema | `./lyracore preflight` | The publish feature set and offline schema extraction |
+| Native protocol | `python3 native-host/check.py --host <binary>` | TCP authentication, requests, committed state and emitted packets |
+| Login Queue | Add `--check-admission` | Admission Gates and a waiting client kept connected past 90 seconds |
+| Crash recovery | Add `--check-recovery` | Restart with durable Character and inventory state, connection cleanup and fresh AOI |
+| Slow readers | Add `--check-slow-readers` | A blocked output connection closes while another client remains responsive |
+| Movement load | Add `--load-clients 1000 --load-seconds 30 --load-group-size 16` | Throughput, latency and final observer positions for the stated fixture |
+| Real client | WoW build 5875 | Presentation and client interaction |
+
+The native checks create temporary keys, ports and data directories. The load check reads Linux
+`/proc` for Host CPU and sampled RSS. It uses the full Module with seed fixtures, pre-established
+world-session keys and synthetic Characters. It does not import a world or run Package AI.
+Heartbeats can coalesce before the 50 ms movement publication tick. The final stop check verifies
+that every expected observer receives the final position. Driver CPU and loop delay are reported
+so a saturated driver cannot be mistaken for the Host's capacity limit.
+
+On an Intel Core i7-7820HQ with four cores and eight threads, a 30-second run with 1,000 Characters
+in groups of 16 achieved 9,615 movements per second. Clients received 4,313,418 movement deliveries
+and all 14,936 final observer positions, with zero closed connections. Host CPU averaged 1.81 cores,
+sampled RSS peaked at 711 MiB, and sampled movement latency was 150 ms at p95. Driver CPU averaged
+0.79 cores. The [recorded metrics](../native-host/results/full-module-1000.json) include the Module
+and Host binary hashes. These measurements cover synthetic movement traffic. Populated-world
+capacity and a controlled comparison with the removed Gateway remain unmeasured.
+
+The crash check kills its own disposable Host with a Character online. Restart clears stale
+native connections, channel membership and AOI, preserves committed position and inventory, and
+permits world entry with the saved Session key. The slow-reader check fills one client's output
+while another sends requests. Its final local run closed the blocked client in 3.66 seconds; the
+healthy client's slowest request took 6.38 ms while other validation work ran.

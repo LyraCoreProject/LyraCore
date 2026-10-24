@@ -140,10 +140,36 @@ pub struct ItemInstance {
     pub item_text_id: u32,
 }
 
+impl ItemInstance {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let row = ctx.db.game_item_instance().insert(row);
+        crate::native::item_changed(ctx, None, Some(&row));
+        row
+    }
+
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let items = ctx.db.game_item_instance();
+        let previous = items.guid().find(self.guid);
+        let row = items.guid().update(self);
+        crate::native::item_changed(ctx, previous.as_ref(), Some(&row));
+        row
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
+        let items = ctx.db.game_item_instance();
+        let previous = items.guid().find(guid);
+        let removed = items.guid().delete(guid);
+        if let Some(row) = previous {
+            crate::native::item_changed(ctx, Some(&row), None);
+        }
+        removed
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_item_instance(ctx, character_guid) {
     let items = ctx.db.game_item_instance();
     for r in items.by_owner_guid().filter(&character_guid).collect::<Vec<_>>() {
-        items.guid().delete(r.guid);
+        crate::ItemInstance::delete(ctx, r.guid);
     }
 });
 // Transfer preserves item GUIDs; legacy formats still need collision checks.
@@ -157,7 +183,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_item_instance(ctx, charac
     for mut r in items.by_owner_guid().filter(&character_guid).collect::<Vec<_>>() {
         if r.owner_identity != identity {
             r.owner_identity = identity;
-            items.guid().update(r);
+            r.update(ctx);
         }
     }
 });

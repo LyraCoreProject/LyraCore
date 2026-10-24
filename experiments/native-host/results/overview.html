@@ -1,0 +1,24 @@
+<!doctype html><html><head><meta charset="utf-8"><style>
+body{font-family:var(--font-sans,system-ui);color:var(--foreground,#252525);margin:0;line-height:1.5}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th{text-align:left;font-weight:500;color:var(--muted-foreground,#666);padding:10px 8px;border-bottom:1px solid var(--border,#ddd)}
+td{padding:14px 8px;border-bottom:1px solid var(--border,#ddd)}
+th:first-child,td:first-child{padding-left:0}th:last-child,td:last-child{padding-right:0}
+.number{font-size:20px;font-weight:650;font-variant-numeric:tabular-nums}
+.ok{color:var(--success,#22804d)}
+.meta{font-size:13px;color:var(--muted-foreground,#666);margin:12px 0 16px}
+.limits{background:var(--muted,#f4f4f4);padding:16px;border-radius:var(--radius,8px);font-size:14px;margin:18px 0 0}
+.limits p{margin:0 0 7px}.limits p:last-child{margin:0}
+@media(max-width:460px){table{font-size:12px}.number{font-size:18px}th,td{padding-left:5px;padding-right:5px}}
+</style></head><body>
+<table aria-label="Final native protocol results">
+<thead><tr><th>Native clients</th><th>Requests / second</th><th>p99 latency</th><th>Delivery</th></tr></thead>
+<tbody><tr><td class="number">500</td><td>5,000</td><td class="number">43–48 ms</td><td class="ok">All updates</td></tr>
+<tr><td class="number">1,000</td><td>10,000</td><td class="number">73–78 ms</td><td class="ok">All updates</td></tr></tbody>
+</table>
+<p class="meta">Three final runs at each size. 10 Hz per Character for 10 seconds, groups of up to 32 visible Characters, plus a one-second drain. Host and driver share a four-core machine.</p>
+<div class="limits"><p><strong>Measured limits</strong></p>
+<p>500 clients all seeing one another built a delivery backlog.</p>
+<p>Repeated cell crossings made rebuilding AOI grants too expensive.</p>
+<p>2,000 native clients filled the shared feed queue and closed the World Sessions.</p></div>
+</body></html>

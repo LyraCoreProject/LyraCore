@@ -700,7 +700,7 @@ impl BeginSink for CtxShard<'_> {
         let entities = self.ctx.db.game_world_entity();
         if let Some(e) = entities.guid().find(guid) {
             crate::world::persist_entity(self.ctx, &e, false);
-            entities.guid().delete(guid);
+            crate::WorldEntity::delete(self.ctx, guid);
         }
     }
     fn export_rows(&self, guid: u64) -> Vec<TableRows> {

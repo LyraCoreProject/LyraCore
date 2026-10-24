@@ -1,5 +1,40 @@
 use super::*;
 
+#[reducer]
+pub fn debug_auction_due(ctx: &ReducerContext, auction_id: u32) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mut auction = ctx
+        .db
+        .game_auction()
+        .id()
+        .find(auction_id)
+        .filter(|auction| auction.item_entry == 509_0620)
+        .ok_or("native auction fixture not found")?;
+    let mut receipt = ctx
+        .db
+        .game_auction_operation_receipt()
+        .operation_id()
+        .find(auction.listing_operation_id)
+        .ok_or("auction receipt not found")?;
+    let due = ctx.timestamp.to_micros_since_unix_epoch() + 250_000;
+    receipt.created_micros = due - i64::from(receipt.duration_minutes) * MICROS_PER_MINUTE;
+    receipt.expires_micros = due;
+    auction.created_at = Timestamp::from_micros_since_unix_epoch(receipt.created_micros);
+    auction.expires_at = Timestamp::from_micros_since_unix_epoch(due);
+    ctx.db.game_auction().id().update(auction);
+    ctx.db
+        .game_auction_operation_receipt()
+        .operation_id()
+        .update(receipt);
+    ctx.db.game_auction_expiry().auction_id().delete(auction_id);
+    ctx.db.game_auction_expiry().insert(AuctionExpiry {
+        scheduled_id: 0,
+        scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+        auction_id,
+    });
+    Ok(())
+}
+
 const BUYOUT_FIXTURE_AUCTION_ID: u32 = 509_0050;
 const BUYOUT_FIXTURE_OPERATION_ID: u64 = 509_0050;
 const BUYOUT_FIXTURE_SELLER_GUID: u64 = 509_0050;
@@ -37,7 +72,6 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         .delete(BUYOUT_FIXTURE_NEW_BID_OPERATION_ID);
 
     let mails = ctx.db.game_mail();
-    let notices = ctx.db.game_auction_notice();
     for recipient_guid in [
         BUYOUT_FIXTURE_SELLER_GUID,
         BUYOUT_FIXTURE_WINNER_GUID,
@@ -54,14 +88,7 @@ pub fn debug_stage_auction_buyout_fixture(ctx: &ReducerContext) -> Result<(), St
         for id in stale_mail {
             crate::mail::delete_mail(ctx, id);
         }
-        let stale_notices: Vec<u64> = notices
-            .by_recipient()
-            .filter(&recipient_guid)
-            .map(|notice| notice.id)
-            .collect();
-        for id in stale_notices {
-            notices.id().delete(id);
-        }
+        clear_auction_notices(ctx, recipient_guid);
     }
 
     let expires_micros = ctx
@@ -408,7 +435,6 @@ pub fn debug_stage_auction_cancel_fixture(
             .operation_id()
             .delete(operation_id);
     }
-    let notices = ctx.db.game_auction_notice();
     for recipient_guid in [seller_guid, CANCEL_FIXTURE_BIDDER_GUID] {
         let stale_mail: Vec<u64> = ctx
             .db
@@ -421,14 +447,7 @@ pub fn debug_stage_auction_cancel_fixture(
         for id in stale_mail {
             crate::mail::delete_mail(ctx, id);
         }
-        let stale_notices: Vec<u64> = notices
-            .by_recipient()
-            .filter(&recipient_guid)
-            .map(|notice| notice.id)
-            .collect();
-        for id in stale_notices {
-            notices.id().delete(id);
-        }
+        clear_auction_notices(ctx, recipient_guid);
     }
 
     if ctx.db.game_auction_house().id().find(HOUSE).is_none() {
@@ -582,7 +601,6 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         .delete(EXPIRY_FIXTURE_UNSOLD_OPERATION_ID);
 
     let mails = ctx.db.game_mail();
-    let notices = ctx.db.game_auction_notice();
     for recipient_guid in [
         EXPIRY_FIXTURE_SELLER_GUID,
         EXPIRY_FIXTURE_WINNER_GUID,
@@ -597,14 +615,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         for id in stale_mail {
             crate::mail::delete_mail(ctx, id);
         }
-        let stale_notices: Vec<u64> = notices
-            .by_recipient()
-            .filter(&recipient_guid)
-            .map(|notice| notice.id)
-            .collect();
-        for id in stale_notices {
-            notices.id().delete(id);
-        }
+        clear_auction_notices(ctx, recipient_guid);
     }
 
     let expires_micros = ctx

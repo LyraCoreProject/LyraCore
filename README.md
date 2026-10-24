@@ -69,29 +69,23 @@ The official Packages live in [LyraCoreProject/packages](https://github.com/Lyra
 
 ## Architecture
 
-A client never talks to SpacetimeDB. The gateway speaks the WoW protocol and turns each client
-action into a reducer call. The realm runs on several databases that all run the same module.
-[`docs/architecture.md`](./docs/architecture.md) has the details.
+Unmodified WoW 1.12.1 clients connect to the Native Host's logon and world TCP listeners.
+The SpacetimeDB Module owns authentication decisions, request handling, gameplay, AOI and packet
+construction. The host handles sockets, entropy, framing, ciphers and ordered delivery.
+One Shard holds the Realm's Accounts, Characters, maps, Instances and shared state.
 
+```mermaid
+flowchart TD
+    Client[WoW 1.12.1 client] -->|WoW TCP protocol| Transport
+    subgraph Host[Native Host / SpacetimeDB process]
+        Transport[Sockets and transport] -->|In-process requests| Module[Module: gameplay, AOI and packets]
+        Module -->|Ordered delivery instructions| Transport
+        Module <--> Realm[One Shard for the Realm]
+    end
 ```
-            unmodified 1.12.1 clients (build 5875)
-                      │  raw TCP · SRP6 · header-encrypted opcodes
-                      ▼
-   ┌────────────────────────────────────────┐
-   │  GATEWAY  (edge / protocol tier)       │  TRUSTED · does ALL socket IO
-   │  SRP6 logon :3724 + realm list         │  holds NO durable game state
-   │  world :8085 · header cipher · codec   │  routes across databases
-   │  stdb/ · subscriptions · AOI · relays  │  stateless, restartable
-   └────────────────────────────────────────┘
-                      │  SpacetimeDB client:  reducer calls ↑   subscription deltas ↓
-                      ▼
-   ┌────────────────────────────────────────┐
-   │  SPACETIMEDB  (authority)              │  ALL state + ALL logic
-   │  world shards · instance pool          │  transactional reducers
-   │  realm-core: accounts · sessions ·     │  same wasm on every database
-   │    groups · guilds · chat · loot rolls │  scheduled work drives the world
-   └────────────────────────────────────────┘
-```
+
+The native runtime is the local development default. The Gateway crate has been removed. [`docs/architecture.md`](./docs/architecture.md#native-host-migration) records coverage
+and the remaining work. Existing multi-Shard Realm data requires a separate migration.
 
 ## Contributing
 

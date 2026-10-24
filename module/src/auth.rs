@@ -886,6 +886,14 @@ pub fn delete_character(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    apply_delete_character(ctx, account_id, character_guid)
+}
+
+pub(crate) fn apply_delete_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    character_guid: u64,
+) -> Result<(), String> {
     let c = ctx
         .db
         .game_character()

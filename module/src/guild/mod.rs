@@ -5,6 +5,7 @@ use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table, Timestam
 
 pub(crate) mod chat;
 mod cleanup;
+pub(crate) use cleanup::forget_deleted_character;
 pub mod fee;
 pub mod membership;
 pub mod petition;
@@ -53,6 +54,29 @@ pub struct GuildMember {
     pub officer_note: String,
     pub realm_account_id: u64,
     pub joined_micros: i64,
+}
+
+impl GuildMember {
+    fn insert(self, ctx: &ReducerContext) -> Self {
+        let row = ctx.db.game_guild_member().insert(self);
+        crate::native::guild_membership_changed(ctx, row.character_guid);
+        row
+    }
+
+    pub(super) fn update(self, ctx: &ReducerContext) -> Self {
+        let previous = member(ctx, self.character_guid);
+        let row = ctx.db.game_guild_member().character_guid().update(self);
+        if previous.is_none_or(|old| (old.guild_id, old.rank_id) != (row.guild_id, row.rank_id)) {
+            crate::native::guild_membership_changed(ctx, row.character_guid);
+        }
+        row
+    }
+
+    pub(super) fn delete(ctx: &ReducerContext, guid: u64) {
+        if ctx.db.game_guild_member().character_guid().delete(guid) {
+            crate::native::guild_membership_changed(ctx, guid);
+        }
+    }
 }
 
 #[table(
@@ -150,6 +174,20 @@ pub fn realm_guild_op(
     let actor_account = request_actor.ownership.as_ref().map_or(0, |t| t.account_id);
     let tokenless = request_actor.ownership.is_none();
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    if matches!(op, GuildOp::ForgetDeletedCharacter) && !tokenless {
+        return Err(format!(
+            "Character {actor_guid} has a World Session and is not forgotten"
+        ));
+    }
+    apply_op(ctx, actor_guid, actor_account, op).map_err(|refusal| refusal.as_tag().to_string())
+}
+
+pub(crate) fn apply_op(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    actor_account: u64,
+    op: GuildOp,
+) -> Result<(), GuildRefusal> {
     match op {
         GuildOp::GmCreate(request) => gm_create(ctx, request).map(|_| ()),
         GuildOp::SignOn { actor_name } => sign_on(ctx, actor_guid, &actor_name),
@@ -180,14 +218,11 @@ pub fn realm_guild_op(
             petition::turn_in(ctx, actor_guid, actor_account, charter_item_guid)
         }
         GuildOp::ClosePetition { petition_id } => petition::close(ctx, actor_guid, petition_id),
-        GuildOp::ForgetDeletedCharacter if !tokenless => {
-            return Err(format!(
-                "Character {actor_guid} has a World Session and is not forgotten"
-            ))
+        GuildOp::ForgetDeletedCharacter => {
+            cleanup::forget_deleted_character(ctx, actor_guid);
+            Ok(())
         }
-        GuildOp::ForgetDeletedCharacter => cleanup::forget_deleted_character(ctx, actor_guid),
     }
-    .map_err(|refusal| refusal.as_tag().to_string())
 }
 
 fn gm_create(ctx: &ReducerContext, request: GuildGmCreate) -> Result<u32, GuildRefusal> {
@@ -211,7 +246,7 @@ fn sign_on(ctx: &ReducerContext, actor_guid: u64, actor_name: &str) -> Result<()
     let mut row = member(ctx, actor_guid).ok_or(GuildRefusal::NotInGuild)?;
     if !actor_name.is_empty() && row.name != actor_name {
         row.name = actor_name.to_string();
-        row = ctx.db.game_guild_member().character_guid().update(row);
+        row = row.update(ctx);
     }
     push_event(
         ctx,
@@ -305,7 +340,7 @@ pub(crate) fn add_member(
         return Err(GuildRefusal::AlreadyInGuild);
     }
     petition::withdraw(ctx, character_guid);
-    ctx.db.game_guild_member().insert(GuildMember {
+    GuildMember {
         character_guid,
         guild_id,
         rank_id,
@@ -314,7 +349,8 @@ pub(crate) fn add_member(
         officer_note: String::new(),
         realm_account_id,
         joined_micros: ctx.timestamp.to_micros_since_unix_epoch(),
-    });
+    }
+    .insert(ctx);
     Ok(())
 }
 
@@ -364,7 +400,7 @@ pub(crate) fn push_event(
     other_guid: u64,
     strings: Vec<String>,
 ) {
-    ctx.db.game_guild_event().insert(GuildEvent {
+    let event = ctx.db.game_guild_event().insert(GuildEvent {
         id: 0,
         guild_id,
         recipient_guid,
@@ -374,6 +410,7 @@ pub(crate) fn push_event(
         strings,
         created_at: ctx.timestamp,
     });
+    crate::native::guild_event(ctx, &event);
 }
 
 #[cfg(test)]

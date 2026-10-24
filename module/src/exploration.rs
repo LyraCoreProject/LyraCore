@@ -1,7 +1,7 @@
 use spacetimedb::{table, ReducerContext, Table};
 
 use crate::xp::XpEvent;
-use crate::{game_xp_event, WorldEntity};
+use crate::WorldEntity;
 
 #[table(accessor = game_character_explored, public, index(accessor = by_character, btree(columns = [character_guid])))]
 pub struct CharacterExplored {
@@ -53,24 +53,29 @@ pub(crate) fn check_area_exploration(
     } else {
         0
     };
-    ctx.db.game_character_explored().insert(CharacterExplored {
+    let explored = ctx.db.game_character_explored().insert(CharacterExplored {
         id: 0,
         character_guid: mover.guid,
         area_bit: area.area_bit,
         area_id: area.id,
         experience: xp,
     });
+    crate::native::explored(ctx, &explored);
     if xp > 0 {
         crate::xp::grant_xp(ctx, mover, xp);
-        ctx.db.game_xp_event().insert(XpEvent {
-            id: 0,
-            recipient_identity: mover.owner_identity,
-            killed_guid: 0,
-            total_exp: xp,
-            created_at: ctx.timestamp,
-            is_kill: false,
-            rested_bonus: 0,
-        });
+        XpEvent::insert(
+            ctx,
+            mover.guid,
+            XpEvent {
+                id: 0,
+                recipient_identity: mover.owner_identity,
+                killed_guid: 0,
+                total_exp: xp,
+                created_at: ctx.timestamp,
+                is_kill: false,
+                rested_bonus: 0,
+            },
+        );
     }
 }
 

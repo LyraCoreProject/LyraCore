@@ -111,7 +111,7 @@ fn set_note(
         return Err(GuildRefusal::TooLong);
     }
     kind.apply(&mut target, &edit.text);
-    ctx.db.game_guild_member().character_guid().update(target);
+    target.update(ctx);
     push_event(
         ctx,
         actor.guild_id,
@@ -250,7 +250,7 @@ pub(super) fn delete_rank(ctx: &ReducerContext, actor_guid: u64) -> Result<(), G
     {
         if row.rank_id == deleted_rank_id {
             row.rank_id = new_lowest_rank_id;
-            ctx.db.game_guild_member().character_guid().update(row);
+            row.update(ctx);
         }
     }
     ctx.db.game_guild_rank().id().delete(deleted_row_id);

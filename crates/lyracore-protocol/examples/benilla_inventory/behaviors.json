@@ -1,0 +1,242 @@
+[
+  {
+    "id": "failed_transfer",
+    "support": "partial",
+    "requests": [
+      "0x00DC"
+    ],
+    "replies": [
+      "0x0040"
+    ],
+    "durable_operations": [],
+    "prerequisites": [
+      "An active Character and a pending Transfer that cannot select its destination."
+    ],
+    "tests": [
+      {
+        "path": "crates/lyracore-protocol/src/codec/movement.rs",
+        "function": "vanilla_transfer_abort_contains_only_the_reason",
+        "rung": "codec"
+      }
+    ],
+    "remaining": [
+      "Real-client loading-screen recovery has not been checked."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "quest_reward",
+    "support": "partial",
+    "requests": [
+      "0x0189",
+      "0x018E"
+    ],
+    "replies": [
+      "0x0191"
+    ],
+    "durable_operations": [
+      "module/src/gw.rs::gw_accept_quest",
+      "module/src/gw.rs::gw_turn_in_quest"
+    ],
+    "prerequisites": [
+      "Quest templates, objectives, giver relations and reward item templates are imported."
+    ],
+    "tests": [
+      {
+        "path": "module/tests/quest_choice_reward.rs",
+        "function": "durable_choice_turn_in_grants_the_selected_item_with_all_other_rewards",
+        "rung": "durable_module"
+      }
+    ],
+    "remaining": [
+      "These scenarios do not establish every quest objective or scripted quest."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "corpse_loot",
+    "support": "partial",
+    "requests": [
+      "0x015D",
+      "0x015E",
+      "0x0108"
+    ],
+    "replies": [
+      "0x0160"
+    ],
+    "durable_operations": [
+      "module/src/gw.rs::gw_open_creature_loot",
+      "module/src/gw.rs::gw_loot_money",
+      "module/src/gw.rs::gw_take_loot"
+    ],
+    "prerequisites": [
+      "Creature loot rows and item templates are imported."
+    ],
+    "tests": [],
+    "remaining": [
+      "These scenarios cover one Character's corpse loot, not every group loot policy."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "transport_movement",
+    "support": "partial",
+    "requests": [
+      "0x00B5",
+      "0x00EE"
+    ],
+    "replies": [
+      "0x00B5",
+      "0x00EE"
+    ],
+    "durable_operations": [
+      "module/src/gw.rs::gw_movement_update"
+    ],
+    "prerequisites": [
+      "World entry and AOI Grants are active."
+    ],
+    "tests": [
+      {
+        "path": "crates/lyracore-protocol/tests/benilla_movement.rs",
+        "function": "benilla_transport_movement_survives_decode_and_relay",
+        "rung": "codec"
+      }
+    ],
+    "remaining": [
+      "Boat simulation, transport membership and acknowledgement counters remain outside these scenarios."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "hunter_pet_lifecycle",
+    "support": "partial",
+    "requests": [
+      "0x0175"
+    ],
+    "replies": [
+      "0x0179"
+    ],
+    "durable_operations": [
+      "module/src/gw.rs::gw_pet_command"
+    ],
+    "prerequisites": [
+      "A tameable creature, its template and the Hunter's spells are present."
+    ],
+    "tests": [
+      {
+        "path": "module/tests/hunter_pet.rs",
+        "function": "tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state",
+        "rung": "durable_module"
+      }
+    ],
+    "remaining": [
+      "Pet bar editing, autocast and stables remain separate work."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "battleground_queue",
+    "support": "unavailable",
+    "requests": [
+      "0x02D3"
+    ],
+    "replies": [
+      "0x02D4"
+    ],
+    "durable_operations": [],
+    "prerequisites": [],
+    "tests": [],
+    "remaining": [
+      "The test proves the empty response, not a playable battleground."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "unavailable_pet_controls",
+    "support": "unavailable",
+    "requests": [
+      "0x0174"
+    ],
+    "replies": [
+      "0x0096"
+    ],
+    "durable_operations": [],
+    "prerequisites": [],
+    "tests": [],
+    "remaining": [
+      "Pet bar changes receive an explicit unavailable response."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "hunter_pet_rename",
+    "support": "partial",
+    "requests": [
+      "0x0177",
+      "0x0052"
+    ],
+    "replies": [
+      "0x0178",
+      "0x0053",
+      "0x00A9"
+    ],
+    "durable_operations": [
+      "module/src/creatures/hunter_pet.rs::gw_pet_rename"
+    ],
+    "prerequisites": [
+      "The Character owns a live Hunter pet with its rename still available."
+    ],
+    "tests": [
+      {
+        "path": "module/tests/hunter_pet.rs",
+        "function": "a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout",
+        "rung": "durable_module"
+      },
+      {
+        "path": "module/tests/hunter_pet.rs",
+        "function": "existing_live_pet_recovers_rename_eligibility_without_losing_other_flags",
+        "rung": "durable_module"
+      }
+    ],
+    "remaining": [
+      "The complete client name-cache refresh and Rename Pet menu need real-client Verification.",
+      "Call Pet and pet restoration after login are not implemented. The name persists after logout, but the pet does not return.",
+      "Reserved-name and profanity lists are not enforced."
+    ],
+    "real_client": "unverified"
+  },
+  {
+    "id": "gossip_conditions",
+    "support": "partial",
+    "requests": [
+      "0x017B",
+      "0x017C"
+    ],
+    "replies": [
+      "0x017D",
+      "0x017E"
+    ],
+    "durable_operations": [
+      "module/src/gw.rs::gw_gossip_select"
+    ],
+    "prerequisites": [
+      "Gossip options and their referenced conditions are imported."
+    ],
+    "tests": [
+      {
+        "path": "module/tests/gossip_conditions.rs",
+        "function": "imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction",
+        "rung": "durable_module"
+      },
+      {
+        "path": "module/tests/gossip_conditions.rs",
+        "function": "a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook",
+        "rung": "durable_module"
+      }
+    ],
+    "remaining": [
+      "Only documented condition kinds are supported. Existing rows need a reimport to recover discarded references."
+    ],
+    "real_client": "unverified"
+  }
+]

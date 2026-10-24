@@ -144,7 +144,7 @@ mod tests {
             Some("scripts")
         );
         assert_eq!(optional_owner("module/src/world.rs"), None);
-        assert_eq!(optional_owner("gateway/src/main.rs"), None);
+        assert_eq!(optional_owner("native-host/src/mod.rs"), None);
         assert_eq!(optional_owner("crates/lyracore-shared/src/lib.rs"), None);
     }
 

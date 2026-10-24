@@ -252,7 +252,7 @@ pub(crate) fn remove_seal_auras(ctx: &ReducerContext, unit_guid: u64) -> u32 {
         .collect();
     let removed = ids.len() as u32;
     for id in ids {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     removed
 }
@@ -275,7 +275,7 @@ pub(crate) fn break_stealth(ctx: &ReducerContext, unit_guid: u64) -> u32 {
         .collect();
     let removed = ids.len() as u32;
     for id in ids {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     removed
 }

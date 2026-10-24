@@ -2,7 +2,7 @@
 
 `Standalone` owns an isolated SpacetimeDB process, CLI configuration and database storage. Tests
 can publish the selected Core Module, call reducers, read durable state and retain failure logs.
-`module_bytes()` and `gateway_binary()` build the tested artifacts once per test process.
+`module_bytes()` builds the tested Module once per test process.
 The test Module enables `debug_reducers` and `package_test_fixture`. The latter registers an inert
 Package named `test_fixture` for Core's ownership and teardown tests; normal publishes omit it.
 

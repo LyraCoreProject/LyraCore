@@ -1,0 +1,637 @@
+use super::*;
+use wow_world_messages::vanilla::{
+    GuildCommand, GuildCommandResult, GuildMember, GuildMember_GuildMemberStatus, PetitionResult,
+    PetitionShowlist, PetitionSignature, SMSG_GUILD_COMMAND_RESULT, SMSG_GUILD_INFO,
+    SMSG_GUILD_INVITE, SMSG_GUILD_QUERY_RESPONSE, SMSG_GUILD_ROSTER, SMSG_PETITION_QUERY_RESPONSE,
+    SMSG_PETITION_SHOWLIST, SMSG_PETITION_SHOW_SIGNATURES, SMSG_PETITION_SIGN_RESULTS,
+};
+
+// SMSG_GUILD_EVENT needs a trailing guid that gtker's vanilla type omits.
+pub const SMSG_GUILD_EVENT_OPCODE: u16 = 0x0092;
+
+pub const GUILD_ROSTER_MAX_BODY: usize = 0x8000 - 4;
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GuildRankView {
+    pub rank_id: u32,
+    pub name: String,
+    pub rights: u32,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GuildView {
+    pub guild_id: u32,
+    pub name: String,
+    pub leader_guid: u64,
+    pub team: u32,
+    pub motd: String,
+    pub info: String,
+    pub emblem_style: u32,
+    pub emblem_color: u32,
+    pub border_style: u32,
+    pub border_color: u32,
+    pub background_color: u32,
+    pub created_micros: i64,
+    pub ranks: Vec<GuildRankView>,
+}
+
+impl GuildView {
+    pub fn rank_rights(&self, rank_id: u32) -> u32 {
+        self.ranks
+            .iter()
+            .find(|rank| rank.rank_id == rank_id)
+            .map_or(0, |rank| rank.rights)
+    }
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct GuildMemberView {
+    pub character_guid: u64,
+    pub guild_id: u32,
+    pub rank_id: u32,
+    pub name: String,
+    pub public_note: String,
+    pub officer_note: String,
+    pub realm_account_id: u64,
+}
+
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct GuildRosterLine {
+    pub guid: u64,
+    pub name: String,
+    pub rank_id: u32,
+    pub level: u8,
+    pub class: u8,
+    pub zone_id: u32,
+    pub days_offline: Option<f32>,
+    pub public_note: String,
+    pub officer_note: String,
+}
+
+pub fn build_guild_query_response(guild: &GuildView) -> SMSG_GUILD_QUERY_RESPONSE {
+    let mut rank_names: [String; 10] = Default::default();
+    for (slot, rank) in rank_names.iter_mut().zip(&guild.ranks) {
+        slot.clone_from(&rank.name);
+    }
+    SMSG_GUILD_QUERY_RESPONSE {
+        id: guild.guild_id,
+        name: guild.name.clone(),
+        rank_names,
+        emblem_style: guild.emblem_style,
+        emblem_color: guild.emblem_color,
+        border_style: guild.border_style,
+        border_color: guild.border_color,
+        background_color: guild.background_color,
+    }
+}
+
+pub fn build_guild_command_result(
+    command: GuildCommand,
+    name: String,
+    result: GuildCommandResult,
+) -> SMSG_GUILD_COMMAND_RESULT {
+    SMSG_GUILD_COMMAND_RESULT {
+        command,
+        string: name,
+        result,
+    }
+}
+
+pub fn build_guild_info(
+    guild: &GuildView,
+    member_count: u32,
+    account_count: u32,
+) -> SMSG_GUILD_INFO {
+    let days = guild.created_micros.div_euclid(86_400_000_000);
+    let (year, month, day) = lyracore_shared::calendar::civil_from_days(days);
+    SMSG_GUILD_INFO {
+        guild_name: guild.name.clone(),
+        created_day: day,
+        created_month: month,
+        created_year: u32::try_from(year).unwrap_or_default(),
+        amount_of_characters_in_guild: member_count,
+        amount_of_accounts_in_guild: account_count,
+    }
+}
+
+pub fn build_guild_roster(
+    guild: &GuildView,
+    lines: impl IntoIterator<Item = GuildRosterLine>,
+) -> SMSG_GUILD_ROSTER {
+    let rights: Vec<u32> = guild.ranks.iter().map(|rank| rank.rights).collect();
+    let mut room = GUILD_ROSTER_MAX_BODY
+        .saturating_sub(4 + guild.motd.len() + 1 + guild.info.len() + 1 + 4 + 4 * rights.len());
+    let mut members = Vec::new();
+    for line in lines {
+        let size = roster_line_size(&line);
+        if size > room {
+            break;
+        }
+        room -= size;
+        members.push(GuildMember {
+            guid: Guid::new(line.guid),
+            status: match line.days_offline {
+                Some(time_offline) => GuildMember_GuildMemberStatus::Offline { time_offline },
+                None => GuildMember_GuildMemberStatus::Online,
+            },
+            name: line.name,
+            rank: line.rank_id,
+            level: Level::new(line.level),
+            class: Class::try_from(line.class).unwrap_or_default(),
+            area: Area::try_from(line.zone_id).unwrap_or(Area::None),
+            public_note: line.public_note,
+            officer_note: line.officer_note,
+        });
+    }
+    SMSG_GUILD_ROSTER {
+        motd: guild.motd.clone(),
+        guild_info: guild.info.clone(),
+        rights,
+        members,
+    }
+}
+
+fn roster_line_size(line: &GuildRosterLine) -> usize {
+    const FIXED: usize = 8 + 1 + 4 + 1 + 1 + 4;
+    let offline = if line.days_offline.is_some() { 4 } else { 0 };
+    let strings = [&line.name, &line.public_note, &line.officer_note];
+    FIXED + offline + strings.iter().map(|s| s.len() + 1).sum::<usize>()
+}
+
+pub fn build_guild_invite(player_name: String, guild_name: String) -> SMSG_GUILD_INVITE {
+    SMSG_GUILD_INVITE {
+        player_name,
+        guild_name,
+    }
+}
+
+/// SMSG_GUILD_DECLINE is 0x086 with one CString; gtker has no vanilla type.
+pub const SMSG_GUILD_DECLINE_OPCODE: u16 = 0x0086;
+
+pub fn build_guild_decline_raw(player_name: &str) -> (u16, Vec<u8>) {
+    let mut body = player_name.as_bytes().to_vec();
+    body.push(0);
+    (SMSG_GUILD_DECLINE_OPCODE, body)
+}
+
+pub fn build_guild_event_raw(kind: u8, strings: &[String], subject_guid: u64) -> (u16, Vec<u8>) {
+    let strings = &strings[..strings.len().min(usize::from(u8::MAX))];
+    let mut body = vec![kind, strings.len() as u8];
+    for string in strings {
+        body.extend_from_slice(string.as_bytes());
+        body.push(0);
+    }
+    if subject_guid != 0 {
+        body.extend_from_slice(&subject_guid.to_le_bytes());
+    }
+    (SMSG_GUILD_EVENT_OPCODE, body)
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PetitionView {
+    pub petition_id: u32,
+    pub charter_item_guid: u64,
+    pub owner_guid: u64,
+    pub name: String,
+    pub signers: Vec<u64>,
+}
+
+pub fn build_petition_showlist(npc_guid: u64) -> SMSG_PETITION_SHOWLIST {
+    use lyracore_shared::guild::{CHARTER_COST_COPPER, CHARTER_DISPLAY_ID, GUILD_CHARTER_ENTRY};
+    SMSG_PETITION_SHOWLIST {
+        npc: Guid::new(npc_guid),
+        petitions: vec![PetitionShowlist {
+            index: 1,
+            charter_entry: GUILD_CHARTER_ENTRY,
+            charter_display_id: CHARTER_DISPLAY_ID,
+            guild_charter_cost: CHARTER_COST_COPPER,
+            unknown1: 1,
+        }],
+    }
+}
+
+pub fn build_petition_show_signatures(petition: &PetitionView) -> SMSG_PETITION_SHOW_SIGNATURES {
+    SMSG_PETITION_SHOW_SIGNATURES {
+        item: Guid::new(petition.charter_item_guid),
+        owner: Guid::new(petition.owner_guid),
+        petition: petition.petition_id,
+        signatures: petition
+            .signers
+            .iter()
+            .map(|signer| PetitionSignature {
+                signer: Guid::new(*signer),
+                unknown1: 0,
+            })
+            .collect(),
+    }
+}
+
+pub fn build_petition_query_response(petition: &PetitionView) -> SMSG_PETITION_QUERY_RESPONSE {
+    use lyracore_shared::guild::{MAX_PETITION_SIGNATURES, MIN_PETITION_SIGNATURES};
+    SMSG_PETITION_QUERY_RESPONSE {
+        petition_id: petition.petition_id,
+        charter_owner: Guid::new(petition.owner_guid),
+        guild_name: petition.name.clone(),
+        unknown_flags: 1,
+        minimum_signatures: MIN_PETITION_SIGNATURES as u32,
+        maximum_signatures: MAX_PETITION_SIGNATURES as u32,
+        ..SMSG_PETITION_QUERY_RESPONSE::default()
+    }
+}
+
+/// gtker's `owner` field carries the signer guid.
+pub fn build_petition_sign_results(
+    charter_item_guid: u64,
+    signer_guid: u64,
+    result: PetitionResult,
+) -> SMSG_PETITION_SIGN_RESULTS {
+    SMSG_PETITION_SIGN_RESULTS {
+        petition: Guid::new(charter_item_guid),
+        owner: Guid::new(signer_guid),
+        result,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn guild() -> GuildView {
+        GuildView {
+            guild_id: 7,
+            name: "Tracer Guild".into(),
+            motd: "No message set.".into(),
+            ranks: lyracore_shared::guild::DEFAULT_RANKS
+                .iter()
+                .zip(0u32..)
+                .map(|((name, rights), rank_id)| GuildRankView {
+                    rank_id,
+                    name: (*name).into(),
+                    rights: *rights,
+                })
+                .collect(),
+            emblem_style: 1,
+            emblem_color: 2,
+            border_style: 3,
+            border_color: 4,
+            background_color: 5,
+            ..GuildView::default()
+        }
+    }
+
+    #[test]
+    fn query_response_writes_ten_rank_names_and_the_emblem() {
+        let message = ServerOpcodeMessage::SMSG_GUILD_QUERY_RESPONSE(Box::new(
+            build_guild_query_response(&guild()),
+        ));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        let mut expected = 7u32.to_le_bytes().to_vec();
+        expected.extend_from_slice(b"Tracer Guild\0");
+        expected.extend_from_slice(b"Guild Master\0Officer\0Veteran\0Member\0Initiate\0");
+        expected.extend_from_slice(&[0; 5]);
+        for value in 1u32..=5 {
+            expected.extend_from_slice(&value.to_le_bytes());
+        }
+        assert_eq!(&wire[4..], expected.as_slice());
+        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0055);
+    }
+
+    #[test]
+    fn guild_invite_writes_the_inviter_and_guild_name() {
+        let message = ServerOpcodeMessage::SMSG_GUILD_INVITE(Box::new(build_guild_invite(
+            "Alice".into(),
+            "Tracer Guild".into(),
+        )));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        let mut expected = b"Alice\0".to_vec();
+        expected.extend_from_slice(b"Tracer Guild\0");
+        assert_eq!(&wire[4..], expected.as_slice());
+        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x0083);
+    }
+
+    #[test]
+    fn guild_decline_encodes_raw_as_one_cstring_at_its_own_opcode() {
+        let (opcode, body) = build_guild_decline_raw("Bob");
+        assert_eq!(opcode, 0x0086);
+        assert_eq!(body, b"Bob\0");
+    }
+
+    #[test]
+    fn guild_event_writes_the_subject_guid_after_the_strings_only_when_named() {
+        let (opcode, signed_on) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::SIGNED_ON,
+            &["Alice".to_string()],
+            0x0102,
+        );
+        assert_eq!(opcode, 0x0092);
+        let mut expected = vec![12, 1];
+        expected.extend_from_slice(b"Alice\0");
+        expected.extend_from_slice(&[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        assert_eq!(signed_on, expected);
+
+        let (_, motd) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::MOTD,
+            &["No message set.".to_string()],
+            0,
+        );
+        let mut expected = vec![2, 1];
+        expected.extend_from_slice(b"No message set.\0");
+        assert_eq!(motd, expected);
+    }
+
+    #[test]
+    fn joined_writes_one_string_then_the_new_members_guid() {
+        let (opcode, joined) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::JOINED,
+            &["Bob".to_string()],
+            0x0102,
+        );
+        assert_eq!(opcode, 0x0092);
+        let mut expected = vec![3, 1];
+        expected.extend_from_slice(b"Bob\0");
+        expected.extend_from_slice(&0x0102u64.to_le_bytes());
+        assert_eq!(joined, expected);
+    }
+
+    #[test]
+    fn promotion_writes_the_actor_target_and_new_rank_name_with_no_trailing_guid() {
+        let (opcode, promotion) = build_guild_event_raw(
+            lyracore_shared::guild::event_kind::PROMOTION,
+            &[
+                "Leader".to_string(),
+                "Bob".to_string(),
+                "Member".to_string(),
+            ],
+            0,
+        );
+        assert_eq!(opcode, 0x0092);
+        let mut expected = vec![0, 3];
+        expected.extend_from_slice(b"Leader\0");
+        expected.extend_from_slice(b"Bob\0");
+        expected.extend_from_slice(b"Member\0");
+        assert_eq!(promotion, expected);
+    }
+
+    fn self_create(guild_id: u32, guild_rank: u32) -> wow_world_messages::vanilla::UpdatePlayer {
+        let entity = EntityView {
+            guid: 1,
+            type_mask: lyracore_shared::constants::type_mask::PLAYER_BIT,
+            unit_bytes_0: 1 | (1 << 8) | (1 << 24),
+            guild_id,
+            guild_rank,
+            ..EntityView::default()
+        };
+        let create = build_create_object(&entity, CreateKind::SelfPlayer, &[], &[]).unwrap();
+        let [Object::CreateObject2 {
+            mask2: UpdateMask::Player(player),
+            ..
+        }] = create.objects.as_slice()
+        else {
+            panic!("the self CREATE must carry a player mask");
+        };
+        player.clone()
+    }
+
+    #[test]
+    fn the_self_create_carries_the_guild_projection() {
+        let player = self_create(7, 3);
+        assert_eq!(player.player_guildid(), Some(7));
+        assert_eq!(player.player_guildrank(), Some(3));
+    }
+
+    #[test]
+    fn the_self_create_writes_an_explicit_zero_outside_any_guild() {
+        let player = self_create(0, 0);
+        assert_eq!(player.player_guildid(), Some(0));
+        assert_eq!(player.player_guildrank(), Some(0));
+    }
+
+    #[test]
+    fn the_character_list_carries_each_guild_id() {
+        let characters = [CharacterView {
+            guid: 1,
+            name: "Leader".into(),
+            race: 1,
+            class: 1,
+            guild_id: 7,
+            ..CharacterView::default()
+        }];
+        let list = build_char_enum(&characters).unwrap();
+        assert_eq!(list.characters[0].guild_id, 7);
+    }
+
+    #[test]
+    fn guild_values_carry_only_the_guild_id_and_rank() {
+        let (opcode, body) = build_guild_values(0x0102, 7, 3);
+        assert_eq!(opcode, 0x00A9);
+        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        assert_eq!(updates.len(), 1);
+        assert_eq!(updates[0].guid, 0x0102);
+        assert_eq!(updates[0].fields, vec![(191, 7), (192, 3)]);
+    }
+
+    #[test]
+    fn guild_info_reads_the_founding_date_in_whole_utc_days() {
+        let mut guild = guild();
+        guild.created_micros = 1_790_207_999_000_000;
+        let info = build_guild_info(&guild, 3, 2);
+        assert_eq!(
+            (info.created_day, info.created_month, info.created_year),
+            (23, 9, 2026)
+        );
+        assert_eq!(info.amount_of_characters_in_guild, 3);
+        assert_eq!(info.amount_of_accounts_in_guild, 2);
+    }
+
+    #[test]
+    fn roster_stops_before_the_line_that_would_pass_the_client_limit() {
+        let long_note = "n".repeat(31);
+        let line = |guid| GuildRosterLine {
+            guid,
+            name: "Membername".into(),
+            rank_id: 4,
+            level: 60,
+            class: 1,
+            zone_id: 12,
+            days_offline: Some(1.5),
+            public_note: long_note.clone(),
+            officer_note: long_note.clone(),
+        };
+        let roster = build_guild_roster(&guild(), (1..=600).map(line));
+        let message = ServerOpcodeMessage::SMSG_GUILD_ROSTER(Box::new(roster.clone()));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        assert_eq!(roster.members.len(), 333);
+        assert_eq!(wire.len() - 4, 32_679);
+    }
+
+    fn client_packet(opcode: u32, body: &[u8]) -> ClientOpcodeMessage {
+        let mut framed = ((body.len() + 4) as u16).to_be_bytes().to_vec();
+        framed.extend_from_slice(&opcode.to_le_bytes());
+        framed.extend_from_slice(body);
+        ClientOpcodeMessage::read_unencrypted(&mut framed.as_slice()).unwrap()
+    }
+
+    fn server_body(message: ServerOpcodeMessage) -> (u16, Vec<u8>) {
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        (u16::from_le_bytes([wire[2], wire[3]]), wire[4..].to_vec())
+    }
+
+    #[test]
+    fn save_guild_emblem_reads_the_vendor_then_five_design_values() {
+        let mut body = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        for value in [11u32, 12, 3, 14, 15] {
+            body.extend_from_slice(&value.to_le_bytes());
+        }
+        let ClientOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(save) = client_packet(0x01F1, &body) else {
+            panic!("0x1F1 is MSG_SAVE_GUILD_EMBLEM");
+        };
+        assert_eq!(save.vendor.guid(), 0xF130_0000_0000_0042);
+        assert_eq!(
+            [
+                save.emblem_style,
+                save.emblem_color,
+                save.border_style,
+                save.border_color,
+                save.background_color
+            ],
+            [11, 12, 3, 14, 15]
+        );
+    }
+
+    #[test]
+    fn save_guild_emblem_answers_one_result_word() {
+        use wow_world_messages::vanilla::{GuildEmblemResult, MSG_SAVE_GUILD_EMBLEM_Server};
+        for (result, word) in [
+            (GuildEmblemResult::Success, 0u32),
+            (GuildEmblemResult::NoGuild, 2),
+            (GuildEmblemResult::NotGuildMaster, 3),
+            (GuildEmblemResult::NotEnoughMoney, 4),
+            (GuildEmblemResult::NoMessage, 5),
+        ] {
+            let message =
+                ServerOpcodeMessage::MSG_SAVE_GUILD_EMBLEM(MSG_SAVE_GUILD_EMBLEM_Server { result });
+            assert_eq!(server_body(message), (0x01F1, word.to_le_bytes().to_vec()));
+        }
+    }
+
+    #[test]
+    fn tabard_vendor_activate_carries_the_full_npc_guid_both_ways() {
+        use wow_world_messages::vanilla::MSG_TABARDVENDOR_ACTIVATE;
+        let guid = 0xF130_0000_0000_0042u64;
+        let ClientOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(activate) =
+            client_packet(0x01F2, &guid.to_le_bytes())
+        else {
+            panic!("0x1F2 is MSG_TABARDVENDOR_ACTIVATE");
+        };
+        assert_eq!(activate.guid.guid(), guid);
+        let window = ServerOpcodeMessage::MSG_TABARDVENDOR_ACTIVATE(MSG_TABARDVENDOR_ACTIVATE {
+            guid: Guid::new(guid),
+        });
+        assert_eq!(server_body(window), (0x01F2, guid.to_le_bytes().to_vec()));
+    }
+
+    #[test]
+    fn tabard_changed_is_event_nine_with_nothing_after_it() {
+        let (opcode, body) =
+            build_guild_event_raw(lyracore_shared::guild::event_kind::TABARD_CHANGED, &[], 0);
+        assert_eq!((opcode, body), (0x0092, vec![9, 0]));
+    }
+
+    fn night_watch() -> PetitionView {
+        PetitionView {
+            petition_id: 0x2A,
+            charter_item_guid: 0x4000_0000_0000_0101,
+            owner_guid: 0x0102,
+            name: "Night Watch".into(),
+            signers: vec![0x0201, 0x0202],
+        }
+    }
+
+    #[test]
+    fn petition_showlist_lists_the_guild_charter_at_ten_silver() {
+        let mut expected = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        expected.push(1);
+        for word in [1u32, 5863, 16161, 1000, 1] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        let message = ServerOpcodeMessage::SMSG_PETITION_SHOWLIST(Box::new(
+            build_petition_showlist(0xF130_0000_0000_0042),
+        ));
+        assert_eq!(server_body(message), (0x01BC, expected));
+    }
+
+    #[test]
+    fn petition_show_signatures_lists_each_signer_with_a_zero_word() {
+        let mut expected = vec![0x01, 0x01, 0, 0, 0, 0, 0, 0x40];
+        expected.extend_from_slice(&[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x2A, 0, 0, 0]);
+        expected.push(2);
+        expected.extend_from_slice(&[0x01, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[0x02, 0x02, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]);
+        let message = ServerOpcodeMessage::SMSG_PETITION_SHOW_SIGNATURES(Box::new(
+            build_petition_show_signatures(&night_watch()),
+        ));
+        assert_eq!(server_body(message), (0x01BF, expected));
+    }
+
+    #[test]
+    fn petition_query_response_matches_the_mangos_layout() {
+        let mut expected = vec![0x2A, 0, 0, 0];
+        expected.extend_from_slice(&[0x02, 0x01, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(b"Night Watch\0");
+        expected.push(0);
+        for word in [1u32, 9, 9] {
+            expected.extend_from_slice(&word.to_le_bytes());
+        }
+        expected.extend_from_slice(&[0; 20]);
+        expected.extend_from_slice(&[0; 2]);
+        expected.extend_from_slice(&[0; 16]);
+        let message = ServerOpcodeMessage::SMSG_PETITION_QUERY_RESPONSE(Box::new(
+            build_petition_query_response(&night_watch()),
+        ));
+        assert_eq!(server_body(message), (0x01C7, expected));
+    }
+
+    #[test]
+    fn petition_sign_results_carry_the_charter_the_signer_and_the_result() {
+        let mut expected = vec![0x01, 0x01, 0, 0, 0, 0, 0, 0x40];
+        expected.extend_from_slice(&[0x01, 0x02, 0, 0, 0, 0, 0, 0]);
+        expected.extend_from_slice(&[1, 0, 0, 0]);
+        let message =
+            ServerOpcodeMessage::SMSG_PETITION_SIGN_RESULTS(Box::new(build_petition_sign_results(
+                0x4000_0000_0000_0101,
+                0x0201,
+                PetitionResult::AlreadySigned,
+            )));
+        assert_eq!(server_body(message), (0x01C1, expected));
+    }
+
+    #[test]
+    fn turn_in_petition_results_are_one_word() {
+        use wow_world_messages::vanilla::SMSG_TURN_IN_PETITION_RESULTS;
+        let message =
+            ServerOpcodeMessage::SMSG_TURN_IN_PETITION_RESULTS(SMSG_TURN_IN_PETITION_RESULTS {
+                result: PetitionResult::NeedMore,
+            });
+        assert_eq!(server_body(message), (0x01C5, vec![4, 0, 0, 0]));
+    }
+
+    #[test]
+    fn petition_buy_reads_the_npc_and_the_name() {
+        let mut body = 0xF130_0000_0000_0042u64.to_le_bytes().to_vec();
+        body.extend_from_slice(&[0; 12]);
+        body.extend_from_slice(b"Night Watch\0");
+        body.extend_from_slice(&[0; 40 + 2 + 1]);
+        body.extend_from_slice(&[1, 0, 0, 0]);
+        body.extend_from_slice(&[0; 4]);
+        let ClientOpcodeMessage::CMSG_PETITION_BUY(buy) = client_packet(0x01BD, &body) else {
+            panic!("0x1BD is CMSG_PETITION_BUY");
+        };
+        assert_eq!(buy.npc.guid(), 0xF130_0000_0000_0042);
+        assert_eq!(buy.name, "Night Watch");
+    }
+}

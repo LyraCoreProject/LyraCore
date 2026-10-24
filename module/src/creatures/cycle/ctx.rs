@@ -260,6 +260,7 @@ impl MotionSink for CtxWorld<'_> {
                 leg.map_id,
                 leg.instance_id,
                 (e.grid_x, e.grid_y),
+                None,
             );
         }
     }
@@ -851,7 +852,7 @@ impl ThreatSink for CtxWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut row) = melee.attacker_guid().find(creature) {
             row.target_guid = victim;
-            melee.attacker_guid().update(row);
+            crate::combat::MeleeAttack::update(self.ctx, row);
         }
         let entities = self.ctx.db.game_world_entity();
         if let Some(mut c) = entities.guid().find(creature) {
@@ -980,7 +981,7 @@ impl RoutSink for CtxWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut row) = melee.attacker_guid().find(guid) {
             row.rout_ends_ms = ends_ms;
-            melee.attacker_guid().update(row);
+            crate::combat::MeleeAttack::update(self.ctx, row);
         }
     }
 }
@@ -1083,22 +1084,25 @@ impl PetSink for CtxWorld<'_> {
             Some(mut row) => {
                 if row.target_guid != victim {
                     row.target_guid = victim;
-                    melee.attacker_guid().update(row);
+                    crate::combat::MeleeAttack::update(self.ctx, row);
                 }
             }
             None => {
-                melee.insert(MeleeAttack {
-                    attacker_guid: guid,
-                    target_guid: victim,
-                    last_swing_ms: 0,
-                    ranged_spell_id: 0,
-                    last_offhand_swing_ms: 0,
-                    rout_ends_ms: 0,
-                    pursuit_ends_ms: 0,
-                    leash_x: 0.0,
-                    leash_y: 0.0,
-                    swing_error: 0,
-                });
+                crate::combat::MeleeAttack::insert(
+                    self.ctx,
+                    MeleeAttack {
+                        attacker_guid: guid,
+                        target_guid: victim,
+                        last_swing_ms: 0,
+                        ranged_spell_id: 0,
+                        last_offhand_swing_ms: 0,
+                        rout_ends_ms: 0,
+                        pursuit_ends_ms: 0,
+                        leash_x: 0.0,
+                        leash_y: 0.0,
+                        swing_error: 0,
+                    },
+                );
             }
         }
         let entities = self.ctx.db.game_world_entity();

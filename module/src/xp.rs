@@ -45,6 +45,20 @@ pub struct LevelupEvent {
     pub spirit_gained: u32,
 }
 
+impl XpEvent {
+    pub(crate) fn insert(ctx: &ReducerContext, guid: u64, event: Self) {
+        crate::native::xp(ctx, guid, &event);
+        ctx.db.game_xp_event().insert(event);
+    }
+}
+
+impl LevelupEvent {
+    fn insert(ctx: &ReducerContext, guid: u64, event: Self) {
+        crate::native::levelup(ctx, guid, &event);
+        ctx.db.game_levelup_event().insert(event);
+    }
+}
+
 pub(crate) fn xp_to_next_level(level: u32) -> u32 {
     const XP_PER_LEVEL: [u32; 59] = [
         400, 900, 1400, 2100, 2800, 3600, 4500, 5400, 6500, 7600, 8800, 10100, 11400, 12900, 14400,
@@ -252,15 +266,19 @@ pub(crate) fn award_xp(
             base
         }
     };
-    ctx.db.game_xp_event().insert(XpEvent {
-        id: 0,
-        recipient_identity: p.owner_identity,
-        killed_guid,
-        total_exp: award,
-        created_at: ctx.timestamp,
-        is_kill: true,
-        rested_bonus: award - base,
-    });
+    XpEvent::insert(
+        ctx,
+        attacker_guid,
+        XpEvent {
+            id: 0,
+            recipient_identity: p.owner_identity,
+            killed_guid,
+            total_exp: award,
+            created_at: ctx.timestamp,
+            is_kill: true,
+            rested_bonus: award - base,
+        },
+    );
     grant_xp(ctx, &mut p, award);
     p.update(ctx);
 }
@@ -308,19 +326,23 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
             p.power = p.max_power;
         }
         p.next_level_xp = xp_to_next_level(p.level);
-        ctx.db.game_levelup_event().insert(LevelupEvent {
-            id: 0,
-            recipient_identity: p.owner_identity,
-            new_level: p.level,
-            health_gained: gained,
-            created_at: ctx.timestamp,
-            mana_gained,
-            strength_gained,
-            agility_gained,
-            stamina_gained,
-            intellect_gained,
-            spirit_gained,
-        });
+        LevelupEvent::insert(
+            ctx,
+            p.guid,
+            LevelupEvent {
+                id: 0,
+                recipient_identity: p.owner_identity,
+                new_level: p.level,
+                health_gained: gained,
+                created_at: ctx.timestamp,
+                mana_gained,
+                strength_gained,
+                agility_gained,
+                stamina_gained,
+                intellect_gained,
+                spirit_gained,
+            },
+        );
         // Level-up hooks read the payload; the entity row is persisted only after this loop.
         crate::hooks::fire_on_levelup(
             ctx,

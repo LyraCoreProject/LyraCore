@@ -37,18 +37,21 @@ pub(crate) fn arm_creature_engagement(
     if melee.attacker_guid().find(creature_guid).is_some() {
         return false;
     }
-    melee.insert(MeleeAttack {
-        attacker_guid: creature_guid,
-        target_guid,
-        last_swing_ms: 0,
-        ranged_spell_id: 0,
-        last_offhand_swing_ms: 0,
-        rout_ends_ms: 0,
-        pursuit_ends_ms: 0,
-        leash_x: 0.0,
-        leash_y: 0.0,
-        swing_error: 0,
-    });
+    crate::combat::MeleeAttack::insert(
+        ctx,
+        MeleeAttack {
+            attacker_guid: creature_guid,
+            target_guid,
+            last_swing_ms: 0,
+            ranged_spell_id: 0,
+            last_offhand_swing_ms: 0,
+            rout_ends_ms: 0,
+            pursuit_ends_ms: 0,
+            leash_x: 0.0,
+            leash_y: 0.0,
+            swing_error: 0,
+        },
+    );
     let entities = ctx.db.game_world_entity();
     if let Some(mut creature) = entities.guid().find(creature_guid) {
         if creature.target_guid != target_guid {
@@ -83,7 +86,7 @@ pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
         row.pursuit_ends_ms = crate::creatures::pursuit_deadline_ms(now_ms);
         row.leash_x = e.x;
         row.leash_y = e.y;
-        melee.attacker_guid().update(row);
+        crate::combat::MeleeAttack::update(ctx, row);
     }
 }
 
@@ -101,7 +104,7 @@ pub(crate) fn disengage(ctx: &ReducerContext, guid: u64) {
         .into_iter()
         .chain(attackers_of_guid.iter().copied())
     {
-        melee.attacker_guid().delete(a);
+        crate::combat::MeleeAttack::delete(ctx, a);
     }
     use crate::game_threat;
     let threat_members = ctx
@@ -150,7 +153,7 @@ pub(crate) fn stop_duel_combat(ctx: &ReducerContext, first_guid: u64, second_gui
                     || (attacker_guid == second_guid && attack.target_guid == first_guid)
             })
         {
-            melee.attacker_guid().delete(attacker_guid);
+            crate::combat::MeleeAttack::delete(ctx, attacker_guid);
         }
     }
     let entities = ctx.db.game_world_entity();
@@ -177,7 +180,7 @@ pub(crate) fn clear_target(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn break_own_attacks(ctx: &ReducerContext, guid: u64) {
-    ctx.db.game_melee_attack().attacker_guid().delete(guid);
+    crate::combat::MeleeAttack::delete(ctx, guid);
     crate::threat::clear_for_unit(ctx, guid);
     clear_target(ctx, guid);
 }
@@ -257,6 +260,32 @@ pub struct MeleeAttack {
     pub swing_error: u8,
 }
 
+impl MeleeAttack {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let row = ctx.db.game_melee_attack().insert(row);
+        crate::native::engagement_changed(ctx, None, Some(&row));
+        row
+    }
+
+    pub(crate) fn update(ctx: &ReducerContext, row: Self) -> Self {
+        let table = ctx.db.game_melee_attack();
+        let old = table.attacker_guid().find(row.attacker_guid);
+        let row = table.attacker_guid().update(row);
+        crate::native::engagement_changed(ctx, old.as_ref(), Some(&row));
+        row
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
+        let table = ctx.db.game_melee_attack();
+        let Some(old) = table.attacker_guid().find(guid) else {
+            return false;
+        };
+        table.attacker_guid().delete(guid);
+        crate::native::engagement_changed(ctx, Some(&old), None);
+        true
+    }
+}
+
 pub const SWING_ERROR_NONE: u8 = 0;
 pub const SWING_ERROR_NOT_IN_RANGE: u8 = 1;
 pub const SWING_ERROR_BAD_FACING: u8 = 2;
@@ -298,6 +327,11 @@ pub struct CombatEvent {
 }
 
 impl CombatEvent {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        crate::native::combat_event(ctx, &row);
+        ctx.db.game_combat_event_live().insert(row)
+    }
+
     pub(crate) fn signal_at(
         ctx: &ReducerContext,
         attacker: &WorldEntity,
@@ -532,9 +566,9 @@ fn start_attack(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
-        melee.attacker_guid().update(row);
+        crate::combat::MeleeAttack::update(ctx, row);
     } else {
-        melee.insert(row);
+        crate::combat::MeleeAttack::insert(ctx, row);
     }
     Ok(AttackStart::Armed)
 }
@@ -623,18 +657,15 @@ pub(crate) fn apply_start_ranged_attack(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker.guid).is_some() {
-        melee.attacker_guid().update(row);
+        crate::combat::MeleeAttack::update(ctx, row);
     } else {
-        melee.insert(row);
+        crate::combat::MeleeAttack::insert(ctx, row);
     }
     Ok(())
 }
 
 pub(crate) fn stop_attack_for(ctx: &ReducerContext, attacker_guid: u64) {
-    ctx.db
-        .game_melee_attack()
-        .attacker_guid()
-        .delete(attacker_guid);
+    crate::combat::MeleeAttack::delete(ctx, attacker_guid);
 }
 
 #[cfg(test)]

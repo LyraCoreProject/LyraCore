@@ -1,4 +1,4 @@
-//! Hold before deciding; reusing a decided operation id can debit the fee twice.
+//! Legacy fees must hold before deciding; a reused decision id can debit twice.
 
 use lyracore_shared::constants::npc_flags;
 use lyracore_shared::guild::{
@@ -7,6 +7,7 @@ use lyracore_shared::guild::{
 };
 use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
 
+use super::petition::game_guild_petition;
 use super::{game_guild, member, petition, push_event};
 use crate::game_world_entity;
 use crate::items::{game_item_instance, game_item_template};
@@ -279,25 +280,106 @@ fn hold_fee<P: FeePurse>(purse: &mut P, hold: HeldFee) -> Result<(), FeeError> {
             Err(FeeError::Conflict("another Fee Hold is pending"))
         };
     }
-    let charter = matches!(hold.terms, HeldTerms::Charter { .. });
-    if !purse.npc_serves(hold.payer_guid, hold.npc_guid, hold.terms.kind()) {
+    payment_gate(purse, hold.payer_guid, hold.npc_guid, &hold.terms)?;
+    purse.take(hold)
+}
+
+fn payment_gate<P: FeePurse>(
+    purse: &P,
+    payer_guid: u64,
+    npc_guid: u64,
+    terms: &HeldTerms,
+) -> Result<(), FeeError> {
+    let charter = matches!(terms, HeldTerms::Charter { .. });
+    if !purse.npc_serves(payer_guid, npc_guid, terms.kind()) {
         return Err(FeeError::Refused(GuildRefusal::NpcRefused));
     }
     if charter && !purse.charter_known() {
         return Err(FeeError::Refused(GuildRefusal::CharterUnavailable));
     }
     if purse
-        .purse(hold.payer_guid)
-        .is_none_or(|copper| copper < hold.copper)
+        .purse(payer_guid)
+        .is_none_or(|copper| copper < terms.copper())
     {
         return Err(FeeError::Refused(GuildRefusal::NotEnoughMoney));
     }
     if charter {
-        purse
-            .charter_room(hold.payer_guid)
-            .map_err(FeeError::Refused)?;
+        purse.charter_room(payer_guid).map_err(FeeError::Refused)?;
     }
-    purse.take(hold)
+    Ok(())
+}
+
+// The caller must roll back on error, including item creation after the copper debit.
+pub(crate) fn purchase(
+    ctx: &ReducerContext,
+    payer_guid: u64,
+    request: GuildFeeRequest,
+) -> Result<(), String> {
+    let apply = || -> Result<(), FeeError> {
+        let purse = CtxPurse { ctx };
+        if purse.held(payer_guid).is_some() {
+            return Err(FeeError::Conflict(
+                "a legacy Fee Hold must settle before a native purchase",
+            ));
+        }
+        let mut ledger = CtxLedger { ctx };
+        match request {
+            GuildFeeRequest::Emblem(request) => {
+                let guild_id = emblem_gate(&ledger, payer_guid).map_err(FeeError::Refused)?;
+                payment_gate(
+                    &purse,
+                    payer_guid,
+                    request.npc_guid,
+                    &HeldTerms::Emblem(request.emblem),
+                )?;
+                debit(ctx, payer_guid, EMBLEM_COST_COPPER)?;
+                ledger.apply_emblem(guild_id, &request.emblem);
+            }
+            GuildFeeRequest::Charter(request) => {
+                if let Some(petition) = ctx.db.game_guild_petition().owner_guid().find(payer_guid) {
+                    if !petition::holds_charter(ctx, payer_guid, petition.charter_item_guid) {
+                        petition::close(ctx, payer_guid, petition.petition_id)
+                            .map_err(FeeError::Refused)?;
+                    }
+                }
+                let character = crate::helpers::character_by_guid(ctx, payer_guid)
+                    .ok_or(FeeError::Refused(GuildRefusal::NoSuchCharacter))?;
+                let mut charter = GuildCharterTerms {
+                    charter_item_guid: 0,
+                    name: request.name.clone(),
+                    payer_name: character.name,
+                    payer_team: lyracore_shared::faction::team_for_race(character.race),
+                };
+                charter_gate(&ledger, payer_guid, &charter).map_err(FeeError::Refused)?;
+                payment_gate(
+                    &purse,
+                    payer_guid,
+                    request.npc_guid,
+                    &HeldTerms::Charter {
+                        name: request.name,
+                        charter_item_guid: 0,
+                    },
+                )?;
+                let identity = debit(ctx, payer_guid, CHARTER_COST_COPPER)?;
+                charter.charter_item_guid = purse.create_charter(payer_guid, identity)?;
+                ledger.open_petition(payer_guid, &charter);
+            }
+        }
+        Ok(())
+    };
+    apply().map_err(FeeError::into_text)
+}
+
+fn debit(ctx: &ReducerContext, guid: u64, copper: u32) -> Result<spacetimedb::Identity, FeeError> {
+    let mut payer = crate::helpers::acting_entity_by_guid(ctx, guid)
+        .ok_or(FeeError::Refused(GuildRefusal::NotEnoughMoney))?;
+    payer.money = payer
+        .money
+        .checked_sub(copper)
+        .ok_or(FeeError::Refused(GuildRefusal::NotEnoughMoney))?;
+    let identity = payer.owner_identity;
+    payer.update(ctx);
+    Ok(identity)
 }
 
 fn charter_fits(max_count: u32, held: usize) -> bool {
@@ -402,6 +484,29 @@ fn finish_fee<P: FeePurse>(
     purse.release(&hold, refund - mailed, mailed)
 }
 
+pub(crate) fn npc_serves(ctx: &ReducerContext, payer_guid: u64, npc_guid: u64, kind: u8) -> bool {
+    let required_flags = match kind {
+        fee_kind::EMBLEM => npc_flags::TABARDDESIGNER,
+        fee_kind::CHARTER => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
+        _ => return false,
+    };
+    let Ok((payer, npc)) = crate::items::npc_interaction_gate(
+        ctx,
+        payer_guid,
+        npc_guid,
+        required_flags,
+        "guild NPC",
+        "target does not serve guild fees",
+        "pay a guild fee",
+    ) else {
+        return false;
+    };
+    npc.npc_flags & required_flags == required_flags
+        && !npc.dead
+        && npc.health != 0
+        && !crate::reputation::npc_refuses_interaction(ctx, &npc, &payer)
+}
+
 struct CtxPurse<'a> {
     ctx: &'a ReducerContext,
 }
@@ -421,26 +526,7 @@ impl FeePurse for CtxPurse<'_> {
     }
 
     fn npc_serves(&self, payer_guid: u64, npc_guid: u64, kind: u8) -> bool {
-        let required_flags = match kind {
-            fee_kind::EMBLEM => npc_flags::TABARDDESIGNER,
-            fee_kind::CHARTER => npc_flags::PETITIONER | npc_flags::TABARDDESIGNER,
-            _ => return false,
-        };
-        let Ok((payer, npc)) = crate::items::npc_interaction_gate(
-            self.ctx,
-            payer_guid,
-            npc_guid,
-            required_flags,
-            "guild NPC",
-            "target does not serve guild fees",
-            "pay a guild fee",
-        ) else {
-            return false;
-        };
-        npc.npc_flags & required_flags == required_flags
-            && !npc.dead
-            && npc.health != 0
-            && !crate::reputation::npc_refuses_interaction(self.ctx, &npc, &payer)
+        npc_serves(self.ctx, payer_guid, npc_guid, kind)
     }
 
     fn charter_known(&self) -> bool {
@@ -478,14 +564,7 @@ impl FeePurse for CtxPurse<'_> {
     }
 
     fn take(&mut self, mut hold: HeldFee) -> Result<(), FeeError> {
-        let mut payer = crate::helpers::acting_entity_by_guid(self.ctx, hold.payer_guid)
-            .ok_or(FeeError::Refused(GuildRefusal::NotEnoughMoney))?;
-        payer.money = payer
-            .money
-            .checked_sub(hold.copper)
-            .ok_or(FeeError::Refused(GuildRefusal::NotEnoughMoney))?;
-        let owner_identity = payer.owner_identity;
-        payer.update(self.ctx);
+        let owner_identity = debit(self.ctx, hold.payer_guid, hold.copper)?;
         if let HeldTerms::Charter {
             charter_item_guid, ..
         } = &mut hold.terms
@@ -507,7 +586,7 @@ impl FeePurse for CtxPurse<'_> {
             .find(charter_item_guid)
             .is_some_and(|item| item.owner_guid == payer_guid && item.entry == GUILD_CHARTER_ENTRY);
         if held {
-            items.guid().delete(charter_item_guid);
+            crate::ItemInstance::delete(self.ctx, charter_item_guid);
         }
         held
     }

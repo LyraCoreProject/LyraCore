@@ -9,6 +9,11 @@
 Every entry below is here because it cost real debugging time at least once. A change that crosses
 any line in §1 needs a human review before it ships, whoever or whatever wrote it.
 
+This checkout runs one native Host and one Shard. The legacy deployment procedures below describe
+older Gateway revisions and must not be used to deploy this checkout. Existing multi-Shard Realms
+need a reviewed data migration, including settlement of pending Escrows and Holds and retirement
+of Gateway leases and Account Claims. Local native startup creates its own data directory.
+
 ## 1. DO-NOT-TOUCH / high-risk traps (these have bitten before)
 
 1. **`spacetime publish -c` is DESTRUCTIVE** — wipes the database and breaks login until
@@ -18,21 +23,11 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
 2. **Migrations:**
    - New COLUMN → **END-append** the struct field + `#[default(...)]` → additive auto-migrate. Anywhere
      else = publish aborts.
-   - New reducer ARG → change the module reducer **and** the gateway `call_reducer!` **in the same
-     commit** (code lockstep, NOT a database migration).
-   - After a Module schema change, run `./lyracore bindings`. The CLI generates the Gateway's
-     private Rust bindings from the local Module with `debug_reducers`, using the pinned
-     SpacetimeDB and Rust versions. It needs `spacetimedb-standalone` for offline schema extraction,
-     but does not contact a Realm or publish anything.
-   - Bindings live under `.lyracore/generated/gateway/` and are never committed or hand-edited.
-     Use the generator's Rust field names, including digit separators such as `eff_p_0` and
-     `cond_value_1`. These Rust names do not rename the Module's SQL columns.
-   - Run `cargo test -p lyracore-gateway` after preparation. `gateway/tests/schema_parity.rs`
-     compares every Coordinator subscription with the Module schema. Update its field manifest
-     when a subscribed table changes, including explicit mappings for generated Rust names.
-   - Direct Gateway Cargo builds check the prepared output through the installed, pinned CLI.
-     Missing output, changed inputs, or edited generated files stop the build with preparation
-     instructions. `./lyracore bindings --check` performs the same read-only check.
+   - Change native reducer arguments and their Host calls together. The Host and Module also share
+     the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
+     `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
+   - The native runtime has no generated Gateway bindings. `./lyracore preflight` still extracts
+     the schema offline with the pinned SpacetimeDB and Rust versions.
 
    **A defaulted column's default can be a VALID VALUE, not a sentinel — plan the backfill (#456).**
    `cell` was END-appended to the four AOI-scoped tables as `#[default(0i64)]`, and 0 is the legitimate
@@ -84,6 +79,22 @@ any line in §1 needs a human review before it ships, whoever or whatever wrote 
    realm-wide or partition-managing read, with a one-line justification, and delete budget as scans
    are replaced with helpers — a budget larger than the real count fails its own test.
 
+### Corpse AOI migration
+
+The native runtime indexes `game_corpse` by map, Instance and `cell`. The end-appended `cell`
+column defaults to zero, which is also a valid cell. After publishing this schema to an existing
+Shard, run `debug_backfill_cell_ids` as the Operator before opening the native listeners. The reducer now restamps
+corpse positions as well as the existing spatial tables. New corpses stamp their cell on insertion;
+corpse decay and Instance teardown use their time and Instance indexes.
+
+### DynamicObject AOI migration
+
+The native runtime adds a map, Instance and `cell` index to `game_dynamic_object`. Its new `cell`
+column defaults to zero, which is a valid cell. After publishing this schema to an existing Shard,
+run `debug_backfill_cell_ids` as the Operator before opening native listeners. The reducer restamps
+DynamicObjects and reconciles their AOI Grants. New ground effects stamp their cell on insertion;
+expiry removes the DynamicObject and its Grants in the same transaction.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use native SpacetimeDB event
@@ -94,22 +105,18 @@ The two tables share each row type. The Module writes new notifications only to 
 The event reaper expires rows left in the original table after an upgrade.
 
 SpacetimeDB refuses a change to an existing table's event flag. Keep the old declarations and
-their indexes when publishing this additive change. Stop the Gateway, publish the Module to
-every configured Shard, then start the matching Gateway. An old Gateway subscribes to the old
-names and will miss new notifications. Do not clear a Shard to make this migration apply.
+their indexes for additive schema compatibility. Do not clear a Shard to make this migration apply.
+Existing Gateway revisions read different notification tables and cannot serve this Module.
 
-Native events reach connected subscribers through insert callbacks. They have no initial replay,
-cached rows, update callbacks or delete callbacks. The Gateway uses the same row fields, audience
-rules and packet rendering for the new tables. Cast notifications carry their start, completion
-or outcome in each row; the Relays do not read a retained event batch. A reconnect restores
-durable state and receives subsequent notifications. Events emitted during a Transport Loss
-are not replayed. Event inserts still enter the commit log, so this change does not replace
+Native events reach connected subscribers without initial replay, cached rows, update callbacks or
+delete callbacks. The Module emits client packets in the transaction that changes gameplay state.
+A reconnect restores durable state and receives subsequent notifications. Events emitted during a
+Transport Loss are not replayed. Event inserts still enter the commit log, so they do not replace
 history retention. See the [event table contract](https://spacetimedb.com/docs/tables/event-tables/).
 
-Keep `game_group_event` ordinary. `GroupEventCursor` reads the committed batch and sorts its ids
-before delivery. Keep `game_system_message_event` ordinary because login reads pending messages.
-Pending casts and impacts, Transfer Intent, party command intent and receipts, Mail, invitations
-and other durable work keep their current storage and completion rules.
+`game_group_event` and `game_system_message_event` retain their published storage. Native group
+notifications send directly from the Module; login also reads pending system messages. Existing
+Transfer Intent, command intent and receipts, Mail and invitation tables retain their schemas.
 
 Durable tests observe notifications through subscriptions opened before the action. A SQL read
 after the action sees an empty native event table. The old debug reducer

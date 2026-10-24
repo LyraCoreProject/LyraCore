@@ -8,7 +8,6 @@ use crate::game_gameobject;
 use crate::game_item_instance;
 use crate::game_item_template;
 use crate::game_world_entity;
-use crate::game_xp_event;
 #[cfg(feature = "debug_reducers")]
 use crate::group::{game_group, game_group_member};
 #[cfg(feature = "debug_reducers")]
@@ -267,10 +266,50 @@ pub struct CharacterQuestEventCredit {
     pub quest_entry: u32,
 }
 
+impl CharacterQuest {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let row = ctx.db.game_character_quest().insert(row);
+        crate::native::quest_changed(ctx, None, Some(&row));
+        row
+    }
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let table = ctx.db.game_character_quest();
+        let old = table.id().find(self.id);
+        let row = table.id().update(self);
+        crate::native::quest_changed(ctx, old.as_ref(), Some(&row));
+        row
+    }
+    pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
+        let table = ctx.db.game_character_quest();
+        let old = table.id().find(id);
+        let removed = table.id().delete(id);
+        if let Some(row) = old {
+            crate::native::quest_changed(ctx, Some(&row), None);
+        }
+        removed
+    }
+}
+impl CharacterQuestEventCredit {
+    fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let row = ctx.db.game_character_quest_event_credit().insert(row);
+        crate::native::quest_event_credit(ctx, &row, true);
+        row
+    }
+    fn delete(ctx: &ReducerContext, id: u64) -> bool {
+        let table = ctx.db.game_character_quest_event_credit();
+        let old = table.id().find(id);
+        let removed = table.id().delete(id);
+        if let Some(row) = old {
+            crate::native::quest_event_credit(ctx, &row, false);
+        }
+        removed
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_character_quest(ctx, character_guid) {
     let quests = ctx.db.game_character_quest();
     for r in quests.by_character().filter(&character_guid).collect::<Vec<_>>() {
-        quests.id().delete(r.id);
+        crate::quest::CharacterQuest::delete(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_character_quest(ctx, character_guid, io) {
@@ -283,7 +322,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_quest(ctx, char
     for mut r in quests.by_character().filter(&character_guid).collect::<Vec<_>>() {
         if r.owner_identity != identity {
             r.owner_identity = identity;
-            quests.id().update(r);
+            r.update(ctx);
         }
     }
 });
@@ -291,7 +330,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_quest(ctx, char
 crate::character_owned!(delete, fn sweep_delete_game_character_quest_event_credit(ctx, character_guid) {
     let credits = ctx.db.game_character_quest_event_credit();
     for row in credits.by_character().filter(&character_guid).collect::<Vec<_>>() {
-        credits.id().delete(row.id);
+        CharacterQuestEventCredit::delete(ctx, row.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_character_quest_event_credit(ctx, character_guid, io) {
@@ -633,7 +672,7 @@ fn apply_accept_effects(
         .filter(|credit| credit.quest_entry == quest_entry)
         .collect::<Vec<_>>()
     {
-        event_credits.id().delete(credit.id);
+        CharacterQuestEventCredit::delete(ctx, credit.id);
     }
     match existing {
         Some(mut row) => {
@@ -641,19 +680,22 @@ fn apply_accept_effects(
             row.rewarded = false;
             row.failed = false;
             row.deadline_micros = deadline_micros;
-            ctx.db.game_character_quest().id().update(row);
+            row.update(ctx);
         }
         None => {
-            ctx.db.game_character_quest().insert(CharacterQuest {
-                id: 0,
-                character_guid,
-                owner_identity,
-                quest_entry,
-                counts,
-                rewarded: false,
-                deadline_micros,
-                failed: false,
-            });
+            crate::quest::CharacterQuest::insert(
+                ctx,
+                CharacterQuest {
+                    id: 0,
+                    character_guid,
+                    owner_identity,
+                    quest_entry,
+                    counts,
+                    rewarded: false,
+                    deadline_micros,
+                    failed: false,
+                },
+            );
         }
     }
     crate::hooks::fire_on_quest_accept(
@@ -826,15 +868,19 @@ pub(crate) fn request_turn_in_quest(
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
     if player.level < QUEST_MAX_LEVEL_PAYOUT {
-        ctx.db.game_xp_event().insert(crate::xp::XpEvent {
-            id: 0,
-            recipient_identity: player.owner_identity,
-            killed_guid: 0,
-            total_exp: xp,
-            created_at: ctx.timestamp,
-            is_kill: false,
-            rested_bonus: 0,
-        });
+        crate::xp::XpEvent::insert(
+            ctx,
+            player_guid,
+            crate::xp::XpEvent {
+                id: 0,
+                recipient_identity: player.owner_identity,
+                killed_guid: 0,
+                total_exp: xp,
+                created_at: ctx.timestamp,
+                is_kill: false,
+                rested_bonus: 0,
+            },
+        );
         crate::xp::grant_xp(ctx, &mut player, xp);
     }
     player.update(ctx);
@@ -858,7 +904,7 @@ pub(crate) fn request_turn_in_quest(
 
     // Keep rewarded repeatable rows because later quests read them as prerequisite evidence.
     cq.rewarded = true;
-    ctx.db.game_character_quest().id().update(cq);
+    cq.update(ctx);
     crate::hooks::fire_on_quest_turnin(
         ctx,
         &crate::hooks::QuestTurninPayload {
@@ -907,7 +953,7 @@ pub fn debug_stage_choice_reward_fixture(
         .guid()
         .find(CHOICE_FIXTURE_GIVER_SOURCE)
         .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
-    entities.guid().delete(CHOICE_FIXTURE_GIVER);
+    crate::WorldEntity::delete(ctx, CHOICE_FIXTURE_GIVER);
     giver.guid = CHOICE_FIXTURE_GIVER;
     giver.x = player.x + 1.0;
     giver.y = player.y;
@@ -1021,7 +1067,7 @@ pub fn debug_stage_choice_reward_fixture(
         .filter(&CHOICE_FIXTURE_PLAYER)
         .collect::<Vec<_>>()
     {
-        ctx.db.game_item_instance().guid().delete(item.guid);
+        crate::ItemInstance::delete(ctx, item.guid);
     }
     for row in ctx
         .db
@@ -1031,7 +1077,7 @@ pub fn debug_stage_choice_reward_fixture(
         .filter(|row| row.quest_entry == CHOICE_FIXTURE_QUEST)
         .collect::<Vec<_>>()
     {
-        ctx.db.game_character_quest().id().delete(row.id);
+        crate::quest::CharacterQuest::delete(ctx, row.id);
     }
     for row in ctx
         .db
@@ -1041,7 +1087,7 @@ pub fn debug_stage_choice_reward_fixture(
         .filter(|row| row.faction_id == crate::seed::FIXTURE_FACTION)
         .collect::<Vec<_>>()
     {
-        ctx.db.game_player_reputation().id().delete(row.id);
+        crate::reputation::PlayerReputation::delete(ctx, row.id);
     }
 
     player.level = 1;
@@ -1054,16 +1100,19 @@ pub fn debug_stage_choice_reward_fixture(
     if fill_inventory {
         crate::items::grant_item(ctx, CHOICE_FIXTURE_PLAYER, CHOICE_FIXTURE_FILLER, 15)?;
     }
-    ctx.db.game_character_quest().insert(CharacterQuest {
-        id: 0,
-        character_guid: CHOICE_FIXTURE_PLAYER,
-        owner_identity,
-        quest_entry: CHOICE_FIXTURE_QUEST,
-        counts: vec![0],
-        rewarded: false,
-        deadline_micros: 0,
-        failed: false,
-    });
+    crate::quest::CharacterQuest::insert(
+        ctx,
+        CharacterQuest {
+            id: 0,
+            character_guid: CHOICE_FIXTURE_PLAYER,
+            owner_identity,
+            quest_entry: CHOICE_FIXTURE_QUEST,
+            counts: vec![0],
+            rewarded: false,
+            deadline_micros: 0,
+            failed: false,
+        },
+    );
     Ok(())
 }
 
@@ -1257,7 +1306,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             .filter(|quest| fixture_quests.contains(&quest.quest_entry))
             .collect::<Vec<_>>()
         {
-            logs.id().delete(quest.id);
+            crate::quest::CharacterQuest::delete(ctx, quest.id);
         }
     }
     let event_credits = ctx.db.game_character_quest_event_credit();
@@ -1268,7 +1317,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             .filter(|credit| fixture_quests.contains(&credit.quest_entry))
             .collect::<Vec<_>>()
         {
-            event_credits.id().delete(credit.id);
+            CharacterQuestEventCredit::delete(ctx, credit.id);
         }
     }
     let templates = ctx.db.game_quest_template();
@@ -1290,7 +1339,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         EVENTAI_CREDIT_FIXTURE_DISTANT_MEMBER,
         EVENTAI_CREDIT_FIXTURE_BENEFICIARY,
     ] {
-        entities.guid().delete(guid);
+        crate::WorldEntity::delete(ctx, guid);
     }
     let source = entities
         .guid()
@@ -1478,17 +1527,20 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
             EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
         ),
     ] {
-        logs.id().delete(id);
-        logs.insert(CharacterQuest {
-            id,
-            character_guid,
-            owner_identity: fixture_owner,
-            quest_entry,
-            counts: vec![0],
-            rewarded: false,
-            deadline_micros: 0,
-            failed: false,
-        });
+        crate::quest::CharacterQuest::delete(ctx, id);
+        crate::quest::CharacterQuest::insert(
+            ctx,
+            CharacterQuest {
+                id,
+                character_guid,
+                owner_identity: fixture_owner,
+                quest_entry,
+                counts: vec![0],
+                rewarded: false,
+                deadline_micros: 0,
+                failed: false,
+            },
+        );
     }
 
     let tap_context = EventAiQuestCreditContext {
@@ -1633,7 +1685,7 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         return Err("event-required quest completed without its ordinary objective".to_string());
     }
     event_quest.counts[0] = 1;
-    logs.id().update(event_quest);
+    event_quest.update(ctx);
     let event_quest = character_quest_row(
         ctx,
         EVENTAI_CREDIT_FIXTURE_PLAYER,
@@ -1734,7 +1786,7 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
             .filter(|q| fixture_quests.contains(&q.quest_entry))
             .collect::<Vec<_>>()
         {
-            logs.id().delete(quest.id);
+            crate::quest::CharacterQuest::delete(ctx, quest.id);
         }
     }
     let templates = ctx.db.game_quest_template();
@@ -1759,10 +1811,10 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
     }
     let entities = ctx.db.game_world_entity();
     for &guid in fixture_characters.iter().filter(|&&g| g != RQC_PLAYER) {
-        entities.guid().delete(guid);
+        crate::WorldEntity::delete(ctx, guid);
     }
     crate::loot::tag::clear(ctx, RQC_WOLF_GUID);
-    entities.guid().delete(RQC_WOLF_GUID);
+    crate::WorldEntity::delete(ctx, RQC_WOLF_GUID);
     ctx.db.game_creature_spawn().guid().delete(RQC_WOLF_GUID);
 
     let player = entities
@@ -1950,17 +2002,20 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         (509_297_302, RQC_PARTY_KILLER, RQC_NORMAL_QUEST),
         (509_297_303, RQC_PLAYER, RQC_CAST_QUEST),
     ] {
-        logs.id().delete(id);
-        logs.insert(CharacterQuest {
-            id,
-            character_guid,
-            owner_identity: fixture_owner,
-            quest_entry,
-            counts: vec![0, 0, 0, 0],
-            rewarded: false,
-            deadline_micros: 0,
-            failed: false,
-        });
+        crate::quest::CharacterQuest::delete(ctx, id);
+        crate::quest::CharacterQuest::insert(
+            ctx,
+            CharacterQuest {
+                id,
+                character_guid,
+                owner_identity: fixture_owner,
+                quest_entry,
+                counts: vec![0, 0, 0, 0],
+                rewarded: false,
+                deadline_micros: 0,
+                failed: false,
+            },
+        );
     }
 
     on_creature_killed(ctx, RQC_PLAYER, RQC_CREATURE_ENTRY);
@@ -2083,7 +2138,7 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
     }
 
     crate::loot::tag::clear(ctx, RQC_WOLF_GUID);
-    entities.guid().delete(RQC_WOLF_GUID);
+    crate::WorldEntity::delete(ctx, RQC_WOLF_GUID);
     ctx.db.game_creature_spawn().guid().delete(RQC_WOLF_GUID);
     Ok(())
 }
@@ -2134,7 +2189,7 @@ fn credit_objective(
             }
         }
         if changed {
-            log.id().update(cq);
+            cq.update(ctx);
         }
     }
 }
@@ -2190,11 +2245,14 @@ pub(crate) fn apply_eventai_credit(
                 {
                     continue;
                 }
-                credits.insert(CharacterQuestEventCredit {
-                    id: 0,
-                    character_guid,
-                    quest_entry: request.quest_entry,
-                });
+                CharacterQuestEventCredit::insert(
+                    ctx,
+                    CharacterQuestEventCredit {
+                        id: 0,
+                        character_guid,
+                        quest_entry: request.quest_entry,
+                    },
+                );
             }
         }
         EventAiQuestCredit::CastCredit(request) => {
@@ -2386,43 +2444,15 @@ impl AreaTriggerRoute {
             self.target_z,
             self.target_o,
         ];
-        let volume = self.volume;
-        coordinates.into_iter().all(f32::is_finite)
-            && [
-                volume.radius,
-                volume.length,
-                volume.width,
-                volume.height,
-                volume.yaw,
-            ]
-            .into_iter()
-            .all(f32::is_finite)
-            && (volume.radius > 0.0
-                || (volume.radius == 0.0
-                    && volume.length > 0.0
-                    && volume.width > 0.0
-                    && volume.height > 0.0))
+        coordinates.into_iter().all(f32::is_finite) && self.volume.valid()
     }
 
     #[cfg_attr(not(has_packages), allow(dead_code))]
     pub(crate) fn contains(self, x: f32, y: f32, z: f32) -> bool {
-        if !self.valid() || ![x, y, z].into_iter().all(f32::is_finite) {
-            return false;
-        }
-        let (dx, dy, dz) = (x - self.source_x, y - self.source_y, z - self.source_z);
-        let volume = self.volume;
-        if volume.radius > 0.0 {
-            return dx * dx + dy * dy + dz * dz <= volume.radius * volume.radius;
-        }
-        if volume.length <= 0.0 || volume.width <= 0.0 || volume.height <= 0.0 {
-            return false;
-        }
-        let (sin, cos) = volume.yaw.sin_cos();
-        let local_x = dx * cos + dy * sin;
-        let local_y = -dx * sin + dy * cos;
-        local_x.abs() <= volume.length / 2.0
-            && local_y.abs() <= volume.width / 2.0
-            && dz.abs() <= volume.height / 2.0
+        self.valid()
+            && self
+                .volume
+                .contains([self.source_x, self.source_y, self.source_z], [x, y, z])
     }
 }
 
@@ -2433,6 +2463,46 @@ struct AreaTriggerVolume {
     width: f32,
     height: f32,
     yaw: f32,
+}
+
+impl AreaTriggerVolume {
+    fn of(trigger: &crate::config::GameAreaTrigger) -> Self {
+        Self {
+            radius: trigger.radius,
+            length: trigger.box_length,
+            width: trigger.box_width,
+            height: trigger.box_height,
+            yaw: trigger.box_yaw,
+        }
+    }
+
+    fn valid(self) -> bool {
+        [self.radius, self.length, self.width, self.height, self.yaw]
+            .into_iter()
+            .all(f32::is_finite)
+            && (self.radius > 0.0
+                || (self.radius == 0.0
+                    && self.length > 0.0
+                    && self.width > 0.0
+                    && self.height > 0.0))
+    }
+
+    fn contains(self, origin: [f32; 3], point: [f32; 3]) -> bool {
+        if !self.valid() || !origin.into_iter().chain(point).all(f32::is_finite) {
+            return false;
+        }
+        let [dx, dy, dz] =
+            std::array::from_fn(|index| f64::from(point[index]) - f64::from(origin[index]));
+        if self.radius > 0.0 {
+            return dx * dx + dy * dy + dz * dz <= f64::from(self.radius).powi(2);
+        }
+        let (sin, cos) = f64::from(self.yaw).sin_cos();
+        let local_x = dx * cos + dy * sin;
+        let local_y = -dx * sin + dy * cos;
+        local_x.abs() <= f64::from(self.length) / 2.0
+            && local_y.abs() <= f64::from(self.width) / 2.0
+            && dz.abs() <= f64::from(self.height) / 2.0
+    }
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -2456,13 +2526,7 @@ pub(crate) fn area_trigger_route(
         target_y: teleport.y,
         target_z: teleport.z,
         target_o: teleport.o,
-        volume: AreaTriggerVolume {
-            radius: volume.radius,
-            length: volume.box_length,
-            width: volume.box_width,
-            height: volume.box_height,
-            yaw: volume.box_yaw,
-        },
+        volume: AreaTriggerVolume::of(&volume),
     };
     route.valid().then_some(route)
 }
@@ -2477,6 +2541,7 @@ pub(crate) fn enter_sessionless_areatrigger(
     controller_generation: u64,
 ) -> Result<u64, ActionRefusal> {
     crate::sessionless::transfer_authority_gate(ctx, character_guid)?;
+    crate::sessionless::action_gate(ctx, character_guid)?;
     let route = area_trigger_route(ctx, trigger_id).ok_or_else(|| {
         ActionRefusal::new(
             ActionRefusalKind::MissingResource,
@@ -2500,13 +2565,14 @@ pub(crate) fn enter_sessionless_areatrigger(
         z: route.target_z,
         o: route.target_o,
     };
-    if let Some(intent_id) = crate::transfer::bot_transfer_intent_gate(
+    if let Some(relocation_id) = crate::sessionless::completed_relocation(
         ctx,
         character_guid,
-        destination,
+        trigger_id,
+        (expected_map, expected_instance),
         controller_generation,
-    )? {
-        return Ok(intent_id);
+    ) {
+        return Ok(relocation_id);
     }
     let entity = crate::helpers::live_entity(ctx, character_guid).map_err(|_| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "Character is not in world")
@@ -2573,16 +2639,40 @@ pub(crate) fn enter_sessionless_areatrigger(
             "AreaTrigger resolves to a different party instance",
         ));
     }
-    crate::transfer::emit_bot_transfer_intent(
+    Ok(crate::sessionless::relocate(
         ctx,
         character_guid,
+        trigger_id,
         crate::transfer::Destination {
             instance_id: destination_instance,
             ..destination
         },
-        "sessionless AreaTrigger",
         controller_generation,
-    )
+    ))
+}
+
+pub(crate) fn request_enter_areatrigger(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+) -> Result<(), String> {
+    let actor = crate::helpers::live_entity(ctx, character_guid)?;
+    let trigger = ctx
+        .db
+        .game_area_trigger()
+        .id()
+        .find(trigger_id)
+        .ok_or("AreaTrigger is unavailable")?;
+    if actor.map_id != trigger.map_id
+        || !AreaTriggerVolume::of(&trigger).contains(
+            [trigger.x, trigger.y, trigger.z],
+            [actor.x, actor.y, actor.z],
+        )
+    {
+        return Err("Character is outside the AreaTrigger".into());
+    }
+    apply_enter_areatrigger(ctx, character_guid, trigger_id);
+    Ok(())
 }
 
 // A trigger may grant exploration credit and teleport; both effects are independent.
@@ -2627,7 +2717,7 @@ crate::game_tick_pass!(fn quest_timer_pass(ctx) {
     for mut cq in expired {
         cq.failed = true;
         cq.deadline_micros = 0;
-        log.id().update(cq);
+        cq.update(ctx);
     }
 });
 
@@ -2732,7 +2822,7 @@ pub(crate) fn debug_force_expire(
     }
     cq.failed = true;
     cq.deadline_micros = 0;
-    ctx.db.game_character_quest().id().update(cq);
+    cq.update(ctx);
     Ok(())
 }
 
@@ -2753,7 +2843,7 @@ pub(crate) fn apply_abandon_quest(
             crate::items::remove_items(ctx, player_guid, tmpl.src_item, count)?;
         }
     }
-    ctx.db.game_character_quest().id().delete(cq.id);
+    crate::quest::CharacterQuest::delete(ctx, cq.id);
     Ok(())
 }
 
@@ -2914,6 +3004,20 @@ mod tests {
         assert!(route.contains(13.0, 24.0, 30.0));
         assert!(!route.contains(13.1, 24.0, 30.0));
         assert!(!route.contains(10.0, 20.0, 35.1));
+    }
+
+    #[test]
+    fn finite_trigger_coordinates_cannot_overflow_the_range_gate() {
+        let volume = AreaTriggerVolume {
+            radius: f32::MAX,
+            length: 0.0,
+            width: 0.0,
+            height: 0.0,
+            yaw: 0.0,
+        };
+        assert!(volume.contains([0.0; 3], [f32::MAX, 0.0, 0.0]));
+        assert!(!volume.contains([-f32::MAX, 0.0, 0.0], [f32::MAX, 0.0, 0.0]));
+        assert!(!volume.contains([0.0; 3], [f32::NAN, 0.0, 0.0]));
     }
 
     #[test]

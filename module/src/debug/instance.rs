@@ -399,7 +399,7 @@ pub fn debug_assert_floor_snap(
     }
     if let Some(g) = spawned_entity_guid {
         ctx.db.game_creature_spawn().guid().delete(g);
-        ctx.db.game_world_entity().guid().delete(g);
+        crate::WorldEntity::delete(ctx, g);
     }
     if let Some(prior) = prior_vmap {
         if let Some(mut c) = ctx.db.game_config().id().find(0) {
@@ -950,7 +950,7 @@ pub fn debug_backfill_go_grid(ctx: &ReducerContext) {
                 g.grid_x = gx;
                 g.grid_y = gy;
                 g.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
-                gos.guid().update(g);
+                g.update(ctx);
                 n += 1;
             }
         }
@@ -976,7 +976,7 @@ pub fn debug_stage_instance_removal_fixture(
     ctx: &ReducerContext,
     party_id: u64,
 ) -> Result<(), String> {
-    use crate::{game_character, game_instance_removal};
+    use crate::game_character;
     crate::helpers::require_operator(ctx)?;
     let instances = ctx.db.game_instance();
     instances.instance_id().delete(REMOVAL_FIXTURE_INSTANCE);
@@ -990,8 +990,8 @@ pub fn debug_stage_instance_removal_fixture(
     });
     let (home_map, home_x, home_y, home_z, home_zone) = REMOVAL_FIXTURE_HOME;
     for (guid, name, gm_level, inside, online) in REMOVAL_FIXTURE_CHARACTERS {
-        ctx.db.game_instance_removal().character_guid().delete(guid);
-        ctx.db.game_world_entity().guid().delete(guid);
+        crate::InstanceRemoval::delete(ctx, guid);
+        crate::WorldEntity::delete(ctx, guid);
         let mut character = crate::helpers::character_by_guid(ctx, 1)
             .ok_or("the seeded Tester is the fixture template")?;
         character.guid = guid;
@@ -1030,10 +1030,10 @@ pub fn debug_hold_instance_removals(ctx: &ReducerContext) -> Result<(), String> 
     );
     let removals = ctx.db.game_instance_removal();
     for mut removal in removals.iter().collect::<Vec<_>>() {
-        removals.scheduled_id().delete(removal.scheduled_id);
+        crate::InstanceRemoval::delete(ctx, removal.character_guid);
         removal.scheduled_id = 0;
         removal.scheduled_at = spacetimedb::ScheduleAt::Time(due);
-        removals.insert(removal);
+        removal.insert(ctx);
     }
     Ok(())
 }

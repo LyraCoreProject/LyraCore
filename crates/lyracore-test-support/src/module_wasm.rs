@@ -1,4 +1,4 @@
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::process::Command;
 use std::sync::OnceLock;
 
@@ -22,11 +22,6 @@ fn build_module_bytes() -> Vec<u8> {
     let bytes = std::fs::read(&wasm).expect("the test Module output is missing");
     assert!(bytes.starts_with(b"\0asm"), "the built module is not Wasm");
     bytes
-}
-
-pub fn gateway_binary() -> &'static Path {
-    static BINARY: OnceLock<PathBuf> = OnceLock::new();
-    BINARY.get_or_init(|| build_artifact("lyracore-gateway", "lyracore-gateway", &[]))
 }
 
 fn build_artifact(package: &str, target: &str, options: &[&str]) -> PathBuf {

@@ -378,7 +378,7 @@ pub(crate) fn aura_apply(
         a.proc_family_flags = proc.family_flags;
         a.proc_charges = proc.charges;
         a.proc_icd_ms = proc.icd_ms;
-        auras.id().update(a);
+        a.update(ctx);
     } else {
         // Evictions must free aura slots before this insert chooses one.
         if !crate::spell::stacking::apply_group_conflict(
@@ -408,18 +408,21 @@ pub(crate) fn aura_apply(
                 tracer_spell::AURA_SLOTS,
                 hdr.spell_id
             );
-            ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-                is_interrupted: true,
-                ..SpellCastEvent::signal(
-                    ctx,
-                    caster_guid,
-                    hdr.spell_id,
-                    SpellCastEventKind::Interrupt,
-                )
-            });
+            crate::spell::SpellCastEvent::insert(
+                ctx,
+                SpellCastEvent {
+                    is_interrupted: true,
+                    ..SpellCastEvent::signal(
+                        ctx,
+                        caster_guid,
+                        hdr.spell_id,
+                        SpellCastEventKind::Interrupt,
+                    )
+                },
+            );
             return;
         };
-        auras.insert(Aura {
+        Aura {
             id: 0,
             target_guid,
             caster_guid,
@@ -451,7 +454,8 @@ pub(crate) fn aura_apply(
             proc_charges: proc.charges,
             proc_icd_ms: proc.icd_ms,
             proc_ready_micros: 0,
-        });
+        }
+        .insert(ctx);
     }
 
     // Advance diminishing returns only after successful aura placement.
@@ -1188,18 +1192,15 @@ fn apply_character_effect(
                         .find(caster_guid)
                         .map(|c| c.name)
                         .unwrap_or_default();
-                    ctx.db
-                        .game_resurrect_request()
-                        .target_guid()
-                        .delete(target_guid);
-                    ctx.db.game_resurrect_request().insert(ResurrectRequest {
+                    ResurrectRequest {
                         target_guid,
                         target_identity: t.owner_identity,
                         caster_guid,
                         caster_name,
                         points,
                         created_at: ctx.timestamp,
-                    });
+                    }
+                    .insert(ctx);
                 }
             }
             EffectHit::none()
@@ -1408,19 +1409,19 @@ fn create_ground_area(
         next_tick_micros: now.to_micros_since_unix_epoch() + (period_ms as i64) * 1000,
         expires_at,
     });
-    ctx.db
-        .game_dynamic_object()
-        .insert(crate::spell::DynamicObject {
-            guid: dynamic_object_guid(area.id),
-            caster_guid,
-            spell_id: e.spell_id,
-            map_id,
-            instance_id,
-            x,
-            y,
-            z,
-            radius_yd: e.radius_yd,
-        });
+    crate::spell::DynamicObject {
+        guid: dynamic_object_guid(area.id),
+        caster_guid,
+        spell_id: e.spell_id,
+        map_id,
+        instance_id,
+        x,
+        y,
+        z,
+        radius_yd: e.radius_yd,
+        cell: 0,
+    }
+    .insert(ctx);
 }
 
 // Vanilla HIGHGUID_DYNAMICOBJECT occupies the top 16 bits as 0xF100.
@@ -1462,6 +1463,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         caster.map_id,
         caster.instance_id,
         (caster.grid_x, caster.grid_y),
+        None,
     );
     // The spline animates the client; combat needs the authoritative landing position immediately.
     if let Some(mut c) = entities.guid().find(caster_guid) {

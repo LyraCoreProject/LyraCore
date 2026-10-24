@@ -1,8 +1,11 @@
+mod rng;
+pub use rng::Rng;
+
 mod module_wasm;
 pub mod source_scan;
 mod subscription;
 
-pub use module_wasm::{gateway_binary, module_bytes};
+pub use module_wasm::module_bytes;
 pub use subscription::TableSubscription;
 
 use std::collections::{BTreeMap, BTreeSet};

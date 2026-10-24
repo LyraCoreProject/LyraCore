@@ -1,4 +1,4 @@
-use spacetimedb::{ReducerContext, Table};
+use spacetimedb::ReducerContext;
 
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
@@ -58,10 +58,11 @@ pub(crate) fn apply_item_destroy(
         return Err(ItemRefusal::BagNotEmpty);
     }
     if count == 0 || count >= item.stack_count {
-        ctx.db.game_item_instance().guid().delete(item.guid);
+        crate::ItemInstance::delete(ctx, item.guid);
+        crate::mail_text::drop_letter_text(ctx, item.item_text_id);
     } else {
         item.stack_count -= count;
-        ctx.db.game_item_instance().guid().update(item);
+        item.update(ctx);
     }
     if slot <= equip_slot::END {
         crate::spell::recompute_vitals(ctx, character_guid);
@@ -80,7 +81,6 @@ pub(crate) fn apply_item_split(
     if is_bank_slot(slot) || is_bank_slot(to_slot) {
         bank_access(ctx, player_guid)?;
     }
-    let instances = ctx.db.game_item_instance();
     let mut inst = item_in_slot(ctx, player_guid, slot)
         .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
@@ -107,21 +107,24 @@ pub(crate) fn apply_item_split(
     let random_property_id = inst.random_property_id;
     let soulbound = inst.soulbound;
     let item_text_id = inst.item_text_id;
-    instances.guid().update(inst);
-    instances.insert(ItemInstance {
-        guid: new_guid,
-        entry,
-        owner_identity,
-        owner_guid: player_guid,
-        slot: to_slot,
-        stack_count: count,
-        durability,
-        created_at: ctx.timestamp,
-        enchant_id: 0,
-        soulbound,
-        random_property_id,
-        item_text_id,
-    });
+    inst.update(ctx);
+    crate::ItemInstance::insert(
+        ctx,
+        ItemInstance {
+            guid: new_guid,
+            entry,
+            owner_identity,
+            owner_guid: player_guid,
+            slot: to_slot,
+            stack_count: count,
+            durability,
+            created_at: ctx.timestamp,
+            enchant_id: 0,
+            soulbound,
+            random_property_id,
+            item_text_id,
+        },
+    );
     Ok(())
 }
 
@@ -137,7 +140,6 @@ pub(crate) fn apply_item_move(
     if is_bank_slot(from_slot) || is_bank_slot(to_slot) {
         bank_access(ctx, player_guid)?;
     }
-    let instances = ctx.db.game_item_instance();
     let mut src = item_in_slot(ctx, player_guid, from_slot).ok_or_else(|| {
         refuse(
             ItemRefusal::ItemNotFound,
@@ -280,12 +282,12 @@ pub(crate) fn apply_item_move(
                     let moved = merge_amount(src.stack_count, dst.stack_count, tmpl.max_stack);
                     if moved > 0 {
                         dst.stack_count += moved;
-                        instances.guid().update(dst);
+                        dst.update(ctx);
                         if moved >= src.stack_count {
-                            instances.guid().delete(src.guid);
+                            crate::ItemInstance::delete(ctx, src.guid);
                         } else {
                             src.stack_count -= moved;
-                            instances.guid().update(src);
+                            src.update(ctx);
                         }
                     }
                     return Ok(());
@@ -293,12 +295,12 @@ pub(crate) fn apply_item_move(
             }
         }
         dst.slot = from_slot;
-        instances.guid().update(dst);
+        dst.update(ctx);
     }
     src.slot = to_slot;
-    instances.guid().update(src);
+    src.update(ctx);
     if let Some(off_hand) = displaced_off_hand {
-        instances.guid().update(off_hand);
+        off_hand.update(ctx);
     }
     if from_slot <= equip_slot::END || to_slot <= equip_slot::END {
         crate::spell::recompute_vitals(ctx, player_guid);

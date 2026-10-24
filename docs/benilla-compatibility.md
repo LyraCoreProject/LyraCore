@@ -1,116 +1,68 @@
 # Benilla protocol compatibility
 
-Benilla is an independent client codec for testing LyraCore's 1.12.1 protocol.
-The Gateway's development dependencies pin `benilla-protocol` and `benilla-srp`
-to `c2fc3cf304075a0fa1c9accffaf5efb99be9edfe`. Tests use that revision from Cargo,
-so changes in a neighboring Benilla checkout cannot change the results.
-
-Every request in the pinned Benilla writer has a typed dispatch pattern or a
-reviewed raw route. The inventory test flags requests with neither source
-classification. This accounts for requests; it does not certify every gameplay path or every outgoing
-packet. Unsupported operations return a Refusal where the protocol defines one,
-or a System Message naming the unavailable feature.
-
-The first Headless Client scenario covers SRP logon, realm discovery, encrypted
-world authentication, Character selection, world entry, the Realm Clock, ping,
-logout and another world entry. It repeats on a new connection with the saved
-logon key. It uses the real Gateway dispatch with a Fake at the LogonStore and
-WorldStore Seams. It needs no running realm, client assets or graphics runtime.
-
-Run the scenario and movement checks with:
+`lyracore-protocol` pins the independent Benilla codec to
+`c2fc3cf304075a0fa1c9accffaf5efb99be9edfe`. Its tests compare movement and other packet layouts with
+that codec. The Gateway crate has been removed. The native TCP check runs separately against the
+real Module, using a Python client that implements logon, header encryption and the checked packet
+layouts.
 
 ```sh
-cargo test --locked -p lyracore-gateway --bin lyracore-gateway benilla_
+cargo test --locked -p lyracore-protocol
+python3 native-host/check.py --host <path>/target/release/spacetimedb-standalone
 ```
 
-## What the tests establish
-
-The Headless Client uses Benilla for SRP proofs, header encryption, request bodies
-and reply decoding. Local framing keeps the existing socket deadlines in force.
-World entry checks the Character guid, name, map, position, health and level.
-Clock replies must contain current Unix seconds, and pong must echo the sequence
-number. Logout must complete before the next Character selection.
-
-Every received world packet must decode without unread bytes. Two world-entry
-messages have no Benilla decoder at this pin. The test checks their lengths
-explicitly: `SMSG_ACCOUNT_DATA_TIMES` at `0x0209` is 128 bytes, and
-`SMSG_SET_REST_START` at `0x021E` is four bytes. Their contents are not verified.
-Any other unmodelled packet fails the test.
-
-Two Headless Clients also move through real dispatch and a shared Fake WorldStore.
-Each receives the other's ground, jump, swim and transport movement through the
-production motion callback, AOI audience, known-object Gate and encrypted writer.
-The Fake supplies the initial peer snapshot and applies movement to its stored
-positions. The scenario checks those positions, suppresses echoes to the mover,
-and excludes an observer outside the AOI. It does not run the Module's movement
-reducer or verify initial peer discovery.
-
-Separate codec checks cover movement tails and malformed bodies. Every truncated
-prefix and a body with trailing bytes must fail decoding.
+The native check covers the gameplay exchanges listed in
+[the architecture](./architecture.md#native-host-migration), with committed-state and packet
+assertions. These tests do not establish every gameplay path or real-client presentation. The
+removed Gateway's Fake Store scenarios are no longer evidence for the native runtime.
 
 ## Generate the opcode inventory
 
 ```sh
-cargo fetch --locked
-cargo run --locked --quiet -p lyracore-gateway --example benilla_inventory \
+cargo run --locked --quiet -p lyracore-protocol --example benilla_inventory \
   > /tmp/benilla-inventory.json
 ```
 
-The inventory groups world messages by numeric opcode and direction. It reads
-the pinned Benilla writer, movement selectors and decoder, then matches those
-numbers against LyraCore's codec names and Gateway source. For example,
-Benilla's `CMSG_MEETINGSTONE_STATUS_QUERY` and LyraCore's
-`CMSG_MEETINGSTONE_INFO` both mean `0x0296`.
+The inventory reads the pinned Benilla writer, movement selectors and decoder. It matches their
+numeric opcodes against Module dispatch and the shared protocol source. Every request emitted by
+that Benilla revision has a typed dispatch pattern, a reviewed raw route or an explicit ignore.
+The inventory test fails when none applies.
 
-Each row contains source locations and one of these observations:
+Each message records its direction, source references and handling classification:
 
-- `dispatch_pattern_present`: Gateway source contains a typed dispatch pattern.
-- `explicitly_ignored`: a matching dispatch arm has an empty body.
-- `raw_route_review_required`: the opcode has a known raw routing path.
-- `no_dispatch_pattern_found`: the scanner found no typed dispatch pattern.
-- `source_evidence_only`: an outgoing message appears in source. Its decoder
-  presence and Gateway references are separate fields.
+- `dispatch_pattern_present`: a typed dispatch pattern exists.
+- `explicitly_ignored`: the request is deliberately dropped.
+- `raw_route_review_required`: a known numeric route needs manual inspection.
+- `no_dispatch_pattern_found`: no typed pattern or reviewed route was found.
+- `source_evidence_only`: an outgoing opcode appears in source.
 
-These are source observations, not claims that a feature works. The scanner
-excludes imports, comments, strings, test code and generated bindings. It handles
-`match`, destructuring patterns and `matches!`; it does not expand other macros,
-resolve aliases or trace calls. Raw numeric sends need manual inspection.
-Outgoing rows include Benilla decoder references and LyraCore's named `SMSG_`
-references. A Benilla decoder does not make a message mandatory for every realm.
-Logon packets use a separate protocol and are covered by the scenario instead.
+Source presence does not certify behavior. The scanner excludes imports, comments, strings and
+test code, handles `match`, destructuring and `matches!`, and does not expand other macros or trace
+calls. A decoder in Benilla does not require every Realm to emit that message.
 
-The inventory scanner tests run in `cargo test -p lyracore-gateway`.
-
-The `behaviors` list supplements those source observations with curated gameplay
-evidence. Each entry names requests, replies, Module operations, content prerequisites,
-test functions and remaining gaps. Message rows link to matching entries through
-`behavior_evidence`. An empty list means no curated entry, not missing support.
-
-The inventory checks that each named test exists as a Rust test declaration. It
-records whether the test is ignored by default and marks execution as
-`not_run_by_inventory`. It does not run tests or infer that a feature works from a
-function name. `support` is a reviewed scope description; even an unavailable feature
-can have a passing refusal test. `real_client` remains `unverified` until a separate
-Verification records it. Add evidence in
-`gateway/examples/benilla_inventory/behaviors.json` as scenarios grow.
+The curated `behaviors` list names retained Rust tests in
+`crates/lyracore-protocol/examples/benilla_inventory/behaviors.json`. The inventory checks their
+declarations and records whether they are ignored. It does not run them. Removed Gateway tests
+are omitted; native Python scenarios are separate. An empty test list means no retained Rust
+scenario in this inventory. Real-client Verification remains unverified.
 
 ## Transport movement
 
 The build-5875 movement codec uses transport flag `0x02000000`, a full 64-bit
 transport guid, a relative position and orientation, with no transport timestamp.
-The Gateway decodes relayed `MSG_MOVE_*` bodies before the general typed reader
+The Module decodes relayed `MSG_MOVE_*` bodies before the general typed reader
 and writes that same vanilla layout into the movement row. Observer replies
 preserve the stored body. The shared fall-damage parser recognizes the same flag
 and excludes transport movement from fall damage.
 
 `wow_world_messages` 0.3.0 uses a later transport layout. Its typed movement values
-remain the internal carrier, while the Gateway owns the transport bytes. Benilla
+remain the internal carrier, while the protocol crate owns the build-5875 movement bytes. Benilla
 checks transport, jump and swim tails together. The transport regression test is
 enabled in the normal suite.
 
 The real Module scenario also checks late-observer transport attachment. Speed,
 root, hover, feather-fall, water-walk, knockback, teleport and spline completion
-acknowledgements keep the World Session usable. The Gateway reads the speed,
+acknowledgements keep the World Session usable. The Module reads the speed,
 root, knockback, hover, feather-fall and water-walk acknowledgements with the
 build-5875 layout too, so a transport tail does not end the session. This does
 not establish boat simulation, transport membership or acknowledgement counter
@@ -150,17 +102,17 @@ are ignored without decoding. They never move the Character.
 
 ### Root receipts
 
-The client moves independently of the Module. The Gateway sends a root packet for a root, stun or
+The client moves independently of the Module. The Module sends a root packet for a root, stun or
 polymorph and sends an unroot packet only after the last hold ends. The library writes
 `SMSG_FORCE_MOVE_ROOT` and `SMSG_SPLINE_MOVE_ROOT` with a full guid, which the client misreads, so
-the Gateway writes the packed guid itself. The Module drops steering samples while held, but accepts
+the Module writes the packed guid itself. The Module drops steering samples while held, but accepts
 root receipts, stops, turns and landings so fall damage still applies.
 
-`gateway/src/codec/movement.rs::acknowledged_move` turns the current Character's root, unroot and
-water-walk receipts into `MSG_MOVE_ROOT`, `MSG_MOVE_UNROOT` and `MSG_MOVE_WATER_WALK` relays for
+`crates/lyracore-protocol/src/codec/movement.rs::acknowledged_move` turns the current Character's
+root, unroot and water-walk receipts into `MSG_MOVE_ROOT`, `MSG_MOVE_UNROOT` and `MSG_MOVE_WATER_WALK` relays for
 peers, as cmangos does. Peers otherwise retain the last run. A root receipt clears steering flags
 so the Module accepts the reported position. The pinned library's `clear_*` methods mask with
-`reverse_bits`, so the Gateway clears the bits in the encoded bytes instead. The Gateway reads the
+`reverse_bits`, so the Module clears the bits in the encoded bytes instead. The Module reads the
 receipts with the build-5875 layout, so receipts on a transport relay too. A receipt between a
 same-map teleport and the client's `MSG_MOVE_TELEPORT_ACK` is not relayed.
 
@@ -168,185 +120,44 @@ Movement interruption uses client flags, including jumping, rather than a change
 position. A delayed stop can update the stored position after Shadowmeld begins without ending
 the aura. Turning in place also preserves it.
 
-## Gameplay scenarios and remaining gaps
+### Resurrection packets
 
-The Headless Client scenarios cover these exchanges through the same WorldStore Seam:
+The shared [corpse codec](../crates/lyracore-protocol/src/codec/corpse.rs) writes reclaim delay in
+milliseconds. The pinned library writes seconds. It also writes both resurrection-offer flags after
+the sized caster name; the library omits the second flag. The native runtime uses these raw codecs. The
+[CMaNGOS packet writers](https://github.com/cmangos/mangos-classic/blob/master/src/game/Entities/Player.cpp#L17442)
+define the offer layout and reclaim-delay units.
 
-- Select a target, start melee and stop melee. Check the selected target and
-  engagement in the Fake, plus the attack-start and attack-stop replies.
-- Open a corpse, take copper and an item stack, close loot and move the item to
-  another inventory slot. Check the Fake's balances and inventory, then log in
-  again and decode the acquired item's entry, owner and stack count before the
-  Character's inventory pointers arrive.
-- Read and accept a quest without objectives, request its reward screen, then
-  collect the reward. Check the quest log and copper balance, plus the completion
-  packet's quest id, money and XP. An incomplete quest must stay on the progress
-  screen and grant nothing when its reward screen is requested.
+## Build-5875 corrections
 
-## Durable scenarios
+The protocol crate supplies raw codecs where the pinned generated library differs. These include
+transport movement, teleport acknowledgements, packed movement-control GUIDs, reclaim-delay units,
+resurrection-offer flags and XP layouts. Partial VALUES updates omit `OBJECT_FIELD_TYPE`.
+See [the protocol traps](./danger-zones.md#1-do-not-touch--high-risk-traps-these-have-bitten-before)
+before changing those packets.
 
-The ignored `benilla_durable_` tests start private SpacetimeDB instances on loopback
-ports. Each publishes the Module with `debug_reducers`, creates a Coordinator and
-runs the real Gateway dispatch. Fixture changes apply only to these disposable
-instances. No existing realm is needed or changed.
-
-```sh
-cargo test --locked -p lyracore-gateway --bin lyracore-gateway benilla_durable_ \
-  -- --ignored --test-threads=1
-```
-
-They require SpacetimeDB 2.7.1 and the Wasm toolchain. The Module durable workflow
-runs them in CI. They cover:
-
-- Two Characters discovering one another, ground and transport movement, late
-  observer attachment, leaving the AOI and returning.
-- Accepting a two-kill quest, melee damage, kill credit, corpse money and item
-  loot, reward collection and persistence after reconnect.
-- Splitting stacks, refusing invalid counts and equipment destinations, then
-  reconnecting with both stacks intact.
-- Partial and full item destruction, indestructible items and persistence.
-- Destroying an equipped weapon and updating the Character sheet to unarmed damage.
-- Splitting into an equipped bag, capacity checks, reconnecting with its contents,
-  moving, equipping, using and destroying contained items. Nonempty bag moves and
-  destruction are refused, as are reverse swaps that would equip food.
-- Starting a spell channel and cancelling it with `CMSG_CANCEL_CHANNELLING`.
-- Refusing a distant, dead or wrong-kind innkeeper, then binding at the selected
-  innkeeper and receiving the new hearth point during the same World Session.
-
-## Additional protocol corrections
-
-`SMSG_TRANSFER_ABORTED` carries one reason byte in build 5875. The Gateway sends it
-even when the failed Transfer has no usable destination map. A Benilla scenario checks
-the failure path for known, unknown and missing destinations, including full body
-consumption. The retail client's loading-screen recovery still needs Verification.
-
-The Gateway owns these build-5875 layouts where the protocol library differs:
-
-| Request | Benilla layout |
-| --- | --- |
-| `CMSG_BATTLEFIELD_JOIN` | Map, instance and group flag, nine bytes |
-| `CMSG_PAGE_TEXT_QUERY` | Page id and object guid, twelve bytes |
-| `CMSG_SET_FACTION_ATWAR` | Reputation-list index and boolean, five bytes |
-| `CMSG_SET_FACTION_INACTIVE` | Reputation-list index and boolean, five bytes |
-| `CMSG_SET_WATCHED_FACTION` | Signed reputation-list index, four bytes |
-| `CMSG_ACTIVATETAXIEXPRESS` | Flightmaster, total cost, node count and node ids |
-| `CMSG_OPENING_CINEMATIC` | Empty body, absent from the library's client enum |
-| `CMSG_SET_LOOKING_FOR_GROUP` | Three slots and a terminated comment, absent from the library's client enum |
-| `CMSG_GMTICKET_CREATE` | Category, map, position and two terminated strings; Benilla omits the optional harassment transcript |
-| `CMSG_GMTICKET_UPDATETEXT` | Category and terminated text, including the Help window's 500-character limit |
-
-Ticket requests receive Refusals after framing checks. The unavailable service
-does not decompress the optional transcript or allocate from its size headers.
-
-Kill XP carries base XP and the group multiplier; other XP awards have no extra
-fields, and the Gateway writes that layout directly. At world entry, container
-pointers follow the item and Character creation packets, with the same slot
-mapping as incremental inventory updates.
-
-At War changes reach the existing Module operation. Bind and talent-reset
-confirmations also reach existing Module operations. Selecting the gossip option
-opens the confirmation dialog first. Talent quotes use the same price calculation
-as the Module. Changed bind points reach the client from the Character row update.
-The selected innkeeper guid reaches the Module's interaction Gate.
-`CMSG_PLAYER_LOGOUT` uses the existing logout Gate, and
-`CMSG_LOGOUT_CANCEL` returns its acknowledgement. Logout remains immediate when
-allowed; there is no twenty-second pending logout to cancel.
-
-Stand, sit, sleep and kneel requests reach the Module, which stores the stand
-state on the Character's unit bytes. A ghost can sit too. Damage stands a seated
-player who is not mounted. Each stored change sends the Character
-`SMSG_STANDSTATE_UPDATE`, and observers see it in the unit bytes. A refused
-request sends the stored state back. A completed bind also sends `SMSG_PLAYERBOUND`.
-Its confirmation line names the Character's zone; vmangos names the sub-area at
-the bind point. World entry and each zone
-crossing send an empty `SMSG_INIT_WORLD_STATES`. A first world entry plays the
-race's opening cinematic. A second login in one World Session gets
-`SMSG_CHARACTER_LOGIN_FAILED`. Debug, GM, Warden and lottery requests get no
-answer. The Gateway drops account-data uploads and zone reports before decoding,
-because the protocol library cannot read them safely.
-
-## Combat feedback
-
-A player's due melee swing that finds its target out of reach or behind the player records a
-Swing Error. The Gateway sends `SMSG_ATTACKSWING_NOTINRANGE` or `SMSG_ATTACKSWING_BADFACING` once
-when the error changes, and a landed swing clears it. A creature that starts an Engagement sends
-`SMSG_AI_REACTION` (hostile) before `SMSG_ATTACKSTART`; a reconnect replays only the attack start.
-The player who lands a melee killing blow gets `SMSG_PARTYKILLLOG`. A swing that ends a Duel is no
-killing blow. vmangos sends the line to the tagger or a pet's owner, and to the party. The tag
-is gone from the Coordinator cache when the relay runs, so those copies and spell kills are not
-sent.
-
-Each periodic damage, heal or energize tick sends `SMSG_PERIODICAURALOG`; a heal tick on a unit at
-full health logs nothing. A damage spell rolls its hit once per target, and a missed target takes
-none of its effects. The `SMSG_SPELL_GO` miss list names the target, as a miss for a physical spell
-and a resist for a magic one. The caster of an instant cast already holds a GO, so it gets
-`SMSG_SPELLLOGMISS` instead. A direct energize sends `SMSG_SPELLENERGIZELOG`. Bystanders of an
-interrupted player cast get `SMSG_SPELL_FAILED_OTHER`. Mount refusals name the vanilla cast
-failure: dead, in combat, indoors or in deep water.
-
-`CMSG_PET_RENAME` renames the Character's live Hunter pet once. The Module checks
-ownership, pet kind and the remaining rename before changing any state. Those
-Refusals are silent. An invalid name receives `SMSG_PET_NAME_INVALID`; names must
-have 2 to 12 letters from one script. Success stores the name and a changed timestamp
-so the client can refresh its cached name.
-
-The name-cache fields reach nearby viewers as well as the owner. Existing live pets
-recover their rename flag during the normal care update, using their creation timestamp
-until their first rename. Durable tests cover refused requests, logout persistence and
-this reconciliation. Call Pet and restoration after login remain unavailable, so name
-persistence does not yet mean the pet returns after reconnect. Reserved-name and profanity
-lists are also absent.
-
-Imported gossip conditions retain source references and operands. Supported rules
-cover quest state, level, team, race and class, plus compound conditions and negation.
-Unknown, dangling or cyclic conditions make an option unavailable. The Module repeats
-the eligibility check when the client selects an option, before running its hook.
-Existing imported rows need a gossip reimport to recover information the previous
-importer discarded. No reimport is performed by these tests.
+Native Character creation, inventory changes, quests, Mail and auctions return gameplay Refusals
+without committing partial state. The Module constructs those replies. The Host delivers them
+after the failed transaction has rolled back.
 
 ## Missing gameplay and deliberate responses
 
-These features remain unavailable. The responses below apply to valid requests
-while in world. A decoded request or a refusal is not a working gameplay system.
-Automatic action-bar and tutorial requests announce each missing feature once
-per World Session. Repeated requests do not add chat lines.
+`crates/lyracore-protocol/src/unavailable.rs` defines responses for services that remain absent.
+A Refusal or an empty reply does not establish a working gameplay feature.
 
-| Feature | Protocol behavior | Missing work |
-| --- | --- | --- |
-| Battlegrounds | Empty instance lists, three clear queue slots, empty scoreboards and positions. Join and port requests report unavailability. | Queues, matchmaking, instances, matches, rewards and battlemaster map selection. |
-| Battleground spirit healers | System Message reporting unavailability. | Resurrection queues and timers. |
-| GM tickets | System disabled, no current ticket, creation and update refused. Deletion reports the already-absent ticket. | Durable tickets and GM workflow. |
-| Pet stables | Stable failure code 6 for listing, storing, retrieving, swapping and slot purchase. | Stable storage and purchases. |
-| Pet controls | Specific System Messages for bar changes, autocast, aura cancellation, stop-attack, abandonment and unlearning. A pet-bar spell cast gets `SMSG_PET_CAST_FAILED` with the unreported reason, then a System Message. A pet-info request is ignored; the pet bar arrives with the pet. | These operations and their durable state, and an owner-to-pet read to resend the pet bar. Pet action commands, Hunter pet rename and progression have separate implementations. |
-| Item containers and gifts | Inventory Refusal 39. | Item-container loot, wrapping and unwrapping. |
-| Readable pages | A terminal page names the unavailable text service. | Page-text catalog import and page chains. |
-| Reading items | Read failure with the close reason and a System Message, for an item with page text. An item without page text gets Inventory Refusal 23. | Page-text catalog import, then the read-OK reply. |
-| Limited vendor stock, item timers and item cooldowns | No `SMSG_BUY_ITEM`, `SMSG_ITEM_TIME_UPDATE`, `SMSG_ITEM_ENCHANT_TIME_UPDATE` or `SMSG_ITEM_COOLDOWN`. | Stock depletion and restock, item duration and the equip cooldown. |
-| Skill points, ground-item and loot-slot stores, lottery | Ignored without a reply, as vmangos and cmangos do. | Nothing in 1.12. |
-| Explicit vendor destination | Inventory Refusal 39. | An atomic purchase into the requested bag and slot. Ordinary vendor purchase uses the existing path. |
-| Automatic bag placement | Equipment-to-backpack uses the existing path; other requests receive Inventory Refusal 39. | Automatic placement into a chosen bag and movement of nonempty equipped bags. Explicit supported slot moves work. |
-| Character presentation | Specific System Messages. | Mount flourish, helm and cloak visibility preferences. |
-| Stand-state rules | Stand state is stored and shown. | Auras that sitting or standing cancels, the automatic critical hit on a seated victim, the NOT_STANDING cast failure, 1.5x regeneration while seated, and the UNIT_FLAG_PREVENT_ANIM gate. |
-| Character renames | `SMSG_CHAR_RENAME` with CHAR_CREATE_ERROR. | An at-login rename flag and the rename itself. |
-| Account data | Every section reports empty at world entry. A section request gets an empty `SMSG_UPDATE_ACCOUNT_DATA`; uploads are dropped. | Durable macros, key bindings and settings per Account and per Character. |
-| Tutorials and display preferences | Specific System Messages. | Durable tutorial flags, action bar visibility, inactive and watched factions. Action buttons and At War use existing operations. |
-| Ammunition and skill unlearning | Specific System Messages. | Ammunition selection and removal of learned skills. |
-| Taxi chains | Activation failure code 1. | Chained flight state and charging. Single-hop taxis use the existing path. |
-| Quest-share confirmations and results | System Messages. | Recipient acceptance and result relay. The existing share-offer path alone does not complete the exchange. |
-| Instance resets and raid lockout queries | System Messages. | Client routing and projection across Instance Pools. Existing instance bindings are not reported as an empty list. |
-| Honor and PvP flag toggles | System Messages. | Honor accounting, inspection and PvP flag timers. |
-| Summon acceptance, remote cameras and opening cinematics | System Messages. | Summon offers, camera control and cinematic start state. |
-| LFG preferences | System Message. | Durable LFG slots and comments. Meeting Stone requests use their existing path. |
+| Service | Response |
+| --- | --- |
+| Battlegrounds | Empty instance lists, queue slots, scoreboards and positions; join requests report unavailability |
+| GM tickets | Disabled service, absent ticket, refused creation and updates |
+| Pet stables | Failure code 6 |
+| Pet bar editing, autocast and pet spell requests | Specific System Messages, with a cast-failed packet for a pet spell |
+| Item containers, wrapping and explicit vendor destinations | Inventory Refusal |
+| Readable pages | A terminal page naming the unavailable text service |
+| Tutorials and action-bar display preferences | One unavailable notice per feature per World Session |
+| Ammunition, skill unlearning, equipment visibility, PvP flags and honor queries | Specific System Messages |
+| Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
+| Instance resets and raid lockout queries | Specific System Messages |
+| Taxi chains | Activation failure; single-hop taxis have their own implementation |
 
-Apart from the [root receipts](#root-receipts) above, movement-control acknowledgements, skipped
-time, inactive-mover movement, cinematic camera advances and cinematic completion are receipt-only.
-They do not move the Character. No receipt establishes acknowledgement counter enforcement. Setting
-the active mover to the current Character is accepted; another mover receives a
-System Message. Possession and remote movement authority remain unavailable.
-
-The scenarios establish the behavior listed above, not every branch of the older
-handlers. Further gameplay verification includes targeted item spells, channel
-refresh and reconnect, pet spell execution, multi-shard instance flows and the
-complete outgoing opcode inventory. Decoder presence alone does not require a
-realm to emit an outgoing message.
-
+The Module handles current native presence, name lookup, party authority and recipient Gates in
+one Shard. Cross-Shard instance routing and Gateway relays are no longer part of these exchanges.

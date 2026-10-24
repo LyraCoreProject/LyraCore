@@ -61,10 +61,17 @@ pub fn realm_chat(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let speaker_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    apply_chat(ctx, speaker_guid, request).map_err(|refusal| refused_chat(refusal, speaker_guid))
+}
+
+pub(crate) fn apply_chat(
+    ctx: &ReducerContext,
+    speaker_guid: u64,
+    request: RealmChatRequest,
+) -> Result<(), ChatRefusal> {
     let line = compose(speaker_guid, request, |request| {
         audience(ctx, speaker_guid, request)
-    })
-    .map_err(|refusal| refused_chat(refusal, speaker_guid))?;
+    })?;
     emit(ctx, line);
     Ok(())
 }
@@ -233,6 +240,7 @@ pub(crate) fn whisper_lines(
 }
 
 pub(crate) fn emit(ctx: &ReducerContext, line: RealmChatLine) {
+    crate::native::realm_chat_line(ctx, &line);
     ctx.db.game_realm_chat_event().insert(RealmChatEvent {
         id: 0,
         kind: line.kind,

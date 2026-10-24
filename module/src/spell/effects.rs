@@ -97,7 +97,7 @@ pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8
                 now_micros,
             );
         }
-        auras.id().delete(a.id);
+        crate::Aura::delete(ctx, a.id);
     }
     if moves_mount {
         crate::mount::recompute_mount(ctx, target_guid);
@@ -259,10 +259,10 @@ pub(crate) fn absorb_incoming(ctx: &ReducerContext, target_guid: u64, incoming: 
     shields.sort_by_key(|a| a.id); // Drain the oldest shield first.
     let (updated, deleted, remaining_damage) = drain_shields(shields, incoming);
     for shield in updated {
-        auras.id().update(shield);
+        shield.update(ctx);
     }
     for id in deleted {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     remaining_damage
 }
