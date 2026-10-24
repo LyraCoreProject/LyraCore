@@ -36,12 +36,13 @@ def main():
         if target.read_text() not in (original, desired):
             raise RuntimeError(f'refusing to overwrite unrelated changes in {target}')
         target.write_text(desired)
-    patch = str(ROOT / 'host-lock.patch')
-    check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
-    if check.returncode == 0:
-        subprocess.run(['git', 'apply', patch], cwd=checkout, check=True)
-    else:
-        subprocess.run(['git', 'apply', '--reverse', '--check', patch], cwd=checkout, check=True)
+    for name in ('host-lock.patch', 'dev-reload.patch'):
+        patch = str(ROOT / name)
+        check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
+        if check.returncode == 0:
+            subprocess.run(['git', 'apply', patch], cwd=checkout, check=True)
+        else:
+            subprocess.run(['git', 'apply', '--reverse', '--check', patch], cwd=checkout, check=True)
     shutil.copyfile(ROOT / 'src/mod.rs', checkout / 'crates/standalone/src/native_world.rs')
     for name in ('feed', 'wire'):
         shutil.copyfile(ROOT / f'src/{name}.rs', checkout / f'crates/standalone/src/native_{name}.rs')

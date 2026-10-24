@@ -487,6 +487,34 @@ invocation or not inside a checkout.
 
 ## Updating
 
+### Developer reload
+
+For Module code changes, start the local development Realm and watcher:
+
+```bash
+./lyracore dev watch
+```
+
+The first run builds the Native Host and development WASM. Connect the client, edit Module or
+Package Rust source, and save. Later edits rebuild only the WASM and publish it to the running
+Host. The command prints build and publish times. It combines rapid saves and rebuilds again if
+source changes during a build. An unchanged WASM needs no further publish within that watch run.
+
+If a normal `dev up` Host is already running, stop it with `./lyracore dev down` before starting
+watch. This one-time mode switch ends existing World Sessions. Ctrl+C stops the watcher and leaves
+the development Host running. `./lyracore dev down` stops that Host and keeps its durable data.
+
+A failed Rust build leaves the current Module running. Fix the source and save again. The
+development Host also refuses any change to the Module definition, including private tables and
+reducer arguments. Handle those changes through a planned update. A compatible code edit keeps
+the same client connection, but it can still change gameplay or contain a bug. This workflow does
+not replace `./lyracore preflight` or the tests required for a PR.
+
+The build cache lives in `.lyracore/dev-reload-target/`. Keep it between edits. Changing the Native
+Host requires a restart; the watcher only publishes the Module.
+
+### Checkout updates
+
 ```bash
 ./lyracore update
 ```

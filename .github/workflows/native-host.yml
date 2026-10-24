@@ -31,10 +31,18 @@ jobs:
             .lyracore/native-host/SpacetimeDB -> target
       - name: Build the native Host
         run: python3 native-host/prepare-host.py --checkout .lyracore/native-host/SpacetimeDB --build
+      - name: Check development reload compatibility
+        working-directory: .lyracore/native-host/SpacetimeDB
+        env:
+          CARGO_PROFILE_RELEASE_DEBUG: '0'
+          CARGO_PROFILE_RELEASE_LTO: 'false'
+        run: cargo +1.97.1 test --release --locked -p spacetimedb-schema development_reload
       - name: Build the Module
         run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
       - name: Check native protocol behavior
         run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone
+      - name: Check development reload with connected clients
+        run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-reload
       - name: Check long Login Queue waits
         run: python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-admission
       - name: Check crash recovery
