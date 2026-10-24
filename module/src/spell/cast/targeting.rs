@@ -1474,7 +1474,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         c.grid_x = gx;
         c.grid_y = gy;
         c.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
-        // Native World Sessions supply client time; bots and creatures use server time.
+        // Native World Sessions supply client time; bots and creatures use the Realm Clock.
         if !crate::native::is_player(ctx, caster_guid) {
             c.last_move_ms = now_ms;
         }

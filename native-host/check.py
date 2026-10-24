@@ -277,8 +277,8 @@ def check_sessionless_movement(call, sql, guid):
             advanced = True
         if not sql(f'SELECT guid FROM game_creature_spline WHERE guid = {guid}')[0]['rows']:
             break
-    assert advanced, ('sessionless movement did not refresh server time', x, moved, started)
-    assert x == 6005 and moved != started, ('sessionless arrival did not refresh server time', x, moved, started)
+    assert advanced, ('sessionless movement did not record the Realm Clock', x, moved, started)
+    assert x == 6005 and moved != started, ('sessionless arrival did not record the Realm Clock', x, moved, started)
 
 
 def check_charge_movement(client, peer, call, sql, guid, peer_guid):
@@ -4841,6 +4841,9 @@ def main():
                 assert [opcode for opcode, _ in logout][-2:] == [0x4c, 0x4d]
                 replacement.send(0x37)
                 assert any(opcode == 0x3b for opcode, _ in replacement.collect())
+                replacement.send(0x2c7, struct.pack('<Q', guid) + b'Renamed\0')
+                assert replacement.read() == (0x2c8, b'\x2f')
+                assert sql(f'SELECT name FROM game_character WHERE guid = {guid}')[0]['rows'] == [['Native']]
                 assert not sql(f'SELECT guid FROM game_world_entity WHERE guid = {guid}')[0]['rows']
                 assert guid in destroys(peer.collect())
                 peer.send(0xee, struct.pack('<IIffffI', 0, 2000, 11, 0, 0, 0, 0))
