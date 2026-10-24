@@ -75,6 +75,11 @@ This workflow covers Module code changes in a local development Realm. Host chan
 a restart, and schema changes need a planned update. It does not implement paused production
 updates. See [the workflow](./quickstart.md#development-reload) for startup and failure handling.
 
+The [recorded Benilla check](../native-host/results/development-reload.json) kept one World Session
+through two source edits, a compile failure and Ctrl+C. Build plus publish took 37.85 and 31.62
+seconds while recording. This is a development workflow with minimal fixture content, not a
+release-build comparison or a populated-Realm performance result.
+
 ### Native protocol coverage
 
 The native protocol check covers SRP logon, world proof authentication, Character creation,
