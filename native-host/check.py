@@ -292,7 +292,14 @@ def check_charge_movement(client, peer, call, sql, guid, peer_guid):
     client.send(0xee, struct.pack('<IIffffI', 0, 3_605_000, x+6, y, z, orientation, 0))
     client.collect()
     assert sql(f'SELECT x,last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[x+6, 3_605_000]]
-    assert any(opcode == 0xee and packed_guid(body) == guid for opcode, body in peer.collect())
+    observed = []
+    for _ in range(50):
+        observed += peer.collect()
+        if any(opcode == 0xee and packed_guid(body) == guid for opcode, body in observed):
+            break
+        time.sleep(0.02)
+    else:
+        raise AssertionError(('missing movement after Charge', [(hex(opcode), body.hex()) for opcode, body in observed]))
 
 
 def check_death(client, peer, call, sql, guid, peer_guid):
