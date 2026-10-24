@@ -14,6 +14,11 @@ pub struct Packet {
 pub fn encode(message: ServerOpcodeMessage) -> Result<Packet> {
     let mut frame = Vec::new();
     message.write_unencrypted_server(&mut frame)?;
+    if matches!(&message, ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(query) if query.found.is_some())
+    {
+        // Build 5875 needs 24 data words; wow_world_messages 0.3.0 emits six.
+        frame.extend_from_slice(&[0; (24 - 6) * 4]);
+    }
     ensure!(frame.len() >= 4, "world response is missing its header");
     Ok(Packet {
         opcode: u16::from_le_bytes([frame[2], frame[3]]),
@@ -151,6 +156,74 @@ mod tests {
             client_seed.wrapping_add(1),
             &proof
         ));
+    }
+
+    #[test]
+    fn gameobject_query_carries_all_24_build_5875_data_words() {
+        let view = crate::codec::GameObjectTemplateView {
+            type_id: 3,
+            display_id: 259,
+            name: "Chest".into(),
+            data0: 0x0102_0304,
+            data1: 52,
+            data2: 1,
+        };
+        let packet = encode(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
+            Box::new(crate::codec::build_gameobject_query_response(
+                50100,
+                Some(&view),
+            )),
+        ))
+        .unwrap();
+        assert_eq!(packet.opcode, 0x005f);
+        assert_eq!(
+            &packet.body[..22],
+            b"\xb4\xc3\0\0\x03\0\0\0\x03\x01\0\0Chest\0\0\0\0\0"
+        );
+        let words = packet.body[22..]
+            .chunks_exact(4)
+            .map(|word| u32::from_le_bytes(word.try_into().unwrap()))
+            .collect::<Vec<_>>();
+        assert_eq!(packet.body.len(), 118);
+        assert_eq!(
+            words,
+            [
+                0x0102_0304,
+                52,
+                1,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0,
+                0
+            ]
+        );
+    }
+
+    #[test]
+    fn missing_gameobject_query_contains_only_the_flagged_entry() {
+        let packet = encode(ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(
+            Box::new(crate::codec::build_gameobject_query_response(50100, None)),
+        ))
+        .unwrap();
+        assert_eq!(packet.opcode, 0x005f);
+        assert_eq!(packet.body, [0xb4, 0xc3, 0, 0x80]);
     }
 
     #[test]
