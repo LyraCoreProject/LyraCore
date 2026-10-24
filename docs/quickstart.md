@@ -39,13 +39,14 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
 | **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
+| **openssl** command | EC key support | Native startup creates and checks its persistent signing keys with this command. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
 ### Ubuntu 24.04
 
 ```bash
 sudo apt-get update
-sudo apt-get install -y build-essential pkg-config libssl-dev git curl
+sudo apt-get install -y build-essential pkg-config libssl-dev openssl git curl
 ```
 
 Install `libssl-dev` and `pkg-config` for the native Rust dependencies that link against OpenSSL.
@@ -65,8 +66,8 @@ curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 ```
 
-No Homebrew packages and no OpenSSL are needed — on Apple platforms `native-tls` uses
-Security.framework, not OpenSSL.
+On Apple platforms, `native-tls` uses Security.framework. Native startup also requires the
+`openssl` command for its signing keys.
 
 ### SpacetimeDB 2.7.1 (both platforms)
 
@@ -530,7 +531,7 @@ Each replacement stores the WASM in the local commit log. Frequent edits can con
 disk space under `.lyracore/native-data/`; the build cache is separate. Do not delete individual
 commit-log files to reclaim space from a Realm you intend to keep.
 
-Native startup requires OpenSSL with EC support. The CLI keeps local signing keys in the private
+Native startup requires the `openssl` command with EC support. The CLI keeps local signing keys in the private
 `.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
 does not match, startup stops without replacing it. An existing certificate authority in the
 Host's configuration takes precedence over these fallback keys.
