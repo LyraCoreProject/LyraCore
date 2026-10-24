@@ -237,17 +237,6 @@ fn send_raw(
     body: Vec<u8>,
     close_after: bool,
 ) {
-    if !close_after
-        && !matches!(opcode, 0x003e | 0x003f | 0x0040 | 0x01dd | 0x0096)
-        && ctx
-            .db
-            .game_native_player()
-            .connection_id()
-            .find(connection_id)
-            .is_some_and(|player| player.teleport == Some(teleport::NativeTeleport::WorldPort))
-    {
-        return;
-    }
     ctx.db.game_native_packet().insert(NativePacket {
         id: 0,
         audience: NativeAudience::Connection(connection_id),
@@ -484,11 +473,7 @@ pub fn native_world_receive(
                 ClientOpcodeMessage::CMSG_CHAR_RENAME(_) => ServerOpcodeMessage::SMSG_CHAR_RENAME(
                     Box::new(codec::build_char_rename_refusal()),
                 ),
-                _ => {
-                    return Err(format!(
-                        "opcode {opcode:#06x} is unavailable at character selection"
-                    ))
-                }
+                _ => return Ok(()),
             };
             send(ctx, connection_id, reply, false)
         }

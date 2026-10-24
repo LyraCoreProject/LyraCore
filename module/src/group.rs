@@ -4,6 +4,7 @@ pub use mirror::sync_group_mirror;
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
+use crate::native::game_native_player;
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
@@ -1035,6 +1036,15 @@ pub(crate) fn invite_core(
     })
 }
 
+fn character_online(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .character_guid()
+        .find(guid)
+        .is_some()
+        || ctx.db.game_world_entity().guid().find(guid).is_some()
+}
+
 fn invite_core_on(
     ctx: &ReducerContext,
     plane: Plane,
@@ -1049,13 +1059,7 @@ fn invite_core_on(
         if ctx.db.game_character().guid().find(target_guid).is_none() {
             return Err(GroupRefusal::NoSuchPlayer.into());
         }
-        if ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(target_guid)
-            .is_none()
-        {
+        if !character_online(ctx, target_guid) {
             return Err(GroupRefusal::TargetOffline.into());
         }
     }
@@ -1833,12 +1837,7 @@ pub(crate) fn apply_action(
             let actor = crate::helpers::character_by_guid(ctx, actor_guid)
                 .ok_or_else(|| refused(GroupRefusal::ActorUnavailable, "group invite"))?;
             if let Some(target) = crate::helpers::character_by_guid(ctx, target) {
-                if ctx
-                    .db
-                    .game_world_entity()
-                    .guid()
-                    .find(target.guid)
-                    .is_some()
+                if character_online(ctx, target.guid)
                     && !lyracore_shared::faction::same_team(actor.race, target.race)
                 {
                     return Err(refused(GroupRefusal::WrongFaction, "group invite"));
@@ -1846,7 +1845,7 @@ pub(crate) fn apply_action(
             }
         }
         if let SetLeader(target) = action {
-            if ctx.db.game_world_entity().guid().find(target).is_none() {
+            if !character_online(ctx, target) {
                 return Err(refused(GroupRefusal::TargetOffline, "group leader"));
             }
         }

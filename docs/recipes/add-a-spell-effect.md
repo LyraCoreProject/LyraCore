@@ -1,13 +1,7 @@
 # Recipe: add a spell effect
 
-The worked example is Distract (spell 1725, raw `Spell.dbc` effect 69), merged in `e3858119`. It
-touched 24 files, three of them generated bindings. Read that diff next to this list:
-
-```bash
-git diff e3858119^1 e3858119 --stat
-```
-
-The shared taxonomy supplies the codes used by the Module, Gateway and Importer.
+The shared taxonomy supplies the codes used by the Module and Importer. Native protocol handlers
+and Relays run in the Module; reusable packet builders live in the protocol crate.
 
 ## 1. State the 1.12.1 behaviour
 
@@ -46,8 +40,9 @@ Files: `module/src/spell/cast/resolve.rs`, `module/src/spell/outcome.rs`.
   cost is charged, so a Refusal leaves power and cooldown untouched.
 - A Gate returns a `CastRefusal`. Add a `CastRefusalKind` only when a caller must tell the new
   Refusal apart.
-- The Gateway picks the client's `SpellCastResult` from the Refusal message
-  (`cast_failure_reason_for` in `gateway/src/codec/combat.rs`). Reuse an existing phrase such as
+- The native cast handler picks the client's `SpellCastResult` from the Refusal message
+  through `cast_failure_reason_for` in `crates/lyracore-protocol/src/codec/combat.rs`.
+  Reuse an existing phrase such as
   "out of range" or "line of sight", or add an arm there with a test.
 
 ## 5. Apply the effect
@@ -72,29 +67,18 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
   `IdleSink` (`module/src/creatures/cycle/ctx.rs`) and faces the point through
   `module/src/creatures/tick/mod.rs`.
 
-## 7. Regenerate the Gateway bindings
+## 7. Check schema and delivery
 
-Required for every new table or reducer, including a private table the Gateway never reads, because
-preparation covers the complete private schema.
+Run `./lyracore preflight` for a table or reducer change. Native handlers read the Shard directly;
+there are no generated Gateway bindings or Coordinator subscriptions. If the effect changes
+persistent state, update its native Relay and any world-entry replay that restores it.
 
-- Run `./lyracore bindings`, then `cargo test -p lyracore-gateway`.
-- Inspect the generated files under `.lyracore/generated/gateway/`. Distract added
-  `creature_distraction_type.rs`, `game_creature_distraction_table.rs` and lines in `mod.rs`.
-- If the table drives a Relay, declare it in `gateway/src/codec/<family>/subscriptions.rs`. The
-  declaration generates its query and row callbacks. A table used only by Durable Reads goes in
-  `coordinator_queries` in `gateway/src/stdb/connection.rs`.
-- Add a `parity_test!` and the subscribed table name to `MANIFEST_TABLES` in
-  `gateway/tests/schema_parity.rs`. The inventory covers both query sources.
+## 8. Change the packets when needed
 
-## 8. Change the packets, if the client needs it
-
-Most effects need no Gateway change. Distract did: a cast at a clicked ground point echoes the point
-in the START and GO target blocks.
-
-- Add the builders in `gateway/src/codec/combat.rs` and any new gtker type import in
-  `gateway/src/codec/mod.rs`.
-- Choose them in `gateway/src/world/handlers/cast/mod.rs`.
-- Test the builders byte for byte, and the handler through the cast dispatcher's Fake.
+- Add reusable builders in `crates/lyracore-protocol/src/codec/combat.rs`.
+- Call them from `module/src/native/spell.rs` or the owning native Protocol Family.
+- Test exact packet bytes, recipient selection and the client's acknowledgement when applicable.
+- Add a native request scenario to `native-host/check.py` for behavior that crosses those paths.
 
 ## 9. Write the durable test
 
@@ -115,4 +99,4 @@ edit.
 ## 11. Run the checks
 
 Run every command in [`testing.md`](../testing.md) that the change reaches: the unit tier, the
-wasm check, the new durable target, and the binding check.
+wasm check, the new durable target, preflight and the native protocol check.

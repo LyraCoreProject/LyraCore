@@ -85,8 +85,10 @@ impl CtxWorld<'_> {
         e.grid_x = gx;
         e.grid_y = gy;
         e.cell = spatial::grid_cell_id(gx, gy);
-        if let Some(ms) = moved_ms {
-            e.last_move_ms = ms;
+        if !e.is_player() {
+            if let Some(ms) = moved_ms {
+                e.last_move_ms = ms;
+            }
         }
         if let Some(rad) = orientation {
             e.orientation = rad;

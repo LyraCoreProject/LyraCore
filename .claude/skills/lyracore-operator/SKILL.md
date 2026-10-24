@@ -1,6 +1,6 @@
 ---
 name: lyracore-operator
-description: Operate a LyraCore production realm through guarded updates and read-only diagnosis. Use when deploying merged changes, restarting or verifying the gateway, or diagnosing topology, SpacetimeDB, listener, realm-address, or capacity failures. Not for ordinary source implementation.
+description: Operate a LyraCore Realm through targeted updates and read-only diagnosis. Use for Native Host deployment, restart, recovery, listener, Realm-address or capacity work. Not for ordinary source implementation.
 ---
 
 # LyraCore operator
@@ -9,9 +9,8 @@ Treat `docs/danger-zones.md` as authoritative. For either branch, first read
 [`references/production-contract.md`](references/production-contract.md) completely; it defines the
 independent production authority, target, topology, redaction, and health proof.
 
-The host scripts for history pruning, the disk guard and diagnostic captures live in `deploy/` of
-the `LyraCoreProject/lyracore-cli` repository. The Standalone Supervisor unit stays in this checkout
-at `deploy/systemd/spacetimedb-standalone.service`.
+Follow [the native operations guide](../../../docs/native-operations.md). Establish the actual
+service configuration before an operation; the retired Gateway procedures do not apply.
 
 ## Choose one branch
 

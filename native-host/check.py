@@ -263,6 +263,38 @@ def acknowledge_controls(client, peer, sql, guid, packets):
     raise AssertionError(('missing movement receipt Relay', expected, [hex(opcode) for opcode, _ in observed]))
 
 
+def check_charge_movement(client, peer, call, sql, guid, peer_guid):
+    spell = 5099100
+    sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
+    sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({spell * 4},{spell},0,9,0,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false)')
+    for target, x in [(guid, 10), (peer_guid, 11)]:
+        call('debug_teleport', [target, 0, x, 0, 0, 0])
+    client.collect()
+    peer.collect()
+    call('debug_learn_spell', [guid, spell])
+    client.send(0xee, struct.pack('<IIffffI', 0, 3_600_000, 16, 0, 0, 0, 0))
+    client.collect()
+    peer.collect()
+    before = {row[0] for row in sql('SELECT guid FROM game_world_entity WHERE entry = 51000')[0]['rows']}
+    call('debug_spawn_at_feet', [guid, 51000, 15])
+    spawned = {row[0] for row in sql('SELECT guid FROM game_world_entity WHERE entry = 51000')[0]['rows']} - before
+    assert len(spawned) == 1, spawned
+    target = spawned.pop()
+    client.send(0x12e, cast(spell, target))
+    cast_packets = client.collect()
+    assert any(opcode == 0x132 and spell_id(body) == spell for opcode, body in cast_packets), [(hex(opcode), body.hex()) for opcode, body in cast_packets]
+    time.sleep(1.5)
+    client.collect()
+    peer.collect()
+    x, y, z, orientation = sql(f'SELECT x,y,z,orientation FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0]
+    assert x > 20, ('Charge did not move the Character', x)
+    assert sql(f'SELECT last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[3_600_000]]
+    client.send(0xee, struct.pack('<IIffffI', 0, 3_605_000, x+6, y, z, orientation, 0))
+    client.collect()
+    assert sql(f'SELECT x,last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[x+6, 3_605_000]]
+    assert any(opcode == 0xee and packed_guid(body) == guid for opcode, body in peer.collect())
+
+
 def check_death(client, peer, call, sql, guid, peer_guid):
     corpse = 0xf101_0000_0000_0000 | guid
     sql("INSERT INTO game_graveyard (id,map_id,x,y,z,o,name) VALUES (5090401,0,20,0,0,0,'Native graveyard')")
@@ -2813,8 +2845,14 @@ def check_party(client, peer, call, sql, guid, peer_guid):
     assert (0x7c, b'') in peer.collect()
     invite('Missinggroupmember', 1)
     invite('Native', 1)
+    call('debug_teleport', [peer_guid, 1, 11, 0, 0, 0])
+    assert any(opcode == 0x3e for opcode, _ in peer.collect(auto_ack=False))
     invite('pEeR')
-    assert (0x6f, b'Native\0') in peer.collect()
+    assert (0x6f, b'Native\0') in peer.collect(auto_ack=False)
+    peer.send(0xdc)
+    peer.collect()
+    call('debug_teleport', [peer_guid, 0, 11, 0, 0, 0])
+    peer.collect()
     peer.send(0x73)
     peer.collect()
     assert (0x74, b'Peer\0') in client.collect()
@@ -4740,6 +4778,7 @@ def main():
                 check_world_objects(client, peer, call, sql)
                 check_addon(client, peer, call, sql)
                 check_chat(client, peer, call, sql, guid, peer_guid)
+                check_charge_movement(client, peer, call, sql, guid, peer_guid)
                 replacement = World(world_port, key=native_key)
                 assert replacement.read()[0] == 0x1ee
                 replacement.send(0x3d, struct.pack('<Q', guid))
@@ -4758,8 +4797,13 @@ def main():
                 time.sleep(0.05)
                 assert sql(f'SELECT guid FROM game_world_entity WHERE guid = {guid}')[0]['rows']
                 replacement.send(0x4b)
+                replacement.send(0xee, struct.pack('<IIffffI', 0, 3000, 12, 0, 0, 0, 0))
+                replacement.send(0x13d, struct.pack('<Q', peer_guid))
+                replacement.send(0x50, struct.pack('<Q', peer_guid))
                 logout = replacement.collect()
                 assert [opcode for opcode, _ in logout][-2:] == [0x4c, 0x4d]
+                replacement.send(0x37)
+                assert any(opcode == 0x3b for opcode, _ in replacement.collect())
                 assert not sql(f'SELECT guid FROM game_world_entity WHERE guid = {guid}')[0]['rows']
                 assert guid in destroys(peer.collect())
                 peer.send(0xee, struct.pack('<IIffffI', 0, 2000, 11, 0, 0, 0, 0))

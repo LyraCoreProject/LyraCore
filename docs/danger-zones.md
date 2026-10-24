@@ -10,7 +10,8 @@ Every entry below is here because it cost real debugging time at least once. A c
 any line in §1 needs a human review before it ships, whoever or whatever wrote it.
 
 This checkout runs one native Host and one Shard. The legacy deployment procedures below describe
-older Gateway revisions and must not be used to deploy this checkout. Existing multi-Shard Realms
+older Gateway revisions and must not be used to deploy this checkout. Use
+[the native operations guide](native-operations.md) for this revision. Existing multi-Shard Realms
 need a reviewed data migration, including settlement of pending Escrows and Holds and retirement
 of Gateway leases and Account Claims. Local native startup creates its own data directory.
 

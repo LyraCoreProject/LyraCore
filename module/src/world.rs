@@ -335,11 +335,7 @@ impl MovementDelta {
 
 pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &MovementDelta) {
     let dist_2d = ((delta.x - delta.old_x).powi(2) + (delta.y - delta.old_y).powi(2)).sqrt();
-    let dt_s = if delta.move_time_ms > delta.old_move_ms {
-        (delta.move_time_ms - delta.old_move_ms) as f32 / 1000.0
-    } else {
-        0.0
-    };
+    let dt_s = (delta.move_time_ms.wrapping_sub(delta.old_move_ms) as i32).max(0) as f32 / 1000.0;
     if dist_2d <= TELEPORT_MAX_YD && dt_s < MIN_DT_S {
         return;
     }
@@ -852,7 +848,7 @@ pub(crate) fn movement_is_accepted(
     z: f32,
     o: f32,
 ) -> bool {
-    (move_time_ms == 0 || move_time_ms > last_move_ms)
+    (move_time_ms == 0 || last_move_ms == 0 || (move_time_ms.wrapping_sub(last_move_ms) as i32) > 0)
         && x.is_finite()
         && y.is_finite()
         && z.is_finite()
@@ -1582,6 +1578,17 @@ mod tests {
         };
         assert!(plan_movement(HEARTBEAT, false, false, false, 0.0, false, &moving).moved);
         assert!(!plan_movement(HEARTBEAT, false, false, false, 0.0, false, &stationary).moved);
+    }
+
+    #[test]
+    fn movement_clock_wrap_accepts_new_packets_and_refuses_stale_ones() {
+        let accepted = |last, next| super::movement_is_accepted(last, next, 0.0, 0.0, 0.0, 0.0);
+        assert!(accepted(0, u32::MAX - 10));
+        assert!(accepted(u32::MAX - 10, 20));
+        assert!(!accepted(20, u32::MAX - 10));
+        assert!(!accepted(20, 20));
+        assert!(!accepted(20, 19));
+        assert!(accepted(20, 21));
     }
 
     #[test]

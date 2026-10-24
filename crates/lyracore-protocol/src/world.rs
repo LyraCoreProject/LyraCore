@@ -39,9 +39,9 @@ pub fn decode(opcode: u32, body: &[u8]) -> Result<ClientOpcodeMessage> {
     ensure!(
         !matches!(
             opcode,
-            crate::codec::auth_session::CMSG_AUTH_SESSION_OPCODE | 0x0205 | 0x020b
+            crate::codec::auth_session::CMSG_AUTH_SESSION_OPCODE | 0x0205 | 0x020b | 0x0317
         ),
-        "compressed requests require a bounded raw handler"
+        "request requires a bounded raw handler"
     );
     if let Some(message) = crate::codec::read_movement_client(opcode, body)? {
         return Ok(message);
@@ -51,7 +51,6 @@ pub fn decode(opcode: u32, body: &[u8]) -> Result<ClientOpcodeMessage> {
         0x028f | 0x023e => body.get(8),
         0x02f3 => body.get(12),
         0x02ee => body.get(16),
-        0x0317 => body.get(4),
         _ => None,
     };
     ensure!(
@@ -179,7 +178,7 @@ mod tests {
             (0x028f, 8),
             (0x02f3, 12),
             (0x02ee, 16),
-            (0x0317, 4),
+            (0x0317, 2),
             (0x023e, 8),
         ] {
             let mut body = vec![0; offset + 1];
