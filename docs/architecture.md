@@ -26,8 +26,8 @@ stable AOI Grants through entity, GameObject, Corpse, DynamicObject and stealth 
 The [host extension](../native-host/src/mod.rs) adds logon and world TCP listeners to SpacetimeDB
 standalone. It uses in-process Core connections and one private output subscription for all native clients. It has no
 SDK or WebSocket connection to the Module. It passes native reducer arguments as BSATN. BSATN has
-no field names and the reducer call does not check for trailing bytes, so the host's argument types
-must match the reducer parameters exactly. The host owns secure random seeds, header ciphers,
+no field names and the reducer call does not check for trailing bytes, so the host's arguments must
+match the reducer parameters' order and BSATN layout. The host owns secure random seeds, header ciphers,
 framing, socket deadlines and bounded output queues. It applies Module-issued grant and revoke
 instructions; it does not calculate spatial visibility or gameplay Gates.
 

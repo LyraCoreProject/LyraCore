@@ -171,8 +171,12 @@ async fn connect(
     Ok(())
 }
 
-async fn request(client: &ClientConnection, name: &str, arguments: &impl Serialize) -> Result<()> {
-    let Err(error) = call(client, name, arguments).await?.into_result() else {
+async fn request(
+    client: &ClientConnection,
+    reducer: &str,
+    arguments: &impl Serialize,
+) -> Result<()> {
+    let Err(error) = call(client, reducer, arguments).await?.into_result() else {
         return Ok(());
     };
     let reason = error.to_string();
@@ -181,7 +185,7 @@ async fn request(client: &ClientConnection, name: &str, arguments: &impl Seriali
     };
     let packets: Vec<(u16, Vec<u8>)> = serde_json::from_str(reply)?;
     ensure!(
-        name == "native_world_receive",
+        reducer == "native_world_receive",
         "native rollback reply outside a world request"
     );
     call(client, "native_world_reply", &(packets,))
@@ -189,7 +193,7 @@ async fn request(client: &ClientConnection, name: &str, arguments: &impl Seriali
         .into_result()
 }
 
-// BSATN is positional and decoders ignore trailing bytes; types must match the reducer parameters.
+// Arguments must match the reducer parameters' order and BSATN layout; trailing bytes go unchecked.
 async fn call(
     client: &ClientConnection,
     reducer: &str,
