@@ -3519,14 +3519,24 @@ def check_slow_readers(world_port, call, sql, await_empty):
         healthy, healthy_guid = clients[1]
         slow.collect()
         healthy.collect()
-        item = sql(f'SELECT entry FROM game_item_instance WHERE owner_guid = {slow_guid}')[0]['rows'][0][0]
+        text_id = 5090999
+        text = 'x' * 16384
+        sql(f"INSERT INTO game_npc_text (text_id, text) VALUES ({text_id}, '{text}')")
+        query = struct.pack('<IQ', text_id, 0)
+        slow.send(0x17f, query)
+        reply = next(body for opcode, body in slow.collect() if opcode == 0x180)
+        assert len(reply) > len(text) * 2
         slow.socket.setsockopt(socket.SOL_SOCKET, socket.SO_RCVBUF, 2048)
-        slow.socket.settimeout(0.5)
+        requests_sent = 0
 
         def flood():
+            nonlocal requests_sent
             try:
-                while not stopped.is_set():
-                    slow.send(0x56, struct.pack('<IQ', item, 0))
+                for _ in range(512):
+                    if stopped.is_set():
+                        break
+                    slow.send(0x17f, query)
+                    requests_sent += 1
             except OSError:
                 pass
 
@@ -3543,7 +3553,7 @@ def check_slow_readers(world_port, call, sql, await_empty):
                 break
             time.sleep(0.05)
         else:
-            raise AssertionError('slow reader remained connected after its output blocked')
+            raise AssertionError(f'slow reader remained connected after {requests_sent} replies of {len(reply) + 4} bytes')
         assert max(latencies) < 1, latencies
         print(json.dumps({'check': 'slow_reader_isolation',
             'slow_reader_closed_seconds': time.monotonic() - started,
