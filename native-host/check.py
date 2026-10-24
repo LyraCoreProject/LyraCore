@@ -263,6 +263,24 @@ def acknowledge_controls(client, peer, sql, guid, packets):
     raise AssertionError(('missing movement receipt Relay', expected, [hex(opcode) for opcode, _ in observed]))
 
 
+def check_sessionless_movement(call, sql, guid):
+    call('debug_spawn_player_entity', [guid])
+    assert not sql(f'SELECT character_guid FROM game_native_player WHERE character_guid = {guid}')[0]['rows']
+    call('debug_teleport', [guid, 0, 6000, 1000, 0, 0])
+    call('debug_creature_path', [guid, 6005, 1000, 0, False])
+    started = sql(f'SELECT last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0][0]
+    advanced = False
+    for _ in range(100):
+        time.sleep(0.05)
+        x, moved = sql(f'SELECT x,last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0]
+        if 6000 < x < 6005 and moved != started:
+            advanced = True
+        if not sql(f'SELECT guid FROM game_creature_spline WHERE guid = {guid}')[0]['rows']:
+            break
+    assert advanced, ('sessionless movement did not refresh server time', x, moved, started)
+    assert x == 6005 and moved != started, ('sessionless arrival did not refresh server time', x, moved, started)
+
+
 def check_charge_movement(client, peer, call, sql, guid, peer_guid):
     spell = 5099100
     sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
@@ -3689,12 +3707,16 @@ def check_decoder_bounds(world_port, call, sql, await_empty, log_path):
                     client.send(0x3d, struct.pack('<Q', guid))
                     client.collect()
                 client.send(opcode, body)
-                client.socket.settimeout(3)
-                try:
-                    while True:
-                        client.read()
-                except EOFError:
-                    pass
+                if in_world:
+                    client.socket.settimeout(3)
+                    try:
+                        while True:
+                            client.read()
+                    except EOFError:
+                        pass
+                else:
+                    client.send(0x37)
+                    assert any(opcode == 0x3b for opcode, _ in client.collect())
             finally:
                 client.close()
             await_empty('game_native_player')
@@ -3706,7 +3728,11 @@ def check_decoder_bounds(world_port, call, sql, await_empty, log_path):
                 client.collect()
             ticket = b'\x02' + bytes(18) + struct.pack('<I', 0xffffffff) + bytes([0xff]) * 16
             client.send(0x205, ticket)
-            assert (0x206, struct.pack('<I', 3)) in client.collect()
+            if in_world:
+                assert (0x206, struct.pack('<I', 3)) in client.collect()
+            else:
+                client.send(0x37)
+                assert any(opcode == 0x3b for opcode, _ in client.collect())
         finally:
             client.close()
         await_empty('game_native_player')
@@ -4785,6 +4811,7 @@ def main():
                 check_world_objects(client, peer, call, sql)
                 check_addon(client, peer, call, sql)
                 check_chat(client, peer, call, sql, guid, peer_guid)
+                check_sessionless_movement(call, sql, 1)
                 check_charge_movement(client, peer, call, sql, guid, peer_guid)
                 replacement = World(world_port, key=native_key)
                 assert replacement.read()[0] == 0x1ee
@@ -4807,6 +4834,9 @@ def main():
                 replacement.send(0xee, struct.pack('<IIffffI', 0, 3000, 12, 0, 0, 0, 0))
                 replacement.send(0x13d, struct.pack('<Q', peer_guid))
                 replacement.send(0x50, struct.pack('<Q', peer_guid))
+                replacement.send(0x125, struct.pack('<IB', 0, 1))
+                replacement.send(0x318, struct.pack('<i', -1))
+                replacement.send(0x258, struct.pack('<QI', 0, 0) + b'\0' + struct.pack('<BBIIIIB', 0, 0, 0xffffffff, 0xffffffff, 0xffffffff, 0xffffffff, 0))
                 logout = replacement.collect()
                 assert [opcode for opcode, _ in logout][-2:] == [0x4c, 0x4d]
                 replacement.send(0x37)

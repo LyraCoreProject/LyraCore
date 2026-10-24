@@ -1474,7 +1474,8 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
         c.grid_x = gx;
         c.grid_y = gy;
         c.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
-        if !c.is_player() {
+        // Native World Sessions supply client time; bots and creatures use server time.
+        if !crate::native::is_player(ctx, caster_guid) {
             c.last_move_ms = now_ms;
         }
         c.orientation = facing;

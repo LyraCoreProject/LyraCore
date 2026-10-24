@@ -85,7 +85,8 @@ impl CtxWorld<'_> {
         e.grid_x = gx;
         e.grid_y = gy;
         e.cell = spatial::grid_cell_id(gx, gy);
-        if !e.is_player() {
+        // Native World Sessions supply client time; bots and creatures use server time.
+        if !crate::native::is_player(self.ctx, guid) {
             if let Some(ms) = moved_ms {
                 e.last_move_ms = ms;
             }

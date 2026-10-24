@@ -381,6 +381,16 @@ pub fn native_world_receive(
     if let Some(account_id) = account_id {
         current_account(ctx, &connection, account_id)?;
     }
+    // World requests can remain in flight after logout; selection decodes only its own requests.
+    if matches!(
+        connection.state,
+        NativeWorldState::CharacterSelection { .. }
+    ) && !matches!(
+        opcode,
+        0x0036 | 0x0037 | 0x0038 | 0x003d | 0x01ce | 0x01dc | 0x02c7
+    ) {
+        return Ok(());
+    }
     // Discard obsolete controls before readers inspect untrusted sizes, compressed data or enums.
     if !matches!(connection.state, NativeWorldState::AwaitingProof)
         && matches!(
@@ -433,11 +443,6 @@ pub fn native_world_receive(
             }
         }
         NativeWorldState::CharacterSelection { account_id } => {
-            if opcode == codec::addon::CMSG_MESSAGECHAT_OPCODE
-                && body.get(4..8) == Some(codec::addon::LANG_ADDON.to_le_bytes().as_slice())
-            {
-                return Ok(());
-            }
             if opcode == 0x003d {
                 return world::login(ctx, connection, &body);
             }
