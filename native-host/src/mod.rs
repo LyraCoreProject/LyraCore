@@ -3,11 +3,11 @@ use anyhow::{ensure, Context, Result};
 use spacetimedb::client::{
     ClientActorId, ClientConfig, ClientConnection, ClientConnectionReceiver, Protocol, WsVersion,
 };
-use spacetimedb::host::FunctionArgs;
+use spacetimedb::host::{FunctionArgs, ReducerOutcome};
 use spacetimedb_auth::identity::ConnectionAuthCtx;
 use spacetimedb_client_api::{ControlStateReadAccess, NodeDelegate};
 use spacetimedb_client_api_messages::websocket::v1;
-use spacetimedb_lib::{identity::AuthCtx, ConnectionId};
+use spacetimedb_lib::{bsatn, identity::AuthCtx, ser::Serialize, ConnectionId};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -171,49 +171,40 @@ async fn connect(
     Ok(())
 }
 
-async fn request(
+async fn request(client: &ClientConnection, name: &str, arguments: &impl Serialize) -> Result<()> {
+    let Err(error) = call(client, name, arguments).await?.into_result() else {
+        return Ok(());
+    };
+    let reason = error.to_string();
+    let Some(reply) = reason.strip_prefix("native_reply:") else {
+        return Err(error);
+    };
+    let packets: Vec<(u16, Vec<u8>)> = serde_json::from_str(reply)?;
+    ensure!(
+        name == "native_world_receive",
+        "native rollback reply outside a world request"
+    );
+    call(client, "native_world_reply", &(packets,))
+        .await?
+        .into_result()
+}
+
+// BSATN is positional and decoders ignore trailing bytes; types must match the reducer parameters.
+async fn call(
     client: &ClientConnection,
-    name: &str,
-    arguments: serde_json::Value,
-) -> Result<()> {
-    let result = client
+    reducer: &str,
+    arguments: &impl Serialize,
+) -> Result<ReducerOutcome> {
+    Ok(client
         .call_reducer(
-            name,
-            FunctionArgs::Json(arguments.to_string().into()),
+            reducer,
+            FunctionArgs::Bsatn(bsatn::to_vec(arguments)?.into()),
             0,
             Instant::now(),
             v1::CallReducerFlags::NoSuccessNotify,
         )
         .await?
-        .outcome
-        .into_result();
-    if let Err(error) = result {
-        let reason = error.to_string();
-        let Some(reply) = reason.strip_prefix("native_reply:") else {
-            return Err(error);
-        };
-        let packets: Vec<(u16, Vec<u8>)> = serde_json::from_str(reply)?;
-        let packets: Vec<_> = packets
-            .into_iter()
-            .map(|(opcode, body)| serde_json::json!({"opcode": opcode, "body": body}))
-            .collect();
-        ensure!(
-            name == "native_world_receive",
-            "native rollback reply outside a world request"
-        );
-        client
-            .call_reducer(
-                "native_world_reply",
-                FunctionArgs::Json(serde_json::json!([packets]).to_string().into()),
-                0,
-                Instant::now(),
-                v1::CallReducerFlags::NoSuccessNotify,
-            )
-            .await?
-            .outcome
-            .into_result()?;
-    }
-    Ok(())
+        .outcome)
 }
 
 async fn serve(
@@ -232,21 +223,11 @@ async fn serve(
     let transport = async move {
         let seed = ProofSeed::new();
         let handshake = async {
-            request(
-                &client,
-                "native_world_open",
-                serde_json::json!([seed.seed()]),
-            )
-            .await?;
+            request(&client, "native_world_open", &(seed.seed(),)).await?;
             let challenge = deliveries.recv().await.context("native feed closed")?;
             wire::write_plain(&mut socket, challenge).await?;
             let (opcode, body) = wire::read_client(&mut socket, None).await?;
-            request(
-                &client,
-                "native_world_receive",
-                serde_json::json!([opcode, body]),
-            )
-            .await?;
+            request(&client, "native_world_receive", &(opcode, body)).await?;
             let reply = deliveries.recv().await.context("native feed closed")?;
             let Some(cipher) = reply.cipher else {
                 wire::write_plain(&mut socket, reply).await?;
@@ -281,12 +262,7 @@ async fn serve(
             loop {
                 let (opcode, body) = wire::read_client(&mut reader, Some(&mut decrypt)).await?;
                 input_activity.send_replace(tokio::time::Instant::now());
-                request(
-                    &client,
-                    "native_world_receive",
-                    serde_json::json!([opcode, body]),
-                )
-                .await?;
+                request(&client, "native_world_receive", &(opcode, body)).await?;
             }
             #[allow(unreachable_code)]
             Ok::<(), anyhow::Error>(())
@@ -332,7 +308,7 @@ async fn serve_logon(
         request(
             &client,
             "native_logon_open",
-            serde_json::json!([socket.peer_addr()?.ip().to_string()]),
+            &(socket.peer_addr()?.ip().to_string(),),
         )
         .await?;
         let mut deadline = tokio::time::Instant::now() + Duration::from_secs(10);
@@ -343,12 +319,7 @@ async fn serve_logon(
             }
             let exchange = async {
                 let frame = wire::read_logon(&mut socket).await?;
-                request(
-                    &client,
-                    "native_logon_receive",
-                    serde_json::json!([frame, entropy::<32>()]),
-                )
-                .await?;
+                request(&client, "native_logon_receive", &(frame, entropy::<32>())).await?;
                 let delivery = deliveries.recv().await.context("native feed closed")?;
                 wire::write_logon(&mut socket, delivery).await
             };

@@ -25,9 +25,11 @@ stable AOI Grants through entity, GameObject, Corpse, DynamicObject and stealth 
 
 The [host extension](../native-host/src/mod.rs) adds logon and world TCP listeners to SpacetimeDB
 standalone. It uses in-process Core connections and one private output subscription for all native clients. It has no
-SDK or WebSocket connection to the Module. The host owns secure random seeds, header ciphers, framing,
-socket deadlines and bounded output queues. It applies Module-issued grant and revoke instructions;
-it does not calculate spatial visibility or gameplay Gates.
+SDK or WebSocket connection to the Module. It passes native reducer arguments as BSATN. BSATN has
+no field names and the reducer call does not check for trailing bytes, so the host's argument types
+must match the reducer parameters exactly. The host owns secure random seeds, header ciphers,
+framing, socket deadlines and bounded output queues. It applies Module-issued grant and revoke
+instructions; it does not calculate spatial visibility or gameplay Gates.
 
 `game_native_packet.id` orders delivery instructions within a transaction. A grant's CREATE precedes
 the packets delivered through that grant. A revoke removes its recipient before later packets can
@@ -39,10 +41,11 @@ World entry registers its Character as an AOI viewer after self CREATE and befor
 Sessionless Characters remain AOI subjects but do not allocate viewer Grants. Companion populations
 therefore do not create packet-delivery subscriptions for Characters without native connections.
 
-An expected request failure returns a `native_reply:` envelope containing Module-encoded packets.
-The list is empty for a silent Refusal. The failed transaction rolls back. The host submits that
-envelope to `native_world_reply` on the same connection, which emits the refusal through the ordered output stream. The host does
-not classify gameplay errors. Other failures close the connection.
+An expected request failure returns a `native_reply:` envelope, a JSON list of Module-encoded
+packets. The list is empty for a silent Refusal. The failed transaction rolls back. The host parses
+that list and submits its packets to `native_world_reply` on the same connection, which emits the
+refusal through the ordered output stream. The host does not classify gameplay errors. Other
+failures close the connection.
 
 The native protocol check covers SRP logon, world proof authentication, Character creation,
 enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTROY, stealth visibility,
