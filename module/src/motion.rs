@@ -68,6 +68,7 @@ pub(crate) fn tick_action(entity_alive: bool) -> TickAction {
 }
 
 fn publish(ctx: &ReducerContext, p: &PendingMotion) {
+    crate::native::motion(ctx, p);
     let motions = ctx.db.game_entity_motion();
     match motions.guid().find(p.guid) {
         Some(prev) => {

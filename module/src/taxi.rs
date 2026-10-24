@@ -519,6 +519,7 @@ fn remaining_spline(
 }
 
 fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
+    crate::native::taxi_spline_changed(ctx, &row);
     let splines = ctx.db.game_taxi_passenger_spline();
     if splines.character_guid().find(row.character_guid).is_some() {
         splines.character_guid().update(row);
@@ -885,7 +886,20 @@ pub fn gw_taxi_node_status(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let reply = match resolve_flight_master(ctx, character_guid, npc_guid) {
+    write_reply(
+        ctx,
+        taxi_node_status(ctx, character_guid, npc_guid, request_id),
+    );
+    Ok(())
+}
+
+pub(crate) fn taxi_node_status(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    request_id: u64,
+) -> TaxiServiceReply {
+    match resolve_flight_master(ctx, character_guid, npc_guid) {
         Ok((_player, source)) => TaxiServiceReply {
             character_guid,
             request_id,
@@ -907,9 +921,7 @@ pub fn gw_taxi_node_status(
             denied,
             ctx.timestamp.to_micros_since_unix_epoch(),
         ),
-    };
-    write_reply(ctx, reply);
-    Ok(())
+    }
 }
 
 #[spacetimedb::reducer]
@@ -921,7 +933,17 @@ pub fn gw_open_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let reply = match resolve_flight_master(ctx, character_guid, npc_guid) {
+    write_reply(ctx, open_taxi(ctx, character_guid, npc_guid, request_id));
+    Ok(())
+}
+
+pub(crate) fn open_taxi(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    request_id: u64,
+) -> TaxiServiceReply {
+    match resolve_flight_master(ctx, character_guid, npc_guid) {
         Ok((_player, source)) => {
             discover(ctx, character_guid, source.id);
             TaxiServiceReply {
@@ -946,9 +968,7 @@ pub fn gw_open_taxi(
             denied,
             ctx.timestamp.to_micros_since_unix_epoch(),
         ),
-    };
-    write_reply(ctx, reply);
-    Ok(())
+    }
 }
 
 #[spacetimedb::reducer]
@@ -962,6 +982,28 @@ pub fn gw_activate_taxi(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    write_reply(
+        ctx,
+        activate_taxi(
+            ctx,
+            character_guid,
+            npc_guid,
+            source_client_node_id,
+            destination_client_node_id,
+            request_id,
+        ),
+    );
+    Ok(())
+}
+
+pub(crate) fn activate_taxi(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    npc_guid: u64,
+    source_client_node_id: u32,
+    destination_client_node_id: u32,
+    request_id: u64,
+) -> TaxiServiceReply {
     let created_micros = ctx.timestamp.to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
         let (mut player, source) = resolve_flight_master(ctx, character_guid, npc_guid)?;
@@ -1004,18 +1046,14 @@ pub fn gw_activate_taxi(
         Ok(())
     })();
 
-    write_reply(
-        ctx,
-        activation_reply(
-            character_guid,
-            request_id,
-            npc_guid,
-            source_client_node_id,
-            created_micros,
-            attempt,
-        ),
-    );
-    Ok(())
+    activation_reply(
+        character_guid,
+        request_id,
+        npc_guid,
+        source_client_node_id,
+        created_micros,
+        attempt,
+    )
 }
 
 pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {

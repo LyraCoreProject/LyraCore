@@ -3,6 +3,14 @@ use spacetimedb::{ReducerContext, Table};
 use super::{game_world_entity, WorldEntity};
 
 impl WorldEntity {
+    pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
+        let guid = *guid.borrow();
+        let removed = ctx.db.game_world_entity().guid().delete(guid);
+        crate::breath::clear(ctx, guid);
+        crate::aoi::entity_removed(ctx, guid);
+        removed
+    }
+
     fn stamp_simulation(&mut self) {
         use lyracore_shared::packing::power_type;
 
@@ -20,12 +28,23 @@ impl WorldEntity {
 
     pub(crate) fn insert(mut self, ctx: &ReducerContext) -> Self {
         self.stamp_simulation();
-        ctx.db.game_world_entity().insert(self)
+        let entity = ctx.db.game_world_entity().insert(self);
+        crate::aoi::entity_changed(ctx, None, &entity);
+        entity
     }
 
     pub(crate) fn update(mut self, ctx: &ReducerContext) -> Self {
         self.stamp_simulation();
-        ctx.db.game_world_entity().guid().update(self)
+        let old = ctx.db.game_world_entity().guid().find(self.guid);
+        let entity = ctx.db.game_world_entity().guid().update(self);
+        crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
+        if let Some(old) = old {
+            if crate::breath::eligible(&old) && !crate::breath::eligible(&entity) {
+                crate::breath::clear(ctx, entity.guid);
+            }
+            crate::native::entity_changed(ctx, &old, &entity);
+        }
+        entity
     }
 }
 

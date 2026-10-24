@@ -27,16 +27,17 @@ pub use engage::{
     RangedImpactSchedule,
 };
 pub(crate) use folds::{
-    arm_react, aura_attack_power_bonus, clear_queued_strike, effective_agility, effective_crit_bp,
-    effective_move_speed, effective_strength, effective_swing_time, equipped_offhand_weapon_damage,
-    equipped_ranged_weapon, find_ammo, queued_strike_on_swing, react_window_active,
-    retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing, roll_swing_with_range,
-    seal_holy_on_swing, swing_range_ctx, weapon_strike_damage, wear_weapon, ReactKind,
+    arm_react, aura_attack_power_bonus, clear_queued_strike, effective_agility, effective_armor,
+    effective_crit_bp, effective_move_speed, effective_strength, effective_swing_time,
+    equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo, queued_strike_on_swing,
+    react_window_active, retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing,
+    roll_swing_with_range, seal_holy_on_swing, swing_range_ctx, weapon_strike_damage, wear_weapon,
+    ReactKind,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::{
-    effective_armor, effective_block_bp, effective_block_value, effective_dodge_bp,
-    effective_miss_bp, effective_parry_bp,
+    effective_block_bp, effective_block_value, effective_dodge_bp, effective_miss_bp,
+    effective_parry_bp,
 };
 
 pub use swing::{ranged_impact, tick_melee};

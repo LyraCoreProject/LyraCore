@@ -11,7 +11,6 @@ pub(crate) use crate::account_ownership::SessionActor;
 pub(crate) use crate::combat::{
     apply_hit, enter_combat, final_damage, fold_incoming_damage, kill_creature, Hit, HitSource,
 };
-pub(crate) use crate::creatures::tick::emit_move_spline;
 pub(crate) use crate::creatures::{
     build_creature_entity, despawn_creature_entity, insert_creature_entity, timer_never,
 };
@@ -24,6 +23,34 @@ pub(crate) use crate::spell::{
     CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
 pub(crate) use crate::xp::grant_xp;
+
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn emit_move_spline(
+    ctx: &ReducerContext,
+    guid: u64,
+    start: (f32, f32, f32),
+    destination: (f32, f32, f32),
+    duration_ms: u32,
+    run: bool,
+    spline_id: u32,
+    map_id: u32,
+    instance_id: u64,
+    grid: (i32, i32),
+) {
+    crate::creatures::tick::emit_move_spline(
+        ctx,
+        guid,
+        start,
+        destination,
+        duration_ms,
+        run,
+        spline_id,
+        map_id,
+        instance_id,
+        grid,
+        None,
+    );
+}
 
 pub fn apply_damage(
     ctx: &ReducerContext,

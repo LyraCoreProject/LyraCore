@@ -22,8 +22,8 @@ body:
       label: What happened
       description: What you expected, and what you got instead. Paste the exact error text rather than paraphrasing it.
       placeholder: |
-        `./lyracore dev up` reports the gateway healthy, but the client sits on "Connecting" and
-        gateway.log ends with ...
+        `./lyracore dev up` reports the native Host healthy, but the client sits on "Connecting" and
+        spacetime.log ends with ...
     validations:
       required: true
 
@@ -63,7 +63,7 @@ body:
     id: logs
     attributes:
       label: Relevant log lines
-      description: "`./lyracore dev logs gateway` or `./lyracore dev logs spacetime` (`.lyracore/logs/`). The last 20–30 lines around the failure, not the whole file."
+      description: "`./lyracore dev logs spacetime` (`.lyracore/logs/`). The last 20–30 lines around the failure, not the whole file."
       render: text
     validations:
       required: false

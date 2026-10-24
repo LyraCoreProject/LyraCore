@@ -40,7 +40,7 @@ pub struct ChatChannelMember {
     pub channel_id: u64,
     pub character_guid: u64,
     pub member_flags: u8,
-    // Membership ends with the Account Claim generation that admitted it.
+    // A nonzero generation ties membership to a Gateway Account Claim.
     pub account_id: u64,
     pub claim_generation: u64,
 }
@@ -94,14 +94,22 @@ pub fn realm_channel_op(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    let admission = request_actor
+        .ownership
+        .map_or((0, 0), |token| (token.account_id, token.generation));
+    apply_op(ctx, actor_guid, admission, op, request)
+}
+
+pub(crate) fn apply_op(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    admission: (u64, u64),
+    op: u8,
+    request: ChannelRequest,
+) -> Result<(), String> {
     let team = team_for_race(request.speaker.race);
     let outcome = match op {
-        channel_op::JOIN => {
-            let admission = request_actor
-                .ownership
-                .map_or((0, 0), |token| (token.account_id, token.generation));
-            join(ctx, team, actor_guid, admission, &request)
-        }
+        channel_op::JOIN => join(ctx, team, actor_guid, admission, &request),
         channel_op::LEAVE => leave(ctx, team, actor_guid, &request.channel_name),
         channel_op::PASSWORD => set_password(ctx, team, actor_guid, &request),
         channel_op::SET_OWNER => set_owner(ctx, team, actor_guid, &request),
@@ -237,6 +245,7 @@ fn set_password(
     if member.member_flags & member_flag::MODERATOR == 0 {
         return Err(ChannelRefusal::NotModerator);
     }
+    check_password(&request.password)?;
     channel.password = request.password.clone();
     let channel = ctx.db.game_chat_channel().channel_id().update(channel);
     notify(
@@ -744,7 +753,8 @@ pub(crate) fn notify(
     if recipients.is_empty() {
         return;
     }
-    ctx.db
+    let event = ctx
+        .db
         .game_chat_channel_notice_event()
         .insert(ChatChannelNoticeEvent {
             id: 0,
@@ -759,6 +769,7 @@ pub(crate) fn notify(
             recipients,
             created_at: ctx.timestamp,
         });
+    crate::native::channel_notice(ctx, &event);
 }
 
 #[cfg(test)]

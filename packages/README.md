@@ -39,7 +39,7 @@ After creating, installing or changing a Package, apply the enabled Packages to 
 ./lyracore packages apply
 ```
 
-With no Shard names, the command uses the recorded development topology. Pass Shard names to
+With no Shard names, this native checkout uses the single `lyracore` Shard. Pass Shard names to
 choose other Shards. It builds missing or stale artifacts from enabled sources, then applies
 spell Package Deltas and Script Artifacts. Current Script Artifacts need neither Bun nor client data.
 A Datascript build needs Bun and a Base Snapshot. If the snapshot is missing, `apply` extracts one

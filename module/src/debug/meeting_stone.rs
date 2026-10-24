@@ -7,8 +7,8 @@ use crate::meeting_stone::{
     game_meeting_stone, game_meeting_stone_party, game_meeting_stone_seeker, MeetingStone,
 };
 use crate::{
-    game_account_claim, game_character, game_gameobject, game_gameobject_template, game_group,
-    game_group_member, game_world_entity, AccountClaim, Group, GroupMember,
+    game_account_claim, game_character, game_gameobject_template, game_group, game_group_member,
+    AccountClaim, Group, GroupMember,
 };
 
 const FIXTURE_CLAIM_MICROS: i64 = 60 * 60 * 1_000_000;
@@ -52,8 +52,8 @@ pub fn debug_stage_meeting_stone(
         area_id,
     });
     let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(x, y);
-    ctx.db.game_gameobject().guid().delete(go_guid);
-    let go = ctx.db.game_gameobject().insert(crate::GameObject {
+    crate::GameObject::delete(ctx, go_guid);
+    let go = crate::GameObject {
         guid: go_guid,
         template_entry: entry,
         map_id,
@@ -72,7 +72,8 @@ pub fn debug_stage_meeting_stone(
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
     crate::go_collider::register(ctx, &go);
     Ok(())
 }
@@ -92,7 +93,7 @@ pub fn debug_stage_meeting_stone_character(
     z: f32,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    ctx.db.game_world_entity().guid().delete(guid);
+    crate::WorldEntity::delete(ctx, guid);
     let mut character = crate::helpers::character_by_guid(ctx, 1)
         .ok_or("the seeded Tester is the fixture template")?;
     character.guid = guid;

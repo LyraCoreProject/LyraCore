@@ -120,8 +120,11 @@ pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> 
             .map(|s| (s.account_id, s.expires_at.to_micros_since_unix_epoch())),
         ctx.timestamp.to_micros_since_unix_epoch(),
     );
+    let active = crate::native::active_session_accounts(ctx);
     for account_id in expired {
-        sessions.account_id().delete(account_id);
+        if !active.contains(&account_id) {
+            sessions.account_id().delete(account_id);
+        }
     }
     Ok(())
 }
@@ -886,6 +889,14 @@ pub fn delete_character(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let character_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
+    apply_delete_character(ctx, account_id, character_guid)
+}
+
+pub(crate) fn apply_delete_character(
+    ctx: &ReducerContext,
+    account_id: u64,
+    character_guid: u64,
+) -> Result<(), String> {
     let c = ctx
         .db
         .game_character()

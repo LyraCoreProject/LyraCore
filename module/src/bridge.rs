@@ -1,8 +1,7 @@
 use lyracore_shared::group::COMMAND_RESULT_WINDOW_MICROS;
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-#[cfg(feature = "debug_reducers")]
-use crate::{game_group, game_world_entity};
+use crate::game_group;
 
 const COMMAND_LIFETIME_MICROS: i64 = 30_000_000;
 const CLAIM_LEASE_MICROS: i64 = 2_000_000;
@@ -203,13 +202,14 @@ pub(crate) fn send(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload
 }
 
 fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &str, payload: &str) {
-    ctx.db.game_addon_message().insert(AddonMessage {
+    let row = ctx.db.game_addon_message().insert(AddonMessage {
         id: 0,
         recipient_identity,
         cmd: cmd.to_string(),
         payload: payload.to_string(),
         created_at: ctx.timestamp,
     });
+    crate::native::addon_message(ctx, &row);
 }
 
 #[cfg(not(feature = "debug_reducers"))]
@@ -235,17 +235,29 @@ fn parse_fixture_command(
     payload: &str,
 ) -> Option<Result<ParsedClientCommand, CommandOutcome>> {
     (cmd == "fixture.command").then(|| {
-        payload
-            .parse()
-            .ok()
-            .filter(|bot_guid| *bot_guid != 0)
-            .map(|bot_guid| ParsedClientCommand {
-                kind: 0,
-                bot_guid,
-                authority_member_guid: 0,
-                exact_target_guid: 0,
-            })
-            .ok_or(CommandOutcome::Malformed)
+        let mut fields = payload.split('|');
+        let bot_guid = fields
+            .next()
+            .and_then(|field| field.parse::<u64>().ok())
+            .filter(|guid| *guid != 0)
+            .ok_or(CommandOutcome::Malformed)?;
+        let mut optional_guid = || {
+            fields
+                .next()
+                .map_or(Ok(0), str::parse::<u64>)
+                .map_err(|_| CommandOutcome::Malformed)
+        };
+        let authority_member_guid = optional_guid()?;
+        let exact_target_guid = optional_guid()?;
+        if fields.next().is_some() {
+            return Err(CommandOutcome::Malformed);
+        }
+        Ok(ParsedClientCommand {
+            kind: 0,
+            bot_guid,
+            authority_member_guid,
+            exact_target_guid,
+        })
     })
 }
 
@@ -255,11 +267,6 @@ pub(crate) fn apply_client_command(
     cmd: &str,
     payload: &str,
 ) -> Result<(), String> {
-    dispatch(ctx, character_guid, cmd, payload);
-    Ok(())
-}
-
-fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str) {
     match cmd {
         "ping" => send(ctx, character_guid, "pong", payload),
         other => {
@@ -267,13 +274,13 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                 (handler.parse)(other, payload).map(|parsed| (handler, parsed))
             });
             match parsed {
-                Some((_, Ok(command))) => {
+                Some((handler, Ok(command))) => {
                     let now = ctx.timestamp.to_micros_since_unix_epoch();
                     let Some(reply_identity) =
                         crate::helpers::character_by_guid(ctx, character_guid)
                             .map(|character| character.owner_identity)
                     else {
-                        return;
+                        return Ok(());
                     };
                     let issuers = ctx.db.game_party_command_issuer();
                     let current_issuer = issuers.character_guid().find(character_guid);
@@ -312,7 +319,15 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                             dispatch_lane,
                             dispatch_next: 0,
                         });
-                    enqueue_party_command_intent(ctx, &inserted);
+                    if crate::native::is_player(ctx, character_guid) {
+                        let outcome = apply_local_party_command(ctx, &inserted, handler);
+                        if outcome == CommandOutcome::WaitingForCapacity {
+                            return Err(outcome.tag().to_string());
+                        }
+                        complete_party_command(ctx, inserted, outcome);
+                    } else {
+                        enqueue_party_command_intent(ctx, &inserted);
+                    }
                 }
                 Some((handler, Err(outcome))) => {
                     send(ctx, character_guid, handler.reply, outcome.tag())
@@ -324,6 +339,98 @@ fn dispatch(ctx: &ReducerContext, character_guid: u64, cmd: &str, payload: &str)
                 }
             }
         }
+    }
+    Ok(())
+}
+
+fn apply_local_party_command(
+    ctx: &ReducerContext,
+    intent: &PartyCommandIntent,
+    handler: ClientCommandHandler,
+) -> CommandOutcome {
+    if crate::helpers::character_by_guid(ctx, intent.command.bot_guid).is_none() {
+        return CommandOutcome::MissingBot;
+    }
+    let Some(member) = crate::group::group_of(ctx, intent.issuer_guid) else {
+        return CommandOutcome::NotMember;
+    };
+    let Some(group) = ctx.db.game_group().group_id().find(member.group_id) else {
+        return CommandOutcome::StalePartyMirror;
+    };
+    if group.leader_guid != intent.issuer_guid {
+        return CommandOutcome::NotLeader;
+    }
+    let Some(roster) =
+        crate::group::bounded_roster(ctx, group.group_id, crate::group::group_kind_of(&group))
+    else {
+        return CommandOutcome::StalePartyMirror;
+    };
+    let members: Vec<_> = roster
+        .into_iter()
+        .map(|member| member.character_guid)
+        .collect();
+    if !members.contains(&intent.command.bot_guid)
+        || (intent.command.authority_member_guid != 0
+            && !members.contains(&intent.command.authority_member_guid))
+    {
+        return CommandOutcome::NotMember;
+    }
+    let partition = |guid| {
+        use crate::game_world_entity;
+        ctx.db
+            .game_world_entity()
+            .guid()
+            .find(guid)
+            .map(|entity| (entity.map_id, entity.instance_id))
+    };
+    let bot_partition = partition(intent.command.bot_guid);
+    if bot_partition.is_none()
+        || partition(intent.issuer_guid) != bot_partition
+        || (intent.command.authority_member_guid != 0
+            && partition(intent.command.authority_member_guid) != bot_partition)
+    {
+        return CommandOutcome::WrongPartition;
+    }
+    let command = AdmittedClientCommand {
+        source_identity: intent.source_identity,
+        intent_id: intent.id,
+        issuer_guid: intent.issuer_guid,
+        issuer_sequence: intent.issuer_sequence,
+        group_id: group.group_id,
+        leader_guid: group.leader_guid,
+        members,
+        command: intent.command,
+        expires_micros: intent.expires_micros,
+        receipt_retain_until_micros: intent
+            .expires_micros
+            .saturating_add(COMMAND_RESULT_WINDOW_MICROS),
+    };
+    crate::group::admit_party_command(ctx, &command)
+        .unwrap_or_else(|| (handler.apply)(ctx, &command))
+}
+
+fn complete_party_command(
+    ctx: &ReducerContext,
+    mut intent: PartyCommandIntent,
+    outcome: CommandOutcome,
+) {
+    intent.state = CommandIntentState::Finished(outcome);
+    intent.pending = false;
+    intent.claim_until_micros = 0;
+    intent.result_reap_micros = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_add(COMMAND_RESULT_WINDOW_MICROS);
+    let response_id = intent.id;
+    let reply_identity = intent.reply_identity;
+    ctx.db.game_party_command_intent().id().update(intent);
+    if let Some(handler) = client_command_handler() {
+        send_to_identity(
+            ctx,
+            reply_identity,
+            handler.reply,
+            &format!("{response_id}|{}", outcome.tag()),
+        );
     }
 }
 
@@ -478,7 +585,7 @@ pub fn finish_party_command_intent(
         return Err("WaitingForCapacity is not terminal".to_string());
     }
     let table = ctx.db.game_party_command_intent();
-    let mut intent = table
+    let intent = table
         .id()
         .find(intent_id)
         .ok_or_else(|| "MissingIntent".to_string())?;
@@ -493,22 +600,8 @@ pub fn finish_party_command_intent(
     {
         return Err("ClaimLost".to_string());
     }
-    intent.state = CommandIntentState::Finished(outcome);
-    intent.pending = false;
-    intent.claim_until_micros = 0;
-    intent.result_reap_micros = now.saturating_add(COMMAND_RESULT_WINDOW_MICROS);
-    let response_id = intent.id;
-    let reply_identity = intent.reply_identity;
     retire_party_command_intent(ctx, &intent)?;
-    table.id().update(intent);
-    if let Some(handler) = client_command_handler() {
-        send_to_identity(
-            ctx,
-            reply_identity,
-            handler.reply,
-            &format!("{response_id}|{}", outcome.tag()),
-        );
-    }
+    complete_party_command(ctx, intent, outcome);
     Ok(())
 }
 
@@ -708,10 +801,7 @@ fn fixture_command_apply_after_authority(
     match gate_change {
         0 => {}
         1 => {
-            ctx.db
-                .game_world_entity()
-                .guid()
-                .delete(intent.command.bot_guid);
+            crate::WorldEntity::delete(ctx, intent.command.bot_guid);
         }
         2 => {
             crate::sessionless::set_sessionless_action_consent(ctx, intent.command.bot_guid, false)

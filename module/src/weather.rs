@@ -249,11 +249,12 @@ fn apply_zone_weather(ctx: &ReducerContext, zone_id: u32, state: WeatherState, n
         intensity: state.intensity,
         changed_at_micros: now_micros,
     };
-    if rows.zone_id().find(zone_id).is_some() {
-        rows.zone_id().update(row);
+    let row = if rows.zone_id().find(zone_id).is_some() {
+        rows.zone_id().update(row)
     } else {
-        rows.insert(row);
-    }
+        rows.insert(row)
+    };
+    crate::native::weather_changed(ctx, &row);
 }
 
 fn current_state(ctx: &ReducerContext, zone_id: u32) -> WeatherState {

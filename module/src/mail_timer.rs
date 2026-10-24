@@ -122,6 +122,7 @@ fn arrive(ctx: &ReducerContext, recipient_guid: u64) {
         recipient_guid,
         created_at: ctx.timestamp,
     });
+    crate::native::mail_arrived(ctx, recipient_guid);
 }
 
 // Stagger overdue timers so a repair cannot unleash the whole backlog in consecutive transactions.

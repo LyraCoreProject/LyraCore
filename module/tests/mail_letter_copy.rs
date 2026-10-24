@@ -156,7 +156,14 @@ fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
         "realm_mail_mark_letter_granted",
         &[&actor(1), &mail_id.to_string()],
     );
-    shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383");
+    let letter = shard
+        .query_rows("SELECT slot FROM game_item_instance WHERE owner_guid = 1 AND entry = 8383");
+    shard.assert_call("gw_destroy_item", &[&actor(1), &letter[0]["slot"], "0"]);
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT id FROM game_item_text WHERE id = {mail_id}"
+        ))
+        .is_empty());
 
     let refused = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
     assert!(
@@ -169,7 +176,7 @@ fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
     ));
     assert!(
         granted.is_empty(),
-        "the copy step refused, so the Gateway never reaches the grant — no letter is minted"
+        "the refused copy grants no second letter"
     );
 }
 

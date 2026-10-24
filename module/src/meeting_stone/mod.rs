@@ -91,7 +91,12 @@ pub fn gw_admit_meeting_stone(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    admit(ctx, request_actor, actor_guid, go_guid).map_err(|refusal| {
+    let outcome = if request_actor.ownership.is_none() {
+        Err(MeetingStoneRefusal::ActorUnavailable)
+    } else {
+        admit(ctx, actor_guid, go_guid).map(|_| ())
+    };
+    outcome.map_err(|refusal| {
         refused(
             refusal,
             &format!("admission of {actor_guid} at gameobject {go_guid}"),
@@ -99,13 +104,12 @@ pub fn gw_admit_meeting_stone(
     })
 }
 
-fn admit(
+pub(crate) fn admit(
     ctx: &ReducerContext,
-    request_actor: crate::account_ownership::SessionActor,
     actor_guid: u64,
     go_guid: u64,
-) -> Result<(), MeetingStoneRefusal> {
-    if request_actor.ownership.is_none() || crate::taxi::is_in_flight(ctx, actor_guid) {
+) -> Result<u32, MeetingStoneRefusal> {
+    if crate::taxi::is_in_flight(ctx, actor_guid) {
         return Err(MeetingStoneRefusal::ActorUnavailable);
     }
     let (_, template) = crate::gameobject::usable_go(ctx, actor_guid, go_guid)
@@ -125,7 +129,7 @@ fn admit(
     if !level_in_range(level, stone.min_level, stone.max_level) {
         return Err(MeetingStoneRefusal::LevelOutOfRange);
     }
-    Ok(())
+    Ok(stone.area_id)
 }
 
 fn gate_refusal(kind: crate::actor::ActionRefusalKind) -> MeetingStoneRefusal {
@@ -162,7 +166,7 @@ fn party_join_gate(membership: Membership) -> Result<(), MeetingStoneRefusal> {
     Ok(())
 }
 
-enum StoneOpError {
+pub(crate) enum StoneOpError {
     Refused(MeetingStoneRefusal),
     Invalid(String),
 }
@@ -216,7 +220,7 @@ pub fn realm_meeting_stone_op(
     })
 }
 
-fn join(
+pub(crate) fn join(
     ctx: &ReducerContext,
     actor_guid: u64,
     area_id: u32,
@@ -352,7 +356,7 @@ fn member_guids(ctx: &ReducerContext, group_id: u64) -> Vec<u64> {
         .collect()
 }
 
-fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), StoneOpError> {
+pub(crate) fn leave(ctx: &ReducerContext, actor_guid: u64) -> Result<(), StoneOpError> {
     let Some((group, _)) = crate::group::group_with_members(ctx, actor_guid)? else {
         let seekers = ctx.db.game_meeting_stone_seeker();
         if seekers.character_guid().find(actor_guid).is_some() {
@@ -443,7 +447,7 @@ fn read_bucket(
     for seeker in rows {
         if seeker.group_id != 0 {
             group_ids.insert(seeker.group_id);
-        } else if has_live_claim(ctx, seeker.character_guid)
+        } else if seeker_is_online(ctx, seeker.character_guid)
             && crate::group::group_of(ctx, seeker.character_guid).is_none()
         {
             solos.push(seeker);
@@ -476,7 +480,10 @@ fn read_bucket(
     (solos, parties)
 }
 
-fn has_live_claim(ctx: &ReducerContext, character_guid: u64) -> bool {
+fn seeker_is_online(ctx: &ReducerContext, character_guid: u64) -> bool {
+    if crate::native::is_player(ctx, character_guid) {
+        return true;
+    }
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     ctx.db
         .game_account_claim()
@@ -594,6 +601,7 @@ fn stone_add(ctx: &ReducerContext, joiner: &MeetingStoneSeeker, plan: JoinPlan) 
         .delete(joiner.character_guid);
     let joined = plan.apply(ctx);
     crate::group::advance_group_revision(ctx, joined.group_id, !joined.formed, true);
+    crate::native::party_roster(ctx, joiner.character_guid, true);
     joined.group_id
 }
 
@@ -661,7 +669,7 @@ pub(crate) fn party_left(ctx: &ReducerContext, departed: PartyDeparture) -> Opti
                 );
             }
             dequeue_party(ctx, departed.group_id, queue_status::LEAVE_QUEUE);
-            if !has_live_claim(ctx, guid) {
+            if !seeker_is_online(ctx, guid) {
                 return None;
             }
             push_queue(
@@ -752,7 +760,7 @@ pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
     });
 }
 
-pub(crate) fn claim_ended(ctx: &ReducerContext, character_guid: u64) {
+pub(crate) fn remove_solo_seeker(ctx: &ReducerContext, character_guid: u64) {
     let seekers = ctx.db.game_meeting_stone_seeker();
     if seekers
         .character_guid()

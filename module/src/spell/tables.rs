@@ -166,11 +166,49 @@ pub struct Aura {
     pub proc_ready_micros: i64,
 }
 
+impl Aura {
+    pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
+        let aura = ctx.db.game_aura().insert(self);
+        if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
+            crate::aoi::refresh_entity(ctx, aura.target_guid);
+        }
+        crate::native::aura_changed(ctx, None, Some(&aura));
+        aura
+    }
+
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let auras = ctx.db.game_aura();
+        let previous = auras.id().find(self.id);
+        let aura = auras.id().update(self);
+        if previous
+            .as_ref()
+            .is_some_and(|old| old.eff_kind != aura.eff_kind)
+        {
+            crate::aoi::refresh_entity(ctx, aura.target_guid);
+        }
+        crate::native::aura_changed(ctx, previous.as_ref(), Some(&aura));
+        aura
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, id: u64) -> bool {
+        let auras = ctx.db.game_aura();
+        let previous = auras.id().find(id);
+        let removed = auras.id().delete(id);
+        if let Some(aura) = previous {
+            if aura.eff_kind == lyracore_shared::spell::taxonomy::A_STEALTH {
+                crate::aoi::refresh_entity(ctx, aura.target_guid);
+            }
+            crate::native::aura_changed(ctx, Some(&aura), None);
+        }
+        removed
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_aura(ctx, character_guid) {
     let auras = ctx.db.game_aura();
     let ids: Vec<u64> = auras.by_target().filter(&character_guid).map(|a| a.id).collect();
     for id in ids {
-        auras.id().delete(id);
+        Aura::delete(ctx, id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_guid, io) {
@@ -271,7 +309,19 @@ pub const CAST_MISS_MISS: u8 = 1;
 /// Vanilla reports a magic spell's failed hit roll as a full resist.
 pub const CAST_MISS_RESIST: u8 = 2;
 
+impl SpellImpactEvent {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        crate::native::spell_impact(ctx, &row);
+        ctx.db.game_spell_impact_event_live().insert(row)
+    }
+}
+
 impl SpellCastEvent {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        crate::native::cast_event(ctx, &row);
+        ctx.db.game_spell_cast_event_live().insert(row)
+    }
+
     pub(crate) fn signal(
         ctx: &ReducerContext,
         caster_guid: u64,
@@ -418,7 +468,9 @@ pub struct GroundArea {
 }
 
 // Client build 5875 draws the ground effect from a DynamicObject CREATE.
-#[table(accessor = game_dynamic_object, public)]
+#[table(accessor = game_dynamic_object, public,
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
+)]
 pub struct DynamicObject {
     #[primary_key]
     pub guid: u64,
@@ -430,6 +482,32 @@ pub struct DynamicObject {
     pub y: f32,
     pub z: f32,
     pub radius_yd: f32,
+    #[default(0i64)]
+    pub cell: i64,
+}
+
+impl DynamicObject {
+    pub(crate) fn position_cell(&self) -> i64 {
+        lyracore_shared::spatial::cell_id_at(self.x, self.y)
+    }
+
+    pub(crate) fn insert(mut self, ctx: &ReducerContext) {
+        self.cell = self.position_cell();
+        let object = ctx.db.game_dynamic_object().insert(self);
+        crate::aoi::dynamic_object_changed(ctx, &object);
+    }
+
+    #[cfg(feature = "debug_reducers")]
+    pub(crate) fn repair_cell(mut self, ctx: &ReducerContext) {
+        self.cell = self.position_cell();
+        let object = ctx.db.game_dynamic_object().guid().update(self);
+        crate::aoi::dynamic_object_changed(ctx, &object);
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
+        ctx.db.game_dynamic_object().guid().delete(guid);
+        crate::aoi::remove_subject(ctx, crate::aoi::DYNAMIC_OBJECT, guid);
+    }
 }
 
 #[table(accessor = game_ground_area_schedule, scheduled(tick_ground_areas))]
@@ -525,9 +603,39 @@ pub struct ResurrectRequest {
     pub created_at: Timestamp,
 }
 
+impl ResurrectRequest {
+    pub(crate) fn insert(self, ctx: &ReducerContext) {
+        let requests = ctx.db.game_resurrect_request();
+        requests.target_guid().delete(self.target_guid);
+        let row = requests.insert(self);
+        crate::native::resurrect_offered(ctx, &row);
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
+        ctx.db.game_resurrect_request().target_guid().delete(guid);
+    }
+}
+
 #[table(accessor = game_self_resurrect_option, public)]
 pub struct SelfResurrectOption {
     #[primary_key]
     pub character_guid: u64,
     pub spell_id: u32,
+}
+
+impl SelfResurrectOption {
+    pub(crate) fn set(ctx: &ReducerContext, guid: u64, spell_id: Option<u32>) {
+        let options = ctx.db.game_self_resurrect_option();
+        if options.character_guid().find(guid).map(|row| row.spell_id) == spell_id {
+            return;
+        }
+        options.character_guid().delete(guid);
+        if let Some(spell_id) = spell_id {
+            options.insert(SelfResurrectOption {
+                character_guid: guid,
+                spell_id,
+            });
+        }
+        crate::native::self_resurrection_changed(ctx, guid, spell_id.unwrap_or(0));
+    }
 }

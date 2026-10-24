@@ -2,7 +2,6 @@ use spacetimedb::ReducerContext;
 
 use crate::game_creature_template;
 use crate::game_fishing_loot;
-use crate::game_item_instance;
 use crate::game_item_template;
 use crate::game_player_skill;
 use crate::game_skinning_loot;
@@ -223,7 +222,7 @@ pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Res
     );
     // Grant materials before consuming the item so a full bag destroys nothing.
     crate::items::grant_item(ctx, guid, DISENCHANT_MATS_ENTRY, DISENCHANT_MATS_COUNT)?;
-    ctx.db.game_item_instance().guid().delete(inst.guid);
+    crate::ItemInstance::delete(ctx, inst.guid);
     crate::skill::gain_profession_skill(ctx, guid, crate::skill::skill_line::ENCHANTING, 1, 0);
     if slot <= crate::items::equip_slot::END {
         crate::spell::recompute_vitals(ctx, guid);
@@ -251,9 +250,8 @@ pub(crate) fn apply_enchant_item(
     require_gear(ctx, inst.entry)?;
     crate::items::remove_items(ctx, guid, DISENCHANT_MATS_ENTRY, DISENCHANT_MATS_COUNT)?;
 
-    let instances = ctx.db.game_item_instance();
     inst.enchant_id = enchant_id;
-    instances.guid().update(inst);
+    inst.update(ctx);
     crate::skill::gain_profession_skill(ctx, guid, crate::skill::skill_line::ENCHANTING, 1, 0);
     if target_slot <= crate::items::equip_slot::END {
         crate::spell::recompute_vitals(ctx, guid);

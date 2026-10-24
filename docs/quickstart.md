@@ -37,8 +37,8 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | Thing | Version | Why that version |
 | --- | --- | --- |
 | **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
-| **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"` and `gateway/Cargo.toml` pins the SDK to `=2.7.1`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
-| **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the gateway. |
+| **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
+| **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
 ### Ubuntu 24.04
@@ -48,8 +48,7 @@ sudo apt-get update
 sudo apt-get install -y build-essential pkg-config libssl-dev git curl
 ```
 
-`libssl-dev` + `pkg-config` are not optional on Linux: the gateway's SpacetimeDB SDK pulls in
-`native-tls`, which builds against system OpenSSL on Linux.
+Install `libssl-dev` and `pkg-config` for the native Rust dependencies that link against OpenSSL.
 
 ```bash
 # Rust (rustup — it will pick up the pinned 1.93.0 toolchain from the checkout automatically)
@@ -174,103 +173,48 @@ port in particular is usually your own stack, which is why it is a warning and n
 
 ---
 
-## 3. Start the stack
+## 3. Start the Realm
 
 ```bash
 ./lyracore dev up
 ```
 
-It prints its progress as it goes:
+The CLI builds the pinned Native Host and starts one SpacetimeDB process. That process owns the
+HTTP endpoint on `127.0.0.1:3000`, logon on `127.0.0.1:3724` and world on `127.0.0.1:8085`.
 
-```text
-· starting SpacetimeDB on 127.0.0.1:3000...
-· building the gateway...
-· publishing lyracore, lyracore-kalimdor, lyracore-instances, lyracore-realm...
-· no SpacetimeDB login found — minting a local identity from http://127.0.0.1:3000 (no spacetimedb.com account needed)...
-· claiming the operator identity...
-· starting the gateway on 127.0.0.1:8085...
-✓ dev stack is up.
-  spacetime  healthy   (PID 12345, 127.0.0.1:3000)
-  gateway    healthy   (PID 12346, 127.0.0.1:8085)
-  databases  lyracore, lyracore-kalimdor, lyracore-instances, lyracore-realm published on http://127.0.0.1:3000
-```
+Startup runs preflight, publishes one Shard named `lyracore`, claims the Operator, installs the
+GUID range and sets the Realm address. It reads a WoW authentication challenge from the world
+listener before reporting success. Import world content before play with `./lyracore import`.
 
-(Illustrative — the exact wording is the CLI's, and it lives in
-[its own repository](https://github.com/LyraCoreProject/lyracore-cli).)
+All maps, Instances, Accounts and Characters live in this Shard. Maps and Instances still separate
+gameplay and AOI. Moving between them no longer requires cross-Shard coordination. `--single`
+remains accepted and has no effect on native startup.
 
-What that actually did:
+The first build uses the host's pinned Rust 1.97.1 toolchain, in addition to Rust 1.93.0 for the
+Module. Install it with `rustup toolchain install 1.97.1` if it is missing.
 
-1. Started SpacetimeDB on `127.0.0.1:3000` — **or reused one already listening there.** A node this
-   CLI did not start is never recorded and never stopped by `dev down`.
-2. Prepared the Gateway bindings, then built the Gateway with `cargo build -p lyracore-gateway`.
-3. Published the **four fixture databases** — `lyracore`, `lyracore-kalimdor`,
-   `lyracore-instances` and `lyracore-realm` — always through `./lyracore publish`. Nothing in this path runs a bare
-   `spacetime publish`, and the command **refuses** to forward the destructive `-c` clear-publish.
-   (`./lyracore dev up --single` publishes and runs `lyracore` alone; see below.)
-4. Got itself a **coordinator identity** — see below. The `minting` line appears only on a host with
-   no SpacetimeDB login; if you have one, it is reused and that line is absent.
-5. Called `claim_operator` as that identity (idempotent — repeating `dev up` is not an error).
-6. Started the gateway, with the same identity, and with its logon (`3724`) and world (`8085`)
-   listeners bound to loopback.
+The CLI stores the new local Realm in `.lyracore/native-data`. It does not merge data from a legacy
+multi-Shard Realm. Stop a recorded legacy runtime with `./lyracore dev down` before starting the
+native runtime. Startup refuses an unrelated process on a required port.
 
-Three ports are involved, and only these three: **3000** SpacetimeDB, **3724** logon, **8085** world.
+Repeating `dev up` reuses a healthy native runtime. `dev down` stops the process without deleting
+its data. Changing listener addresses requires a restart.
 
-Re-running `dev up` on a healthy stack does nothing (`dev stack already up — nothing to do.`); on a
-half-up stack it starts only the missing part. It never clears a database, so **your characters
-survive** an up/down cycle.
+### The Operator identity
 
-The realm it brings up is **playable with no client-data import**: the module's `init` reducer seeds
-the realm row, the Human-Warrior start position in Elwynn Forest, the graveyards, a `TEST` account
-with a pre-made character (`Tester`, Human Warrior, level 1), and a small demo population.
+Publishing and native requests must use the same identity. Startup uses the retained credential
+in `.lyracore/native-owner-token`, an existing SpacetimeDB login, or a new identity minted by the
+local node. It saves the credential and publisher configuration in `.lyracore/native-owner-token`
+and `.lyracore/native-cli.toml`, with mode `0600`.
 
-### Your local realm is sharded
+To publish to a native node using a different HTTP port, keep that node's publisher configuration
+in `.lyracore/native-cli.toml` and run `./lyracore publish --server http://127.0.0.1:13000`.
+The explicit target must use a numeric loopback address and a nonzero port. An SSH tunnel can
+connect that address to a remote test Realm. `publish` does not start the Host or change its
+listener addresses. Provision the Realm's advertised world address separately.
 
-Your realm is not one database: all of Eastern Kingdoms — including Northshire Valley, where your
-character starts and where all the seeded content is — lives on `lyracore`, map 1 (Kalimdor) is on
-`lyracore-kalimdor`, every dungeon run (map 36, the Deadmines) is on `lyracore-instances`, and
-accounts and sessions are on `lyracore-realm`. Those are separate
-SpacetimeDB databases with separate writers, not zones in one process. Crossing between the World
-Shards is an escrowed character transfer, not a walk. The seed fixture leaves Kalimdor empty, but
-`./lyracore import` populates its Teldrassil and Darkshore corridor. Walking into the Deadmines
-portal crosses to the Instance Pool, which the same import populates with map 36 only.
-
-> The fixture used to carry a second Elwynn database and a **walkable seam** on the road to
-> Goldshire — a mid-session handoff between two databases serving one map. That region tier was
-> removed from the codebase on 2026-08-08 (#471, an operator decision to keep the alpha on the broad
-> splits alone).
-
-⚠ **Expect empty ground beyond Northshire.** Everything the fixture seeds lives in Northshire
-Valley; the rest of Elwynn stays unpopulated until you run `./lyracore import` (which needs a
-cmangos world dump and your own client MPQs). Goldshire is not populated out of the box.
-
-If you would rather not deal with four databases (debugging something unrelated, or RAM is tight),
-`./lyracore dev up --single` brings up `lyracore` alone.
-
-⚠ Because the fixture is sharded, **a schema change means republishing every fixture database**, not
-just `lyracore` — `./lyracore publish` covers the set. A partial publish tends to present as an
-unrelated mid-session hang rather than a loud error
-([`docs/danger-zones.md`](./danger-zones.md) §3).
-
-### The coordinator identity (why there is no account signup)
-
-The gateway's own connection to the database is privileged: `game_account` and `game_session` are
-private module tables, and account provisioning is gated on a single **operator** identity that
-`dev up` claims on first run. So the stack needs one real credential — and getting it must not
-require an account with anybody.
-
-It does not. `dev up` takes the first of these that exists:
-
-1. `.lyracore/coordinator-token` — an identity a previous `dev up` minted for this checkout. It wins,
-   because it is the one that already claimed the operator (a *different* identity would be refused).
-2. Your `spacetime login`, if you have one. Nothing is copied into the checkout in that case.
-3. Otherwise a **server-issued identity minted from your own local node** (`POST /v1/identity`), saved
-   at `.lyracore/coordinator-token` with mode `0600` inside the git-ignored `.lyracore/`.
-
-That third rung is what keeps `git clone && ./lyracore dev up` anonymous: `spacetime login` only
-offers the spacetimedb.com browser flow, and this fixture never needs it. Treat the file as a
-credential — it is the operator of your local realm — and note that deleting it and re-running
-`dev up` mints a *new* identity that the database will refuse to accept as operator (see
-[Troubleshooting](#dev-up-says-operator-already-claimed)).
+Keep both files with the Realm's data. A new identity cannot replace the existing publisher or
+Operator. No spacetimedb.com account is required.
 
 ---
 
@@ -333,7 +277,7 @@ It refuses to run against a stack that is not up.
 
 ## 5. Point your client at it
 
-You need an unmodified **1.12.1, build 5875** client. The exact build matters — the gateway speaks
+You need an unmodified **1.12.1, build 5875** client. The exact build matters — the native Module speaks
 that build's wire format (logon `protocol_version` 3) and nothing else. Other builds are not rejected
 with a friendly message; they fail at the logon challenge or drop mid-handshake.
 
@@ -371,7 +315,7 @@ the unmodified client has no matching map art for invented nodes. Use the locall
 Opening the fixture discovers its source. Once its destination is known, direct activation charges
 the imported fare and selects the source node's race-appropriate Horde or Alliance mount display in
 one authoritative transaction. A duplicate request cannot create a second active flight or charge
-the purse twice. The gateway queues the success reply before it arms authoritative scheduled
+the purse twice. The Module queues the success reply before it arms authoritative scheduled
 movement. Supported direct routes then advance to an exact durable landing; routes with delays or
 nonzero point flags are refused until those semantics are implemented.
 
@@ -398,17 +342,13 @@ One command, and it asks before it does anything:
 
 It prints the notice above in full and waits for you to type `yes`. Then it pulls `classic-db`
 (checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
-the curated class-spell trainer offerings on every content destination. The sharded plan is
-`lyracore` with `alliance-eastern`, `lyracore-kalimdor` with `alliance-kalimdor`, and
-`lyracore-instances` with `instances`. The Eastern profiles include all of Deeprun Tram, map 369,
-on the default World Shard. Under `--single`, `lyracore` receives `alliance-single`, the
-union of both continents, map 36 and map 369. Pass `--accept` to answer the consent question in advance for a
+the curated class-spell trainer offerings on `lyracore`. Its `alliance-single` profile includes
+both continent corridors, Deadmines on map 36 and Deeprun Tram on map 369. Pass `--accept` to answer the consent question in advance for a
 scripted run, and leave `--client-data` off to be prompted for the path.
 
 **What to expect.** The pull is a few hundred megabytes of git history. Each ETL is the long
 part: **tens of minutes**, most of it in the terrain and navigation passes, which rasterize each
-bounded slice cell by cell. The sharded fixture runs those modes on both World Shards and skips them
-on the Instance Pool. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf
+bounded slice cell by cell. The native import selects the combined content profile in one Shard. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf
 corridor checks, caster-spell completeness, and distinct Deadmines checks. A failed stage stops later
 work and names the destination and mode. Fix the cause and rerun: each owned family clears and
 reloads, so a rerun repairs a partial family. This is not multi-process atomicity. The stack must be
@@ -444,7 +384,7 @@ unsuitable static geometry. This dry run does not prove ordinary Core movement a
 client-facing listeners to one of **this machine's own private addresses** instead:
 
 ```bash
-./lyracore dev down                       # a running gateway cannot be rebound
+./lyracore dev down                       # restart before changing listener addresses
 ./lyracore dev up --lan 192.168.1.50      # `ip addr` (Linux) / `ifconfig` (macOS) to find yours
 ```
 
@@ -476,8 +416,7 @@ Rules `--lan` enforces for you:
   lyracore: --lan refuses 0.0.0.0: it is not a private-LAN address. ...
   ```
 
-- A **running** gateway is never silently rebound — switching modes is refused with the `dev down`
-  to run first, rather than reported as "already up".
+- Changing listener addresses on a running Native Host requires `dev down` first.
 
 This is a LAN convenience for a contributor fixture, **not a deployment mode**: no TLS, 2004-era
 password hashing, and a fixture account whose password is written in this document.
@@ -490,19 +429,10 @@ Only put it on a network you trust, and read the next section.
 **Never expose ports 3000, 3724, or 8085 to the internet, and never port-forward them.** The reasons
 are concrete, not precautionary:
 
-- **`:3000` is the real trust boundary.** The gateway itself talks to SpacetimeDB only over its
-  owner-token coordinator connection, and every player action is required to arrive through the
-  module's operator-gated `gw_*` reducer surface (#483) — per-player connections are gone, so
-  there is no anonymous, tokenless identity the *gateway* mints any more. That does not move the
-  boundary: `:3000` is still the node's public endpoint, and anyone who can reach it can open their
-  own anonymous, tokenless connection the same way the old per-player tier used to, and call **any
-  reducer that is not operator-gated** — from exactly the footing a player has. The whole model's
-  safety still rests on `:3000` being unreachable to anyone but the gateway.
-- **The fixture publishes the debug build.** `dev up` goes through `./lyracore publish`, which
-  bakes in `--features=debug_reducers` — that is **124 extra reducers**, most with no
-  identity gate at all (`debug_set_health(any_guid, 0)`, `set_level`, `kill_nearest`, `teleport`, …).
-  One anonymous call owns any character. This build is for the loopback harness; it must never reach
-  a reachable node.
+- Keep the HTTP endpoint on port 3000 private. Native clients use the WoW listeners; the host
+  submits their requests through in-process Core connections. HTTP remains an administrative endpoint.
+- Local startup publishes the Module with `debug_reducers`. Debug operations can change Character
+  and world state, so this development build needs the private HTTP boundary.
 - **No TLS.** The logon port has the Logon Limiter (three attempts per connection, ten failed
   logons per address per minute, eight open logon connections per address). The stored `game_session`
   key expires one hour after logon and prevents later world handshakes. Existing World Sessions
@@ -519,7 +449,7 @@ order, backups). None of that is what `lyracore dev up` gives you.
 ```bash
 ./lyracore dev status                # what is running, where, and is the database actually published
 ./lyracore dev logs                  # both components' logs
-./lyracore dev logs gateway          # just one (spacetime | gateway)
+./lyracore dev logs spacetime        # Native Host output
 ./lyracore dev down                  # stop what this CLI started
 ./lyracore dev down && ./lyracore dev up   # restart (rebuild + republish; nothing is wiped)
 ./lyracore import                    # replace the seed fixture with the real world (see above)
@@ -541,9 +471,11 @@ Runtime files all live in the git-ignored `.lyracore/`:
 | Path | What |
 | --- | --- |
 | `.lyracore/state.json` | the processes this CLI started (PID + identity), and the recorded bind |
-| `.lyracore/coordinator-token` | **a credential** (mode `0600`) — the identity `dev up` minted for this checkout, if this host had no `spacetime login`. Never committed, never logged; keep it, or the database stops accepting a new operator |
+| `.lyracore/native-owner-token` | Retained publisher and Operator credential, mode `0600` |
+| `.lyracore/native-cli.toml` | Private publisher configuration, mode `0600` |
+| `.lyracore/native-data/` | Durable Realm data; keep it across restarts |
+| `.lyracore/native-host/SpacetimeDB/` | Pinned host source and build |
 | `.lyracore/logs/spacetime.log` | SpacetimeDB node output |
-| `.lyracore/logs/gateway.log` | gateway output |
 | `.lyracore/cli/<rev>/` | the pinned development CLI |
 | `.lyracore/wire-harness/<sha>/` | the pinned wire harness, once `dev smoke` has fetched it |
 
@@ -570,8 +502,7 @@ anything itself; run the restart it tells you to:
 ./lyracore dev down && ./lyracore dev up
 ```
 
-That rebuilds the gateway and republishes every fixture database against whatever schema the update
-brought — nothing is wiped.
+That rebuilds the Native Host and republishes the Realm's Module. It does not delete Realm data.
 
 The manual equivalent, if you would rather not use the CLI for this:
 
@@ -634,62 +565,23 @@ from the checkout root, which needs nothing on `PATH`.
   ⚠ ports            3000, 3724, 8085 already in use — `lyracore dev status` will say whether that is your own stack
 ```
 
-Run `./lyracore dev status`. It distinguishes the two cases precisely:
+Run `./lyracore dev status` to inspect the recorded process and listeners. Startup refuses an
+unrelated process on ports 3000, 3724 or 8085. Use `ss -ltnp` on Linux or `lsof -nP -iTCP -sTCP:LISTEN`
+on macOS to identify the process before stopping it.
 
-- `healthy (PID …, 127.0.0.1:8085)` — your own stack. Nothing to do.
-- `external (127.0.0.1:3000 answers; not started by this CLI)` — **someone else's** process on that
-  port. A foreign **SpacetimeDB** node is reused (and deliberately left running by `dev down`); a
-  foreign **gateway** is *not* adopted, because we cannot know its build or topology:
+### `dev up` fails while starting the Native Host
 
-  ```text
-  lyracore: process error: port 8085 is already served by a gateway this CLI did not start —
-  stop it first, or run `lyracore dev down --forget` if it is stale state from an earlier run
-  ```
+Read `.lyracore/logs/spacetime.log` with `./lyracore dev logs`. A missing build toolchain, an address
+already in use or a Module publish failure can stop startup. The CLI records the host before
+publishing, so `dev down` can stop it after a later failure.
 
-  Find the offender with `ss -ltnp | grep -E '3000|3724|8085'` (Linux) or
-  `lsof -nP -iTCP:3000,3724,8085 -sTCP:LISTEN` (macOS) and stop it. There is no flag to move these
-  ports.
+If the world listener does not return an authentication challenge, check the log and the retained
+publisher credential. The Module's Operator must be the identity that published it.
 
-### `dev up` fails while starting a component
+### `dev status` says the Shard is unreachable
 
-Either component can fail to come up, and the message always names both the component and its log:
-
-```text
-lyracore: process error: spacetime exited immediately (PID 12345); see .lyracore/logs/spacetime.log
-lyracore: process error: gateway exited during startup; see .lyracore/logs/gateway.log
-lyracore: process error: gateway did not answer on 127.0.0.1:8085 within 60s; see .lyracore/logs/gateway.log
-```
-
-Read the named log — `./lyracore dev logs spacetime` or `./lyracore dev logs gateway`.
-
-**SpacetimeDB won't start:** the usual causes are a `spacetime` that is not really on `PATH` for a
-non-login shell, a half-installed version (`spacetime version list` should show 2.7.1), or something
-already bound to `:3000` that is not a SpacetimeDB node at all (`dev up` reuses a node it finds
-there, so a *different* service on that port produces a confusing downstream failure rather than a
-clean one).
-
-**The gateway won't start:** two lines worth recognising in `gateway.log` —
-
-- `coordinator subscriptions not applied within 15s (node down, or token lacks access to the private
-  game_account/game_session tables?)` — **the node went away, or the gateway is not the identity that
-  claimed the operator.** `dev up` gives the gateway a credential or refuses to start it, so a
-  *missing* one no longer produces this. What still does: SpacetimeDB died after `dev up` finished
-  (`./lyracore dev status`, then `./lyracore dev logs spacetime`); the database line says
-  `UNREACHABLE`, i.e. nothing was published where the gateway is looking (see the next entry); or a
-  gateway you launched by hand with a `LYRACORE_COORDINATOR_TOKEN` from some *other* identity than
-  the one that claimed this database's operator.
-- an address-in-use error — something grabbed 3724/8085 between the port check and the bind.
-
-### `dev status` says the database is UNREACHABLE
-
-```text
-  database   lyracore UNREACHABLE on http://127.0.0.1:3000 (... failed to find database `lyracore`.)
-             — run `lyracore dev up` to publish it
-```
-
-Both processes can be perfectly healthy in this state — it means nothing was ever published to the
-node they are pointed at (a common shape: a SpacetimeDB node that was already running for some other
-project got reused). `./lyracore dev up` publishes it.
+The HTTP listener can be running before the Module has been published. Rerun `dev up` to complete
+startup. It retains the host and does not clear data.
 
 ### The client says "Unable to connect"
 
@@ -720,57 +612,25 @@ existing account rather than failing. Remember the name is uppercased, and the p
 16 bytes. If you never ran `account create`, the seeded `TEST` account has no usable password: its
 verifier is a placeholder until you provision one.
 
-`./lyracore account create` needs a built gateway binary; on a fresh checkout run `dev up` first, or
-you will get:
-
-```text
-lyracore: prerequisite missing: target/debug/lyracore-gateway is not built — run `lyracore dev up` first
-```
+Account creation computes an SRP salt and verifier in the CLI and sends them directly to the
+Module. It requires a running Realm and its retained Operator credential.
 
 ### `account create` says there is no coordinator credential
 
-```text
-lyracore: prerequisite missing: no coordinator credential — /home/you/lyracore/.lyracore/coordinator-token
-does not exist and `spacetime login show --token` printed no token. Run `lyracore dev up` first: it
-mints a server-issued identity from the local node and claims it as the operator (no spacetimedb.com
-account needed).
-```
-
-(One line in the terminal; wrapped here.) Rare, because `dev up` is what creates that file — you see
-it if you run `account create` on a checkout where `dev up` has never completed, or if you deleted
-`.lyracore/` by hand.
-
-Provisioning writes through the **operator** identity, and `account create` deliberately will not
-mint a new one: a fresh identity has claimed nothing, so the module would refuse the write *after*
-your password had been read. `./lyracore dev up` mints and claims in one step; then re-run
-`account create`. Nothing here needs a spacetimedb.com account.
+Run `./lyracore dev up` first. Account creation checks for the credential before reading a password.
+It does not mint a replacement identity. For native Realms, the retained credential is
+`.lyracore/native-owner-token`.
 
 ### `dev up` says `operator already claimed`
 
-```text
-lyracore: process error: http://127.0.0.1:3000/v1/database/lyracore/call/claim_operator answered HTTP 400: operator already claimed
-  `claim_operator` was called with the server-issued identity in /home/you/lyracore/.lyracore/coordinator-token. A refusal there almost always means this database was claimed by a DIFFERENT identity (an earlier `spacetime login`, or another checkout): delete that file and re-run `lyracore dev up` to fall back to that login.
-```
-
-(Two lines, both long; the wording after `HTTP 400:` is the node's, so it may differ slightly with
-the SpacetimeDB version — the second line is the CLI's and is exact.)
-
-The operator is trust-on-first-use: the first identity to claim it owns the database, and a second
-one is refused for as long as that database exists. So the two identities have to be the same one
-across runs, which is exactly why the minted token is persisted.
-
-- **You logged in to SpacetimeDB after the first `dev up`, or published this database from another
-  checkout.** Delete `.lyracore/coordinator-token` and re-run `dev up`: it falls back to your login,
-  which is the identity that already claimed the operator.
-- **You deleted `.lyracore/coordinator-token` and the database was claimed by the identity it held.**
-  That credential was the only copy — restore it from a backup if you have one. Otherwise the fixture
-  database has to be recreated from scratch; it holds nothing you cannot rebuild with `dev up` +
-  `account create`, but do not reach for `spacetime publish -c` (see [Clean retry](#clean-retry)).
+The retained credential does not match the Shard's Operator. Restore the credential that published
+and claimed this Realm. Keep `.lyracore/native-owner-token` and `.lyracore/native-cli.toml` with the
+Realm's data; deleting them does not reset its ownership.
 
 ### `dev down` refuses to stop something
 
 ```text
-lyracore: refusing to stop gateway: PID 12346 is no longer the process this CLI started
+lyracore: refusing to stop spacetime: PID 12346 is no longer the process this CLI started
 (recorded "…", found "…"). Clear it with `lyracore dev down --forget`.
 ```
 
@@ -778,26 +638,17 @@ PIDs get reused, and signalling a recycled one kills a stranger's process — so
 stored with its start time and command name, and `dev down` compares that identity before signalling
 anything. `dev down --forget` drops the record **without** signalling.
 
-### Clean retry
+### Restart after a failure
 
 ```bash
-./lyracore dev down --forget     # drop the recorded processes, signalling nothing stale
-./lyracore doctor                # confirm the ports are actually free now
+./lyracore dev down
+./lyracore doctor
 ./lyracore dev up
 ```
 
-That is the whole reset: `.lyracore/` holds only state, logs and caches, and `dev up` rebuilds and
-republishes. **Never** run `spacetime publish -c` to "start clean" — that is the destructive wipe;
-it destroys the data *and* the claimed operator identity, and login breaks until you re-claim it.
-`./lyracore publish` refuses to forward it for exactly this reason.
-
-### If you hand-manage the gateway process
-
-You normally never need to — but if you do, the kill pattern is
-**`pkill -x lyracore-gatewa`**. The missing trailing `y` is deliberate: `pkill -x` matches
-`/proc/<pid>/comm`, which the kernel truncates to 15 characters, and the binary name is 16. The full
-name matches nothing and still exits 1 — indistinguishable from "already stopped". And never
-`pkill -f`, which self-matches the launching shell. Prefer `./lyracore dev down`.
+If `dev down` reports a reused PID, `dev down --forget` can clear that stale process record without
+signalling it. Keep `.lyracore/native-data` and the native credential files. They hold the Realm's
+data and ownership, and are not build caches.
 
 ---
 
@@ -807,12 +658,10 @@ name matches nothing and still exits 1 — indistinguishable from "already stopp
   rules.
 - [GitHub Issues](https://github.com/LyraCoreProject/LyraCore/issues) — the work queue. Run the
   checks in [`docs/testing.md`](./testing.md) before proposing a change.
-- [`docs/danger-zones.md`](./danger-zones.md) — authoritative traps, tooling gotchas, and the
-  production (four-database) deploy procedure. `dev up` runs its own four-database fixture
-  topology — the same tiers, on a loopback node — which is the deliberate exception to §3; do not
-  use it to launch or repair a production realm.
-- [`docs/architecture.md`](./architecture.md) and [`docs/schema.md`](./schema.md) — how the module
-  and gateway are put together, if you are here to write game logic.
+- [`docs/danger-zones.md`](./danger-zones.md) records deployment and migration requirements.
+  Local native startup does not update an existing deployment or consolidate its Shards.
+- [`docs/architecture.md`](./architecture.md#native-host-migration) explains the Module and
+  Native Host responsibilities and current verification coverage.
 
 If you are here to contribute rather than to play:
 

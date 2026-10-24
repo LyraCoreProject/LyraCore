@@ -525,59 +525,75 @@ fn admission_reads_current_consent_and_session_ownership() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn each_selection_clears_only_its_characters_unclaimed_group_intents() {
-    let shard = stage("sessionless-intents");
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
-    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "2", "false"]);
-    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "0", "true"]);
-    shard.assert_call("debug_emit_sessionless_group_intent", &["2", "1", "false"]);
-    let original = shard.query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1");
-    assert_eq!(original.len(), 2);
+fn companion_invites_and_departures_apply_locally_with_current_consent() {
+    let shard = stage("sessionless-local-group");
+    shard.assert_call("install_guid_range", &["0"]);
+    shard.assert_call(
+        "create_character",
+        &["1", "\"Companion\"", "1", "1", "0", "0", "0", "0", "0", "0"],
+    );
+    let target = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Companion'")[0]
+        ["guid"]
+        .clone();
+    shard.assert_call("debug_spawn_player_entity", &[&target]);
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
+    shard.assert_call(
+        "debug_emit_sessionless_group_intent",
+        &["1", &target, "false"],
+    );
     assert!(shard
-        .query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1")
+        .query_rows("SELECT id FROM game_group_invite")
         .is_empty());
-    assert_eq!(
-        shard
-            .query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 2")
-            .len(),
-        1
-    );
-    assert_refusal(
-        &shard,
-        "claim_bot_invite_intent",
-        &[&original[0]["id"]],
-        "group:intent_already_claimed",
-    );
-
-    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "2", "false"]);
-    let pending = shard.query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1");
-    let id = &pending[0]["id"];
-    assert_refusal(
-        &shard,
-        "claim_bot_invite_intent",
-        &[id],
-        "group:action_suppressed",
-    );
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1"),
-        pending
-    );
-    shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
     assert!(shard
-        .query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1")
+        .query_rows("SELECT id FROM game_bot_invite_intent")
         .is_empty());
 
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "true"]);
-    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "2", "false"]);
-    let admitted = shard.query_rows("SELECT * FROM game_bot_invite_intent WHERE inviter_guid = 1");
-    shard.assert_call("claim_bot_invite_intent", &[&admitted[0]["id"]]);
-    assert_refusal(
-        &shard,
-        "claim_bot_invite_intent",
-        &[&admitted[0]["id"]],
-        "group:intent_already_claimed",
+    shard.assert_call("debug_set_sessionless_action_consent", &[&target, "false"]);
+    shard.assert_call(
+        "debug_emit_sessionless_group_intent",
+        &["1", &target, "false"],
     );
+    assert_eq!(
+        shard.query_rows("SELECT id FROM game_group_invite").len(),
+        1
+    );
+    assert!(shard
+        .query_rows("SELECT id FROM game_group_member")
+        .is_empty());
+    shard.assert_call("debug_set_sessionless_action_consent", &[&target, "true"]);
+    shard.assert_call(
+        "debug_emit_sessionless_group_intent",
+        &["1", &target, "false"],
+    );
+    assert!(shard
+        .query_rows("SELECT id FROM game_group_invite")
+        .is_empty());
+    assert_eq!(
+        shard.query_rows("SELECT id FROM game_group_member").len(),
+        2
+    );
+    assert!(shard
+        .query_rows("SELECT id FROM game_bot_invite_intent")
+        .is_empty());
+
+    shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
+    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "0", "true"]);
+    assert_eq!(
+        shard.query_rows("SELECT id FROM game_group_member").len(),
+        2
+    );
+    shard.assert_call("debug_set_sessionless_action_consent", &["1", "true"]);
+    shard.assert_call("debug_emit_sessionless_group_intent", &["1", "0", "true"]);
+    assert!(shard
+        .query_rows("SELECT id FROM game_group_member")
+        .is_empty());
+    assert!(shard
+        .query_rows("SELECT group_id FROM game_group")
+        .is_empty());
+    assert!(shard
+        .query_rows("SELECT id FROM game_bot_invite_intent")
+        .is_empty());
 }
 
 #[test]

@@ -106,7 +106,7 @@ pub(crate) fn detach_item(
     }
     let inst = owned.expect("Detach is only reachable with a row");
     let snapshot = ItemSnapshot::from(&inst);
-    items.guid().delete(item_guid);
+    crate::ItemInstance::delete(ctx, item_guid);
     Ok(snapshot)
 }
 pub(crate) fn grant_snapshot(
@@ -261,7 +261,6 @@ pub(crate) fn delivered_mail(ctx: &ReducerContext, mail_id: u64) -> Option<Mail>
         .find(mail_id)
         .filter(|m| m.is_delivered(ctx.timestamp))
 }
-#[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
 pub(crate) fn has_unread(ctx: &ReducerContext, recipient_guid: u64) -> bool {
     ctx.db
         .game_mail()

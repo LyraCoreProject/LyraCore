@@ -208,8 +208,26 @@ pub struct InstanceRemoval {
     pub group_id: u64,
 }
 
+impl InstanceRemoval {
+    pub(crate) fn insert(self, ctx: &ReducerContext) {
+        let row = ctx.db.game_instance_removal().insert(self);
+        crate::native::instance_removal_changed(ctx, row.character_guid, Some(&row));
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, character_guid: u64) {
+        if ctx
+            .db
+            .game_instance_removal()
+            .character_guid()
+            .delete(character_guid)
+        {
+            crate::native::instance_removal_changed(ctx, character_guid, None);
+        }
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_instance_removal(ctx, character_guid) {
-    ctx.db.game_instance_removal().character_guid().delete(character_guid);
+    InstanceRemoval::delete(ctx, character_guid);
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_instance_removal());
 
@@ -614,7 +632,7 @@ pub(crate) fn create_instance_with_id(
         .collect();
     let mut copied = 0u32;
     for src in &sources {
-        let copy = gos.insert(crate::gameobject::GameObject {
+        let copy = crate::gameobject::GameObject {
             guid: (0xF110u64 << 48) | GO_COPY_BAND | next_go_seq,
             template_entry: src.template_entry,
             map_id: src.map_id,
@@ -633,7 +651,8 @@ pub(crate) fn create_instance_with_id(
             rotation_1: src.rotation_1,
             rotation_2: src.rotation_2,
             rotation_3: src.rotation_3,
-        });
+        }
+        .insert(ctx);
         crate::go_collider::register(ctx, &copy);
         next_go_seq += 1;
         copied += 1;
@@ -808,12 +827,12 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
 
     let corpses = ctx.db.game_corpse();
     let dead_bodies: Vec<u64> = corpses
-        .iter()
-        .filter(|c| c.instance_id == instance_id)
+        .by_instance()
+        .filter(instance_id)
         .map(|c| c.guid)
         .collect();
     for guid in dead_bodies {
-        corpses.guid().delete(guid);
+        crate::Corpse::delete(ctx, guid);
     }
 
     let gos = ctx.db.game_gameobject();
@@ -825,7 +844,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     for guid in &copies {
         crate::loot::reap_corpse_loot_family(ctx, *guid);
         crate::go_collider::remove(ctx, *guid);
-        gos.guid().delete(guid);
+        crate::GameObject::delete(ctx, guid);
     }
 
     crate::creatures::cancel_relay_runs_for_instance(ctx, instance_id);
@@ -972,17 +991,18 @@ pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u
         }
     }
     if let Some(row) = running {
-        removals.scheduled_id().delete(row.scheduled_id);
+        InstanceRemoval::delete(ctx, row.character_guid);
     }
     if let Some(standing) = standing.filter(|standing| standing.in_world) {
         let due = ctx.timestamp.to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
-        removals.insert(InstanceRemoval {
+        InstanceRemoval {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
             character_guid,
             instance_id: standing.instance_id,
             group_id: standing.group_id,
-        });
+        }
+        .insert(ctx);
     }
 }
 
@@ -1013,7 +1033,7 @@ pub(crate) fn fire_instance_removal(ctx: &ReducerContext, removal: &InstanceRemo
     {
         return;
     }
-    removals.scheduled_id().delete(removal.scheduled_id);
+    InstanceRemoval::delete(ctx, removal.character_guid);
     if let Some(group_id) = adopt_for_regrouped_member(ctx, removal.character_guid) {
         reconcile_group_members(ctx, group_id);
         return;

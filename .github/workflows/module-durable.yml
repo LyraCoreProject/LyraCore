@@ -1,4 +1,4 @@
-name: Module durable tests and Gateway bindings
+name: Module durable tests
 
 on:
   pull_request:
@@ -32,10 +32,6 @@ jobs:
         if: matrix.shard == 0
         run: python3 -m unittest discover -s scripts/tests
 
-      - name: Prepare Gateway bindings
-        if: matrix.shard != 2
-        run: ./lyracore bindings
-
       - name: Build the module wasm
         run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
 
@@ -64,39 +60,6 @@ jobs:
           cargo build --manifest-path .lyracore-upgrade-baseline/Cargo.toml --target-dir "$baseline_target" --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
           export LYRACORE_TEST_BASELINE_WASM="$baseline_target/wasm32-unknown-unknown/release/lyracore_module.wasm"
           cargo test -p lyracore-module --test additive_upgrade populated_old_module_upgrades_without_clearing -- --ignored --exact --test-threads=1
-
-      - name: Run the single-shard auction Refusal regression
-        if: matrix.shard == 0
-        run: |
-          target_test=stdb::store::auction::auction_reducer_tests::a_local_bid_interaction_refusal_stays_a_client_outcome
-          cargo test -p lyracore-gateway --bin lyracore-gateway "$target_test" -- --ignored --exact --list | grep -Fx "$target_test: test"
-          cargo test -p lyracore-gateway --bin lyracore-gateway "$target_test" -- --ignored --exact
-
-      - name: Run the Gateway ownership and durable projection regressions
-        if: matrix.shard == 0
-        run: |
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::account_sessions::tests::independent_coordinators_preserve_the_winner_after_delayed_cleanup -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::session_tests::competing_world_sessions_close_the_old_socket_without_removing_the_winner -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::character_gone_durable_tests::another_gateway_waits_for_the_transfer_then_cleans_the_deleted_character -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::roster_relay_durable_tests::a_roster_change_made_only_on_realm_core_reaches_every_world_shard_mirror -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::meeting_stone_durable_tests::seekers_on_two_world_shards_form_one_party_that_reaches_every_mirror -- --ignored --exact
-          cargo test -p lyracore-gateway --bin lyracore-gateway world::tests::shard_routing_durable_tests -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::armor::tests::resistance_projection_adds_property_effects_only_while_the_item_is_worn_and_unbroken -- --ignored --exact
-          cargo test -p lyracore-gateway --test provision_cli provision_writes_the_account_to_the_world_shard_and_realm_core -- --ignored --exact
-          cargo test -p lyracore-gateway --test startup_relays -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --test notification_events -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::reads::indexed_durable_tests -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscription_scope_durable_tests -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::world_view::item_durable_tests -- --ignored --test-threads=1
-          cargo test -p lyracore-gateway --bin lyracore-gateway stdb::world_view::observer_durable_tests -- --ignored --test-threads=1
-
-      - name: Run Benilla against private Module instances
-        if: matrix.shard == 0
-        run: cargo test --locked -p lyracore-gateway --bin lyracore-gateway benilla_durable_ -- --ignored --test-threads=1
-
-      - name: Run the cross-Shard command transport tests
-        if: matrix.shard == 1
-        run: cargo test -p lyracore-gateway --bin lyracore-gateway stdb::subscriptions::party_command_durable_tests -- --ignored --test-threads=1
 
       - name: Upload the standalone logs
         if: failure()

@@ -18,10 +18,37 @@ pub struct PlayerReputation {
     pub at_war: bool,
 }
 
+impl PlayerReputation {
+    pub(crate) fn delete(ctx: &ReducerContext, id: u64) {
+        if let Some(mut row) = ctx.db.game_player_reputation().id().find(id) {
+            row.standing = ctx
+                .db
+                .game_faction()
+                .faction_id()
+                .find(row.faction_id)
+                .map_or(0, |faction| faction.base_standing.clamp(REP_MIN, REP_MAX));
+            row.at_war = false;
+            crate::native::reputation_changed(ctx, None, &row);
+            ctx.db.game_player_reputation().id().delete(id);
+        }
+    }
+
+    fn insert(ctx: &ReducerContext, row: Self) {
+        crate::native::reputation_changed(ctx, None, &row);
+        ctx.db.game_player_reputation().insert(row);
+    }
+
+    fn update(self, ctx: &ReducerContext) {
+        let previous = ctx.db.game_player_reputation().id().find(self.id);
+        crate::native::reputation_changed(ctx, previous.as_ref(), &self);
+        ctx.db.game_player_reputation().id().update(self);
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_player_reputation(ctx, character_guid) {
     let reps = ctx.db.game_player_reputation();
     for r in reps.by_character().filter(&character_guid).collect::<Vec<_>>() {
-        reps.id().delete(r.id);
+        PlayerReputation::delete(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_player_reputation(ctx, character_guid, io) {
@@ -35,7 +62,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_reputation(ctx, ch
     for mut r in reps.by_character().filter(&character_guid).collect::<Vec<_>>() {
         if r.owner_identity != identity {
             r.owner_identity = identity;
-            reps.id().update(r);
+            r.update(ctx);
         }
     }
 });
@@ -132,7 +159,7 @@ pub(crate) fn grant_reputation(
     {
         row.standing = (row.standing.saturating_add(amount)).clamp(REP_MIN, REP_MAX);
         row.reputation_index = rep_index;
-        reps.id().update(row);
+        row.update(ctx);
         return;
     }
     let Some(owner) = ctx
@@ -151,15 +178,18 @@ pub(crate) fn grant_reputation(
     else {
         return;
     };
-    reps.insert(PlayerReputation {
-        id: 0,
-        character_guid: player_guid,
-        owner_identity: owner,
-        faction_id,
-        standing: base.saturating_add(amount).clamp(REP_MIN, REP_MAX),
-        reputation_index: rep_index,
-        at_war: false,
-    });
+    PlayerReputation::insert(
+        ctx,
+        PlayerReputation {
+            id: 0,
+            character_guid: player_guid,
+            owner_identity: owner,
+            faction_id,
+            standing: base.saturating_add(amount).clamp(REP_MIN, REP_MAX),
+            reputation_index: rep_index,
+            at_war: false,
+        },
+    );
 }
 
 pub(crate) fn apply_set_faction_at_war(
@@ -168,6 +198,9 @@ pub(crate) fn apply_set_faction_at_war(
     reputation_index: u32,
     at_war: bool,
 ) -> Result<(), String> {
+    if reputation_index >= 64 {
+        return Err(format!("invalid reputation index {reputation_index}"));
+    }
     let Some(faction) = ctx
         .db
         .game_faction()
@@ -184,18 +217,21 @@ pub(crate) fn apply_set_faction_at_war(
     {
         row.at_war = at_war;
         row.reputation_index = reputation_index as i32;
-        reps.id().update(row);
+        row.update(ctx);
         return Ok(());
     }
-    reps.insert(PlayerReputation {
-        id: 0,
-        character_guid: player.guid,
-        owner_identity: player.owner_identity,
-        faction_id: faction.faction_id,
-        standing: faction.base_standing.clamp(REP_MIN, REP_MAX),
-        reputation_index: reputation_index as i32,
-        at_war,
-    });
+    PlayerReputation::insert(
+        ctx,
+        PlayerReputation {
+            id: 0,
+            character_guid: player.guid,
+            owner_identity: player.owner_identity,
+            faction_id: faction.faction_id,
+            standing: faction.base_standing.clamp(REP_MIN, REP_MAX),
+            reputation_index: reputation_index as i32,
+            at_war,
+        },
+    );
     Ok(())
 }
 
@@ -214,6 +250,7 @@ pub(crate) fn apply_set_watched_faction(
         .ok_or_else(|| "Character not found".to_string())?;
     character.watched_faction_index = reputation_index;
     characters.guid().update(character);
+    crate::native::watched_faction(ctx, character_guid, reputation_index);
     Ok(())
 }
 

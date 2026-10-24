@@ -273,7 +273,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         a.proc_charges = profile.charges;
         a.proc_icd_ms = profile.icd_ms;
         a.proc_ready_micros = 0;
-        auras.id().update(a);
+        a.update(ctx);
         proc_profiles += 1;
     }
 

@@ -28,7 +28,7 @@ lint tells a Package author when core moved under them; it stops nothing at run 
 
 ## Spell effect kinds
 
-`crate::actor::EffectKind` defines the known effect codes shared by the Module, Gateway and
+`crate::actor::EffectKind` defines the known effect codes shared by the Module, protocol crate and
 Importer. Convert a row's `kind` byte with `EffectKind::try_from`; handle unknown authored codes
 explicitly. Existing Actor byte constants keep their values. Version 4 retains the five roots
 and Actor operations from version 3.
@@ -85,13 +85,15 @@ This list pairs each event name with its payload type.
 ### Session-less action consent
 
 `actor::set_sessionless_action_consent(ctx, character_guid, allowed)` records a core-owned consent
-projection during bot setup or controller selection. Call it for repeated selection too: every call
-removes that Character's unclaimed Group Intents. Do not call it on decision ticks. Absent consent
-preserves Legacy behavior. Core Gates check consent when accepting an invite or claiming an Intent.
+projection during bot setup or controller selection. Call it for repeated selection too. Each call
+clears that Character's legacy unclaimed Group Intents and last completed Character Relocation.
+Do not call it on decision ticks. Absent consent permits sessionless actions.
 
-The Gateway obtains acknowledged admission from the owning World Shard before it accepts at
-Realm-core. Admission committed before a concurrent controller change can finish afterwards; this
-ordering does not promise an atomic operation across Shards.
+Core checks current consent before local invite, leave and automatic acceptance operations. The
+consent Gate and group action run in one transaction. Suppressed consent leaves an incoming
+invitation unanswered. The existing `emit_bot_invite_intent` and `emit_bot_leave_intent` names now
+apply these operations directly; they create no Group Intent. A group invariant failure aborts the
+transaction because those Package operations return no outcome.
 
 ### Package-owned Accounts
 
@@ -157,8 +159,8 @@ Existing verbs keep `fn verb(ctx, actor_guid, ..) -> Result<(), String>`. The ta
 
 The same root exposes the typed client-command parser and admitted apply values, the target Receipt
 capacity that bounds retained per-issuer command fences, and the exact `companion_target_facts`
-read. Core authenticates the issuer and the Gateway certifies Realm-core party authority before a
-Package receives an admitted command.
+read. Core authenticates the issuer and checks local party authority and Sessionless Action Consent
+before a Package receives an admitted native command.
 
 `actor::cast_readiness(ctx, actor_guid, spell_id, target_guid)` applies the same read-only spellbook,
 supported-lifecycle, range, line-of-sight, and ordinary cast Gates used at cast start. A Package can
@@ -207,17 +209,20 @@ caller's action deadline to have passed. They return whether they removed the ca
 quest eligibility, loot entitlement, spell readiness and cast observations. The named re-exports
 in `module/src/actor.rs` are the supported operations. Package authorization, Character setup and
 encounter operations are named in `module/src/package.rs`.
+`actor::sell_item(ctx, character_guid, vendor_guid, slot)` sells the complete stack. Native client
+requests can also sell a specified count from that stack.
 
-`actor::party_facts(ctx, character_guid)` reads the Character's local durable party mirror. It names
-the leader and every member, with nullable live position, health, and death facts. An absent local
-Unit may instead carry a Realm-core-certified map, instance, and locator revision. Pending Transfer,
-unknown location, and departed-member fences expose no partition. Enemy facts cover hostile
+`actor::party_facts(ctx, character_guid)` reads the Character's durable party roster. It names
+the leader and every member, with nullable live position, health, and death facts. Live Units supply
+their current map and Instance. An absent Unit can retain a certified partition from legacy
+coordination records. Pending Transfer, unknown location and departed-member fences expose no
+partition. Enemy facts cover hostile
 creatures with current party melee, cast, threat, or control evidence. Hostile Characters are
 excluded because PvP party assistance is outside this contract. An absent membership returns
 `Ok(None)`.
-A Realm-owned Roster Revision orders the complete member list, leader, loot rules, Group kind, and
-every Raid Slot. World Shards retain its disband state, so delayed Gateway fanout cannot remove a
-newer member, restore older party rules, or recreate a disbanded party.
+A Roster Revision orders the complete member list, leader, loot rules, Group kind and every Raid
+Slot. The native Module applies roster changes locally. Legacy mirror reducers still refuse stale
+revisions and retain disband state.
 A membership whose Group row is missing returns `MissingGroup`. Party facts cover every
 Raid member, whatever the Subgroup. `FightLimit` reports more than 40 members, which only a damaged
 mirror holds. It also reports 24 incoming melee or threat rows for one member, one pending cast for
@@ -257,6 +262,7 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `admit_to_instance(ctx, character_guid, map_id, instance_id, party_id, request_actor)` | stages the party's instance as a dungeon entry leaves it and binds the Character to it; refuses when entry resolves to another instance |
 | `record_completed_transfer(ctx, character_guid, map_id, instance_id)` | records a finished Transfer in Realm-core's character-to-shard index |
 | `declare_next_movement_tick(ctx, delay)` | makes the next creature movement tick fire once, `delay` from now; refuses unless the catch-all tick is the only movement schedule |
+| `emit_move_spline(ctx, guid, start, destination, duration_ms, run, spline_id, map_id, instance_id, grid)` | emits a straight creature movement segment with the existing ten-argument fixture contract |
 
 A fixture reads the navigation revision through `actor::movement::inputs(ctx, map_id).imported_revision`.
 
@@ -421,9 +427,12 @@ client back.
 `actor::area_trigger_route(ctx, trigger_id)` reads one exact imported AreaTrigger source volume and
 target map. It exposes the source center and containment rule for Candidate movement while keeping
 the landing coordinates private. `actor::enter_sessionless_areatrigger` rechecks the current body,
-volume, exact existing dungeon instance lease, and a Realm-certified party member in the expected
-partition before it applies the imported landing and writes one Transfer Intent. A Refusal leaves
-the Character, instance binding, and intent unchanged.
+volume, exact existing dungeon instance lease, and a live party member in the expected partition.
+It applies the imported landing and records a completed Character Relocation in the same transaction.
+The returned id names that completed relocation. A repeat for the same controller generation,
+AreaTrigger and destination returns the same id while the Character remains in that destination
+partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
+relocation unchanged. No Transfer Intent or Escrow is created.
 
 `actor::movement::LEG_MAX_EXPANSIONS` is the expansion cap used by `actor::movement::route_step`. A Package can reserve that work before selecting movement.
 

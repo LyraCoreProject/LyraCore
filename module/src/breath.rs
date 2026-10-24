@@ -13,7 +13,7 @@ pub struct BreathState {
 }
 
 crate::character_owned!(delete, fn sweep_delete_game_breath_state(ctx, character_guid) {
-    ctx.db.game_breath_state().entity_guid().delete(character_guid);
+    clear(ctx, character_guid);
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_breath_state());
 
@@ -23,6 +23,23 @@ pub struct BreathSchedule {
     #[auto_inc]
     pub scheduled_id: u64,
     pub scheduled_at: ScheduleAt,
+}
+
+pub(crate) fn eligible(entity: &WorldEntity) -> bool {
+    entity.is_player()
+        && !entity.dead
+        && !entity.godmode
+        && entity.player_flags & lyracore_shared::constants::player_flags::GHOST == 0
+}
+
+pub(crate) fn clear(ctx: &ReducerContext, guid: u64) {
+    let states = ctx.db.game_breath_state();
+    if let Some(state) = states.entity_guid().find(guid) {
+        states.entity_guid().delete(guid);
+        if state.draining {
+            crate::breath_relay::stop(ctx, guid);
+        }
+    }
 }
 
 pub(crate) fn update_breath_edge(ctx: &ReducerContext, mover: &WorldEntity, submerged: bool) {
@@ -84,15 +101,11 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
     for mut state in active {
         let entity_guid = state.entity_guid;
         let Some(entity) = ctx.db.game_world_entity().guid().find(entity_guid) else {
-            states.entity_guid().delete(entity_guid);
+            clear(ctx, entity_guid);
             continue;
         };
-        if entity.dead
-            || entity.godmode
-            || !entity.is_player()
-            || entity.player_flags & lyracore_shared::constants::player_flags::GHOST != 0
-        {
-            states.entity_guid().delete(entity_guid);
+        if !eligible(&entity) {
+            clear(ctx, entity_guid);
             continue;
         }
         let elapsed = now_micros - state.last_evaluated.to_micros_since_unix_epoch();

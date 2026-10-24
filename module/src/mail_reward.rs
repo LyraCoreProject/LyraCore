@@ -93,6 +93,21 @@ pub(crate) fn file_reward_letter(
             return Ok(());
         }
     };
+    if crate::native::is_player(ctx, character_guid) {
+        let delivery = crate::mail::Letter::reward(
+            letter.header,
+            character_guid,
+            letter.body,
+            letter.money,
+            letter.item,
+        )
+        .delayed(
+            ctx.timestamp.to_micros_since_unix_epoch(),
+            letter.delay_secs,
+        );
+        crate::mail::insert_letter(ctx, delivery);
+        return Ok(());
+    }
     let escrow_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)?.start();
     crate::mail_escrow::file_reward(ctx, escrow_id, character_guid, &letter)
 }
@@ -132,7 +147,7 @@ mod fixture {
             .guid()
             .find(GIVER_SOURCE)
             .ok_or_else(|| "reward letter fixture giver source is not live".to_string())?;
-        entities.guid().delete(GIVER);
+        crate::WorldEntity::delete(ctx, GIVER);
         giver.guid = GIVER;
         giver.x = character.x + 1.0;
         giver.y = character.y;
@@ -228,18 +243,21 @@ mod fixture {
                 .filter(|row| row.quest_entry == quest)
                 .collect::<Vec<_>>()
             {
-                log.id().delete(row.id);
+                crate::quest::CharacterQuest::delete(ctx, row.id);
             }
-            log.insert(CharacterQuest {
-                id: 0,
-                character_guid: CHARACTER,
-                owner_identity: character.owner_identity,
-                quest_entry: quest,
-                counts: Vec::new(),
-                rewarded: false,
-                deadline_micros: 0,
-                failed: false,
-            });
+            crate::quest::CharacterQuest::insert(
+                ctx,
+                CharacterQuest {
+                    id: 0,
+                    character_guid: CHARACTER,
+                    owner_identity: character.owner_identity,
+                    quest_entry: quest,
+                    counts: Vec::new(),
+                    rewarded: false,
+                    deadline_micros: 0,
+                    failed: false,
+                },
+            );
         }
         Ok(())
     }

@@ -70,14 +70,17 @@ pub(crate) fn resolve_cast_at_typed(
         check_distract_destination(ctx, &caster, dest, hdr.range_yd)?;
     }
 
-    // Scheduled Refusals retain state, so consume all reagents before charging power.
-    let creates_items = effects.iter().any(|effect| effect.kind == E_CREATE_ITEM);
-    let inventory_before_craft =
-        creates_items.then(|| crate::items::carried_items(ctx, caster_guid));
-    if creates_items {
-        crate::items::exchange_items(ctx, caster_guid, &recipe_reagents(ctx, spell_id), &[])
-            .map_err(String::from)?;
-    }
+    // Scheduled crafts admit reagents before charging power; all products commit together.
+    let craft = if effects.iter().any(|effect| effect.kind == E_CREATE_ITEM) {
+        let mut plan = crate::items::ItemStoragePlan::read(ctx, caster_guid, caster.owner_identity);
+        for (entry, count) in recipe_reagents(ctx, spell_id) {
+            plan.consume(entry, count).map_err(String::from)?;
+        }
+        plan.check_trade_offers(ctx).map_err(String::from)?;
+        Some(plan)
+    } else {
+        None
+    };
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !queues_next_swing(&effects) {
@@ -111,7 +114,7 @@ pub(crate) fn resolve_cast_at_typed(
             client_initiated,
         },
         dest,
-        inventory_before_craft,
+        craft,
     );
 
     let cast_hits_enemy = effects
@@ -221,7 +224,7 @@ fn run_spell_effects(
     level: u8,
     origin: CastOrigin,
     dest: Option<(f32, f32, f32)>,
-    inventory_before_craft: Option<Vec<crate::items::ItemInstance>>,
+    mut craft: Option<crate::items::ItemStoragePlan>,
 ) {
     let mut hit_targets = Vec::new();
     let mut seen_hit_targets = std::collections::HashSet::new();
@@ -262,19 +265,52 @@ fn run_spell_effects(
                 primary_missed |= t == target_guid;
                 continue;
             }
-            // Combo finishers scale from the explicit enemy target, even for self-targeted effects.
-            let hit = apply_effect(
-                ctx,
-                e,
-                hdr,
-                caster_guid,
-                t,
-                target_guid,
-                level,
-                points,
-                dest,
-                triggered,
-            );
+            let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
+                let result = ctx
+                    .db
+                    .game_item_template()
+                    .entry()
+                    .find(e.p0.max(0) as u32)
+                    .ok_or_else(|| {
+                        crate::actor::ActionRefusal::from(
+                            "craft product has no item template".to_string(),
+                        )
+                    })
+                    .and_then(|template| {
+                        craft.as_mut().expect("craft was checked").grant(
+                            ctx,
+                            &template,
+                            points.max(1) as u32,
+                            false,
+                            None,
+                        )
+                    });
+                if let Err(ref reason) = result {
+                    log::info!("craft {} refused: {reason:?}", hdr.spell_id);
+                }
+                super::targeting::EffectHit {
+                    item: if result.is_ok() {
+                        ItemGrantOutcome::Granted
+                    } else {
+                        ItemGrantOutcome::Refused
+                    },
+                    ..Default::default()
+                }
+            } else {
+                // Combo finishers use the explicit enemy even for self-targeted effects.
+                apply_effect(
+                    ctx,
+                    e,
+                    hdr,
+                    caster_guid,
+                    t,
+                    target_guid,
+                    level,
+                    points,
+                    dest,
+                    triggered,
+                )
+            };
             match hit.item {
                 ItemGrantOutcome::None => {}
                 ItemGrantOutcome::Granted => item_grants += 1,
@@ -294,11 +330,15 @@ fn run_spell_effects(
             }
         }
     }
-    if item_refused {
-        if let Some(items) = inventory_before_craft {
-            crate::items::restore_carried_items(ctx, caster_guid, items);
+    if !item_refused {
+        if let Some(plan) = craft {
+            if let Err(reason) = plan.commit(ctx) {
+                log::info!("craft {} refused: {reason:?}", hdr.spell_id);
+                item_refused = true;
+            }
         }
-    } else {
+    }
+    if !item_refused {
         for _ in 0..item_grants {
             super::targeting::gain_recipe_skill(ctx, caster_guid, hdr.spell_id);
         }
@@ -317,22 +357,25 @@ fn run_spell_effects(
     }
     let school_index = crate::spell::school_index(hdr.school_mask);
     let (is_completion, client_initiated) = origin.cast_event_flags();
-    ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-        target_guid,
-        is_completion,
-        damage: total_damage,
-        healed: total_healed,
-        school: school_index,
-        is_crit: any_crit,
-        resisted: total_resisted,
-        absorbed: total_absorbed,
-        miss_info: cast_miss(primary_missed, hdr.school_mask),
-        energized: total_energized,
-        power_type: energized_power_type,
-        cooldown_ms: hdr.cooldown_ms,
-        client_initiated,
-        ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
-    });
+    crate::spell::SpellCastEvent::insert(
+        ctx,
+        SpellCastEvent {
+            target_guid,
+            is_completion,
+            damage: total_damage,
+            healed: total_healed,
+            school: school_index,
+            is_crit: any_crit,
+            resisted: total_resisted,
+            absorbed: total_absorbed,
+            miss_info: cast_miss(primary_missed, hdr.school_mask),
+            energized: total_energized,
+            power_type: energized_power_type,
+            cooldown_ms: hdr.cooldown_ms,
+            client_initiated,
+            ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
+        },
+    );
 }
 
 fn cast_miss(missed: bool, school_mask: u8) -> u8 {
@@ -1239,11 +1282,14 @@ pub(crate) fn begin_cast_with_admission(
         dest_z: dz,
     });
     start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
-    ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-        target_guid,
-        cast_time_ms: completion_ms,
-        ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
-    });
+    crate::spell::SpellCastEvent::insert(
+        ctx,
+        SpellCastEvent {
+            target_guid,
+            cast_time_ms: completion_ms,
+            ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
+        },
+    );
     Ok(CastStart::Started(cast.into()))
 }
 

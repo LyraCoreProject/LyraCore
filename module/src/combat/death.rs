@@ -343,7 +343,7 @@ pub fn debug_respawn_lethal_damage_floor_fixture(
     creature_guid: u64,
 ) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
-    if !entities.guid().delete(creature_guid) {
+    if !crate::WorldEntity::delete(ctx, creature_guid) {
         return Err("fixture creature does not exist".to_string());
     }
     let spawns = ctx.db.game_creature_spawn();
@@ -456,7 +456,7 @@ fn kill_creature_with_attribution(
         crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
         disengage(ctx, target_guid);
-        entities.guid().delete(target_guid);
+        crate::WorldEntity::delete(ctx, target_guid);
         crate::creatures::clear_live_pet_kind(ctx, target_guid);
         crate::creatures::distraction::clear(ctx, target_guid);
         crate::hooks::fire_on_death(

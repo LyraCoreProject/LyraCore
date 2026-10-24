@@ -290,7 +290,7 @@ pub(crate) fn wear_weapon(ctx: &ReducerContext, player_guid: u64) {
     ) {
         if inst.durability > 0 && ctx.random::<u32>() % 100 < DURABILITY_WEAR_CHANCE_PCT {
             inst.durability -= 1;
-            ctx.db.game_item_instance().guid().update(inst);
+            inst.update(ctx);
         }
     }
 }

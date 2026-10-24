@@ -21,10 +21,11 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
 #[cfg(feature = "debug_reducers")]
 pub(crate) use economy::apply_repair_item;
 pub(crate) use economy::{
-    apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell, apply_player_repair,
-    buy_bank_slot_result, innkeeper_access_gate, npc_interaction_gate,
+    apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell,
+    apply_item_sell_count, apply_player_repair, buy_bank_slot_result, innkeeper_access_gate,
+    npc_interaction_gate,
 };
-pub(crate) use exchange::exchange_items;
+pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, next_item_guid};
 pub(crate) use inventory::{
     apply_auto_bank_item, apply_equip_item, apply_equip_profile_upgrade, apply_item_destroy,
@@ -32,11 +33,10 @@ pub(crate) use inventory::{
     is_carried_slot, validate_bag_dest_slot,
 };
 pub(crate) use ops::{
-    apply_death_durability_loss, apply_item_use, apply_take_loot, carried_items,
-    equipped_school_stat_bonus, equipped_stat_bonus, grant_item, grant_item_property,
-    grant_letter_item, grant_starter_item, has_free_slot, item_count, item_stat_bonus,
-    remove_items, request_grant_item, request_profile_item, request_take_loot, resistance_items,
-    restore_carried_items, store_instance_state, ItemSnapshot,
+    apply_death_durability_loss, apply_item_use, apply_take_loot, equipped_school_stat_bonus,
+    equipped_stat_bonus, grant_item, grant_item_property, grant_letter_item, grant_starter_item,
+    has_free_slot, item_count, item_stat_bonus, remove_items, request_grant_item,
+    request_profile_item, request_take_loot, resistance_items, store_instance_state, ItemSnapshot,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,

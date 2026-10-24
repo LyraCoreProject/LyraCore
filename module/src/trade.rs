@@ -85,7 +85,7 @@ fn push_trade_event_payload(
     payload: String,
 ) {
     let bound = crate::helpers::character_by_guid(ctx, recipient_guid).map(|c| c.owner_identity);
-    ctx.db.game_trade_event().insert(TradeEvent {
+    let event = ctx.db.game_trade_event().insert(TradeEvent {
         id: 0,
         recipient_identity: crate::helpers::event_recipient_identity(bound),
         kind,
@@ -94,6 +94,7 @@ fn push_trade_event_payload(
         recipient_guid,
         payload,
     });
+    crate::native::trade_event(ctx, &event);
 }
 
 pub(crate) fn session_involving(ctx: &ReducerContext, guid: u64) -> Option<TradeSession> {
@@ -658,9 +659,8 @@ fn run_trade_commit(
                 crate::items::allocate_item_guids(ctx, acceptor_items.len() + partner_items.len())?;
             let acceptor_guids = partner_guids.split_off(acceptor_items.len());
             // Remove both outgoing offers first; their freed slots count toward space.
-            let instances = ctx.db.game_item_instance();
             for inst in acceptor_items.iter().chain(partner_items.iter()) {
-                instances.guid().delete(inst.guid);
+                crate::ItemInstance::delete(ctx, inst.guid);
             }
             for (inst, guid) in acceptor_items.iter().zip(partner_guids) {
                 let tmpl = ctx

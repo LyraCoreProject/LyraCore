@@ -7,19 +7,19 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 ## Index
 
-**A** [Account](#accounts-characters-and-sessions) · [Account Character Owner](#accounts-characters-and-sessions) · [Account Claim](#accounts-characters-and-sessions) · [Account Fence](#accounts-characters-and-sessions) · [Action Outcome](#procs) · [Actor](#accounts-characters-and-sessions) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](#gateway-and-module) · [Architecture Test](#working-method) · [Assistant](#sharding-and-transfer) · [Auction Cut](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#gateway-and-module) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
+**A** [Account](#accounts-characters-and-sessions) · [Account Character Owner](#accounts-characters-and-sessions) · [Account Claim](#accounts-characters-and-sessions) · [Account Fence](#accounts-characters-and-sessions) · [Action Outcome](#procs) · [Actor](#accounts-characters-and-sessions) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](#requests-and-delivery) · [AOI Grant](#requests-and-delivery) · [Architecture Test](#working-method) · [Assistant](#sharding-and-transfer) · [Auction Cut](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Bot Capacity Lease](#sharding-and-transfer) · [Bot Controller](#sharding-and-transfer) · [Bot Objective](#sharding-and-transfer) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Candidate](#sharding-and-transfer) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](#accounts-characters-and-sessions) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#sharding-and-transfer) · [Companion Order](#sharding-and-transfer) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#gateway-and-module) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Candidate](#sharding-and-transfer) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](#accounts-characters-and-sessions) · [Character Relocation](#sharding-and-transfer) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#sharding-and-transfer) · [Companion Order](#sharding-and-transfer) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#requests-and-delivery) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](#gateway-and-module) · [Durable Request](#gateway-and-module)
+**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](#requests-and-delivery) · [Durable Request](#requests-and-delivery) · [DynamicObject](#requests-and-delivery)
 
-**E** [Effect Kind](#gateway-and-module) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#sharding-and-transfer) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
+**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#sharding-and-transfer) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
 
 **F** [Fake](#working-method) · [Fee Hold](#guilds) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#sharding-and-transfer) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](#gateway-and-module) · [Gateway](#realm-topology) · [Gateway Verb](#gateway-and-module) · [Git Package Source](#packages) · [Group](#sharding-and-transfer) · [Group Audience](#sharding-and-transfer) · [Group Broadcast](#sharding-and-transfer) · [Group Intent](#sharding-and-transfer) · [GUID Range](#sharding-and-transfer) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [GameObject Collider](#gameobject-collision) · [Gate](#requests-and-delivery) · [Gateway](#realm-topology) · [Gateway Verb](#requests-and-delivery) · [Git Package Source](#packages) · [Group](#sharding-and-transfer) · [Group Audience](#sharding-and-transfer) · [Group Broadcast](#sharding-and-transfer) · [Group Intent](#sharding-and-transfer) · [GUID Range](#sharding-and-transfer) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Headless Client](#working-method) · [Hold](#auctions) · [Home Shard](#sharding-and-transfer) · [Host Operation](#runtime-scripts)
 
@@ -29,17 +29,17 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 **M** [Mail](#mail) · [Mail Arrival](#mail) · [Mail Expiry](#mail) · [Mail Sender](#mail) · [Mail Template](#mail) · [Mail Timer](#mail) · [Meeting Stone](#meeting-stones) · [Meeting Stone Queue](#meeting-stones) · [Member Stats](#sharding-and-transfer) · [Module](#realm-topology) · [Mount Projection](#mounts) · [Movement Intent](#creature-ai)
 
-**N** [Navigation Inputs](#sharding-and-transfer)
+**N** [Native Host](#realm-topology) · [Navigation Inputs](#sharding-and-transfer)
 
-**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](#realm-topology) · [Operator Content API](#gateway-and-module) · [Operator Spawn Range](#gateway-and-module) · [Owner Token](#gateway-and-module)
+**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](#realm-topology) · [Operator Content API](#requests-and-delivery) · [Operator Spawn Range](#requests-and-delivery) · [Owner Token](#requests-and-delivery)
 
-**P** [Package](#packages) · [Package API](#packages) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#sharding-and-transfer) · [Party Partition](#sharding-and-transfer) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#gateway-and-module) · [Property Pool](#random-properties) · [Protocol Family](#working-method) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#sharding-and-transfer) · [Public Note](#guilds)
+**P** [Package](#packages) · [Package API](#packages) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#sharding-and-transfer) · [Party Partition](#sharding-and-transfer) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](#working-method) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#sharding-and-transfer) · [Public Note](#guilds)
 
-**R** [Raid](#sharding-and-transfer) · [Raid Quest](#sharding-and-transfer) · [Raid Slot](#sharding-and-transfer) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#sharding-and-transfer) · [Realm](#realm-topology) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#chat) · [Realm-core](#realm-topology) · [Recorded Revision](#packages) · [Recovery Attempt](#sharding-and-transfer) · [Recovery Scan](#sharding-and-transfer) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](#gateway-and-module) · [Relay](#gateway-and-module) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roster Revision](#sharding-and-transfer) · [Roster Revision Relay](#sharding-and-transfer) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](#runtime-scripts) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+**R** [Raid](#sharding-and-transfer) · [Raid Quest](#sharding-and-transfer) · [Raid Slot](#sharding-and-transfer) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#sharding-and-transfer) · [Realm](#realm-topology) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#chat) · [Realm-core](#realm-topology) · [Recorded Revision](#packages) · [Recovery Attempt](#sharding-and-transfer) · [Recovery Scan](#sharding-and-transfer) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](#requests-and-delivery) · [Relay](#requests-and-delivery) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Roster Revision](#sharding-and-transfer) · [Roster Revision Relay](#sharding-and-transfer) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](#runtime-scripts) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](#working-method) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](#accounts-characters-and-sessions) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#sharding-and-transfer) · [Settlement](#auctions) · [Shard](#realm-topology) · [Shard Boundary](#sharding-and-transfer) · [Shard Map](#sharding-and-transfer) · [Signature](#guilds) · [Solo Target Claim](#sharding-and-transfer) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](#working-method) · [Strategy](#sharding-and-transfer) · [Subgroup](#sharding-and-transfer) · [Suffix](#random-properties) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Transport Loss](#gateway-and-module) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#sharding-and-transfer) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#sharding-and-transfer) · [Transfer Intent](#sharding-and-transfer) · [Transport Loss](#requests-and-delivery) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -53,19 +53,25 @@ A World of Warcraft 1.12.1 server. Game state lives in SpacetimeDB; the gateway 
 
 ### Realm topology
 
+**Native Host**:
+The SpacetimeDB process that accepts WoW TCP connections. It handles transport and cryptographic
+scratch state, then applies the Module's ordered packet delivery instructions. The native runtime
+uses one Shard for all Realm state.
+
 **Realm**:
-The set of shards behind one gateway tier that clients see as one server.
+The game world and Accounts that clients see as one server. The native runtime stores a Realm in
+one Shard.
 _Avoid_: server, cluster
 
 **Shard**:
-One SpacetimeDB database in a realm. The word for the boundary a character or mail crosses is "cross-shard".
+One SpacetimeDB database containing a Realm. Maps and Instances partition gameplay within it.
 _Avoid_: database (when meaning a shard), db, cross-database
 
 **World Shard**:
-A shard that owns a set of maps.
+A retired topology role that owned a set of maps. Native Realms keep all maps in one Shard.
 
 **Instance Pool**:
-The shard that hosts instanced maps.
+A retired topology role that hosted instanced maps. Native Instances share the Realm's Shard.
 
 **World Import Profile**:
 A stable name for the import plan assigned to one World Shard or Instance Pool destination. The
@@ -134,16 +140,18 @@ for collision extraction. It owns only the selected vmap cells. It does not clai
 Navigation Coverage, or the rest of the instance.
 
 **Realm-core**:
-The shard that holds realm-wide state: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, the character-to-shard index and shard load samples. It holds no Characters.
+The retired Shard for realm-wide state. Native Realms store that state beside Characters in one Shard.
 
 **Gateway**:
-The trusted protocol tier between clients and shards. Holds no durable state.
+The removed protocol runtime between clients and Shards. Its request handling and AOI run in the
+Module; the Native Host handles transport.
 
 **Module**:
-The wasm that holds all durable state and all game logic. The same wasm runs on every shard.
+The WebAssembly program that owns durable state, gameplay, AOI and native protocol handling in a
+Realm's Shard.
 
 **Operator**:
-The identity that publishes and owns the shards, and the only caller of Gateway Verbs.
+The identity that publishes and owns the Realm's Shard, and the only caller of Gateway Verbs.
 
 **Standalone Supervisor**:
 The systemd unit that runs a host's `spacetimedb-standalone` process. The tracked artifact is
@@ -156,20 +164,21 @@ Making a host's Standalone Supervisor match the unit tracked in the checkout. `l
 reconcile` performs it, reading every expected value out of the tracked unit. A host that does not
 match afterwards is reported as NOT reconciled, never as a success.
 
-### Gateway and module
+### Requests and delivery
 
 **Gateway Verb**:
 A `gw_*` reducer the Operator calls on a character's behalf, with the Actor named by guid.
 
 **Gate**:
-A rule that refuses a request. Gates live in the Module, except the realm-wide reads only the Gateway can perform (presence, name resolution, loot-roll fan-out).
+A Module rule that refuses a request. This includes presence, name resolution and recipient selection.
 _Avoid_: validation, guard
 
 **Proficiency**:
 What a Character may wield and wear. Each weapon type needs its weapon proficiency spell, such as Two-Handed Swords (202): the race and class kit grants the starting ones, and a weapon master teaches the rest. Misc weapons and fishing poles need none. Armor is the class base set plus the tiers trained at a class trainer, where knowing the passive spell is the proficiency. Derived once in `lyracore-shared`; the Module equip Gate, the Gateway's `SMSG_SET_PROFICIENCY` masks and the auction usable filter all read that derivation.
 
 **Coordinator**:
-The Gateway's subscribed connection per shard, authenticated with the Owner Token. It serves every Durable Read; a small pool of call pipes carries Durable Requests.
+The removed Gateway's subscribed connection to a Shard. The Native Host uses in-process connections
+and the Module reads its own state.
 
 **Owner Token**:
 The credential that bypasses row-level security.
@@ -180,19 +189,26 @@ it applies an aura. Imported and authored table rows keep their byte encoding; u
 remain possible and consumers handle them explicitly.
 
 **Relay**:
-Gateway code that turns a table change into a client message.
+Code that turns a state change into a client message. Native Relays run in the Module.
 _Avoid_: forwarder, pusher
 
 **AOI**:
 The area of interest that decides which entities a World Session sees.
 _Avoid_: visibility set, interest radius
 
+**AOI Grant**:
+A private Module row that permits a Character to observe an entity. Its id stays unchanged while
+that permission holds. WorldEntity, GameObject, Corpse and DynamicObject grants use separate layers.
+
+**DynamicObject**:
+The client object that draws a ground spell effect. It has its own GUID, map, Instance and AOI Grant.
+The ground area's timer removes the DynamicObject when the effect expires.
+
 **Durable Request**:
-A reducer call the Gateway makes that changes Module state.
-_Avoid_: mutation, write, reducer call (in gateway prose)
+A request whose state changes commit in a Module transaction.
 
 **Durable Read**:
-A read of Module state through the Coordinator.
+A read of committed Module state.
 
 **Refusal**:
 A Gate saying no to a Durable Request. An expected gameplay outcome, not a Transport Loss.
@@ -249,20 +265,19 @@ word, for example `victimIsPlayer`. Core code uses Character.
 _Avoid_: player as a noun in Core code outside that authoring contract
 
 **Actor**:
-The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
-`Actor::new` returns `None` for guid 0, so no request acts as guid 0. The Coordinator signs an Actor
-into a SessionActor.
+The Character a gameplay request acts as, identified by a nonzero guid. Native requests resolve it
+from the authenticated World Session; Operator reducers accept a SessionActor.
 
 **Session**:
 The Module's record that an Account is logged in on a Character.
 
 **World Session**:
-The Gateway's per-connection loop for one client on the world port.
+One authenticated connection on the world port, with its request state in the Module.
 _Avoid_: session (unqualified, when meaning the connection)
 
 **Login Queue**:
-The Gateway's line of authenticated World Sessions waiting for admission. The vanilla client shows
-its position. A full realm, or too many sessions still entering the world, keeps new arrivals in it.
+The Module's line of authenticated World Sessions waiting for admission in ticket order. The vanilla
+client shows its position. Capacity, entry limits and admission rate can keep new arrivals in it.
 _Avoid_: wait list, login line
 
 **Account Claim**:
@@ -321,12 +336,16 @@ lease lets a replacement Gateway resume after process restart.
 _Avoid_: transfer request, move order
 
 **Group Intent**:
-A row a Package writes to ask the Gateway to run one party operation for a Character that has no
-Session: invite that Character, or leave the party it leads. Party membership is authoritative on
-realm-core, which a Package can never reach, so the Package decides and the Gateway executes against
-the correct authority. Reaped on the shared event TTL, so it is a request, never a record. Held in
-`game_bot_invite_intent`, which kept its name through the change that gave it a second operation.
+A legacy row that asks the Gateway to run a party operation for a sessionless Character. The
+single-Shard Module applies Package invite and leave operations locally, with current consent,
+and writes no Group Intent. The old `game_bot_invite_intent` table remains for cutover cleanup.
 _Avoid_: invite intent, group request, party order
+
+**Character Relocation**:
+The latest completed sessionless AreaTrigger crossing. Its id, controller generation, AreaTrigger
+and destination identify a repeat call after arrival. Position, Instance admission and this receipt
+commit in one Module transaction. A new relocation replaces the receipt; controller selection or
+Character deletion removes it. It creates no Transfer Intent or Escrow.
 
 **Bot Controller**:
 The durable selector for Legacy, RecordOnly, Cohort, or Frozen behavior. RecordOnly records decisions
@@ -353,9 +372,10 @@ leg changes. Quest selection resumes after arrival, movement cancellation or the
 
 **Companion Order**:
 An authenticated human leader's retained Follow, Stay, Assist, or Target instruction for one bot.
-Realm-core certifies party authority before the bot's World Shard applies it. The order directs the
-existing Bot Controller and does not form a second runner. Each authenticated issuer carries a
-monotonic order sequence across Shards, so a delayed older command cannot replace a newer one. In a
+The native Module checks party authority and applies the command in one transaction. The legacy
+Gateway path certifies authority in Realm-core before the bot's World Shard applies it. The order
+directs the existing Bot Controller and does not form a second runner. Each authenticated issuer
+carries a monotonic order sequence across Shards, so a delayed older command cannot replace a newer one. In a
 Raid, the Group leader may order a bot in any Subgroup and may name any Raid member.
 
 **Solo Target Claim**:
@@ -480,12 +500,11 @@ batch. The scan can be pending or complete; its result distinguishes unread, mis
 rotation. It rechecks selections before use and restarts after Transfer using destination state.
 
 **Sessionless Action Consent**:
-A Character-owned core projection of a Package's controller selection. An absent row permits legacy
-behavior. Each selection updates consent and clears unclaimed Group Intents in one transaction,
-including a same-value selection. Automatic group answers and Group Intent claims require admission
-on the owning World Shard. Suppression leaves a pending invitation unanswered. An action admitted
-before a later selection may still finish on Realm-core. Admission and membership are separate
-transactions across Shards. Consent travels with the Character on Transfer and is deleted with it.
+A Character-owned core projection of a Package's controller selection. An absent row permits
+sessionless actions. Each selection updates consent and clears legacy unclaimed Group Intents and
+the latest Character Relocation, including a same-value selection. Local invite, leave and automatic
+group acceptance check current consent in the same transaction as the action. Suppression leaves
+an incoming invitation unanswered. Consent is deleted with its Character.
 
 **Idle Bot**:
 A Package-controlled Character, one with a Sessionless Action Consent row, that is out of combat and
@@ -495,7 +514,7 @@ always wake creatures.
 _Avoid_: AFK bot, sleeping bot, inactive bot
 
 **Home Shard**:
-The shard that currently holds a Character's row.
+The Shard that contains a Character. Every Character in a native Realm has the same Home Shard.
 
 **GUID Range**:
 A disjoint interval assigned by Realm-core to one Shard. Character creation and item creation
@@ -825,16 +844,17 @@ _Avoid_: error log, stack trace
 ### Mail
 
 **Mail**:
-One letter on Realm-core for one recipient. It carries a subject, an optional body, copper, one
-item and a cash on delivery price. Its recipient cannot see, read, delete, take from or return it
-before its delivery instant.
+One letter for one recipient in the native Realm's Shard, or on Realm-core in the Gateway runtime.
+It carries a subject, an optional body, copper, one item and a cash on delivery price. Its recipient
+cannot see, read, delete, take from or return it before its delivery instant.
 _Avoid_: message
 
 **Delivery Delay**:
 The hour a Mail with an item waits before it reaches a Character on another Realm Account, when it
 is sent and when it is returned. A cash on delivery price needs an item, so a priced Mail waits too.
-Copper, text, a COD payment, Auction Mail and a return at Mail Expiry arrive at once. The Gateway
-reads both Realm Accounts, and the Module applies the rule.
+Copper, text, a COD payment, Auction Mail and a return at Mail Expiry arrive at once. The native
+Module reads both Accounts and applies the rule. The Gateway runtime reads Realm Accounts across
+Shards before asking the Module to apply it.
 
 **Mail Sender**:
 Who a Mail is from, as the client names it in the inbox: a Character, an Auction House, a Creature
@@ -852,9 +872,9 @@ template id.
 **Reward Letter**:
 A letter a quest giver sends when a Character turns a quest in. It is from the quest ender, or from
 the creature a quest script names, and it names a Mail Template, carries its text, and can carry
-copper and one item. The World Session turn-in files it as Escrow in the same transaction, and the
-Gateway delivers it, so it arrives once even when the Gateway stops between the two. A held letter
-travels with its Character across a Transfer. A playerbot's turn-in sends none.
+copper and one item. A native World Session turn-in inserts the Mail in the same transaction.
+In the Gateway runtime, turn-in files Escrow and the Gateway delivers it. A held letter travels
+with its Character across a Transfer. A playerbot's turn-in sends none.
 
 **Mail Timer**:
 The one-shot schedule each Mail holds. It fires at the delivery instant of a Mail that is not
@@ -868,8 +888,9 @@ Returned Mail. Every other Mail is deleted with its item and copper.
 
 **Mail Arrival**:
 The event that tells a recipient a Mail is now visible to them: on delivery, and when a Mail comes
-back as a Returned Mail. The Gateway relays it as `SMSG_RECEIVED_MAIL` to a recipient in the world
-on any Shard. An offline recipient learns of the Mail from the unread poll at the next login.
+back as a Returned Mail. The native Module sends `SMSG_RECEIVED_MAIL` to the recipient's World
+Session. The Gateway runtime relays it across Shards. An offline recipient learns of the Mail
+from the unread poll at the next login.
 _Avoid_: new mail notification, mail push
 
 **Letter Copy**:
@@ -899,15 +920,16 @@ successful sale, an expired listing, a cancelled listing's item, and the bid a C
 
 **Auction Notice**:
 The live message an online seller or bidder gets the instant an auction is outbid, won, sold,
-expired or cancelled. Rides the private per-recipient Relay; an offline recipient
-gets the Auction Mail only.
+expired or cancelled. The Module selects its native recipient in the same transaction. The old
+Gateway uses a private per-recipient Relay. An offline recipient gets the Auction Mail only.
 
 **Hold**:
 Value taken from a Character on its Home Shard for one auction operation, and held while Realm-core
 decides. A listing Hold keeps the item and the deposit. A bid Hold keeps the full offer, and a
 Cancellation's bid Hold keeps the Auction Cut. The decision spends the Hold or gives it back,
 exactly once. Unlike Escrow, a Refusal refunds it. A bid Hold and a listing Hold both travel with
-their Character on Transfer.
+their Character on Transfer. Native auctions change value and market state in one local transaction,
+without a Hold or Decision row. Old Holds must settle before cutover.
 
 **Cancellation**:
 The seller withdraws an active listing. The item goes back by Auction Mail, a displaced bidder gets
@@ -989,13 +1011,15 @@ the Meeting Stone Queue for the stone's dungeon area, inside the stone's level r
 _Avoid_: summoning stone, LFG tool
 
 **Meeting Stone Queue**:
-Realm-core's realm-wide list of Seekers and queued Parties, per dungeon area and team.
+The Realm's list of Seekers and queued Parties, per dungeon area and team. The native runtime
+keeps it in the Realm's single Shard; the Gateway runtime keeps it on Realm-core.
 _Avoid_: LFG queue, matchmaking queue
 
 **Seeker**:
 One Character in the Meeting Stone Queue, alone or as a member of a queued Party. It carries its
-class and its team, from the class and race the Gateway supplied. A solo Seeker lasts as long as
-its Account Claim.
+class and team from Character facts. Native requests read those facts in the Module, and a solo
+Seeker lasts through its World Session. Legacy requests take these facts from the Gateway and end a solo
+Seeker with its Account Claim.
 _Avoid_: queued player, LFG player
 
 **Open Role**:
@@ -1011,7 +1035,11 @@ _Avoid_: matchmaking, auto-invite
 ### World clock and weather
 
 **Realm Clock**:
-The wall clock the realm runs on, always UTC. There is no realm-timezone setting, so no part of the realm reads host-local time. The Gateway packs it into `SMSG_LOGIN_SETTIMESPEED` once per world entry and the client advances it alone afterwards. It also answers `CMSG_QUERY_TIME` with Unix seconds in `SMSG_QUERY_TIME_RESPONSE`, so the client can interpret timed quest deadlines. The Module reads the same clock to pick the weather season.
+The wall clock the Realm runs on, always UTC. There is no Realm timezone setting, so no part of
+the Realm reads host-local time. The Module packs it into `SMSG_LOGIN_SETTIMESPEED` once per world
+entry and the client advances it alone afterwards. The Module answers `CMSG_QUERY_TIME` with Unix
+seconds in `SMSG_QUERY_TIME_RESPONSE`, so the client can interpret timed quest deadlines. It reads
+the same clock to pick the weather season.
 _Avoid_: server time, game time, local time
 
 **Zone Weather**:
@@ -1302,14 +1330,14 @@ _Avoid_: client patch, distribution, release bundle, player package
 ### Working method
 
 **Seam**:
-The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
+An interface between caller behavior and a dependency that tests can substitute.
 
 **Protocol Family**:
-A group of client opcodes one Gateway handler owns, with the Store traits that handler calls. The opcode ownership table selects that handler once. Each handler implements `ProtocolFamily`, reads or changes shared protocol state, and returns its outbound messages. `WorldStore` holds all Store traits for the World Session; each handler names only the Stores it needs.
+Related client opcodes handled by one Module component.
 _Avoid_: family (unqualified), domain
 
 **Store**:
-The durable side of a Seam: the trait a handler calls for Durable Reads and Durable Requests. The Coordinator implements it in production, a Fake in tests.
+The durable side of a Seam, represented by a trait when tests substitute a Fake.
 _Avoid_: repository, adapter, port, backend, service
 
 **Fake**:
@@ -1329,7 +1357,7 @@ Throwaway code built to answer a design question. Never shipped.
 _Avoid_: spike, poc
 
 **Headless Client**:
-A client that speaks the real 1.12.1 protocol to the Gateway in tests, with no UI.
+A client that speaks the real 1.12.1 protocol to the Native Host in tests, with no UI.
 _Avoid_: wire harness, test harness
 
 **Spec**:

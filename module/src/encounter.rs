@@ -212,6 +212,26 @@ pub struct EncounterEquip {
     pub ranged: u32,
 }
 
+impl EncounterEquip {
+    fn replace(self, ctx: &ReducerContext) {
+        let table = ctx.db.game_encounter_equip();
+        let row = if table.creature_guid().find(self.creature_guid).is_some() {
+            table.creature_guid().update(self)
+        } else {
+            table.insert(self)
+        };
+        crate::native::creature_equipment_changed(ctx, &row, false);
+    }
+
+    fn delete(ctx: &ReducerContext, guid: u64) {
+        let table = ctx.db.game_encounter_equip();
+        if let Some(row) = table.creature_guid().find(guid) {
+            table.creature_guid().delete(guid);
+            crate::native::creature_equipment_changed(ctx, &row, true);
+        }
+    }
+}
+
 pub(crate) fn hp_fired_key(entry: u32) -> u32 {
     RESERVED_ENCOUNTER_ID_BIT | entry
 }
@@ -453,7 +473,7 @@ pub(crate) fn open_door(
     for guid in targets {
         if let Some(mut g) = gos.guid().find(guid) {
             g.state = DOOR_OPEN_STATE;
-            gos.guid().update(g);
+            g.update(ctx);
         }
     }
     Ok(opened)
@@ -551,25 +571,14 @@ pub(crate) fn equip_swap(
             .ok_or_else(|| format!("virtual equipment item {entry} is missing"))
     };
     let (main_hand, off_hand, ranged) = (display(main_hand)?, display(off_hand)?, display(ranged)?);
-    let t = ctx.db.game_encounter_equip();
-    match t.creature_guid().find(creature_guid) {
-        Some(mut row) => {
-            row.instance_id = e.instance_id;
-            row.main_hand = main_hand;
-            row.off_hand = off_hand;
-            row.ranged = ranged;
-            t.creature_guid().update(row);
-        }
-        None => {
-            t.insert(EncounterEquip {
-                creature_guid,
-                instance_id: e.instance_id,
-                main_hand,
-                off_hand,
-                ranged,
-            });
-        }
+    EncounterEquip {
+        creature_guid,
+        instance_id: e.instance_id,
+        main_hand,
+        off_hand,
+        ranged,
     }
+    .replace(ctx);
     Ok(())
 }
 
@@ -619,6 +628,7 @@ pub(crate) fn move_to_point(
         e.map_id,
         e.instance_id,
         (e.grid_x, e.grid_y),
+        None,
     );
     e.last_move_ms = crate::creatures::tick::now_ms(ctx);
     e.update(ctx);
@@ -658,7 +668,7 @@ fn despawn_tracked(ctx: &ReducerContext, tracked: &[EncounterSpawn]) {
     for t in tracked {
         crate::creatures::despawn_creature_entity(ctx, t.guid);
         ctx.db.game_creature_spawn().guid().delete(t.guid);
-        ctx.db.game_encounter_equip().creature_guid().delete(t.guid);
+        EncounterEquip::delete(ctx, t.guid);
         ctx.db.game_encounter_spawn().id().delete(t.id);
     }
 }
@@ -689,7 +699,7 @@ pub(crate) fn sweep_encounter_state(ctx: &ReducerContext, instance_id: u64) {
         .map(|r| r.creature_guid)
         .collect();
     for guid in stale {
-        equips.creature_guid().delete(guid);
+        EncounterEquip::delete(ctx, guid);
     }
 }
 

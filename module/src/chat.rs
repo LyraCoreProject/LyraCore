@@ -124,7 +124,7 @@ fn write_chat_event(
             crate::terrain::zone_id_at(ctx, sender.map_id, sender.x, sender.y).unwrap_or(0);
         sender = sender.update(ctx);
     }
-    ctx.db.game_chat_event_live().insert(ChatEvent {
+    let event = ctx.db.game_chat_event_live().insert(ChatEvent {
         id: 0,
         sender_guid: sender.guid,
         chat_type,
@@ -133,6 +133,7 @@ fn write_chat_event(
         created_at: ctx.timestamp,
         target_guid,
     });
+    crate::native::speech(ctx, &sender, &event);
     Ok(())
 }
 
@@ -195,7 +196,7 @@ pub(crate) fn apply_send_emote(
         return Err("dead players cannot emote".to_string());
     }
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(&sender);
-    ctx.db.game_emote_event_live().insert(EmoteEvent {
+    let event = ctx.db.game_emote_event_live().insert(EmoteEvent {
         id: 0,
         sender_guid: sender.guid,
         text_emote,
@@ -207,6 +208,7 @@ pub(crate) fn apply_send_emote(
         grid_x,
         grid_y,
     });
+    crate::native::text_emote(ctx, &sender, &event);
     if sender.is_player() && target_guid != 0 {
         crate::creatures::eventai_on_receive_emote(ctx, target_guid, sender.guid, text_emote);
     }
@@ -247,7 +249,8 @@ pub(crate) fn emit_system_message(
     let recipient = crate::helpers::character_by_guid(ctx, character_guid)
         .map(|character| (character.owner_identity, character.online));
     let event = prepare_system_message(character_guid, recipient, &message, ctx.timestamp)?;
-    ctx.db.game_system_message_event().insert(event);
+    let event = ctx.db.game_system_message_event().insert(event);
+    crate::native::system_message(ctx, &event);
     Ok(())
 }
 
@@ -280,7 +283,10 @@ fn prepare_system_message(
 pub const MAX_FRIENDS: usize = 50;
 pub const MAX_IGNORED: usize = 25;
 
-#[table(accessor = game_character_contact, public, index(accessor = by_owner, btree(columns = [owner_guid])))]
+#[table(accessor = game_character_contact, public,
+    index(accessor = by_owner, btree(columns = [owner_guid])),
+    index(accessor = by_target, btree(columns = [target_guid]))
+)]
 pub struct ContactEntry {
     #[primary_key]
     #[auto_inc]
@@ -296,7 +302,7 @@ crate::character_owned!(delete, fn sweep_delete_game_character_contact(ctx, char
     for r in contacts.by_owner().filter(&character_guid).collect::<Vec<_>>() {
         contacts.id().delete(r.id);
     }
-    for r in contacts.iter().filter(|c| c.target_guid == character_guid).collect::<Vec<_>>() {
+    for r in contacts.by_target().filter(character_guid).collect::<Vec<_>>() {
         contacts.id().delete(r.id);
     }
 });

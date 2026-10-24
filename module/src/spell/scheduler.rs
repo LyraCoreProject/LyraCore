@@ -39,15 +39,18 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             e
         );
         // A failed completion needs SMSG_SPELL_FAILURE to clear the filled client cast bar.
-        ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-            is_interrupted: true,
-            ..SpellCastEvent::signal(
-                ctx,
-                sched.caster_guid,
-                sched.spell_id,
-                SpellCastEventKind::Interrupt,
-            )
-        });
+        crate::spell::SpellCastEvent::insert(
+            ctx,
+            SpellCastEvent {
+                is_interrupted: true,
+                ..SpellCastEvent::signal(
+                    ctx,
+                    sched.caster_guid,
+                    sched.spell_id,
+                    SpellCastEventKind::Interrupt,
+                )
+            },
+        );
     }
     crate::hooks::fire_on_cast_finished(
         ctx,
@@ -84,9 +87,9 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
         ),
     );
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::grid_of(ctx, sched.caster_guid);
-    ctx.db
-        .game_spell_impact_event_live()
-        .insert(SpellImpactEvent {
+    crate::spell::SpellImpactEvent::insert(
+        ctx,
+        SpellImpactEvent {
             id: 0,
             caster_guid: sched.caster_guid,
             target_guid: sched.target_guid,
@@ -101,7 +104,8 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
             instance_id,
             grid_x,
             grid_y,
-        });
+        },
+    );
 }
 
 pub(crate) fn do_cast_spell(
@@ -172,7 +176,7 @@ pub(crate) fn do_resurrect_response(
         .target_guid()
         .find(target_guid)
         .ok_or_else(|| "no pending resurrect offer".to_string())?;
-    requests.target_guid().delete(target_guid);
+    ResurrectRequest::delete(ctx, target_guid);
     if accept {
         if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
             if t.dead {
@@ -246,7 +250,7 @@ pub(crate) fn do_cancel_aura(
     let mut resheet = false;
     let mut remount = false;
     for (id, moves_vitals, moves_sheet, moves_mount) in to_remove {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
         revitalize |= moves_vitals;
         resheet |= moves_sheet;
         remount |= moves_mount;
@@ -340,12 +344,15 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     .unwrap_or(0);
                 let amount =
                     resist_magic_damage(ctx, a.target_guid, school, a.level as u32, a.amount);
-                ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-                    damage: amount.max(0) as u32,
-                    school: crate::spell::school_index(school),
-                    resisted: a.amount.saturating_sub(amount).max(0) as u32,
-                    ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
-                });
+                crate::spell::SpellCastEvent::insert(
+                    ctx,
+                    SpellCastEvent {
+                        damage: amount.max(0) as u32,
+                        school: crate::spell::school_index(school),
+                        resisted: a.amount.saturating_sub(amount).max(0) as u32,
+                        ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                    },
+                );
                 if amount > 0 {
                     dot_damaged.insert(a.target_guid);
                     if !target.is_player()
@@ -400,10 +407,13 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let new_health = healed_value(cur, target.max_health, a.amount);
                 pending.insert(a.target_guid, new_health);
                 if cur < target.max_health {
-                    ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-                        healed: a.amount.max(0) as u32,
-                        ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
-                    });
+                    crate::spell::SpellCastEvent::insert(
+                        ctx,
+                        SpellCastEvent {
+                            healed: a.amount.max(0) as u32,
+                            ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                        },
+                    );
                 }
                 let effective = new_health.saturating_sub(cur);
                 crate::threat::add_heal_threat(ctx, a.caster_guid, a.target_guid, effective);
@@ -417,11 +427,14 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                     a.target_guid,
                     energized_value(cur, target.max_power, a.amount),
                 );
-                ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-                    energized: a.amount.max(0) as u32,
-                    power_type: target.power_type(),
-                    ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
-                });
+                crate::spell::SpellCastEvent::insert(
+                    ctx,
+                    SpellCastEvent {
+                        energized: a.amount.max(0) as u32,
+                        power_type: target.power_type(),
+                        ..SpellCastEvent::periodic_log(ctx, a.caster_guid, a.spell_id, &target)
+                    },
+                );
                 if a.enters_combat {
                     crate::combat::enter_combat(ctx, a.caster_guid);
                 }
@@ -461,11 +474,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
             continue;
         };
         a2.next_tick_micros += (a2.period_ms as i64) * 1000;
-        auras.id().update(a2);
+        a2.update(ctx);
     }
 
     for id in channel_end {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     for (caster_guid, trigger_spell, level, channel_target) in channel_fires {
         if trigger_spell == 0 {
@@ -531,7 +544,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         }
     }
     for a in &expired {
-        auras.id().delete(a.id);
+        crate::Aura::delete(ctx, a.id);
     }
     for target_guid in revitalize {
         recompute_vitals(ctx, target_guid);
@@ -590,10 +603,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
     }
     for id in expired {
         areas.id().delete(id);
-        ctx.db
-            .game_dynamic_object()
-            .guid()
-            .delete(crate::spell::cast::dynamic_object_guid(id));
+        crate::spell::DynamicObject::delete(ctx, crate::spell::cast::dynamic_object_guid(id));
     }
 
     for a in &due {
@@ -626,9 +636,9 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                 crate::combat::Hit::triggered(),
             );
             if dealt > 0 || absorbed > 0 {
-                ctx.db
-                    .game_spell_cast_event_live()
-                    .insert(crate::spell::SpellCastEvent {
+                crate::spell::SpellCastEvent::insert(
+                    ctx,
+                    crate::spell::SpellCastEvent {
                         target_guid: t,
                         damage: dealt,
                         school: crate::spell::school_index(a.school_mask),
@@ -641,7 +651,8 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
                             a.spell_id,
                             SpellCastEventKind::ProcLog,
                         )
-                    });
+                    },
+                );
             }
         }
     }

@@ -289,7 +289,6 @@ pub fn debug_retire_region_creatures(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let spawns = ctx.db.game_creature_spawn();
-    let entities = ctx.db.game_world_entity();
     let splines = ctx.db.game_creature_spline();
     let doomed: Vec<u64> = spawns
         .iter()
@@ -300,7 +299,7 @@ pub fn debug_retire_region_creatures(
         .map(|s| s.guid)
         .collect();
     for g in &doomed {
-        entities.guid().delete(g);
+        crate::WorldEntity::delete(ctx, g);
         splines.guid().delete(g);
         spawns.guid().delete(g);
     }

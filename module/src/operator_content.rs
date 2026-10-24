@@ -662,30 +662,28 @@ fn insert_gameobject(
     fields: &GameObjectSpawnFields,
 ) -> Result<GameObject, String> {
     let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(fields.x, fields.y);
-    let go = ctx
-        .db
-        .game_gameobject()
-        .try_insert(GameObject {
-            guid,
-            template_entry: fields.template_entry,
-            map_id: fields.map_id,
-            x: fields.x,
-            y: fields.y,
-            z: fields.z,
-            orientation: fields.orientation,
-            state: fields.state,
-            created_at: ctx.timestamp,
-            respawn_at_micros: 0,
-            instance_id: 0,
-            grid_x,
-            grid_y,
-            cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
-            rotation_0: fields.rotation_0,
-            rotation_1: fields.rotation_1,
-            rotation_2: fields.rotation_2,
-            rotation_3: fields.rotation_3,
-        })
-        .map_err(|e| format!("gameobject spawn {guid} cannot be inserted: {e}"))?;
+    let go = GameObject {
+        guid,
+        template_entry: fields.template_entry,
+        map_id: fields.map_id,
+        x: fields.x,
+        y: fields.y,
+        z: fields.z,
+        orientation: fields.orientation,
+        state: fields.state,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0,
+        instance_id: 0,
+        grid_x,
+        grid_y,
+        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
+        rotation_0: fields.rotation_0,
+        rotation_1: fields.rotation_1,
+        rotation_2: fields.rotation_2,
+        rotation_3: fields.rotation_3,
+    }
+    .try_insert(ctx)
+    .map_err(|e| format!("gameobject spawn {guid} cannot be inserted: {e}"))?;
     crate::go_collider::register(ctx, &go);
     Ok(go)
 }

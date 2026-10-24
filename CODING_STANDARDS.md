@@ -40,18 +40,16 @@ Use this order when two good practices compete:
 
 ## Authority and placement
 
-- Follow `docs/architecture.md` for tier ownership. The Module owns durable state and gameplay rules.
-  The Gateway owns protocol handling, routing, relays, and only the realm-wide Gates a single shard
-  cannot answer.
-- Gateway handlers map client intent to Durable Reads or Durable Requests, then map durable outcomes
-  to client messages. Those operations cross a Store seam; gameplay rules do not grow inside packet
-  handlers.
+- The native host migration follows the single-Shard boundary in
+  `docs/architecture.md#native-host-migration`. New native request handling, AOI, recipient Gates
+  and packet construction belong in the Module. The native host handles sockets, cryptographic
+  scratch state and the Module's ordered delivery instructions.
+- The Module handles request admission, durable state and gameplay rules in one Shard.
 - Put code in `lyracore-shared` only when more than one crate genuinely shares the same pure concept or
   calculation. It is not a neutral dumping ground.
-- The Module stays shard-agnostic. Code that needs a shard name or topology decision belongs in the
-  Gateway unless `docs/architecture.md` explicitly identifies an exception.
-- Treat generated bindings as generated code. Follow `docs/danger-zones.md` for regeneration and its
-  documented exceptions.
+- Gameplay partitions use map and Instance. They do not select another Shard.
+- Keep the Host delivery types and native reducer arguments in sync with the Module.
+  Run the native protocol check after changing this interface.
 
 ## Interface depth and seams
 
@@ -59,7 +57,7 @@ Use this order when two good practices compete:
   policy. Callers should express intent, not reproduce the implementation's procedure.
 - Apply the deletion test to wrappers and traits. If deleting one only moves its calls unchanged to
   every caller, it is shallow and should normally disappear.
-- Introduce a Seam where behavior actually varies. In Gateway code, a production Store plus a Fake is
+- Introduce a Seam where behavior actually varies. A durable Store plus a Fake is
   a real seam. A trait with one implementation and no concrete substitution is hypothetical.
 - Keep internal details behind the interface. Do not expose private operations or state only so a test
   can reach them.

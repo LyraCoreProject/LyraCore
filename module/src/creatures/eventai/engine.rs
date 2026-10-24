@@ -1398,7 +1398,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
         let melee = self.ctx.db.game_melee_attack();
         if let Some(mut fight) = melee.attacker_guid().find(creature_guid) {
             fight.rout_ends_ms = ends_ms;
-            melee.attacker_guid().update(fight);
+            crate::combat::MeleeAttack::update(self.ctx, fight);
         }
     }
 

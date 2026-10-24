@@ -41,7 +41,7 @@ class DurableTargetTests(unittest.TestCase):
             selector.partition(targets, {}), selector.partition(reversed(targets), {})
         )
 
-    def test_measured_work_is_balanced_including_gateway_checks(self):
+    def test_measured_work_is_balanced_including_the_upgrade_baseline(self):
         seconds = json.loads((ROOT / ".github/durable-test-seconds.json").read_text())
         targets = sorted(path.stem for path in (ROOT / "module/tests").glob("*.rs"))
         _, totals = selector.partition(targets, seconds)
