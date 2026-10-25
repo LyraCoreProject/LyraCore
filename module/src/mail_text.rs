@@ -121,10 +121,10 @@ pub(crate) fn apply_copy_letter(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::mail::MailRefusal> {
     apply_copy_text(ctx, recipient_guid, mail_id)?;
     crate::items::grant_letter_item(ctx, recipient_guid, MAIL_BODY_ITEM_TEMPLATE, mail_id as u32)?;
-    apply_mark_letter_granted(ctx, recipient_guid, mail_id)
+    Ok(apply_mark_letter_granted(ctx, recipient_guid, mail_id)?)
 }
 
 // Transfer source sweeps move letters rather than destroying them, so their text must remain.
@@ -167,6 +167,7 @@ pub fn gw_mail_grant_letter(
     crate::helpers::require_operator(ctx)?;
     let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     crate::items::grant_letter_item(ctx, payee_guid, MAIL_BODY_ITEM_TEMPLATE, item_text_id)
+        .map_err(String::from)
 }
 
 // GRANTED survives item destruction and trade; possession cannot prove a prior Letter Copy grant.

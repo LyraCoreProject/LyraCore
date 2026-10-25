@@ -246,10 +246,30 @@ fn store_item_typed(
     plan.commit(ctx)
 }
 
-pub(crate) fn free_slot(ctx: &ReducerContext, player_guid: u64) -> Result<u8, String> {
+pub(crate) enum StoreRefusal {
+    InventoryFull,
+    Refused(crate::Refusal),
+}
+
+impl From<String> for StoreRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+impl From<StoreRefusal> for String {
+    fn from(refusal: StoreRefusal) -> Self {
+        match refusal {
+            StoreRefusal::InventoryFull => lyracore_shared::mail::INVENTORY_FULL.into(),
+            StoreRefusal::Refused(refusal) => refusal.into(),
+        }
+    }
+}
+
+pub(crate) fn free_slot(ctx: &ReducerContext, player_guid: u64) -> Result<u8, StoreRefusal> {
     first_free_backpack_slot(ctx, player_guid)
         .or_else(|| first_free_bag_slot(ctx, player_guid))
-        .ok_or_else(|| lyracore_shared::mail::INVENTORY_FULL.to_string())
+        .ok_or(StoreRefusal::InventoryFull)
 }
 
 pub(crate) fn has_free_slot(ctx: &ReducerContext, player_guid: u64) -> bool {
@@ -295,7 +315,7 @@ pub(crate) fn store_instance_state(
     tmpl: &ItemTemplate,
     preallocated_guid: Option<u64>,
     snapshot: &ItemSnapshot,
-) -> Result<(), String> {
+) -> Result<(), StoreRefusal> {
     let slot = free_slot(ctx, player_guid)?;
     let guid = match preallocated_guid {
         Some(guid) => guid,
@@ -328,7 +348,7 @@ pub(crate) fn grant_letter_item(
     player_guid: u64,
     item_entry: u32,
     item_text_id: u32,
-) -> Result<(), String> {
+) -> Result<(), StoreRefusal> {
     let already_granted = ctx
         .db
         .game_item_instance()
