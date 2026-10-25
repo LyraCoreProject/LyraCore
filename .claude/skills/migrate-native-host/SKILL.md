@@ -17,10 +17,10 @@ Run these checks from the user's checkout. Report the result before you change a
 - **Branch.** Run `git fetch origin`. The branch changes Gateway code when either command prints
   something:
   - `git diff --stat $(git merge-base HEAD origin/main) HEAD -- gateway/`
-  - `git log --full-history --oneline origin/main..HEAD -- gateway/`
+  - `git log --full-history --no-merges --oneline origin/main..HEAD -- gateway/`
 
   When only the second prints something, the branch already merged the new `main`, and the merge
-  dropped the Gateway changes. Tell the user, and recover each diff with `git show <commit> -- gateway/`.
+  dropped the Gateway changes. Tell the user. Step 3 of "Port a branch" saves them differently.
 - **Local Realm.** Run `./lyracore dev status`, and check for `.lyracore/coordinator-token` and
   `.lyracore/native-data/`. A coordinator token without native data means an old local Realm.
 - **Packages.** Search the branch's Package code for `emit_bot_invite_intent`,
@@ -50,7 +50,7 @@ Report the smoke result.
 1. Check that `git status --porcelain` prints nothing. If it prints something, ask the user to
    commit or stash. Do not stash or discard their work yourself.
 2. Record the branch head so the user can return to it: `git branch backup/<branch> HEAD`. If that
-   branch exists, pick another name.
+   branch exists, pick another name. On a detached HEAD, ask the user for a name.
 3. Save the old Gateway diff outside the repository. This is the specification for the port.
 
    ```bash
@@ -58,21 +58,32 @@ Report the smoke result.
    git diff $(git merge-base HEAD origin/main) HEAD -- gateway/ > "/tmp/$name-gateway.diff"
    ```
 
-4. Run `git rebase origin/main`. At each stop:
-   - run `git rm` on each Gateway file in a delete/modify conflict,
+   If the branch already merged the new `main`, that diff is empty. Use this instead:
+
+   ```bash
+   git log --full-history --no-merges -p origin/main..HEAD -- gateway/ > "/tmp/$name-gateway.diff"
+   ```
+
+   Check that the file is not empty before you continue.
+
+4. Run `git rebase -X no-renames origin/main`. Rename detection must stay off. With it on, Git
+   applies some Gateway changes to moved codec files and moves added Gateway files into
+   `module/src/native/` or the protocol crate. At each stop:
+   - run `git rm -r -f -q --ignore-unmatch gateway/`,
    - resolve the other conflicts as usual,
    - run `git rebase --continue`, or `git rebase --skip` when the commit is now empty.
 
    Conflicts come back for each commit that changed the Gateway. Repeat until the rebase ends.
-5. Check that `git ls-files gateway/` prints nothing. A file the branch added under `gateway/` gives
-   no conflict, so remove it with `git rm` and commit.
+5. Check that `git ls-files gateway/` prints nothing. Read `git diff --stat origin/main HEAD` and
+   check that it lists only the branch's own changes.
 6. For each hunk in the saved diff, find the new location in the doc's file map. Read the new code
    before you change it, because the runtime change already contains some fixes. When a hunk
    already exists in the new code, tell the user and skip it.
 7. Port the hunk by its behaviour, not by its text, in new commits. Use the doc's patterns:
    - Request handlers go in `module/src/native/<area>.rs`.
    - A Refusal returns `Err(super::rollback_silent(cause))` or `Err(super::rollback_reply(message, cause))`.
-     Any other `Err` closes the player's connection.
+     Gate helpers return a plain `String` and the handler maps it with `.map_err(super::rollback_silent)`.
+     Any other `Err` that leaves the handler ends the World Session with a Transport Loss.
    - A Relay is called from the Module code that writes the Relay row, and is re-exported in
      `native/mod.rs`.
    - Codecs go in `crates/lyracore-protocol`.
