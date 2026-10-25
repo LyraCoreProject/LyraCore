@@ -7,6 +7,7 @@ impl WorldEntity {
         let guid = *guid.borrow();
         let removed = ctx.db.game_world_entity().guid().delete(guid);
         crate::breath::clear(ctx, guid);
+        crate::transport::leave(ctx, guid);
         crate::aoi::entity_removed(ctx, guid);
         removed
     }

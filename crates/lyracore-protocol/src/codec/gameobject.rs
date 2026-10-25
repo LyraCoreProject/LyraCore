@@ -73,6 +73,63 @@ pub fn build_gameobject_create_object(go: &GameObjectView) -> SMSG_UPDATE_OBJECT
     }
 }
 
+#[derive(Clone, Debug, Default)]
+pub struct TransportView {
+    pub guid: u64,
+    pub entry: u32,
+    pub display_id: u32,
+    pub size: f32,
+    pub flags: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub orientation: f32,
+    pub path_progress_ms: u32,
+}
+
+const GAMEOBJECT_TYPE_MO_TRANSPORT: i32 = 15;
+const GO_STATE_READY: i32 = 1;
+
+/// The client moves an MO_TRANSPORT along its TaxiPathNode path from `path_progress_ms` alone.
+pub fn build_transport_create_object(transport: &TransportView) -> SMSG_UPDATE_OBJECT {
+    let mask = UpdateGameObject::builder()
+        .set_object_guid(Guid::new(transport.guid))
+        .set_object_entry(transport.entry as i32)
+        .set_object_scale_x(object_scale_x(transport.size))
+        .set_gameobject_displayid(transport.display_id as i32)
+        .set_gameobject_flags(transport.flags as i32)
+        .set_gameobject_state(GO_STATE_READY)
+        .set_gameobject_type_id(GAMEOBJECT_TYPE_MO_TRANSPORT)
+        .set_gameobject_pos_x(transport.x)
+        .set_gameobject_pos_y(transport.y)
+        .set_gameobject_pos_z(transport.z)
+        .set_gameobject_facing(transport.orientation)
+        .set_gameobject_animprogress(100)
+        .finalize();
+    let update_flag = MovementBlock_UpdateFlag::empty()
+        .set_transport(MovementBlock_UpdateFlag_Transport {
+            transport_progress_in_ms: transport.path_progress_ms,
+        })
+        .set_all(MovementBlock_UpdateFlag_All { unknown1: 1 })
+        .set_living(MovementBlock_UpdateFlag_Living::HasPosition {
+            orientation: transport.orientation,
+            position: Vector3d {
+                x: transport.x,
+                y: transport.y,
+                z: transport.z,
+            },
+        });
+    SMSG_UPDATE_OBJECT {
+        has_transport: 1,
+        objects: vec![Object::CreateObject2 {
+            guid3: Guid::new(transport.guid),
+            object_type: ObjectType::GameObject,
+            movement2: MovementBlock { update_flag },
+            mask2: UpdateMask::GameObject(mask),
+        }],
+    }
+}
+
 pub fn build_gameobject_values(go: &GameObjectView) -> SMSG_UPDATE_OBJECT {
     let mut mask = UpdateGameObject::builder().finalize();
     mask.dirty_reset();
@@ -256,6 +313,48 @@ mod tests {
         let mut buf = Vec::new();
         msg.write_unencrypted_server(&mut buf).unwrap();
         assert!(!buf.is_empty());
+    }
+
+    #[test]
+    fn transport_create_flags_the_packet_and_ends_its_movement_block_with_path_progress() {
+        let transport = TransportView {
+            guid: (0x1FC0u64 << 48) | 176_244,
+            entry: 176_244,
+            display_id: 3015,
+            size: 1.0,
+            flags: 40,
+            x: 8533.7,
+            y: 1025.1,
+            z: 0.0,
+            orientation: 2.0,
+            path_progress_ms: 123_456,
+        };
+        let message = build_transport_create_object(&transport);
+        let Object::CreateObject2 {
+            object_type,
+            mask2: UpdateMask::GameObject(mask),
+            ..
+        } = &message.objects[0]
+        else {
+            panic!("a Transport must use CREATE_OBJECT2");
+        };
+        assert_eq!(*object_type, ObjectType::GameObject);
+        assert_eq!(mask.gameobject_type_id(), Some(15));
+        assert_eq!(mask.gameobject_flags(), Some(40));
+        assert_eq!(mask.gameobject_displayid(), Some(3015));
+        let packet =
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap();
+        // Block count, has_transport and CREATE_OBJECT2, then a 6-byte packed GUID and the type.
+        assert_eq!(&packet.body[..6], &[1, 0, 0, 0, 1, 3]);
+        let movement = 6 + 6 + 1;
+        assert_eq!(packet.body[movement - 1], 5, "GameObject object type");
+        assert_eq!(packet.body[movement], 0x02 | 0x10 | 0x40);
+        let progress = movement + 1 + 16 + 4;
+        assert_eq!(
+            u32::from_le_bytes(packet.body[progress..progress + 4].try_into().unwrap()),
+            123_456
+        );
     }
 
     #[test]

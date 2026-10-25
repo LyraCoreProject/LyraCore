@@ -13,6 +13,7 @@ pub(crate) const WORLD_ENTITY: u8 = 0;
 pub(crate) const GAME_OBJECT: u8 = 1;
 pub(crate) const CORPSE: u8 = 2;
 pub(crate) const DYNAMIC_OBJECT: u8 = 3;
+pub(crate) const TRANSPORT: u8 = 4;
 
 #[table(
     accessor = game_aoi_grant,
@@ -230,6 +231,9 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
             wanted.insert((DYNAMIC_OBJECT, object.guid));
         }
     }
+    for transport in crate::transport::visible_on(ctx, viewer.map_id, viewer.instance_id) {
+        wanted.insert((TRANSPORT, transport));
+    }
     let grants = ctx.db.game_aoi_grant();
     let existing: BTreeMap<_, _> = grants
         .by_viewer()
@@ -242,7 +246,11 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
             crate::native::grant_removed(ctx, &grant);
         }
     }
-    for (layer, entity_guid) in wanted {
+    // A Passenger's CREATE names its Transport, so the client must already have that Transport.
+    let (transports, others): (Vec<_>, Vec<_>) = wanted
+        .into_iter()
+        .partition(|(layer, _)| *layer == TRANSPORT);
+    for (layer, entity_guid) in transports.into_iter().chain(others) {
         let grant = grants.insert(AoiGrant {
             id: 0,
             viewer_guid: viewer.guid,

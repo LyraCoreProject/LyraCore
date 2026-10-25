@@ -10,6 +10,8 @@ use wow_world_messages::vanilla::{
 };
 use wow_world_messages::Guid;
 
+// Steering and walk-mode flags, which add no fields to a MovementInfo.
+pub(crate) const SIMPLE_MOVE_MASK: u32 = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x100;
 const JUMPING: u32 = 0x2000;
 const SPLINE_ELEVATION: u32 = 0x0400_0000;
 
@@ -124,6 +126,28 @@ pub fn movement_info_to_bytes(info: &MovementInfo) -> Result<Vec<u8>> {
     Ok(body)
 }
 
+/// A Passenger's MovementInfo: the world pose, then the full Transport GUID and the offset on it.
+pub fn passenger_movement_bytes(
+    flags: u32,
+    timestamp: u32,
+    world: [f32; 4],
+    transport_guid: u64,
+    offset: [f32; 4],
+) -> Vec<u8> {
+    let mut body = Vec::with_capacity(52);
+    body.extend_from_slice(&(flags & SIMPLE_MOVE_MASK | MOVEMENT_FLAG_ON_TRANSPORT).to_le_bytes());
+    body.extend_from_slice(&timestamp.to_le_bytes());
+    for value in world {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&transport_guid.to_le_bytes());
+    for value in offset {
+        body.extend_from_slice(&value.to_le_bytes());
+    }
+    body.extend_from_slice(&0u32.to_le_bytes());
+    body
+}
+
 pub fn create_with_movement(
     create: &wow_world_messages::vanilla::SMSG_UPDATE_OBJECT,
     movement: &[u8],
@@ -144,7 +168,7 @@ pub fn create_with_movement(
     );
     let flags = u32::from_le_bytes(body[living..living + 4].try_into()?);
     ensure!(
-        flags & !0x13f == 0,
+        flags & !SIMPLE_MOVE_MASK == 0,
         "initial CREATE already has conditional movement"
     );
     body.splice(living..living + 28, movement.iter().copied());

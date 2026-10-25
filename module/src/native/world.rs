@@ -180,7 +180,9 @@ pub(super) fn enter_character(
         teleport_counter,
         zone_id: entity.zone_id,
     });
-    for grant in ctx.db.game_aoi_grant().by_viewer().filter(guid) {
+    let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
+    grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
+    for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant)?;
     }
     super::economy::replay_buyback(ctx, connection.connection_id, guid)?;

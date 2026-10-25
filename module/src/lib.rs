@@ -246,6 +246,7 @@ mod threat;
 mod trade;
 mod trainer;
 mod transfer;
+mod transport;
 
 mod vmap;
 

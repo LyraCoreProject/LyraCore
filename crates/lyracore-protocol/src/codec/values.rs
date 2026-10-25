@@ -59,7 +59,7 @@ pub fn build_bank_bag_slots_values(guid: u64, player_bytes_2: u32) -> SMSG_UPDAT
     })
 }
 
-const SMSG_UPDATE_OBJECT_OPCODE: u16 = 0x00A9;
+pub const SMSG_UPDATE_OBJECT_OPCODE: u16 = 0x00A9;
 
 pub fn build_values_update_raw(guid: u64, mask: &update_mask::UpdateMaskValues) -> (u16, Vec<u8>) {
     // OBJECT_FIELD_TYPE in partial VALUES can strip PLAYER and crash build 5875 at null+0x110.

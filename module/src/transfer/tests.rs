@@ -41,6 +41,7 @@ fn manifest_exclude_holds_only_local_runtime_state() {
             "game_native_player",
             "game_native_member_stats",
             "game_character_relocation",
+            "game_transport_passenger",
         ],
         "Only local relocation, Transfer machinery and connection state may be excluded."
     );

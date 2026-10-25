@@ -16,6 +16,7 @@ mod spell_dbc;
 mod spell_snapshot;
 mod talent;
 mod terrain;
+mod transport;
 mod ui_transform;
 mod vmap;
 mod world_import_scope;
@@ -545,6 +546,7 @@ pub(crate) mod got {
     pub const TYPE: usize = 1;
     pub const DISPLAY_ID: usize = 2;
     pub const NAME: usize = 3;
+    pub const FLAGS: usize = 5;
     pub const SIZE: usize = 7;
 
     pub const DATA0: usize = 8;
