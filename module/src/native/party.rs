@@ -11,7 +11,7 @@ use spacetimedb::{log, ConnectionId, ReducerContext, SpacetimeType};
 use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{
     game_world_entity,
-    group::{GroupAction, Plane},
+    group::{GroupAction, GroupOpError, Plane},
 };
 
 #[derive(SpacetimeType, Default)]
@@ -62,20 +62,35 @@ impl CommandReply {
         )))
     }
 
-    fn refused(&self, cause: String) -> Rollback {
-        let result = match GroupRefusal::parse_tag(&cause) {
-            Some(GroupRefusal::AlreadyInGroup) => PartyResult::AlreadyInGroup,
-            Some(GroupRefusal::GroupFull) => PartyResult::GroupFull,
-            Some(GroupRefusal::NotLeader) => PartyResult::NotLeader,
-            Some(GroupRefusal::NotInGroup) => PartyResult::NotInGroup,
-            Some(GroupRefusal::TargetNotInGroup) => PartyResult::TargetNotInGroup,
-            Some(GroupRefusal::WrongFaction) => PartyResult::PlayerWrongFaction,
-            _ => PartyResult::BadPlayerName,
+    fn refused(&self, error: GroupOpError) -> Rollback {
+        use GroupRefusal as R;
+        let result = match &error {
+            GroupOpError::Refused(R::AlreadyInGroup) => PartyResult::AlreadyInGroup,
+            GroupOpError::Refused(R::GroupFull) => PartyResult::GroupFull,
+            GroupOpError::Refused(R::NotLeader) => PartyResult::NotLeader,
+            GroupOpError::Refused(R::NotInGroup) => PartyResult::NotInGroup,
+            GroupOpError::Refused(R::TargetNotInGroup) => PartyResult::TargetNotInGroup,
+            GroupOpError::Refused(R::WrongFaction) => PartyResult::PlayerWrongFaction,
+            GroupOpError::Refused(
+                R::ActorUnavailable
+                | R::InviteSelf
+                | R::NoSuchPlayer
+                | R::TargetOffline
+                | R::NoPendingInvite
+                | R::InviterUnavailable
+                | R::KickSelf
+                | R::InvalidLootRules
+                | R::IntentAlreadyClaimed
+                | R::ActionSuppressed
+                | R::NotRaid
+                | R::TargetIsSelf
+                | R::InvalidSubgroup
+                | R::SubgroupFull
+                | R::InvalidTargetIcon,
+            )
+            | GroupOpError::Invariant(_) => PartyResult::BadPlayerName,
         };
-        match self.packet(result) {
-            Some(packet) => Rollback::reply(packet, cause),
-            None => Rollback::silent(cause),
-        }
+        Rollback::messages(self.packet(result), error.to_string())
     }
 }
 
@@ -92,7 +107,7 @@ pub(super) fn receive(
         C::CMSG_GROUP_INVITE(request) => {
             let reply = CommandReply::Invite(request.name.clone());
             let target = named_character(ctx, &request.name)
-                .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.as_tag().into()))?;
+                .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.into()))?;
             (A::Invite(target), reply)
         }
         C::CMSG_GROUP_ACCEPT => (
@@ -111,7 +126,7 @@ pub(super) fn receive(
         C::CMSG_GROUP_UNINVITE(request) => {
             let reply = CommandReply::Leave(request.name.clone());
             let target = named_character(ctx, &request.name)
-                .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.as_tag().into()))?;
+                .ok_or_else(|| reply.refused(GroupRefusal::NoSuchPlayer.into()))?;
             (A::Uninvite(target), reply)
         }
         C::CMSG_GROUP_UNINVITE_GUID(request) => {
@@ -210,15 +225,15 @@ pub(super) fn receive(
             .connection_id()
             .update(connection);
     }
-    if let Err(cause) = crate::group::apply_action(ctx, Plane::Shard, guid, action) {
-        if limited && GroupRefusal::parse_tag(&cause).is_some() {
+    if let Err(error) = crate::group::apply_action(ctx, Plane::Shard, guid, action) {
+        if limited && matches!(error, GroupOpError::Refused(_)) {
             return Ok(());
         }
-        return Err(reply.refused(cause));
+        return Err(reply.refused(error));
     }
     if let A::Invite(target) = action {
         crate::group::answer_sessionless_invite(ctx, target)
-            .map_err(|cause| reply.refused(cause))?;
+            .map_err(|error| reply.refused(error))?;
     }
     if let Some(packet) = reply.packet(PartyResult::Success) {
         super::send(ctx, id, packet, false)?;

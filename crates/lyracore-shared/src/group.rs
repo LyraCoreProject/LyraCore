@@ -212,30 +212,6 @@ pub enum GroupRefusal {
 }
 
 impl GroupRefusal {
-    pub const ALL: [Self; 21] = [
-        Self::ActorUnavailable,
-        Self::InviteSelf,
-        Self::NoSuchPlayer,
-        Self::TargetOffline,
-        Self::AlreadyInGroup,
-        Self::GroupFull,
-        Self::NotLeader,
-        Self::NotInGroup,
-        Self::TargetNotInGroup,
-        Self::NoPendingInvite,
-        Self::InviterUnavailable,
-        Self::KickSelf,
-        Self::InvalidLootRules,
-        Self::IntentAlreadyClaimed,
-        Self::ActionSuppressed,
-        Self::WrongFaction,
-        Self::NotRaid,
-        Self::TargetIsSelf,
-        Self::InvalidSubgroup,
-        Self::SubgroupFull,
-        Self::InvalidTargetIcon,
-    ];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::ActorUnavailable => "group:actor_unavailable",
@@ -260,12 +236,6 @@ impl GroupRefusal {
             Self::SubgroupFull => "group:subgroup_full",
             Self::InvalidTargetIcon => "group:invalid_target_icon",
         }
-    }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
     }
 }
 
@@ -491,18 +461,6 @@ mod tests {
             ]
         );
         assert_eq!(event_kind::LOOT_ROLL_RESERVED_START, roll::ROLL_START);
-    }
-
-    #[test]
-    fn every_group_refusal_tag_round_trips() {
-        for refusal in GroupRefusal::ALL {
-            assert_eq!(GroupRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(GroupRefusal::parse_tag("group:"), None);
-        assert_eq!(
-            GroupRefusal::parse_tag("gw_group_invite reducer timed out after 10s"),
-            None
-        );
     }
 
     fn member(guid: u64, name: &str, subgroup: u8, assistant: bool) -> RosterMember {

@@ -198,15 +198,16 @@ fn apply_sessionless_group_action(ctx: &ReducerContext, actor_guid: u64, action:
             Ok(())
         }
     });
-    if let Err(cause) = result {
-        if GroupRefusal::parse_tag(&cause).is_none() {
-            // The Package API returns no outcome; an invariant failure must abort this transaction.
-            panic!("Companion group invariant failed for {actor_guid}: {cause}");
-        }
+    if let Err(error @ GroupOpError::Invariant(_)) = result {
+        // The Package API returns no outcome; an invariant failure must abort this transaction.
+        panic!("Companion group invariant failed for {actor_guid}: {error}");
     }
 }
 
-pub(crate) fn answer_sessionless_invite(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+pub(crate) fn answer_sessionless_invite(
+    ctx: &ReducerContext,
+    guid: u64,
+) -> Result<(), GroupOpError> {
     let Some(character) = crate::helpers::character_by_guid(ctx, guid).filter(|c| !c.online) else {
         return Ok(());
     };
@@ -230,10 +231,10 @@ pub(crate) fn answer_sessionless_invite(ctx: &ReducerContext, guid: u64) -> Resu
         },
     ) {
         Ok(()) => Ok(()),
-        Err(cause) if GroupRefusal::parse_tag(&cause).is_some() => {
+        Err(GroupOpError::Refused(_)) => {
             apply_action(ctx, Plane::Shard, guid, GroupAction::Decline)
         }
-        Err(cause) => Err(cause),
+        Err(error) => Err(error),
     }
 }
 
@@ -266,14 +267,29 @@ impl From<GroupRefusal> for GroupOpError {
     }
 }
 
-fn group_op_error(error: GroupOpError, detail: &str) -> String {
-    match error {
-        GroupOpError::Refused(refusal) => refused(refusal, detail),
-        GroupOpError::Invariant(reason) => {
-            spacetimedb::log::error!("group invariant failed: {detail}: {reason}");
-            format!("group invariant failed: {reason}")
+impl std::fmt::Display for GroupOpError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Refused(refusal) => refusal.as_tag().fmt(f),
+            Self::Invariant(reason) => write!(f, "group invariant failed: {reason}"),
         }
     }
+}
+
+fn logged(error: GroupOpError, detail: &str) -> GroupOpError {
+    match &error {
+        GroupOpError::Refused(refusal) => {
+            spacetimedb::log::info!("group refused {}: {detail}", refusal.as_tag());
+        }
+        GroupOpError::Invariant(reason) => {
+            spacetimedb::log::error!("group invariant failed: {detail}: {reason}");
+        }
+    }
+    error
+}
+
+fn group_op_error(error: GroupOpError, detail: &str) -> String {
+    logged(error, detail).to_string()
 }
 
 use lyracore_shared::group::{event_kind as group_event_kind, leave_cause, GroupRefusal};
@@ -1759,7 +1775,7 @@ pub fn realm_group_op(
         },
         other => return Err(format!("unknown realm group op {other}")),
     };
-    apply_action(ctx, Plane::RealmCore, actor_guid, action)
+    apply_action(ctx, Plane::RealmCore, actor_guid, action).map_err(|error| error.to_string())
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -1813,24 +1829,24 @@ pub(crate) fn apply_action(
     plane: Plane,
     actor_guid: u64,
     action: GroupAction,
-) -> Result<(), String> {
+) -> Result<(), GroupOpError> {
     use GroupAction::*;
     use RosterChange::{Changed, Unchanged};
     if plane == Plane::Shard {
         if let Invite(target) = action {
             let actor = crate::helpers::character_by_guid(ctx, actor_guid)
-                .ok_or_else(|| refused(GroupRefusal::ActorUnavailable, "group invite"))?;
+                .ok_or_else(|| logged(GroupRefusal::ActorUnavailable.into(), "group invite"))?;
             if let Some(target) = crate::helpers::character_by_guid(ctx, target) {
                 if character_online(ctx, target.guid)
                     && !lyracore_shared::faction::same_team(actor.race, target.race)
                 {
-                    return Err(refused(GroupRefusal::WrongFaction, "group invite"));
+                    return Err(logged(GroupRefusal::WrongFaction.into(), "group invite"));
                 }
             }
         }
         if let SetLeader(target) = action {
             if !character_online(ctx, target) {
-                return Err(refused(GroupRefusal::TargetOffline, "group leader"));
+                return Err(logged(GroupRefusal::TargetOffline.into(), "group leader"));
             }
         }
     }
@@ -1865,9 +1881,8 @@ pub(crate) fn apply_action(
         }
         RandomRoll { min, max } => random_roll_on(ctx, actor_guid, min, max).map(|()| Unchanged),
     };
-    let change = ran.map_err(|error| {
-        group_op_error(error, &format!("group action {action:?} for {actor_guid}"))
-    })?;
+    let change =
+        ran.map_err(|error| logged(error, &format!("group action {action:?} for {actor_guid}")))?;
     if change == Changed {
         let after_groups = action_groups(ctx, actor_guid, action);
         let touched: std::collections::BTreeSet<_> = before_groups
@@ -2294,7 +2309,6 @@ mod tests {
         );
 
         assert!(failure.contains("group invariant failed"));
-        assert_eq!(GroupRefusal::parse_tag(&failure), None);
         assert_eq!(
             group_op_error(
                 GroupOpError::Refused(GroupRefusal::NotLeader),
