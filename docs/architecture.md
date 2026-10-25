@@ -97,11 +97,12 @@ gives each completed snapshot its own object files. It copies them after releasi
 committed-state lock and before making the snapshot available for recovery. In-place damage to
 one snapshot therefore cannot corrupt the other's copy through a hard link. Snapshot creation
 remains serial; cleanup keeps the latest snapshot that the next snapshot can copy. Normal Hosts
-retain upstream compression and
-history behavior. Cleanup failures stop that pass and log a warning. The retained window is not
-an archive or a fixed disk limit; recovery still needs one readable retained snapshot and the
-log that follows it. On filesystems such as ext4, independent snapshot files cost extra disk space
-and writes. Filesystems with copy-on-write cloning can share storage until a file changes.
+retain upstream compression and history behavior. Cleanup failures stop that pass and log a warning.
+The retained window is not an archive or a fixed disk limit; recovery still needs one readable
+retained snapshot and the log that follows it. On filesystems such as ext4, independent snapshots
+cost extra disk space and writes. On Linux, filesystems with copy-on-write cloning can share
+storage until a file changes.
+On macOS, the Host writes full copies even on APFS.
 Copying and checking a full imported Realm remain unmeasured. Snapshot checks can briefly use
 memory for another copy of the Realm. A failed snapshot can leave an incomplete directory;
 cleanup leaves incomplete and invalid snapshots in place.
