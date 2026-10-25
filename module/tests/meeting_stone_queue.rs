@@ -531,7 +531,6 @@ fn a_solo_seeker_ends_with_its_account_claim() {
         "UPDATE game_account_claim SET expires_micros = 0 WHERE account_id = {REAPED} \
          OR account_id = {MEMBER}"
     ));
-    realm.assert_call("gw_heartbeat", &[]);
     assert!(
         support::poll_until(Duration::from_secs(30), || !seekers(&realm)
             .contains_key(&REAPED)),

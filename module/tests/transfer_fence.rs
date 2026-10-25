@@ -67,7 +67,6 @@ fn login_refuses_a_character_in_escrow() {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
     shard.assert_call("gw_player_login", &["1", &actor(ESCROWED)]);
 
     begin_transfer(&shard, ESCROWED);

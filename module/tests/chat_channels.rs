@@ -437,7 +437,6 @@ fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
         HUMAN,
     );
     realm.assert_sql("UPDATE game_account_claim SET expires_micros = 0");
-    realm.assert_call("gw_heartbeat", &[]);
     assert!(
         support::poll_until(Duration::from_secs(30), || realm
             .query_rows("SELECT * FROM game_chat_channel_member WHERE character_guid = 1")

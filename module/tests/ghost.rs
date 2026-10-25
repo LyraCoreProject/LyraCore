@@ -146,7 +146,6 @@ fn bind_session(shard: &Standalone) {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
 }
 
 #[test]

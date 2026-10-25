@@ -1214,7 +1214,7 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
         .insert(crate::gw::GatewayLeaseReaperSchedule {
             scheduled_id: 0,
             scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                crate::gw::LEASE_REAP_MICROS,
+                crate::gw::ACCOUNT_CLAIM_REAP_MICROS,
             )),
         });
 

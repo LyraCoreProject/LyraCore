@@ -218,7 +218,9 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     }
     lease_sched.insert(crate::gw::GatewayLeaseReaperSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(crate::gw::LEASE_REAP_MICROS)),
+        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
+            crate::gw::ACCOUNT_CLAIM_REAP_MICROS,
+        )),
     });
 
     crate::weather::rearm_weather_schedule(ctx);

@@ -16,12 +16,12 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
-            &[
-                "game_account_claim",
-                "game_account_fence",
-                "game_account_character_owner",
-            ],
-            "Realm Account ownership retained across Character deletion and Transfer",
+            &["game_account_claim"],
+            "Account Claim keyed by Account and retained across Character deletion",
+        ),
+        (
+            &["game_account_fence", "game_account_character_owner"],
+            "retired Account Fence tables that nothing writes",
         ),
         (
             &[
@@ -158,7 +158,10 @@ pub(crate) mod character_owned_tripwire {
             &["game_meeting_stone_seeker"],
             "Realm-core Meeting Stone Queue; a solo Seeker ends with its Account Claim, a party Seeker with its party membership",
         ),
-        (&["game_gateway_session"], "live Session routing state"),
+        (
+            &["game_gateway_session"],
+            "retired Gateway Session table that nothing writes",
+        ),
         (
             &["game_entity_motion_pending"],
             "short-lived motion staging row drained by the next publish tick",
