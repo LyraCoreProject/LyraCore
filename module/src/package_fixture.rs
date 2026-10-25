@@ -19,10 +19,18 @@ pub(crate) use crate::items::{grant_item, remove_items};
 pub(crate) use crate::loot::tag::clear as clear_loot_tag;
 pub(crate) use crate::nav::record_change as record_navigation_change;
 pub(crate) use crate::spell::{
-    cast_triggered, do_cancel_aura, learn_spell, start_creature_spell,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
+    cast_triggered, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
+    CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
 pub(crate) use crate::xp::grant_xp;
+
+pub(crate) fn do_cancel_aura(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    spell_id: u32,
+) -> Result<(), String> {
+    crate::spell::do_cancel_aura(ctx, player_guid, spell_id).map_err(String::from)
+}
 
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_move_spline(
