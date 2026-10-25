@@ -8,7 +8,7 @@ use wow_dbc::Indexable;
 
 use crate::dump::{field, got, parse_table};
 use crate::nav::Tri;
-use crate::{GO_BUTTON, GO_DOOR};
+use crate::world_import::{GO_BUTTON, GO_DOOR};
 
 // Shuffle Y-up placement coordinates to Z-up world axes before rotation and scale.
 fn shuffle(v: [f32; 3]) -> [f32; 3] {
@@ -77,7 +77,7 @@ fn door_templates(dump: &str) -> Vec<DoorTemplate> {
         .filter_map(|row| {
             let entry: u64 = field(row, got::ENTRY).parse().ok()?;
             let raw_type: u32 = field(row, got::TYPE).parse().ok()?;
-            let stored_type = crate::classify_go_type(entry, raw_type)?;
+            let stored_type = crate::world_import::classify_go_type(entry, raw_type)?;
             (stored_type == GO_DOOR || stored_type == GO_BUTTON).then(|| DoorTemplate {
                 entry,
                 display_id: field(row, got::DISPLAY_ID).parse().unwrap_or(0),

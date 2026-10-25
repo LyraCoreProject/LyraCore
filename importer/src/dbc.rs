@@ -2496,19 +2496,19 @@ mod tests {
         let map = resolve_profession_tier_values(&availability, &tiers);
 
         assert_eq!(map.len(), PROFESSION_SKILL_LINES.len());
-        for &(line, entries) in crate::PROFESSION_LEARN {
+        for &(line, entries) in crate::world_import::PROFESSION_LEARN {
             let caps = map
                 .get(&line)
                 .unwrap_or_else(|| panic!("no resolved tier caps for line {line}"));
             for &(_, tier_index, _) in entries {
                 assert_eq!(
                     caps[tier_index as usize] as u32,
-                    crate::LEGACY_TIER_CAPS[tier_index as usize],
+                    crate::world_import::LEGACY_TIER_CAPS[tier_index as usize],
                     "line {line} tier {tier_index}"
                 );
             }
         }
-        crate::assert_profession_tier_parity(&map)
+        crate::world_import::assert_profession_tier_parity(&map)
             .expect("fixture data must satisfy the parity guard");
     }
 

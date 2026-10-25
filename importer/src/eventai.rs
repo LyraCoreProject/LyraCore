@@ -1,7 +1,8 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::dump::{bt, field, parse_table, sql_text};
-use crate::{eventai_presentation, go_guid, world_guid};
+use crate::eventai_presentation;
+use crate::world_import::{go_guid, world_guid};
 
 pub(crate) const SOURCE_PROFILE_NAME: &str = "cmangos-classic-z2815";
 pub(crate) const LOADER_CONTRACT: &str = "creature-ai-scripts-24-columns-ordered-by-id-v1";

@@ -3,7 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 use anyhow::{bail, Context, Result};
 
 use crate::dump::{cr, field, parse_complete_table, sql_str};
-use crate::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow, WorldImportScope};
+use crate::world_import::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow};
+use crate::world_import_scope::WorldImportScope;
 
 pub(crate) struct PopulationPlan {
     pub(crate) spawns: Vec<CreatureSpawnRow>,
