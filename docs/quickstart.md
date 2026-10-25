@@ -555,10 +555,14 @@ both snapshots and removes older snapshots and unneeded log segments.
 Accounts, Characters, items and the installed Module stay in the retained state. Cleanup keeps
 enough history to recover from either retained snapshot; it does not reset the Realm. Each snapshot
 has its own object files, so in-place file damage cannot spread to the other through a hard link.
-These separate copies require more disk space and writes than shared snapshot files.
+On filesystems such as ext4, these separate copies require more disk space and writes. Filesystems
+with copy-on-write cloning can share storage until a file changes.
 
 This is a recovery window, not a fixed disk quota. Large transactions, snapshot work and cleanup
 errors can leave more history on disk. The Host logs cleanup failures and keeps the recovery files.
+It leaves incomplete and invalid snapshot directories in place, including copies left by a failed
+snapshot. Before changing the SpacetimeDB pin, check that the new Host can restore the retained
+snapshots; pruned history cannot replay from the first transaction.
 Normal Hosts keep their existing history policy. The build cache is separate, and Wasmtime manages
 its compiled-code disk cache separately. Do not delete individual commit-log files from
 `.lyracore/native-data/` to reclaim space from a Realm you intend to keep.

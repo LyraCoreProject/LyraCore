@@ -14,16 +14,14 @@ def check(data, world_port, sql, restart):
 
     for _ in range(300):
         snapshots, segments = files()
-        if len(snapshots) == 2 and segments and int(segments[0].name.split('.')[0]) > 0:
-            break
+        if len(snapshots) == 2 and 1 <= len(segments) <= 4:
+            older = int(snapshots[0].name.split('.')[0])
+            starts = [int(path.name.split('.')[0]) for path in segments]
+            if 0 < starts[0] <= older + 1 and (len(starts) == 1 or starts[1] > older + 1):
+                break
         time.sleep(0.1)
     else:
         raise AssertionError(f'cleanup did not retain two snapshots and a shortened log: {snapshots}, {segments}')
-    older = int(snapshots[0].name.split('.')[0])
-    starts = [int(path.name.split('.')[0]) for path in segments]
-    assert starts[0] <= older + 1
-    assert len(starts) == 1 or starts[1] > older + 1, (older, starts)
-    assert len(starts) <= 4, starts
     queries = [
         'SELECT program_hash FROM st_module',
         'SELECT id, username FROM game_account',
