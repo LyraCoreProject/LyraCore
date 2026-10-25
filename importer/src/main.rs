@@ -446,6 +446,21 @@ impl Args {
         Ok(scope)
     }
 
+    fn world_import_args(&self) -> Result<world_import::WorldImportArgs> {
+        Ok(world_import::WorldImportArgs {
+            dbc: self.dbc.clone(),
+            family: self.family.clone(),
+            world_profile: self.world_profile,
+            scope: self.world_import_scope()?,
+            include_creatures: self.include_creatures.clone(),
+            eventai_profile: self.eventai_profile.clone(),
+            packages: self.packages.clone(),
+            source_sha: self.source_sha.clone(),
+            apply: self.apply,
+            shard: self.shard.clone(),
+        })
+    }
+
     fn spell_args(&self) -> Result<spell::SpellArgs> {
         Ok(spell::SpellArgs {
             only: self.only.clone(),
@@ -527,7 +542,7 @@ fn main() -> Result<()> {
         return extents::print_extents(&dump_path, args.map, args.bbox);
     }
 
-    world_import::run(&dump_path, &args)
+    world_import::run(&dump_path, &args.world_import_args()?, &args.spell_args()?)
 }
 
 #[cfg(test)]
@@ -830,7 +845,7 @@ mod tests {
         .is_err());
     }
 
-    pub(crate) fn test_args() -> Args {
+    fn test_args() -> Args {
         Args {
             dump: None,
             taxi_mounts: None,

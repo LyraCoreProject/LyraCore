@@ -11,9 +11,10 @@ use crate::dump::{
     lvl, mlt, npct, nt, nv, parse_complete_table, parse_table, pc, pca, pci, pcs, push_insert, qr,
     qt, read_dump, sc, sha256_hex, sls, spe, sql_text,
 };
+use crate::shard::Shard;
 use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
 use crate::{
-    creature_population, dbc, eventai, gossip_conditions, item_property, package_delta, spell, Args,
+    creature_population, dbc, eventai, gossip_conditions, item_property, package_delta, spell,
 };
 
 const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
@@ -1833,6 +1834,19 @@ pub(crate) fn creature_row_kept_in_scope(
             || scope.contains(map, x, y, z))
 }
 
+pub(crate) struct WorldImportArgs {
+    pub(crate) dbc: Option<String>,
+    pub(crate) family: Option<String>,
+    pub(crate) world_profile: Option<WorldImportProfile>,
+    pub(crate) scope: WorldImportScope,
+    pub(crate) include_creatures: Vec<u64>,
+    pub(crate) eventai_profile: String,
+    pub(crate) packages: Option<String>,
+    pub(crate) source_sha: String,
+    pub(crate) apply: bool,
+    pub(crate) shard: Shard,
+}
+
 pub(crate) const FAMILIES: &[&str] = &[
     "creatures",
     "items",
@@ -1849,27 +1863,21 @@ pub(crate) const FAMILIES: &[&str] = &[
 
 const SPAWN_BATCH: usize = 250;
 
-pub(crate) fn family_active(args: &Args, name: &str) -> bool {
+pub(crate) fn family_active(args: &WorldImportArgs, name: &str) -> bool {
     match &args.family {
         None => true,
         Some(f) => f == name,
     }
 }
 
-fn run_package_stage(args: &Args, family: &str) -> Result<()> {
+fn run_package_stage(args: &WorldImportArgs, family: &str) -> Result<()> {
     let quest_event_reload =
         family == "creature-ai" && args.world_profile.is_some() && family_active(args, "quests");
     if !family_active(args, family) && !quest_event_reload {
         return Ok(());
     }
     match &args.packages {
-        Some(root) => package_delta::reapply(
-            &args.world_import_scope()?,
-            args.apply,
-            &args.shard,
-            family,
-            root,
-        )?,
+        Some(root) => package_delta::reapply(&args.scope, args.apply, &args.shard, family, root)?,
         None => package_delta::warn_not_reapplied(family),
     }
     Ok(())
@@ -1892,7 +1900,10 @@ pub(crate) struct DumpPlan {
 
 impl DumpPlan {
     // Load GameObject dependencies before AI, then creatures whose spawn events can invoke AI.
-    fn reducer_batches<'a>(&'a self, args: &Args) -> Result<Vec<(&'static str, &'a str)>> {
+    fn reducer_batches<'a>(
+        &'a self,
+        args: &WorldImportArgs,
+    ) -> Result<Vec<(&'static str, &'a str)>> {
         let mut batches = Vec::new();
         if family_active(args, "gameobjects") {
             for (index, batch) in self.go_batches.iter().enumerate() {
@@ -1941,19 +1952,19 @@ impl DumpPlan {
 
 fn build_dump_plan(
     dump: &str,
-    args: &Args,
+    args: &WorldImportArgs,
     display_scales: &Option<std::collections::HashMap<u32, f32>>,
     profession_tier_values: &Option<std::collections::HashMap<u32, [u16; 4]>>,
 ) -> Result<DumpPlan> {
-    let scope = args.world_import_scope()?;
+    let scope = &args.scope;
     eprintln!("world import scope: {}", scope.name());
-    let population = creature_population::collect(dump, &scope)?;
+    let population = creature_population::collect(dump, scope)?;
     let spawns = &population.spawns;
     let ScopeEntries {
         entries,
         eventai,
         eventai_manifest,
-    } = resolve_scope_entries(dump, args, &scope, &population, ScopePurpose::Import)?;
+    } = resolve_scope_entries(dump, args, scope, &population, ScopePurpose::Import)?;
     let CreatureTemplates {
         templates,
         creature_loot_ids,
@@ -1980,7 +1991,7 @@ fn build_dump_plan(
         waypoints.len()
     );
 
-    let go_spawns = collect_gameobject_spawns(dump, &scope);
+    let go_spawns = collect_gameobject_spawns(dump, scope);
     let GameobjectTemplateRows {
         templates: go_template_rows,
         traps: go_trap_rows,
@@ -2220,7 +2231,7 @@ struct QuestCatalogue {
 
 fn build_quest_catalogue(
     dump: &str,
-    args: &Args,
+    args: &WorldImportArgs,
     display_scales: &Option<std::collections::HashMap<u32, f32>>,
 ) -> Result<QuestCatalogue> {
     let mut scope = if args
@@ -2275,7 +2286,7 @@ struct MappedContent<'a> {
 
 fn resolve_scope_entries(
     dump: &str,
-    args: &Args,
+    args: &WorldImportArgs,
     scope: &WorldImportScope,
     population: &creature_population::PopulationPlan,
     purpose: ScopePurpose,
@@ -3037,7 +3048,11 @@ fn build_loot_family_rows(
     }
 }
 
-fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mut Vec<String>) {
+fn push_world_content_statements(
+    args: &WorldImportArgs,
+    content: MappedContent,
+    stmts: &mut Vec<String>,
+) {
     let MappedContent {
         templates,
         waypoints,
@@ -3163,7 +3178,7 @@ fn push_world_content_statements(args: &Args, content: MappedContent, stmts: &mu
 }
 
 fn push_quest_and_gameobject_statements(
-    args: &Args,
+    args: &WorldImportArgs,
     content: MappedContent,
     stmts: &mut Vec<String>,
 ) {
@@ -3281,7 +3296,7 @@ fn push_quest_and_gameobject_statements(
 }
 
 fn push_creature_behaviour_statements(
-    args: &Args,
+    args: &WorldImportArgs,
     content: MappedContent,
     stmts: &mut Vec<String>,
 ) {
@@ -3349,7 +3364,11 @@ fn push_creature_behaviour_statements(
     }
 }
 
-fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> Result<(u64, u64)> {
+fn push_global_statements(
+    args: &WorldImportArgs,
+    dump: &str,
+    stmts: &mut Vec<String>,
+) -> Result<(u64, u64)> {
     let mut globals_row_count = 0u64;
     if family_active(args, "globals") {
         let stats_sql = build_stats_sql(dump);
@@ -3403,7 +3422,7 @@ fn push_global_statements(args: &Args, dump: &str, stmts: &mut Vec<String>) -> R
 }
 
 fn family_stamps(
-    args: &Args,
+    args: &WorldImportArgs,
     content: MappedContent,
     property_row_count: u64,
     globals_row_count: u64,
@@ -3489,7 +3508,11 @@ fn family_stamps(
     stamps
 }
 
-fn run_full_world_catalogues(dump: &str, args: &Args) -> Result<()> {
+fn run_full_world_catalogues(
+    dump: &str,
+    args: &WorldImportArgs,
+    spells: &spell::SpellArgs,
+) -> Result<()> {
     if args
         .world_profile
         .is_some_and(WorldImportProfile::imports_all_templates)
@@ -3500,12 +3523,16 @@ fn run_full_world_catalogues(dump: &str, args: &Args) -> Result<()> {
             .as_deref()
             .context("a complete world import requires --dbc <client Data directory>")?;
         dbc::run_from_dump(data_dir, dump, args.apply, &args.shard)?;
-        spell::run_spells(data_dir, &args.spell_args()?)?;
+        spell::run_spells(data_dir, spells)?;
     }
     Ok(())
 }
 
-pub(crate) fn run(dump_path: &str, args: &Args) -> Result<()> {
+pub(crate) fn run(
+    dump_path: &str,
+    args: &WorldImportArgs,
+    spells: &spell::SpellArgs,
+) -> Result<()> {
     let dump = read_dump(dump_path)?;
 
     let display_scales: Option<std::collections::HashMap<u32, f32>> = match &args.dbc {
@@ -3535,7 +3562,7 @@ pub(crate) fn run(dump_path: &str, args: &Args) -> Result<()> {
 
     let plan = build_dump_plan(&dump, args, &display_scales, &profession_tier_values)?;
 
-    run_full_world_catalogues(&dump, args)?;
+    run_full_world_catalogues(&dump, args, spells)?;
 
     if !args.apply {
         if let Some(manifest) = &plan.eventai_manifest {
@@ -3612,9 +3639,15 @@ pub(crate) fn run(dump_path: &str, args: &Args) -> Result<()> {
 mod tests {
     use super::*;
     use crate::dump::cr;
-    use crate::parse_args_from;
     use crate::standalone_support;
-    use crate::tests::test_args;
+
+    fn import_args<const N: usize>(argv: [&str; N]) -> Result<WorldImportArgs> {
+        crate::parse_args_from(argv)?.world_import_args()
+    }
+
+    fn test_args() -> WorldImportArgs {
+        import_args(["--dump", "synthetic.sql"]).unwrap()
+    }
 
     #[test]
     fn world_guid_is_highguid_unit_encoded_and_unique_per_spawn() {
@@ -4918,14 +4951,14 @@ mod tests {
             quest_template_row_requiring_event(500),
             eventai_rule_row(10, 100, 4, 0, 100, 0, [0; 6], [[15, 500, 6, 0], [0; 4], [0; 4]]),
         );
-        let eastern = parse_args_from([
+        let eastern = import_args([
             "--dump",
             "synthetic.sql",
             "--world-profile",
             "starting-eastern",
         ])
         .unwrap();
-        let mut kalimdor = parse_args_from([
+        let mut kalimdor = import_args([
             "--dump",
             "synthetic.sql",
             "--world-profile",
@@ -4991,7 +5024,7 @@ mod tests {
                 dump.clone()
             };
             let mut args =
-                parse_args_from(["--dump", "synthetic.sql", "--world-profile", profile]).unwrap();
+                import_args(["--dump", "synthetic.sql", "--world-profile", profile]).unwrap();
             let full = build_dump_plan(&dump, &args, &None, &None).unwrap();
             args.family = Some("quests".into());
             let partial = build_dump_plan(&dump, &args, &None, &None).unwrap();
@@ -5022,7 +5055,7 @@ mod tests {
 
     #[test]
     fn canonical_quest_reimport_checks_creature_ai_package_deltas() {
-        let mut args = parse_args_from([
+        let mut args = import_args([
             "--dump",
             "synthetic.sql",
             "--world-profile",
@@ -5084,7 +5117,7 @@ mod tests {
     }
 
     fn quest_catalogue_plan(profile: &str) -> DumpPlan {
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             "synthetic.sql",
             "--family",
@@ -5282,7 +5315,7 @@ mod tests {
             ("full-kalimdor", 1),
             ("full-instances", 0),
         ] {
-            let args = parse_args_from([
+            let args = import_args([
                 "--dump",
                 "synthetic.sql",
                 "--family",
@@ -5359,7 +5392,7 @@ mod tests {
             ("starting-kalimdor", false),
             ("instances", false),
         ] {
-            let args = parse_args_from([
+            let args = import_args([
                 "--dump",
                 "synthetic.sql",
                 "--family",
@@ -5413,7 +5446,7 @@ mod tests {
             creature_template_row(300, 0),
             creature_template_row(344, 0),
         );
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             "synthetic.sql",
             "--world-profile",
@@ -5473,7 +5506,7 @@ mod tests {
             creature_template_row(300, 0),
             creature_template_row(400, 0),
         );
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             "synthetic.sql",
             "--world-profile",
@@ -5609,8 +5642,7 @@ mod tests {
             creature_template_row(644, 0),
             creature_template_row(999, 0),
         );
-        let mut args = test_args();
-        args.include_maps = vec![36];
+        let args = import_args(["--dump", "synthetic.sql", "--include-map", "36"]).unwrap();
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
         let spawn_payload = plan.spawn_batches.join(";");
         let rows: Vec<&str> = spawn_payload.split(';').collect();
@@ -5692,8 +5724,7 @@ mod tests {
             creature_template_row(644, 0),
             creature_template_row(645, 0),
         );
-        let mut args = test_args();
-        args.include_maps = vec![36];
+        let mut args = import_args(["--dump", "synthetic.sql", "--include-map", "36"]).unwrap();
         args.family = Some("creatures".to_string());
         let plan = build_dump_plan(&dump, &args, &None, &None).expect("build_dump_plan");
         let wp_insert = plan
@@ -5739,7 +5770,7 @@ mod tests {
         let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
         let client = std::env::var("LYRACORE_TEST_DBC").unwrap();
         let dump = read_dump(&path).unwrap();
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             path.as_str(),
             "--dbc",
@@ -5851,7 +5882,7 @@ mod tests {
         let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
         let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
         let dump = read_dump(&path).unwrap();
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             path.as_str(),
             "--dbc",
@@ -5880,7 +5911,7 @@ mod tests {
         let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
         let dump = read_dump(&path).unwrap();
         for profile in ["starting-eastern", "starting-kalimdor"] {
-            let args = parse_args_from([
+            let args = import_args([
                 "--dump",
                 path.as_str(),
                 "--dbc",
@@ -5905,7 +5936,7 @@ mod tests {
         let path = std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap();
         let dbc = std::env::var("LYRACORE_TEST_DBC").unwrap();
         let dump = read_dump(&path).unwrap();
-        let args = parse_args_from([
+        let args = import_args([
             "--dump",
             path.as_str(),
             "--dbc",
