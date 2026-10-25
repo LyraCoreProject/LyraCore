@@ -16,8 +16,6 @@ fn emblem_request(npc_guid: &str) -> String {
     )
 }
 
-const EMBLEM_TERMS: &str = r#"{"emblem":{"emblem_style":11,"emblem_color":12,"border_style":3,"border_color":14,"background_color":15}}"#;
-
 fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
     let result = shard.call(reducer, args);
     let output = format!(
@@ -37,10 +35,6 @@ fn purse(shard: &Standalone) -> u32 {
     ))[0]["money"]
         .parse()
         .unwrap()
-}
-
-fn holds(shard: &Standalone) -> usize {
-    shard.query_rows("SELECT * FROM game_guild_fee_hold").len()
 }
 
 fn fixture(name: &str) -> (Standalone, String) {
@@ -70,56 +64,33 @@ fn make_tabard_designer(shard: &Standalone, vendor: &str) {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn the_guild_leader_pays_ten_gold_and_every_refusal_returns_the_copper() {
+fn the_guild_leader_pays_ten_gold_and_every_refusal_keeps_the_copper() {
     let (shard, vendor) = fixture("guild-fee");
     let payer = actor(PAYER);
     let request = emblem_request(&vendor);
 
     refused(
         &shard,
-        "gw_guild_fee_hold",
-        &["5090401", &payer, &request],
-        "guild:npc_refused",
+        "gw_guild_fee_purchase",
+        &[&payer, &request],
+        "guild:not_in_guild",
     );
-    assert_eq!((purse(&shard), holds(&shard)), (150_000, 0));
-    make_tabard_designer(&shard, &vendor);
-
-    shard.assert_call("gw_guild_fee_hold", &["5090401", &payer, &request]);
-    shard.assert_call("gw_guild_fee_hold", &["5090401", &payer, &request]);
-    assert_eq!((purse(&shard), holds(&shard)), (50_000, 1));
-    refused(
-        &shard,
-        "gw_guild_fee_hold",
-        &["5090402", &payer, &request],
-        "another Fee Hold is pending",
-    );
-    let account_id = shard.query_rows(&format!(
-        "SELECT account_id FROM game_character WHERE guid = {PAYER}"
-    ))[0]["account_id"]
-        .clone();
-    refused(
-        &shard,
-        "delete_character",
-        &[&account_id, &payer],
-        "CHAR_HAS_GUILD_FEE_HOLD",
-    );
-    shard.assert_call("realm_guild_fee_decide", &["5090401", &payer, EMBLEM_TERMS]);
-    let decision = &shard.query_rows("SELECT * FROM game_guild_fee_decision")[0];
-    assert_eq!(decision["accepted"], "false");
-    assert_eq!(decision["refusal"], "guild:not_in_guild");
-    shard.assert_call("gw_guild_fee_finish", &["5090401", &payer, "false"]);
-    shard.assert_call("gw_guild_fee_finish", &["5090401", &payer, "false"]);
-    assert_eq!((purse(&shard), holds(&shard)), (150_000, 0));
-
+    assert_eq!(purse(&shard), 150_000);
     let founding = format!(
         r#"{{"gmCreate":{{"leader_guid":{PAYER},"leader_name":"Tester","leader_team":469,"leader_realm_account":0,"gm_level":1,"name":"Tabard Guild"}}}}"#
     );
     shard.assert_call("realm_guild_op", &[&payer, &founding]);
-    shard.assert_call("gw_guild_fee_hold", &["5090403", &payer, &request]);
-    shard.assert_call("realm_guild_fee_decide", &["5090403", &payer, EMBLEM_TERMS]);
-    shard.assert_call("realm_guild_fee_decide", &["5090403", &payer, EMBLEM_TERMS]);
-    shard.assert_call("gw_guild_fee_finish", &["5090403", &payer, "true"]);
-    assert_eq!((purse(&shard), holds(&shard)), (50_000, 0));
+    refused(
+        &shard,
+        "gw_guild_fee_purchase",
+        &[&payer, &request],
+        "guild:npc_refused",
+    );
+    assert_eq!(purse(&shard), 150_000);
+    make_tabard_designer(&shard, &vendor);
+
+    shard.assert_call("gw_guild_fee_purchase", &[&payer, &request]);
+    assert_eq!(purse(&shard), 50_000);
     let guild = &shard.query_rows("SELECT * FROM game_guild")[0];
     let emblem: Vec<&str> = [
         "emblem_style",
@@ -134,56 +105,13 @@ fn the_guild_leader_pays_ten_gold_and_every_refusal_returns_the_copper() {
     assert_eq!(emblem, ["11", "12", "3", "14", "15"]);
     let tabard_events =
         shard.query_rows("SELECT * FROM game_guild_event WHERE kind = 9 AND recipient_guid = 0");
-    assert_eq!(
-        tabard_events.len(),
-        1,
-        "a replayed decision broadcasts once"
-    );
+    assert_eq!(tabard_events.len(), 1);
 
     refused(
         &shard,
-        "gw_guild_fee_hold",
-        &["5090404", &payer, &request],
+        "gw_guild_fee_purchase",
+        &[&payer, &request],
         "guild:not_enough_money",
     );
-    assert_eq!((purse(&shard), holds(&shard)), (50_000, 0));
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_fee_hold_travels_with_its_character_and_finishes_on_the_new_home_shard() {
-    let (source, vendor) = fixture("guild-fee-source");
-    make_tabard_designer(&source, &vendor);
-    let payer = actor(PAYER);
-    source.assert_call(
-        "gw_guild_fee_hold",
-        &["5090411", &payer, &emblem_request(&vendor)],
-    );
-    source.assert_call(
-        "begin_transfer",
-        &["5090410", &payer, "0", "0", "0", "0", "0", "0", "true"],
-    );
-    let out = source.query_rows("SELECT blob FROM game_transfer_out WHERE transfer_id = 5090410");
-    let blob = serde_json::to_string(out[0]["blob"].strip_prefix("0x").unwrap()).unwrap();
-
-    let mut destination = Standalone::start("guild-fee-destination");
-    destination.publish_module();
-    destination.assert_call("claim_operator", &[]);
-    destination.assert_call("install_guid_range", &["1000000000"]);
-    let system = actor(0);
-    destination.assert_call("import_character_blob", &["5090410", &blob, &system]);
-    source.assert_call("confirm_import", &["5090410", &system]);
-    source.assert_call("finish_transfer", &["5090410", &system]);
-    destination.assert_call("release_transfer", &["5090410", &system]);
-
-    assert_eq!(holds(&source), 0, "the Hold left with its Character");
-    let arrived = destination.query_rows("SELECT * FROM game_guild_fee_hold");
-    assert_eq!(arrived.len(), 1);
-    assert_eq!(arrived[0]["operation_id"], "5090411");
-    assert_eq!(arrived[0]["copper"], "100000");
-
-    source.assert_call("realm_guild_fee_decide", &["5090411", &payer, EMBLEM_TERMS]);
-    destination.assert_call("debug_spawn_player_entity", &[&PAYER.to_string()]);
-    destination.assert_call("gw_guild_fee_finish", &["5090411", &payer, "false"]);
-    assert_eq!((purse(&destination), holds(&destination)), (150_000, 0));
+    assert_eq!(purse(&shard), 50_000);
 }

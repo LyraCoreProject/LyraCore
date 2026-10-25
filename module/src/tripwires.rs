@@ -24,20 +24,20 @@ pub(crate) mod character_owned_tripwire {
             "retired Account Fence tables that nothing writes",
         ),
         (
-            &[
-                "game_auction",
-                "game_auction_bid_decision",
-                "game_auction_operation_receipt",
-            ],
-            "realm-owned Auction value and protocol state",
+            &["game_auction", "game_auction_operation_receipt"],
+            "realm-owned Auction value and listing receipts",
+        ),
+        (
+            &["game_auction_bid_decision"],
+            "retired Auction decision table that nothing writes",
         ),
         (
             &["game_bot_invite_intent"],
-            "short-lived Group Intent consumed by the Gateway or event GC",
+            "short-lived Group Intent reaped by event GC",
         ),
         (
             &["game_bot_transfer_intent"],
-            "durable source-side Transfer Intent consumed by exact Gateway completion",
+            "durable source-side Transfer Intent consumed by its Transfer completion",
         ),
         (
             &["game_party_command_intent"],
@@ -132,7 +132,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_guild_fee_decision"],
-            "Realm-core guild fee decision kept as the replay answer for its operation id",
+            "retired guild fee table that nothing writes",
         ),
         (
             &["game_loot_roll_vote"],

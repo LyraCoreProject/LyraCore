@@ -56,12 +56,6 @@ fn charter_request(npc_guid: &str, name: &str) -> String {
     format!(r#"{{"charter":{{"npc_guid":{npc_guid},"name":"{name}"}}}}"#)
 }
 
-fn charter_terms(charter_item_guid: &str, name: &str) -> String {
-    format!(
-        r#"{{"charter":{{"charter_item_guid":{charter_item_guid},"name":"{name}","payer_name":"Tester","payer_team":{TEAM_ALLIANCE}}}}}"#
-    )
-}
-
 fn sign(charter_item_guid: &str, name: &str, team: u32) -> String {
     format!(
         r#"{{"signPetition":{{"charter_item_guid":{charter_item_guid},"actor_name":"{name}","actor_team":{team}}}}}"#
@@ -179,33 +173,15 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
     let owner = actor(OWNER);
     let request = charter_request(&npc, "Night Watch");
 
-    shard.assert_call("gw_guild_fee_hold", &["5090501", &owner, &request]);
-    shard.assert_call("gw_guild_fee_hold", &["5090501", &owner, &request]);
+    shard.assert_call("gw_guild_fee_purchase", &[&owner, &request]);
     assert_eq!(purse(&shard), 500);
     let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
-    let hold = &shard.query_rows("SELECT * FROM game_guild_fee_hold")[0];
-    assert_eq!(
-        (hold["kind"].as_str(), hold["copper"].as_str()),
-        ("2", "1000")
-    );
-    assert_eq!(hold["charter_item_guid"], charter);
-    assert_eq!(hold["charter_name"], "Night Watch");
-
-    let terms = charter_terms(&charter, "Night Watch");
-    shard.assert_call("realm_guild_fee_decide", &["5090501", &owner, &terms]);
-    shard.assert_call("realm_guild_fee_decide", &["5090501", &owner, &terms]);
-    shard.assert_call("gw_guild_fee_finish", &["5090501", &owner, "true"]);
-    assert_eq!(purse(&shard), 500);
-    assert_eq!(count(&shard, "game_guild_fee_hold"), 0);
     let petitions = shard.query_rows("SELECT * FROM game_guild_petition");
-    assert_eq!(petitions.len(), 1, "a replayed decision opens one Petition");
+    assert_eq!(petitions.len(), 1, "one purchase opens one Petition");
     let petition = &petitions[0];
     assert_eq!(petition["charter_item_guid"], charter);
     assert_eq!(petition["owner_guid"], OWNER.to_string());
     assert_eq!(petition["name"], "Night Watch");
-    let decision = &shard.query_rows("SELECT * FROM game_guild_fee_decision")[0];
-    assert_eq!(decision["accepted"], "true");
-    assert_eq!(decision["petition_id"], petition["petition_id"]);
 
     let own = sign(&charter, "Tester", TEAM_ALLIANCE);
     refused(
@@ -321,21 +297,20 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_refused_charter_is_refunded_and_a_joining_signer_loses_its_signature() {
+fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     let (shard, npc) = fixture("guild-petition-refusals", 999);
     let owner = actor(OWNER);
     let request = charter_request(&npc, "Night Watch");
 
     refused(
         &shard,
-        "gw_guild_fee_hold",
-        &["5090531", &owner, &request],
+        "gw_guild_fee_purchase",
+        &[&owner, &request],
         "guild:not_enough_money",
     );
     assert_eq!((purse(&shard), charters(&shard).len()), (999, 0));
     shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
 
-    shard.assert_call("gw_guild_fee_hold", &["5090532", &owner, &request]);
     shard.assert_call(
         "realm_guild_op",
         &[
@@ -343,22 +318,18 @@ fn a_refused_charter_is_refunded_and_a_joining_signer_loses_its_signature() {
             &gm_create(GUILDED_SIGNER, "Night Watch"),
         ],
     );
-    let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
-    let terms = charter_terms(&charter, "Night Watch");
-    shard.assert_call("realm_guild_fee_decide", &["5090532", &owner, &terms]);
-    let decision = &shard.query_rows("SELECT * FROM game_guild_fee_decision")[0];
-    assert_eq!(decision["refusal"], "guild:name_exists");
-    shard.assert_call("gw_guild_fee_finish", &["5090532", &owner, "false"]);
-    shard.assert_call("gw_guild_fee_finish", &["5090532", &owner, "false"]);
+    refused(
+        &shard,
+        "gw_guild_fee_purchase",
+        &[&owner, &request],
+        "guild:name_exists",
+    );
     assert_eq!((purse(&shard), charters(&shard).len()), (1_500, 0));
     assert_eq!(count(&shard, "game_guild_petition"), 0);
 
     let owner_request = charter_request(&npc, "Day Watch");
-    shard.assert_call("gw_guild_fee_hold", &["5090533", &owner, &owner_request]);
+    shard.assert_call("gw_guild_fee_purchase", &[&owner, &owner_request]);
     let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
-    let terms = charter_terms(&charter, "Day Watch");
-    shard.assert_call("realm_guild_fee_decide", &["5090533", &owner, &terms]);
-    shard.assert_call("gw_guild_fee_finish", &["5090533", &owner, "true"]);
     assert_eq!(purse(&shard), 500);
     let signers = signer_actors(&shard, &SIGNERS[..2]);
     for signer in &signers {
@@ -379,49 +350,36 @@ fn a_refused_charter_is_refunded_and_a_joining_signer_loses_its_signature() {
     assert_eq!(changed[0]["subject_guid"], SIGNERS[0].to_string());
     assert_eq!(changed[0]["other_guid"], charter);
 
-    shard.assert_sql(&format!(
-        "DELETE FROM game_item_instance WHERE guid = {charter}"
-    ));
     shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
-    let second = buy_attempt_refused(&shard, &npc);
-    assert_eq!(second, "guild:already_has_petition");
-    assert_eq!((purse(&shard), charters(&shard).len()), (1_500, 0));
+    refused(
+        &shard,
+        "gw_guild_fee_purchase",
+        &[&owner, &charter_request(&npc, "Rain Watch")],
+        "guild:already_has_petition",
+    );
+    assert_eq!((purse(&shard), charters(&shard).len()), (1_500, 1));
     let petition_id =
         shard.query_rows("SELECT petition_id FROM game_guild_petition")[0]["petition_id"].clone();
     let close = format!(r#"{{"closePetition":{petition_id}}}"#);
     shard.assert_call("realm_guild_op", &[&owner, &close]);
     assert_eq!(count(&shard, "game_guild_petition"), 0);
     assert_eq!(count(&shard, "game_guild_petition_signature"), 0);
+    shard.assert_sql(&format!(
+        "DELETE FROM game_item_instance WHERE guid = {charter}"
+    ));
 
     let sun_watch = charter_request(&npc, "Sun Watch");
-    shard.assert_call("gw_guild_fee_hold", &["5090535", &owner, &sun_watch]);
-    let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
-    let terms = charter_terms(&charter, "Sun Watch");
-    shard.assert_call("realm_guild_fee_decide", &["5090535", &owner, &terms]);
-    shard.assert_call("gw_guild_fee_finish", &["5090535", &owner, "true"]);
+    shard.assert_call("gw_guild_fee_purchase", &[&owner, &sun_watch]);
+    assert_eq!(charters(&shard).len(), 1);
     shard.assert_call("realm_guild_op", &[&owner, &gm_create(OWNER, "Star Watch")]);
     assert_eq!(count(&shard, "game_guild_petition"), 0);
     shard.assert_call("realm_guild_op", &[&owner, r#"{"leave":{}}"#]);
     shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
     refused(
         &shard,
-        "gw_guild_fee_hold",
-        &["5090536", &owner, &charter_request(&npc, "Moon Watch")],
+        "gw_guild_fee_purchase",
+        &[&owner, &charter_request(&npc, "Rain Watch")],
         "guild:charter_limit",
     );
     assert_eq!((purse(&shard), charters(&shard).len()), (1_500, 1));
-    assert_eq!(count(&shard, "game_guild_fee_hold"), 0);
-}
-
-fn buy_attempt_refused(shard: &Standalone, npc: &str) -> String {
-    let owner = actor(OWNER);
-    let request = charter_request(npc, "Night Watch");
-    shard.assert_call("gw_guild_fee_hold", &["5090534", &owner, &request]);
-    let [charter] = <[String; 1]>::try_from(charters(shard)).expect("one Guild Charter");
-    let terms = charter_terms(&charter, "Night Watch");
-    shard.assert_call("realm_guild_fee_decide", &["5090534", &owner, &terms]);
-    shard.assert_call("gw_guild_fee_finish", &["5090534", &owner, "false"]);
-    shard.query_rows("SELECT refusal FROM game_guild_fee_decision WHERE operation_id = 5090534")[0]
-        ["refusal"]
-        .clone()
 }
