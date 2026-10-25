@@ -11,7 +11,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, NativeWorldConnection};
+use super::{game_native_player, NativeWorldConnection, Rollback};
 use crate::{
     chat::game_character_contact,
     game_world_entity,
@@ -41,9 +41,8 @@ pub(super) fn receive(
     connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::character_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_character(ctx, guid)?;
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
     let mut typed_name = String::new();
@@ -56,7 +55,7 @@ pub(super) fn receive(
                     codec::build_guild_query_response(&guild),
                 ))
             });
-            return super::send(ctx, id, packet, false);
+            return Ok(super::send(ctx, id, packet, false)?);
         }
         C::CMSG_GUILD_ROSTER => {
             if let Some(member) = guild::member(ctx, guid) {
@@ -87,7 +86,7 @@ pub(super) fn receive(
                     (accounts.len() + unknown) as u32,
                 )))
             });
-            return super::send(ctx, id, packet, false);
+            return Ok(super::send(ctx, id, packet, false)?);
         }
         C::CMSG_GUILD_CREATE(request) => (
             create(&actor, actor.gm_level, request.guild_name),
@@ -104,7 +103,7 @@ pub(super) fn receive(
                         .is_some()
                 })
             else {
-                return super::send(
+                return Ok(super::send(
                     ctx,
                     id,
                     command(
@@ -113,7 +112,7 @@ pub(super) fn receive(
                         GuildCommandResult::GuildPlayerNotFoundS,
                     ),
                     false,
-                );
+                )?);
             };
             target_name = target.name.clone();
             let ignores = ctx
@@ -147,7 +146,7 @@ pub(super) fn receive(
         ),
         C::CMSG_GUILD_LEAVE => {
             let Some(guild) = own_guild(ctx, guid) else {
-                return super::send(ctx, id, not_in_guild(), false);
+                return Ok(super::send(ctx, id, not_in_guild(), false)?);
             };
             if guild.leader_guid != guid {
                 success = Some(command(
@@ -248,8 +247,8 @@ pub(super) fn receive(
         let packet = refused(reply, &op, refusal, &typed_name, &target_name);
         let cause = refusal.as_tag().to_string();
         return Err(match packet {
-            Some(packet) => super::rollback_reply(packet, cause),
-            None => super::rollback_silent(cause),
+            Some(packet) => Rollback::reply(packet, cause),
+            None => Rollback::silent(cause),
         });
     }
     if let Some(packet) = success {
@@ -619,7 +618,7 @@ pub(super) fn dot_command(
     ctx: &ReducerContext,
     actor: &crate::WorldEntity,
     text: &str,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let character =
         crate::helpers::character_by_guid(ctx, actor.guid).ok_or("Character is not available")?;
     let result = (|| {
@@ -648,7 +647,7 @@ pub(super) fn dot_command(
         })
     })();
     result.map_err(|cause| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(
                 cause.clone(),
             ))),

@@ -178,17 +178,17 @@ pub fn debug_age_corpse(
 
 #[reducer]
 pub fn debug_repop(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::repop(ctx, character_guid)
+    Ok(crate::actor::repop(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_spirit_healer_res(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::spirit_res(ctx, character_guid)
+    Ok(crate::actor::spirit_res(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::self_resurrect(ctx, character_guid)
+    Ok(crate::actor::self_resurrect(ctx, character_guid)?)
 }
 
 #[reducer]
@@ -197,7 +197,11 @@ pub fn debug_resurrect_response(
     character_guid: u64,
     accept: bool,
 ) -> Result<(), String> {
-    crate::spell::do_resurrect_response(ctx, character_guid, accept)
+    Ok(crate::spell::do_resurrect_response(
+        ctx,
+        character_guid,
+        accept,
+    )?)
 }
 
 #[reducer]

@@ -22,9 +22,12 @@ add it in the owning Module file. Keep presence, ownership, map, Instance and re
 Use indexes and partition-scoped spatial helpers. A request must not supply its own authority.
 
 Preserve atomicity. An expected Refusal must leave durable state unchanged unless the behavior
-explicitly defines a partial result. Use the native rollback/reply helpers when a reply must be
-sent after a transaction rolls back. Inspect neighboring handlers for the required reply shape.
-A transport or decoding failure remains distinct from a gameplay Refusal.
+explicitly defines a partial result. Return the Refusal as a type: `crate::Refusal` when the client
+gets no reply, or the Protocol Family's Refusal enum when the reply depends on the reason. The
+handler returns `Result<(), Rollback>` and maps a family enum to its reply packets with an
+exhaustive `match`. The Native Host sends those packets after the transaction rolls back.
+A transport or decoding failure is a `String` error, which ends the World Session; it remains
+distinct from a gameplay Refusal.
 
 ## 3. Add state only when the behavior needs it
 

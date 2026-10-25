@@ -11,16 +11,16 @@ use crate::spell::spellbook::game_player_spell;
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
-    NativeWorldConnection, NativeWorldState,
+    NativeWorldConnection, NativeWorldState, Rollback,
 };
 
 pub(super) fn login(
     ctx: &ReducerContext,
     connection: NativeWorldConnection,
     body: &[u8],
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     enter(ctx, connection, body).map_err(|cause| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(codec::build_character_login_failed()),
             cause,
         )
@@ -237,7 +237,7 @@ pub(super) fn receive(
     guid: u64,
     opcode: u32,
     body: &[u8],
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let player = ctx
         .db
         .game_native_player()
@@ -246,7 +246,9 @@ pub(super) fn receive(
         .filter(|player| player.character_guid == guid)
         .ok_or("native World Session is no longer current")?;
     if matches!(opcode, 0x00c7 | 0x00dc) {
-        return super::teleport::acknowledge(ctx, connection, player, opcode, body);
+        return Ok(super::teleport::acknowledge(
+            ctx, connection, player, opcode, body,
+        )?);
     }
     if player.teleport.is_some() && !matches!(opcode, 0x01dc | 0x004a | 0x004b) {
         return Ok(());
@@ -269,7 +271,7 @@ pub(super) fn receive(
             .guid()
             .find(guid)
             .ok_or("Character is not in the world")?;
-        return crate::world::apply_movement_update(
+        return Ok(crate::world::apply_movement_update(
             ctx,
             entity,
             opcode as u16,
@@ -279,7 +281,7 @@ pub(super) fn receive(
             info.position.z,
             info.orientation,
             info.timestamp,
-        );
+        )?);
     }
     if opcode == codec::CMSG_AUCTION_LIST_ITEMS_OPCODE {
         return super::auction::browse(ctx, connection.connection_id, guid, body);
@@ -479,9 +481,9 @@ pub(super) fn receive(
             return super::taxi::receive(ctx, connection.connection_id, guid, message);
         }
         ClientOpcodeMessage::CMSG_AREATRIGGER(request) => {
-            super::actor(ctx, guid).map_err(super::rollback_silent)?;
+            super::actor(ctx, guid)?;
             return crate::quest::request_enter_areatrigger(ctx, guid, request.trigger_id)
-                .map_err(super::rollback_silent);
+                .map_err(Rollback::silent);
         }
         message @ (ClientOpcodeMessage::CMSG_LOOT(_)
         | ClientOpcodeMessage::CMSG_LOOT_MONEY
@@ -542,16 +544,11 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_CANCEL_CAST(_)
         | ClientOpcodeMessage::CMSG_CANCEL_CHANNELLING(_) => {
-            return crate::spell::do_cancel_cast(
-                ctx,
-                super::actor(ctx, guid).map_err(super::rollback_silent)?,
-            )
-            .map_err(super::rollback_silent);
+            return Ok(crate::spell::do_cancel_cast(ctx, super::actor(ctx, guid)?)?);
         }
         ClientOpcodeMessage::CMSG_CANCEL_AURA(request) => {
-            super::actor(ctx, guid).map_err(super::rollback_silent)?;
-            return crate::spell::do_cancel_aura(ctx, guid, request.id)
-                .map_err(super::rollback_silent);
+            super::actor(ctx, guid)?;
+            return Ok(crate::spell::do_cancel_aura(ctx, guid, request.id)?);
         }
         ClientOpcodeMessage::CMSG_SET_ACTIVE_MOVER(request) => {
             if request.guid.guid() == guid {
@@ -586,8 +583,7 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_INSPECT(request) => {
             let entity = crate::helpers::live_entity(ctx, guid)?;
-            crate::world::apply_inspect(ctx, entity, request.guid.guid())
-                .map_err(super::rollback_silent)?;
+            crate::world::apply_inspect(ctx, entity, request.guid.guid())?;
             ServerOpcodeMessage::SMSG_INSPECT(codec::build_inspect_response(request.guid.guid()))
         }
         ClientOpcodeMessage::CMSG_ATTACKSWING(request) => {
@@ -596,20 +592,22 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_ATTACKSTOP => return super::combat::stop(ctx, guid),
         ClientOpcodeMessage::CMSG_SETSHEATHED(request) => {
             let entity = crate::helpers::live_entity(ctx, guid)?;
-            return crate::world::apply_set_sheathed(ctx, entity, request.sheathed.as_int())
-                .map_err(super::rollback_silent);
+            return Ok(crate::world::apply_set_sheathed(
+                ctx,
+                entity,
+                request.sheathed.as_int(),
+            )?);
         }
         ClientOpcodeMessage::CMSG_PET_RENAME(request) => {
             return super::pet::rename(ctx, guid, request.pet.guid(), &request.name);
         }
         ClientOpcodeMessage::CMSG_PET_ACTION(request) => {
-            return crate::creatures::apply_pet_command(
+            return Ok(crate::creatures::apply_pet_command(
                 ctx,
                 guid,
                 request.data,
                 request.target.guid(),
-            )
-            .map_err(super::rollback_silent);
+            )?);
         }
         ClientOpcodeMessage::CMSG_FORCE_RUN_SPEED_CHANGE_ACK(_)
         | ClientOpcodeMessage::CMSG_CANCEL_GROWTH_AURA
@@ -677,7 +675,7 @@ pub(super) fn receive(
                     let state =
                         lyracore_protocol::messages::vanilla::UnitStandState::try_from(previous)
                             .unwrap_or_default();
-                    super::rollback_reply(
+                    Rollback::reply(
                         ServerOpcodeMessage::SMSG_STANDSTATE_UPDATE(
                             codec::build_stand_state_update(state),
                         ),
@@ -702,14 +700,14 @@ pub(super) fn receive(
         }
         _ => return Ok(()),
     };
-    super::send(ctx, connection.connection_id, response, false)
+    Ok(super::send(ctx, connection.connection_id, response, false)?)
 }
 
 fn movement_receipt(
     ctx: &ReducerContext,
     guid: u64,
     message: &ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let Some((mover, opcode, mut info)) = codec::acknowledged_move(message) else {
         return Ok(());
     };
@@ -729,7 +727,7 @@ fn movement_receipt(
         return Ok(());
     }
     let bytes = codec::movement_info_to_bytes(&info).map_err(|error| error.to_string())?;
-    crate::world::apply_movement_update(
+    Ok(crate::world::apply_movement_update(
         ctx,
         entity,
         opcode as u16,
@@ -739,5 +737,5 @@ fn movement_receipt(
         info.position.z,
         info.orientation,
         info.timestamp,
-    )
+    )?)
 }

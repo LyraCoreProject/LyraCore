@@ -8,8 +8,10 @@ use lyracore_protocol::{
 use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::{
     skill::game_player_skill, spell::spellbook::game_player_spell, trainer::game_trainer_spell,
+    Refusal,
 };
 
 pub(super) fn list(
@@ -17,7 +19,7 @@ pub(super) fn list(
     connection: ConnectionId,
     guid: u64,
     trainer: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let character = super::actor(ctx, guid)?;
     let trainer = crate::trainer::validate_trainer_interaction(ctx, &character, trainer)?;
     let learned: std::collections::HashSet<_> = ctx
@@ -54,7 +56,7 @@ pub(super) fn list(
         })
         .collect();
     spells.sort_by_key(|row| row.spell_id);
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(codec::build_trainer_list(
@@ -63,7 +65,7 @@ pub(super) fn list(
             "I can teach you a thing or two.",
         ))),
         false,
-    )
+    )?)
 }
 
 pub(super) fn receive(
@@ -71,19 +73,20 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     match message {
         ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
-            let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+            let actor = super::actor(ctx, guid)?;
             crate::talent::do_learn_talent(ctx, guid, actor.owner_identity, c.talent.as_int())
-                .map_err(super::rollback_silent)?;
+                .map_err(Rollback::silent)?;
             Ok(())
         }
         ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
-            list(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(list(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(c) => {
             super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| crate::trainer::apply_trainer_buy(ctx, guid, c.guid.guid(), c.id))
                 .map_err(|reason| {
                     let failure = match TrainerRefusal::parse_tag(&reason) {
@@ -95,24 +98,24 @@ pub(super) fn receive(
                         }
                         _ => TrainingFailureReason::Unavailable,
                     };
-                    super::rollback_reply(
+                    Rollback::reply(
                         ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(Box::new(
                             codec::build_trainer_buy_failed(c.guid.guid(), c.id, failure),
                         )),
                         reason,
                     )
                 })?;
-            super::send(
+            Ok(super::send(
                 ctx,
                 connection,
                 ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(Box::new(
                     codec::build_trainer_buy_succeeded(c.guid.guid(), c.id),
                 )),
                 false,
-            )
+            )?)
         }
         ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(c) => {
-            let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+            let actor = super::actor(ctx, guid)?;
             crate::action_bar::apply_set_action_button(
                 ctx,
                 actor,
@@ -120,7 +123,7 @@ pub(super) fn receive(
                 u32::from(c.action) | (u32::from(c.misc) << 16),
                 c.action_type,
             )
-            .map_err(super::rollback_silent)
+            .map_err(Rollback::silent)
         }
         _ => Err("invalid trainer opcode".into()),
     }

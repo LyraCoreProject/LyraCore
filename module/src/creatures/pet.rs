@@ -116,7 +116,7 @@ pub(crate) fn apply_pet_command(
     owner_guid: u64,
     data: u32,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     pet_of(ctx, owner_guid).ok_or_else(|| "no pet".to_string())?;
     let flag = ((data >> 24) & 0xFF) as u8;
     let id = (data & 0x00FF_FFFF) as u8;
@@ -127,11 +127,11 @@ pub(crate) fn apply_pet_command(
             CMD_FOLLOW => set_pet_command(ctx, owner_guid, CMD_FOLLOW, react, 0),
             CMD_ATTACK => set_pet_command(ctx, owner_guid, CMD_ATTACK, react, target_guid),
             CMD_DISMISS => despawn_pets(ctx, owner_guid),
-            other => return Err(format!("unknown pet command id {other}")),
+            other => return Err(format!("unknown pet command id {other}").into()),
         },
         ACT_REACTION => {
             if id > REACT_AGGRESSIVE {
-                return Err(format!("unknown pet react id {id}"));
+                return Err(format!("unknown pet react id {id}").into());
             }
             set_pet_command(ctx, owner_guid, cmd, id, cmd_target);
         }
@@ -148,7 +148,7 @@ pub fn debug_pet_command(
     data: u32,
     target_guid: u64,
 ) -> Result<(), String> {
-    apply_pet_command(ctx, owner_guid, data, target_guid)
+    Ok(apply_pet_command(ctx, owner_guid, data, target_guid)?)
 }
 
 pub(crate) fn pet_of(ctx: &ReducerContext, owner_guid: u64) -> Option<WorldEntity> {

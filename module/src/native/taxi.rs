@@ -9,7 +9,9 @@ use lyracore_protocol::{
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::taxi::{game_taxi_passenger_spline, TaxiPassengerSpline};
+use crate::Refusal;
 
 fn spline_packet(row: &TaxiPassengerSpline) -> Option<Packet> {
     if row.points.is_empty() || !row.points.len().is_multiple_of(3) {
@@ -61,7 +63,7 @@ pub(super) fn open(
     connection: ConnectionId,
     guid: u64,
     npc: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     super::actor(ctx, guid)?;
     let reply = crate::taxi::open_taxi(ctx, guid, npc, 0);
     if reply.accepted {
@@ -86,10 +88,10 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     match message {
         ClientOpcodeMessage::CMSG_TAXINODE_STATUS_QUERY(c) => {
-            super::actor(ctx, guid).map_err(super::rollback_silent)?;
+            super::actor(ctx, guid)?;
             let reply = crate::taxi::taxi_node_status(ctx, guid, c.guid.guid(), 0);
             if reply.accepted {
                 super::send(
@@ -107,12 +109,10 @@ pub(super) fn receive(
             Ok(())
         }
         ClientOpcodeMessage::CMSG_TAXIQUERYAVAILABLENODES(c) => {
-            open(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(open(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_ACTIVATETAXI(c) => {
-            if crate::helpers::acting_entity_by_guid(ctx, guid).is_none() {
-                return Err(super::rollback_silent("Character is not available".into()));
-            }
+            super::available_entity(ctx, guid)?;
             let reply = crate::taxi::activate_taxi(
                 ctx,
                 guid,

@@ -12,15 +12,15 @@ use lyracore_protocol::{
 use lyracore_shared::duel::{completion_kind, event_kind};
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{duel::DuelEvent, gameobject::game_gameobject_template};
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     match message {
         ClientOpcodeMessage::CMSG_DUEL_ACCEPTED(request) => {
             crate::duel::accept_duel(ctx, guid, request.guid.guid());

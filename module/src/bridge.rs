@@ -266,7 +266,7 @@ pub(crate) fn apply_client_command(
     character_guid: u64,
     cmd: &str,
     payload: &str,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     match cmd {
         "ping" => send(ctx, character_guid, "pong", payload),
         other => {
@@ -322,7 +322,7 @@ pub(crate) fn apply_client_command(
                     if crate::native::is_player(ctx, character_guid) {
                         let outcome = apply_local_party_command(ctx, &inserted, handler);
                         if outcome == CommandOutcome::WaitingForCapacity {
-                            return Err(outcome.tag().to_string());
+                            return Err(outcome.tag().into());
                         }
                         complete_party_command(ctx, inserted, outcome);
                     } else {

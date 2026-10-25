@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::group::{self, event_kind, GroupRefusal, RosterPayload};
 use spacetimedb::{log, ConnectionId, ReducerContext, SpacetimeType};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection};
+use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{
     game_world_entity,
     group::{GroupAction, Plane},
@@ -62,7 +62,7 @@ impl CommandReply {
         )))
     }
 
-    fn refused(&self, cause: String) -> String {
+    fn refused(&self, cause: String) -> Rollback {
         let result = match GroupRefusal::parse_tag(&cause) {
             Some(GroupRefusal::AlreadyInGroup) => PartyResult::AlreadyInGroup,
             Some(GroupRefusal::GroupFull) => PartyResult::GroupFull,
@@ -73,8 +73,8 @@ impl CommandReply {
             _ => PartyResult::BadPlayerName,
         };
         match self.packet(result) {
-            Some(packet) => super::rollback_reply(packet, cause),
-            None => super::rollback_silent(cause),
+            Some(packet) => Rollback::reply(packet, cause),
+            None => Rollback::silent(cause),
         }
     }
 }
@@ -84,9 +84,8 @@ pub(super) fn receive(
     mut connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::acting_entity_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
     use ClientOpcodeMessage as C;
     use GroupAction as A;
     let (action, reply) = match message {

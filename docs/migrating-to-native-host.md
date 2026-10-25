@@ -102,15 +102,16 @@ sends replies with `super::send(ctx, connection_id, message, false)`. In `module
 `CMSG_SPIRIT_HEALER_ACTIVATE` applies a Gate and calls the core function. `confirm_spirit_healer`
 in the same file sends a reply. `native/gossip.rs` calls it.
 
-**Refusal.** Return `Err(super::rollback_silent(cause))` to roll back and send nothing. Return
-`Err(super::rollback_reply(message, cause))` to roll back and send one packet. The Native Host
-delivers that packet after the rollback. Gate helpers usually return a plain `String` error, and
-the handler converts it at its boundary with `.map_err(super::rollback_silent)`, as
-`native/death.rs` does.
+**Refusal.** A request handler returns `Result<(), Rollback>`. `Rollback::Refusal` rolls back the
+transaction, and the Native Host then sends its reply packets. The list of packets can be empty.
+`Rollback::Failure` ends the World Session with a Transport Loss. A plain `String` error converts to
+`Failure`. A core operation that refuses returns a typed Refusal: the family's enum when the
+client reply depends on the reason, or `crate::Refusal` when the client gets no reply. The `?`
+operator converts `crate::Refusal` to a silent `Rollback::Refusal`. The handler maps a family enum
+to its reply packets with an exhaustive `match`, as `native/social.rs` does. Only
+`native_world_receive` writes the `native_reply:` envelope.
 
-Do not let any other `Err` leave the handler for a Refusal. The Native Host treats it as a failure
-and ends the World Session with a Transport Loss. Do not send a packet with `send` and then return
-`Err`, because the rollback deletes the packet.
+Do not send a packet with `send` and then return `Err`, because the rollback deletes the packet.
 
 **Relay.** The Gateway subscribed to a Relay table and encoded each new row. Now the Module code that
 inserts the row also calls the native Relay function. `module/src/breath_relay.rs` inserts the row,

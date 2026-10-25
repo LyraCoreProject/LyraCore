@@ -383,17 +383,37 @@ fn next_name_timestamp(previous: u32, now: u32) -> u32 {
     now.max(previous.saturating_add(1))
 }
 
+pub(crate) enum PetRenameRefusal {
+    InvalidName,
+    Refused(crate::Refusal),
+}
+
+impl From<String> for PetRenameRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+impl std::fmt::Display for PetRenameRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidName => PET_NAME_INVALID.fmt(f),
+            Self::Refused(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
 pub(crate) fn rename_hunter_pet(
     ctx: &ReducerContext,
     owner_guid: u64,
     pet_guid: u64,
     name: &str,
-) -> Result<(), String> {
+) -> Result<(), PetRenameRefusal> {
     let live = super::pet_of(ctx, owner_guid)
         .filter(|pet| pet.guid == pet_guid)
         .ok_or_else(|| format!("pet rename: {owner_guid} has no live pet {pet_guid}"))?;
     let PetKind::Hunter { pet_id } = live_pet_kind(ctx, live.guid) else {
-        return Err(format!("pet rename: {pet_guid} is not a Hunter pet"));
+        return Err(format!("pet rename: {pet_guid} is not a Hunter pet").into());
     };
     let mut pet = ctx
         .db
@@ -403,12 +423,10 @@ pub(crate) fn rename_hunter_pet(
         .filter(|pet| pet.owner_guid == owner_guid)
         .ok_or_else(|| format!("pet rename: {owner_guid} does not own Hunter pet {pet_id}"))?;
     if !pet.rename_allowed {
-        return Err(format!(
-            "pet rename: Hunter pet {pet_id} was already renamed"
-        ));
+        return Err(format!("pet rename: Hunter pet {pet_id} was already renamed").into());
     }
     if !is_valid_pet_name(name) {
-        return Err(PET_NAME_INVALID.to_string());
+        return Err(PetRenameRefusal::InvalidName);
     }
 
     pet.name = name.to_string();
@@ -431,7 +449,7 @@ pub fn gw_pet_rename(
     let owner_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     crate::helpers::acting_entity_by_guid(ctx, owner_guid)
         .ok_or_else(|| "mover not in world".to_string())?;
-    rename_hunter_pet(ctx, owner_guid, pet_guid, &name)
+    rename_hunter_pet(ctx, owner_guid, pet_guid, &name).map_err(|refusal| refusal.to_string())
 }
 
 #[cfg(test)]

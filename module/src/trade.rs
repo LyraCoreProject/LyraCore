@@ -163,7 +163,7 @@ pub(crate) fn apply_initiate_trade(
     ctx: &ReducerContext,
     actor: WorldEntity,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if target_guid == actor.guid {
         push_trade_event(ctx, actor.guid, event_kind::NO_TARGET, target_guid);
         return Ok(());
@@ -320,18 +320,18 @@ pub(crate) fn apply_set_trade_item(
     actor: WorldEntity,
     trade_slot: u8,
     inv_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let Some(session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
     if trade_slot > WILL_NOT_BE_TRADED_SLOT {
-        return Err(format!("bad trade slot {trade_slot}"));
+        return Err(format!("bad trade slot {trade_slot}").into());
     }
     if inv_slot < lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 {
-        return Err("equipped items cannot be traded".to_string());
+        return Err("equipped items cannot be traded".into());
     }
     if inv_slot >= lyracore_shared::constants::starter_item::BACKPACK_SLOT_0 + 16 {
-        return Err("bag items cannot be traded yet".to_string());
+        return Err("bag items cannot be traded yet".into());
     }
     let inst = crate::items::item_in_slot(ctx, actor.guid, inv_slot).ok_or("no item in slot")?;
     if inst.soulbound {
@@ -368,12 +368,12 @@ pub(crate) fn apply_clear_trade_item(
     ctx: &ReducerContext,
     actor: WorldEntity,
     trade_slot: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let Some(session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
     if trade_slot > WILL_NOT_BE_TRADED_SLOT {
-        return Err(format!("bad trade slot {trade_slot}"));
+        return Err(format!("bad trade slot {trade_slot}").into());
     }
     let slots = ctx.db.game_trade_slot();
     let mut removed = false;
@@ -396,7 +396,7 @@ pub(crate) fn apply_set_trade_gold(
     ctx: &ReducerContext,
     actor: WorldEntity,
     copper: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
@@ -419,7 +419,10 @@ pub(crate) fn apply_set_trade_gold(
     Ok(())
 }
 
-pub(crate) fn apply_begin_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_begin_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     let sessions = ctx.db.game_trade_session();
     let Some(mut session) = sessions
         .by_target()
@@ -438,7 +441,10 @@ pub(crate) fn apply_begin_trade(ctx: &ReducerContext, actor: WorldEntity) -> Res
     Ok(())
 }
 
-pub(crate) fn apply_cancel_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_cancel_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     cancel_trade_for(ctx, actor.guid);
     Ok(())
 }
@@ -449,12 +455,18 @@ pub(crate) fn session_is_stale(last_action_micros: i64, now_micros: i64) -> bool
     now_micros - last_action_micros > TRADE_IDLE_TTL_MICROS
 }
 
-pub(crate) fn apply_busy_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_busy_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     decline_proposal(ctx, actor.guid, event_kind::BUSY);
     Ok(())
 }
 
-pub(crate) fn apply_ignore_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_ignore_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     decline_proposal(ctx, actor.guid, event_kind::IGNORE_YOU);
     Ok(())
 }
@@ -523,7 +535,10 @@ pub(crate) fn mutation_clears_accepts(initiator_accepted: bool, target_accepted:
     initiator_accepted || target_accepted
 }
 
-pub(crate) fn apply_accept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_accept_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };
@@ -534,7 +549,7 @@ pub(crate) fn apply_accept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Re
         session.target_accepted = true;
     }
     if session.initiator_accepted && session.target_accepted {
-        return run_trade_commit(ctx, session, &actor);
+        return Ok(run_trade_commit(ctx, session, &actor)?);
     }
     let partner = if i_am_initiator {
         session.target_guid
@@ -547,7 +562,10 @@ pub(crate) fn apply_accept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Re
     Ok(())
 }
 
-pub(crate) fn apply_unaccept_trade(ctx: &ReducerContext, actor: WorldEntity) -> Result<(), String> {
+pub(crate) fn apply_unaccept_trade(
+    ctx: &ReducerContext,
+    actor: WorldEntity,
+) -> Result<(), crate::Refusal> {
     let Some(mut session) = session_involving(ctx, actor.guid).filter(|s| s.open) else {
         return Ok(());
     };

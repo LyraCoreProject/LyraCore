@@ -254,7 +254,7 @@ pub fn gw_set_sheathed(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let actor = actor(ctx, actor_guid)?;
-    crate::world::apply_set_sheathed(ctx, actor, state)
+    Ok(crate::world::apply_set_sheathed(ctx, actor, state)?)
 }
 
 #[reducer]
@@ -432,7 +432,7 @@ pub fn gw_respond_resurrect(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::respond_resurrect(ctx, actor_guid, accept)
+    Ok(crate::actor::respond_resurrect(ctx, actor_guid, accept)?)
 }
 
 #[reducer]
@@ -443,7 +443,7 @@ pub fn gw_repop(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::repop(ctx, actor_guid)
+    Ok(crate::actor::repop(ctx, actor_guid)?)
 }
 
 #[reducer]
@@ -454,7 +454,7 @@ pub fn gw_self_resurrect(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::self_resurrect(ctx, actor_guid)
+    Ok(crate::actor::self_resurrect(ctx, actor_guid)?)
 }
 
 #[reducer]
@@ -465,7 +465,7 @@ pub fn gw_spirit_res(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::spirit_res(ctx, actor_guid)
+    Ok(crate::actor::spirit_res(ctx, actor_guid)?)
 }
 
 #[reducer]
@@ -517,7 +517,13 @@ pub fn gw_send_emote(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = actor(ctx, actor_guid)?;
-    crate::chat::apply_send_emote(ctx, sender, text_emote, emote_anim, target_guid)
+    Ok(crate::chat::apply_send_emote(
+        ctx,
+        sender,
+        text_emote,
+        emote_anim,
+        target_guid,
+    )?)
 }
 
 #[reducer]
@@ -580,7 +586,7 @@ pub fn gw_set_away(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let entity =
         acting_entity_by_guid(ctx, actor_guid).ok_or_else(|| "mover not in world".to_string())?;
-    crate::away::apply_set_away(ctx, entity, kind, message)
+    Ok(crate::away::apply_set_away(ctx, entity, kind, message)?)
 }
 
 fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
@@ -688,7 +694,11 @@ pub fn gw_initiate_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_initiate_trade(ctx, acting, target_guid)
+    Ok(crate::trade::apply_initiate_trade(
+        ctx,
+        acting,
+        target_guid,
+    )?)
 }
 
 #[reducer]
@@ -699,7 +709,7 @@ pub fn gw_begin_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_begin_trade(ctx, acting)
+    Ok(crate::trade::apply_begin_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -710,7 +720,7 @@ pub fn gw_cancel_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_cancel_trade(ctx, acting)
+    Ok(crate::trade::apply_cancel_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -723,7 +733,9 @@ pub fn gw_set_trade_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_set_trade_item(ctx, acting, trade_slot, inv_slot)
+    Ok(crate::trade::apply_set_trade_item(
+        ctx, acting, trade_slot, inv_slot,
+    )?)
 }
 
 #[reducer]
@@ -735,7 +747,9 @@ pub fn gw_clear_trade_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_clear_trade_item(ctx, acting, trade_slot)
+    Ok(crate::trade::apply_clear_trade_item(
+        ctx, acting, trade_slot,
+    )?)
 }
 
 #[reducer]
@@ -747,7 +761,7 @@ pub fn gw_set_trade_gold(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_set_trade_gold(ctx, acting, copper)
+    Ok(crate::trade::apply_set_trade_gold(ctx, acting, copper)?)
 }
 
 #[reducer]
@@ -758,7 +772,7 @@ pub fn gw_accept_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_accept_trade(ctx, acting)
+    Ok(crate::trade::apply_accept_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -769,7 +783,7 @@ pub fn gw_unaccept_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_unaccept_trade(ctx, acting)
+    Ok(crate::trade::apply_unaccept_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -780,7 +794,7 @@ pub fn gw_busy_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_busy_trade(ctx, acting)
+    Ok(crate::trade::apply_busy_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -791,7 +805,7 @@ pub fn gw_ignore_trade(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let acting = actor(ctx, actor_guid)?;
-    crate::trade::apply_ignore_trade(ctx, acting)
+    Ok(crate::trade::apply_ignore_trade(ctx, acting)?)
 }
 
 #[reducer]
@@ -945,7 +959,12 @@ pub fn gw_buyback_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::items::apply_buyback_item(ctx, actor_guid, vendor_guid, slot)
+    Ok(crate::items::apply_buyback_item(
+        ctx,
+        actor_guid,
+        vendor_guid,
+        slot,
+    )?)
 }
 
 #[reducer]
@@ -1088,7 +1107,7 @@ pub fn gw_cancel_cast(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
-    crate::spell::do_cancel_cast(ctx, caster)
+    Ok(crate::spell::do_cancel_cast(ctx, caster)?)
 }
 
 #[reducer]
@@ -1100,7 +1119,7 @@ pub fn gw_cancel_aura(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::spell::do_cancel_aura(ctx, actor_guid, spell_id)
+    Ok(crate::spell::do_cancel_aura(ctx, actor_guid, spell_id)?)
 }
 
 #[reducer]
@@ -1136,7 +1155,7 @@ pub fn gw_inspect(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let inspector = actor(ctx, actor_guid)?;
-    crate::world::apply_inspect(ctx, inspector, target_guid)
+    Ok(crate::world::apply_inspect(ctx, inspector, target_guid)?)
 }
 
 #[reducer]
@@ -1235,7 +1254,7 @@ pub fn gw_reclaim_corpse(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let player = actor(ctx, actor_guid)?;
-    crate::corpse::apply_reclaim_corpse(ctx, player)
+    Ok(crate::corpse::apply_reclaim_corpse(ctx, player)?)
 }
 
 #[reducer]
@@ -1260,7 +1279,12 @@ pub fn gw_pet_command(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::creatures::apply_pet_command(ctx, actor_guid, data, target_guid)
+    Ok(crate::creatures::apply_pet_command(
+        ctx,
+        actor_guid,
+        data,
+        target_guid,
+    )?)
 }
 
 #[reducer]
@@ -1273,7 +1297,9 @@ pub fn gw_client_command(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::bridge::apply_client_command(ctx, actor_guid, &cmd, &payload)
+    Ok(crate::bridge::apply_client_command(
+        ctx, actor_guid, &cmd, &payload,
+    )?)
 }
 
 #[reducer]

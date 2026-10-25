@@ -11,6 +11,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::meeting_stone::{self, game_meeting_stone_seeker, SeekerFacts, StoneOpError};
 
 pub(super) fn receive(
@@ -18,12 +19,12 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     let response = match message {
         ClientOpcodeMessage::CMSG_MEETINGSTONE_JOIN(request) => {
             let area = meeting_stone::admit(ctx, guid, request.guid.guid())
-                .map_err(|refusal| super::rollback_silent(refusal.as_tag().into()))?;
+                .map_err(|refusal| Rollback::silent(refusal.as_tag()))?;
             if Area::try_from(area).is_err() {
                 return Ok(());
             }
@@ -48,23 +49,23 @@ pub(super) fn receive(
                 .collect::<Vec<_>>();
             meeting_stone::join(ctx, guid, area, &facts).map_err(|error| match error {
                 StoneOpError::Refused(refusal) => {
-                    let cause = refusal.as_tag().into();
+                    let cause = refusal.as_tag();
                     match join_failure_for(refusal).and_then(codec::build_meetingstone_joinfailed) {
-                        Some(packet) => super::rollback_reply(
+                        Some(packet) => Rollback::reply(
                             ServerOpcodeMessage::SMSG_MEETINGSTONE_JOINFAILED(packet),
                             cause,
                         ),
-                        None => super::rollback_silent(cause),
+                        None => Rollback::silent(cause),
                     }
                 }
-                StoneOpError::Invalid(cause) => cause,
+                StoneOpError::Invalid(cause) => Rollback::from(cause),
             })?;
             return Ok(());
         }
         ClientOpcodeMessage::CMSG_MEETINGSTONE_LEAVE => {
             meeting_stone::leave(ctx, guid).map_err(|error| match error {
-                StoneOpError::Refused(refusal) => super::rollback_silent(refusal.as_tag().into()),
-                StoneOpError::Invalid(cause) => cause,
+                StoneOpError::Refused(refusal) => Rollback::silent(refusal.as_tag()),
+                StoneOpError::Invalid(cause) => Rollback::from(cause),
             })?;
             return Ok(());
         }
@@ -88,5 +89,5 @@ pub(super) fn receive(
         }
         _ => return Err("opcode is not a meeting stone request".into()),
     };
-    super::send(ctx, connection, response, false)
+    Ok(super::send(ctx, connection, response, false)?)
 }

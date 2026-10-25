@@ -1425,7 +1425,13 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay emote subject {guid} is missing"))?;
-            crate::chat::apply_send_emote(ctx, source, 0, emote_id, target_guid)
+            Ok(crate::chat::apply_send_emote(
+                ctx,
+                source,
+                0,
+                emote_id,
+                target_guid,
+            )?)
         }
         RelayInstruction::MoveTo(movement) => match *movement {
             RelayMoveTo::Point(RelayMovePoint {

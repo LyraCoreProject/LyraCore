@@ -191,9 +191,9 @@ pub(crate) fn apply_send_emote(
     text_emote: u32,
     emote_anim: u32,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if sender.dead {
-        return Err("dead players cannot emote".to_string());
+        return Err("dead players cannot emote".into());
     }
     let (map_id, instance_id, grid_x, grid_y) = crate::helpers::entity_addr(&sender);
     let event = ctx.db.game_emote_event_live().insert(EmoteEvent {

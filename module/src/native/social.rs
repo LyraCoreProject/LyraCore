@@ -10,7 +10,7 @@ use lyracore_protocol::{
 use lyracore_shared::{chat::chat_tag_for, faction::same_team, social::ContactRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection};
+use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{
     chat::game_character_contact, game_area, game_world_entity, guild::game_guild, Character,
 };
@@ -20,9 +20,8 @@ pub(super) fn receive(
     mut connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::acting_entity_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
     let id = connection.connection_id;
     match message {
         ClientOpcodeMessage::CMSG_WHO(request) => {
@@ -87,7 +86,7 @@ fn lists(
     ctx: &ReducerContext,
     connection: ConnectionId,
     actor: &crate::WorldEntity,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let mut friends = Vec::new();
     let mut ignored = Vec::new();
     for contact in ctx
@@ -122,14 +121,14 @@ fn lists(
         ))),
         false,
     )?;
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_IGNORE_LIST(Box::new(codec::build_ignore_list_response(
             &ignored,
         ))),
         false,
-    )
+    )?)
 }
 
 fn result(
@@ -143,9 +142,9 @@ fn result(
     super::send_raw(ctx, connection, opcode, body, false);
 }
 
-fn refused(cause: String, guid: u64, is_ignore: bool) -> String {
+fn refused(cause: String, guid: u64, is_ignore: bool) -> Rollback {
     let Some(refusal) = ContactRefusal::parse_tag(&cause) else {
-        return super::rollback_silent(cause);
+        return Rollback::silent(cause);
     };
     let result = match (refusal, is_ignore) {
         (ContactRefusal::AddSelf, false) => FriendResult::SelfX,
@@ -161,7 +160,7 @@ fn refused(cause: String, guid: u64, is_ignore: bool) -> String {
         (ContactRefusal::Enemy, _) => FriendResult::Enemy,
     };
     let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
-    super::rollback_packets(
+    Rollback::replies(
         vec![lyracore_protocol::world::Packet { opcode, body }],
         cause,
     )
@@ -173,7 +172,7 @@ fn add(
     actor: crate::WorldEntity,
     name: &str,
     is_ignore: bool,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let Some(target) = crate::helpers::character_by_name(ctx, name) else {
         result(
             ctx,
@@ -188,7 +187,7 @@ fn add(
         );
         return Ok(());
     };
-    crate::taxi::reject_action_while_in_flight(ctx, actor.guid).map_err(super::rollback_silent)?;
+    crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
     crate::chat::add_contact(ctx, actor, target.guid, is_ignore, Some(target.race))
         .map_err(|cause| refused(cause, target.guid, is_ignore))?;
     let online = (!is_ignore).then(|| online(ctx, &target)).flatten();
@@ -209,8 +208,8 @@ fn remove(
     actor: crate::WorldEntity,
     target: u64,
     is_ignore: bool,
-) -> Result<(), String> {
-    crate::taxi::reject_action_while_in_flight(ctx, actor.guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
     crate::chat::remove_contact(ctx, actor, target, is_ignore)
         .map_err(|cause| refused(cause, target, is_ignore))?;
     result(

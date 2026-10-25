@@ -6,7 +6,7 @@ use lyracore_protocol::{
 use lyracore_shared::item::ItemRefusal;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::items::item_in_slot;
 use crate::{game_item_template, ItemInstance};
 
@@ -244,7 +244,7 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let slots = match &message {
         ClientOpcodeMessage::CMSG_DESTROYITEM(c) => [codec::inventory_slot(c.bag, c.slot), None],
         ClientOpcodeMessage::CMSG_SPLIT_ITEM(c) => [
@@ -367,11 +367,11 @@ pub(super) fn receive(
         }
     })();
     result.map_err(|reason| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
                 codec::build_inventory_refusal(reason, item_guids[0], item_guids[1]),
             )),
-            reason.as_tag().into(),
+            reason.as_tag(),
         )
     })
 }

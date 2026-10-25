@@ -17,7 +17,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, NativeWorldConnection};
+use super::{game_native_player, NativeWorldConnection, Rollback};
 use crate::{
     game_world_entity,
     guild::{
@@ -37,9 +37,8 @@ pub(super) fn receive(
     connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::character_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_character(ctx, guid)?;
     let id = connection.connection_id;
     use ClientOpcodeMessage as C;
     let run = |op, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>| {
@@ -236,13 +235,13 @@ pub(super) fn receive(
     Ok(())
 }
 
-fn refused(cause: String, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>) -> String {
+fn refused(cause: String, reply: &dyn Fn(GuildRefusal) -> Option<ServerOpcodeMessage>) -> Rollback {
     let Some(refusal) = GuildRefusal::parse_tag(&cause) else {
-        return cause;
+        return Rollback::from(cause);
     };
     match reply(refusal) {
-        Some(packet) => super::rollback_reply(packet, cause),
-        None => super::rollback_silent(cause),
+        Some(packet) => Rollback::reply(packet, cause),
+        None => Rollback::silent(cause),
     }
 }
 

@@ -9,7 +9,7 @@ use lyracore_shared::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
     channel::{ChannelRequest, ChatChannelNoticeEvent},
     realm_chat::SpeakerFacts,
@@ -20,9 +20,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::acting_entity_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
     let (op, channel_name, password, target_name) = match message {
         ClientOpcodeMessage::CMSG_JOIN_CHANNEL(c) => {
             (channel_op::JOIN, c.channel_name, c.channel_password, None)
@@ -145,7 +144,7 @@ pub(super) fn receive(
                 if targeted { target_guid } else { guid },
                 target_name,
             ),
-            None => super::rollback_silent(cause),
+            None => Rollback::silent(cause),
         }
     })
 }
@@ -155,7 +154,7 @@ fn refusal_reply(
     channel_name: String,
     subject_guid: u64,
     text: String,
-) -> String {
+) -> Rollback {
     let (opcode, body) = codec::notify(&ChannelNoticeView {
         notice: refusal.notice(),
         channel_name,
@@ -163,9 +162,9 @@ fn refusal_reply(
         text,
         ..Default::default()
     });
-    super::rollback_packets(
+    Rollback::replies(
         vec![lyracore_protocol::world::Packet { opcode, body }],
-        refusal.as_tag().into(),
+        refusal.as_tag(),
     )
 }
 
@@ -175,7 +174,7 @@ fn roster(
     actor: &crate::WorldEntity,
     channel_name: String,
     owner_only: bool,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let (channel, _) =
         crate::channel::membership(ctx, team_for_race(actor.race()), &channel_name, actor.guid)
             .map_err(|refusal| {
@@ -201,7 +200,7 @@ fn roster(
             .into_iter()
             .map(|member| (member.character_guid, member.member_flags))
             .collect::<Vec<_>>();
-        super::send(
+        Ok(super::send(
             ctx,
             connection,
             ServerOpcodeMessage::SMSG_CHANNEL_LIST(Box::new(codec::build_channel_list(
@@ -210,7 +209,7 @@ fn roster(
                 &members,
             ))),
             false,
-        )
+        )?)
     }
 }
 

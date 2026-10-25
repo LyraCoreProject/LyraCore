@@ -8,7 +8,7 @@ use lyracore_protocol::{
 use lyracore_shared::{faction::same_team, mail as rules};
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
     game_gameobject, game_gameobject_template, game_item_instance, game_item_template,
     mail::{self as core, game_mail},
@@ -20,17 +20,17 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    let actor = super::actor(ctx, guid)?;
     let mailbox = |target| at_mailbox(ctx, &actor, target);
     let run = |result: Result<(), String>, reply: &dyn Fn(bool) -> SMSG_SEND_MAIL_RESULT| {
-        result.map_err(|cause| super::rollback_reply(response(reply(false)), cause))?;
-        Ok::<_, String>(response(reply(true)))
+        result.map_err(|cause| Rollback::reply(response(reply(false)), cause))?;
+        Ok::<_, Rollback>(response(reply(true)))
     };
     use ClientOpcodeMessage as C;
     let packet = match message {
         C::CMSG_GET_MAIL_LIST(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid()).map_err(Rollback::silent)?;
             let mails = ctx
                 .db
                 .game_mail()
@@ -58,7 +58,7 @@ pub(super) fn receive(
         C::CMSG_MAIL_MARK_AS_READ(request) => {
             mailbox(request.mailbox.guid())
                 .and_then(|()| core::apply_mark_read(ctx, guid, request.mail_id.into()))
-                .map_err(super::rollback_silent)?;
+                .map_err(Rollback::silent)?;
             return Ok(());
         }
         C::CMSG_MAIL_DELETE(request) => run(
@@ -99,7 +99,7 @@ pub(super) fn receive(
                     } else {
                         codec::MailTakeItemError::Other
                     };
-                    super::rollback_reply(
+                    Rollback::reply(
                         response(codec::build_mail_take_item_result(
                             request.mail_id,
                             Err(refusal),
@@ -113,17 +113,17 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_SEND_MAIL(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid()).map_err(Rollback::silent)?;
             send_letter(ctx, guid, *request).map_err(|refusal| {
-                super::rollback_reply(
+                Rollback::reply(
                     response(codec::build_mail_send_result(refusal)),
-                    "mail send refused".into(),
+                    "mail send refused",
                 )
             })?;
             response(codec::build_mail_send_result(MailResult::Ok))
         }
         C::CMSG_MAIL_CREATE_TEXT_ITEM(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid()).map_err(Rollback::silent)?;
             crate::mail_text::apply_copy_letter(ctx, guid, request.mail_id.into()).map_err(
                 |cause| {
                     let refusal = if cause.contains(rules::INVENTORY_FULL) {
@@ -131,7 +131,7 @@ pub(super) fn receive(
                     } else {
                         codec::MailMadePermanentError::Other
                     };
-                    super::rollback_reply(
+                    Rollback::reply(
                         response(codec::build_mail_made_permanent_result(
                             request.mail_id,
                             Err(refusal),
@@ -147,7 +147,7 @@ pub(super) fn receive(
         }
         _ => return Err("opcode is not a mail request".into()),
     };
-    super::send(ctx, connection, packet, false)
+    Ok(super::send(ctx, connection, packet, false)?)
 }
 
 fn response(packet: SMSG_SEND_MAIL_RESULT) -> ServerOpcodeMessage {

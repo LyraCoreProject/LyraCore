@@ -1,7 +1,7 @@
 use lyracore_protocol::codec::addon;
 use spacetimedb::{ReducerContext, SpacetimeType};
 
-use super::{game_native_player, game_native_world_connection, NativeWorldConnection};
+use super::{game_native_player, game_native_world_connection, NativeWorldConnection, Rollback};
 use crate::{bridge::AddonMessage, game_world_entity};
 
 #[derive(SpacetimeType)]
@@ -35,8 +35,8 @@ pub(super) fn receive(
     mut connection: NativeWorldConnection,
     guid: u64,
     text: &str,
-) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     let admitted = connection
         .addon_limit
@@ -48,8 +48,7 @@ pub(super) fn receive(
         .update(connection);
     if admitted {
         if let Some((command, payload)) = addon::parse_bridge_envelope(text) {
-            crate::bridge::apply_client_command(ctx, guid, &command, &payload)
-                .map_err(super::rollback_silent)?;
+            crate::bridge::apply_client_command(ctx, guid, &command, &payload)?;
         }
     }
     Ok(())

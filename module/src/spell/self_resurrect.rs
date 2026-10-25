@@ -16,14 +16,17 @@ pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid:
     SelfResurrectOption::set(ctx, character_guid, chosen);
 }
 
-pub(crate) fn do_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+pub(crate) fn do_self_resurrect(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Result<(), crate::Refusal> {
     let entities = ctx.db.game_world_entity();
     let mut character = entities
         .guid()
         .find(character_guid)
         .ok_or_else(|| "caller not in world".to_string())?;
     if !character.dead {
-        return Err("caller is not dead".to_string());
+        return Err("caller is not dead".into());
     }
     let option = ctx
         .db

@@ -15,7 +15,7 @@ use lyracore_protocol::{
 use lyracore_shared::auction::{auction_notice, bid_increment, market_of, AuctionRefusal};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
     auction::{self as core, game_auction, native::BidRefusal, AuctionNotice},
     game_item_template, game_player_spell, game_world_entity,
@@ -32,15 +32,15 @@ pub(super) fn browse(
     connection: ConnectionId,
     guid: u64,
     body: &[u8],
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let request = codec::decode_auction_browse(body).map_err(|cause| cause.to_string())?;
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+    super::actor(ctx, guid)?;
     let (rows, total) = core::auction_house_for_interaction(ctx, guid, request.auctioneer_guid)
         .map_or_else(
             || (Vec::new(), 0),
             |house| page(ctx, guid, house.id, Query::Browse(request)),
         );
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(codec::build_auction_list_result(
@@ -49,7 +49,7 @@ pub(super) fn browse(
             ctx.timestamp.to_micros_since_unix_epoch(),
         ))),
         false,
-    )
+    )?)
 }
 
 pub(super) fn receive(
@@ -57,8 +57,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     use ClientOpcodeMessage as C;
     let packet = match message {
         C::MSG_AUCTION_HELLO(request) => {
@@ -116,14 +116,14 @@ pub(super) fn receive(
                 },
             )
             .map_err(|refusal| {
-                super::rollback_reply(
+                Rollback::reply(
                     command(
                         0,
                         Action::Started {
                             result2: result_two(refusal),
                         },
                     ),
-                    refusal.as_tag().into(),
+                    refusal.as_tag(),
                 )
             })?;
             command(
@@ -160,7 +160,7 @@ pub(super) fn receive(
                         new_bid: current_bid,
                     },
                 };
-                super::rollback_reply(
+                Rollback::reply(
                     command(request.auction_id, Action::BidPlaced { result }),
                     format!("auction bid: {refusal:?}"),
                 )
@@ -187,16 +187,16 @@ pub(super) fn receive(
             core::native::cancel(ctx, guid, request.auctioneer.guid(), request.auction_id)
                 .map_err(|refusal| {
                     if refusal == AuctionRefusal::NotEnoughMoney {
-                        super::rollback_silent(refusal.as_tag().into())
+                        Rollback::silent(refusal.as_tag())
                     } else {
-                        super::rollback_reply(
+                        Rollback::reply(
                             command(
                                 0,
                                 Action::Removed {
                                     result2: ResultTwo::ErrDatabase,
                                 },
                             ),
-                            refusal.as_tag().into(),
+                            refusal.as_tag(),
                         )
                     }
                 })?;
@@ -209,7 +209,7 @@ pub(super) fn receive(
         }
         _ => return Err("opcode is not an auction request".into()),
     };
-    super::send(ctx, connection, packet, false)
+    Ok(super::send(ctx, connection, packet, false)?)
 }
 
 fn command(auction_id: u32, action: Action) -> ServerOpcodeMessage {

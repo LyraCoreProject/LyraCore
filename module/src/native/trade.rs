@@ -1,15 +1,15 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ClientOpcodeMessage};
 use spacetimedb::ReducerContext;
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::trade::{self, TradeEvent};
 
 pub(super) fn receive(
     ctx: &ReducerContext,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    let actor = super::actor(ctx, guid)?;
     use ClientOpcodeMessage as C;
     match message {
         C::CMSG_INITIATE_TRADE(request) => {
@@ -32,8 +32,8 @@ pub(super) fn receive(
         C::CMSG_BUSY_TRADE => trade::apply_busy_trade(ctx, actor),
         C::CMSG_IGNORE_TRADE => trade::apply_ignore_trade(ctx, actor),
         _ => return Err("opcode is not a trade request".into()),
-    }
-    .map_err(super::rollback_silent)
+    }?;
+    Ok(())
 }
 
 pub(crate) fn event(ctx: &ReducerContext, event: &TradeEvent) {

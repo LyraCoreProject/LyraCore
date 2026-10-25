@@ -12,6 +12,7 @@ use lyracore_shared::spell::taxonomy::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::combat::game_melee_attack;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
 
@@ -63,9 +64,11 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     request: &CMSG_CAST_SPELL,
-) -> Result<(), String> {
-    let caster = super::actor(ctx, guid)
-        .map_err(|cause| super::rollback_packets(vec![failure(request.spell, &cause)], cause))?;
+) -> Result<(), Rollback> {
+    let caster = super::actor(ctx, guid).map_err(|cause| {
+        let cause = String::from(cause);
+        Rollback::replies(vec![failure(request.spell, &cause)], cause)
+    })?;
     let spell = request.spell;
     let header = ctx.db.game_spell().spell_id().find(spell);
     let effects: Vec<_> = ctx
@@ -181,7 +184,7 @@ pub(super) fn receive(
             return Ok(());
         }
         prelude.push(response);
-        return Err(super::rollback_packets(prelude, cause));
+        return Err(Rollback::replies(prelude, cause));
     }
     match route {
         Route::Ordinary => {}

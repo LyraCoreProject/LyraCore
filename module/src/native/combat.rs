@@ -4,11 +4,11 @@ use lyracore_protocol::{
 };
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::combat::{game_melee_attack, CombatEvent, MeleeAttack};
 
-pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     let already_armed = ctx
         .db
         .game_melee_attack()
@@ -17,11 +17,11 @@ pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(),
         .is_some_and(|row| row.target_guid == target && row.ranged_spell_id == 0);
     crate::actor::attack(ctx, guid, target).map_err(|cause| {
         if cause.contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD) {
-            super::rollback_reply(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET, cause)
+            Rollback::reply(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET, cause)
         } else if cause.contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
-            super::rollback_reply(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK, cause)
+            Rollback::reply(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK, cause)
         } else {
-            super::rollback_silent(cause)
+            Rollback::silent(cause)
         }
     })?;
     if already_armed {
@@ -37,8 +37,8 @@ pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(),
     Ok(())
 }
 
-pub(super) fn stop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
-    super::actor(ctx, guid).map_err(super::rollback_silent)?;
+pub(super) fn stop(ctx: &ReducerContext, guid: u64) -> Result<(), Rollback> {
+    super::actor(ctx, guid)?;
     if ctx
         .db
         .game_melee_attack()
@@ -48,7 +48,7 @@ pub(super) fn stop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
     {
         return Ok(());
     }
-    crate::actor::stop_attack(ctx, guid)
+    Ok(crate::actor::stop_attack(ctx, guid)?)
 }
 
 fn emit(ctx: &ReducerContext, source: u64, message: ServerOpcodeMessage, source_only: bool) {

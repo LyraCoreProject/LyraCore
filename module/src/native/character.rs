@@ -2,13 +2,14 @@ use lyracore_protocol::codec;
 use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, CMSG_CHAR_CREATE};
 use spacetimedb::ReducerContext;
 
+use super::Rollback;
 use crate::guild::game_guild;
 
 pub(super) fn create(
     ctx: &ReducerContext,
     account_id: u64,
     request: CMSG_CHAR_CREATE,
-) -> Result<ServerOpcodeMessage, String> {
+) -> Result<ServerOpcodeMessage, Rollback> {
     let appearance = crate::auth::Appearance {
         gender: request.gender.as_int(),
         skin: request.skin_color,
@@ -31,7 +32,7 @@ pub(super) fn create(
             "SERVER_LIMIT" => codec::CharCreateOutcome::ServerLimit,
             _ => codec::CharCreateOutcome::Failed,
         };
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(outcome)),
             cause,
         )
@@ -45,7 +46,7 @@ pub(super) fn delete(
     ctx: &ReducerContext,
     account_id: u64,
     guid: u64,
-) -> Result<ServerOpcodeMessage, String> {
+) -> Result<ServerOpcodeMessage, Rollback> {
     let apply = || {
         if ctx
             .db
@@ -60,7 +61,7 @@ pub(super) fn delete(
         crate::auth::apply_delete_character(ctx, account_id, guid)
     };
     apply().map_err(|cause| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_CHAR_DELETE(codec::build_char_delete_response(
                 codec::CharDeleteOutcome::Failed,
             )),

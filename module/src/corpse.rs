@@ -127,12 +127,12 @@ impl Corpse {
 pub(crate) fn apply_reclaim_corpse(
     ctx: &ReducerContext,
     mut player: crate::WorldEntity,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     use lyracore_shared::constants::player_flags;
     let corpses = ctx.db.game_corpse();
 
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
-        return Err("caller is not a ghost".to_string());
+        return Err("caller is not a ghost".into());
     }
     // The request GUID is advisory; reclaim always selects the Actor's own corpse.
     let corpse_guid = corpse_guid_for(player.guid);
@@ -141,13 +141,13 @@ pub(crate) fn apply_reclaim_corpse(
         .find(corpse_guid)
         .ok_or_else(|| "no such corpse".to_string())?;
     if corpse.map_id != player.map_id {
-        return Err("corpse on another map".to_string());
+        return Err("corpse on another map".into());
     }
     if corpse.instance_id != player.instance_id {
-        return Err("corpse in another instance".to_string());
+        return Err("corpse in another instance".into());
     }
     if corpse.is_bones {
-        return Err("corpse has decayed to bones".to_string());
+        return Err("corpse has decayed to bones".into());
     }
     let (dx, dy, dz) = (
         corpse.x - player.x,
@@ -155,12 +155,12 @@ pub(crate) fn apply_reclaim_corpse(
         corpse.z - player.z,
     );
     if dx * dx + dy * dy + dz * dz > RECLAIM_RADIUS_SQ {
-        return Err("too far from corpse".to_string());
+        return Err("too far from corpse".into());
     }
     let elapsed =
         ctx.timestamp.to_micros_since_unix_epoch() - corpse.created_at.to_micros_since_unix_epoch();
     if elapsed < corpse.reclaim_delay_micros {
-        return Err("corpse reclaim delay not elapsed".to_string());
+        return Err("corpse reclaim delay not elapsed".into());
     }
 
     player.health = (player.max_health / 2).max(1);

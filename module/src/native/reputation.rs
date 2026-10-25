@@ -1,7 +1,7 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
 use spacetimedb::ReducerContext;
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::reputation::PlayerReputation;
 
 pub(crate) fn changed(
@@ -46,7 +46,7 @@ pub(super) fn receive(
     guid: u64,
     opcode: u32,
     body: &[u8],
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let result = match opcode {
         0x0125 => {
             if body.len() != 5 || body[4] > 1 {
@@ -54,9 +54,11 @@ pub(super) fn receive(
             }
             let index =
                 u32::from_le_bytes(body[..4].try_into().expect("checked faction index length"));
-            super::actor(ctx, guid).and_then(|actor| {
-                crate::reputation::apply_set_faction_at_war(ctx, actor, index, body[4] != 0)
-            })
+            super::actor(ctx, guid)
+                .map_err(String::from)
+                .and_then(|actor| {
+                    crate::reputation::apply_set_faction_at_war(ctx, actor, index, body[4] != 0)
+                })
         }
         0x0318 => {
             let index = i32::from_le_bytes(
@@ -64,12 +66,13 @@ pub(super) fn receive(
                     .map_err(|_| "invalid watched faction request")?,
             );
             super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| crate::reputation::apply_set_watched_faction(ctx, guid, index))
         }
         _ => return Err("invalid reputation opcode".into()),
     };
     result.map_err(|reason| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(
                 reason.clone(),
             ))),

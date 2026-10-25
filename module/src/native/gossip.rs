@@ -11,8 +11,8 @@ use lyracore_protocol::{
 use lyracore_shared::constants::{gossip_option, npc_flags, player_flags};
 use spacetimedb::{ConnectionId, ReducerContext, SpacetimeType};
 
-use super::game_native_player;
-use crate::{game_gossip_menu, game_gossip_menu_profile_option, game_gossip_option};
+use super::{game_native_player, Rollback};
+use crate::{game_gossip_menu, game_gossip_menu_profile_option, game_gossip_option, Refusal};
 
 #[derive(SpacetimeType)]
 pub struct NativeGossipMenu {
@@ -41,7 +41,7 @@ fn hello(
     connection: ConnectionId,
     guid: u64,
     npc: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let character = super::actor(ctx, guid)?;
     let (_, npc) = if character.player_flags & player_flags::GHOST != 0 {
         crate::ghost::spirit_healer_gate(ctx, guid, npc)?
@@ -143,14 +143,14 @@ fn hello(
     });
     ctx.db.game_native_player().connection_id().update(player);
     let quests = codec::quest_menu_items(&super::quest::evaluations(ctx, npc.guid, guid));
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_GOSSIP_MESSAGE(Box::new(codec::build_gossip_message(
             npc.guid, text, quests, &options,
         ))),
         false,
-    )
+    )?)
 }
 
 fn select(
@@ -183,10 +183,10 @@ fn select(
     super::actor(ctx, guid)?;
     crate::world::apply_gossip_select(ctx, guid, npc, index, row_id, source, action)?;
     match action {
-        gossip_option::VENDOR => super::economy::vendor(ctx, connection, guid, npc),
-        gossip_option::TRAINER => super::trainer::list(ctx, connection, guid, npc),
-        gossip_option::BANKER => super::economy::bank(ctx, connection, guid, npc),
-        gossip_option::TAXI => super::taxi::open(ctx, connection, guid, npc),
+        gossip_option::VENDOR => Ok(super::economy::vendor(ctx, connection, guid, npc)?),
+        gossip_option::TRAINER => Ok(super::trainer::list(ctx, connection, guid, npc)?),
+        gossip_option::BANKER => Ok(super::economy::bank(ctx, connection, guid, npc)?),
+        gossip_option::TAXI => Ok(super::taxi::open(ctx, connection, guid, npc)?),
         gossip_option::INNKEEPER => {
             complete(ctx, connection)?;
             super::send_raw(ctx, connection, 0x02eb, npc.to_le_bytes().to_vec(), false);
@@ -233,21 +233,16 @@ fn select(
     }
 }
 
-fn interaction_refusal(reason: String) -> String {
-    let messages = [
-        ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(
-            reason.clone(),
-        ))),
-        ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE,
-    ];
-    match messages
-        .into_iter()
-        .map(lyracore_protocol::world::encode)
-        .collect()
-    {
-        Ok(packets) => super::rollback_packets(packets, reason),
-        Err(error) => error.to_string(),
-    }
+fn interaction_refusal(reason: String) -> Rollback {
+    Rollback::messages(
+        [
+            ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(codec::build_gm_system_message(
+                reason.clone(),
+            ))),
+            ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE,
+        ],
+        reason,
+    )
 }
 
 pub(super) fn receive(
@@ -255,18 +250,19 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     match message {
         ClientOpcodeMessage::CMSG_GOSSIP_HELLO(c) => {
-            hello(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(hello(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_GOSSIP_SELECT_OPTION(c) => {
             select(ctx, connection, guid, c.guid.guid(), c.gossip_list_id).map_err(|reason| {
-                super::rollback_reply(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE, reason)
+                Rollback::reply(ServerOpcodeMessage::SMSG_GOSSIP_COMPLETE, reason)
             })
         }
         ClientOpcodeMessage::CMSG_BINDER_ACTIVATE(c) => {
             super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| crate::items::innkeeper_access_gate(ctx, guid, c.guid.guid()))
                 .map_err(interaction_refusal)?;
             crate::world::set_home(ctx, guid);
@@ -274,13 +270,14 @@ pub(super) fn receive(
                 let (opcode, body) = codec::build_player_bound(c.guid.guid(), character.zone_id);
                 super::send_raw(ctx, connection, opcode, body, false);
             }
-            complete(ctx, connection)
+            Ok(complete(ctx, connection)?)
         }
         ClientOpcodeMessage::MSG_TALENT_WIPE_CONFIRM(c) => {
             super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| crate::talent::do_reset_talents(ctx, guid, c.wiping_npc.guid()))
                 .map_err(interaction_refusal)?;
-            complete(ctx, connection)
+            Ok(complete(ctx, connection)?)
         }
         _ => Err("invalid gossip opcode".into()),
     }

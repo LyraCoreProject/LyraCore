@@ -6,7 +6,7 @@ use spacetimedb::{
     TimeDuration,
 };
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::game_hunter_pet_protocol;
 use crate::{aoi::game_aoi_grant, game_creature_template, game_world_entity, spell::game_aura};
 
@@ -92,7 +92,7 @@ pub(super) fn stop(ctx: &ReducerContext, connection_id: ConnectionId) {
         .delete(connection_id);
 }
 
-fn mates(ctx: &ReducerContext, guid: u64) -> Result<Vec<u64>, String> {
+fn mates(ctx: &ReducerContext, guid: u64) -> Result<Vec<u64>, crate::Refusal> {
     let Some((member, group)) = crate::group::checked_group_membership(ctx, guid)
         .map_err(|cause| format!("member stats for {guid}: {cause:?}"))?
     else {
@@ -232,11 +232,8 @@ pub(super) fn request(
     connection: ConnectionId,
     guid: u64,
     target: u64,
-) -> Result<(), String> {
-    let packet = if mates(ctx, guid)
-        .map_err(super::rollback_silent)?
-        .contains(&target)
-    {
+) -> Result<(), Rollback> {
+    let packet = if mates(ctx, guid)?.contains(&target) {
         match presence(ctx, target) {
             Presence::Live(entity) => {
                 let stats = entity.stats();
