@@ -46,6 +46,86 @@ impl std::fmt::Display for CastRefusal {
     }
 }
 
+/// What the casting client's cast result reports; Package API kinds stay in [`CastRefusalKind`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum CastRefusalReason {
+    Unreported,
+    NoPower,
+    NotReady,
+    OutOfRange,
+    TooClose,
+    NotInFront,
+    NoLineOfSight,
+    NoAmmo,
+    WrongStance,
+    NotBehind,
+    NotStealthed,
+    SchoolLocked,
+    ReactWindowClosed,
+    Stunned,
+    LevelTooLow,
+    CasterDead,
+    TargetDead,
+    BadTargets,
+    MountWhileDead,
+    MountInCombat,
+    MountIndoors,
+    MountInDeepWater,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) struct CastGateRefusal {
+    pub(crate) reason: CastRefusalReason,
+    pub(crate) refusal: CastRefusal,
+}
+
+impl CastGateRefusal {
+    pub(crate) fn new(
+        kind: CastRefusalKind,
+        reason: CastRefusalReason,
+        message: impl Into<String>,
+    ) -> Self {
+        Self {
+            reason,
+            refusal: CastRefusal::new(kind, message.into()),
+        }
+    }
+
+    pub(crate) fn other(reason: CastRefusalReason, message: impl Into<String>) -> Self {
+        Self::new(CastRefusalKind::Other, reason, message)
+    }
+}
+
+impl From<String> for CastGateRefusal {
+    fn from(message: String) -> Self {
+        Self::other(CastRefusalReason::Unreported, message)
+    }
+}
+
+impl From<crate::Refusal> for CastGateRefusal {
+    fn from(refusal: crate::Refusal) -> Self {
+        String::from(refusal).into()
+    }
+}
+
+impl From<CastGateRefusal> for CastRefusal {
+    fn from(refusal: CastGateRefusal) -> Self {
+        refusal.refusal
+    }
+}
+
+impl From<CastGateRefusal> for String {
+    fn from(refusal: CastGateRefusal) -> Self {
+        refusal.refusal.message
+    }
+}
+
+impl std::fmt::Display for CastGateRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.refusal.fmt(f)
+    }
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
 pub struct CastHandle {
     pub scheduled_id: u64,
@@ -117,6 +197,7 @@ pub(crate) fn cast_readiness(
         target_guid,
         CreatureSpellCasterAdmission::Living,
     )
+    .map_err(Into::into)
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
@@ -141,6 +222,7 @@ pub(crate) fn request_cast(
         None,
         CreatureSpellCasterAdmission::Living,
     )
+    .map_err(Into::into)
 }
 
 pub(crate) fn pending_cast(ctx: &ReducerContext, caster_guid: u64) -> Option<CastHandle> {

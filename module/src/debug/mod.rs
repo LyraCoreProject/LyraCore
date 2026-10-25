@@ -831,7 +831,7 @@ pub fn debug_begin_cast(
     target_guid: u64,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, caster_guid)?;
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         caster_guid,
         spell_id,
@@ -839,7 +839,7 @@ pub fn debug_begin_cast(
         target_guid,
         false,
         None,
-    )
+    )?)
 }
 
 #[reducer]
@@ -858,7 +858,7 @@ pub fn debug_cast_spell_at(
     } else {
         target_guid
     };
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         caster_guid,
         spell_id,
@@ -866,7 +866,7 @@ pub fn debug_cast_spell_at(
         target,
         false,
         Some((x, y, z)),
-    )
+    )?)
 }
 
 #[reducer]
@@ -1252,12 +1252,12 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
 
 #[reducer]
 pub fn debug_fish(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::loot::apply_fish(ctx, character_guid)
+    Ok(crate::loot::apply_fish(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_disenchant(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    crate::loot::apply_disenchant(ctx, character_guid, slot)
+    Ok(crate::loot::apply_disenchant(ctx, character_guid, slot)?)
 }
 
 #[reducer]
@@ -1267,7 +1267,12 @@ pub fn debug_enchant_item(
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
-    crate::loot::apply_enchant_item(ctx, character_guid, target_slot, enchant_id)
+    Ok(crate::loot::apply_enchant_item(
+        ctx,
+        character_guid,
+        target_slot,
+        enchant_id,
+    )?)
 }
 
 #[reducer]
@@ -1283,7 +1288,12 @@ pub fn debug_ranged_attack_nearest(
     })
     .ok_or_else(|| "no live creature near attacker".to_string())?
     .guid;
-    crate::actor::ranged_attack(ctx, attacker_guid, target_guid, spell_id)
+    Ok(crate::actor::ranged_attack(
+        ctx,
+        attacker_guid,
+        target_guid,
+        spell_id,
+    )?)
 }
 
 #[reducer]
@@ -1582,7 +1592,7 @@ pub fn debug_cast_spell(
     } else {
         target_guid
     };
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         character_guid,
         spell_id,
@@ -1590,7 +1600,7 @@ pub fn debug_cast_spell(
         target,
         false,
         None,
-    )
+    )?)
 }
 
 #[reducer]

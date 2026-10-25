@@ -2002,42 +2002,11 @@ fn gossip_menu_options_appends_only_the_missing_flag_lines() {
 }
 
 #[test]
-fn cast_result_failed_body_and_reason_map() {
+fn cast_result_failed_body_carries_the_spell_status_and_reason() {
     assert_eq!(
         build_cast_result_failed(100, 0x4D),
         vec![100, 0, 0, 0, 0x02, 0x4D]
     );
-    assert_eq!(
-        cast_failure_reason_for("not enough power: have 0, need 150"),
-        0x4D
-    );
-    assert_eq!(
-        cast_failure_reason_for("spell not ready (global cooldown)"),
-        0x3C
-    );
-    assert_eq!(
-        cast_failure_reason_for("target out of range (32.0 yd > 30 + 0.0 yd leeway)"),
-        0x59
-    );
-    assert_eq!(
-        cast_failure_reason_for("spell 53 must be cast from BEHIND the target (99)"),
-        0x33
-    );
-    assert_eq!(
-        cast_failure_reason_for("spell 1784 requires stealth (caster 9 is not stealthed)"),
-        0x57
-    );
-    assert_eq!(
-        cast_failure_reason_for("spell 100 cannot be cast in the caster's current stance (1)"),
-        0x3D
-    );
-    assert_eq!(
-        cast_failure_reason_for(
-            "spell 7384 requires an Overpower window (the target must have dodged your swing)"
-        ),
-        0x12
-    );
-    assert_eq!(cast_failure_reason_for("some future gate wording"), 0x17);
 }
 
 #[test]

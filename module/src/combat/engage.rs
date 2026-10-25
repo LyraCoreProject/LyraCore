@@ -5,6 +5,7 @@ use crate::{game_faction_template, game_world_entity, WorldEntity};
 use super::*;
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use crate::creatures::tick::game_creature_spline;
+use crate::spell::{CastGateRefusal, CastRefusalReason};
 
 pub(crate) const COMBAT_DROP_MS: u64 = 6000;
 
@@ -406,6 +407,7 @@ impl From<AttackRefusal> for ActionRefusal {
     }
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn validate_attack_target(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -616,25 +618,37 @@ pub(crate) fn apply_start_ranged_attack(
     attacker_guid: u64,
     target_guid: u64,
     spell_id: u32,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
+    use CastRefusalReason as Reason;
     let attacker = crate::helpers::live_entity(ctx, attacker_guid)
         .map_err(|_| "attacker not in world".to_string())?;
     if attacker.dead {
-        return Err("dead attackers cannot attack".to_string());
+        return Err("dead attackers cannot attack".to_string().into());
     }
     if crate::spell::is_action_blocked(ctx, attacker.guid) {
-        return Err(format!(
-            "attacker {} cannot act (stun/poly/fear)",
-            attacker.guid
+        return Err(CastGateRefusal::other(
+            Reason::Stunned,
+            format!("attacker {} cannot act (stun/poly/fear)", attacker.guid),
         ));
     }
     if target_guid == attacker.guid {
-        return Err("cannot attack self".to_string());
+        return Err("cannot attack self".to_string().into());
     }
 
     let ranged_weapon = equipped_ranged_weapon(ctx, attacker.guid)
         .ok_or_else(|| "no ranged weapon equipped".to_string())?;
-    let target = validate_attack_target(ctx, &attacker, target_guid)?;
+    let target = attack_target(ctx, &attacker, target_guid).map_err(|refusal| {
+        let reason = match &refusal {
+            AttackRefusal::DeadTarget => Reason::TargetDead,
+            AttackRefusal::Refused(refusal)
+                if refusal.kind == ActionRefusalKind::OtherPartition =>
+            {
+                Reason::OutOfRange
+            }
+            AttackRefusal::FriendlyTarget | AttackRefusal::Refused(_) => Reason::Unreported,
+        };
+        CastGateRefusal::other(reason, ActionRefusal::from(refusal).detail)
+    })?;
     {
         let (dx, dy, dz) = (
             target.x - attacker.x,
@@ -643,10 +657,16 @@ pub(crate) fn apply_start_ranged_attack(
         );
         let dist_sq = dx * dx + dy * dy + dz * dz;
         if dist_sq > RANGED_RANGE_SQ {
-            return Err("ranged target out of range".to_string());
+            return Err(CastGateRefusal::other(
+                Reason::OutOfRange,
+                "ranged target out of range",
+            ));
         }
         if dist_sq < MELEE_RANGE_SQ {
-            return Err("ranged target too close".to_string());
+            return Err(CastGateRefusal::other(
+                Reason::TooClose,
+                "ranged target too close",
+            ));
         }
         if !crate::spell::is_facing(
             attacker.x,
@@ -655,7 +675,10 @@ pub(crate) fn apply_start_ranged_attack(
             target.x,
             target.y,
         ) {
-            return Err("target must be in front of you".to_string());
+            return Err(CastGateRefusal::other(
+                Reason::NotInFront,
+                "target must be in front of you",
+            ));
         }
         if !crate::nav::has_los(
             ctx,
@@ -664,14 +687,20 @@ pub(crate) fn apply_start_ranged_attack(
             (attacker.x, attacker.y, attacker.z),
             (target.x, target.y, target.z),
         ) {
-            return Err("target not in line of sight".to_string());
+            return Err(CastGateRefusal::other(
+                Reason::NoLineOfSight,
+                "target not in line of sight",
+            ));
         }
 
         use crate::items::weapon_subclass as ws;
         if matches!(ranged_weapon.3, ws::BOW | ws::GUN | ws::CROSSBOW)
             && find_ammo(ctx, attacker.guid).is_none()
         {
-            return Err("no ammo for ranged weapon".to_string());
+            return Err(CastGateRefusal::other(
+                Reason::NoAmmo,
+                "no ammo for ranged weapon",
+            ));
         }
     }
     crate::mount::dismount(ctx, attacker.guid);

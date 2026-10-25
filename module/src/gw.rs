@@ -170,7 +170,15 @@ pub fn gw_cast_spell_at(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
-    crate::spell::apply_cast_spell_at(ctx, &caster, spell_id, target_guid, x, y, z)
+    Ok(crate::spell::apply_cast_spell_at(
+        ctx,
+        &caster,
+        spell_id,
+        target_guid,
+        x,
+        y,
+        z,
+    )?)
 }
 
 fn loot_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
@@ -232,7 +240,12 @@ pub fn gw_ranged_attack(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::ranged_attack(ctx, actor_guid, target_guid, spell_id)
+    Ok(crate::actor::ranged_attack(
+        ctx,
+        actor_guid,
+        target_guid,
+        spell_id,
+    )?)
 }
 
 #[reducer]
@@ -338,7 +351,9 @@ pub fn gw_cast_item_target(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::cast_item_target(ctx, actor_guid, spell_id, slot)
+    Ok(crate::actor::cast_item_target(
+        ctx, actor_guid, spell_id, slot,
+    )?)
 }
 
 #[reducer]
@@ -1024,7 +1039,7 @@ pub fn gw_disenchant(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::professions::apply_disenchant(ctx, actor_guid, slot)
+    Ok(crate::professions::apply_disenchant(ctx, actor_guid, slot)?)
 }
 
 #[reducer]
@@ -1037,7 +1052,12 @@ pub fn gw_enchant_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::professions::apply_enchant_item(ctx, actor_guid, target_slot, enchant_id)
+    Ok(crate::professions::apply_enchant_item(
+        ctx,
+        actor_guid,
+        target_slot,
+        enchant_id,
+    )?)
 }
 
 #[reducer]
@@ -1048,7 +1068,7 @@ pub fn gw_fish(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::professions::apply_fish(ctx, actor_guid)
+    Ok(crate::professions::apply_fish(ctx, actor_guid)?)
 }
 
 #[reducer]
@@ -1131,7 +1151,12 @@ pub fn gw_cast_spell(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let caster = actor(ctx, actor_guid)?;
-    crate::spell::do_cast_spell(ctx, caster, spell_id, target_guid)
+    Ok(crate::spell::do_cast_spell(
+        ctx,
+        caster,
+        spell_id,
+        target_guid,
+    )?)
 }
 
 #[reducer]
@@ -1229,7 +1254,9 @@ pub fn gw_pick_lock(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::gameobject::apply_pick_lock(ctx, actor_guid, go_guid)
+    Ok(crate::gameobject::apply_pick_lock(
+        ctx, actor_guid, go_guid,
+    )?)
 }
 
 #[reducer]

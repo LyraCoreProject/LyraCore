@@ -42,7 +42,7 @@ pub(crate) fn resolve_cast_at_typed(
     is_completion: bool,
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -642,7 +642,7 @@ fn check_cast_gates(
     target_guid: u64,
     spell_id: u32,
     level: u8,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let allow_dead_creature = dead_callback_cast_admitted(ctx, caster.guid, spell_id);
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
@@ -659,21 +659,22 @@ fn check_cast_gates_with_admission(
     spell_id: u32,
     level: u8,
     allow_dead_creature: bool,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
     check_global_cooldown(ctx, caster.guid)?;
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
 }
 
-fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastRefusal> {
+fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
     if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
         if is_on_cooldown(
             ctx.timestamp.to_micros_since_unix_epoch(),
             cd.ready_at.to_micros_since_unix_epoch(),
         ) {
-            return Err(CastRefusal::new(
+            return Err(CastGateRefusal::new(
                 CastRefusalKind::Cooldown,
+                CastRefusalReason::NotReady,
                 "spell not ready (global cooldown)".to_string(),
             ));
         }
@@ -707,19 +708,21 @@ fn check_cast_gate_prefix(
     effects: &[SpellEffect],
     target_guid: u64,
     allow_dead_creature: bool,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let caster_guid = caster.guid;
 
     if is_action_blocked(ctx, caster_guid) {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::CannotAct,
+            CastRefusalReason::Stunned,
             format!("caster {caster_guid} cannot act (stun/poly/fear)"),
         ));
     }
 
     if !caster_life_allows(caster.is_player(), caster.dead, allow_dead_creature) {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::Dead,
+            CastRefusalReason::CasterDead,
             format!("caster {caster_guid} is dead"),
         ));
     }
@@ -757,7 +760,7 @@ fn check_targeted_los(
     caster: &WorldEntity,
     effects: &[SpellEffect],
     target_guid: u64,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     if !targeted_los_applies(caster.is_player(), caster.guid, target_guid, effects) {
         return Ok(());
     }
@@ -774,8 +777,9 @@ fn check_targeted_los(
         (caster.x, caster.y, caster.z),
         (target.x, target.y, target.z),
     ) {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::NoLineOfSight,
+            CastRefusalReason::NoLineOfSight,
             format!("target {target_guid} is not in line of sight"),
         ));
     }
@@ -788,7 +792,7 @@ pub(crate) fn check_cast_start_gates(
     spell_id: u32,
     target_guid: u64,
     admission: CreatureSpellCasterAdmission,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -820,7 +824,7 @@ pub(crate) fn check_pending_cast_los(
     caster_guid: u64,
     spell_id: u32,
     target_guid: u64,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let caster = crate::helpers::live_entity(ctx, caster_guid)?;
     let effects: Vec<SpellEffect> = ctx
         .db
@@ -839,12 +843,13 @@ fn check_distract_destination(
     caster: &WorldEntity,
     dest: Option<(f32, f32, f32)>,
     range_yd: u32,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let caster_at = (caster.x, caster.y, caster.z);
     let point = check_ground_destination(caster_at, dest, range_yd)?;
     if !crate::nav::has_los(ctx, caster.map_id, caster.instance_id, caster_at, point) {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::NoLineOfSight,
+            CastRefusalReason::NoLineOfSight,
             "ground point is not in line of sight".to_string(),
         ));
     }
@@ -855,10 +860,11 @@ fn check_ground_destination(
     caster_at: (f32, f32, f32),
     dest: Option<(f32, f32, f32)>,
     range_yd: u32,
-) -> Result<(f32, f32, f32), CastRefusal> {
+) -> Result<(f32, f32, f32), CastGateRefusal> {
     let Some((x, y, z)) = dest else {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::BadTargets,
+            CastRefusalReason::BadTargets,
             "spell can only target a ground point".to_string(),
         ));
     };
@@ -867,10 +873,10 @@ fn check_ground_destination(
     Ok((x, y, z))
 }
 
-fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastRefusal> {
+fn check_cast_range(what: &str, dist: f32, range_yd: u32) -> Result<(), CastGateRefusal> {
     if dist > range_yd as f32 + CAST_RANGE_LEEWAY_YD {
-        return Err(CastRefusal::new(
-            CastRefusalKind::OutOfRange,
+        return Err(CastGateRefusal::new(
+            CastRefusalKind::OutOfRange, CastRefusalReason::OutOfRange,
             format!(
                 "{what} out of range ({dist:.1} yd > {range_yd} + {CAST_RANGE_LEEWAY_YD:.1} yd leeway)"
             ),
@@ -889,7 +895,7 @@ fn check_cast_gate_suffix(
     target_guid: u64,
     spell_id: u32,
     level: u8,
-) -> Result<(), CastRefusal> {
+) -> Result<(), CastGateRefusal> {
     let caster_guid = caster.guid;
     for effect in effects
         .iter()
@@ -899,17 +905,23 @@ fn check_cast_gate_suffix(
     }
 
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
-        return Err(CastRefusal::from(format!(
-            "spell {spell_id} requires level {} (caster is level {level})",
-            hdr.spell_level
-        )));
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::LevelTooLow,
+            format!(
+                "spell {spell_id} requires level {} (caster is level {level})",
+                hdr.spell_level
+            ),
+        ));
     }
 
     if !stance_allows(hdr.stances, caster.stance) {
-        return Err(CastRefusal::from(format!(
-            "spell {spell_id} cannot be cast in the caster's current stance ({})",
-            caster.stance
-        )));
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::WrongStance,
+            format!(
+                "spell {spell_id} cannot be cast in the caster's current stance ({})",
+                caster.stance
+            ),
+        ));
     }
 
     if let Some(lock) = ctx
@@ -926,10 +938,13 @@ fn check_cast_gate_suffix(
         })
     {
         let _ = lock;
-        return Err(CastRefusal::from(format!(
-            "spell {spell_id} school {} is locked (interrupted) for caster {caster_guid}",
-            hdr.school_mask
-        )));
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::SchoolLocked,
+            format!(
+                "spell {spell_id} school {} is locked (interrupted) for caster {caster_guid}",
+                hdr.school_mask
+            ),
+        ));
     }
 
     if hdr.cooldown_ms > 0 {
@@ -944,8 +959,9 @@ fn check_cast_gate_suffix(
                 ctx.timestamp.to_micros_since_unix_epoch(),
                 cd.ready_at.to_micros_since_unix_epoch(),
             ) {
-                return Err(CastRefusal::new(
+                return Err(CastGateRefusal::new(
                     CastRefusalKind::Cooldown,
+                    CastRefusalReason::NotReady,
                     "spell not ready (cooldown)".to_string(),
                 ));
             }
@@ -957,16 +973,19 @@ fn check_cast_gate_suffix(
         if hdr.cast_flags & SPELL_ATTR_REQ_OVERPOWER != 0
             && !crate::combat::react_window_active(caster.overpower_until_ms, now_ms)
         {
-            return Err(CastRefusal::from(format!(
+            return Err(CastGateRefusal::other(CastRefusalReason::ReactWindowClosed, format!(
                 "spell {spell_id} requires an Overpower window (the target must have dodged your swing)"
             )));
         }
         if hdr.cast_flags & SPELL_ATTR_REQ_REVENGE != 0
             && !crate::combat::react_window_active(caster.revenge_until_ms, now_ms)
         {
-            return Err(CastRefusal::from(format!(
+            return Err(CastGateRefusal::other(
+                CastRefusalReason::ReactWindowClosed,
+                format!(
                 "spell {spell_id} requires a Revenge window (you must have dodged/parried/blocked)"
-            )));
+            ),
+            ));
         }
     }
 
@@ -974,8 +993,9 @@ fn check_cast_gate_suffix(
         if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
             // World coordinates are meaningful only within the same map and instance.
             if caster.map_id != target.map_id || caster.instance_id != target.instance_id {
-                return Err(CastRefusal::new(
+                return Err(CastGateRefusal::new(
                     CastRefusalKind::OtherPartition,
+                    CastRefusalReason::OutOfRange,
                     format!(
                         "target on another map (caster {} != target {})",
                         caster.map_id, target.map_id
@@ -1005,7 +1025,7 @@ fn check_cast_gate_suffix(
                 if let Some(class) =
                     faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
                 {
-                    return Err(CastRefusal::from(format!(
+                    return Err(CastGateRefusal::other(CastRefusalReason::BadTargets, format!(
                         "spell {spell_id} targets {class} — cannot be cast on this unit ({target_guid})"
                     )));
                 }
@@ -1016,7 +1036,7 @@ fn check_cast_gate_suffix(
     if let Some(e) = effects.iter().find(|e| {
         e.kind & KIND_AURA_BIT != 0 && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32)
     }) {
-        return Err(CastRefusal::from(format!(
+        return Err(CastGateRefusal::other(CastRefusalReason::Unreported, format!(
             "spell {spell_id} refused — target {target_guid} carries the linked debuff {} (Weakened-Soul-style lockout)",
             e.p1
         )));
@@ -1026,7 +1046,7 @@ fn check_cast_gate_suffix(
         .iter()
         .find(|e| e.kind == E_BLINK && e.radius_yd <= 0.0)
     {
-        return Err(CastRefusal::from(format!(
+        return Err(CastGateRefusal::other(CastRefusalReason::Unreported, format!(
             "spell {spell_id} (Blink) effect {} has no radius — teleport distance is unauthored data",
             e.effect_index
         )));
@@ -1035,10 +1055,13 @@ fn check_cast_gate_suffix(
         .iter()
         .find(|e| e.kind == E_PERSISTENT_AREA && e.radius_yd <= 0.0)
     {
-        return Err(CastRefusal::from(format!(
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::Unreported,
+            format!(
             "spell {spell_id} (ground-AoE) effect {} has no radius — area size is unauthored data",
             e.effect_index
-        )));
+        ),
+        ));
     }
 
     if let Some(e) = effects.iter().find(|e| {
@@ -1051,10 +1074,13 @@ fn check_cast_gate_suffix(
                 .find(e.script_id)
                 .is_some_and(|script| script.enabled)
     }) {
-        return Err(CastRefusal::from(format!(
-            "spell {spell_id} effect {} names script {} which is missing or disabled",
-            e.effect_index, e.script_id
-        )));
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::Unreported,
+            format!(
+                "spell {spell_id} effect {} names script {} which is missing or disabled",
+                e.effect_index, e.script_id
+            ),
+        ));
     }
 
     if target_guid != caster_guid {
@@ -1062,23 +1088,28 @@ fn check_cast_gate_suffix(
             let target = crate::helpers::live_entity(ctx, target_guid)
                 .map_err(|_| format!("spell {spell_id} target {target_guid} not in world"))?;
             if !is_behind(caster.x, caster.y, target.x, target.y, target.orientation) {
-                return Err(CastRefusal::from(format!(
-                    "spell {spell_id} must be cast from BEHIND the target ({target_guid})"
-                )));
+                return Err(CastGateRefusal::other(
+                    CastRefusalReason::NotBehind,
+                    format!("spell {spell_id} must be cast from BEHIND the target ({target_guid})"),
+                ));
             }
         }
         // Check stealth before cast acceptance breaks it.
         if hdr.cast_flags & SPELL_ATTR_REQ_STEALTH != 0 && !is_stealthed(ctx, caster_guid) {
-            return Err(CastRefusal::from(format!(
-                "spell {spell_id} requires stealth (caster {caster_guid} is not stealthed)"
-            )));
+            return Err(CastGateRefusal::other(
+                CastRefusalReason::NotStealthed,
+                format!(
+                    "spell {spell_id} requires stealth (caster {caster_guid} is not stealthed)"
+                ),
+            ));
         }
         if hdr.cast_flags & SPELL_ATTR_INCAP_OPENER != 0 {
             if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
                 if target.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0 {
-                    return Err(CastRefusal::from(format!(
-                        "spell {spell_id} cannot target a unit IN COMBAT ({target_guid})"
-                    )));
+                    return Err(CastGateRefusal::other(
+                        CastRefusalReason::Unreported,
+                        format!("spell {spell_id} cannot target a unit IN COMBAT ({target_guid})"),
+                    ));
                 }
                 let is_humanoid = target.is_player()
                     || ctx
@@ -1088,9 +1119,10 @@ fn check_cast_gate_suffix(
                         .find(target.entry)
                         .is_some_and(|t| t.creature_type == HUMANOID_TYPE);
                 if !is_humanoid {
-                    return Err(CastRefusal::from(format!(
-                        "spell {spell_id} can only target a Humanoid ({target_guid})"
-                    )));
+                    return Err(CastGateRefusal::other(
+                        CastRefusalReason::BadTargets,
+                        format!("spell {spell_id} can only target a Humanoid ({target_guid})"),
+                    ));
                 }
             }
         }
@@ -1111,7 +1143,7 @@ fn check_cast_gate_suffix(
                 })
                 .unwrap_or(false);
         if !has_dagger {
-            return Err(CastRefusal::from(format!(
+            return Err(CastGateRefusal::other(CastRefusalReason::Unreported, format!(
                 "spell {spell_id} requires a dagger equipped in the main hand (caster {caster_guid})"
             )));
         }
@@ -1119,8 +1151,9 @@ fn check_cast_gate_suffix(
 
     // Creatures have no managed power pool, so only Characters pay spell costs.
     if cost_gate_blocks(caster.is_player(), caster.power, hdr.cost) {
-        return Err(CastRefusal::new(
+        return Err(CastGateRefusal::new(
             CastRefusalKind::InsufficientPower,
+            CastRefusalReason::NoPower,
             format!("not enough power: have {}, need {}", caster.power, hdr.cost),
         ));
     }
@@ -1160,7 +1193,7 @@ pub(crate) fn begin_cast(
 
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     begin_cast_with_admission(
         ctx,
         caster_guid,
@@ -1172,7 +1205,6 @@ pub(crate) fn begin_cast(
         CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
-    .map_err(Into::into)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1185,7 +1217,7 @@ pub(crate) fn begin_cast_with_admission(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
     admission: CreatureSpellCasterAdmission,
-) -> Result<CastStart, CastRefusal> {
+) -> Result<CastStart, CastGateRefusal> {
     let hdr = ctx
         .db
         .game_spell()
@@ -1302,9 +1334,13 @@ mod ground_destination_tests {
     #[test]
     fn a_distract_without_a_ground_point_is_a_bad_target() {
         let refusal = check_ground_destination(CASTER, None, 30).unwrap_err();
-        assert_eq!(refusal.kind, CastRefusalKind::BadTargets);
+        assert_eq!(refusal.refusal.kind, CastRefusalKind::BadTargets);
+        assert_eq!(refusal.reason, CastRefusalReason::BadTargets);
         assert!(
-            refusal.message.contains("only target a ground point"),
+            refusal
+                .refusal
+                .message
+                .contains("only target a ground point"),
             "{refusal}"
         );
     }
@@ -1322,8 +1358,12 @@ mod ground_destination_tests {
     #[test]
     fn a_ground_point_beyond_the_leeway_is_out_of_range() {
         let refusal = check_ground_destination(CASTER, Some((34.7, 0.0, 0.0)), 30).unwrap_err();
-        assert_eq!(refusal.kind, CastRefusalKind::OutOfRange);
-        assert!(refusal.message.contains("out of range"), "{refusal}");
+        assert_eq!(refusal.refusal.kind, CastRefusalKind::OutOfRange);
+        assert_eq!(refusal.reason, CastRefusalReason::OutOfRange);
+        assert!(
+            refusal.refusal.message.contains("out of range"),
+            "{refusal}"
+        );
     }
 }
 

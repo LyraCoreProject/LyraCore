@@ -60,7 +60,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             scheduled_id: sched.scheduled_id,
             outcome: match result {
                 Ok(()) => CastFinish::Resolved,
-                Err(refusal) => CastFinish::Refused(refusal),
+                Err(refusal) => CastFinish::Refused(refusal.into()),
             },
         },
     );
@@ -113,9 +113,9 @@ pub(crate) fn do_cast_spell(
     caster: crate::WorldEntity,
     spell_id: u32,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::spell::CastGateRefusal> {
     if !knows_spell(ctx, caster.guid, spell_id) {
-        return Err(format!("spell {spell_id} is not in the caster's spellbook"));
+        return Err(format!("spell {spell_id} is not in the caster's spellbook").into());
     }
     let target = if target_guid == 0 {
         caster.guid
@@ -141,14 +141,12 @@ pub(crate) fn apply_cast_spell_at(
     x: f32,
     y: f32,
     z: f32,
-) -> Result<(), String> {
+) -> Result<(), crate::spell::CastGateRefusal> {
     if !knows_spell(ctx, caster.guid, spell_id) {
-        return Err(format!("spell {spell_id} is not in the caster's spellbook"));
+        return Err(format!("spell {spell_id} is not in the caster's spellbook").into());
     }
     if !(x.is_finite() && y.is_finite() && z.is_finite()) {
-        return Err(format!(
-            "cast_spell_at: non-finite ground point ({x},{y},{z})"
-        ));
+        return Err(format!("cast_spell_at: non-finite ground point ({x},{y},{z})").into());
     }
     let target = if target_guid == 0 {
         caster.guid
