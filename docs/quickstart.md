@@ -548,9 +548,17 @@ still require a code edit. Package Deltas and Runtime Scripts use `packages appl
 publish Rust Packages; it is a separate workflow from watching Rust source.
 
 Each replacement writes the old and new WASM to the local commit log, about 66 MB in total with
-the current 33 MB development artifact. Frequent edits can consume substantial disk space under
-`.lyracore/native-data/`; the build cache is separate. Do not delete individual commit-log files
-to reclaim space from a Realm you intend to keep.
+the current 33 MB development artifact. The development Host rotates log segments at 256 MiB
+and takes a snapshot after rotation. Once two snapshots are complete and their transactions are
+durable, it verifies both snapshots and removes older snapshots and unneeded log segments.
+Accounts, Characters, items and the installed Module stay in the retained state. Cleanup keeps
+enough history to recover from either retained snapshot; it does not reset the Realm.
+
+This is a recovery window, not a fixed disk quota. Large transactions, snapshot work and cleanup
+errors can leave more history on disk. The Host logs cleanup failures and keeps the recovery files.
+Normal Hosts keep their existing history policy. The build cache is separate, and Wasmtime manages
+its compiled-code disk cache separately. Do not delete individual commit-log files from
+`.lyracore/native-data/` to reclaim space from a Realm you intend to keep.
 
 Native startup requires OpenSSL 3 or newer. The CLI keeps local signing keys in the private
 `.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
