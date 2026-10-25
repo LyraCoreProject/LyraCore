@@ -206,6 +206,7 @@ Module. Install it with `rustup toolchain install 1.97.1` if it is missing.
 The CLI stores the new local Realm in `.lyracore/native-data`. It does not merge data from a legacy
 multi-Shard Realm. Stop a recorded legacy runtime with `./lyracore dev down` before starting the
 native runtime. Startup refuses an unrelated process on a required port.
+[Migrating to the Native Host](./migrating-to-native-host.md) gives the full steps.
 
 Repeating `dev up` reuses a healthy native runtime. `dev down` stops the process without deleting
 its data. Changing listener addresses requires a restart.
@@ -275,7 +276,7 @@ or missing Account name before changing state.
 ### Optional: prove it over the wire before touching a client
 
 ```bash
-./lyracore dev smoke
+printf 'test123\n' | ./lyracore dev smoke TEST Tester --password-stdin
 ```
 
 This hands off to the pinned headless wire harness and drives a **real build-5875 login** against the

@@ -86,6 +86,8 @@ flowchart TD
 
 The native runtime is the local development default. The Gateway crate has been removed. [`docs/architecture.md`](./docs/architecture.md#native-host-migration) records coverage
 and the remaining work. Existing multi-Shard Realm data requires a separate migration.
+To move a local Realm, a branch or a Package from the Gateway, read
+[`docs/migrating-to-native-host.md`](./docs/migrating-to-native-host.md) or run `/migrate-native-host`.
 
 ## Contributing
 
