@@ -258,12 +258,6 @@ impl ChannelRefusal {
         }
     }
 
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
-    }
-
     pub fn notice(self) -> u8 {
         match self {
             Self::NotMember => notice::NOT_MEMBER,
@@ -468,15 +462,6 @@ mod tests {
             Err(ChannelRefusal::WrongPassword)
         );
         assert_eq!(check_password(""), Ok(()));
-    }
-
-    #[test]
-    fn every_channel_refusal_tag_round_trips() {
-        for refusal in ChannelRefusal::ALL {
-            assert_eq!(ChannelRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(ChannelRefusal::parse_tag("chat:channel:"), None);
-        assert_eq!(ChannelRefusal::parse_tag("chat:not_in_group"), None);
     }
 
     #[test]

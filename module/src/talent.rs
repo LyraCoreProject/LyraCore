@@ -252,7 +252,7 @@ pub(crate) fn do_learn_talent(
     guid: u64,
     owner: Identity,
     talent_id: u32,
-) -> Result<u8, String> {
+) -> Result<u8, crate::Refusal> {
     let talent = ctx
         .db
         .game_talent()

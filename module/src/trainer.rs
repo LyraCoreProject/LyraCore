@@ -8,10 +8,9 @@ use crate::{
 
 pub(crate) const TRAINER_RANGE_SQ: f32 = 100.0;
 
-pub(crate) fn refused(refusal: TrainerRefusal, detail: &str) -> String {
-    let tag = refusal.as_tag();
-    spacetimedb::log::info!("trainer refused {tag}: {detail}");
-    tag.to_string()
+pub(crate) fn refused(refusal: TrainerRefusal, detail: &str) -> TrainerRefusal {
+    spacetimedb::log::info!("trainer refused {}: {detail}", refusal.as_tag());
+    refusal
 }
 
 #[table(
@@ -397,7 +396,7 @@ pub(crate) fn apply_trainer_buy(
     caster_guid: u64,
     trainer_guid: u64,
     spell_id: u32,
-) -> Result<(), String> {
+) -> Result<(), TrainerRefusal> {
     let entities = ctx.db.game_world_entity();
     let mut caster = entities
         .guid()

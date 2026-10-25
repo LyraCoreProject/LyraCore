@@ -142,10 +142,7 @@ fn result(
     super::send_raw(ctx, connection, opcode, body, false);
 }
 
-fn refused(cause: String, guid: u64, is_ignore: bool) -> Rollback {
-    let Some(refusal) = ContactRefusal::parse_tag(&cause) else {
-        return Rollback::silent(cause);
-    };
+fn refused(refusal: ContactRefusal, guid: u64, is_ignore: bool) -> Rollback {
     let result = match (refusal, is_ignore) {
         (ContactRefusal::AddSelf, false) => FriendResult::SelfX,
         (ContactRefusal::AddSelf, true) => FriendResult::IgnoreSelf,
@@ -162,7 +159,7 @@ fn refused(cause: String, guid: u64, is_ignore: bool) -> Rollback {
     let (opcode, body) = codec::build_friend_status_raw(result, guid, None);
     Rollback::replies(
         vec![lyracore_protocol::world::Packet { opcode, body }],
-        cause,
+        refusal.as_tag(),
     )
 }
 
@@ -189,7 +186,7 @@ fn add(
     };
     crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
     crate::chat::add_contact(ctx, actor, target.guid, is_ignore, Some(target.race))
-        .map_err(|cause| refused(cause, target.guid, is_ignore))?;
+        .map_err(|refusal| refused(refusal, target.guid, is_ignore))?;
     let online = (!is_ignore).then(|| online(ctx, &target)).flatten();
     let status = if is_ignore {
         FriendResult::IgnoreAdded
@@ -211,7 +208,7 @@ fn remove(
 ) -> Result<(), Rollback> {
     crate::taxi::reject_action_while_in_flight(ctx, actor.guid)?;
     crate::chat::remove_contact(ctx, actor, target, is_ignore)
-        .map_err(|cause| refused(cause, target, is_ignore))?;
+        .map_err(|refusal| refused(refusal, target, is_ignore))?;
     result(
         ctx,
         connection,

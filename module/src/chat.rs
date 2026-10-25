@@ -321,10 +321,9 @@ crate::character_owned!(restamp, fn sweep_restamp_game_character_contact(ctx, ch
     }
 });
 
-pub(crate) fn refused_contact(refusal: ContactRefusal, detail: &str) -> String {
-    let tag = refusal.as_tag();
-    spacetimedb::log::info!("contact refused {tag}: {detail}");
-    tag.to_string()
+pub(crate) fn refused_contact(refusal: ContactRefusal, detail: &str) -> ContactRefusal {
+    spacetimedb::log::info!("contact refused {}: {detail}", refusal.as_tag());
+    refusal
 }
 
 pub(crate) fn add_contact(
@@ -333,7 +332,7 @@ pub(crate) fn add_contact(
     target_guid: u64,
     is_ignore: bool,
     target_race: Option<u8>,
-) -> Result<(), String> {
+) -> Result<(), ContactRefusal> {
     let owner_guid = sender.guid;
     add_contact_core(ctx, sender, target_guid, is_ignore, target_race).map_err(|refusal| {
         refused_contact(
@@ -386,7 +385,7 @@ pub(crate) fn remove_contact(
     sender: crate::WorldEntity,
     target_guid: u64,
     is_ignore: bool,
-) -> Result<(), String> {
+) -> Result<(), ContactRefusal> {
     let contacts = ctx.db.game_character_contact();
     let Some(row) = contacts
         .by_owner()

@@ -93,7 +93,7 @@ pub(crate) fn apply_set_action_button(
     button: u8,
     action: u32,
     action_type: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let actions = ctx.db.game_player_action();
     let existing = actions
         .by_character()

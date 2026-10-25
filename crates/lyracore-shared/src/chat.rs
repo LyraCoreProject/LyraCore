@@ -129,32 +129,6 @@ pub enum ChatRefusal {
 }
 
 impl ChatRefusal {
-    pub const ALL: [Self; 23] = [
-        Self::NotInGroup,
-        Self::NotRaid,
-        Self::NotRaidLeader,
-        Self::NotRaidLeaderOrAssistant,
-        Self::UnknownLanguage,
-        Self::UnsupportedKind,
-        Self::EmptyMessage,
-        Self::NotInGuild,
-        Self::NoGuildChatRight,
-        Self::Channel(ChannelRefusal::NotMember),
-        Self::Channel(ChannelRefusal::WrongPassword),
-        Self::Channel(ChannelRefusal::NotModerator),
-        Self::Channel(ChannelRefusal::NotOwner),
-        Self::Channel(ChannelRefusal::Muted),
-        Self::Channel(ChannelRefusal::Banned),
-        Self::Channel(ChannelRefusal::InvalidName),
-        Self::Channel(ChannelRefusal::PlayerNotFound),
-        Self::Channel(ChannelRefusal::PlayerNotBanned),
-        Self::Channel(ChannelRefusal::PlayerAlreadyMember),
-        Self::Channel(ChannelRefusal::InviteWrongFaction),
-        Self::Channel(ChannelRefusal::PlayerInviteBanned),
-        Self::Channel(ChannelRefusal::NotModerated),
-        Self::WrongFaction,
-    ];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::NotInGroup => "chat:not_in_group",
@@ -169,12 +143,6 @@ impl ChatRefusal {
             Self::Channel(refusal) => refusal.as_tag(),
             Self::WrongFaction => "chat:wrong_faction",
         }
-    }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
     }
 }
 
@@ -382,35 +350,5 @@ mod tests {
             "GHOST does not change the tag"
         );
         assert_eq!(chat_tag_for(0x10), 0);
-    }
-
-    #[test]
-    fn every_channel_refusal_is_a_chat_refusal() {
-        for refusal in ChannelRefusal::ALL {
-            assert!(
-                ChatRefusal::ALL.contains(&ChatRefusal::Channel(refusal)),
-                "{refusal:?}"
-            );
-        }
-    }
-
-    #[test]
-    fn every_chat_refusal_tag_round_trips() {
-        for refusal in ChatRefusal::ALL {
-            assert_eq!(ChatRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(ChatRefusal::parse_tag("chat:"), None);
-        assert_eq!(
-            ChatRefusal::parse_tag("chat:channel:muted"),
-            Some(ChatRefusal::Channel(ChannelRefusal::Muted))
-        );
-        assert_eq!(
-            ChatRefusal::parse_tag("chat:wrong_faction"),
-            Some(ChatRefusal::WrongFaction)
-        );
-        assert_eq!(
-            ChatRefusal::parse_tag("realm_chat reducer timed out after 10s"),
-            None
-        );
     }
 }

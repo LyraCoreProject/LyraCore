@@ -1453,6 +1453,7 @@ pub fn debug_buy_trainer_spell(
         .find(|e| e.entry == trainer_entry && !e.is_player())
         .ok_or_else(|| format!("no spawned trainer with entry {trainer_entry}"))?;
     crate::actor::trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -1462,7 +1463,10 @@ pub fn debug_learn_talent(
     talent_id: u32,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    crate::talent::do_learn_talent(ctx, character_guid, e.owner_identity, talent_id).map(|_| ())
+    Ok(
+        crate::talent::do_learn_talent(ctx, character_guid, e.owner_identity, talent_id)
+            .map(|_| ())?,
+    )
 }
 
 #[reducer]

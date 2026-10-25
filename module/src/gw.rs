@@ -405,7 +405,9 @@ fn trainer_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
         return Err(crate::trainer::refused(
             lyracore_shared::trainer::TrainerRefusal::Unavailable,
             "buyer is in taxi flight",
-        ));
+        )
+        .as_tag()
+        .into());
     }
     Ok(actor)
 }
@@ -421,6 +423,7 @@ pub fn gw_trainer_buy(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     trainer_actor(ctx, actor_guid)?;
     crate::actor::trainer_buy(ctx, actor_guid, trainer_guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -596,7 +599,9 @@ fn contact_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEn
         return Err(crate::chat::refused_contact(
             lyracore_shared::social::ContactRefusal::ActorUnavailable,
             &format!("actor {actor_guid} is in taxi flight"),
-        ));
+        )
+        .as_tag()
+        .into());
     }
     Ok(actor)
 }
@@ -612,6 +617,7 @@ pub fn gw_add_friend(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, false, Some(target_race))
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -624,6 +630,7 @@ pub fn gw_del_friend(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, false)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -636,6 +643,7 @@ pub fn gw_add_ignore(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::add_contact(ctx, sender, target_guid, true, None)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -648,6 +656,7 @@ pub fn gw_del_ignore(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let sender = contact_actor(ctx, actor_guid)?;
     crate::chat::remove_contact(ctx, sender, target_guid, true)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 fn group_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
@@ -1167,7 +1176,10 @@ pub fn gw_learn_talent(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let learner = actor(ctx, actor_guid)?;
-    crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id).map(|_| ())
+    Ok(
+        crate::talent::do_learn_talent(ctx, actor_guid, learner.owner_identity, talent_id)
+            .map(|_| ())?,
+    )
 }
 
 #[reducer]
@@ -1205,7 +1217,13 @@ pub fn gw_set_action_button(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     let character = actor(ctx, actor_guid)?;
-    crate::action_bar::apply_set_action_button(ctx, character, button, action, action_type)
+    Ok(crate::action_bar::apply_set_action_button(
+        ctx,
+        character,
+        button,
+        action,
+        action_type,
+    )?)
 }
 
 #[reducer]
