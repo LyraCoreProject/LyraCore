@@ -101,6 +101,7 @@ fi
 say "LyraCore installer — checking prerequisites (nothing here runs sudo)."
 
 missing=''
+need_xcode=0
 apt_pkgs=''
 want() {
     missing="$missing $1"
@@ -130,14 +131,25 @@ if have openssl && openssl_banner=$(openssl version 2>/dev/null); then
         'OpenSSL '*)
             openssl_version=${openssl_banner#OpenSSL }
             openssl_version=${openssl_version%% *}
-            openssl_major=${openssl_version%%.*}
-            openssl_rest=${openssl_version#*.}
+            openssl_core=${openssl_version%%[-+]*}
+            openssl_suffix=${openssl_version#"$openssl_core"}
+            openssl_major=${openssl_core%%.*}
+            openssl_rest=${openssl_core#*.}
             openssl_minor=${openssl_rest%%.*}
             openssl_patch=${openssl_rest#*.}
             case "$openssl_major:$openssl_minor:$openssl_patch" in
                 *[!0-9:]* | :* | *::* | *:) ;;
                 *)
-                    if [ "$openssl_version" != "$openssl_rest" ] &&
+                    openssl_suffix_ok=1
+                    if [ -n "$openssl_suffix" ]; then
+                        case "${openssl_suffix#?}" in
+                            '' | *[!abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._~+-]*)
+                                openssl_suffix_ok=0
+                                ;;
+                        esac
+                    fi
+                    if [ "$openssl_suffix_ok" -eq 1 ] &&
+                       [ "$openssl_core" != "$openssl_rest" ] &&
                        [ "$openssl_rest" != "$openssl_patch" ] &&
                        [ "$openssl_major" -ge 3 ] 2>/dev/null; then
                         need_openssl=0
@@ -166,6 +178,7 @@ if [ "$os" = Linux ]; then
     fi
 elif [ "$os" = Darwin ]; then
     if ! have cc && ! have clang; then
+        need_xcode=1
         missing="$missing the-Xcode-Command-Line-Tools"
     fi
 else
@@ -176,12 +189,16 @@ if [ -n "$missing" ]; then
     printf 'install.sh: missing prerequisite(s):%s\n' "$missing" >&2
     printf 'install.sh: this installer never runs sudo — install them yourself, then re-run it:\n' >&2
     if [ "$os" = Darwin ]; then
-        printf '\n  xcode-select --install\n\n' >&2
+        printf '\n' >&2
+        if [ "$need_xcode" -eq 1 ]; then
+            printf '  xcode-select --install\n' >&2
+        fi
         if [ "$need_openssl" -eq 1 ]; then
             printf '%s\n' '  brew install openssl@3' \
                 '  export PATH="$(brew --prefix openssl@3)/bin:$PATH"' \
                 '  Keep that PATH entry in your shell configuration; LibreSSL is not supported.' >&2
         fi
+        printf '\n' >&2
     elif have apt-get; then
         printf '\n  sudo apt-get update\n  sudo apt-get install -y%s\n\n' "$apt_pkgs" >&2
     else
