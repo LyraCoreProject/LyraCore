@@ -92,6 +92,7 @@ processes and data directories. They do not use an existing Realm.
 
 ```bash
 python3 native-host/prepare-host.py --checkout .lyracore/native-host/SpacetimeDB --build
+(cd .lyracore/native-host/SpacetimeDB && CARGO_PROFILE_RELEASE_DEBUG=0 CARGO_PROFILE_RELEASE_LTO=false cargo +1.97.1 test --release --locked -p spacetimedb-standalone --lib native_world::feed::tests)
 cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone recovery reload
