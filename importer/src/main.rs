@@ -639,6 +639,18 @@ impl Args {
         scope.extend_forced_creatures(&self.include_creatures);
         Ok(scope)
     }
+
+    fn spell_args(&self) -> Result<spell::SpellArgs> {
+        Ok(spell::SpellArgs {
+            only: self.only.clone(),
+            trainers: self.trainers.clone(),
+            source_sha: self.source_sha.clone(),
+            packages: self.packages.clone(),
+            scope: self.world_import_scope()?,
+            apply: self.apply,
+            shard: self.shard.clone(),
+        })
+    }
 }
 
 fn build_stats_sql(dump: &str) -> Vec<String> {
@@ -2431,7 +2443,13 @@ fn run_package_stage(args: &Args, family: &str) -> Result<()> {
         return Ok(());
     }
     match &args.packages {
-        Some(root) => package_delta::reapply(args, family, root)?,
+        Some(root) => package_delta::reapply(
+            &args.world_import_scope()?,
+            args.apply,
+            &args.shard,
+            family,
+            root,
+        )?,
         None => package_delta::warn_not_reapplied(family),
     }
     Ok(())
@@ -4062,7 +4080,7 @@ fn run_full_world_catalogues(dump: &str, args: &Args) -> Result<()> {
             .as_deref()
             .context("a complete world import requires --dbc <client Data directory>")?;
         dbc::run_from_dump(data_dir, dump, args.apply, &args.shard)?;
-        spell::run_spells(data_dir, args)?;
+        spell::run_spells(data_dir, &args.spell_args()?)?;
     }
     Ok(())
 }
@@ -4121,7 +4139,7 @@ fn main() -> Result<()> {
             return spell::run_spell_snapshot(&dir, &path);
         }
         if args.spells {
-            return spell::run_spells(&dir, &args);
+            return spell::run_spells(&dir, &args.spell_args()?);
         }
         return dbc::run(&dir, args.taxi_mounts.as_deref(), args.apply, &args.shard);
     }
