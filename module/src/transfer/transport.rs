@@ -28,6 +28,7 @@ pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
     "game_native_player",
     "game_native_member_stats",
     "game_character_relocation",
+    "game_transport_passenger",
 ];
 
 #[cfg_attr(not(test), allow(dead_code))]
@@ -55,6 +56,7 @@ pub(crate) const NOT_TRANSPORTED: &[&str] = &[
     "game_taxi_service_reply",
     "game_trade_session",
     "game_trade_slot",
+    "game_transport_passenger",
     "game_duel",
     "game_duel_event",
 ];

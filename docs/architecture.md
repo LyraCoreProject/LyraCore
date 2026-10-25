@@ -147,6 +147,7 @@ mailbox access, delivery, COD payment, returns, private text and Letter Copies,
 auction browsing, listings, bids, buyouts, cancellation, expiry and private notices,
 AreaTrigger exploration and dungeon entry, creature movement and facing splines,
 GameObject changes, encounter equipment, ground-effect visuals and Instance-removal notices,
+Transport creation, template queries, boarding, Passenger carriage, late observers and leaving,
 Addon bridge requests and local Companion command admission,
 logout and replacement of a World Session.
 [The native check](../native-host/check.py) runs these paths
@@ -276,6 +277,21 @@ send virtual item displays through creature AOI; late entry restores those displ
 DynamicObjects use a separate AOI layer and a map, Instance and cell index. Ground-area expiry
 removes their Grants and sends DESTROY. Existing rows require the
 [DynamicObject cell backfill](./danger-zones.md#dynamicobject-aoi-migration) before native cutover.
+
+The [Transport module](../module/src/transport/mod.rs) runs each imported single-map route from the
+Realm Clock. Every Character in the open world of a Transport's map holds its AOI Grant, and those
+Grants precede other CREATEs so a Passenger's CREATE can name its Transport. The CREATE carries the
+Path Progress as the phase within the current cycle; the client moves the Transport from it. The
+world database's period can differ from the client's own by milliseconds per cycle. A small Path
+Progress keeps that error from multiplying over thousands of cycles, so the client's clock drifts
+only from its latest CREATE. Movement that names a Transport on the mover's map boards a Passenger
+when the mover stands within 30 yards of its claimed place on the Transport, and later movement
+updates the offset. Movement without a Transport ends the Passenger. As in CMaNGOS, the Module
+refuses movement whose offset exceeds 50 yards across or 100 yards up. Passengers, and Characters
+leaving a Transport, are exempt from movement-violation scoring. While Passengers remain, a 500 ms
+schedule moves their world positions with the Transport for AOI and zone changes; it sends no
+movement. Late observers receive the Passenger's CREATE with the Transport GUID and offset.
+Teleports and leaving the world end the attachment. Routes that cross maps are not imported yet.
 
 Instance Removal inserts and cancellations send the countdown only to the affected Character.
 World entry replays the remaining time, or clears a stale countdown when none remains. Scheduled

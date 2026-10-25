@@ -116,7 +116,7 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
 
 pub fn run(data_dir: &str, args: &Args) -> Result<()> {
     let mount_dump = crate::read_dump(args.taxi_mounts.as_deref().context(
-        "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays",
+        "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays and transports",
     )?)?;
     run_from_dump(data_dir, args, &mount_dump)
 }
@@ -214,6 +214,10 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
     for warning in taxi_warnings {
         eprintln!("{warning}");
     }
+    let transports = crate::transport::catalogue_sql(&taxi_paths, &taxi_path_nodes, mount_dump)?;
+    for warning in &transports.warnings {
+        eprintln!("{warning}");
+    }
 
     let skill_lines: DbcSkillLine = read_table(&mut chain)?;
     let skill_abilities: DbcSkillLineAbility = read_table(&mut chain)?;
@@ -253,6 +257,7 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
         "TaxiNodes/TaxiPath/TaxiPathNode: {} nodes, {} directed paths, {} ordered points",
         taxi_counts.nodes, taxi_counts.paths, taxi_counts.path_nodes
     );
+    println!("Transports: {} single-map routes", transports.count);
     Ok([
         property_stmts,
         faction_stmts,
@@ -271,6 +276,7 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
         family_stmts,
         lock_stmts,
         taxi_stmts,
+        transports.statements,
     ]
     .into_iter()
     .flatten()
@@ -931,6 +937,13 @@ fn taxi_catalogue_sql(
                 row.delay
             );
         }
+        // TaxiPathNode.dbc stores the wait in seconds.
+        let delay_ms = row.delay.checked_mul(1000).with_context(|| {
+            format!(
+                "TaxiPathNode.dbc point {id} has delay {} out of range",
+                row.delay
+            )
+        })?;
         if !path_ids.contains(&path_id) {
             dangling_points.push((id, path_id));
             continue;
@@ -940,7 +953,7 @@ fn taxi_catalogue_sql(
             (path_id, node_index, id),
             format!(
                 "({id},{path_id},{node_index},{},{},{},{},{},{})",
-                row.map.id, row.location_x, row.location_y, row.location_z, row.flags, row.delay,
+                row.map.id, row.location_x, row.location_y, row.location_z, row.flags, delay_ms,
             ),
         ));
     }
@@ -1742,9 +1755,9 @@ mod tests {
             .find(|sql| sql.starts_with("INSERT INTO game_taxi_path_node "))
             .unwrap();
         let p0 = point_insert.find("(701,70,0,0,10,5,6,1,0)").unwrap();
-        let p1 = point_insert.find("(702,70,1,0,20,5,6,2,450)").unwrap();
+        let p1 = point_insert.find("(702,70,1,0,20,5,6,2,450000)").unwrap();
         let p2 = point_insert
-            .find("(703,70,2,0,30,5,6,-2147483648,900)")
+            .find("(703,70,2,0,30,5,6,-2147483648,900000)")
             .unwrap();
         assert!(
             p0 < p1 && p1 < p2,

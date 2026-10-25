@@ -4,7 +4,7 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::game_native_player;
 use super::{game_native_packet, NativeAudience, NativePacket};
-use crate::aoi::{AoiGrant, CORPSE, DYNAMIC_OBJECT, GAME_OBJECT, WORLD_ENTITY};
+use crate::aoi::{AoiGrant, CORPSE, DYNAMIC_OBJECT, GAME_OBJECT, TRANSPORT, WORLD_ENTITY};
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity, WorldEntity};
 
 pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant) {
@@ -96,6 +96,7 @@ pub(super) fn create(
     grant: &AoiGrant,
 ) -> Result<(), String> {
     let mut rotation = None;
+    let mut passenger_movement = None;
     let message = match grant.layer {
         WORLD_ENTITY => {
             if grant.viewer_guid == grant.entity_guid {
@@ -121,6 +122,7 @@ pub(super) fn create(
             } else {
                 Vec::new()
             };
+            passenger_movement = super::transport::passenger_movement(ctx, &entity);
             codec::build_create_object(&view, codec::CreateKind::Peer, &items, &[])
                 .map_err(|error| error.to_string())?
         }
@@ -161,12 +163,20 @@ pub(super) fn create(
                 object.radius_yd,
             )
         }
+        TRANSPORT => super::transport::create(ctx, grant.entity_guid)?,
         _ => return Err("unknown AOI layer".into()),
     };
-    let packet = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
-        Box::new(message),
-    ))
-    .map_err(|error| error.to_string())?;
+    let packet = match passenger_movement {
+        Some(movement) => lyracore_protocol::world::Packet {
+            opcode: codec::SMSG_UPDATE_OBJECT_OPCODE,
+            body: codec::create_with_movement(&message, &movement)
+                .map_err(|error| error.to_string())?,
+        },
+        None => lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(message),
+        ))
+        .map_err(|error| error.to_string())?,
+    };
     recipient_packet(ctx, connection, grant, Some(packet), true);
     if let Some((opcode, body)) = rotation {
         super::send_raw(ctx, connection, opcode, body, false);

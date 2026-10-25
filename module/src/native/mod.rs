@@ -39,6 +39,7 @@ mod taxi;
 mod teleport;
 mod trade;
 mod trainer;
+mod transport;
 mod unavailable;
 mod view;
 mod visibility;

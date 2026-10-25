@@ -76,7 +76,8 @@ confusion to avoid:
   node's map position, name, and faction mount
   displays; its DBC id becomes both the storage id and the bounded client/wire id. `TaxiPath.dbc`
   supplies directed endpoints and fares; `TaxiPathNode.dbc` supplies ordered geometry, raw signed
-  `int32` flag containers, and non-negative signed `int32` delays.
+  `int32` flag containers, and non-negative delays in seconds, which the import stores in
+  milliseconds.
 - **Server-side world content (the road from "one chicken" to a real world):** creature templates +
   spawns + waypoints, items, gameobjects + spawns, the loot tables, quests + relations, npc/gossip
   text, vendors, trainers, `playercreateinfo_spell`, `player_levelstats`/`player_classlevelstats`
@@ -349,6 +350,13 @@ SQL runs.
 The catalogue stores the first nonzero model in the template's four model slots. This deterministic
 choice omits the reference's random model and gender selection. The creature-entry lookup and
 faction fallback follow [CMaNGOS Classic's taxi mount selection](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Globals/ObjectMgr.cpp#L6500-L6534).
+
+The same pass builds the Transport catalogue, `game_transport`. Each row of the dump's `transports`
+table names a type-15 `gameobject_template`. Its `data0`, `data1` and `data2` give the TaxiPath,
+speed and acceleration, and `transports.period` gives the client's cycle in milliseconds. A route
+whose path crosses maps is omitted with a warning, because the Module does not yet move
+Passengers between maps. A missing template, a different GameObject type, a path without imported
+points, or a zero speed, acceleration or period is also omitted with a warning.
 
 Existing catalogues need the standalone DBC pass again with the same client and full dump. Updating
 the binary alone does not repair stored displays. With flights stopped, an Operator can rebuild

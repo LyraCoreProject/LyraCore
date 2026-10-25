@@ -4,6 +4,7 @@ use spacetimedb::ReducerContext;
 use crate::creatures::game_hunter_pet_protocol;
 use crate::gameobject::game_gameobject_template;
 use crate::items::game_item_template;
+use crate::transport::game_transport;
 use crate::{
     game_creature_template, game_meeting_stone, game_npc_text, game_npc_text_slot,
     game_world_entity,
@@ -27,27 +28,41 @@ pub(super) fn creature(ctx: &ReducerContext, entry: u32) -> Option<ServerOpcodeM
 }
 
 pub(super) fn gameobject(ctx: &ReducerContext, entry: u32) -> ServerOpcodeMessage {
-    let view = ctx
-        .db
-        .game_gameobject_template()
-        .entry()
-        .find(entry)
-        .map(|row| {
-            let stone = (row.type_id == lyracore_shared::constants::go_type::MEETINGSTONE)
-                .then(|| ctx.db.game_meeting_stone().entry().find(entry))
-                .flatten();
-            let (data0, data1, data2) = stone.map_or((row.data0, row.data1, 0), |stone| {
-                (stone.min_level, stone.max_level, stone.area_id)
-            });
-            codec::GameObjectTemplateView {
-                type_id: row.type_id,
+    let transport =
+        ctx.db
+            .game_transport()
+            .entry()
+            .find(entry)
+            .map(|row| codec::GameObjectTemplateView {
+                type_id: lyracore_shared::constants::go_type::MO_TRANSPORT,
                 display_id: row.display_id,
                 name: row.name,
-                data0,
-                data1,
-                data2,
-            }
-        });
+                data0: row.taxi_path_id,
+                data1: row.move_speed,
+                data2: row.accel_rate,
+            });
+    let view = transport.or_else(|| {
+        ctx.db
+            .game_gameobject_template()
+            .entry()
+            .find(entry)
+            .map(|row| {
+                let stone = (row.type_id == lyracore_shared::constants::go_type::MEETINGSTONE)
+                    .then(|| ctx.db.game_meeting_stone().entry().find(entry))
+                    .flatten();
+                let (data0, data1, data2) = stone.map_or((row.data0, row.data1, 0), |stone| {
+                    (stone.min_level, stone.max_level, stone.area_id)
+                });
+                codec::GameObjectTemplateView {
+                    type_id: row.type_id,
+                    display_id: row.display_id,
+                    name: row.name,
+                    data0,
+                    data1,
+                    data2,
+                }
+            })
+    });
     ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(Box::new(
         codec::build_gameobject_query_response(entry, view.as_ref()),
     ))

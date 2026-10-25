@@ -87,6 +87,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | Realm-core | 2 | 0 | `realm_core.rs` |
 | Gateway leases | 3 | 0 | `gw.rs` |
 | Taxi | 5 | 1 | `taxi.rs` |
+| Transport | 3 | 1 | `transport/mod.rs` |
 | Weather | 3 | 1 | `weather.rs` |
 | Packages | 5 | 1 | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
 | Event GC | 1 | 0 | `gc.rs` |
@@ -115,16 +116,27 @@ Read the structs; this section gives you the shape and the reason.
 ### `game_taxi_node` / `game_taxi_path` / `game_taxi_path_node` (`module/src/config.rs`)
 
 Public static catalogue rows imported from the operator's `TaxiNodes.dbc`, `TaxiPath.dbc`, and
-`TaxiPathNode.dbc`. A node's `id` is its storage key and `client_node_id` is its unique wire id in the
-vanilla client's fixed eight-word (256-bit) taxi mask. Imported nodes use their DBC id for both;
+`TaxiPathNode.dbc`. A node's `id` is its storage key and `client_node_id` is its unique wire id in
+the vanilla client's fixed eight-word (256-bit) taxi mask. Imported nodes use their DBC id for both;
 reserved fixtures keep 509xxxx storage ids but use bounded synthetic wire ids. Nodes also retain map
 position, name, and the Horde/Alliance mount-display pair. Paths are directed source-to-destination
-edges with their fare in copper; the reverse direction is present only when the DBC contains a second
-row. Path nodes keep their stable DBC id and explicit `(path_id, node_index)` order, plus map position,
-flags, and delay. `flags` remains the DBC's signed `int32` container so every raw bit survives; delay
-keeps the source type but the importer rejects negative time. The importer validates references,
-wire-id bounds/collisions, and duplicate ordinals before writing, then replaces the family
-point-first/path-second/node-last so a successful rerun removes stale geometry.
+edges with their fare in copper; the reverse direction is present only when the DBC contains a
+second row. Path nodes keep their stable DBC id and explicit `(path_id, node_index)` order, plus map
+position, flags, and delay. `flags` remains the DBC's signed `int32` container so every raw bit
+survives; `delay_ms` holds the DBC's seconds in milliseconds, and the importer rejects negative
+time. The importer validates references, wire-id bounds/collisions, and duplicate ordinals before
+writing, then replaces the family point-first/path-second/node-last so a successful rerun removes
+stale geometry.
+
+### `game_transport` / `game_transport_passenger` / `game_transport_carry_schedule` (`module/src/transport/mod.rs`)
+
+`game_transport` is a public catalogue of Transports, one row per imported single-map route. It
+keeps the GameObject display and flags, the TaxiPath, speed, acceleration, cycle period and map. A
+Transport's position is a function of the Realm Clock and its timetable, so no row stores it.
+`game_transport_passenger` is private and holds one row per Passenger: the Transport and the
+Passenger's offset on it. Leaving the Transport, a teleport or leaving the world deletes the row.
+`game_transport_carry_schedule` has one 500 ms schedule per Transport with Passengers. Each firing
+moves its Passengers' world positions with the Transport and deletes the schedule when none remain.
 
 ### Taxi progression, schedule, spline, and service tables (`module/src/taxi.rs`)
 
@@ -637,7 +649,7 @@ Two constraints survive the removal and bind any filter added later.
 
 ## 6. Scheduled tables
 
-**27 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
+**31 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
 timer decides gameplay. Recount and re-list them with:
 
 ```bash
@@ -650,16 +662,20 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_melee_schedule` | `tick_melee` | 100 ms | `combat/engage.rs:462` |
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs:81` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs:56` |
+| `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed lazily by boarding | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, so ~4 s) | `creatures/tick/mod.rs:178` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs:632` |
+| `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
 | `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs:576` |
 | `game_breath_schedule` | `tick_breath` | 1 s | `breath.rs:32` |
 | `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs:24` |
 | `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily by `begin_transfer` | `transfer/mod.rs:250` |
 | `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs:68` |
 | `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone/mod.rs:77` |
+| `game_native_member_stats` | `tick_native_member_stats` | 5 s per grouped native connection | `native/member_stats.rs` |
 | `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
 | `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
+| `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed lazily by a logon connection | `native/logon.rs` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |
 | `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed lazily by `establish_session` | `auth.rs:127` |
 | `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs:153` |
@@ -675,7 +691,8 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs:309` |
 
 The interval rows are inserted by `init` (`seed_scheduler_arming`, `module/src/seed.rs`), except the
-transfer, mail-escrow and session reapers, which their own entry points arm lazily and idempotently.
+transfer, mail-escrow, session and native logon reapers, the native admission and member-stat
+ticks, and the Transport carry schedules, which their own entry points arm lazily and idempotently.
 Scheduled reducers self-gate on `ctx.sender() == ctx.database_identity()` so they cannot be driven
 externally.
 

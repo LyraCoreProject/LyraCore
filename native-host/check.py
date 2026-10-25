@@ -1923,6 +1923,124 @@ def check_world_objects(client, peer, call, sql):
             world.close()
 
 
+def check_transports(call, sql, world_port):
+    def rows(query):
+        return sql(query)[0]['rows']
+
+    entry, path = 5090400, 5090401
+    transport = (0x1FC0 << 48) | entry
+
+    def transport_create(packets):
+        for index, (opcode, body) in enumerate(packets):
+            if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == transport:
+                offset = 7 + body[6].bit_count()
+                assert body[4] == 1 and body[offset:offset + 2] == bytes([5, 0x52])
+                return index, struct.unpack_from('<I', body, offset + 2 + 16 + 4)[0]
+        return None
+
+    def peer_movement(packets, guid):
+        for index, (opcode, body) in enumerate(packets):
+            if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == guid:
+                offset = 7 + body[6].bit_count()
+                assert body[offset] == 4
+                return index, body[offset + 2:offset + 2 + 48]
+        return None
+
+    def heartbeat(time, x, y, offset=None):
+        flags = 0x02000000 if offset else 0
+        tail = struct.pack('<Qffff', transport, *offset) if offset else b''
+        return struct.pack('<IIffff', flags, time, x, y, 0, 0) + tail + struct.pack('<I', 0)
+
+    def until(predicate):
+        for _ in range(60):
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError('Transport state did not settle')
+
+    for index, (x, flags, delay) in enumerate([(6995, 0, 0), (7000, 2, 10), (7005, 0, 0), (7010, 0, 0),
+                                               (7015, 2, 10), (7020, 0, 0), (7025, 0, 0)]):
+        sql(f'INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) '
+            f'VALUES ({path + 1 + index},{path},{index},1,{x},7000,0,{flags},{delay * 1000})')
+    sql(f"INSERT INTO game_transport (entry,name,display_id,size,flags,taxi_path_id,move_speed,accel_rate,"
+        f"period_ms,map_id) VALUES ({entry},'Native ferry',3015,1,40,{path},10,5,40000,1)")
+    worlds = {}
+    try:
+        def enter(name, index):
+            username = name.upper()
+            call('provision_account', [username, list(bytes(32)), list(bytes(32))])
+            account = rows(f"SELECT id FROM game_account WHERE username = '{username}'")[0][0]
+            call('establish_session', [account, list(KEY), ['0x' + bytes([170 + index]).hex() * 32]])
+            call('create_character', [account, name, 1, 1, 0, 0, 0, 0, 0, 0])
+            guid = rows(f"SELECT guid FROM game_character WHERE name = '{name}'")[0][0]
+            sql(f'UPDATE game_character SET map_id = 1, x = 7030, y = 7010, z = 0 WHERE guid = {guid}')
+            world = World(world_port, username=username)
+            assert world.read()[0] == 0x1ee
+            world.send(0x3d, struct.pack('<Q', guid))
+            worlds[name] = (world, guid)
+            return world, guid, world.collect()
+
+        passenger, passenger_guid, entered = enter('Passenger', 0)
+        _, progress = transport_create(entered)
+        assert progress < 40000
+        passenger.send(0x5e, struct.pack('<IQ', entry, transport))
+        response = next(body for opcode, body in passenger.collect() if opcode == 0x5f)
+        assert struct.unpack_from('<III', response) == (entry, 15, 3015)
+        assert struct.unpack_from('<III', response, len(response) - 96) == (path, 10, 5)
+        watcher, _, entered = enter('Watcher', 1)
+        assert transport_create(entered)
+        passenger.collect()
+
+        passenger.send(0xee, heartbeat(10000, 7060, 7000.5, (2, 1, 0, 0)))
+        passenger.collect()
+        assert not rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {passenger_guid}')
+        passenger.send(0xee, heartbeat(11000, 7008, 7000.5, (2, 1, 0, 0)))
+        passenger.collect()
+        assert rows(f'SELECT transport_entry, x, y FROM game_transport_passenger WHERE character_guid = {passenger_guid}') == [[entry, 2.0, 1.0]]
+        relayed = []
+        until(lambda: relayed.extend(watcher.collect()) or any(
+            opcode == 0xee and packed_guid(body) == passenger_guid for opcode, body in relayed))
+        body = next(body for opcode, body in relayed if opcode == 0xee and packed_guid(body) == passenger_guid)
+        tail = body[1 + body[0].bit_count():]
+        assert struct.unpack_from('<I', tail)[0] & 0x02000000
+        assert struct.unpack_from('<Q', tail, 24)[0] == transport
+        until(lambda: abs(rows(f'SELECT y FROM game_world_entity WHERE guid = {passenger_guid}')[0][0] - 6999) < 0.01)
+        x = rows(f'SELECT x FROM game_world_entity WHERE guid = {passenger_guid}')[0][0]
+        assert 6997 <= x <= 7019, x
+        passenger.send(0xee, heartbeat(11500, 100, 100, (500, 0, 0, 0)))
+        passenger.collect()
+        assert rows(f'SELECT x, y FROM game_transport_passenger WHERE character_guid = {passenger_guid}') == [[2.0, 1.0]]
+        assert rows(f'SELECT x FROM game_world_entity WHERE guid = {passenger_guid}')[0][0] != 100
+
+        _, _, entered = enter('Latecomer', 2)
+        transport_index, _ = transport_create(entered)
+        passenger_index, movement = peer_movement(entered, passenger_guid)
+        assert transport_index < passenger_index
+        flags, _, _, _, _, _, carried_by, *offset = struct.unpack('<IIffffQffff', movement)
+        assert flags & 0x02000000 and carried_by == transport and offset == [2, 1, 0, 0]
+
+        passenger.send(0xee, heartbeat(12000, 7010, 7020))
+        passenger.collect()
+        assert not rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {passenger_guid}')
+        time.sleep(0.6)
+        assert rows(f'SELECT x, y FROM game_world_entity WHERE guid = {passenger_guid}') == [[7010.0, 7020.0]]
+        assert not rows(f'SELECT guid FROM game_movement_violation WHERE guid = {passenger_guid}')
+
+        passenger.send(0xee, heartbeat(13000, 7008, 7000.5, (2, 1, 0, 0)))
+        passenger.collect()
+        assert rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {passenger_guid}')
+        passenger.send(0x4b)
+        assert [opcode for opcode, _ in passenger.collect()][-2:] == [0x4c, 0x4d]
+        assert not rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {passenger_guid}')
+        until(lambda: not rows(f'SELECT scheduled_id FROM game_transport_carry_schedule WHERE scheduled_id = {entry}'))
+    finally:
+        for world, _ in worlds.values():
+            world.close()
+        sql(f'DELETE FROM game_transport WHERE entry = {entry}')
+        sql(f'DELETE FROM game_taxi_path_node WHERE path_id = {path}')
+    print('PASS native Transport creation, boarding, carriage, late observers and leaving')
+
+
 def check_areatriggers(client, peer, call, sql):
     def rows(query):
         return sql(query)[0]['rows']
@@ -4898,6 +5016,7 @@ def main():
                 check_pets(client, peer, call, sql)
                 check_areatriggers(client, peer, call, sql)
                 check_world_objects(client, peer, call, sql)
+                check_transports(call, sql, world_port)
                 check_addon(client, peer, call, sql)
                 check_chat(client, peer, call, sql, guid, peer_guid)
                 check_sessionless_movement(call, sql, 1)

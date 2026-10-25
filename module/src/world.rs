@@ -451,6 +451,7 @@ pub(crate) fn teleport_player(
     let teleport_counter = crate::native::begin_teleport(ctx, player_guid, cross_map);
     // Drop queued pre-teleport motion so the next publish cannot snap peers back.
     crate::motion::drop_pending(ctx, player_guid);
+    crate::transport::leave(ctx, player_guid);
 
     let destination_zone = crate::terrain::zone_id_at(ctx, map_id, x, y);
 
@@ -937,6 +938,10 @@ pub(crate) fn apply_movement_update(
         .get(0..4)
         .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
         .unwrap_or(0);
+    let boarding = crate::transport::passenger_moved(ctx, &mover, old_flags, &movement_info);
+    if boarding == crate::transport::Boarding::Refused {
+        return Ok(());
+    }
     let mover_guid = mover.guid;
     let map_id = mover.map_id;
     let instance_id = mover.instance_id;
@@ -1029,7 +1034,7 @@ pub(crate) fn apply_movement_update(
         crate::spell::break_auras_on_move(ctx, mover_guid);
     }
 
-    if plan.moved {
+    if plan.moved && boarding == crate::transport::Boarding::Ashore {
         score_and_log_movement(ctx, mover_guid, &delta);
     }
 

@@ -3183,7 +3183,7 @@ fn cross_map_teleport_sends_transfer_pending_then_new_world_carrying_target_map_
             assert_eq!(p.map.as_int(), 36);
             assert!(
                 p.has_transport.is_none(),
-                "no transport (ship/zeppelin) support yet"
+                "a teleport that is not a Transport map crossing names no Transport"
             );
             let mut buf = Vec::new();
             p.write_unencrypted_server(&mut buf).unwrap();

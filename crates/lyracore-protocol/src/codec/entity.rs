@@ -391,13 +391,12 @@ pub fn build_create_object(
         (ObjectType::Unit, UpdateMask::Unit(unit_builder.finalize()))
     };
 
-    const SIMPLE_MOVE_MASK: u32 = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x100;
     let running_speed = speeds::RUN * (entity.run_speed_mult_bp as f32 / 10_000.0);
     let mut update_flag = MovementBlock_UpdateFlag::empty()
         .set_all(MovementBlock_UpdateFlag_All { unknown1: 1 })
         .set_living(MovementBlock_UpdateFlag_Living::Living {
             flags: MovementBlock_MovementFlags::new(
-                entity.movement_flags & SIMPLE_MOVE_MASK,
+                entity.movement_flags & super::movement_info::SIMPLE_MOVE_MASK,
                 None,
                 None,
                 None,
