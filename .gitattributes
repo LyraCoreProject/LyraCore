@@ -1,2 +1,4 @@
+# The launcher, pins, scripts and patches break with CRLF, so every checkout keeps LF.
+* text=auto eol=lf
 # Unified diffs represent empty context lines with a single space.
 **/host-lock.patch whitespace=-blank-at-eol
