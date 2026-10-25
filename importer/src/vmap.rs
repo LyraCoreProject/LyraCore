@@ -397,14 +397,23 @@ fn sql_owns_instance_pool(output: &str) -> Result<bool> {
     Ok(rows.len() == 1 && rows[0][0].as_u64() == Some(0) && rows[0][1].as_bool() == Some(true))
 }
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    if args.vmap_status {
-        if args.vmap.is_none() {
+pub(crate) struct VmapArgs {
+    pub(crate) data_dir: Option<String>,
+    pub(crate) status: bool,
+    pub(crate) map: i64,
+    pub(crate) scope: crate::world_import_scope::WorldImportScope,
+    pub(crate) apply: bool,
+    pub(crate) shard: Shard,
+}
+
+pub(crate) fn run(args: &VmapArgs) -> Result<()> {
+    if args.status {
+        if args.data_dir.is_none() {
             return active_generation_status(&args.shard, args.map as u32);
         }
         bail!("--vmap-status is a standalone status command; omit --vmap");
     }
-    let scope = args.world_import_scope()?;
+    let scope = &args.scope;
     if scope.bounded_slices.is_empty() && scope.instance_vmap_slices.is_empty() {
         println!(
             "vmap: scope {} has no bounded or instance vmap slices; no vmap generation to import",
@@ -424,7 +433,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         preflight_map_ownership(&args.shard, map_id)
             .with_context(|| format!("vmap scope {} map {map_id}", scope.name()))?;
     }
-    let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
+    let data_dir = Path::new(args.data_dir.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let source_identity = format!("client-data-path:{}", data_dir.display());
     let mut plans = Vec::with_capacity(slices_by_map.len() + scope.instance_vmap_slices.len());
@@ -1502,18 +1511,18 @@ fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
     batches
 }
 
-pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
-    let generation = generation_info(&args.shard, generation_id)?;
-    preflight_map_ownership(&args.shard, generation.map_id)?;
+pub(crate) fn run_coverage(generation_id: u64, apply: bool, shard: &Shard) -> Result<()> {
+    let generation = generation_info(shard, generation_id)?;
+    preflight_map_ownership(shard, generation.map_id)?;
     if !matches!(generation.state, VERIFIED | ACTIVE) {
         bail!("vmap generation {generation_id} is not verified or active (state {}) — coverage preparation refused", generation.state);
     }
 
-    let all_cells = generation_cells(&args.shard, generation_id)?;
+    let all_cells = generation_cells(shard, generation_id)?;
     if all_cells.is_empty() {
         bail!("vmap generation {generation_id} has no staged chunks to derive coverage from");
     }
-    let already = covered_cells(&args.shard, generation_id)?;
+    let already = covered_cells(shard, generation_id)?;
     let pending = pending_cells(&all_cells, &already);
     let batches = coverage_batches(&pending);
 
@@ -1525,21 +1534,20 @@ pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()>
         pending.len(),
         batches.len()
     );
-    if !args.apply {
+    if !apply {
         println!("-- DRY RUN: would call prepare_vmap_nav_coverage ({} batch(es)) + finalize_vmap_nav_coverage", batches.len());
         return Ok(());
     }
 
     for batch in &batches {
-        args.shard.call_reducer_args(
+        shard.call_reducer_args(
             "prepare_vmap_nav_coverage",
             &[&generation_id.to_string(), batch],
         )?;
     }
-    args.shard
-        .call_reducer_args("finalize_vmap_nav_coverage", &[&generation_id.to_string()])?;
+    shard.call_reducer_args("finalize_vmap_nav_coverage", &[&generation_id.to_string()])?;
 
-    let manifest = args.shard.query_json(
+    let manifest = shard.query_json(
         "vmap",
         &format!(
             "SELECT generation_id, map_id, cell_count, digest, complete FROM game_vmap_nav_coverage_manifest WHERE generation_id = {generation_id}"

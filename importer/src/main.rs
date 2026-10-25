@@ -4091,11 +4091,18 @@ fn main() -> Result<()> {
     }
 
     if args.vmap.is_some() || args.vmap_status {
-        return vmap::run(&args);
+        return vmap::run(&vmap::VmapArgs {
+            data_dir: args.vmap.clone(),
+            status: args.vmap_status,
+            map: args.map,
+            scope: args.world_import_scope()?,
+            apply: args.apply,
+            shard: args.shard.clone(),
+        });
     }
 
     if let Some(generation_id) = args.vmap_prepare_coverage {
-        return vmap::run_coverage(&args, generation_id);
+        return vmap::run_coverage(generation_id, args.apply, &args.shard);
     }
 
     if let Some(dir) = &args.go_models {

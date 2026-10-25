@@ -2,6 +2,7 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 
+#[derive(Clone)]
 pub(crate) struct Shard {
     pub(crate) server: String,
     pub(crate) db: String,
