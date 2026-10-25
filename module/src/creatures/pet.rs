@@ -167,7 +167,7 @@ fn despawn_pet_entity(ctx: &ReducerContext, pet: WorldEntity) {
     crate::combat::disengage(ctx, pet.guid);
     crate::motion::drop_pending(ctx, pet.guid);
     ctx.db.game_entity_motion().guid().delete(pet.guid);
-    ctx.db.game_world_entity().guid().delete(pet.guid);
+    crate::WorldEntity::delete(ctx, pet.guid);
     super::clear_live_pet_kind(ctx, pet.guid);
     super::distraction::clear(ctx, pet.guid);
 }

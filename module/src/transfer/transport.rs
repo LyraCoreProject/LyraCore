@@ -21,10 +21,22 @@ pub(crate) const HOT_TABLES: &[&str] = &[
     "game_aura",
 ];
 
-pub(crate) const MANIFEST_EXCLUDE: &[&str] = &["game_transfer_out"];
+pub(crate) const MANIFEST_EXCLUDE: &[&str] = &[
+    "game_transfer_out",
+    "game_aoi_grant",
+    "game_aoi_viewer",
+    "game_native_player",
+    "game_native_member_stats",
+    "game_character_relocation",
+];
 
 #[cfg_attr(not(test), allow(dead_code))]
 pub(crate) const NOT_TRANSPORTED: &[&str] = &[
+    "game_aoi_grant",
+    "game_aoi_viewer",
+    "game_native_player",
+    "game_native_member_stats",
+    "game_character_relocation",
     "game_rest_state_event",
     "game_breath_relay_event",
     "game_breath_state",

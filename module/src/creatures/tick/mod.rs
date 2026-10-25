@@ -75,6 +75,25 @@ pub struct CreatureSpline {
     pub path: Option<CreaturePath>,
 }
 
+impl CreatureSpline {
+    #[cfg(feature = "debug_reducers")]
+    pub(crate) fn repair_cell(mut self, ctx: &ReducerContext) {
+        self.cell = lyracore_shared::spatial::grid_cell_id(self.grid_x, self.grid_y);
+        // Repairing an index must not restart the client's current spline.
+        ctx.db.game_creature_spline().guid().update(self);
+    }
+
+    fn replace(self, ctx: &ReducerContext) {
+        let table = ctx.db.game_creature_spline();
+        let row = if table.guid().find(self.guid).is_some() {
+            table.guid().update(self)
+        } else {
+            table.insert(self)
+        };
+        crate::native::creature_spline_changed(ctx, &row);
+    }
+}
+
 #[table(accessor = game_creature_move_schedule, scheduled(tick_creatures))]
 pub struct CreatureMoveSchedule {
     #[primary_key]
@@ -276,6 +295,7 @@ pub(crate) fn emit_move_spline(
     map_id: u32,
     instance_id: u64,
     grid: (i32, i32),
+    path: Option<CreaturePath>,
 ) {
     let row = CreatureSpline {
         guid,
@@ -296,13 +316,9 @@ pub(crate) fn emit_move_spline(
         run,
         facing: false,
         facing_angle: 0.0,
-        path: None,
+        path,
     };
-    if ctx.db.game_creature_spline().guid().find(guid).is_some() {
-        ctx.db.game_creature_spline().guid().update(row);
-    } else {
-        ctx.db.game_creature_spline().insert(row);
-    }
+    row.replace(ctx);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -337,11 +353,7 @@ pub(crate) fn emit_facing_spline(
         facing_angle: angle_rad,
         path: None,
     };
-    if ctx.db.game_creature_spline().guid().find(guid).is_some() {
-        ctx.db.game_creature_spline().guid().update(row);
-    } else {
-        ctx.db.game_creature_spline().insert(row);
-    }
+    row.replace(ctx);
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone)]
@@ -381,6 +393,13 @@ pub(crate) fn emit_creature_path(
     }
     let speed = if run { speeds::RUN } else { speeds::WALK };
     let duration = (length / speed * 1000.0).ceil().max(1.0) as u32;
+    let path = CreaturePath {
+        navigation: crate::nav::inputs(ctx, mover.map_id),
+        points: points
+            .iter()
+            .map(|&(x, y, z)| CreaturePathPoint { x, y, z })
+            .collect(),
+    };
     emit_move_spline(
         ctx,
         mover.guid,
@@ -392,17 +411,8 @@ pub(crate) fn emit_creature_path(
         mover.map_id,
         mover.instance_id,
         (mover.grid_x, mover.grid_y),
+        Some(path),
     );
-    if let Some(mut spline) = ctx.db.game_creature_spline().guid().find(mover.guid) {
-        spline.path = Some(CreaturePath {
-            navigation: crate::nav::inputs(ctx, mover.map_id),
-            points: points
-                .iter()
-                .map(|&(x, y, z)| CreaturePathPoint { x, y, z })
-                .collect(),
-        });
-        ctx.db.game_creature_spline().guid().update(spline);
-    }
     mover.orientation = (points[0].1 - mover.y).atan2(points[0].0 - mover.x);
     mover.last_move_ms = now_ms(ctx);
     mover.update(ctx);
@@ -439,6 +449,7 @@ pub(crate) fn emit_creature_leg(
         e.map_id,
         e.instance_id,
         (e.grid_x, e.grid_y),
+        None,
     );
     e.last_move_ms = now_ms;
     if set_leg_ends {
@@ -464,6 +475,7 @@ pub(crate) fn stop_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity)
         mover.map_id,
         mover.instance_id,
         (mover.grid_x, mover.grid_y),
+        None,
     );
 }
 

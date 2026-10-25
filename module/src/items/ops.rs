@@ -1,5 +1,5 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
-use spacetimedb::{Identity, ReducerContext, Table};
+use spacetimedb::{Identity, ReducerContext};
 
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
@@ -41,20 +41,23 @@ pub(crate) fn grant_starter_item(
         let Ok(random_property_id) = select_property(ctx, &tmpl) else {
             return Ok(());
         };
-        instances.insert(ItemInstance {
-            guid: next_item_guid(ctx)?,
-            entry: tmpl.entry,
-            owner_identity,
-            owner_guid,
-            slot,
-            stack_count: stack,
-            durability: tmpl.max_durability,
-            created_at: ctx.timestamp,
-            enchant_id: 0,
-            soulbound: binds_on_grant(tmpl.bonding),
-            random_property_id,
-            item_text_id: 0,
-        });
+        crate::ItemInstance::insert(
+            ctx,
+            ItemInstance {
+                guid: next_item_guid(ctx)?,
+                entry: tmpl.entry,
+                owner_identity,
+                owner_guid,
+                slot,
+                stack_count: stack,
+                durability: tmpl.max_durability,
+                created_at: ctx.timestamp,
+                enchant_id: 0,
+                soulbound: binds_on_grant(tmpl.bonding),
+                random_property_id,
+                item_text_id: 0,
+            },
+        );
         Ok(())
     };
     grant_one(
@@ -297,21 +300,24 @@ pub(crate) fn store_instance_state(
         Some(guid) => guid,
         None => next_item_guid(ctx)?,
     };
-    ctx.db.game_item_instance().insert(ItemInstance {
-        guid,
-        entry: tmpl.entry,
-        owner_identity,
-        owner_guid: player_guid,
-        slot,
-        // Snapshots can outlive template edits, including a lower stack cap.
-        stack_count: snapshot.stack_count.max(1).min(tmpl.max_stack.max(1)),
-        durability: snapshot.durability,
-        created_at: ctx.timestamp,
-        enchant_id: snapshot.enchant_id,
-        soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
-        random_property_id: snapshot.random_property_id,
-        item_text_id: snapshot.item_text_id,
-    });
+    crate::ItemInstance::insert(
+        ctx,
+        ItemInstance {
+            guid,
+            entry: tmpl.entry,
+            owner_identity,
+            owner_guid: player_guid,
+            slot,
+            // Snapshots can outlive template edits, including a lower stack cap.
+            stack_count: snapshot.stack_count.max(1).min(tmpl.max_stack.max(1)),
+            durability: snapshot.durability,
+            created_at: ctx.timestamp,
+            enchant_id: snapshot.enchant_id,
+            soulbound: snapshot.soulbound || binds_on_grant(tmpl.bonding),
+            random_property_id: snapshot.random_property_id,
+            item_text_id: snapshot.item_text_id,
+        },
+    );
     Ok(())
 }
 
@@ -341,20 +347,23 @@ pub(crate) fn grant_letter_item(
         .ok_or_else(|| format!("mail: no template for letter item {item_entry}"))?;
     let slot = free_slot(ctx, player_guid)?;
     let guid = next_item_guid(ctx)?;
-    ctx.db.game_item_instance().insert(ItemInstance {
-        guid,
-        entry: tmpl.entry,
-        owner_identity: player.owner_identity,
-        owner_guid: player_guid,
-        slot,
-        stack_count: 1,
-        durability: tmpl.max_durability,
-        created_at: ctx.timestamp,
-        enchant_id: 0,
-        soulbound: binds_on_grant(tmpl.bonding),
-        random_property_id: 0,
-        item_text_id,
-    });
+    crate::ItemInstance::insert(
+        ctx,
+        ItemInstance {
+            guid,
+            entry: tmpl.entry,
+            owner_identity: player.owner_identity,
+            owner_guid: player_guid,
+            slot,
+            stack_count: 1,
+            durability: tmpl.max_durability,
+            created_at: ctx.timestamp,
+            enchant_id: 0,
+            soulbound: binds_on_grant(tmpl.bonding),
+            random_property_id: 0,
+            item_text_id,
+        },
+    );
     Ok(())
 }
 
@@ -399,37 +408,12 @@ pub(crate) fn remove_items(
             continue;
         }
         if inst.stack_count == 0 {
-            instances.guid().delete(inst.guid);
+            crate::ItemInstance::delete(ctx, inst.guid);
         } else {
-            instances.guid().update(inst);
+            inst.update(ctx);
         }
     }
     Ok(())
-}
-
-pub(crate) fn carried_items(ctx: &ReducerContext, owner_guid: u64) -> Vec<ItemInstance> {
-    ctx.db
-        .game_item_instance()
-        .by_owner_guid()
-        .filter(&owner_guid)
-        .filter(|item| is_carried_slot(item.slot))
-        .collect()
-}
-
-// Restore original identities and remove prior craft products before the transaction commits.
-pub(crate) fn restore_carried_items(
-    ctx: &ReducerContext,
-    owner_guid: u64,
-    items: Vec<ItemInstance>,
-) {
-    let instances = ctx.db.game_item_instance();
-    for item in carried_items(ctx, owner_guid) {
-        instances.guid().delete(item.guid);
-    }
-    for item in items {
-        instances.insert(item);
-    }
-    crate::trade::refresh_offer(ctx, owner_guid);
 }
 
 pub(crate) const RECENTLY_BANDAGED_SPELL: u32 = 11196;
@@ -493,7 +477,6 @@ pub(crate) fn apply_item_use(
             "dead players cannot use items",
         ));
     }
-    let instances = ctx.db.game_item_instance();
     let mut inst = item_in_slot(ctx, player_guid, slot)
         .ok_or_else(|| refuse(ItemRefusal::ItemNotFound, format!("no item in slot {slot}")))?;
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
@@ -546,9 +529,9 @@ pub(crate) fn apply_item_use(
     if !spell_keeps_item(ctx, spell_id) {
         if inst.stack_count > 1 {
             inst.stack_count -= 1;
-            instances.guid().update(inst);
+            inst.update(ctx);
         } else {
-            instances.guid().delete(inst.guid);
+            crate::ItemInstance::delete(ctx, inst.guid);
         }
     }
     crate::spell::begin_cast(
@@ -705,7 +688,7 @@ pub(crate) fn apply_death_durability_loss(ctx: &ReducerContext, player_guid: u64
             let new_durability = death_durability_loss(tmpl.max_durability, inst.durability);
             if new_durability != inst.durability {
                 inst.durability = new_durability;
-                instances.guid().update(inst);
+                inst.update(ctx);
                 any_lost = true;
             }
         }

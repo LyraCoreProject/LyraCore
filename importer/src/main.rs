@@ -3957,7 +3957,6 @@ fn gameobject_template_rows(
         go_meta,
         dropped_type25,
         go_packed_rows,
-        used_go,
         ..
     } = spawns;
     let mut go_template_rows: Vec<String> = Vec::new();
@@ -3971,11 +3970,9 @@ fn gameobject_template_rows(
             bail!("relay requires GameObject definition {entry}, which cannot be imported");
         }
     }
-    let mut used_sorted: Vec<u64> = used_go.iter().copied().collect();
-    used_sorted.extend(required_entries);
-    used_sorted.sort_unstable();
-    used_sorted.dedup();
-    for entry in used_sorted {
+    let mut entries: Vec<_> = go_meta.keys().copied().collect();
+    entries.sort_unstable();
+    for entry in entries {
         let meta = &go_meta[&entry];
         *go_type_histogram.entry(meta.stored_type).or_insert(0) += 1;
         let (row, loot_id_used) = go_template_row(
@@ -4954,7 +4951,7 @@ mod tests {
     }
 
     #[test]
-    fn gameobject_family_emits_one_meeting_stone_row_per_spawned_stone() {
+    fn gameobject_catalog_includes_unspawned_templates() {
         let dump = "INSERT INTO `gameobject_template` VALUES \
             (179584,23,6973,'Meeting Stone',0,0,0,1,15,20,1581,0,0,0),\
             (179585,23,6973,'Unspawned Stone',0,0,0,1,30,40,717,0,0,0); \
@@ -4974,14 +4971,14 @@ mod tests {
             [
                 "DELETE FROM game_meeting_stone WHERE entry > 0",
                 "INSERT INTO game_meeting_stone (entry,min_level,max_level,area_id) VALUES \
-                 (179584,15,20,1581)",
+                 (179584,15,20,1581),(179585,30,40,717)",
             ]
         );
         assert!(plan.stmts.iter().any(|statement| {
             statement.starts_with("INSERT INTO game_gameobject_template")
                 && statement.contains("(179584,23,6973,'Meeting Stone',0,0,0,0,0,0,1)")
         }));
-        assert_eq!(plan.stamps, vec![("gameobjects", 2)]);
+        assert_eq!(plan.stamps, vec![("gameobjects", 4)]);
     }
 
     #[test]
@@ -6927,13 +6924,12 @@ mod tests {
                     serves_tram,
                     "{profile} spawn {entry} keeps its map, position and rotation"
                 );
-                assert_eq!(
+                assert!(
                     templates.contains(&format!("({entry},5,{display},'{name}',")),
-                    serves_tram,
-                    "{profile} includes the template for spawn {entry}"
+                    "{profile} includes template {entry}"
                 );
             }
-            assert!(!templates.contains("'Other Map Prop'"), "{profile}");
+            assert!(templates.contains("'Other Map Prop'"), "{profile}");
         }
     }
 

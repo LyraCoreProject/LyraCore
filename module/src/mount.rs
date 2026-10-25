@@ -70,7 +70,7 @@ pub(crate) fn dismount(ctx: &ReducerContext, guid: u64) {
         .map(|a| a.id)
         .collect();
     for id in ids {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     recompute_mount(ctx, guid);
 }

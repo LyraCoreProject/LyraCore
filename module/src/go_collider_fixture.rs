@@ -76,7 +76,7 @@ fn blink(ctx: &ReducerContext, instance: u64, expected_x: f32) -> Result<(), Str
         landed.instance_id == instance && (landed.x - expected_x).abs() < 0.001,
         "Blink crossed the closed door or lost instance identity",
     )?;
-    ctx.db.game_world_entity().guid().delete(1);
+    crate::WorldEntity::delete(ctx, 1);
     Ok(())
 }
 
@@ -161,7 +161,7 @@ fn walking_support(ctx: &ReducerContext) -> Result<(), String> {
     let mut transformed = door(ctx, 0)?;
     transformed.rotation_1 = 1.0;
     transformed.rotation_3 = 1.0;
-    ctx.db.game_gameobject().guid().update(transformed);
+    transformed.update(ctx);
     require(
         crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
             .is_some_and(|z| (z - 28.0).abs() < 0.001),
@@ -172,7 +172,7 @@ fn walking_support(ctx: &ReducerContext) -> Result<(), String> {
         let mut transformed = door(ctx, 0)?;
         transformed.rotation_1 = (angle * 0.5).sin();
         transformed.rotation_3 = (angle * 0.5).cos();
-        ctx.db.game_gameobject().guid().update(transformed);
+        transformed.update(ctx);
         let floor = 30.0 - 2.0 / angle.sin();
         require(
             crate::vmap::floor_z(ctx, MAP, 0, 10.0, 20.0, 30.0)
@@ -340,7 +340,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     rays(ctx, 0, Some(1.0))?;
     let mut closed = door(ctx, first)?;
     closed.state = 0;
-    ctx.db.game_gameobject().guid().update(closed);
+    closed.update(ctx);
     rays(ctx, first, Some(1.0))?;
 
     {
@@ -423,7 +423,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     transformed.z = 30.0;
     transformed.orientation = std::f32::consts::FRAC_PI_2;
     crate::go_collider::register(ctx, &transformed);
-    ctx.db.game_gameobject().guid().update(transformed);
+    transformed.update(ctx);
     for hit in [
         crate::vmap::los_ray(ctx, MAP, 0, [10.0, 16.0, 30.0], [10.0, 24.0, 30.0]),
         crate::vmap::collision_ray(ctx, MAP, 0, [10.0, 16.0, 30.0], [10.0, 24.0, 30.0]),
@@ -436,7 +436,7 @@ pub fn debug_assert_go_collision(ctx: &ReducerContext) -> Result<(), String> {
     walking_support(ctx)?;
 
     let source = door(ctx, 0)?.guid;
-    ctx.db.game_gameobject().guid().delete(source);
+    crate::GameObject::delete(ctx, source);
     for hit in [
         crate::vmap::los_ray(ctx, MAP, 0, [10.0, 20.0, 32.0], [10.0, 20.0, 24.0]),
         crate::vmap::collision_ray(ctx, MAP, 0, [10.0, 20.0, 32.0], [10.0, 20.0, 24.0]),

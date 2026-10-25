@@ -309,10 +309,13 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
         let new_count = p.pushback_count;
         p.scheduled_at = ScheduleAt::Time(new_fire_at);
         pending.scheduled_id().update(p);
-        ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-            delay_ms: CAST_PUSHBACK_MS as u32,
-            ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Pushback)
-        });
+        crate::spell::SpellCastEvent::insert(
+            ctx,
+            SpellCastEvent {
+                delay_ms: CAST_PUSHBACK_MS as u32,
+                ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Pushback)
+            },
+        );
         log::info!(
             "cast pushed back: caster {caster_guid}'s spell {spell_id} delayed {CAST_PUSHBACK_MS}ms \
              (pushback {new_count}/{CAST_PUSHBACK_MAX})"
@@ -352,10 +355,13 @@ fn interrupt_cast_with_outcome(
     for (id, spell_id, target_guid) in hits {
         pending.scheduled_id().delete(id);
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
-        ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-            is_interrupted: true,
-            ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Interrupt)
-        });
+        crate::spell::SpellCastEvent::insert(
+            ctx,
+            SpellCastEvent {
+                is_interrupted: true,
+                ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Interrupt)
+            },
+        );
         crate::hooks::fire_on_cast_finished(
             ctx,
             &crate::hooks::CastFinishedPayload {
@@ -409,7 +415,7 @@ pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
         .collect();
     let broke_channel = !ids.is_empty();
     for id in ids {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
     }
     let broke_cast = interrupt_cast(ctx, caster_guid);
     if broke_channel {
@@ -501,9 +507,8 @@ pub(crate) fn shed_auras(ctx: &ReducerContext, unit_guid: u64, shed: Vec<Aura>) 
         resheet |= crate::spell::aura_moves_sheet(a.eff_kind, a.eff_p0);
         remount |= crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0);
     }
-    let auras = ctx.db.game_aura();
     for a in shed {
-        auras.id().delete(a.id);
+        crate::Aura::delete(ctx, a.id);
     }
     if revitalize {
         recompute_vitals(ctx, unit_guid);

@@ -251,6 +251,8 @@ mod vmap;
 #[cfg(test)]
 mod tripwires;
 
+mod aoi;
+mod native;
 mod weather;
 mod world;
 mod xp;

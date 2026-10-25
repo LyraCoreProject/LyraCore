@@ -20,12 +20,12 @@ use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{
-    game_aura, game_character, game_config, game_creature_move_schedule, game_creature_spawn,
-    game_creature_spline, game_creature_template, game_entity_motion, game_gameobject,
-    game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
-    game_gameobject_unlocked, game_ground_area, game_item_instance, game_item_template,
-    game_melee_attack, game_quest_template, game_spell, game_spell_effect, game_world_entity,
-    CreatureMoveSchedule, CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
+    game_character, game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
+    game_creature_spline, game_creature_template, game_dynamic_object, game_entity_motion,
+    game_gameobject, game_gameobject_pool, game_gameobject_pool_member, game_gameobject_template,
+    game_gameobject_unlocked, game_ground_area, game_item_template, game_melee_attack,
+    game_quest_template, game_spell, game_spell_effect, game_world_entity, CreatureMoveSchedule,
+    CreatureSpawn, GroundArea, ItemInstance, ServerConfig,
 };
 
 #[reducer]
@@ -156,6 +156,26 @@ pub fn debug_set_health(ctx: &ReducerContext, guid: u64, health: u32) -> Result<
 }
 
 #[reducer]
+pub fn debug_age_corpse(
+    ctx: &ReducerContext,
+    corpse_guid: u64,
+    age_seconds: u32,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mut corpse = ctx
+        .db
+        .game_corpse()
+        .guid()
+        .find(corpse_guid)
+        .ok_or("no such Corpse")?;
+    corpse.created_at =
+        ctx.timestamp - TimeDuration::from_micros(i64::from(age_seconds) * 1_000_000);
+    corpse.update(ctx);
+    crate::corpse::sweep_corpse_decay(ctx);
+    Ok(())
+}
+
+#[reducer]
 pub fn debug_repop(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     crate::actor::repop(ctx, character_guid)
 }
@@ -246,6 +266,12 @@ pub fn debug_spawn_at_feet(
 }
 
 #[reducer]
+pub fn debug_register_aoi_viewer(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    crate::aoi::enter_viewer(ctx, character_guid)
+}
+
+#[reducer]
 pub fn debug_spawn_player_entity(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
     if entities.guid().find(character_guid).is_some() {
@@ -326,7 +352,7 @@ pub fn debug_clear_creatures(ctx: &ReducerContext, map_id: u32) -> Result<(), St
     let n = guids.len();
     for g in &guids {
         crate::combat::disengage(ctx, *g);
-        entities.guid().delete(g);
+        crate::WorldEntity::delete(ctx, g);
     }
     log::info!("debug_clear_creatures: removed {n} creatures on map {map_id}");
     Ok(())
@@ -490,10 +516,10 @@ pub fn debug_replay_sessionless_areatrigger(
     expected_map: u32,
     expected_instance: u64,
     controller_generation: u64,
-    expected_intent_id: u64,
+    expected_relocation_id: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let intent_id = crate::quest::enter_sessionless_areatrigger(
+    let relocation_id = crate::quest::enter_sessionless_areatrigger(
         ctx,
         character_guid,
         trigger_id,
@@ -502,9 +528,9 @@ pub fn debug_replay_sessionless_areatrigger(
         controller_generation,
     )
     .map_err(|refusal| format!("{:?}: {}", refusal.kind, refusal))?;
-    if intent_id != expected_intent_id {
+    if expected_relocation_id != 0 && relocation_id != expected_relocation_id {
         return Err(format!(
-            "session-less AreaTrigger replay returned intent {intent_id}, expected {expected_intent_id}"
+            "session-less AreaTrigger replay returned relocation {relocation_id}, expected {expected_relocation_id}"
         ));
     }
     Ok(())
@@ -575,31 +601,29 @@ pub fn debug_spawn_gameobject(
             });
     }
     let guid = (0xF110u64 << 48) | template_entry as u64;
-    ctx.db.game_gameobject().guid().delete(guid);
+    crate::GameObject::delete(ctx, guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
-    let go = ctx
-        .db
-        .game_gameobject()
-        .insert(crate::gameobject::GameObject {
-            guid,
-            template_entry,
-            map_id,
-            x,
-            y,
-            z,
-            orientation: 0.0,
-            state: 0,
-            created_at: ctx.timestamp,
-            respawn_at_micros: 0,
-            instance_id: 0,
-            grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
-            grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
-            cell: lyracore_shared::spatial::cell_id_at(x, y),
-            rotation_0: 0.0,
-            rotation_1: 0.0,
-            rotation_2: 0.0,
-            rotation_3: 0.0,
-        });
+    let go = crate::gameobject::GameObject {
+        guid,
+        template_entry,
+        map_id,
+        x,
+        y,
+        z,
+        orientation: 0.0,
+        state: 0,
+        created_at: ctx.timestamp,
+        respawn_at_micros: 0,
+        instance_id: 0,
+        grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
+        grid_y: lyracore_shared::spatial::grid_cell(x, y).1,
+        cell: lyracore_shared::spatial::cell_id_at(x, y),
+        rotation_0: 0.0,
+        rotation_1: 0.0,
+        rotation_2: 0.0,
+        rotation_3: 0.0,
+    }
+    .insert(ctx);
     crate::go_collider::register(ctx, &go);
     Ok(())
 }
@@ -613,7 +637,7 @@ pub fn debug_force_gameobject_respawn(ctx: &ReducerContext, go_entry: u32) -> Re
         .ok_or_else(|| format!("no depleted gameobject of entry {go_entry}"))?;
     go.state = 0;
     go.respawn_at_micros = 0;
-    gos.guid().update(go);
+    go.update(ctx);
     Ok(())
 }
 
@@ -629,13 +653,11 @@ pub fn debug_setup_gather_pool(
     let pool_tbl = ctx.db.game_gameobject_pool();
     let member_tbl = ctx.db.game_gameobject_pool_member();
     let tmpl_tbl = ctx.db.game_gameobject_template();
-    let gos = ctx.db.game_gameobject();
 
     let prior: Vec<crate::gameobject::GameObjectPoolMember> =
         member_tbl.iter().filter(|m| m.pool_id == pool_id).collect();
     for m in &prior {
-        gos.guid()
-            .delete(crate::gameobject::pool_point_guid(m.point_id));
+        crate::GameObject::delete(ctx, crate::gameobject::pool_point_guid(m.point_id));
         member_tbl.point_id().delete(m.point_id);
     }
 
@@ -776,9 +798,9 @@ pub fn debug_engage(
         swing_error: 0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
-        melee.attacker_guid().update(row);
+        crate::combat::MeleeAttack::update(ctx, row);
     } else {
-        melee.insert(row);
+        crate::combat::MeleeAttack::insert(ctx, row);
     }
     let entities = ctx.db.game_world_entity();
     if let Some(mut e) = entities.guid().find(attacker_guid) {
@@ -868,14 +890,13 @@ pub fn debug_fill_aura_slots(
     } else {
         0
     };
-    let auras = ctx.db.game_aura();
     let now = ctx.timestamp;
     let expires = now
         .checked_add(TimeDuration::from_micros(3_600_000_000))
         .unwrap_or(now);
     for i in 0..count {
         let slot = base_slot + i;
-        auras.insert(crate::Aura {
+        crate::Aura {
             id: 0,
             target_guid,
             caster_guid,
@@ -911,7 +932,8 @@ pub fn debug_fill_aura_slots(
             proc_charges: 0,
             proc_icd_ms: 0,
             proc_ready_micros: 0,
-        });
+        }
+        .insert(ctx);
     }
     Ok(())
 }
@@ -1013,7 +1035,6 @@ fn equip_into(
         .as_ref()
         .map(|t| crate::items::binds_on_grant(t.bonding) || crate::items::binds_on_equip(t.bonding))
         .unwrap_or(false);
-    let instances = ctx.db.game_item_instance();
     if let Some(mut inst) = crate::items::item_in_slot(ctx, character_guid, slot) {
         if inst.entry != item_entry {
             inst.random_property_id = random_property_id;
@@ -1021,23 +1042,26 @@ fn equip_into(
         inst.entry = item_entry;
         inst.durability = durability;
         inst.soulbound = inst.soulbound || soulbound;
-        instances.guid().update(inst);
+        inst.update(ctx);
     } else {
         let guid = crate::items::next_item_guid(ctx)?;
-        instances.insert(ItemInstance {
-            guid,
-            entry: item_entry,
-            owner_identity: e.owner_identity,
-            owner_guid: character_guid,
-            slot,
-            stack_count: 1,
-            durability,
-            created_at: ctx.timestamp,
-            enchant_id: 0,
-            soulbound,
-            random_property_id,
-            item_text_id: 0,
-        });
+        crate::ItemInstance::insert(
+            ctx,
+            ItemInstance {
+                guid,
+                entry: item_entry,
+                owner_identity: e.owner_identity,
+                owner_guid: character_guid,
+                slot,
+                stack_count: 1,
+                durability,
+                created_at: ctx.timestamp,
+                enchant_id: 0,
+                soulbound,
+                random_property_id,
+                item_text_id: 0,
+            },
+        );
     }
     Ok(())
 }
@@ -1143,6 +1167,34 @@ pub fn debug_creature_path(
     crate::helpers::require_operator(ctx)?;
     let mover = crate::helpers::live_entity(ctx, guid)?;
     crate::creatures::tick::emit_creature_path(ctx, mover, vec![(x, y, z)], run);
+    Ok(())
+}
+
+#[reducer]
+pub fn debug_creature_waypoints(
+    ctx: &ReducerContext,
+    guid: u64,
+    points: Vec<crate::creatures::tick::CreaturePathPoint>,
+    run: bool,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mover = crate::helpers::live_entity(ctx, guid)?;
+    let points: Vec<_> = points.into_iter().map(|p| (p.x, p.y, p.z)).collect();
+    let points = lyracore_shared::movement_path::wire_points(&points)
+        .ok_or("creature path cannot be encoded")?;
+    crate::creatures::tick::emit_creature_path(ctx, mover, points, run);
+    Ok(())
+}
+
+#[reducer]
+pub fn debug_creature_face(ctx: &ReducerContext, guid: u64, x: f32, y: f32) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    if !x.is_finite() || !y.is_finite() {
+        return Err("facing point is not finite".into());
+    }
+    let mut mover = crate::helpers::live_entity(ctx, guid)?;
+    crate::creatures::tick::stop_facing(ctx, &mut mover, (x, y));
+    mover.update(ctx);
     Ok(())
 }
 
@@ -1264,6 +1316,7 @@ pub fn debug_set_xp_rate(ctx: &ReducerContext, rate: f32) -> Result<(), String> 
 
 #[reducer]
 pub fn debug_backfill_cell_ids(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
     let mut totals: Vec<(&str, usize)> = Vec::new();
 
     let entities = ctx.db.game_world_entity();
@@ -1290,7 +1343,7 @@ pub fn debug_backfill_cell_ids(ctx: &ReducerContext) -> Result<(), String> {
     for guid in stale {
         if let Some(mut g) = gos.guid().find(guid) {
             g.cell = spatial::grid_cell_id(g.grid_x, g.grid_y);
-            gos.guid().update(g);
+            g.update(ctx);
         }
     }
 
@@ -1316,10 +1369,29 @@ pub fn debug_backfill_cell_ids(ctx: &ReducerContext) -> Result<(), String> {
         .collect();
     totals.push(("game_creature_spline", stale.len()));
     for guid in stale {
-        if let Some(mut s) = splines.guid().find(guid) {
-            s.cell = spatial::grid_cell_id(s.grid_x, s.grid_y);
-            splines.guid().update(s);
+        if let Some(s) = splines.guid().find(guid) {
+            s.repair_cell(ctx);
         }
+    }
+
+    let dynamic_objects = ctx.db.game_dynamic_object();
+    let stale: Vec<_> = dynamic_objects
+        .iter()
+        .filter(|object| object.cell != object.position_cell())
+        .collect();
+    totals.push(("game_dynamic_object", stale.len()));
+    for object in stale {
+        object.repair_cell(ctx);
+    }
+
+    let corpses = ctx.db.game_corpse();
+    let stale: Vec<_> = corpses
+        .iter()
+        .filter(|c| c.cell != c.position_cell())
+        .collect();
+    totals.push(("game_corpse", stale.len()));
+    for corpse in stale {
+        corpse.update(ctx);
     }
 
     for (table, n) in totals {

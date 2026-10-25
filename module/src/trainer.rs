@@ -360,7 +360,12 @@ pub(crate) fn validate_trainer_interaction(
         .guid()
         .find(trainer_guid)
         .ok_or_else(|| "no such trainer".to_string())?;
-    if trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0 {
+    if caster.dead || caster.health == 0 || trainer.dead || trainer.health == 0 {
+        return Err("training requires a living Character and trainer".into());
+    }
+    if trainer.is_player()
+        || trainer.npc_flags & lyracore_shared::constants::npc_flags::TRAINER == 0
+    {
         return Err("target is not a trainer".to_string());
     }
     if trainer.map_id != caster.map_id || trainer.instance_id != caster.instance_id {
@@ -368,6 +373,9 @@ pub(crate) fn validate_trainer_interaction(
     }
     if crate::helpers::dist_sq(caster, &trainer) > TRAINER_RANGE_SQ {
         return Err("trainer out of range".to_string());
+    }
+    if crate::reputation::npc_refuses_interaction(ctx, &trainer, caster) {
+        return Err("trainer refuses interaction".into());
     }
 
     if ctx

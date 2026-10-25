@@ -39,21 +39,7 @@ pub(crate) fn select_gate(
         "target has no gossip",
         "use gossip",
     )?;
-    if npc.dead || crate::reputation::npc_refuses_interaction(ctx, &npc, &actor) {
-        return Err("gossip creature is unavailable".into());
-    }
-    let active_menu = ctx
-        .db
-        .game_creature_gossip_menu_override()
-        .creature_guid()
-        .find(npc_guid)
-        .filter(|menu| menu.map_id == npc.map_id && menu.instance_id == npc.instance_id)
-        .and_then(|menu| {
-            ctx.db
-                .game_gossip_menu_profile()
-                .menu_id()
-                .find(menu.menu_id)
-        });
+    let active_menu = active_menu(ctx, &npc);
     if source_menu_id != active_menu.as_ref().map_or(0, |menu| menu.menu_id) {
         return Err("gossip menu has changed".into());
     }
@@ -106,6 +92,23 @@ pub(crate) fn select_gate(
         return Err("gossip option action has changed".into());
     }
     condition_gate(ctx, character_guid, actor.level, (kind, value1, value2))
+}
+
+pub(crate) fn active_menu(
+    ctx: &ReducerContext,
+    npc: &crate::WorldEntity,
+) -> Option<crate::creatures::GossipMenuProfile> {
+    ctx.db
+        .game_creature_gossip_menu_override()
+        .creature_guid()
+        .find(npc.guid)
+        .filter(|menu| menu.map_id == npc.map_id && menu.instance_id == npc.instance_id)
+        .and_then(|menu| {
+            ctx.db
+                .game_gossip_menu_profile()
+                .menu_id()
+                .find(menu.menu_id)
+        })
 }
 
 fn condition_gate(

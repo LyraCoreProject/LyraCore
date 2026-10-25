@@ -18,7 +18,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
     ctx.db.game_entity_motion().guid().delete(guid);
     crate::loot::reap_corpse_loot_family(ctx, guid);
     // Delete last; its Relay destroys the client object.
-    ctx.db.game_world_entity().guid().delete(guid);
+    crate::WorldEntity::delete(ctx, guid);
 }
 
 pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
@@ -179,7 +179,7 @@ pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
                 if let Some(mut go) = gos.guid().find(guid) {
                     go.state = 0;
                     go.respawn_at_micros = 0;
-                    gos.guid().update(go);
+                    go.update(ctx);
                 }
             }
         }

@@ -41,7 +41,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_party_command_intent"],
-            "source Module command relay retained through issuer Transfer until Gateway finalization or event GC",
+            "command results retained through issuer Transfer until completion or event GC",
         ),
         (
             &[
@@ -56,11 +56,12 @@ pub(crate) mod character_owned_tripwire {
         (
             &[
                 "game_auction_notice",
+                "game_hunter_pet_protocol",
                 "game_chat_channel_notice_event",
+                "game_group_event",
                 "game_chat_event",
                 "game_combat_event",
                 "game_emote_event",
-                "game_group_event",
                 "game_guild_event",
                 "game_mail_arrival",
                 "game_realm_chat_event",
@@ -127,7 +128,7 @@ pub(crate) mod character_owned_tripwire {
                 "game_guild_petition",
                 "game_guild_petition_signature",
             ],
-            "realm-owned guild state on Realm-core, which holds no Character rows; the Gateway's character-gone reconciliation forgets a deleted Character",
+            "shared Guild state; cascade_delete_character removes membership and petitions without deleting other members",
         ),
         (
             &["game_guild_fee_decision"],
@@ -802,19 +803,91 @@ mod build_scan_strip_tripwire {
 }
 
 #[cfg(test)]
-mod entity_simulation_write_discipline {
+mod native_delivery_write_discipline {
     fn raw_writes(source: &str) -> Vec<(usize, &'static str)> {
         let source = source.replace("self.ctx", "ctx");
-        crate::test_scan::raw_table_reads(&source, &["game_world_entity"], |source, offset| {
-            let tail: String = source[offset..]
-                .chars()
-                .take(96)
-                .filter(|c| !c.is_whitespace())
-                .collect();
-            tail.starts_with(".insert(")
-                || tail.starts_with(".try_insert(")
-                || tail.starts_with(".guid().update(")
-        })
+        let mut writes = crate::test_scan::raw_table_reads(
+            &source,
+            &[
+                "game_world_entity",
+                "game_gameobject",
+                "game_dynamic_object",
+                "game_encounter_equip",
+                "game_instance_removal",
+                "game_addon_message",
+                "game_corpse",
+                "game_zone_weather",
+                "game_breath_relay_event",
+                "game_chat_event_live",
+                "game_emote_event_live",
+                "game_system_message_event",
+                "game_realm_chat_event",
+                "game_chat_channel_notice_event",
+                "game_group_event",
+                "game_guild_event",
+                "game_trade_event",
+                "game_guild_petition",
+                "game_duel_event",
+                "game_auction_notice",
+                "game_hunter_pet_protocol",
+                "game_mail_arrival",
+                "game_guild_member",
+                "game_resurrect_request",
+                "game_self_resurrect_option",
+                "game_melee_attack",
+                "game_combat_event_live",
+                "game_spell_cast_event_live",
+                "game_spell_impact_event_live",
+                "game_aura",
+                "game_item_instance",
+                "game_character_quest",
+                "game_character_quest_event_credit",
+                "game_player_skill",
+                "game_player_spell",
+                "game_xp_event",
+                "game_levelup_event",
+                "game_player_reputation",
+            ],
+            |source, offset| {
+                let tail: String = source[offset..]
+                    .chars()
+                    .take(96)
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                tail.starts_with(".insert(")
+                    || tail.starts_with(".try_insert(")
+                    || tail.starts_with(".id().update(")
+                    || tail.starts_with(".id().delete(")
+                    || tail.starts_with(".pet_id().update(")
+                    || tail.starts_with(".guid().update(")
+                    || tail.starts_with(".guid().delete(")
+                    || tail.starts_with(".creature_guid().update(")
+                    || tail.starts_with(".creature_guid().delete(")
+                    || tail.starts_with(".scheduled_id().delete(")
+                    || tail.starts_with(".zone_id().update(")
+                    || tail.starts_with(".target_guid().delete(")
+                    || tail.starts_with(".target_guid().update(")
+                    || tail.starts_with(".character_guid().delete(")
+                    || tail.starts_with(".character_guid().update(")
+                    || tail.starts_with(".attacker_guid().update(")
+                    || tail.starts_with(".attacker_guid().delete(")
+            },
+        );
+        writes.extend(crate::test_scan::raw_table_reads(
+            &source,
+            &["game_creature_spline"],
+            |source, offset| {
+                let tail: String = source[offset..]
+                    .chars()
+                    .take(96)
+                    .filter(|c| !c.is_whitespace())
+                    .collect();
+                tail.starts_with(".insert(")
+                    || tail.starts_with(".try_insert(")
+                    || tail.starts_with(".guid().update(")
+            },
+        ));
+        writes
     }
 
     #[test]
@@ -824,6 +897,60 @@ mod entity_simulation_write_discipline {
                 ctx.db.game_world_entity().insert(row);
                 let entities = self.ctx.db.game_world_entity();
                 entities.guid().update(row);
+                entities.guid().delete(7);
+                let attacks = ctx.db.game_melee_attack();
+                attacks.attacker_guid().update(row);
+                attacks.attacker_guid().delete(7);
+                ctx.db.game_combat_event_live().insert(event);
+                ctx.db.game_spell_cast_event_live().insert(event);
+                ctx.db.game_spell_impact_event_live().insert(event);
+                let auras = ctx.db.game_aura();
+                auras.id().update(row);
+                auras.id().delete(7);
+                ctx.db.game_item_instance().guid().update(row);
+                ctx.db.game_item_instance().guid().delete(7);
+                ctx.db.game_character_quest().id().update(row);
+                ctx.db.game_character_quest_event_credit().id().delete(7);
+                ctx.db.game_player_skill().id().update(row);
+                ctx.db.game_player_spell().insert(row);
+                ctx.db.game_xp_event().insert(row);
+                ctx.db.game_levelup_event().insert(row);
+                ctx.db.game_player_reputation().insert(row);
+                ctx.db.game_corpse().guid().delete(7);
+                ctx.db.game_zone_weather().zone_id().update(row);
+                ctx.db.game_breath_relay_event().insert(row);
+                ctx.db.game_chat_event_live().insert(row);
+                ctx.db.game_emote_event_live().insert(row);
+                ctx.db.game_system_message_event().insert(row);
+                ctx.db.game_realm_chat_event().insert(row);
+                ctx.db.game_chat_channel_notice_event().insert(row);
+                ctx.db.game_group_event().insert(row);
+                ctx.db.game_guild_event().insert(row);
+                ctx.db.game_trade_event().insert(row);
+                ctx.db.game_duel_event().insert(row);
+                ctx.db.game_creature_spline().insert(row);
+                ctx.db.game_creature_spline().guid().update(row);
+                ctx.db.game_creature_spline().guid().delete(7);
+                ctx.db.game_gameobject().insert(row);
+                ctx.db.game_gameobject().guid().update(row);
+                ctx.db.game_gameobject().guid().delete(7);
+                ctx.db.game_dynamic_object().insert(row);
+                ctx.db.game_dynamic_object().guid().delete(7);
+                ctx.db.game_encounter_equip().insert(row);
+                ctx.db.game_encounter_equip().creature_guid().update(row);
+                ctx.db.game_encounter_equip().creature_guid().delete(7);
+                ctx.db.game_addon_message().insert(row);
+                ctx.db.game_instance_removal().insert(row);
+                ctx.db.game_instance_removal().character_guid().delete(7);
+                ctx.db.game_instance_removal().scheduled_id().delete(7);
+                ctx.db.game_auction_notice().insert(row);
+                ctx.db.game_hunter_pet_protocol().insert(row);
+                ctx.db.game_hunter_pet_protocol().pet_id().update(row);
+                ctx.db.game_mail_arrival().insert(row);
+                ctx.db.game_guild_petition().insert(row);
+                ctx.db.game_guild_member().character_guid().update(row);
+                ctx.db.game_resurrect_request().target_guid().delete(7);
+                ctx.db.game_self_resurrect_option().character_guid().update(row);
                 // entities.insert(row);
                 row.update(ctx);
             }
@@ -832,26 +959,61 @@ mod entity_simulation_write_discipline {
                 ctx.db.game_world_entity().insert(row);
             }
         "#;
-        assert_eq!(raw_writes(source).len(), 2);
+        assert_eq!(raw_writes(source).len(), 53);
     }
 
     #[test]
-    fn entity_writes_stamp_the_simulation_predicates() {
+    fn writes_maintain_simulation_aoi_and_native_delivery() {
         let root = crate::test_scan::repo_root();
         let mut violations = Vec::new();
         for file in super::character_owned_tripwire::scanned_files() {
             let relative = file.strip_prefix(&root).unwrap_or(&file);
-            if relative == std::path::Path::new("module/src/world/simulation.rs") {
-                continue;
-            }
             let source = std::fs::read_to_string(&file).expect("readable Module source");
-            for (line, _) in raw_writes(&source) {
+            for (line, table) in raw_writes(&source) {
+                let owner = match table {
+                    "game_creature_spline" => "module/src/creatures/tick/mod.rs",
+                    "game_gameobject" => "module/src/gameobject.rs",
+                    "game_dynamic_object" => "module/src/spell/tables.rs",
+                    "game_encounter_equip" => "module/src/encounter.rs",
+                    "game_instance_removal" => "module/src/instance.rs",
+                    "game_addon_message" => "module/src/bridge.rs",
+                    "game_corpse" => "module/src/corpse.rs",
+                    "game_zone_weather" => "module/src/weather.rs",
+                    "game_breath_relay_event" => "module/src/breath_relay.rs",
+                    "game_chat_event_live"
+                    | "game_emote_event_live"
+                    | "game_system_message_event" => "module/src/chat.rs",
+                    "game_realm_chat_event" => "module/src/realm_chat.rs",
+                    "game_chat_channel_notice_event" => "module/src/channel.rs",
+                    "game_group_event" => "module/src/group.rs",
+                    "game_trade_event" => "module/src/trade.rs",
+                    "game_duel_event" => "module/src/duel.rs",
+                    "game_auction_notice" => "module/src/auction.rs",
+                    "game_hunter_pet_protocol" => "module/src/creatures/hunter_pet.rs",
+                    "game_mail_arrival" => "module/src/mail_timer.rs",
+                    "game_guild_petition" => "module/src/guild/petition.rs",
+                    "game_guild_event" | "game_guild_member" => "module/src/guild/mod.rs",
+                    "game_player_skill" => "module/src/skill.rs",
+                    "game_player_spell" => "module/src/spell/spellbook.rs",
+                    "game_xp_event" | "game_levelup_event" => "module/src/xp.rs",
+                    "game_player_reputation" => "module/src/reputation.rs",
+                    "game_character_quest" | "game_character_quest_event_credit" => {
+                        "module/src/quest.rs"
+                    }
+                    "game_item_instance" => "module/src/items/tables.rs",
+                    "game_world_entity" => "module/src/world/simulation.rs",
+                    "game_melee_attack" | "game_combat_event_live" => "module/src/combat/engage.rs",
+                    _ => "module/src/spell/tables.rs",
+                };
+                if relative == std::path::Path::new(owner) {
+                    continue;
+                }
                 violations.push(format!("{}:{line}", relative.display()));
             }
         }
         assert!(
             violations.is_empty(),
-            "entity writes must use WorldEntity::insert/update: {}",
+            "Native delivery tables must be written through their methods: {}",
             violations.join(", ")
         );
     }
@@ -863,13 +1025,14 @@ mod partition_discipline_tripwire {
 
     const SPATIAL_ACCESSORS: &[&str] = &[
         "game_world_entity",
+        "game_corpse",
         "game_creature_spawn",
         "game_gameobject",
         "game_dynamic_object",
     ];
 
     const WHITELIST: &[(&str, usize, &str)] = &[
-        ("module/src/debug/mod.rs", 9, "Debug fixture and operator migration reducers inspect the whole Shard, including the packed-cell backfill."),
+        ("module/src/debug/mod.rs", 11, "Debug fixture and Operator migration reducers inspect the whole Shard, including the DynamicObject cell backfill."),
         ("module/src/debug/instance.rs", 3, "Debug fixture setup and floor validation inspect template populations and guid allocation."),
         ("module/src/creatures/spawn.rs", 4, "World imports replace all authored spawns. Timer normalization and region retirement inspect the complete spawn catalogue."),
         ("module/src/go_collider.rs", 1, "Operator reconciliation rebuilds derived colliders for every hosted partition"),
@@ -1120,12 +1283,8 @@ mod partition_discipline_tripwire {
             violations.is_empty(),
             "Invariant: no Module game logic reads a shard id.\n\
              module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
-             A shard is a database name, a GATEWAY routing fact. Module \
-             game logic may read cells (`lyracore_shared::spatial`) and regions \
-             (`lyracore_shared::region::RegionMap`), and may partition by `(map_id, instance_id)` via \
-             `crate::helpers`, but must never branch on which database owns a region: that is what \
-             lets the same wasm run on every shard and lets a region move between shards without a \
-             code change. Route in `gateway/src/config.rs` instead.",
+             Native Realms use one Shard. Partition gameplay by map and Instance through \
+             `crate::helpers`, and use indexed cells for nearby reads.",
             violations.join("\n  ")
         );
     }
@@ -1153,7 +1312,7 @@ mod character_fence_tripwire {
 
     const WHITELIST: &[(&str, usize, &str)] = &[
         ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
-        ("module/src/helpers.rs", 2, "`character_by_guid` + `character_by_name` — the fence; these two ARE the raw lookups everything else routes through"),
+        ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
         ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
         ("module/src/group.rs", 3, "Group accept, uninvite, and leave read member identity while changing membership, which is authoritative on Realm-core."),
@@ -1738,7 +1897,7 @@ pub(crate) mod package_name_tripwire {
 
     const OFFICIAL_PACKAGES: &[&str] = &["playerbots"];
 
-    const CORE_TREES: &[&str] = &["module", "gateway", "crates", "importer"];
+    const CORE_TREES: &[&str] = &["module", "native-host", "crates", "importer"];
 
     fn is_exempt(rel: &str) -> bool {
         rel == "module/src/tripwires.rs"
@@ -1804,14 +1963,14 @@ pub(crate) mod package_name_tripwire {
     }
 
     #[test]
-    fn the_scan_reads_comments_and_bindings_but_not_tests() {
+    fn the_scan_reads_comments_and_native_host_source_but_not_tests() {
         let source = "let x = 1;\n/// a Playerbots brain\nlet t = \"pkg_playerbots_bot\";\n";
         assert_eq!(
             named_packages(source),
             vec![(2, "playerbots"), (3, "playerbots")]
         );
-        assert!(!is_exempt("gateway/src/stdb/bindings/mod.rs"));
-        assert!(is_exempt("gateway/src/world/party_tests.rs"));
+        assert!(!is_exempt("native-host/src/feed.rs"));
+        assert!(is_exempt("module/src/group_tests.rs"));
         assert!(is_exempt("module/tests/package_account.rs"));
     }
 }

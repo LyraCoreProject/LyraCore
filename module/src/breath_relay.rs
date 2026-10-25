@@ -34,7 +34,7 @@ fn insert(
     duration_ms: u32,
     damage: u32,
 ) {
-    ctx.db.game_breath_relay_event().insert(BreathRelayEvent {
+    let row = ctx.db.game_breath_relay_event().insert(BreathRelayEvent {
         id: 0,
         character_guid,
         kind,
@@ -43,6 +43,7 @@ fn insert(
         damage,
         created_at: ctx.timestamp,
     });
+    crate::native::breath_event(ctx, &row);
 }
 
 pub(crate) fn start(

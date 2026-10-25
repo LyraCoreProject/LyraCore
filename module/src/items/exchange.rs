@@ -1,5 +1,5 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
-use spacetimedb::{Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{Identity, ReducerContext, Timestamp};
 
 use super::inventory::{free_inventory_slots, is_carried_slot};
 use super::{
@@ -64,7 +64,7 @@ pub(super) fn consume_item_stacks(
 }
 
 // Reserve every new GUID before committing any inventory change.
-pub(super) struct ItemStoragePlan {
+pub(crate) struct ItemStoragePlan {
     character_guid: u64,
     owner_identity: Identity,
     created_at: Timestamp,
@@ -73,7 +73,7 @@ pub(super) struct ItemStoragePlan {
 }
 
 impl ItemStoragePlan {
-    pub(super) fn read(
+    pub(crate) fn read(
         ctx: &ReducerContext,
         character_guid: u64,
         owner_identity: Identity,
@@ -110,11 +110,11 @@ impl ItemStoragePlan {
         }
     }
 
-    fn consume(&mut self, entry: u32, count: u32) -> Result<(), ActionRefusal> {
+    pub(crate) fn consume(&mut self, entry: u32, count: u32) -> Result<(), ActionRefusal> {
         consume_item_stacks(&mut self.items, entry, count)
     }
 
-    pub(super) fn grant(
+    pub(crate) fn grant(
         &mut self,
         ctx: &ReducerContext,
         template: &ItemTemplate,
@@ -235,7 +235,7 @@ impl ItemStoragePlan {
         Ok(())
     }
 
-    pub(super) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+    pub(crate) fn check_trade_offers(&self, ctx: &ReducerContext) -> Result<bool, ActionRefusal> {
         let mut changed_offer = false;
         for (item, &(count, soulbound)) in self.items.iter().zip(&self.original_stacks) {
             if (item.stack_count, item.soulbound) != (count, soulbound)
@@ -249,24 +249,54 @@ impl ItemStoragePlan {
                 changed_offer = true;
             }
         }
+        Ok(changed_offer)
+    }
+
+    pub(crate) fn commit(self, ctx: &ReducerContext) -> Result<(), ActionRefusal> {
+        let changed_offer = self.check_trade_offers(ctx)?;
+        if ctx
+            .db
+            .game_item_instance()
+            .by_owner_guid()
+            .filter(self.character_guid)
+            .count()
+            != self.original_stacks.len()
+        {
+            return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
+        }
+        for (item, &(count, soulbound)) in self.items.iter().zip(&self.original_stacks) {
+            let current = ctx.db.game_item_instance().guid().find(item.guid);
+            if !current.is_some_and(|current| {
+                current.owner_guid == self.character_guid
+                    && current.slot == item.slot
+                    && current.entry == item.entry
+                    && current.stack_count == count
+                    && current.soulbound == soulbound
+                    && current.durability == item.durability
+                    && current.enchant_id == item.enchant_id
+                    && current.random_property_id == item.random_property_id
+                    && current.item_text_id == item.item_text_id
+            }) {
+                return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
+            }
+        }
         let mut guids =
             allocate_item_guids(ctx, self.items.len() - self.original_stacks.len())?.into_iter();
-        let instances = ctx.db.game_item_instance();
         for (index, mut item) in self.items.into_iter().enumerate() {
             match self.original_stacks.get(index) {
                 Some(&(count, soulbound))
                     if (count, soulbound) != (item.stack_count, item.soulbound) =>
                 {
                     if item.stack_count == 0 {
-                        instances.guid().delete(item.guid);
+                        crate::ItemInstance::delete(ctx, item.guid);
                     } else {
-                        instances.guid().update(item);
+                        item.update(ctx);
                     }
                 }
                 Some(_) => {}
                 None => {
                     item.guid = guids.next().expect("item plan reserved every new GUID");
-                    instances.insert(item);
+                    crate::ItemInstance::insert(ctx, item);
                 }
             }
         }

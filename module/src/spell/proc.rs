@@ -1,4 +1,4 @@
-use spacetimedb::{log, ReducerContext, Table};
+use spacetimedb::{log, ReducerContext};
 
 use crate::game_world_entity;
 
@@ -301,7 +301,7 @@ pub(crate) fn run_proc_pass(
                 fresh.proc_charges = fire.charges_left;
             }
             fresh.proc_ready_micros = fire.ready_micros;
-            ctx.db.game_aura().id().update(fresh);
+            fresh.update(ctx);
         }
     }
 }
@@ -396,20 +396,23 @@ fn fire_proc_damage(ctx: &ReducerContext, row: &Aura, counterparty_guid: u64) ->
         Hit::spell(HitSource::Triggered, row.spell_id, false),
     );
     if dealt > 0 || absorbed > 0 {
-        ctx.db.game_spell_cast_event_live().insert(SpellCastEvent {
-            target_guid: counterparty_guid,
-            damage: dealt,
-            school: school_index(school_mask),
-            resisted: (row.amount as u32).saturating_sub(after_resist.max(0) as u32),
-            absorbed,
-            is_proc_log: true,
-            ..SpellCastEvent::signal(
-                ctx,
-                row.target_guid,
-                row.spell_id,
-                SpellCastEventKind::ProcLog,
-            )
-        });
+        crate::spell::SpellCastEvent::insert(
+            ctx,
+            SpellCastEvent {
+                target_guid: counterparty_guid,
+                damage: dealt,
+                school: school_index(school_mask),
+                resisted: (row.amount as u32).saturating_sub(after_resist.max(0) as u32),
+                absorbed,
+                is_proc_log: true,
+                ..SpellCastEvent::signal(
+                    ctx,
+                    row.target_guid,
+                    row.spell_id,
+                    SpellCastEventKind::ProcLog,
+                )
+            },
+        );
     }
     true
 }

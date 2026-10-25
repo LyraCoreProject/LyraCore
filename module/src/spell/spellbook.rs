@@ -104,6 +104,7 @@ pub(crate) fn learn_spell(ctx: &ReducerContext, guid: u64, owner: Identity, spel
         owner_identity: owner,
         spell_id,
     });
+    crate::native::spell_learned(ctx, guid, spell_id);
     crate::skill::grant_lockpicking_on_learn(ctx, guid, owner, spell_id);
 }
 
@@ -115,6 +116,7 @@ pub(crate) fn forget_spell(ctx: &ReducerContext, guid: u64, spell_id: u32) {
         .collect::<Vec<_>>()
     {
         spells.id().delete(row.id);
+        crate::native::spell_forgotten(ctx, guid, spell_id);
     }
 }
 
@@ -140,7 +142,7 @@ pub(crate) fn strip_spell_auras(ctx: &ReducerContext, guid: u64, spell_id: u32) 
     let mut moved_vitals = false;
     let mut moved_mount = false;
     for (id, mv, mm) in to_remove {
-        auras.id().delete(id);
+        crate::Aura::delete(ctx, id);
         moved_vitals |= mv;
         moved_mount |= mm;
     }

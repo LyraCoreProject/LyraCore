@@ -212,18 +212,17 @@ pub(crate) fn open(
     name: &str,
     charter_item_guid: u64,
 ) -> u32 {
-    ctx.db
-        .game_guild_petition()
-        .insert(GuildPetition {
-            petition_id: 0,
-            charter_item_guid,
-            owner_guid,
-            owner_name: owner_name.to_string(),
-            team,
-            name: name.to_string(),
-            created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
-        })
-        .petition_id
+    let petition = ctx.db.game_guild_petition().insert(GuildPetition {
+        petition_id: 0,
+        charter_item_guid,
+        owner_guid,
+        owner_name: owner_name.to_string(),
+        team,
+        name: name.to_string(),
+        created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+    });
+    crate::native::guild_charter_opened(ctx, &petition);
+    petition.petition_id
 }
 
 pub(crate) fn sign(
@@ -457,6 +456,14 @@ pub(super) fn withdraw(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
+pub(crate) fn holds_charter(ctx: &ReducerContext, guid: u64, charter: u64) -> bool {
+    ctx.db
+        .game_item_instance()
+        .guid()
+        .find(charter)
+        .is_some_and(|item| item.owner_guid == guid && item.entry == GUILD_CHARTER_ENTRY)
+}
+
 #[reducer]
 pub fn gw_destroy_guild_charter(
     ctx: &ReducerContext,
@@ -474,7 +481,7 @@ pub fn gw_destroy_guild_charter(
             "item {charter_item_guid} is not a Guild Charter of {actor_guid}"
         ));
     }
-    items.guid().delete(charter_item_guid);
+    crate::ItemInstance::delete(ctx, charter_item_guid);
     Ok(())
 }
 

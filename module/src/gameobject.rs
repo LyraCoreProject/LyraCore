@@ -145,6 +145,42 @@ pub struct GameObject {
     pub rotation_3: f32,
 }
 
+impl GameObject {
+    pub(crate) fn try_insert(self, ctx: &ReducerContext) -> Result<Self, String> {
+        let object = ctx.db.game_gameobject().try_insert(self)?;
+        crate::aoi::gameobject_changed(ctx, &object);
+        Ok(object)
+    }
+
+    pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
+        let object = ctx.db.game_gameobject().insert(self);
+        crate::aoi::gameobject_changed(ctx, &object);
+        object
+    }
+
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let old = ctx.db.game_gameobject().guid().find(self.guid);
+        let object = ctx.db.game_gameobject().guid().update(self);
+        if old.as_ref().is_none_or(|old| {
+            (old.map_id, old.instance_id, old.cell)
+                != (object.map_id, object.instance_id, object.cell)
+        }) {
+            crate::aoi::gameobject_changed(ctx, &object);
+        }
+        if let Some(old) = old {
+            crate::native::gameobject_changed(ctx, &old, &object);
+        }
+        object
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: impl std::borrow::Borrow<u64>) -> bool {
+        let guid = *guid.borrow();
+        let removed = ctx.db.game_gameobject().guid().delete(guid);
+        crate::aoi::remove_subject(ctx, crate::aoi::GAME_OBJECT, guid);
+        removed
+    }
+}
+
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn gameobject_destination_evidence(
     ctx: &ReducerContext,
@@ -217,7 +253,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();
     crate::go_collider::remove(ctx, gathered_guid);
-    gos.guid().delete(gathered_guid);
+    crate::GameObject::delete(ctx, gathered_guid);
     let candidates: Vec<GameObjectPoolMember> = members
         .by_pool()
         .filter(&pool_id)
@@ -235,7 +271,7 @@ pub(crate) fn reroll_pool(ctx: &ReducerContext, pool_id: u32, gathered_guid: u64
 }
 
 fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
-    let go = ctx.db.game_gameobject().insert(GameObject {
+    let go = GameObject {
         guid: pool_point_guid(m.point_id),
         template_entry: m.template_entry,
         map_id: m.map_id,
@@ -254,7 +290,8 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         rotation_1: 0.0,
         rotation_2: 0.0,
         rotation_3: 0.0,
-    });
+    }
+    .insert(ctx);
     crate::go_collider::register(ctx, &go);
 }
 
@@ -305,7 +342,7 @@ pub(crate) fn arm_pool(ctx: &ReducerContext, pool_id: u32) {
         .unwrap_or(0);
     for m in members.by_pool().filter(&pool_id) {
         crate::go_collider::remove(ctx, pool_point_guid(m.point_id));
-        gos.guid().delete(pool_point_guid(m.point_id));
+        crate::GameObject::delete(ctx, pool_point_guid(m.point_id));
     }
     for _ in 0..max_active {
         let pool_members: Vec<GameObjectPoolMember> = members.by_pool().filter(&pool_id).collect();
@@ -537,7 +574,7 @@ fn use_resolved_gameobject(
             }
             crate::loot::insert_corpse_rows(ctx, go.guid, winners);
             go.state = 1;
-            ctx.db.game_gameobject().guid().update(go);
+            go.update(ctx);
         }
         go_type::GOOBER => {
             if locked_shut(ctx, go.guid, tmpl.lock_id) {
@@ -586,7 +623,7 @@ fn use_resolved_gameobject(
                     go.state = 1;
                     go.respawn_at_micros = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
                         + respawn_window_micros(tmpl.respawn_secs);
-                    ctx.db.game_gameobject().guid().update(go);
+                    go.update(ctx);
                 }
             }
         }
@@ -595,7 +632,7 @@ fn use_resolved_gameobject(
                 return Err("it is locked".to_string());
             }
             go.state = toggle_state(go.state);
-            ctx.db.game_gameobject().guid().update(go);
+            go.update(ctx);
         }
         _ => {}
     }
@@ -622,7 +659,7 @@ pub(crate) fn despawn_from_relay(ctx: &ReducerContext, go_guid: u64) -> Result<(
         .go_guid()
         .delete(go_guid);
     crate::go_collider::remove(ctx, go_guid);
-    ctx.db.game_gameobject().guid().delete(go_guid);
+    GameObject::delete(ctx, go_guid);
     Ok(())
 }
 
@@ -752,7 +789,7 @@ pub fn import_gameobjects(ctx: &ReducerContext, packed: String) -> Result<(), St
     let guids: Vec<u64> = gos.iter().map(|g| g.guid).collect();
     for g in guids {
         crate::go_collider::remove(ctx, g);
-        gos.guid().delete(g);
+        crate::GameObject::delete(ctx, g);
     }
     if load_go_batch(ctx, &packed)? == 0 {
         return Err("import payload was empty".to_string());
@@ -768,7 +805,6 @@ pub fn import_gameobjects_append(ctx: &ReducerContext, packed: String) -> Result
 }
 
 fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
-    let gos = ctx.db.game_gameobject();
     let now = ctx.timestamp;
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
@@ -785,29 +821,29 @@ fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
         let pu8 = |s: &str| s.parse::<u8>().map_err(|_| format!("bad u8 state: {s}"));
 
         let (gx_src, gy_src) = (pf32(f[3])?, pf32(f[4])?);
-        let go = gos
-            .try_insert(GameObject {
-                guid: pu64(f[0])?,
-                template_entry: pu32(f[1])?,
-                map_id: pu32(f[2])?,
-                x: pf32(f[3])?,
-                y: pf32(f[4])?,
-                z: pf32(f[5])?,
-                orientation: pf32(f[6])?,
-                state: pu8(f[7])?,
-                created_at: now,
-                respawn_at_micros: 0,
-                instance_id: 0,
+        let go = GameObject {
+            guid: pu64(f[0])?,
+            template_entry: pu32(f[1])?,
+            map_id: pu32(f[2])?,
+            x: pf32(f[3])?,
+            y: pf32(f[4])?,
+            z: pf32(f[5])?,
+            orientation: pf32(f[6])?,
+            state: pu8(f[7])?,
+            created_at: now,
+            respawn_at_micros: 0,
+            instance_id: 0,
 
-                grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
-                grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
-                cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
-                rotation_0: pf32(f[8])?,
-                rotation_1: pf32(f[9])?,
-                rotation_2: pf32(f[10])?,
-                rotation_3: pf32(f[11])?,
-            })
-            .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
+            grid_x: lyracore_shared::spatial::grid_cell(gx_src, gy_src).0,
+            grid_y: lyracore_shared::spatial::grid_cell(gx_src, gy_src).1,
+            cell: lyracore_shared::spatial::cell_id_at(gx_src, gy_src),
+            rotation_0: pf32(f[8])?,
+            rotation_1: pf32(f[9])?,
+            rotation_2: pf32(f[10])?,
+            rotation_3: pf32(f[11])?,
+        }
+        .try_insert(ctx)
+        .map_err(|e| format!("gameobject insert failed (dup guid?): {e}"))?;
         crate::go_collider::register(ctx, &go);
         loaded += 1;
     }

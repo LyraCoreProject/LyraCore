@@ -28,14 +28,18 @@ pub(crate) fn character_by_guid(ctx: &ReducerContext, guid: u64) -> Option<Chara
 }
 
 pub(crate) fn character_by_name(ctx: &ReducerContext, name: &str) -> Option<Character> {
-    gate_by_guid(
-        ctx,
-        ctx.db
-            .game_character()
-            .iter()
-            .find(|c| c.name.eq_ignore_ascii_case(name)),
-        |c| c.guid,
-    )
+    characters_by_name(ctx, name).next()
+}
+
+pub(crate) fn characters_by_name<'a>(
+    ctx: &'a ReducerContext,
+    name: &'a str,
+) -> impl Iterator<Item = Character> + 'a {
+    ctx.db
+        .game_character()
+        .iter()
+        .filter(move |character| character.name.eq_ignore_ascii_case(name))
+        .filter_map(move |character| gate_by_guid(ctx, Some(character), |character| character.guid))
 }
 
 fn gate_by_guid<T>(

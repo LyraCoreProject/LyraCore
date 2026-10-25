@@ -1,169 +1,65 @@
 # Recipe: add an opcode
 
-An opcode has two halves. A client opcode (`CMSG_*`) reaches a Gateway dispatcher, which makes
-Durable Reads and Durable Requests through a Store. A server opcode (`SMSG_*`) that answers a
-change in the Module is sent by a Relay when a row changes. Many features need both.
+Client requests enter `module/src/native/mod.rs` and dispatch from `module/src/native/world.rs`.
+The Module reads durable state, applies gameplay rules and emits ordered packets in one
+transaction. The Native Host handles sockets and cryptographic scratch state.
 
-Two merged changes are the worked examples. Read their diffs next to this list:
+## 1. Establish the build-5875 layout
 
-- The Meeting Stone Queue (`c2f2373a`) added a whole client-opcode family:
-  `CMSG_MEETINGSTONE_JOIN`, `_LEAVE`, `_INFO` and `MSG_LOOKING_FOR_GROUP`.
-- The Instance Removal countdown (`fcb1cf3b`) relays `SMSG_RAID_GROUP_ONLY` from a Module row.
+Find the message in `wow_world_messages::vanilla` and compare it with the client or an authoritative
+protocol implementation. Some generated layouts differ from 1.12.1. Put bounded custom readers and
+packet builders in `crates/lyracore-protocol/src/codec/`.
 
-```bash
-git diff c2f2373a^1 c2f2373a --stat
-git diff fcb1cf3b^1 fcb1cf3b --stat
-```
+Test the bytes, lengths and opcodes. Gate counts, booleans, sized strings and compressed data before
+calling a generated reader that can panic or allocate from an unchecked field. A reader reachable
+at Character selection or in the Login Queue needs the same protection as an in-world reader.
 
-Steps 1 to 4 are the Module side. Steps 5 to 11 are the Gateway side, and step 12 covers both.
+## 2. Put the gameplay rule in its owning Module code
 
-## 1. Check the message type
+Resolve the Actor from the authenticated World Session. Call the existing gameplay operation or
+add it in the owning Module file. Keep presence, ownership, map, Instance and recipient Gates there.
+Use indexes and partition-scoped spatial helpers. A request must not supply its own authority.
 
-Find the message in `wow_world_messages::vanilla`: `ClientOpcodeMessage::CMSG_*` for a client
-opcode, `ServerOpcodeMessage::SMSG_*` for a server one. Compare its fields with cmangos or vmangos.
-When gtker cannot encode the real layout, send raw bytes with `Outbound::Raw { opcode, body }`, as
-the cast handler does for `SMSG_CAST_RESULT`.
+Preserve atomicity. An expected Refusal must leave durable state unchanged unless the behavior
+explicitly defines a partial result. Use the native rollback/reply helpers when a reply must be
+sent after a transaction rolls back. Inspect neighboring handlers for the required reply shape.
+A transport or decoding failure remains distinct from a gameplay Refusal.
 
-## 2. Put the rule in the Module
+## 3. Add state only when the behavior needs it
 
-The Gateway carries the client's intent. The Module decides.
+Add or extend a table in the owning Module file. Follow the additive migration rules in
+[danger zones](../danger-zones.md). Native request handling reads the Shard directly; it needs no
+Coordinator cache, generated Gateway bindings or cross-Shard call.
 
-- Add a Gateway Verb, `gw_<verb>`, in the owning family's module under `module/src/`. Its first act
-  is `crate::helpers::require_operator(ctx)?`, then
-  `crate::account_ownership::require_actor(ctx, request_actor)?` with a `crate::SessionActor`
-  argument. Then it calls the family's core function, which holds the Gates.
-- A Realm-core operation is a `realm_<verb>` reducer and takes the realm-wide facts the Gateway
-  read.
-- A Refusal returns `Err` with a tag the Gateway can parse back into a typed Refusal. The Meeting
-  Stone Queue keeps that type in `lyracore_shared::meeting_stone`. The Gateway's `classify` treats
-  every other error as a Transport Loss, so the two never mix.
-- Declare a new module file in `module/src/lib.rs`.
+If login or map entry must restore the state, update the entry path too. Persistent state and
+transient notifications have different replay requirements.
 
-## 3. Store what the Relay or a Durable Read needs
+## 4. Dispatch and deliver
 
-Add or extend a table in the owning family. A new column goes at the END of the struct with
-`#[default(...)]`, and a `String` cannot take one. [`danger-zones.md`](../danger-zones.md) section 1
-has the rules. A row the Gateway relays carries its recipient, so the Relay finds the viewer by key
-instead of a scan.
+Add the request arm in `module/src/native/world.rs` and its Protocol Family handler under
+`module/src/native/`. Preserve the opcode's behavior in every state where the client sends it,
+including packets still in flight after logout and acknowledgements during teleport.
 
-## 4. Regenerate the Gateway bindings
+Build replies with the protocol crate and emit them through the native send functions. State
+changes use the owning native Relay. Select recipients in the Module using World Sessions and AOI
+Grants. Keep owner-private fields out of Peer CREATE and AOI VALUES packets.
 
-Required for every new table and every new reducer.
+A map change clears the old audience. Connection notifications can still arrive while loading;
+AOI entry must put self CREATE before the destination's dependent updates. Test the ordering when
+the new opcode participates in that path.
 
-- Run `./lyracore bindings`, then `cargo test -p lyracore-gateway`.
-- For a Relay table, add its declaration beside its codec as described in step 11. The declaration
-  generates the subscription query. For a table used only by Durable Reads, add its query to
-  `coordinator_queries` in `gateway/src/stdb/connection.rs`.
-- Add a `parity_test!` and the table name to `MANIFEST_TABLES` in
-  `gateway/tests/schema_parity.rs`. Its inventory checks both query sources.
+## 5. Verify each affected boundary
 
-## 5. Call the reducer from the Store trait method
+- Protocol tests cover exact layouts and malformed client bytes.
+- Module tests cover gameplay Gates, atomicity and committed state.
+- `native-host/check.py` covers actual native request dispatch, replies and peer delivery.
+- Benilla covers the client acknowledgement, UI and follow-up behavior that a Headless Client
+  cannot establish.
 
-File: `gateway/src/stdb/store/<family>.rs`, declared in `gateway/src/stdb/store/mod.rs`. It holds
-`impl <Family>ActionStore for Coordinator`. Each trait method makes its Durable Request itself, as
-the `Actor` the handler resolved:
+Run `./lyracore preflight` after a schema change. A change to native reducer arguments or the Host's
+BSATN delivery types must update both Host and Module and pass the native protocol check. See
+[testing](../testing.md) for the remaining required checks.
 
-```rust
-fn admit_meeting_stone(&self, actor: Actor, go_guid: u64) -> Result<MeetingStoneOutcome> {
-    meeting_stone_outcome(call_reducer!(
-        self.0.call_pipe().conn.reducers,
-        "gw_admit_meeting_stone",
-        gw_admit_meeting_stone_then(self.session_actor(actor), go_guid)
-    ))
-}
-```
-
-Do not add an inherent `impl Coordinator` method for the trait method to forward to. Keep one only
-when a Relay, logon or another family calls it too. A Realm-core call goes through
-`self.realm_core()?` first. A Durable Request the Gateway makes for the World Session, with no
-client acting, uses `self.owner_actor()`. A family with a typed Refusal parses it with
-`reducer_refusal_reason` and returns every other error unchanged.
-
-## 6. Add the Durable Reads
-
-File: `gateway/src/stdb/store/<family>.rs`. Write the read in the trait method. A read that a Relay
-or another family also calls is an `impl Coordinator` method in `gateway/src/stdb/reads/`. Find rows
-in the Coordinator cache by a unique index. The SDK cache has no other index, and a whole-table
-`iter()` holds the lock the pump needs.
-
-## 7. Write the Protocol Family handler
-
-File: `gateway/src/world/handlers/<family>.rs`, declared and re-exported in
-`gateway/src/world/handlers/mod.rs`. For an existing Protocol Family, add its request arm and
-ownership entry, then continue with the packet and tests.
-
-- Keep Durable Reads and Durable Requests on the Protocol Family's Store trait. A method that acts for a
-  Character takes `actor: Actor`. Steps 5 and 6 implement it.
-- Implement `ProtocolFamily<St>` on the handler. Its `handle` method takes the Store, shared
-  `ProtocolSession`, and `ProtocolRequest`, and returns `ProtocolReply`.
-- Resolve the Character with `session.actor()`. Before world entry it is `None`; preserve the
-  opcode's specified reply without inventing an Actor.
-- Classify Store errors with `classify`. A Refusal gets the Protocol Family's reply. A Transport Loss
-  returns `Err`, which ends the World Session.
-- Update local protocol state after the Durable Request succeeds and return outbound messages in
-  their required order. The World Session queues them. Existing operations that must follow that
-  queue step, such as taxi arming, use `WorldSessionAction`.
-- Keep a local Fake and test through `handle`. The shared `ProtocolSession` needs no socket or
-  routed Store. Do not add a separate context for each Protocol Family, dispatch outcome, or pass-through result.
-
-## 8. Join the family to `WorldStore`
-
-- File: `gateway/src/world/store.rs`. Add the trait to the `WorldStore` supertrait list and to the
-  bounds of its blanket impl.
-- File: `gateway/src/world/test_support/world_fake/<family>.rs`. Implement the trait for `WorldFake`,
-  the shared Fake that implements every family, and keep the family's state in its own struct there.
-
-## 9. Declare opcode ownership
-
-File: `gateway/src/world/routing.rs`. Add the opcode type to its owner's entry in
-`protocol_families!`. The declaration supplies both the ownership table and the handler call.
-A new Protocol Family needs one entry with its handler type and opcodes.
-
-The ownership test refuses duplicate entries. Declaration order has no routing meaning. A handler
-receives only its owned requests; an unexpected opcode is a routing defect. If one opcode serves
-several interactions, its owner selects the operation from the payload or Durable Read. GameObject
-use and chat are examples.
-
-The reader supplies the numeric opcode, including requests whose packet layout needs a custom
-reader. Movement coalescing and the Chat Flood Limiter run before handler dispatch.
-
-## 10. Build the packet
-
-File: `gateway/src/codec/<area>.rs`, with a `pub use` in `gateway/src/codec/mod.rs` and any new gtker
-type import there. Name the cmangos or vmangos source for each field. Test the builder byte for
-byte, opcode and size header included.
-
-## 11. Relay the row
-
-File: `gateway/src/codec/<family>/subscriptions.rs`, declared by its codec module.
-
-- Add a `declare_relays!` entry with the generated table accessor, its Realm-core choice, and each
-  insert, update or delete callback. It generates the query and per-Shard registration together.
-  Set the Realm-core choice to `true` only for a table that also needs the private Realm-core Relay.
-- Choose `insert(Live)` to suppress initial subscription rows or `insert(Snapshot)` to replay them.
-  Updates and deletes always carry live deltas. Follow the table's behavior; event names do not
-  determine its replay policy.
-- Keep the row callback and outbound builder in this file. Find the recipient with a WorldView
-  routing method, clone rows before queuing, then call the builder inside
-  `enqueue(viewer, move |viewer| vec![...])`. The World Session writer runs that job in order.
-- A new Protocol Family joins `protocol_relays!` in `gateway/src/stdb/relays.rs`. It then contributes
-  both its queries and its callbacks. WorldView keeps the shared AOI and viewer lifetime, and
-  registers callbacks before seeding the cache on reconnect.
-- If world entry must show resident state, add it to the world entry sweep too. The Instance Removal
-  countdown does this.
-
-## 12. Test each seam
-
-- The dispatcher, through its local Fake, in the family file. One Fake answers
-  `ReducerCallError::refused` and the client gets the Refusal answer. One answers
-  `ReducerCallError::transport_lost` and the dispatcher returns `Err`.
-- The packet bytes, in the codec file.
-- The Relay builder in its codec file, and shared audience and queue behavior in `world_view.rs`.
-- The Module rule, in a durable test `module/tests/<family>.rs`. CI picks up a new target with no
-  workflow edit.
-- A cross-Shard Gateway behaviour, in an ignored test under `gateway/src/stdb/`. CI runs those one by
-  one, so add its `--ignored --exact` line to `.github/workflows/module-durable.yml`.
-
-Then record new terms in `CONTEXT.md` (and `CORE_TERMS.md` when a first change meets them), add a
-client check under [`docs/verification/`](../verification/README.md) for what only a real client
-shows, and run the commands in [`testing.md`](../testing.md).
+Record new terms in `CONTEXT.md`, and in `CORE_TERMS.md` when new contributors need them. Record
+real-client evidence under [verification](../verification/README.md), including the exact revision
+and any fixture setup.

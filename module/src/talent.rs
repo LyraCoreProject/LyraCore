@@ -287,6 +287,7 @@ pub(crate) fn do_learn_talent(
     }
 
     apply_talent_rank(ctx, &talent, guid, owner, next, entity.level as u8);
+    crate::native::talent_points(ctx, guid, entity.level);
     Ok(next)
 }
 
@@ -491,7 +492,7 @@ pub(crate) fn do_reset_talents(
     trainer_guid: u64,
 ) -> Result<u32, String> {
     let entities = ctx.db.game_world_entity();
-    let mut entity = entities
+    let entity = entities
         .guid()
         .find(character_guid)
         .ok_or_else(|| format!("no live entity for guid {character_guid}"))?;
@@ -534,7 +535,7 @@ pub(crate) fn do_reset_talents(
         learned.id().delete(row.id);
     }
 
-    // Strip passive auras directly because the player-facing cancel Gate refuses them.
+    // Cancelling a passive Aura through the client request is forbidden.
     let mut revitalize = false;
     for spell_id in &passives {
         revitalize |= crate::spell::strip_spell_auras(ctx, character_guid, *spell_id);
@@ -548,9 +549,12 @@ pub(crate) fn do_reset_talents(
         crate::spell::forget_spell(ctx, character_guid, *spell_id);
     }
 
-    entity.money = entity.money.saturating_sub(cost);
-    entity.update(ctx);
-    character.respec_count += 1;
+    if let Some(mut entity) = entities.guid().find(character_guid) {
+        entity.money = entity.money.saturating_sub(cost);
+        crate::native::talent_points(ctx, character_guid, entity.level);
+        entity.update(ctx);
+    }
+    character.respec_count = character.respec_count.saturating_add(1);
     chars.guid().update(character);
     Ok(cost)
 }

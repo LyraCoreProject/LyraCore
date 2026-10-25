@@ -234,7 +234,7 @@ pub fn release_account_claim(ctx: &ReducerContext, token: WorldSessionToken) -> 
 
 fn claim_ended(ctx: &ReducerContext, character_guid: u64) {
     crate::channel::leave_all(ctx, character_guid);
-    crate::meeting_stone::claim_ended(ctx, character_guid);
+    crate::meeting_stone::remove_solo_seeker(ctx, character_guid);
 }
 
 // Install the Realm-core generation on every World Shard before admitting the Character.

@@ -7,47 +7,54 @@ changes in one file, change it in the other.
 
 ## Where things run
 
+**Native Host**:
+The SpacetimeDB process that accepts WoW TCP connections. It handles transport and cryptographic
+scratch state, then applies the Module's ordered packet delivery instructions. The native runtime
+uses one Shard for all Realm state.
+
 **Realm**:
-The set of shards behind one gateway tier that clients see as one server.
+The game world and Accounts that clients see as one server. The native runtime stores a Realm in
+one Shard.
 _Avoid_: server, cluster
 
 **Shard**:
-One SpacetimeDB database in a realm. The word for the boundary a character or mail crosses is "cross-shard".
+One SpacetimeDB database containing a Realm. Maps and Instances partition gameplay within it.
 _Avoid_: database (when meaning a shard), db, cross-database
 
 **World Shard**:
-A shard that owns a set of maps.
+A retired topology role that owned a set of maps. Native Realms keep all maps in one Shard.
 
 **Instance Pool**:
-The shard that hosts instanced maps.
+A retired topology role that hosted instanced maps. Native Instances share the Realm's Shard.
 
 **Realm-core**:
-The shard that holds realm-wide state: accounts, sessions, Account Claims, groups, guilds, Chat Channels, Realm Chat Lines, mail, auctions, loot rolls, the character-to-shard index and shard load samples. It holds no Characters.
+The retired Shard for realm-wide state. Native Realms store that state beside Characters in one Shard.
 
 **Home Shard**:
-The shard that currently holds a Character's row.
+The Shard that contains a Character. Every Character in a native Realm has the same Home Shard.
 
 **Module**:
-The wasm that holds all durable state and all game logic. The same wasm runs on every shard.
+The WebAssembly program that owns durable state, gameplay, AOI and native protocol handling in a
+Realm's Shard.
 
 **Gateway**:
-The trusted protocol tier between clients and shards. Holds no durable state.
+The removed protocol runtime between clients and Shards. Its request handling and AOI run in the
+Module; the Native Host handles transport.
 
 **Operator**:
-The identity that publishes and owns the shards, and the only caller of Gateway Verbs.
+The identity that publishes and owns the Realm's Shard, and the only caller of Gateway Verbs.
 
-## How the Gateway talks to the Module
+## Requests and delivery
 
 **Gateway Verb**:
 A `gw_*` reducer the Operator calls on a character's behalf, with the Actor named by guid.
 
 **Actor**:
-The Character a Gateway Verb acts as. In the Gateway it is the `Actor` type, a nonzero guid.
-`Actor::new` returns `None` for guid 0, so no request acts as guid 0. The Coordinator signs an Actor
-into the `SessionActor` a reducer receives.
+The Character a gameplay request acts as, identified by a nonzero guid. Native requests resolve it
+from the authenticated World Session; Operator reducers accept a SessionActor.
 
 **Gate**:
-A rule that refuses a request. Gates live in the Module, except the realm-wide reads only the Gateway can perform (presence, name resolution, loot-roll fan-out).
+A Module rule that refuses a request. This includes presence, name resolution and recipient selection.
 _Avoid_: validation, guard
 
 **Refusal**:
@@ -61,17 +68,17 @@ client logs in again from durable state.
 _Avoid_: transport failure, fatal error, disconnect
 
 **Durable Request**:
-A reducer call the Gateway makes that changes Module state.
-_Avoid_: mutation, write, reducer call (in gateway prose)
+A request whose state changes commit in a Module transaction.
 
 **Durable Read**:
-A read of Module state through the Coordinator.
+A read of committed Module state.
 
 **Coordinator**:
-The Gateway's subscribed connection per shard, authenticated with the Owner Token. It serves every Durable Read; a small pool of call pipes carries Durable Requests.
+The removed Gateway's subscribed connection to a Shard. The Native Host uses in-process connections
+and the Module reads its own state.
 
 **Relay**:
-Gateway code that turns a table change into a client message.
+Code that turns a state change into a client message. Native Relays run in the Module.
 _Avoid_: forwarder, pusher
 
 **Speech**:
@@ -83,7 +90,11 @@ _Avoid_: local chat, proximity chat
 The area of interest that decides which entities a World Session sees.
 _Avoid_: visibility set, interest radius
 
-## Players and moving between Shards
+**AOI Grant**:
+A private Module row that permits a Character to observe an entity. Its id stays unchanged while
+that permission holds. WorldEntity, GameObject, Corpse and DynamicObject grants use separate layers.
+
+## Characters and Sessions
 
 **Account**:
 A login. Owns characters.
@@ -98,7 +109,7 @@ _Avoid_: player as a noun in Core code outside that authoring contract
 The Module's record that an Account is logged in on a Character.
 
 **World Session**:
-The Gateway's per-connection loop for one client on the world port.
+One authenticated connection on the world port, with its request state in the Module.
 _Avoid_: session (unqualified, when meaning the connection)
 
 **Transfer**:
@@ -127,14 +138,14 @@ _Avoid_: SDK, plugin API, public API, allowlist
 ## Tests
 
 **Seam**:
-The interface where session or protocol handling hands work to durable state, expressed as a trait so tests can substitute the far side. Not the Shard Boundary, not any arbitrary trait.
+An interface between caller behavior and a dependency that tests can substitute.
 
 **Protocol Family**:
-A group of client opcodes one Gateway handler owns, with the Store traits that handler calls. The opcode ownership table selects that handler once. Each handler implements `ProtocolFamily`, reads or changes shared protocol state, and returns its outbound messages. `WorldStore` holds all Store traits for the World Session; each handler names only the Stores it needs.
+Related client opcodes handled by one Module component.
 _Avoid_: family (unqualified), domain
 
 **Store**:
-The durable side of a Seam: the trait a handler calls for Durable Reads and Durable Requests. The Coordinator implements it in production, a Fake in tests.
+The durable side of a Seam, represented by a trait when tests substitute a Fake.
 _Avoid_: repository, adapter, port, backend, service
 
 **Fake**:
@@ -146,7 +157,7 @@ A test that fails the build when a structural rule is broken.
 _Avoid_: tripwire, guard test
 
 **Headless Client**:
-A client that speaks the real 1.12.1 protocol to the Gateway in tests, with no UI.
+A client that speaks the real 1.12.1 protocol to the Native Host in tests, with no UI.
 _Avoid_: wire harness, test harness
 
 **Verification**:

@@ -15,7 +15,7 @@ use super::tables::{
 // Squared yards.
 const VENDOR_RANGE_SQ: f32 = 100.0;
 
-// Gateway buy-failure mapping matches substrings in these Refusal messages.
+// The protocol's buy-failure mapping matches substrings in these Refusal messages.
 pub(crate) fn npc_interaction_gate(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -40,11 +40,17 @@ pub(crate) fn npc_interaction_gate(
     if npc.is_player() || npc.npc_flags & required_flag == 0 {
         return Err(flag_err.to_string());
     }
+    if npc.dead || npc.health == 0 {
+        return Err(format!("{noun} is dead"));
+    }
     if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
         return Err(format!("{noun} on another map"));
     }
     if crate::helpers::dist_sq(&player, &npc) > VENDOR_RANGE_SQ {
         return Err(format!("{noun} out of range"));
+    }
+    if crate::reputation::npc_refuses_interaction(ctx, &npc, &player) {
+        return Err(format!("{noun} refuses interaction"));
     }
     Ok((player, npc))
 }
@@ -65,7 +71,7 @@ pub(crate) fn innkeeper_access_gate(
     character_guid: u64,
     innkeeper_guid: u64,
 ) -> Result<(), String> {
-    let (_, innkeeper) = npc_interaction_gate(
+    npc_interaction_gate(
         ctx,
         character_guid,
         innkeeper_guid,
@@ -74,9 +80,6 @@ pub(crate) fn innkeeper_access_gate(
         "target is not an innkeeper",
         "bind a home",
     )?;
-    if innkeeper.dead || innkeeper.health == 0 {
-        return Err("innkeeper is dead".into());
-    }
     Ok(())
 }
 
@@ -112,7 +115,8 @@ fn flagged_npc_in_reach_gate(
             e.npc_flags,
             e.dead,
             dx * dx + dy * dy + dz * dz,
-        )
+        ) && e.health != 0
+            && !crate::reputation::npc_refuses_interaction(ctx, e, &player)
     });
     if !open {
         return Err(format!("{noun} out of range"));
@@ -209,6 +213,16 @@ pub(crate) fn apply_item_sell(
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
+    apply_item_sell_count(ctx, player_guid, vendor_guid, slot, 0)
+}
+
+pub(crate) fn apply_item_sell_count(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    vendor_guid: u64,
+    slot: u8,
+    count: u32,
+) -> Result<(), String> {
     let (mut player, _vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -218,9 +232,12 @@ pub(crate) fn apply_item_sell(
         "target is not a vendor",
         "sell",
     )?;
-    let instances = ctx.db.game_item_instance();
-    let inst =
+    let mut inst =
         item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    let count = if count == 0 { inst.stack_count } else { count };
+    if count > inst.stack_count {
+        return Err("invalid sell count".into());
+    }
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
         return Err(super::refused(
             lyracore_shared::item::ItemRefusal::NotRightNow,
@@ -241,7 +258,7 @@ pub(crate) fn apply_item_sell(
     if tmpl.sell_price == 0 {
         return Err("item has no sell value".to_string());
     }
-    let earned = sell_value(tmpl.sell_price, inst.stack_count);
+    let earned = sell_value(tmpl.sell_price, count);
     player.money = player.money.saturating_add(earned);
     player.update(ctx);
     let buyback_tab = ctx.db.game_character_buyback();
@@ -254,12 +271,17 @@ pub(crate) fn apply_item_sell(
         id: 0,
         player_guid,
         item_entry: inst.entry,
-        stack_count: inst.stack_count,
+        stack_count: count,
         price: earned,
         soulbound: inst.soulbound,
         random_property_id: inst.random_property_id,
     });
-    instances.guid().delete(inst.guid);
+    if count == inst.stack_count {
+        crate::ItemInstance::delete(ctx, inst.guid);
+    } else {
+        inst.stack_count -= count;
+        inst.update(ctx);
+    }
     Ok(())
 }
 
@@ -384,7 +406,7 @@ pub(crate) fn apply_repair_item(
         return Err(format!("item in slot {slot} has no durability to repair"));
     }
     inst.durability = tmpl.max_durability;
-    ctx.db.game_item_instance().guid().update(inst);
+    inst.update(ctx);
     Ok(())
 }
 
@@ -445,7 +467,7 @@ pub(crate) fn apply_player_repair(
     player.update(ctx);
     for (mut inst, max_dur) in to_repair {
         inst.durability = max_dur;
-        instances.guid().update(inst);
+        inst.update(ctx);
     }
     Ok(())
 }

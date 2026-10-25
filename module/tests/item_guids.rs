@@ -371,7 +371,7 @@ fn seed_craft(shard: &Standalone) {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_failed_later_craft_product_restores_reagents_without_skill_or_partial_products() {
+fn a_failed_craft_keeps_reagents_without_skill_or_partial_products() {
     let shard = fixture("item-guid-craft-refund");
     seed_craft(&shard);
     shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)");
@@ -397,7 +397,7 @@ fn a_failed_later_craft_product_restores_reagents_without_skill_or_partial_produ
     );
     assert_eq!(
         shard.query_rows("SELECT high_water FROM game_guid_allocator")[0]["high_water"],
-        "999999999"
+        "999999998"
     );
 }
 

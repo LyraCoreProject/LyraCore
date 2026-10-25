@@ -1,3 +1,5 @@
+pub(crate) mod native;
+
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use lyracore_shared::auction::bid_outcome::{
@@ -286,8 +288,8 @@ fn listing_proceeds_are_representable(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct AuctionHousePolicy {
-    id: u32,
+pub(crate) struct AuctionHousePolicy {
+    pub(crate) id: u32,
     deposit_rate: u32,
     consignment_rate: u32,
 }
@@ -317,7 +319,7 @@ fn imported_house_policy(ctx: &ReducerContext, house: u32) -> Result<AuctionHous
     })
 }
 
-fn auction_house_for_interaction(
+pub(crate) fn auction_house_for_interaction(
     ctx: &ReducerContext,
     player_guid: u64,
     auctioneer_guid: u64,
@@ -377,10 +379,10 @@ struct ListingItem {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct ListingTerms {
-    start_bid: u32,
-    buyout: u32,
-    duration_minutes: u32,
+pub(crate) struct ListingTerms {
+    pub(crate) start_bid: u32,
+    pub(crate) buyout: u32,
+    pub(crate) duration_minutes: u32,
 }
 
 const FIRST_BACKPACK_SLOT: u8 = 23;
@@ -749,8 +751,21 @@ struct AuctionNoticeDraft {
     bidder_guid: u64,
 }
 
+#[cfg(feature = "debug_reducers")]
+fn clear_auction_notices(ctx: &ReducerContext, recipient_guid: u64) {
+    let notices = ctx.db.game_auction_notice();
+    let ids: Vec<_> = notices
+        .by_recipient()
+        .filter(recipient_guid)
+        .map(|notice| notice.id)
+        .collect();
+    for id in ids {
+        notices.id().delete(id);
+    }
+}
+
 fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
-    ctx.db.game_auction_notice().insert(AuctionNotice {
+    let notice = ctx.db.game_auction_notice().insert(AuctionNotice {
         id: 0,
         recipient_guid: draft.recipient_guid,
         kind: draft.kind,
@@ -763,6 +778,7 @@ fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
         bidder_guid: draft.bidder_guid,
         created_at: ctx.timestamp,
     });
+    crate::native::auction_notice(ctx, &notice);
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1762,10 +1778,7 @@ fn consume_listing_value(ctx: &ReducerContext, listing: &PreparedListing) {
         .expect("validated listing seller remains present in the reducer transaction");
     seller.money -= listing.deposit;
     seller.update(ctx);
-    ctx.db
-        .game_item_instance()
-        .guid()
-        .delete(listing.request.item_guid);
+    crate::ItemInstance::delete(ctx, listing.request.item_guid);
 }
 
 impl LocalListingSink for CtxSource<'_> {
@@ -2060,6 +2073,41 @@ impl BidMarket for CtxBidMarket<'_> {
         auction: Option<BidAuction>,
         decision: HoldDecision,
     ) -> Result<(), AuctionRefusal> {
+        self.apply_decision(request, auction, decision)?;
+        let fields = bid_decision_fields(decision);
+        let (item_entry, random_property_id) =
+            auction.map_or((0, 0), |a| (a.item.entry, a.item.random_property_id));
+        self.ctx
+            .db
+            .game_auction_bid_decision()
+            .insert(AuctionBidDecision {
+                operation_id: request.operation_id,
+                bidder_guid: request.bidder_guid,
+                auction_id: request.auction_id,
+                house: request.house,
+                offer: request.offer,
+                outcome: fields.outcome,
+                revision: fields.revision,
+                result_bidder_guid: fields.result_bidder_guid,
+                result_bid: fields.result_bid,
+                minimum_increment: fields.minimum_increment,
+                accepted_price: fields.accepted_price,
+                deferred_refund: 0,
+                item_entry,
+                random_property_id,
+                operation: request.operation.code(),
+            });
+        Ok(())
+    }
+}
+
+impl CtxBidMarket<'_> {
+    fn apply_decision(
+        &mut self,
+        request: HoldRequest,
+        auction: Option<BidAuction>,
+        decision: HoldDecision,
+    ) -> Result<(), AuctionRefusal> {
         if let HoldDecision::Accepted(accepted) = decision {
             let expected = auction.ok_or(AuctionRefusal::Database)?;
             let mut row = self
@@ -2152,34 +2200,9 @@ impl BidMarket for CtxBidMarket<'_> {
                 displaced_bid,
             )?;
         }
-        let fields = bid_decision_fields(decision);
-        let (item_entry, random_property_id) =
-            auction.map_or((0, 0), |a| (a.item.entry, a.item.random_property_id));
-        self.ctx
-            .db
-            .game_auction_bid_decision()
-            .insert(AuctionBidDecision {
-                operation_id: request.operation_id,
-                bidder_guid: request.bidder_guid,
-                auction_id: request.auction_id,
-                house: request.house,
-                offer: request.offer,
-                outcome: fields.outcome,
-                revision: fields.revision,
-                result_bidder_guid: fields.result_bidder_guid,
-                result_bid: fields.result_bid,
-                minimum_increment: fields.minimum_increment,
-                accepted_price: fields.accepted_price,
-                deferred_refund: 0,
-                item_entry,
-                random_property_id,
-                operation: request.operation.code(),
-            });
         Ok(())
     }
-}
 
-impl CtxBidMarket<'_> {
     fn commit_cancellation(
         &mut self,
         expected: BidAuction,

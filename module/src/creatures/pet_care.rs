@@ -1,8 +1,8 @@
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
 use crate::{
-    game_creature_family, game_hunter_pet, game_item_instance, game_item_template,
-    game_live_pet_kind, game_spell_effect, game_world_entity, HunterPet, WorldEntity,
+    game_creature_family, game_hunter_pet, game_item_template, game_live_pet_kind,
+    game_spell_effect, game_world_entity, HunterPet, WorldEntity,
 };
 
 pub const HAPPINESS_BAND: u32 = 333_000;
@@ -280,12 +280,11 @@ fn feed_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), Stri
     let benefit = eligibility.validate().map_err(str::to_string)?;
 
     let mut item = item.expect("validated item exists");
-    let items = ctx.db.game_item_instance();
     if item.stack_count > 1 {
         item.stack_count -= 1;
-        items.guid().update(item);
+        item.update(ctx);
     } else {
-        items.guid().delete(item.guid);
+        crate::ItemInstance::delete(ctx, item.guid);
     }
     let mut pet = durable.expect("validated durable pet exists");
     pet.happiness = pet.happiness.saturating_add(benefit).min(MAX_HAPPINESS);

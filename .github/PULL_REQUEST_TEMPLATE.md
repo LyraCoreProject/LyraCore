@@ -25,7 +25,7 @@ The commands CI runs, in `.github/workflows/rust.yml`:
 - [ ] `cargo test -p lyracore-module --test build_script`
 - [ ] `cargo test -p lyracore-module --test package_api_lint`
 - [ ] `cargo test -p lyracore-package-delta`
-- [ ] `cargo test -p lyracore-gateway`
+- [ ] `cargo test -p lyracore-protocol`
 - [ ] `cargo test -p lyracore-shared`
 - [ ] `cargo test -p lyracore-test-support`
 - [ ] `cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers`
@@ -33,7 +33,12 @@ The commands CI runs, in `.github/workflows/rust.yml`:
 In `.github/workflows/module-durable.yml`, when the change reaches the Module or the schema:
 
 - [ ] `cargo test -p lyracore-module --test <target> -- --ignored` for each durable target the change touches (CI runs them all)
-- [ ] `./lyracore bindings --check`
+
+In `.github/workflows/native-host.yml`, when the change reaches native requests or delivery:
+
+- [ ] Native protocol check
+- [ ] Crash-recovery check
+- [ ] Slow-reader isolation check
 
 In `.github/workflows/runtime-scripts.yml`, when the change reaches `datascripts/`:
 
@@ -61,12 +66,12 @@ Higher rungs, if the change reaches them — no rung substitutes for another
 
 ## Risk
 
-<!-- Blast radius: which tier (module / gateway / importer / CLI / docs), and what breaks if this is
+<!-- Blast radius: which tier (Module / native Host / importer / CLI / docs), and what breaks if this is
      wrong. -->
 
 - [ ] **Schema change** — a new column is END-appended with `#[default(...)]` (which cannot default
-      a `String`); a new table has regenerated gateway bindings. Every shard needs republishing, and
-      a partial publish fails quietly. See `docs/danger-zones.md` §1.2.
+      a `String`); native delivery type changes have passed the native protocol check.
+      See `docs/danger-zones.md` §1.2.
 - [ ] **Protocol change** — the 5875 wire format is fixed; note what a real client does with this.
 - [ ] Touches `packages/` — remember a Tier-1 package is trusted module code, reviewed like a patch
       to `module/`.

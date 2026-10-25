@@ -354,7 +354,7 @@ pub fn decode_random_roll(payload: &str) -> Option<(u32, u32, u32)> {
     Some((min, max, result))
 }
 
-// The roster commits with its change; the Gateway supplies presence and missing names.
+// The roster commits with its change; the packet builder adds live presence and missing names.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct RosterPayload {
     pub leader: u64,

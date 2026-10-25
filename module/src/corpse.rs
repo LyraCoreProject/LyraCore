@@ -59,7 +59,11 @@ pub(crate) fn corpse_appearance_bytes(
     (bytes_1, bytes_2)
 }
 
-#[table(accessor = game_corpse, public)]
+#[table(accessor = game_corpse, public,
+    index(accessor = by_cell, btree(columns = [map_id, instance_id, cell])),
+    index(accessor = by_instance, btree(columns = [instance_id])),
+    index(accessor = by_created_at, btree(columns = [created_at]))
+)]
 pub struct Corpse {
     #[primary_key]
     pub guid: u64,
@@ -82,6 +86,42 @@ pub struct Corpse {
 
     #[default(0u64)]
     pub instance_id: u64,
+    #[default(0i64)]
+    pub cell: i64,
+}
+
+impl Corpse {
+    pub(crate) fn position_cell(&self) -> i64 {
+        let (x, y) = lyracore_shared::spatial::grid_cell(self.x, self.y);
+        lyracore_shared::spatial::grid_cell_id(x, y)
+    }
+
+    pub(crate) fn insert(mut self, ctx: &ReducerContext) -> Self {
+        self.cell = self.position_cell();
+        let row = ctx.db.game_corpse().insert(self);
+        crate::aoi::corpse_changed(ctx, &row);
+        crate::native::corpse_created(ctx, &row);
+        row
+    }
+
+    pub(crate) fn update(mut self, ctx: &ReducerContext) -> Self {
+        self.cell = self.position_cell();
+        let previous = ctx.db.game_corpse().guid().find(self.guid);
+        let row = ctx.db.game_corpse().guid().update(self);
+        crate::aoi::corpse_changed(ctx, &row);
+        if previous.is_some_and(|old| old.is_bones != row.is_bones) {
+            crate::native::corpse_changed(ctx, &row);
+        }
+        row
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {
+        if let Some(corpse) = ctx.db.game_corpse().guid().find(guid) {
+            ctx.db.game_corpse().guid().delete(guid);
+            crate::native::corpse_removed(ctx, corpse.owner_guid);
+        }
+        crate::aoi::remove_subject(ctx, crate::aoi::CORPSE, guid);
+    }
 }
 
 pub(crate) fn apply_reclaim_corpse(
@@ -94,7 +134,7 @@ pub(crate) fn apply_reclaim_corpse(
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
         return Err("caller is not a ghost".to_string());
     }
-    // CMSG_RECLAIM_CORPSE carries the Character guid, so derive its corpse guid instead.
+    // The request GUID is advisory; reclaim always selects the Actor's own corpse.
     let corpse_guid = corpse_guid_for(player.guid);
     let corpse = corpses
         .guid()
@@ -134,28 +174,26 @@ pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
     let t = ctx.db.game_corpse();
     let now = ctx.timestamp.to_micros_since_unix_epoch();
     let to_bones: Vec<u64> = t
-        .iter()
-        .filter(|c| {
-            !c.is_bones && now - c.created_at.to_micros_since_unix_epoch() >= CORPSE_DECAY_MICROS
-        })
+        .by_created_at()
+        .filter(..=Timestamp::from_micros_since_unix_epoch(now - CORPSE_DECAY_MICROS))
+        .filter(|c| !c.is_bones)
         .map(|c| c.guid)
         .collect();
     for guid in to_bones {
         if let Some(mut c) = t.guid().find(guid) {
             c.is_bones = true;
-            t.guid().update(c);
+            c.update(ctx);
         }
     }
     let bones_gone_micros = CORPSE_DECAY_MICROS + BONES_DECAY_MICROS;
     let to_despawn: Vec<u64> = t
-        .iter()
-        .filter(|c| {
-            c.is_bones && now - c.created_at.to_micros_since_unix_epoch() >= bones_gone_micros
-        })
+        .by_created_at()
+        .filter(..=Timestamp::from_micros_since_unix_epoch(now - bones_gone_micros))
+        .filter(|c| c.is_bones)
         .map(|c| c.guid)
         .collect();
     for guid in to_despawn {
-        t.guid().delete(guid);
+        Corpse::delete(ctx, guid);
     }
 }
 

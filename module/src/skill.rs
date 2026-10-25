@@ -187,10 +187,32 @@ pub struct PlayerSkill {
     pub max_rank: u16,
 }
 
+impl PlayerSkill {
+    pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        let row = ctx.db.game_player_skill().insert(row);
+        crate::native::skill_changed(ctx, None, Some(&row));
+        row
+    }
+
+    pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        let previous = ctx.db.game_player_skill().id().find(self.id);
+        let row = ctx.db.game_player_skill().id().update(self);
+        crate::native::skill_changed(ctx, previous.as_ref(), Some(&row));
+        row
+    }
+
+    pub(crate) fn delete(ctx: &ReducerContext, id: u64) {
+        if let Some(row) = ctx.db.game_player_skill().id().find(id) {
+            ctx.db.game_player_skill().id().delete(id);
+            crate::native::skill_changed(ctx, Some(&row), None);
+        }
+    }
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_player_skill(ctx, character_guid) {
     let skills = ctx.db.game_player_skill();
     for r in skills.by_character().filter(&character_guid).collect::<Vec<_>>() {
-        skills.id().delete(r.id);
+        PlayerSkill::delete(ctx, r.id);
     }
 });
 crate::character_owned!(transfer, fn sweep_transfer_game_player_skill(ctx, character_guid, io) {
@@ -203,7 +225,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_player_skill(ctx, charact
     for mut r in skills.by_character().filter(&character_guid).collect::<Vec<_>>() {
         if r.owner_identity != identity {
             r.owner_identity = identity;
-            skills.id().update(r);
+            r.update(ctx);
         }
     }
 });
@@ -264,7 +286,7 @@ fn raise_skill(ctx: &ReducerContext, guid: u64, line: u32) -> Option<u32> {
     let next = next_skill(row.current as u32, row.max_rank as u32) as u16;
     if next != row.current {
         row.current = next;
-        skills.id().update(row);
+        row.update(ctx);
     }
     Some(next as u32)
 }
@@ -340,17 +362,20 @@ pub(crate) fn learn_riding(ctx: &ReducerContext, guid: u64, owner: Identity, ran
         if tier != row.max_rank || tier != row.current {
             row.max_rank = tier;
             row.current = tier;
-            skills.id().update(row);
+            row.update(ctx);
         }
     } else {
-        skills.insert(PlayerSkill {
-            id: 0,
-            character_guid: guid,
-            owner_identity: owner,
-            skill_line: skill_line::RIDING,
-            current: rank,
-            max_rank: rank,
-        });
+        PlayerSkill::insert(
+            ctx,
+            PlayerSkill {
+                id: 0,
+                character_guid: guid,
+                owner_identity: owner,
+                skill_line: skill_line::RIDING,
+                current: rank,
+                max_rank: rank,
+            },
+        );
     }
 }
 
@@ -362,7 +387,7 @@ pub(crate) fn raise_combat_caps(ctx: &ReducerContext, guid: u64, new_level: u32)
             is_combat_skill_line(row.skill_line) || row.skill_line == skill_line::LOCKPICKING;
         if tracks_level && row.max_rank < cap {
             row.max_rank = cap;
-            skills.id().update(row);
+            row.update(ctx);
         }
     }
 }
@@ -464,16 +489,19 @@ pub(crate) fn reconcile_profile_skill(
             return Ok(false);
         }
         row.max_rank = cap;
-        skills.id().update(row);
+        row.update(ctx);
     } else {
-        skills.insert(PlayerSkill {
-            id: 0,
-            character_guid: guid,
-            owner_identity: actor.owner_identity,
-            skill_line: line,
-            current: cap,
-            max_rank: cap,
-        });
+        PlayerSkill::insert(
+            ctx,
+            PlayerSkill {
+                id: 0,
+                character_guid: guid,
+                owner_identity: actor.owner_identity,
+                skill_line: line,
+                current: cap,
+                max_rank: cap,
+            },
+        );
     }
     Ok(true)
 }
@@ -526,17 +554,20 @@ pub(crate) fn learn_profession(
         let new_cap = raised_cap(row.max_rank, cap);
         if new_cap != row.max_rank {
             row.max_rank = new_cap;
-            skills.id().update(row);
+            row.update(ctx);
         }
     } else {
-        skills.insert(PlayerSkill {
-            id: 0,
-            character_guid: guid,
-            owner_identity: owner,
-            skill_line,
-            current: 1,
-            max_rank: cap,
-        });
+        PlayerSkill::insert(
+            ctx,
+            PlayerSkill {
+                id: 0,
+                character_guid: guid,
+                owner_identity: owner,
+                skill_line,
+                current: 1,
+                max_rank: cap,
+            },
+        );
     }
     let current = skills
         .by_character()
@@ -594,14 +625,17 @@ pub(crate) fn grant_lockpicking_on_learn(
         .map(|e| e.level)
         .unwrap_or(1);
     let cap = skill_cap_for_level(level.max(1)) as u16;
-    skills.insert(PlayerSkill {
-        id: 0,
-        character_guid: guid,
-        owner_identity: owner,
-        skill_line: skill_line::LOCKPICKING,
-        current: 1,
-        max_rank: cap,
-    });
+    PlayerSkill::insert(
+        ctx,
+        PlayerSkill {
+            id: 0,
+            character_guid: guid,
+            owner_identity: owner,
+            skill_line: skill_line::LOCKPICKING,
+            current: 1,
+            max_rank: cap,
+        },
+    );
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -823,14 +857,17 @@ pub(crate) fn ensure_player_skills(
             .filter(&guid)
             .any(|s| s.skill_line == line);
         if !present {
-            skills.insert(PlayerSkill {
-                id: 0,
-                character_guid: guid,
-                owner_identity: owner,
-                skill_line: line,
-                current: cap,
-                max_rank: cap,
-            });
+            PlayerSkill::insert(
+                ctx,
+                PlayerSkill {
+                    id: 0,
+                    character_guid: guid,
+                    owner_identity: owner,
+                    skill_line: line,
+                    current: cap,
+                    max_rank: cap,
+                },
+            );
         }
     }
 
@@ -857,16 +894,19 @@ pub fn debug_set_skill(
     {
         row.current = current;
         row.max_rank = max_rank;
-        skills.id().update(row);
+        row.update(ctx);
     } else {
-        skills.insert(PlayerSkill {
-            id: 0,
-            character_guid,
-            owner_identity: entity.owner_identity,
-            skill_line,
-            current,
-            max_rank,
-        });
+        PlayerSkill::insert(
+            ctx,
+            PlayerSkill {
+                id: 0,
+                character_guid,
+                owner_identity: entity.owner_identity,
+                skill_line,
+                current,
+                max_rank,
+            },
+        );
     }
     spacetimedb::log::info!(
         "debug_set_skill: guid={character_guid} line={skill_line} -> {current}/{max_rank}"

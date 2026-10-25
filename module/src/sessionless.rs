@@ -11,6 +11,81 @@ pub struct SessionlessActionConsent {
     pub allowed: bool,
 }
 
+#[table(accessor = game_character_relocation)]
+pub struct CharacterRelocation {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[unique]
+    pub character_guid: u64,
+    pub trigger_id: u32,
+    pub controller_generation: u64,
+    pub map_id: u32,
+    pub instance_id: u64,
+}
+
+crate::character_owned!(delete, fn sweep_delete_game_character_relocation(ctx, character_guid) {
+    ctx.db.game_character_relocation().character_guid().delete(character_guid);
+});
+crate::character_owned!(not_transported, fn sweep_transfer_game_character_relocation());
+
+pub(crate) fn completed_relocation(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+    partition: (u32, u64),
+    controller_generation: u64,
+) -> Option<u64> {
+    let receipt = ctx
+        .db
+        .game_character_relocation()
+        .character_guid()
+        .find(character_guid)?;
+    let entity = crate::helpers::acting_entity_by_guid(ctx, character_guid)?;
+    (receipt.trigger_id == trigger_id
+        && receipt.controller_generation == controller_generation
+        && (receipt.map_id, receipt.instance_id) == partition
+        && (entity.map_id, entity.instance_id) == partition)
+        .then_some(receipt.id)
+}
+
+// Call after body, consent, destination and Instance admission Gates pass.
+pub(crate) fn relocate(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    trigger_id: u32,
+    destination: crate::transfer::Destination,
+    controller_generation: u64,
+) -> u64 {
+    if let Some(cast) = crate::spell::pending_cast(ctx, character_guid) {
+        crate::spell::cancel_cast_attempt(ctx, character_guid, cast.scheduled_id);
+    }
+    let _ = crate::actor::stop_attack(ctx, character_guid);
+    crate::actor::stop_movement(ctx, character_guid);
+    crate::world::teleport_player(
+        ctx,
+        character_guid,
+        destination.map_id,
+        destination.instance_id,
+        destination.x,
+        destination.y,
+        destination.z,
+        destination.o,
+    );
+    let receipts = ctx.db.game_character_relocation();
+    receipts.character_guid().delete(character_guid);
+    receipts
+        .insert(CharacterRelocation {
+            id: 0,
+            character_guid,
+            trigger_id,
+            controller_generation,
+            map_id: destination.map_id,
+            instance_id: destination.instance_id,
+        })
+        .id
+}
+
 crate::character_owned!(delete, fn sweep_delete_game_sessionless_action_consent(ctx, character_guid) {
     ctx.db.game_sessionless_action_consent().character_guid().delete(character_guid);
 });
@@ -20,7 +95,6 @@ crate::character_owned!(transfer, fn sweep_transfer_game_sessionless_action_cons
     primary_key = character_guid,
 });
 
-// Clearing unclaimed Intents cannot recall actions already admitted for Realm-core.
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn set_sessionless_action_consent(
     ctx: &ReducerContext,
@@ -38,6 +112,10 @@ pub(crate) fn set_sessionless_action_consent(
         consent.insert(row);
     }
     crate::group::clear_unclaimed_group_intents(ctx, character_guid);
+    ctx.db
+        .game_character_relocation()
+        .character_guid()
+        .delete(character_guid);
 }
 
 pub(crate) fn action_gate(

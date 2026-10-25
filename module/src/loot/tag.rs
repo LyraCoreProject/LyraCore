@@ -12,7 +12,6 @@ use super::game_corpse_loot_eligible;
 #[cfg(feature = "debug_reducers")]
 use crate::{
     game_corpse_loot, game_creature_template, game_group, game_group_member, game_item_template,
-    game_melee_attack, game_player_skill,
 };
 
 #[table(accessor = game_creature_quest_tap)]
@@ -255,6 +254,9 @@ pub(crate) fn revoke_group_member(ctx: &ReducerContext, group_id: u64, character
         {
             members.id().delete(member.id);
         }
+        if let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) {
+            crate::native::loot_flags(ctx, &creature);
+        }
     }
 }
 
@@ -278,6 +280,9 @@ pub(crate) fn record_corpse_eligibility(
             corpse_guid,
             eligible_guid,
         });
+    }
+    if let Some(corpse) = ctx.db.game_world_entity().guid().find(corpse_guid) {
+        crate::native::loot_flags(ctx, &corpse);
     }
 }
 
@@ -588,18 +593,21 @@ pub fn debug_verify_loot_tag_fixture(ctx: &ReducerContext) -> Result<(), String>
     insert_fixture_entity(ctx, &origin, retained, base_x, false, 0);
     crate::threat::add_threat(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, 10);
     crate::combat::arm_creature_engagement(ctx, retained, LOOT_TAG_FIXTURE_CHARACTER_F, false);
-    ctx.db.game_melee_attack().insert(crate::MeleeAttack {
-        attacker_guid: LOOT_TAG_FIXTURE_CHARACTER_B,
-        target_guid: retained,
-        last_swing_ms: 0,
-        ranged_spell_id: 0,
-        last_offhand_swing_ms: 0,
-        rout_ends_ms: 0,
-        pursuit_ends_ms: 0,
-        leash_x: 0.0,
-        leash_y: 0.0,
-        swing_error: 0,
-    });
+    crate::combat::MeleeAttack::insert(
+        ctx,
+        crate::MeleeAttack {
+            attacker_guid: LOOT_TAG_FIXTURE_CHARACTER_B,
+            target_guid: retained,
+            last_swing_ms: 0,
+            ranged_spell_id: 0,
+            last_offhand_swing_ms: 0,
+            rout_ends_ms: 0,
+            pursuit_ends_ms: 0,
+            leash_x: 0.0,
+            leash_y: 0.0,
+            swing_error: 0,
+        },
+    );
     crate::combat::kill_player(
         ctx,
         LOOT_TAG_FIXTURE_CHARACTER_F,
@@ -806,14 +814,17 @@ fn insert_fixture_corpse(
 
 #[cfg(feature = "debug_reducers")]
 fn insert_fixture_skinning(ctx: &ReducerContext, character_guid: u64) {
-    ctx.db.game_player_skill().insert(crate::PlayerSkill {
-        id: 0,
-        character_guid,
-        owner_identity: spacetimedb::Identity::ZERO,
-        skill_line: crate::skill::skill_line::SKINNING,
-        current: 1,
-        max_rank: 75,
-    });
+    crate::PlayerSkill::insert(
+        ctx,
+        crate::PlayerSkill {
+            id: 0,
+            character_guid,
+            owner_identity: spacetimedb::Identity::ZERO,
+            skill_line: crate::skill::skill_line::SKINNING,
+            current: 1,
+            max_rank: 75,
+        },
+    );
 }
 
 #[cfg(feature = "debug_reducers")]

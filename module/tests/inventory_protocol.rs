@@ -140,23 +140,6 @@ fn inventory_changes_preserve_accepted_trade_items() {
     let changed = shard.query_rows("SELECT * FROM game_trade_session");
     assert_eq!(changed[0]["target_accepted"], "false");
     assert_eq!(changed[0]["initiator_accepted"], "false");
-    shard.assert_call("debug_grant_item", &["1", "5090054", "1"]);
-    shard.assert_call("gw_accept_trade", &[&buyer]);
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090999,8,0,0,false)");
-    let before_failed_product = shard.query_rows("SELECT * FROM game_item_instance");
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
-    shard.assert_sql("DELETE FROM game_trade_event");
-    shard.assert_call("debug_begin_cast", &["1", "5090171", "1"]);
-    assert!(poll_until(std::time::Duration::from_secs(5), || shard
-        .query_rows("SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = 1")
-        .is_empty()));
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_item_instance"),
-        before_failed_product
-    );
-    let changed = shard.query_rows("SELECT * FROM game_trade_session");
-    assert_eq!(changed[0]["target_accepted"], "false");
-    assert_eq!(changed[0]["initiator_accepted"], "false");
     let events = shard.query_rows("SELECT * FROM game_trade_event");
     for kind in [event_kind::OFFER_SELF, event_kind::OFFER_PARTNER] {
         let last_offer = events
@@ -174,13 +157,30 @@ fn inventory_changes_preserve_accepted_trade_items() {
             11
         );
     }
+    shard.assert_call("debug_grant_item", &["1", "5090054", "1"]);
+    shard.assert_call("gw_accept_trade", &[&buyer]);
+    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090999,8,0,0,false)");
+    let before_failed_product = shard.query_rows("SELECT * FROM game_item_instance");
+    let accepted = shard.query_rows("SELECT * FROM game_trade_session");
+    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.assert_sql("DELETE FROM game_trade_event");
+    shard.assert_call("debug_begin_cast", &["1", "5090171", "1"]);
+    assert!(poll_until(std::time::Duration::from_secs(5), || shard
+        .query_rows("SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = 1")
+        .is_empty()));
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_item_instance"),
+        before_failed_product
+    );
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_trade_session"),
+        accepted
+    );
+    assert!(shard
+        .query_rows("SELECT * FROM game_trade_event")
+        .is_empty());
     shard.assert_call("gw_split_item", &[ACTOR, "24", "27", "1"]);
     shard.assert_call("gw_accept_trade", &[ACTOR]);
-    assert_eq!(
-        shard.query_rows("SELECT * FROM game_trade_session").len(),
-        1
-    );
-    shard.assert_call("gw_accept_trade", &[&buyer]);
     let received = shard.query_rows(&format!(
         "SELECT stack_count FROM game_item_instance WHERE owner_guid = {other} AND entry = 5090052"
     ));

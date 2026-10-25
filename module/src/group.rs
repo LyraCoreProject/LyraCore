@@ -4,6 +4,7 @@ pub use mirror::sync_group_mirror;
 
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
+use crate::native::game_native_player;
 use crate::{game_character, game_melee_attack, game_pending_cast, game_threat, game_world_entity};
 
 pub use lyracore_shared::group::GROUP_MAX_MEMBERS;
@@ -170,23 +171,70 @@ pub struct BotInviteIntent {
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_invite_intent(ctx: &ReducerContext, inviter_guid: u64, target_guid: u64) {
-    emit_bot_group_intent(ctx, bot_op::INVITE, inviter_guid, target_guid);
+    apply_sessionless_group_action(ctx, inviter_guid, GroupAction::Invite(target_guid));
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn emit_bot_leave_intent(ctx: &ReducerContext, leaver_guid: u64) {
-    emit_bot_group_intent(ctx, bot_op::LEAVE, leaver_guid, 0);
+    apply_sessionless_group_action(
+        ctx,
+        leaver_guid,
+        GroupAction::Leave {
+            cause: leave_cause::LEFT,
+        },
+    );
 }
 
 #[cfg_attr(not(has_packages), allow(dead_code))]
-fn emit_bot_group_intent(ctx: &ReducerContext, op: u8, actor_guid: u64, target_guid: u64) {
-    ctx.db.game_bot_invite_intent().insert(BotInviteIntent {
-        id: 0,
-        inviter_guid: actor_guid,
-        target_guid,
-        created_at: ctx.timestamp,
-        op,
+fn apply_sessionless_group_action(ctx: &ReducerContext, actor_guid: u64, action: GroupAction) {
+    if let Err(refusal) = crate::sessionless::group_action_gate(ctx, actor_guid) {
+        refused(refusal, "Companion group action");
+        return;
+    }
+    let result = apply_action(ctx, Plane::Shard, actor_guid, action).and_then(|()| {
+        if let GroupAction::Invite(target_guid) = action {
+            answer_sessionless_invite(ctx, target_guid)
+        } else {
+            Ok(())
+        }
     });
+    if let Err(cause) = result {
+        if GroupRefusal::parse_tag(&cause).is_none() {
+            // The Package API returns no outcome; an invariant failure must abort this transaction.
+            panic!("Companion group invariant failed for {actor_guid}: {cause}");
+        }
+    }
+}
+
+pub(crate) fn answer_sessionless_invite(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+    let Some(character) = crate::helpers::character_by_guid(ctx, guid).filter(|c| !c.online) else {
+        return Ok(());
+    };
+    if crate::sessionless::group_action_gate(ctx, guid).is_err()
+        || ctx
+            .db
+            .game_group_invite()
+            .by_target()
+            .filter(guid)
+            .next()
+            .is_none()
+    {
+        return Ok(());
+    }
+    match apply_action(
+        ctx,
+        Plane::Shard,
+        guid,
+        GroupAction::Accept {
+            class: character.class,
+        },
+    ) {
+        Ok(()) => Ok(()),
+        Err(cause) if GroupRefusal::parse_tag(&cause).is_some() => {
+            apply_action(ctx, Plane::Shard, guid, GroupAction::Decline)
+        }
+        Err(cause) => Err(cause),
+    }
 }
 
 pub(crate) fn clear_unclaimed_group_intents(ctx: &ReducerContext, character_guid: u64) {
@@ -243,7 +291,7 @@ fn group_op_error(error: GroupOpError, detail: &str) -> String {
     }
 }
 
-use lyracore_shared::group::{bot_op, event_kind as group_event_kind, leave_cause, GroupRefusal};
+use lyracore_shared::group::{event_kind as group_event_kind, leave_cause, GroupRefusal};
 
 #[table(accessor = game_group_event, public, index(accessor = by_recipient, btree(columns = [recipient_identity])))]
 pub struct GroupEvent {
@@ -268,6 +316,7 @@ pub(crate) fn push_event(
     other_guid: u64,
     payload: String,
 ) {
+    crate::native::group_event(ctx, recipient_guid, kind, other_guid, &payload);
     let bound = ctx
         .db
         .game_character()
@@ -286,7 +335,7 @@ pub(crate) fn push_event(
     });
 }
 
-fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
+pub(crate) fn roster_payload(ctx: &ReducerContext, group_id: u64) -> Option<String> {
     let group = ctx.db.game_group().group_id().find(group_id)?;
     let members = members_of(ctx, group_id)
         .into_iter()
@@ -576,30 +625,18 @@ pub(crate) fn has_known_party_member_in_partition(
     let Some(member) = group_of(ctx, character_guid) else {
         return Ok(false);
     };
-    if ctx
+    let group = ctx
         .db
         .game_group()
         .group_id()
         .find(member.group_id)
-        .is_none()
-    {
-        return Err(PartyFactsUnavailableReason::MissingGroup);
-    }
-    let members = bounded_roster(ctx, member.group_id, GroupKind::Party)
+        .ok_or(PartyFactsUnavailableReason::MissingGroup)?;
+    let members = bounded_roster(ctx, member.group_id, group_kind_of(&group))
         .ok_or(PartyFactsUnavailableReason::FightLimit)?;
     Ok(members.into_iter().any(|candidate| {
         candidate.character_guid != character_guid
-            && ctx
-                .db
-                .game_group_member_partition()
-                .character_guid()
-                .find(candidate.character_guid)
-                .is_some_and(|known| {
-                    known.group_id == member.group_id
-                        && known.member_active
-                        && known.state == PartyPartitionState::Known
-                        && (known.map_id, known.instance_id) == partition
-                })
+            && current_party_partition(ctx, &candidate)
+                .is_some_and(|known| (known.map_id, known.instance_id) == partition)
     }))
 }
 
@@ -609,10 +646,17 @@ pub enum PartyFactsUnavailableReason {
     FightLimit,
 }
 
-fn known_party_partition(
+fn current_party_partition(
     ctx: &ReducerContext,
     member: &GroupMember,
 ) -> Option<PartyPartitionFacts> {
+    if let Some(entity) = crate::helpers::acting_entity_by_guid(ctx, member.character_guid) {
+        return Some(PartyPartitionFacts {
+            map_id: entity.map_id,
+            instance_id: entity.instance_id,
+            locator_revision: 0,
+        });
+    }
     ctx.db
         .game_group_member_partition()
         .character_guid()
@@ -674,7 +718,7 @@ pub(crate) fn party_facts(
             PartyMemberFacts {
                 character_guid: member.character_guid,
                 unit,
-                partition: known_party_partition(ctx, &member),
+                partition: current_party_partition(ctx, &member),
             }
         })
         .collect();
@@ -992,6 +1036,15 @@ pub(crate) fn invite_core(
     })
 }
 
+fn character_online(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .character_guid()
+        .find(guid)
+        .is_some()
+        || ctx.db.game_world_entity().guid().find(guid).is_some()
+}
+
 fn invite_core_on(
     ctx: &ReducerContext,
     plane: Plane,
@@ -1006,13 +1059,7 @@ fn invite_core_on(
         if ctx.db.game_character().guid().find(target_guid).is_none() {
             return Err(GroupRefusal::NoSuchPlayer.into());
         }
-        if ctx
-            .db
-            .game_world_entity()
-            .guid()
-            .find(target_guid)
-            .is_none()
-        {
+        if !character_online(ctx, target_guid) {
             return Err(GroupRefusal::TargetOffline.into());
         }
     }
@@ -1095,7 +1142,6 @@ fn accept_invite_on(
         .filter(&acceptor_guid)
         .next()
         .ok_or(GroupRefusal::NoPendingInvite)?;
-    invites.id().delete(invite.id);
     let target = match invite.group_id {
         0 => JoinTarget::NewParty {
             leader_guid: invite.inviter_guid,
@@ -1110,6 +1156,7 @@ fn accept_invite_on(
         }
         crate::helpers::character_by_guid(ctx, acceptor_guid).ok_or(GroupRefusal::NoSuchPlayer)?;
     }
+    invites.id().delete(invite.id);
     let joined = plan.apply(ctx);
     if joined.formed {
         crate::meeting_stone::party_joined(ctx, joined.group_id, invite.inviter_guid, 0)
@@ -1686,46 +1733,159 @@ pub fn realm_group_op(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    use lyracore_shared::group::realm_op;
-    let before_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
-    use RosterChange::{Changed, Unchanged};
-    let ran = match op {
-        realm_op::INVITE => {
-            invite_core_on(ctx, Plane::RealmCore, actor_guid, target_guid).map(|()| Unchanged)
-        }
-        realm_op::ACCEPT => {
-            accept_invite_on(ctx, Plane::RealmCore, actor_guid, arg_a).map(|()| Changed)
-        }
-        realm_op::DECLINE => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
-        realm_op::LEAVE => leave_group_on(ctx, actor_guid, arg_a).map(|()| Changed),
-        realm_op::UNINVITE => uninvite_on(ctx, actor_guid, target_guid).map(|()| Changed),
-        realm_op::LOOT_METHOD => {
-            set_loot_method_on(ctx, actor_guid, arg_a, target_guid, arg_b).map(|()| Changed)
-        }
-        realm_op::RAID_CONVERT => raid_convert_on(ctx, actor_guid),
-        realm_op::SET_LEADER => set_leader_on(ctx, actor_guid, target_guid),
-        realm_op::SET_ASSISTANT => set_assistant_on(ctx, actor_guid, target_guid, arg_a != 0),
-        realm_op::CHANGE_SUBGROUP => change_subgroup_on(ctx, actor_guid, target_guid, arg_a),
-        realm_op::SWAP_SUBGROUP => swap_subgroup_on(ctx, actor_guid, target_guid, arg_c),
-        realm_op::READY_CHECK_START => ready_check_start_on(ctx, actor_guid).map(|()| Unchanged),
-        realm_op::READY_CHECK_ANSWER => {
-            ready_check_answer_on(ctx, actor_guid, arg_a).map(|()| Unchanged)
-        }
-        realm_op::TARGET_ICON => {
-            target_icon_on(ctx, actor_guid, arg_a, target_guid).map(|()| Unchanged)
-        }
-        realm_op::MINIMAP_PING => {
-            minimap_ping_on(ctx, actor_guid, target_guid, arg_c).map(|()| Unchanged)
-        }
-        realm_op::RANDOM_ROLL => {
-            random_roll_on(ctx, actor_guid, target_guid, arg_c).map(|()| Unchanged)
-        }
+    use lyracore_shared::group::realm_op as op;
+    let action = match op {
+        op::INVITE => GroupAction::Invite(target_guid),
+        op::ACCEPT => GroupAction::Accept { class: arg_a },
+        op::DECLINE => GroupAction::Decline,
+        op::LEAVE => GroupAction::Leave { cause: arg_a },
+        op::UNINVITE => GroupAction::Uninvite(target_guid),
+        op::LOOT_METHOD => GroupAction::LootMethod {
+            method: arg_a,
+            master: target_guid,
+            threshold: arg_b,
+        },
+        op::RAID_CONVERT => GroupAction::RaidConvert,
+        op::SET_LEADER => GroupAction::SetLeader(target_guid),
+        op::SET_ASSISTANT => GroupAction::SetAssistant {
+            target: target_guid,
+            promote: arg_a != 0,
+        },
+        op::CHANGE_SUBGROUP => GroupAction::ChangeSubgroup {
+            target: target_guid,
+            subgroup: arg_a,
+        },
+        op::SWAP_SUBGROUP => GroupAction::SwapSubgroup {
+            first: target_guid,
+            second: arg_c,
+        },
+        op::READY_CHECK_START => GroupAction::ReadyCheckStart,
+        op::READY_CHECK_ANSWER => GroupAction::ReadyCheckAnswer(arg_a),
+        op::TARGET_ICON => GroupAction::TargetIcon {
+            icon: arg_a,
+            target: target_guid,
+        },
+        op::MINIMAP_PING => GroupAction::MinimapPing {
+            x_bits: target_guid,
+            y_bits: arg_c,
+        },
+        op::RANDOM_ROLL => GroupAction::RandomRoll {
+            min: target_guid,
+            max: arg_c,
+        },
         other => return Err(format!("unknown realm group op {other}")),
     };
-    let change = ran
-        .map_err(|error| group_op_error(error, &format!("realm group op {op} for {actor_guid}")))?;
+    apply_action(ctx, Plane::RealmCore, actor_guid, action)
+}
+
+#[derive(Clone, Copy, Debug)]
+pub(crate) enum GroupAction {
+    Invite(u64),
+    Accept {
+        class: u8,
+    },
+    Decline,
+    Leave {
+        cause: u8,
+    },
+    Uninvite(u64),
+    LootMethod {
+        method: u8,
+        master: u64,
+        threshold: u8,
+    },
+    RaidConvert,
+    SetLeader(u64),
+    SetAssistant {
+        target: u64,
+        promote: bool,
+    },
+    ChangeSubgroup {
+        target: u64,
+        subgroup: u8,
+    },
+    SwapSubgroup {
+        first: u64,
+        second: u64,
+    },
+    ReadyCheckStart,
+    ReadyCheckAnswer(u8),
+    TargetIcon {
+        icon: u8,
+        target: u64,
+    },
+    MinimapPing {
+        x_bits: u64,
+        y_bits: u64,
+    },
+    RandomRoll {
+        min: u64,
+        max: u64,
+    },
+}
+
+pub(crate) fn apply_action(
+    ctx: &ReducerContext,
+    plane: Plane,
+    actor_guid: u64,
+    action: GroupAction,
+) -> Result<(), String> {
+    use GroupAction::*;
+    use RosterChange::{Changed, Unchanged};
+    if plane == Plane::Shard {
+        if let Invite(target) = action {
+            let actor = crate::helpers::character_by_guid(ctx, actor_guid)
+                .ok_or_else(|| refused(GroupRefusal::ActorUnavailable, "group invite"))?;
+            if let Some(target) = crate::helpers::character_by_guid(ctx, target) {
+                if character_online(ctx, target.guid)
+                    && !lyracore_shared::faction::same_team(actor.race, target.race)
+                {
+                    return Err(refused(GroupRefusal::WrongFaction, "group invite"));
+                }
+            }
+        }
+        if let SetLeader(target) = action {
+            if !character_online(ctx, target) {
+                return Err(refused(GroupRefusal::TargetOffline, "group leader"));
+            }
+        }
+    }
+    let before_groups = action_groups(ctx, actor_guid, action);
+    let ran = match action {
+        Invite(target) => invite_core_on(ctx, plane, actor_guid, target).map(|()| Unchanged),
+        Accept { class } => accept_invite_on(ctx, plane, actor_guid, class).map(|()| Changed),
+        Decline => decline_invite_on(ctx, actor_guid).map(|()| Unchanged),
+        Leave { cause } => leave_group_on(ctx, actor_guid, cause).map(|()| Changed),
+        Uninvite(target) => uninvite_on(ctx, actor_guid, target).map(|()| Changed),
+        LootMethod {
+            method,
+            master,
+            threshold,
+        } => set_loot_method_on(ctx, actor_guid, method, master, threshold).map(|()| Changed),
+        RaidConvert => raid_convert_on(ctx, actor_guid),
+        SetLeader(target) => set_leader_on(ctx, actor_guid, target),
+        SetAssistant { target, promote } => set_assistant_on(ctx, actor_guid, target, promote),
+        ChangeSubgroup { target, subgroup } => {
+            change_subgroup_on(ctx, actor_guid, target, subgroup)
+        }
+        SwapSubgroup { first, second } => swap_subgroup_on(ctx, actor_guid, first, second),
+        ReadyCheckStart => ready_check_start_on(ctx, actor_guid).map(|()| Unchanged),
+        ReadyCheckAnswer(state) => {
+            ready_check_answer_on(ctx, actor_guid, state).map(|()| Unchanged)
+        }
+        TargetIcon { icon, target } => {
+            target_icon_on(ctx, actor_guid, icon, target).map(|()| Unchanged)
+        }
+        MinimapPing { x_bits, y_bits } => {
+            minimap_ping_on(ctx, actor_guid, x_bits, y_bits).map(|()| Unchanged)
+        }
+        RandomRoll { min, max } => random_roll_on(ctx, actor_guid, min, max).map(|()| Unchanged),
+    };
+    let change = ran.map_err(|error| {
+        group_op_error(error, &format!("group action {action:?} for {actor_guid}"))
+    })?;
     if change == Changed {
-        let after_groups = realm_op_groups(ctx, op, actor_guid, target_guid);
+        let after_groups = action_groups(ctx, actor_guid, action);
         let touched: std::collections::BTreeSet<_> = before_groups
             .iter()
             .chain(after_groups.iter())
@@ -1743,18 +1903,16 @@ pub fn realm_group_op(
     Ok(())
 }
 
-fn realm_op_groups(
+fn action_groups(
     ctx: &ReducerContext,
-    op: u8,
     actor_guid: u64,
-    target_guid: u64,
+    action: GroupAction,
 ) -> std::collections::BTreeSet<u64> {
-    use lyracore_shared::group::realm_op;
     let mut guids = vec![actor_guid];
-    if target_guid != 0 {
-        guids.push(target_guid);
+    if let GroupAction::Uninvite(target) = action {
+        guids.push(target);
     }
-    if op == realm_op::ACCEPT {
+    if matches!(action, GroupAction::Accept { .. }) {
         if let Some(invite) = ctx
             .db
             .game_group_invite()
@@ -1926,7 +2084,7 @@ fn delete_target_icons_on(ctx: &ReducerContext, target_guid: u64) {
 }
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_target_icon());
 
-fn target_icons_of(ctx: &ReducerContext, group_id: u64) -> Vec<TargetIcon> {
+pub(crate) fn target_icons_of(ctx: &ReducerContext, group_id: u64) -> Vec<TargetIcon> {
     let mut icons: Vec<TargetIcon> = ctx
         .db
         .game_group_target_icon()

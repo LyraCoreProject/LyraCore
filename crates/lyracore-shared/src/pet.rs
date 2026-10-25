@@ -16,7 +16,7 @@ pub fn pet_guid_for(owner_guid: u64) -> u64 {
 pub const MIN_PET_NAME: usize = 2;
 pub const MAX_PET_NAME: usize = 12;
 
-/// The Gateway matches this Refusal exactly to send `SMSG_PET_NAME_INVALID`.
+/// The native Module handler matches this Refusal exactly to send `SMSG_PET_NAME_INVALID`.
 pub const PET_NAME_INVALID: &str = "PET_NAME_INVALID";
 
 /// Uses one allowed script; ASCII digits and spaces are refused.
