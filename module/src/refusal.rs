@@ -20,6 +20,12 @@ impl From<Refusal> for String {
     }
 }
 
+impl From<crate::actor::ActionRefusal> for Refusal {
+    fn from(refusal: crate::actor::ActionRefusal) -> Self {
+        Self(refusal.detail)
+    }
+}
+
 impl std::fmt::Display for Refusal {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)

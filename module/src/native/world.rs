@@ -482,8 +482,11 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_AREATRIGGER(request) => {
             super::actor(ctx, guid)?;
-            return crate::quest::request_enter_areatrigger(ctx, guid, request.trigger_id)
-                .map_err(Rollback::silent);
+            return Ok(crate::quest::request_enter_areatrigger(
+                ctx,
+                guid,
+                request.trigger_id,
+            )?);
         }
         message @ (ClientOpcodeMessage::CMSG_LOOT(_)
         | ClientOpcodeMessage::CMSG_LOOT_MONEY

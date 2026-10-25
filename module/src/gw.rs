@@ -296,7 +296,12 @@ pub fn gw_turn_in_quest(
     actor(ctx, actor_guid)?;
     crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)?;
     // Only World Sessions drive Reward Letters; a bot turn-in would leave its letter held.
-    crate::mail_reward::file_reward_letter(ctx, actor_guid, giver_guid, quest_entry)
+    Ok(crate::mail_reward::file_reward_letter(
+        ctx,
+        actor_guid,
+        giver_guid,
+        quest_entry,
+    )?)
 }
 
 fn item_actor(ctx: &ReducerContext, actor_guid: u64) -> Result<crate::WorldEntity, String> {
@@ -890,7 +895,11 @@ pub fn gw_push_quest_to_party(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::quest::apply_push_quest_to_party(ctx, actor_guid, quest_entry)
+    Ok(crate::quest::apply_push_quest_to_party(
+        ctx,
+        actor_guid,
+        quest_entry,
+    )?)
 }
 
 #[reducer]
@@ -1277,7 +1286,11 @@ pub fn gw_abandon_quest(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::quest::apply_abandon_quest(ctx, actor_guid, quest_entry)
+    Ok(crate::quest::apply_abandon_quest(
+        ctx,
+        actor_guid,
+        quest_entry,
+    )?)
 }
 
 #[reducer]
@@ -1301,7 +1314,9 @@ pub fn gw_enter_areatrigger(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::quest::request_enter_areatrigger(ctx, actor_guid, trigger_id)
+    Ok(crate::quest::request_enter_areatrigger(
+        ctx, actor_guid, trigger_id,
+    )?)
 }
 
 #[reducer]

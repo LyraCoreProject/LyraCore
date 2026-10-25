@@ -1123,7 +1123,11 @@ pub fn debug_push_quest(
     character_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    crate::quest::apply_push_quest_to_party(ctx, character_guid, quest_entry)
+    Ok(crate::quest::apply_push_quest_to_party(
+        ctx,
+        character_guid,
+        quest_entry,
+    )?)
 }
 
 #[reducer]

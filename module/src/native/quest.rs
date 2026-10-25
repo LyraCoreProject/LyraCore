@@ -1,5 +1,7 @@
+use crate::actor::ActionRefusal;
 use crate::quest::*;
 use crate::{game_creature_template, game_item_template};
+use lyracore_shared::quest::AcceptanceRefusal;
 use spacetimedb::ReducerContext;
 
 pub(super) fn quest_detail_view(
@@ -289,29 +291,22 @@ fn reward_screen(
     })?])
 }
 
-fn accept_refusal(quest: u32, reason: &str) -> Vec<Packet> {
+fn accept_refusal(refusal: &AcceptQuestRefusal) -> Vec<Packet> {
     use lyracore_protocol::messages::vanilla::QuestFailedReason as Reason;
-    use lyracore_shared::quest::{AcceptanceRefusal, QUEST_LOG_FULL_TEXT};
-    let message = if reason == QUEST_LOG_FULL_TEXT {
-        Some(ServerOpcodeMessage::SMSG_QUESTLOG_FULL)
-    } else if let Some(refusal) = AcceptanceRefusal::parse(reason) {
-        let reason = match refusal {
-            AcceptanceRefusal::Level => Reason::QuestFailedLowLevel,
-            AcceptanceRefusal::Race => Reason::QuestFailedWrongRace,
-            AcceptanceRefusal::AlreadyTaken => Reason::QuestAlreadyOn,
-            AcceptanceRefusal::Class | AcceptanceRefusal::Prerequisite => Reason::DontHaveReq,
-        };
-        Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
-            codec::build_questgiver_quest_invalid(reason),
-        ))
-    } else if lyracore_shared::item::ItemRefusal::parse_tag(reason)
-        == Some(lyracore_shared::item::ItemRefusal::InventoryFull)
-    {
-        Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_FAILED(
-            codec::build_questgiver_quest_failed(quest, Reason::QuestFailedInventoryFull),
-        ))
-    } else {
-        None
+    let message = match refusal {
+        AcceptQuestRefusal::LogFull => Some(ServerOpcodeMessage::SMSG_QUESTLOG_FULL),
+        AcceptQuestRefusal::Acceptance { refusal, .. } => {
+            let reason = match refusal {
+                AcceptanceRefusal::Level => Reason::QuestFailedLowLevel,
+                AcceptanceRefusal::Race => Reason::QuestFailedWrongRace,
+                AcceptanceRefusal::AlreadyTaken => Reason::QuestAlreadyOn,
+                AcceptanceRefusal::Class | AcceptanceRefusal::Prerequisite => Reason::DontHaveReq,
+            };
+            Some(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_INVALID(
+                codec::build_questgiver_quest_invalid(reason),
+            ))
+        }
+        AcceptQuestRefusal::Refused(_) => None,
     };
     message
         .into_iter()
@@ -359,9 +354,11 @@ pub(super) fn receive(
             .collect(),
         ClientOpcodeMessage::CMSG_QUESTGIVER_ACCEPT_QUEST(q) => {
             super::actor(ctx, guid)
-                .map_err(String::from)
-                .and_then(|_| apply_accept_quest(ctx, guid, q.guid.guid(), q.quest_id))
-                .map_err(|reason| Rollback::replies(accept_refusal(q.quest_id, &reason), reason))?;
+                .map_err(|refusal| AcceptQuestRefusal::from(String::from(refusal)))
+                .and_then(|_| accept_offered_quest(ctx, guid, q.guid.guid(), q.quest_id))
+                .map_err(|refusal| {
+                    Rollback::replies(accept_refusal(&refusal), ActionRefusal::from(refusal))
+                })?;
             Vec::new()
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_CANCEL => {
@@ -374,8 +371,8 @@ pub(super) fn receive(
             reward_screen(ctx, q.guid.guid(), guid, q.quest_id)?
         }
         ClientOpcodeMessage::CMSG_QUESTGIVER_CHOOSE_REWARD(q) => {
-            if let Err(reason) = super::actor(ctx, guid).map_err(String::from).and_then(|_| {
-                apply_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward)?;
+            if let Err(reason) = super::actor(ctx, guid).and_then(|_| {
+                request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward)?;
                 crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
             }) {
                 let packets = quest_detail_view(ctx, q.quest_id)
@@ -405,13 +402,13 @@ pub(super) fn receive(
                 .into_iter()
                 .find(|slot| slot.slot == q.slot)
             {
-                apply_abandon_quest(ctx, guid, slot.quest_id).map_err(Rollback::silent)?;
+                apply_abandon_quest(ctx, guid, slot.quest_id)?;
             }
             Vec::new()
         }
         ClientOpcodeMessage::CMSG_PUSHQUESTTOPARTY(q) => {
             super::actor(ctx, guid)?;
-            apply_push_quest_to_party(ctx, guid, q.quest_id).map_err(Rollback::silent)?;
+            apply_push_quest_to_party(ctx, guid, q.quest_id)?;
             Vec::new()
         }
         _ => return Err("invalid quest opcode".into()),

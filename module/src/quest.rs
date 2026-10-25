@@ -1,4 +1,5 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
+use lyracore_shared::quest::AcceptanceRefusal;
 use std::collections::BTreeSet;
 
 use spacetimedb::{table, Identity, ReducerContext, Table};
@@ -558,6 +559,14 @@ pub(crate) fn accept_gates(
     player: &crate::WorldEntity,
     tmpl: &QuestTemplate,
 ) -> Result<Option<CharacterQuest>, String> {
+    acceptance_gate(ctx, player, tmpl).map_err(|refusal| refusal.text(tmpl.min_level))
+}
+
+fn acceptance_gate(
+    ctx: &ReducerContext,
+    player: &crate::WorldEntity,
+    tmpl: &QuestTemplate,
+) -> Result<Option<CharacterQuest>, AcceptanceRefusal> {
     use lyracore_shared::quest::{acceptance, AcceptanceRequirements, Attempt};
     let existing = character_quest_row(ctx, player.guid, tmpl.entry);
     acceptance(
@@ -575,11 +584,44 @@ pub(crate) fn accept_gates(
             rewarded: row.rewarded,
             failed: row.failed,
         }),
-    )
-    .map_err(|refusal| refusal.text(tmpl.min_level))?;
+    )?;
     Ok(existing)
 }
 
+pub(crate) enum AcceptQuestRefusal {
+    Acceptance {
+        refusal: AcceptanceRefusal,
+        min_level: u32,
+    },
+    LogFull,
+    Refused(ActionRefusal),
+}
+
+impl From<ActionRefusal> for AcceptQuestRefusal {
+    fn from(refusal: ActionRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<String> for AcceptQuestRefusal {
+    fn from(detail: String) -> Self {
+        Self::Refused(detail.into())
+    }
+}
+
+impl From<AcceptQuestRefusal> for ActionRefusal {
+    fn from(refusal: AcceptQuestRefusal) -> Self {
+        match refusal {
+            AcceptQuestRefusal::Acceptance { refusal, min_level } => refusal.text(min_level).into(),
+            AcceptQuestRefusal::LogFull => lyracore_shared::quest::QUEST_LOG_FULL_TEXT
+                .to_string()
+                .into(),
+            AcceptQuestRefusal::Refused(refusal) => refusal,
+        }
+    }
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_accept_quest(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -595,13 +637,23 @@ pub(crate) fn request_accept_quest(
     giver_guid: u64,
     quest_entry: u32,
 ) -> Result<(), ActionRefusal> {
+    accept_offered_quest(ctx, player_guid, giver_guid, quest_entry).map_err(Into::into)
+}
+
+pub(crate) fn accept_offered_quest(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    giver_guid: u64,
+    quest_entry: u32,
+) -> Result<(), AcceptQuestRefusal> {
     let player = crate::helpers::live_entity(ctx, player_guid)
         .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingActor, "player not in world"))?;
     if player.dead {
         return Err(ActionRefusal::new(
             ActionRefusalKind::DeadActor,
             "dead players cannot accept quests",
-        ));
+        )
+        .into());
     }
     let giver = validate_giver(ctx, &player, giver_guid)?;
     if !giver_has_quest_role(ctx, &giver, quest_entry, quest_role::START) {
@@ -615,20 +667,22 @@ pub(crate) fn request_accept_quest(
         .entry()
         .find(quest_entry)
         .ok_or_else(|| format!("no such quest {quest_entry}"))?;
-    let existing = accept_gates(ctx, &player, &tmpl)?;
+    let existing =
+        acceptance_gate(ctx, &player, &tmpl).map_err(|refusal| AcceptQuestRefusal::Acceptance {
+            refusal,
+            min_level: tmpl.min_level,
+        })?;
     if existing.as_ref().is_none_or(|row| row.rewarded)
         && quest_slots_used(ctx, player_guid) >= MAX_QUEST_LOG_SIZE
     {
-        return Err(lyracore_shared::quest::QUEST_LOG_FULL_TEXT
-            .to_string()
-            .into());
+        return Err(AcceptQuestRefusal::LogFull);
     }
     let deadline_micros = if tmpl.limit_time > 0 {
         ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
     } else {
         0
     };
-    apply_accept_effects(
+    Ok(apply_accept_effects(
         ctx,
         player_guid,
         player.owner_identity,
@@ -636,7 +690,7 @@ pub(crate) fn request_accept_quest(
         &tmpl,
         existing,
         deadline_micros,
-    )
+    )?)
 }
 
 fn apply_accept_effects(
@@ -2655,7 +2709,7 @@ pub(crate) fn request_enter_areatrigger(
     ctx: &ReducerContext,
     character_guid: u64,
     trigger_id: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let actor = crate::helpers::live_entity(ctx, character_guid)?;
     let trigger = ctx
         .db
@@ -2725,10 +2779,10 @@ pub(crate) fn apply_push_quest_to_party(
     ctx: &ReducerContext,
     sender_guid: u64,
     quest_entry: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if !character_quest_row(ctx, sender_guid, quest_entry).is_some_and(|q| !q.rewarded && !q.failed)
     {
-        return Err("you are not on that quest".to_string());
+        return Err("you are not on that quest".into());
     }
     let sender_entity = crate::helpers::live_entity(ctx, sender_guid)
         .map_err(|_| "player not in world".to_string())?;
@@ -2830,11 +2884,11 @@ pub(crate) fn apply_abandon_quest(
     ctx: &ReducerContext,
     player_guid: u64,
     quest_entry: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let cq = character_quest_row(ctx, player_guid, quest_entry)
         .ok_or_else(|| "you are not on that quest".to_string())?;
     if cq.rewarded {
-        return Err("cannot abandon a completed quest".to_string());
+        return Err("cannot abandon a completed quest".into());
     }
     if let Some(tmpl) = ctx.db.game_quest_template().entry().find(quest_entry) {
         if tmpl.src_item != 0 {
