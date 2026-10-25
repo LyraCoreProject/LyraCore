@@ -2,11 +2,20 @@
 import argparse
 import os
 from pathlib import Path
+import re
 import shutil
 import subprocess
 
 REVISION = '08e1aba133671f9c631c6e70133a82faa0e7b283'
 ROOT = Path(__file__).resolve().parent
+
+
+def host_toolchain():
+    pin = ROOT / 'rust-toolchain.toml'
+    match = re.search(r'^\s*channel\s*=\s*"([^"]+)"', pin.read_text(), re.M)
+    if not match:
+        raise RuntimeError(f'cannot read the toolchain channel from {pin}')
+    return match[1]
 
 
 def main():
@@ -60,7 +69,7 @@ def main():
     if args.build:
         env = dict(os.environ, CARGO_BUILD_JOBS=os.environ.get('CARGO_BUILD_JOBS', '3'),
             CARGO_PROFILE_RELEASE_DEBUG='0', CARGO_PROFILE_RELEASE_LTO='false')
-        subprocess.run(['cargo', '+1.97.1', 'build', '--release', '--locked', '-p', 'spacetimedb-standalone'], cwd=checkout, env=env, check=True)
+        subprocess.run(['cargo', f'+{host_toolchain()}', 'build', '--release', '--locked', '-p', 'spacetimedb-standalone'], cwd=checkout, env=env, check=True)
     print(checkout / 'target/release/spacetimedb-standalone')
 
 

@@ -123,6 +123,7 @@ want_recommended() {
 
 have git || want git git
 have curl || want curl curl
+have python3 || want python3 python3
 
 need_openssl=1
 openssl_banner='not found'
@@ -192,6 +193,9 @@ if [ -n "$missing" ]; then
         printf '\n' >&2
         if [ "$need_xcode" -eq 1 ]; then
             printf '  xcode-select --install\n' >&2
+        fi
+        if ! have python3; then
+            printf '  brew install python3\n' >&2
         fi
         if [ "$need_openssl" -eq 1 ]; then
             printf '%s\n' '  brew install openssl@3' \
