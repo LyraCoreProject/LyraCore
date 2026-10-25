@@ -135,8 +135,9 @@ flight splines and landing, XP and level-up notifications, exploration and rest 
 and watched factions, Loot Tags, corpse loot, local Loot Rolls and group money shares,
 object queries, control receipts, unavailable-service replies, same-map teleports and map changes,
 release and reclaim, resurrection offers, Soulstone, spirit-healer interaction, corpse decay,
-zone weather, breath timers and drowning, Speech, whispers, away status, Realm Chat Lines,
-flood limits, Chat Channel operations, friends and ignores, friend presence notifications, `/who`,
+zone weather, breath and fatigue timers, drowning and exhaustion, Speech, whispers, away status,
+Realm Chat Lines, flood limits, Chat Channel operations, friends and ignores,
+friend presence notifications, `/who`,
 party and raid requests, rosters, target icons, ready checks, minimap pings, random rolls and member stats,
 guild creation, membership, settings, rosters, presence, charters, petitions and emblem purchases,
 trade proposals, offers, acceptance and item and copper exchanges,
@@ -172,7 +173,9 @@ See the [Corpse migration](./danger-zones.md#corpse-aoi-migration) before publis
 Weather delivery uses the Module's terrain-derived zone and an index of native connections in that
 zone. Entry sends the current weather; later changes reach only that zone. Client zone claims do not
 change this state. Breath notifications go only to the owner. Death, godmode and world removal clear
-the active breath timer through the WorldEntity lifecycle.
+the active breath timer through the WorldEntity lifecycle. Fatigue notifications also go only to
+the owner. The 1-second environmental tick ends the fatigue timer for godmode and for a dead
+Character that has not released.
 
 The [chat handler](../module/src/native/chat.rs) resolves whisper targets, reads ignore and away
 state, and selects Speech recipients. Speech queries indexed Character cells independently of AOI

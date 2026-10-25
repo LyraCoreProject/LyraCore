@@ -952,6 +952,7 @@ mod tests {
             holes: 0,
             area_id: 0,
             heights: vec![80.0; 145],
+            deep_water_tiles: 0,
         }
     }
 

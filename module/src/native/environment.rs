@@ -84,6 +84,16 @@ pub(crate) fn breath_event(ctx: &ReducerContext, row: &BreathRelayEvent) {
         crate::breath_relay::KIND_DROWNING_DAMAGE => {
             codec::build_drowning_damage_log(row.character_guid, row.damage)
         }
+        crate::breath_relay::KIND_FATIGUE_DRAIN => {
+            codec::build_fatigue_timer_start(true, row.time_remaining_ms, row.duration_ms)
+        }
+        crate::breath_relay::KIND_FATIGUE_RECOVER => {
+            codec::build_fatigue_timer_start(false, row.time_remaining_ms, row.duration_ms)
+        }
+        crate::breath_relay::KIND_FATIGUE_STOP => codec::build_fatigue_timer_stop(),
+        crate::breath_relay::KIND_EXHAUSTION_DAMAGE => {
+            codec::build_exhaustion_damage_log(row.character_guid, row.damage)
+        }
         _ => return,
     };
     let packet =

@@ -587,6 +587,49 @@ def check_environment(client, peer, call, sql, guid, peer_guid):
     peer.collect()
 
 
+def check_fatigue(client, peer, call, sql, guid, peer_guid):
+    health, level = sql(f'SELECT max_health, level FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0]
+    call('debug_set_health', [guid, health])
+    # Runs after check_environment, which gives cell 512,512 of map 0 liquid at level 10.
+    sql(f'INSERT INTO game_terrain_deep_water (key,tiles) VALUES ({(512 << 16) | 512},{(1 << 64) - 1})')
+    call('debug_teleport', [guid, 0, -31, -1, 0, 0])
+    client.collect()
+    peer.collect()
+    timestamp = sql(f'SELECT last_move_ms FROM game_world_entity WHERE guid = {guid}')[0]['rows'][0][0]
+    client.send(0xee, struct.pack('<IIffffI', 0, timestamp + 1000, -31, -1, 0, 0, 0))
+    assert (0x1d9, struct.pack('<IIIIBI', 0, 60000, 60000, 0xffffffff, 0, 0)) in client.collect()
+    assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
+    sql(f'UPDATE game_fatigue_state SET remaining_micros = 100000 WHERE entity_guid = {guid}')
+    exhausted = []
+    for _ in range(60):
+        exhausted += client.collect()
+        if any(opcode == 0x1fc for opcode, _ in exhausted):
+            break
+        time.sleep(0.05)
+    logs = [struct.unpack('<QBIII', body) for opcode, body in exhausted if opcode == 0x1fc]
+    assert all(log[:2] == (guid, 0) and health // 5 <= log[2] < health // 5 + max(level, 1) for log in logs)
+    assert logs and values(exhausted, guid)[22] < health
+    assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
+    sql(f'DELETE FROM game_terrain_deep_water WHERE key = {(512 << 16) | 512}')
+    client.send(0xee, struct.pack('<IIffffI', 0, timestamp + 2000, -31, -1, 0, 0, 0))
+    recovering = [struct.unpack('<IIIIBI', body) for opcode, body in client.collect() if opcode == 0x1d9]
+    assert [(timer, duration, scale) for timer, _, duration, scale, _, _ in recovering] == [(0, 60000, 10)]
+    sql(f'UPDATE game_fatigue_state SET remaining_micros = 59990000 WHERE entity_guid = {guid}')
+    recovered = []
+    for _ in range(60):
+        recovered += client.collect()
+        if any(opcode == 0x1db for opcode, _ in recovered):
+            break
+        time.sleep(0.05)
+    assert (0x1db, struct.pack('<I', 0)) in recovered
+    assert not sql(f'SELECT entity_guid FROM game_fatigue_state WHERE entity_guid = {guid}')[0]['rows']
+    assert not any(opcode in (0x1d9, 0x1db, 0x1fc) for opcode, _ in peer.collect())
+    call('debug_set_health', [guid, health])
+    call('debug_teleport', [guid, 0, 20, 0, 0, 0])
+    client.collect()
+    peer.collect()
+
+
 def check_social(client, peer, call, sql, guid, peer_guid):
     def status(code, target, online=None):
         body = struct.pack('<BQ', code, target)
@@ -4840,6 +4883,7 @@ def main():
                 peer.collect()
                 check_death(client, peer, call, sql, guid, peer_guid)
                 check_environment(client, peer, call, sql, guid, peer_guid)
+                check_fatigue(client, peer, call, sql, guid, peer_guid)
                 check_social(client, peer, call, sql, guid, peer_guid)
                 check_channels(client, peer, call, sql, guid, peer_guid)
                 check_party(client, peer, call, sql, guid, peer_guid)
