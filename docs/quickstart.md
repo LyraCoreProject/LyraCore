@@ -276,7 +276,7 @@ or missing Account name before changing state.
 ### Optional: prove it over the wire before touching a client
 
 ```bash
-./lyracore dev smoke
+printf 'test123\n' | ./lyracore dev smoke TEST Tester --password-stdin
 ```
 
 This hands off to the pinned headless wire harness and drives a **real build-5875 login** against the

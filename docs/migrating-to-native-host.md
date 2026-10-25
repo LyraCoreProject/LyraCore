@@ -16,29 +16,37 @@ Agents can do most of this work. Run `/migrate-native-host` in Claude Code from 
 ## Local Realm
 
 The new runtime does not read data from the old one. Your local Accounts and Characters stay in the
-old SpacetimeDB data and do not come across. Plan to import content and create Accounts again.
+old SpacetimeDB data and do not come across. Plan to import content and create Accounts and
+Characters again.
 
 1. Pull `main`. `./lyracore` installs the pinned CLI on its next run.
-2. Stop the old runtime with `./lyracore dev down`. Startup refuses an unrelated process on port 3000,
-   3724 or 8085.
+2. Stop the old runtime with `./lyracore dev down`. Native startup refuses while a recorded legacy
+   runtime is live, and it refuses an unrelated process on port 3000, 3724 or 8085.
 3. Install the Native Host toolchain with `rustup toolchain install 1.97.1`. The Module still builds
    with 1.93.0. Native startup also needs OpenSSL 3 or newer.
 4. Run `./lyracore dev up`. The first run also builds the Native Host.
 5. Run `./lyracore import`, then `./lyracore account create TEST`.
 
-`./lyracore dev smoke` checks login and world entry before you start a client.
+To check login and world entry before you start a client, run the smoke test. It needs imported
+content, an Account and a Character name:
+
+```bash
+printf 'PASSWORD\n' | ./lyracore dev smoke TEST Tester --password-stdin
+```
 
 Some files change:
 
 - `.lyracore/native-data/` holds the Realm data. Keep it across restarts.
 - `.lyracore/native-owner-token` and `.lyracore/native-cli.toml` replace `.lyracore/coordinator-token`.
+- `.lyracore/native-jwt/` holds the local signing keys. `.lyracore/native-host/` holds the Host
+  source and build.
 - `.lyracore/logs/gateway.log` is no longer written. All output goes to `.lyracore/logs/spacetime.log`.
 - `dev up` publishes one Shard, `lyracore`. It does not publish `lyracore-realm`,
   `lyracore-kalimdor` or `lyracore-instances`.
 
-For Module code changes, use `./lyracore dev watch` instead of `dev up`. It hot-reloads each saved
-change into the running Host and keeps your client connected. See
-[Development reload](./quickstart.md#development-reload).
+For Module code changes, use `./lyracore dev watch`. It hot-reloads each saved change into the
+running Host and keeps your client connected. If `dev up` is running, stop it with
+`./lyracore dev down` first. See [Development reload](./quickstart.md#development-reload).
 
 ## Branches that change the Gateway
 
@@ -52,37 +60,54 @@ different shape. Port the change by hand. Do not restore the deleted files.
 | --- | --- |
 | `gateway/src/codec/*` | `crates/lyracore-protocol/src/codec/*`, mostly unchanged |
 | `gateway/src/world/who.rs`, `packet_lint.rs` | `crates/lyracore-protocol/src/` |
-| `gateway/src/world/handlers/<area>.rs` | `module/src/native/<area>.rs` |
-| Opcode routing in `gateway/src/world/mod.rs` | `module/src/native/world.rs`, `receive` |
-| `gateway/src/logon/*`, Session and login queue code | `module/src/native/logon.rs`, `admission.rs`, `mod.rs` |
-| `gateway/src/stdb/store/*`, subscription caches | Gone. Read tables through `ctx.db` |
-| `gateway/src/codec/*/subscriptions/*`, Relay fanout | The Module function that writes the Relay row calls `crate::native::<relay>` |
+| `gateway/src/world/handlers/<area>.rs` | `module/src/native/<area>.rs`, with the renames below |
+| `gateway/src/world/{party,mail,loot,social,chat_flood}.rs` | `module/src/native/` file of the same name |
+| `gateway/src/world/party_mirror.rs` | `module/src/native/party.rs` and `module/src/group/mirror.rs` |
+| `gateway/src/world/{whisper,presence}.rs` | `module/src/native/chat.rs` and `social.rs` |
+| Opcode routing in `gateway/src/world/routing.rs`, `family.rs` | `receive` in `module/src/native/world.rs` |
+| `gateway/src/logon/*`, World Session and Login Queue code | `module/src/native/logon.rs`, `admission.rs`, `mod.rs` |
+| Movement handler, `coalesce.rs`, `stdb/movement_batch.rs` | `native/world.rs` calls `crate::world::apply_movement_update`; batching is in `module/src/motion.rs` |
+| `gateway/src/stdb/{store,reads}/*`, `relays.rs`, `subscriptions.rs` | Gone. Read tables through `ctx.db` |
+| `gateway/src/codec/*/subscriptions/*`, Relay fanout | The Module code that writes the Relay row calls `crate::native::<relay>` |
 | `gateway/src/stdb/aoi.rs`, `world_view/*` | `module/src/aoi.rs` and `module/src/native/visibility.rs` |
-| Shard routing, Transfer, `realm_core.rs` | Gone. One Shard holds the Realm |
+| `main.rs`, `accept.rs`, `transport.rs`, `egress.rs`, `config.rs`, `read_deadline.rs`, `fd_limit.rs` | The Host extension in `native-host/src/` |
+| Gateway Shard routing and Transfer coordination | Gone. The Module's `realm_core.rs` and `transfer/` remain for legacy tables |
 | `gateway/src/world/*_tests.rs`, `test_support/world_fake` | Module unit tests, `module/tests/*` and `native-host/check.py` |
+| `gateway/tests/*` | `native-host/check.py --check-admission`, `--check-recovery` and durable tests |
 
-Some areas have new file names. Vendor and bank requests are in `economy.rs`. Melee is in
-`combat.rs`. Casts are in `cast.rs`. Use
-`grep -n CMSG_YOUR_OPCODE module/src/native/world.rs` to find the handler for an opcode.
+Handler renames: `char.rs` is `character.rs`, `gameobject.rs` is `object.rs`, `item.rs` is
+`inventory.rs` and `weather.rs` is `environment.rs`. Vendor and bank requests are in `economy.rs`.
+Melee is in `combat.rs`. Casts are in `cast.rs`.
+
+To find the handler for an opcode, read the start of `receive` in `native/world.rs` first. It routes
+movement, teleport acknowledgements, auction browsing, reputation and Addon chat on the raw opcode
+number, before it decodes the packet. Search for the hex opcode there. It routes the other requests
+by `ClientOpcodeMessage` variant, so `grep -n CMSG_YOUR_OPCODE module/src/native/world.rs` finds them.
 
 ### Patterns
 
 **Client request.** The Gateway decoded a packet, checked it and called a `gw_*` reducer through
-`call_reducer!`. Now `native/world.rs` matches the `ClientOpcodeMessage` and calls the handler for
-its area. The handler runs inside the transaction. It applies the Gate, calls the core function
-directly and sends replies with `super::send(ctx, connection_id, message, false)`.
-`module/src/native/death.rs` shows the whole pattern for `CMSG_SPIRIT_HEALER_ACTIVATE`.
+`call_reducer!`. Now `receive` in `native/world.rs` routes the request to the handler for its area.
+The handler runs inside the transaction. It applies the Gate, calls the core function directly and
+sends replies with `super::send(ctx, connection_id, message, false)`. In `module/src/native/death.rs`,
+`CMSG_SPIRIT_HEALER_ACTIVATE` applies a Gate and calls the core function. `confirm_spirit_healer`
+in the same file sends a reply. `native/gossip.rs` calls it.
 
-**Refusal.** Return an error from the handler. `super::rollback_silent(cause)` rolls back and
-sends nothing. `super::rollback_reply(message, cause)` rolls back and sends one packet. The Native
-Host delivers that packet after the rollback. Do not send a refusal packet with `send` and then
-return an error, because the rollback deletes it.
+**Refusal.** Return `Err(super::rollback_silent(cause))` to roll back and send nothing. Return
+`Err(super::rollback_reply(message, cause))` to roll back and send one packet. The Native Host
+delivers that packet after the rollback.
+
+Do not return any other `Err` for a Refusal. The Native Host treats it as a failure and closes the
+connection, so the player has a Transport Loss. Do not send a packet with `send` and then return
+`Err`, because the rollback deletes the packet.
 
 **Relay.** The Gateway subscribed to a Relay table and encoded each new row. Now the Module code that
 inserts the row also calls the native Relay function. `module/src/breath_relay.rs` inserts the row,
-then calls `crate::native::breath_event`. That function selects the recipient and builds the packet
-with the protocol crate. For one Character, look up its connection in `game_native_player` and use
-`send_raw`. For nearby observers, use `broadcast_aoi` in `native/visibility.rs`.
+then calls `crate::native::breath_event`. Put a new Relay function in a file under
+`module/src/native/` and re-export it with `pub(crate) use` in `native/mod.rs`, as `breath_event`
+is. The function selects the recipient and builds the packet with the protocol crate. For one
+Character, look up its connection in `game_native_player` and use `send_raw`. For nearby observers,
+use `visibility::broadcast`.
 
 **Gateway Verb.** The `gw_*` reducers in `module/src/gw.rs` still exist. Durable tests and
 `native-host/check.py` call them as the Operator. The native runtime does not call them. If your
@@ -94,16 +119,29 @@ so it cannot use threads, sockets or the system clock.
 
 ### Port a branch
 
-1. List your Gateway changes with `git diff --stat $(git merge-base HEAD origin/main) -- gateway/`.
-2. Rebase onto `main`. Resolve conflicts outside `gateway/` as usual.
-3. For each Gateway change, find the new location in the table, then make the same change there.
-4. Remove the deleted Gateway files from the rebase with `git rm`.
-5. Move Gateway tests to the matching Module tests. If a test checks wire bytes or packet order,
+Commit or stash your work first. The rebase removes the Gateway changes from your commits, so save
+them before you start.
+
+1. Make a backup branch: `git branch backup/my-branch HEAD`.
+2. Save the Gateway diff outside the repository:
+   `git diff $(git merge-base HEAD origin/main) HEAD -- gateway/ > /tmp/my-branch-gateway.diff`.
+3. Run `git rebase origin/main`. At each stop, run `git rm` on each conflicting Gateway file, resolve
+   the other conflicts as usual, then run `git rebase --continue`. A commit that changed only
+   `gateway/` is empty after `git rm`. Skip it with `git rebase --skip`.
+4. After the rebase, `git ls-files gateway/` must print nothing. A file your branch added under
+   `gateway/` does not conflict, so remove it with `git rm`.
+5. For each hunk in the saved diff, find the new location in the table. Read the new code, then make
+   the same change in a new commit.
+6. Move Gateway tests to the matching Module tests. If a test checks wire bytes or packet order,
    add a case to `native-host/check.py`.
-6. Run the checks in [testing.md](./testing.md), including the native protocol check.
+7. Run the checks in [testing.md](./testing.md), including the native protocol check.
 
 The runtime change already includes some fixes. Before you port a change, read the new handler.
-For example, `native/death.rs` already asks a Spirit Healer to confirm before it resurrects a ghost.
+For example, the native Module already asks a Spirit Healer to confirm before it resurrects a ghost.
+
+If you already merged the new `main` into your branch, the merge dropped your Gateway changes.
+`git log --full-history --oneline origin/main..HEAD -- gateway/` lists the commits that had them.
+Recover each diff with `git show <commit> -- gateway/`.
 
 ## Package changes
 
@@ -112,10 +150,15 @@ not report these changes. [package-api.md](./package-api.md) gives the full cont
 
 - `emit_bot_invite_intent` and `emit_bot_leave_intent` change the group in the same transaction.
   They create no Group Intent. A group invariant failure aborts the transaction.
+- Core checks Sessionless Action Consent before invite, leave and automatic acceptance. Suppressed
+  consent leaves an incoming invitation unanswered. Absent consent permits sessionless actions.
 - `set_sessionless_action_consent` also clears the Character's last completed Character Relocation.
-  Absent consent permits sessionless actions.
-- `enter_sessionless_areatrigger` moves the Character in the same transaction and returns the id of
-  the completed Character Relocation. It creates no Transfer Intent or Escrow.
+- `enter_sessionless_areatrigger` moves the Character in the same transaction. Its `u64` result was
+  a Transfer Intent id and is now the id of the completed Character Relocation. A Package that looks
+  up a Transfer Intent with that id still compiles and finds nothing. A repeat call for the same
+  destination returns the same id. Only the latest relocation remains.
+- `party_facts` reads the durable party roster. Live Units supply the current map and Instance. For
+  an absent Unit, the partition comes only from legacy coordination records.
 
 If your Package waits for a Group Intent or Transfer Intent to complete, remove that wait. The
 action is complete when the call returns.
@@ -123,6 +166,7 @@ action is complete when the call returns.
 ## Multi-Shard Realms
 
 Do not update a Realm that has players. This change has no migration for durable state from
-several Shards, pending Escrows and Holds, Gateway leases or Account Claims. Expiry of old leases and
-Account Claims can remove Characters or channel memberships. A separate reviewed migration must come
-first. Until then, keep the Realm on the last `main` commit before the Native Host.
+several Shards, pending Escrows and Holds, Gateway leases or Account Claims. When old leases and
+Account Claims expire, the Module despawns their Characters and can remove channel memberships. A
+separate reviewed migration must come first. Until then, keep the Realm on commit `8cf70a66`, the
+last `main` commit before the Native Host.
