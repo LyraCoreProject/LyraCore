@@ -137,6 +137,7 @@ mod away;
 mod breath;
 mod breath_relay;
 mod bridge;
+mod fatigue;
 
 mod channel;
 mod character;
