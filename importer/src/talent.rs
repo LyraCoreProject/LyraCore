@@ -7,7 +7,7 @@ use wow_dbc::vanilla_tables::talent_tab::TalentTab as DbcTalentTab;
 use wow_dbc::DbcTable;
 
 use crate::dbc::{open_chain, read_table};
-use crate::{push_insert, run_sql_statements, sql_text, Args};
+use crate::{push_insert, sql_text, Args};
 
 fn map_talent_tabs(tabs: &DbcTalentTab) -> (Vec<String>, usize) {
     let rows: Vec<String> = tabs
@@ -135,7 +135,7 @@ pub fn run_talents(data_dir: &str, args: &Args) -> Result<()> {
     stmts.extend(talent_stmts);
 
     if args.apply {
-        run_sql_statements(args, &stmts, "talents")?;
+        args.shard.run_sql_statements(&stmts, "talents")?;
         eprintln!(
             "talents: loaded {} tabs + {} talents into game_talent_tab/game_talent.",
             cov.tabs, cov.talents

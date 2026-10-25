@@ -12,7 +12,7 @@ use wow_world_base::vanilla::AuraMod;
 use crate::dbc::{open_chain, read_table};
 use crate::package_delta;
 use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
-use crate::{push_insert, run_sql_statements, stamp_family, Args};
+use crate::{push_insert, Args};
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
@@ -1562,7 +1562,7 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     if args.apply {
-        run_sql_statements(args, &stmts, "spells")?;
+        args.shard.run_sql_statements(&stmts, "spells")?;
         eprintln!(
             "spells: imported {} spells, {} effects ({:.1}% real kinds, {:.1}% E_SCRIPTED){}.",
             cov.spells,
@@ -1583,7 +1583,8 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
                 " [additive allowlist]"
             },
         );
-        stamp_family(args, "spell", &args.source_sha, "", cov.spells as u64)
+        args.shard
+            .stamp_family("spell", &args.source_sha, "", cov.spells as u64)
             .context("stamp_import_meta(spell)")?;
     } else if !args.only.is_empty() {
         println!(

@@ -185,7 +185,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         } else {
             "import_go_models_append"
         };
-        crate::call_reducer(args, reducer, batch)?;
+        args.shard.call_reducer(reducer, batch)?;
     }
     println!(
         "go-models: applied {} row(s) across {} batch(es).",

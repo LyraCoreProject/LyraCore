@@ -125,7 +125,7 @@ pub fn run(data_dir: &str, args: &Args) -> Result<()> {
 pub(crate) fn run_from_dump(data_dir: &str, args: &Args, mount_dump: &str) -> Result<()> {
     let statements = catalogue_statements(data_dir, mount_dump)?;
     if args.apply {
-        crate::run_sql_statements(args, &statements, "dbc")?;
+        args.shard.run_sql_statements(&statements, "dbc")?;
         eprintln!(
             "dbc: loaded client catalogues ({} SQL statements)",
             statements.len()

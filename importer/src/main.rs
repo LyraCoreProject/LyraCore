@@ -11,6 +11,7 @@ mod m2_collision;
 mod nav;
 mod pack_client;
 mod package_delta;
+mod shard;
 mod spell;
 mod spell_dbc;
 mod spell_snapshot;
@@ -34,6 +35,7 @@ use lyracore_package_delta::{
     packed_class_level_id, packed_creature_spawn_guid, packed_gameobject_spawn_guid,
     packed_race_class_id, packed_race_class_level_id,
 };
+use shard::Shard;
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
@@ -707,8 +709,7 @@ pub(crate) struct Args {
     include_creatures: Vec<u64>,
     bbox: Option<(f64, f64, f64, f64)>,
     exclude: Option<(f64, f64, f64, f64)>,
-    db: String,
-    server: String,
+    pub(crate) shard: Shard,
     pub(crate) apply: bool,
     pub(crate) family: Option<String>,
     pub(crate) source_sha: String,
@@ -754,8 +755,10 @@ where
         radius: 180.0,
         bbox: None,
         exclude: None,
-        db: "lyracore".into(),
-        server: "local".into(),
+        shard: Shard {
+            db: "lyracore".into(),
+            server: "local".into(),
+        },
         apply: false,
         family: None,
         source_sha: String::new(),
@@ -921,8 +924,8 @@ where
                     p[2].max(p[3]),
                 ));
             }
-            "--db" => a.db = it.next().context("--db")?,
-            "--server" => a.server = it.next().context("--server")?,
+            "--db" => a.shard.db = it.next().context("--db")?,
+            "--server" => a.shard.server = it.next().context("--server")?,
             "--apply" => a.apply = true,
             "--family" => {
                 let v = it.next().context("--family <name>")?;
@@ -1092,64 +1095,6 @@ impl Args {
         scope.extend_forced_creatures(&self.include_creatures);
         Ok(scope)
     }
-}
-
-// Each spacetime CLI argument is Sats JSON; encode the whole payload once.
-pub(crate) fn call_reducer(args: &Args, reducer: &str, payload: &str) -> Result<()> {
-    let payload = serde_json::to_string(payload).context("encode reducer String argument")?;
-    call_reducer_args(args, reducer, &[&payload])
-}
-
-pub(crate) fn spacetime() -> Command {
-    let mut command = Command::new("spacetime");
-    if let Some(path) = std::env::var_os("LYRACORE_SPACETIME_CONFIG_PATH") {
-        command.arg("--config-path").arg(path);
-    }
-    command
-}
-
-pub(crate) fn call_reducer_args(args: &Args, reducer: &str, values: &[&str]) -> Result<()> {
-    let mut command = spacetime();
-    command.args(["call", "-s", &args.server, &args.db, reducer]);
-    command.args(values);
-    let out = command
-        .output()
-        .with_context(|| format!("run spacetime call {reducer}"))?;
-    if !out.status.success() {
-        bail!("{reducer} failed: {}", String::from_utf8_lossy(&out.stderr));
-    }
-    Ok(())
-}
-
-pub(crate) fn stamp_family(
-    args: &Args,
-    family: &str,
-    source_sha: &str,
-    file_hash: &str,
-    row_count: u64,
-) -> Result<()> {
-    let row_count_s = row_count.to_string();
-    let out = spacetime()
-        .args([
-            "call",
-            "-s",
-            &args.server,
-            &args.db,
-            "stamp_import_meta",
-            family,
-            source_sha,
-            file_hash,
-            &row_count_s,
-        ])
-        .output()
-        .with_context(|| format!("stamp_import_meta({family})"))?;
-    if !out.status.success() {
-        bail!(
-            "stamp_import_meta({family}) failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(())
 }
 
 pub(crate) fn sha256_hex(bytes: &[u8]) -> Result<String> {
@@ -2983,30 +2928,6 @@ fn print_extents(dump: &str, map: i64, bbox: Option<(f64, f64, f64, f64)>) -> Re
     Ok(())
 }
 
-// Each SQL statement commits separately; a failed sequence requires an idempotent rerun.
-pub(crate) fn run_sql_statements(args: &Args, stmts: &[String], label: &str) -> Result<()> {
-    for (n, s) in stmts.iter().enumerate() {
-        eprintln!(
-            "{label} sql [{}/{}]: {}…",
-            n + 1,
-            stmts.len(),
-            &s[..s.len().min(60)]
-        );
-        let out = spacetime()
-            .args(["sql", "-s", &args.server, &args.db, s])
-            .output()
-            .context("run spacetime sql")?;
-        if !out.status.success() {
-            bail!(
-                "statement {} failed: {}",
-                n + 1,
-                String::from_utf8_lossy(&out.stderr)
-            );
-        }
-    }
-    Ok(())
-}
-
 pub(crate) const FAMILIES: &[&str] = &[
     "creatures",
     "items",
@@ -4787,8 +4708,8 @@ fn main() -> Result<()> {
         if family_active(&args, "creature-ai") {
             println!(
                 "-- load native EventAI definitions via reducer: batch 0 replaces the family, and later batches append.\n  e.g. spacetime call -s {} {} import_creature_ai_definitions '<batch>'\n  (sample definition: {})",
-                args.server,
-                args.db,
+                args.shard.server,
+                args.shard.db,
                 plan.eventai_definition_batches
 .first()
 .and_then(|batch| batch.lines().next())
@@ -4796,13 +4717,13 @@ fn main() -> Result<()> {
             );
             println!(
                 "-- load the typed EventAI relay catalogue atomically through the reducer.\n  e.g. spacetime call -s {} {} import_creature_ai_relay_definitions '<catalogue>'",
-                args.server,
-                args.db,
+                args.shard.server,
+                args.shard.db,
             );
         }
         println!(
             "-- load spawns via reducer: batch 0 = import_creature_spawns (clears+loads), the rest = import_creature_spawns_append (load only).\n  e.g. spacetime call -s {} {} import_creature_spawns '<batch>'\n  (sample row: {})",
-            args.server, args.db, plan.spawn_batches.first().and_then(|b| b.split(';').next()).unwrap_or("")
+            args.shard.server, args.shard.db, plan.spawn_batches.first().and_then(|b| b.split(';').next()).unwrap_or("")
         );
         for family in FAMILIES {
             run_package_stage(&args, family)?;
@@ -4814,15 +4735,18 @@ fn main() -> Result<()> {
         bail!("no spawns matched the filter — check --box / --radius / --center");
     }
 
-    run_sql_statements(&args, &plan.stmts, "creatures")?;
+    args.shard.run_sql_statements(&plan.stmts, "creatures")?;
     for (reducer, batch) in plan.reducer_batches(&args)? {
-        call_reducer(&args, reducer, batch).with_context(|| format!("{reducer} batch"))?;
+        args.shard
+            .call_reducer(reducer, batch)
+            .with_context(|| format!("{reducer} batch"))?;
     }
     eprintln!("import applied.");
 
     let file_hash = sha256_hex(dump.as_bytes())?;
     for (family, row_count) in &plan.stamps {
-        stamp_family(&args, family, &args.source_sha, &file_hash, *row_count)
+        args.shard
+            .stamp_family(family, &args.source_sha, &file_hash, *row_count)
             .with_context(|| format!("stamp_import_meta({family})"))?;
     }
 
@@ -7382,8 +7306,10 @@ mod tests {
             radius: 180.0,
             bbox: None,
             exclude: None,
-            db: "lyracore".into(),
-            server: "local".into(),
+            shard: Shard {
+                db: "lyracore".into(),
+                server: "local".into(),
+            },
             apply: false,
             family: None,
             source_sha: String::new(),

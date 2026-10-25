@@ -173,7 +173,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         } else {
             "import_terrain_chunks_append"
         };
-        crate::call_reducer(args, reducer, batch)?;
+        args.shard.call_reducer(reducer, batch)?;
     }
     println!("terrain: applied.");
     Ok(())

@@ -668,8 +668,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         return Ok(());
     }
     for (i, batch) in batches.iter().enumerate() {
-        crate::call_reducer(
-            args,
+        args.shard.call_reducer(
             if i == 0 {
                 "import_nav_chunks"
             } else {
