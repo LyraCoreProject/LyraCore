@@ -39,7 +39,7 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
 | **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
-| **Native Host Rust toolchain** | **1.97.1** | `native-host/rust-toolchain.toml` pins it. Native startup builds the Host with `cargo +1.97.1`, which needs rustup. Install it with `rustup toolchain install 1.97.1`. |
+| **Native Host Rust toolchain** | **1.97.1** | `native-host/rust-toolchain.toml` pins it. Native startup builds the Host with `cargo +1.97.1`, which needs rustup. If the toolchain is missing, `dev up` installs it through rustup. |
 | **python3** | any current | Native startup runs `native-host/prepare-host.py` to prepare and build the Host. |
 | **openssl** command | OpenSSL 3 or newer | Native startup creates and checks its persistent signing keys with this command. LibreSSL is not supported. |
 | **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
@@ -57,7 +57,6 @@ Install `libssl-dev` and `pkg-config` for the native Rust dependencies that link
 # Rust (rustup — it will pick up the pinned 1.93.0 toolchain from the checkout automatically)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
-rustup toolchain install 1.97.1 --profile minimal    # the Native Host toolchain
 ```
 
 ### macOS
@@ -67,7 +66,6 @@ xcode-select --install          # Command Line Tools: git, clang, make
 
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
-rustup toolchain install 1.97.1 --profile minimal    # the Native Host toolchain
 ```
 
 On Apple platforms, `native-tls` uses Security.framework. Native startup requires genuine OpenSSL
@@ -206,8 +204,8 @@ gameplay and AOI. Moving between them no longer requires cross-Shard coordinatio
 remains accepted and has no effect on native startup.
 
 The first build uses the Host's pinned Rust 1.97.1 toolchain from `native-host/rust-toolchain.toml`,
-in addition to Rust 1.93.0 for the Module. `./lyracore doctor` reports it when it is missing. Install
-it with `rustup toolchain install 1.97.1`.
+in addition to Rust 1.93.0 for the Module. If rustup does not have it yet, `dev up` installs it
+before the build, and `./lyracore doctor` warns about it in advance.
 
 The CLI stores the new local Realm in `.lyracore/native-data`. It does not merge data from a legacy
 multi-Shard Realm. Stop a recorded legacy runtime with `./lyracore dev down` before starting the

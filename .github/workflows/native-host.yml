@@ -21,8 +21,12 @@ jobs:
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: ./.github/actions/setup-spacetime
-      - run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt
-      - run: rustfmt +1.97.1 --edition 2021 --config skip_children=true --check native-host/src/*.rs
+      - run: |
+          toolchain=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' native-host/rust-toolchain.toml)
+          test -n "$toolchain"
+          echo "HOST_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+      - run: rustup toolchain install "$HOST_TOOLCHAIN" --profile minimal --component rustfmt
+      - run: rustfmt +"$HOST_TOOLCHAIN" --edition 2021 --config skip_children=true --check native-host/src/*.rs
       - run: python3 native-host/prepare-host.py --checkout .lyracore/native-host/SpacetimeDB
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
@@ -36,13 +40,13 @@ jobs:
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 0
           CARGO_PROFILE_RELEASE_LTO: "false"
-        run: cargo +1.97.1 test --release --locked -p spacetimedb-core --lib host::wasmtime::compile_cache::tests
+        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-core --lib host::wasmtime::compile_cache::tests
       - name: Check recovery history retention
         working-directory: .lyracore/native-host/SpacetimeDB
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 0
           CARGO_PROFILE_RELEASE_LTO: "false"
-        run: cargo +1.97.1 test --release --locked -p spacetimedb-engine --lib retention::tests
+        run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-engine --lib retention::tests
       - name: Build the Module
         run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
       - name: Check native protocol behavior
