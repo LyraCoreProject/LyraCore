@@ -223,6 +223,7 @@ pub mod gossip_option {
     pub const VENDOR: u32 = 3;
     pub const TAXI: u32 = 4;
     pub const TRAINER: u32 = 5;
+    pub const SPIRITHEALER: u32 = 6;
     pub const INNKEEPER: u32 = 8;
     pub const BANKER: u32 = 9;
     pub const PETITIONER: u32 = 10;
@@ -317,7 +318,16 @@ mod tests {
     #[test]
     fn gossip_option_actions_are_distinct() {
         use gossip_option::*;
-        let mut codes = [GOSSIP, QUESTGIVER, BANKER, VENDOR, TAXI, TRAINER, INNKEEPER];
+        let mut codes = [
+            GOSSIP,
+            QUESTGIVER,
+            BANKER,
+            VENDOR,
+            TAXI,
+            TRAINER,
+            SPIRITHEALER,
+            INNKEEPER,
+        ];
         codes.sort_unstable();
         assert_eq!(
             codes.windows(2).filter(|w| w[0] == w[1]).count(),
@@ -325,8 +335,17 @@ mod tests {
             "gossip_option action codes must not collide"
         );
         assert_eq!(
-            (GOSSIP, QUESTGIVER, VENDOR, TAXI, TRAINER, INNKEEPER, BANKER),
-            (1, 2, 3, 4, 5, 8, 9)
+            (
+                GOSSIP,
+                QUESTGIVER,
+                VENDOR,
+                TAXI,
+                TRAINER,
+                SPIRITHEALER,
+                INNKEEPER,
+                BANKER
+            ),
+            (1, 2, 3, 4, 5, 6, 8, 9)
         );
     }
 

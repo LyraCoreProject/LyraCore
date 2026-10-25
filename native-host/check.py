@@ -474,13 +474,25 @@ def check_death(client, peer, call, sql, guid, peer_guid):
     client.send(0x21c, struct.pack('<Q', peer_guid))
     client.collect()
     assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[True]]
+    sql("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES (5090403,51004,0,0,'Return me to life.',6,0,0,0,0)")
     client.send(0x17b, struct.pack('<Q', healer))
-    assert (0x222, struct.pack('<Q', healer)) in client.collect()
+    greeted = client.collect()
+    menu = next(body for opcode, body in greeted if opcode == 0x17d)
+    assert struct.unpack_from('<I', menu, 12)[0] == 1 and b'Return me to life.\0' in menu
+    assert not any(opcode == 0x222 for opcode, _ in greeted)
+    client.send(0x17c, struct.pack('<QI', healer, 0))
+    selected = [packet for packet in client.collect() if packet[0] in (0x17e, 0x222)]
+    assert selected == [(0x17e, b''), (0x222, struct.pack('<Q', healer))], selected
+    assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[True]]
     client.send(0x21c, struct.pack('<Q', healer))
     revived = client.collect()
     assert not any(opcode == 0x222 for opcode, _ in revived)
     assert healer in destroys(revived)
     assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[False]]
+    client.send(0x21c, struct.pack('<Q', healer))
+    assert not any(opcode == 0x222 for opcode, _ in client.collect())
+    assert sql(f'SELECT dead FROM game_world_entity WHERE guid = {guid}')[0]['rows'] == [[False]]
+    sql('DELETE FROM game_gossip_option WHERE row_id = 5090403')
     peer.collect()
 
 

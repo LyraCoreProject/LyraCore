@@ -44,7 +44,7 @@ in the operation that owns them. Callers authorize the Actor before entering the
 | `import_revision` | `game_import_meta` read | current importer source and file identities for one family |
 | `repop` | `world::do_repop` | dead actor releases to the graveyard ghost |
 | `respond_resurrect` | `spell::do_resurrect_response` | consume the actor's pending rez offer; accept revives IN PLACE at the offer's % |
-| `spirit_res` | `world::do_spirit_healer_res` | ghost actor res at the spirit healer (sickness applies) |
+| `spirit_res` | `world::do_spirit_healer_res` | ghost actor res without a healer Gate; 25% carried-item durability loss and level-scaled sickness apply |
 | `self_resurrect` | `spell::do_self_resurrect` | dead actor with a Self-Resurrection Option revives in place; no sickness |
 | `accept_group_invite` | `group::accept_invite_for` | pending invite exists + its Group still exists (or a solo inviter is still ungrouped) + group not full; roster events fire |
 | `set_sessionless_action_consent` | `sessionless::set_sessionless_action_consent` | update Package consent and clear unclaimed Group Intents atomically |

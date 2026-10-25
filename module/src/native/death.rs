@@ -9,7 +9,7 @@ use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::game_native_player;
 use crate::{
-    game_corpse, game_world_entity,
+    game_corpse,
     spell::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest},
     Corpse,
 };
@@ -57,7 +57,7 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_SELF_RES => crate::spell::do_self_resurrect(ctx, guid),
         ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(request) => {
-            spirit_healer_gate(ctx, &character, request.guid.guid())
+            crate::ghost::spirit_healer_gate(ctx, guid, request.guid.guid())
                 .map_err(super::rollback_silent)?;
             crate::world::do_spirit_healer_res(ctx, guid)
         }
@@ -66,41 +66,11 @@ pub(super) fn receive(
     result.map_err(super::rollback_silent)
 }
 
-fn spirit_healer_gate(
-    ctx: &ReducerContext,
-    character: &crate::WorldEntity,
-    guid: u64,
-) -> Result<(), String> {
-    let healer = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .ok_or("no such spirit healer")?;
-    if !character.dead
-        || character.player_flags & lyracore_shared::constants::player_flags::GHOST == 0
-    {
-        return Err("Character is not a ghost".into());
-    }
-    if healer.dead
-        || healer.health == 0
-        || healer.is_player()
-        || healer.npc_flags & lyracore_shared::constants::npc_flags::SPIRITHEALER == 0
-        || !crate::helpers::in_same_partition(&healer, character.map_id, character.instance_id)
-        || crate::helpers::dist_sq(character, &healer) > 25.0
-    {
-        return Err("spirit healer is not in reach".into());
-    }
-    Ok(())
-}
-
 pub(super) fn confirm_spirit_healer(
     ctx: &ReducerContext,
     connection: ConnectionId,
-    character: &crate::WorldEntity,
     guid: u64,
 ) -> Result<(), String> {
-    spirit_healer_gate(ctx, character, guid)?;
     super::send(
         ctx,
         connection,

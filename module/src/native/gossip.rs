@@ -8,7 +8,7 @@ use lyracore_protocol::{
         Guid,
     },
 };
-use lyracore_shared::constants::{gossip_option, npc_flags};
+use lyracore_shared::constants::{gossip_option, npc_flags, player_flags};
 use spacetimedb::{ConnectionId, ReducerContext, SpacetimeType};
 
 use super::game_native_player;
@@ -43,18 +43,19 @@ fn hello(
     npc: u64,
 ) -> Result<(), String> {
     let character = super::actor(ctx, guid)?;
-    if character.player_flags & lyracore_shared::constants::player_flags::GHOST != 0 {
-        return super::death::confirm_spirit_healer(ctx, connection, &character, npc);
-    }
-    let (_, npc) = crate::items::npc_interaction_gate(
-        ctx,
-        guid,
-        npc,
-        u32::MAX,
-        "gossip creature",
-        "target has no gossip",
-        "use gossip",
-    )?;
+    let (_, npc) = if character.player_flags & player_flags::GHOST != 0 {
+        crate::ghost::spirit_healer_gate(ctx, guid, npc)?
+    } else {
+        crate::items::npc_interaction_gate(
+            ctx,
+            guid,
+            npc,
+            u32::MAX,
+            "gossip creature",
+            "target has no gossip",
+            "use gossip",
+        )?
+    };
     let menu = crate::gossip::active_menu(ctx, &npc);
     let source = menu.as_ref().map_or(0, |menu| menu.menu_id);
     let text = menu
@@ -201,6 +202,10 @@ fn select(
             );
             super::send_raw(ctx, connection, 0x02aa, body, false);
             Ok(())
+        }
+        gossip_option::SPIRITHEALER => {
+            complete(ctx, connection)?;
+            super::death::confirm_spirit_healer(ctx, connection, npc)
         }
         gossip_option::TABARDDESIGNER => {
             complete(ctx, connection)?;
