@@ -219,6 +219,7 @@ pub fn gw_open_creature_loot(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
     crate::actor::open_creature_loot(ctx, actor_guid, corpse_guid)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -1064,7 +1065,11 @@ pub fn gw_skin(
     require_operator(ctx).map_err(loot_operator_error)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
-    crate::professions::skin_corpse(ctx, actor_guid, corpse_guid)
+    Ok(crate::professions::skin_corpse(
+        ctx,
+        actor_guid,
+        corpse_guid,
+    )?)
 }
 
 #[reducer]
@@ -1078,7 +1083,13 @@ pub fn gw_loot_roll(
     require_operator(ctx).map_err(loot_operator_error)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
-    crate::loot::cast_vote_on(ctx, corpse_guid, loot_slot as u8, actor_guid, vote)
+    Ok(crate::loot::cast_vote_on(
+        ctx,
+        corpse_guid,
+        loot_slot as u8,
+        actor_guid,
+        vote,
+    )?)
 }
 
 #[reducer]
@@ -1092,7 +1103,13 @@ pub fn gw_loot_master_give(
     require_operator(ctx).map_err(loot_operator_error)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     loot_actor(ctx, actor_guid)?;
-    crate::loot::apply_master_give(ctx, actor_guid, corpse_guid, loot_slot, target_guid)
+    Ok(crate::loot::apply_master_give(
+        ctx,
+        actor_guid,
+        corpse_guid,
+        loot_slot,
+        target_guid,
+    )?)
 }
 
 #[reducer]

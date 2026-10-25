@@ -12,18 +12,6 @@ pub enum LootRefusal {
 }
 
 impl LootRefusal {
-    pub const ALL: [Self; 9] = [
-        Self::LootTagIneligible,
-        Self::OutOfRange,
-        Self::NoLootSource,
-        Self::LooterUnavailable,
-        Self::NothingToLoot,
-        Self::RollUnavailable,
-        Self::NotMasterLooter,
-        Self::RecipientUnavailable,
-        Self::RecipientInventoryFull,
-    ];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::LootTagIneligible => "loot:loot_tag_ineligible",
@@ -37,12 +25,6 @@ impl LootRefusal {
             Self::RecipientInventoryFull => "loot:recipient_inventory_full",
         }
     }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
-    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -52,50 +34,10 @@ pub enum LootBoundaryFailure {
 }
 
 impl LootBoundaryFailure {
-    pub const ALL: [Self; 2] = [Self::OperatorRejected, Self::MissingActor];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::OperatorRejected => "loot:boundary_operator_rejected",
             Self::MissingActor => "loot:boundary_missing_actor",
-        }
-    }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|failure| failure.as_tag() == tag)
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{LootBoundaryFailure, LootRefusal};
-
-    #[test]
-    fn every_refusal_tag_round_trips() {
-        for refusal in LootRefusal::ALL {
-            assert_eq!(LootRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(LootRefusal::parse_tag("loot:"), None);
-        assert_eq!(
-            LootRefusal::parse_tag("loot_tag_ineligible: actor_guid=7 corpse_guid=11"),
-            None
-        );
-        assert_eq!(
-            LootRefusal::parse_tag("gw_take_loot reducer timed out after 10s"),
-            None
-        );
-    }
-
-    #[test]
-    fn every_boundary_failure_tag_round_trips() {
-        for failure in LootBoundaryFailure::ALL {
-            assert_eq!(
-                LootBoundaryFailure::parse_tag(failure.as_tag()),
-                Some(failure)
-            );
-            assert_eq!(LootRefusal::parse_tag(failure.as_tag()), None);
         }
     }
 }

@@ -68,7 +68,7 @@ pub(crate) fn skin_corpse(
     ctx: &ReducerContext,
     looter_guid: u64,
     corpse_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let entities = ctx.db.game_world_entity();
     let looter = entities
         .guid()
@@ -103,7 +103,7 @@ pub(crate) fn skin_corpse(
         corpse.level,
     )?;
     if !crate::loot::corpse_is_looted(ctx, corpse_guid, corpse.money) {
-        return Err("corpse still has loot".to_string());
+        return Err("corpse still has loot".into());
     }
 
     let skin_loot_id = ctx

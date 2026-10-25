@@ -522,7 +522,6 @@ pub(crate) fn apply_pick_lock(
     Ok(())
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -532,6 +531,7 @@ pub(crate) fn request_use_gameobject(
     use_resolved_gameobject(ctx, caster_guid, go, tmpl).map_err(Into::into)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,

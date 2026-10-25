@@ -724,76 +724,101 @@ fn lose_durability(
     any_lost
 }
 
+pub(crate) enum TakeLootRefusal {
+    Loot(lyracore_shared::loot::LootRefusal),
+    Refused(ActionRefusal),
+}
+
+impl From<ActionRefusal> for TakeLootRefusal {
+    fn from(refusal: ActionRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<TakeLootRefusal> for ActionRefusal {
+    fn from(refusal: TakeLootRefusal) -> Self {
+        match refusal {
+            TakeLootRefusal::Loot(refusal) => {
+                ActionRefusal::new(ActionRefusalKind::CannotAct, refusal.as_tag())
+            }
+            TakeLootRefusal::Refused(refusal) => refusal,
+        }
+    }
+}
+
 pub(crate) fn request_take_loot(
     ctx: &ReducerContext,
     player_guid: u64,
     corpse_guid: u64,
     loot_slot: u8,
 ) -> Result<(), ActionRefusal> {
+    take_loot_item(ctx, player_guid, corpse_guid, loot_slot).map_err(Into::into)
+}
+
+pub(crate) fn take_loot_item(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    corpse_guid: u64,
+    loot_slot: u8,
+) -> Result<(), TakeLootRefusal> {
     let entities = ctx.db.game_world_entity();
     let player = entities.guid().find(player_guid).ok_or_else(|| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "looter not in world")
     })?;
     if player.dead {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::DeadActor,
-            "dead players cannot loot",
-        ));
+        return Err(
+            ActionRefusal::new(ActionRefusalKind::DeadActor, "dead players cannot loot").into(),
+        );
     }
-    let (src_map, src_instance, sx, sy, sz, source_is_corpse) =
-        if let Some(corpse) = entities.guid().find(corpse_guid) {
-            if !corpse.dead {
-                return Err(ActionRefusal::new(
-                    ActionRefusalKind::MissingTarget,
-                    "target is not a corpse",
-                ));
-            }
-            (
-                corpse.map_id,
-                corpse.instance_id,
-                corpse.x,
-                corpse.y,
-                corpse.z,
-                true,
-            )
-        } else if let Some(go) = ctx.db.game_gameobject().guid().find(corpse_guid) {
-            (go.map_id, go.instance_id, go.x, go.y, go.z, false)
-        } else {
+    let (src_map, src_instance, sx, sy, sz, source_is_corpse) = if let Some(corpse) =
+        entities.guid().find(corpse_guid)
+    {
+        if !corpse.dead {
             return Err(ActionRefusal::new(
                 ActionRefusalKind::MissingTarget,
-                "no such loot source",
-            ));
-        };
+                "target is not a corpse",
+            )
+            .into());
+        }
+        (
+            corpse.map_id,
+            corpse.instance_id,
+            corpse.x,
+            corpse.y,
+            corpse.z,
+            true,
+        )
+    } else if let Some(go) = ctx.db.game_gameobject().guid().find(corpse_guid) {
+        (go.map_id, go.instance_id, go.x, go.y, go.z, false)
+    } else {
+        return Err(
+            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such loot source").into(),
+        );
+    };
     if source_is_corpse {
         crate::loot::corpse_access(ctx, player_guid, corpse_guid).map_err(|refusal| {
-            ActionRefusal::new(
-                ActionRefusalKind::CannotAct,
-                crate::loot::refused(
-                    refusal,
-                    &format!("actor_guid={player_guid} corpse_guid={corpse_guid}"),
-                ),
-            )
+            TakeLootRefusal::Loot(crate::loot::refuse(
+                refusal,
+                &format!("actor_guid={player_guid} corpse_guid={corpse_guid}"),
+            ))
         })?;
     }
     if src_map != player.map_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "loot on another map",
-        ));
+        return Err(
+            ActionRefusal::new(ActionRefusalKind::OtherPartition, "loot on another map").into(),
+        );
     }
 
     if src_instance != player.instance_id {
         return Err(ActionRefusal::new(
             ActionRefusalKind::OtherPartition,
             "loot in another instance",
-        ));
+        )
+        .into());
     }
     let (dx, dy, dz) = (sx - player.x, sy - player.y, sz - player.z);
     if dx * dx + dy * dy + dz * dz > crate::loot::LOOT_RANGE_SQ {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OutOfRange,
-            "loot out of range",
-        ));
+        return Err(ActionRefusal::new(ActionRefusalKind::OutOfRange, "loot out of range").into());
     }
     let loot = ctx.db.game_corpse_loot();
     let row = loot
@@ -813,7 +838,8 @@ pub(crate) fn request_take_loot(
                 } else {
                     "you do not need this quest item"
                 },
-            ));
+            )
+            .into());
         }
     } else if !crate::loot::group_loot_take_allowed(
         row.withheld,
@@ -829,7 +855,8 @@ pub(crate) fn request_take_loot(
             } else {
                 "this item belongs to another looter right now"
             },
-        ));
+        )
+        .into());
     }
     let tmpl = ctx
         .db

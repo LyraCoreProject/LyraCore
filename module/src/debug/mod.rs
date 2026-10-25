@@ -1243,7 +1243,7 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     })
     .ok_or_else(|| "no skinnable beast corpse near".to_string())?
     .guid;
-    crate::loot::skin_corpse(ctx, character_guid, corpse_guid)
+    Ok(crate::loot::skin_corpse(ctx, character_guid, corpse_guid)?)
 }
 
 #[reducer]

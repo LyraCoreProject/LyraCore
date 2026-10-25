@@ -516,31 +516,52 @@ pub(crate) fn corpse_is_looted(ctx: &ReducerContext, corpse_guid: u64, money: u3
 }
 
 pub(crate) fn refused(refusal: LootRefusal, detail: &str) -> String {
-    let tag = refusal.as_tag();
-    spacetimedb::log::info!("loot refused {tag}: {detail}");
-    tag.to_string()
+    refuse(refusal, detail).as_tag().to_string()
 }
 
+pub(crate) fn refuse(refusal: LootRefusal, detail: &str) -> LootRefusal {
+    spacetimedb::log::info!("loot refused {}: {detail}", refusal.as_tag());
+    refusal
+}
+
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_open_creature_corpse(
     ctx: &ReducerContext,
     actor_guid: u64,
     corpse_guid: u64,
 ) -> Result<(), ActionRefusal> {
+    corpse_open_gate(ctx, actor_guid, corpse_guid)
+        .map_err(|(kind, refusal)| ActionRefusal::new(kind, refusal.as_tag()))
+}
+
+pub(crate) fn open_creature_corpse(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), LootRefusal> {
+    corpse_open_gate(ctx, actor_guid, corpse_guid).map_err(|(_, refusal)| refusal)
+}
+
+fn corpse_open_gate(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    corpse_guid: u64,
+) -> Result<(), (ActionRefusalKind, LootRefusal)> {
     let actor = ctx
         .db
         .game_world_entity()
         .guid()
         .find(actor_guid)
         .ok_or_else(|| {
-            ActionRefusal::new(
+            (
                 ActionRefusalKind::MissingActor,
-                refused(LootRefusal::LooterUnavailable, "looter not in world"),
+                refuse(LootRefusal::LooterUnavailable, "looter not in world"),
             )
         })?;
     if actor.dead {
-        return Err(ActionRefusal::new(
+        return Err((
             ActionRefusalKind::DeadActor,
-            refused(
+            refuse(
                 LootRefusal::LooterUnavailable,
                 "dead Characters cannot loot",
             ),
@@ -552,24 +573,24 @@ pub(crate) fn request_open_creature_corpse(
         .guid()
         .find(corpse_guid)
         .ok_or_else(|| {
-            ActionRefusal::new(
+            (
                 ActionRefusalKind::MissingTarget,
-                refused(LootRefusal::NoLootSource, "no such corpse"),
+                refuse(LootRefusal::NoLootSource, "no such corpse"),
             )
         })?;
     if corpse.is_player() || !corpse.dead {
-        return Err(ActionRefusal::new(
+        return Err((
             ActionRefusalKind::MissingTarget,
-            refused(
+            refuse(
                 LootRefusal::NoLootSource,
                 "Loot Source is not a creature corpse",
             ),
         ));
     }
     if corpse.map_id != actor.map_id || corpse.instance_id != actor.instance_id {
-        return Err(ActionRefusal::new(
+        return Err((
             ActionRefusalKind::OtherPartition,
-            refused(
+            refuse(
                 LootRefusal::OutOfRange,
                 "Loot Source is on another map or instance",
             ),
@@ -577,15 +598,15 @@ pub(crate) fn request_open_creature_corpse(
     }
     let (dx, dy, dz) = (corpse.x - actor.x, corpse.y - actor.y, corpse.z - actor.z);
     if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err(ActionRefusal::new(
+        return Err((
             ActionRefusalKind::OutOfRange,
-            refused(LootRefusal::OutOfRange, "corpse is out of reach"),
+            refuse(LootRefusal::OutOfRange, "corpse is out of reach"),
         ));
     }
     corpse_access(ctx, actor_guid, corpse_guid).map_err(|refusal| {
-        ActionRefusal::new(
+        (
             ActionRefusalKind::CannotAct,
-            refused(
+            refuse(
                 refusal,
                 &format!("actor_guid={actor_guid} corpse_guid={corpse_guid}"),
             ),
@@ -593,26 +614,26 @@ pub(crate) fn request_open_creature_corpse(
     })
 }
 
-pub(crate) fn open_creature_corpse(
-    ctx: &ReducerContext,
-    actor_guid: u64,
-    corpse_guid: u64,
-) -> Result<(), String> {
-    request_open_creature_corpse(ctx, actor_guid, corpse_guid).map_err(Into::into)
-}
-
 pub(crate) fn apply_loot_money(
     ctx: &ReducerContext,
     looter_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
+    claim_money(ctx, looter_guid, target_guid).map_err(|refusal| refusal.as_tag().into())
+}
+
+pub(crate) fn claim_money(
+    ctx: &ReducerContext,
+    looter_guid: u64,
+    target_guid: u64,
+) -> Result<(), LootRefusal> {
     let entities = ctx.db.game_world_entity();
     let mut looter = entities
         .guid()
         .find(looter_guid)
-        .ok_or_else(|| refused(LootRefusal::LooterUnavailable, "looter not in world"))?;
+        .ok_or_else(|| refuse(LootRefusal::LooterUnavailable, "looter not in world"))?;
     if looter.dead {
-        return Err(refused(
+        return Err(refuse(
             LootRefusal::LooterUnavailable,
             "dead players cannot loot",
         ));
@@ -620,22 +641,22 @@ pub(crate) fn apply_loot_money(
     let mut corpse = entities
         .guid()
         .find(target_guid)
-        .ok_or_else(|| refused(LootRefusal::NoLootSource, "no such corpse"))?;
+        .ok_or_else(|| refuse(LootRefusal::NoLootSource, "no such corpse"))?;
 
     if corpse.is_player() {
-        return Err(refused(LootRefusal::NoLootSource, "cannot loot a player"));
+        return Err(refuse(LootRefusal::NoLootSource, "cannot loot a player"));
     }
     if !corpse.dead {
-        return Err(refused(
+        return Err(refuse(
             LootRefusal::NoLootSource,
             "Loot Source is not a corpse",
         ));
     }
     if corpse.map_id != looter.map_id {
-        return Err(refused(LootRefusal::OutOfRange, "corpse on another map"));
+        return Err(refuse(LootRefusal::OutOfRange, "corpse on another map"));
     }
     if corpse.instance_id != looter.instance_id {
-        return Err(refused(
+        return Err(refuse(
             LootRefusal::OutOfRange,
             "corpse in another instance",
         ));
@@ -646,12 +667,17 @@ pub(crate) fn apply_loot_money(
         corpse.z - looter.z,
     );
     if dx * dx + dy * dy + dz * dz > LOOT_RANGE_SQ {
-        return Err(refused(LootRefusal::OutOfRange, "corpse out of range"));
+        return Err(refuse(LootRefusal::OutOfRange, "corpse out of range"));
     }
 
-    corpse_access_gate(ctx, looter_guid, target_guid)?;
+    corpse_access(ctx, looter_guid, target_guid).map_err(|refusal| {
+        refuse(
+            refusal,
+            &format!("actor_guid={looter_guid} corpse_guid={target_guid}"),
+        )
+    })?;
     if corpse.money == 0 {
-        return Err(refused(LootRefusal::NothingToLoot, "corpse purse is empty"));
+        return Err(refuse(LootRefusal::NothingToLoot, "corpse purse is empty"));
     }
 
     let amount = corpse.money;

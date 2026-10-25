@@ -1,6 +1,6 @@
 use lyracore_protocol::{messages::vanilla::opcodes::ServerOpcodeMessage, world::Packet};
 
-use crate::Refusal;
+use crate::{actor::ActionRefusal, Refusal};
 
 /// How a native request ends without committing; see docs/architecture.md#native-host-migration.
 pub(super) enum Rollback {
@@ -65,6 +65,12 @@ impl From<&str> for Rollback {
 
 impl From<Refusal> for Rollback {
     fn from(refusal: Refusal) -> Self {
+        Self::silent(refusal)
+    }
+}
+
+impl From<ActionRefusal> for Rollback {
+    fn from(refusal: ActionRefusal) -> Self {
         Self::silent(refusal)
     }
 }
