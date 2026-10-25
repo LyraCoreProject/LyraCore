@@ -14,7 +14,8 @@ files, and players connect with an unmodified client.
 ### Requirements
 - A World of Warcraft 1.12.1 client, build 5875. None is distributed here.
 - [Rust](https://rust-lang.org/tools/install/) through rustup. `rust-toolchain.toml` pins 1.93.0, and rustup installs it on the first `cargo` call.
-- The SpacetimeDB CLI, exactly version 2.7.1. `module/Cargo.toml` pins it, and `lyracore preflight` refuses any other version. `install.sh` offers to install it.- A Linux or macOS machine or container. WSL is untested.
+- The SpacetimeDB CLI, exactly version 2.7.1. `module/Cargo.toml` pins it, and `lyracore preflight` refuses any other version. `install.sh` offers to install it.
+- A Linux or macOS machine or container. On Windows, use WSL2 with Ubuntu; see [`docs/windows.md`](docs/windows.md).
 
 ### Installing
 ```bash

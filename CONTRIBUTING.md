@@ -21,6 +21,7 @@ annotations belong beside it.
 Look everything else up when a change needs it:
 
 - [`docs/quickstart.md`](docs/quickstart.md): from a clone to a connected client.
+- [`docs/windows.md`](docs/windows.md): the same on Windows, through WSL2.
 - [`docs/testing.md`](docs/testing.md): the commands CI runs, tier by tier.
 - The recipes for [a new opcode](docs/recipes/add-an-opcode.md) and
   [a new spell effect](docs/recipes/add-a-spell-effect.md): every file and step, in order.
@@ -102,7 +103,7 @@ that is out of scope is closed with the reason.
 
 ## Setting up
 
-You need Linux or macOS, Rust, and your own 1.12.1 build 5875 client. [`README.md`](README.md) has
+You need Linux, macOS or WSL2 on Windows, Rust, and your own 1.12.1 build 5875 client. [`README.md`](README.md) has
 the install, and [`docs/quickstart.md`](docs/quickstart.md) goes from clone to a connected client.
 `./lyracore doctor` says what your machine is missing.
 

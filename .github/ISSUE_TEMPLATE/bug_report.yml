@@ -13,8 +13,8 @@ body:
         - **Security problems do not go here.** Send a private message to a maintainer on the
           [LyraCore Discord](https://discord.gg/wxWHS3Tbj). Do not open a public issue.
 
-        Public/VPS hosting, Windows/WSL, non-5875 clients, and requests for game data are out of
-        scope for this alpha and will be closed as such (`SUPPORT.md` has the full list).
+        Public/VPS hosting, native Windows (use WSL2), non-5875 clients, and requests for game data
+        are out of scope for this alpha and will be closed as such (`SUPPORT.md` has the full list).
 
   - type: textarea
     id: what-happened
@@ -88,6 +88,7 @@ body:
       options:
         - Linux
         - macOS
+        - Windows (WSL2)
         - Other (unsupported)
     validations:
       required: true
