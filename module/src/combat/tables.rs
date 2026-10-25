@@ -10,10 +10,8 @@ pub(crate) const RANGED_INITIAL_SHOT_MS: u32 = 500;
 // Projectile speeds are in yd/s from Spell.dbc.
 pub(crate) const AUTO_SHOT_PROJECTILE_SPEED: f32 = 40.0;
 pub(crate) const WAND_PROJECTILE_SPEED: f32 = 20.0;
-pub(crate) const MOVE_MASK_MOVING: u32 = 0x1 | 0x2 | 0x4 | 0x8 | 0x2000 | 0x4000;
-pub(crate) const MOVE_FLAG_FORWARD: u32 = 0x1;
 pub(crate) const fn is_translating(movement_flags: u32) -> bool {
-    movement_flags & MOVE_MASK_MOVING != 0
+    movement_flags & lyracore_shared::movement_flags::MOVING != 0
 }
 pub(crate) const PURSUIT_WINDOW_MS: u32 = 15_000;
 pub(crate) const LEASH_RADIUS_SQ: f32 = 900.0;

@@ -10,7 +10,6 @@ use super::{
     Pursuit, PursuitSink, Recovering, RegenSink, RoutSink, Router, Sensor, SpellOption, Stop,
     ThreatSink, TickContext, Waypoint,
 };
-use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::TickScope;
 use crate::creatures::cast_condition;
 use crate::creatures::distraction;
@@ -23,6 +22,7 @@ use crate::{
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
     game_world_entity, MeleeAttack, WorldEntity,
 };
+use lyracore_shared::movement_flags::FORWARD;
 
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
     if !crate::world::backfill_simulation(ctx) {
@@ -138,7 +138,7 @@ fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
 
 fn translation_flags(unit: &WorldEntity, leg: Option<CreatureSpline>) -> u32 {
     let carried = leg.is_some_and(|l| l.dur_ms > 0);
-    unit.movement_flags | if carried { MOVE_FLAG_FORWARD } else { 0 }
+    unit.movement_flags | if carried { FORWARD } else { 0 }
 }
 
 fn caster_hold_range_yd(ctx: &ReducerContext, entry: u32) -> f32 {

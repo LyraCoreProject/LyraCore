@@ -36,10 +36,6 @@ fn benilla_movement_refuses_truncated_and_trailing_bytes() {
         crate::codec::read_movement_client(u32::from(opcode::MSG_MOVE_HEARTBEAT), &trailing)
             .is_err()
     );
-    assert_eq!(
-        lyracore_shared::env::fall_time_from_movement_info(&body),
-        None
-    );
 }
 
 fn assert_movement_relay(info: messages::MovementInfo) {

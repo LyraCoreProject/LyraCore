@@ -35,9 +35,9 @@ pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
 }
 
 /// Observer relay for an acknowledgement; see docs/benilla-compatibility.md#root-receipts.
-pub fn acknowledged_move(msg: &ClientOpcodeMessage) -> Option<(u64, u32, MovementInfo)> {
+pub fn acknowledged_move(msg: &ClientOpcodeMessage) -> Option<(u64, u32, ClientMovement)> {
+    use lyracore_shared::movement_flags::STEERING;
     use movement_opcodes as m;
-    const FORWARD_BACKWARD_STRAFE: u8 = 0xF;
     let (guid, opcode, info) = match msg {
         ClientOpcodeMessage::CMSG_FORCE_MOVE_ROOT_ACK(ack) => {
             (ack.guid, m::MSG_MOVE_ROOT, &ack.info)
@@ -53,9 +53,10 @@ pub fn acknowledged_move(msg: &ClientOpcodeMessage) -> Option<(u64, u32, Movemen
     // The library clears flags with reverse_bits, so clear steering in the encoded bytes.
     let mut bytes = movement_info_to_bytes(info).ok()?;
     if opcode == m::MSG_MOVE_ROOT {
-        bytes[0] &= !FORWARD_BACKWARD_STRAFE;
+        let flags = u32::from_le_bytes(bytes[..4].try_into().ok()?) & !STEERING;
+        bytes[..4].copy_from_slice(&flags.to_le_bytes());
     }
-    Some((guid.guid(), opcode, bytes_to_movement_info(&bytes).ok()?))
+    Some((guid.guid(), opcode, ClientMovement::decode(&bytes).ok()?))
 }
 
 /// The typed transport layout belongs to later clients; use the build-5875 codec.
@@ -589,9 +590,12 @@ mod control_tests {
         root.extend_from_slice(&3u32.to_le_bytes());
         root.extend_from_slice(&transport_pose());
         let message = read_movement_client(0x00E9, &root).unwrap().unwrap();
-        let (mover, opcode, info) = acknowledged_move(&message).unwrap();
+        let (mover, opcode, movement) = acknowledged_move(&message).unwrap();
         assert_eq!((mover, opcode), (9, movement_opcodes::MSG_MOVE_ROOT));
-        assert_eq!(movement_info_to_bytes(&info).unwrap(), transport_pose());
+        assert_eq!(
+            movement_info_to_bytes(movement.info()).unwrap(),
+            transport_pose()
+        );
 
         let mut run_back = root.clone();
         run_back.extend_from_slice(&2.25f32.to_le_bytes());

@@ -264,7 +264,7 @@ pub(super) fn receive(
         }
     }
     if lyracore_shared::opcodes::movement::is_slice_move(opcode) {
-        let info = codec::bytes_to_movement_info(body).map_err(|error| error.to_string())?;
+        let movement = codec::ClientMovement::decode(body).map_err(|error| error.to_string())?;
         let entity = ctx
             .db
             .game_world_entity()
@@ -275,12 +275,8 @@ pub(super) fn receive(
             ctx,
             entity,
             opcode as u16,
+            &movement,
             body.to_vec(),
-            info.position.x,
-            info.position.y,
-            info.position.z,
-            info.orientation,
-            info.timestamp,
         )?);
     }
     if opcode == codec::CMSG_AUCTION_LIST_ITEMS_OPCODE {
@@ -711,7 +707,7 @@ fn movement_receipt(
     guid: u64,
     message: &ClientOpcodeMessage,
 ) -> Result<(), Rollback> {
-    let Some((mover, opcode, mut info)) = codec::acknowledged_move(message) else {
+    let Some((mover, opcode, movement)) = codec::acknowledged_move(message) else {
         return Ok(());
     };
     if mover != guid {
@@ -719,6 +715,7 @@ fn movement_receipt(
     }
     let entity = crate::helpers::live_entity(ctx, guid)?;
     if entity.dead && entity.player_flags & lyracore_shared::constants::player_flags::GHOST == 0 {
+        let mut info = movement.info().clone();
         info.position.x = entity.x;
         info.position.y = entity.y;
         info.position.z = entity.z;
@@ -729,16 +726,13 @@ fn movement_receipt(
         }
         return Ok(());
     }
-    let bytes = codec::movement_info_to_bytes(&info).map_err(|error| error.to_string())?;
+    let bytes =
+        codec::movement_info_to_bytes(movement.info()).map_err(|error| error.to_string())?;
     Ok(crate::world::apply_movement_update(
         ctx,
         entity,
         opcode as u16,
+        &movement,
         bytes,
-        info.position.x,
-        info.position.y,
-        info.position.z,
-        info.orientation,
-        info.timestamp,
     )?)
 }

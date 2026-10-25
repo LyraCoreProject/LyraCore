@@ -234,7 +234,7 @@ fn resolve_swing(ctx: &ReducerContext) {
 
         if let Some((_, _, delay, subclass)) = ranged {
             use crate::items::weapon_subclass as ws;
-            if attacker.is_player() && attacker.movement_flags & MOVE_MASK_MOVING != 0 {
+            if attacker.is_player() && is_translating(attacker.movement_flags) {
                 if subclass == ws::WAND {
                     crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
                 } else if ranged_due {

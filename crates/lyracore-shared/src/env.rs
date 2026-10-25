@@ -1,7 +1,4 @@
-// SWIMMING also applies at the surface; combine it with the liquid height.
-pub const MOVEMENT_FLAG_SWIMMING: u32 = 0x0020_0000;
-
-pub const MOVEMENT_FLAG_ON_TRANSPORT: u32 = 0x0200_0000;
+use crate::movement_flags::{ON_TRANSPORT, SWIMMING};
 
 // Collision height in yards.
 pub const UNDERWATER_HEAD_HEIGHT: f32 = 2.0;
@@ -12,9 +9,7 @@ pub fn is_submerged(
     has_liquid: bool,
     movement_flags: u32,
 ) -> bool {
-    has_liquid
-        && movement_flags & MOVEMENT_FLAG_SWIMMING != 0
-        && player_z + UNDERWATER_HEAD_HEIGHT < liquid_level
+    has_liquid && movement_flags & SWIMMING != 0 && player_z + UNDERWATER_HEAD_HEIGHT < liquid_level
 }
 
 // Deep water still counts this many yards above its surface.
@@ -22,8 +17,7 @@ pub const DEEP_WATER_SURFACE_REACH: f32 = 2.0;
 
 pub fn is_in_deep_water(player_z: f32, deep_water_level: Option<f32>, movement_flags: u32) -> bool {
     deep_water_level.is_some_and(|level| {
-        movement_flags & MOVEMENT_FLAG_ON_TRANSPORT == 0
-            && player_z <= level + DEEP_WATER_SURFACE_REACH
+        movement_flags & ON_TRANSPORT == 0 && player_z <= level + DEEP_WATER_SURFACE_REACH
     })
 }
 
@@ -123,19 +117,6 @@ pub fn fall_damage(fall_time_ms: u32, max_health: u32) -> u32 {
     (max_health as f32 * perc.min(1.0)) as u32
 }
 
-// Fall time is raw u32 milliseconds; gtker types those same bytes as f32.
-pub fn fall_time_from_movement_info(body: &[u8]) -> Option<u32> {
-    let flags = u32::from_le_bytes(body.get(0..4)?.try_into().ok()?);
-    if flags & MOVEMENT_FLAG_ON_TRANSPORT != 0 {
-        return None;
-    }
-    let mut off = 4 + 4 + 16;
-    if flags & MOVEMENT_FLAG_SWIMMING != 0 {
-        off += 4;
-    }
-    Some(u32::from_le_bytes(body.get(off..off + 4)?.try_into().ok()?))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -151,25 +132,9 @@ mod tests {
     }
 
     #[test]
-    fn fall_time_parses_past_the_flag_dependent_blocks() {
-        let mut body = vec![0u8; 24];
-        body.extend_from_slice(&1500u32.to_le_bytes());
-        assert_eq!(fall_time_from_movement_info(&body), Some(1500));
-        let mut swim = MOVEMENT_FLAG_SWIMMING.to_le_bytes().to_vec();
-        swim.extend_from_slice(&[0u8; 20]);
-        swim.extend_from_slice(&0f32.to_le_bytes());
-        swim.extend_from_slice(&2000u32.to_le_bytes());
-        assert_eq!(fall_time_from_movement_info(&swim), Some(2000));
-        let mut tr = 0x0200_0000u32.to_le_bytes().to_vec();
-        tr.extend_from_slice(&[0u8; 60]);
-        assert_eq!(fall_time_from_movement_info(&tr), None);
-        assert_eq!(fall_time_from_movement_info(&[0u8; 10]), None);
-    }
-
-    #[test]
     fn submerged_requires_swimming_liquid_and_head_below_surface() {
         let surface = 10.0;
-        let swimming = MOVEMENT_FLAG_SWIMMING;
+        let swimming = SWIMMING;
 
         assert!(!is_submerged(8.0, surface, true, swimming));
         assert!(is_submerged(7.99, surface, true, swimming));
@@ -180,15 +145,11 @@ mod tests {
 
     #[test]
     fn deep_water_counts_below_and_just_above_the_surface_but_not_on_a_transport() {
-        assert!(is_in_deep_water(-30.0, Some(0.0), MOVEMENT_FLAG_SWIMMING));
+        assert!(is_in_deep_water(-30.0, Some(0.0), SWIMMING));
         assert!(is_in_deep_water(2.0, Some(0.0), 0));
         assert!(!is_in_deep_water(2.01, Some(0.0), 0));
-        assert!(!is_in_deep_water(-1.0, None, MOVEMENT_FLAG_SWIMMING));
-        assert!(!is_in_deep_water(
-            -1.0,
-            Some(0.0),
-            MOVEMENT_FLAG_ON_TRANSPORT
-        ));
+        assert!(!is_in_deep_water(-1.0, None, SWIMMING));
+        assert!(!is_in_deep_water(-1.0, Some(0.0), ON_TRANSPORT));
     }
 
     #[test]

@@ -1,7 +1,7 @@
 //! Build 5875 uses a different transport flag and layout from the typed codec.
 
 use anyhow::{ensure, Result};
-use lyracore_shared::env::{MOVEMENT_FLAG_ON_TRANSPORT, MOVEMENT_FLAG_SWIMMING};
+use lyracore_shared::movement_flags::{JUMPING, ON_TRANSPORT, SWIMMING};
 use std::io::Read;
 use wow_world_messages::vanilla::{
     MovementInfo, MovementInfo_MovementFlags, MovementInfo_MovementFlags_Jumping,
@@ -12,7 +12,6 @@ use wow_world_messages::Guid;
 
 // Steering and walk-mode flags, which add no fields to a MovementInfo.
 pub(crate) const SIMPLE_MOVE_MASK: u32 = 0x01 | 0x02 | 0x04 | 0x08 | 0x10 | 0x20 | 0x100;
-const JUMPING: u32 = 0x2000;
 const SPLINE_ELEVATION: u32 = 0x0400_0000;
 
 fn word(body: &mut &[u8]) -> Result<[u8; 4]> {
@@ -33,12 +32,72 @@ fn position(body: &mut &[u8]) -> Result<Vector3d> {
     })
 }
 
-pub fn bytes_to_movement_info(mut body: &[u8]) -> Result<MovementInfo> {
+/// A client MovementInfo with its build-5875 flag word, which the typed flags keep private.
+#[derive(Debug, Clone, PartialEq)]
+pub struct ClientMovement {
+    flags: u32,
+    info: MovementInfo,
+}
+
+impl ClientMovement {
+    pub fn decode(body: &[u8]) -> Result<Self> {
+        let (flags, info) = decode(body)?;
+        Ok(Self { flags, info })
+    }
+
+    /// Only a flag word: no conditional fields, a zero pose and a zero fall time.
+    pub fn from_flags(flags: u32) -> Self {
+        Self {
+            flags,
+            info: MovementInfo {
+                flags: MovementInfo_MovementFlags::new(flags, None, None, None, None),
+                ..MovementInfo::default()
+            },
+        }
+    }
+
+    pub fn with_pose(mut self, timestamp: u32, position: Vector3d, orientation: f32) -> Self {
+        self.info.timestamp = timestamp;
+        self.info.position = position;
+        self.info.orientation = orientation;
+        self
+    }
+
+    pub fn flags(&self) -> u32 {
+        self.flags
+    }
+
+    pub fn carries(&self, mask: u32) -> bool {
+        self.flags & mask != 0
+    }
+
+    pub fn info(&self) -> &MovementInfo {
+        &self.info
+    }
+
+    // The typed codec stores the u32 fall time in milliseconds as f32 bits.
+    pub fn fall_time_ms(&self) -> u32 {
+        self.info.fall_time.to_bits()
+    }
+
+    pub fn transport(&self) -> Option<&TransportInfo> {
+        self.info
+            .flags
+            .get_on_transport()
+            .map(|tail| &tail.transport)
+    }
+}
+
+pub fn bytes_to_movement_info(body: &[u8]) -> Result<MovementInfo> {
+    decode(body).map(|(_, info)| info)
+}
+
+fn decode(mut body: &[u8]) -> Result<(u32, MovementInfo)> {
     let flags = u32::from_le_bytes(word(&mut body)?);
     let timestamp = u32::from_le_bytes(word(&mut body)?);
     let pos = position(&mut body)?;
     let orientation = float(&mut body)?;
-    let transport = if flags & MOVEMENT_FLAG_ON_TRANSPORT != 0 {
+    let transport = if flags & ON_TRANSPORT != 0 {
         let mut guid = [0; 8];
         body.read_exact(&mut guid)?;
         Some(MovementInfo_MovementFlags_OnTransport {
@@ -52,7 +111,7 @@ pub fn bytes_to_movement_info(mut body: &[u8]) -> Result<MovementInfo> {
     } else {
         None
     };
-    let swimming = if flags & MOVEMENT_FLAG_SWIMMING != 0 {
+    let swimming = if flags & SWIMMING != 0 {
         Some(MovementInfo_MovementFlags_Swimming {
             pitch: float(&mut body)?,
         })
@@ -78,13 +137,16 @@ pub fn bytes_to_movement_info(mut body: &[u8]) -> Result<MovementInfo> {
         None
     };
     ensure!(body.is_empty(), "unread movement bytes: {}", body.len());
-    Ok(MovementInfo {
-        flags: MovementInfo_MovementFlags::new(flags, transport, jumping, swimming, spline),
-        timestamp,
-        position: pos,
-        orientation,
-        fall_time,
-    })
+    Ok((
+        flags,
+        MovementInfo {
+            flags: MovementInfo_MovementFlags::new(flags, transport, jumping, swimming, spline),
+            timestamp,
+            position: pos,
+            orientation,
+            fall_time,
+        },
+    ))
 }
 
 pub fn movement_info_to_bytes(info: &MovementInfo) -> Result<Vec<u8>> {
@@ -95,11 +157,8 @@ pub fn movement_info_to_bytes(info: &MovementInfo) -> Result<Vec<u8>> {
     let raw_flags = u32::from_le_bytes(word(&mut body.as_slice())?);
     let flags = &info.flags;
     for (mask, present) in [
-        (
-            MOVEMENT_FLAG_ON_TRANSPORT,
-            flags.get_on_transport().is_some(),
-        ),
-        (MOVEMENT_FLAG_SWIMMING, flags.get_swimming().is_some()),
+        (ON_TRANSPORT, flags.get_on_transport().is_some()),
+        (SWIMMING, flags.get_swimming().is_some()),
         (JUMPING, flags.get_jumping().is_some()),
         (SPLINE_ELEVATION, flags.get_spline_elevation().is_some()),
     ] {
@@ -135,7 +194,7 @@ pub fn passenger_movement_bytes(
     offset: [f32; 4],
 ) -> Vec<u8> {
     let mut body = Vec::with_capacity(52);
-    body.extend_from_slice(&(flags & SIMPLE_MOVE_MASK | MOVEMENT_FLAG_ON_TRANSPORT).to_le_bytes());
+    body.extend_from_slice(&(flags & SIMPLE_MOVE_MASK | ON_TRANSPORT).to_le_bytes());
     body.extend_from_slice(&timestamp.to_le_bytes());
     for value in world {
         body.extend_from_slice(&value.to_le_bytes());
