@@ -1,4 +1,4 @@
-use spacetimedb::{log, table, Identity, ReducerContext, Table, Timestamp};
+use spacetimedb::{log, table, Identity, ReducerContext, Timestamp};
 
 use crate::game_character;
 use crate::game_config;
@@ -46,16 +46,14 @@ pub struct LevelupEvent {
 }
 
 impl XpEvent {
-    pub(crate) fn insert(ctx: &ReducerContext, guid: u64, event: Self) {
+    pub(crate) fn send(ctx: &ReducerContext, guid: u64, event: Self) {
         crate::native::xp(ctx, guid, &event);
-        ctx.db.game_xp_event().insert(event);
     }
 }
 
 impl LevelupEvent {
-    fn insert(ctx: &ReducerContext, guid: u64, event: Self) {
+    fn send(ctx: &ReducerContext, guid: u64, event: Self) {
         crate::native::levelup(ctx, guid, &event);
-        ctx.db.game_levelup_event().insert(event);
     }
 }
 
@@ -266,7 +264,7 @@ pub(crate) fn award_xp(
             base
         }
     };
-    XpEvent::insert(
+    XpEvent::send(
         ctx,
         attacker_guid,
         XpEvent {
@@ -326,7 +324,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
             p.power = p.max_power;
         }
         p.next_level_xp = xp_to_next_level(p.level);
-        LevelupEvent::insert(
+        LevelupEvent::send(
             ctx,
             p.guid,
             LevelupEvent {
