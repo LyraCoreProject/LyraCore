@@ -45,11 +45,10 @@ cd LyraCore
 ```
 
 The installer offers to install Rust and SpacetimeDB 2.7.1. After it finishes, open a new Ubuntu
-terminal, or run the `export` or `. "$HOME/.cargo/env"` line that it prints. Then install the
-Native Host toolchain and check the machine:
+terminal, or run the `export` or `. "$HOME/.cargo/env"` line that it prints. Then check the
+machine:
 
 ```bash
-rustup toolchain install 1.97.1 --profile minimal
 lyracore doctor
 ```
 
@@ -64,8 +63,8 @@ lyracore dev up
 lyracore account create admin
 ```
 
-The first `dev up` builds the Native Host and the Module. This takes a long time. Later starts
-reuse the build.
+The first `dev up` installs the Native Host's Rust toolchain if it is missing, then builds the
+Native Host and the Module. This takes a long time. Later starts reuse the build.
 
 ## 4. Connect the client on Windows
 
@@ -97,14 +96,12 @@ The client data can stay on Windows. Only the checkout must be in the Linux file
 
 ### `./lyracore` fails with Windows line endings
 
-The checkout has Windows line endings if `./lyracore` prints one of these:
+The checkout has Windows line endings if `./lyracore` prints
+`/bin/sh^M: bad interpreter: No such file or directory`. With `sh ./lyracore`, the same checkout
+prints `set: Illegal option -`, `$'\r': command not found`, or
+`.lyracore-cli-rev must hold one 40-character lowercase hex commit SHA`.
 
-- `/bin/sh^M: bad interpreter: No such file or directory`
-- `set: Illegal option -` or `set: -: invalid option`
-- `$'\r': command not found`
-- `.lyracore-cli-rev must hold one 40-character lowercase hex commit SHA`
-
-This happens when Git for Windows made the clone, or when an old clone is on `/mnt/c`. Make a new
+This happens when Git for Windows made the clone. Make a new
 clone inside Ubuntu, in `~`, as step 2 shows.
 
 ### The build is very slow, or fails with permission errors
