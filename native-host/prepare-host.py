@@ -38,7 +38,8 @@ def main():
             raise RuntimeError(f'refusing to overwrite unrelated changes in {target}')
         if current != desired:
             target.write_text(desired)
-    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch'):
+    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch', 'retention.patch',
+            'independent-snapshots.patch'):
         patch = str(ROOT / name)
         check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
         if check.returncode == 0:
@@ -46,6 +47,7 @@ def main():
         else:
             subprocess.run(['git', 'apply', '--reverse', '--check', patch], cwd=checkout, check=True)
     sources = {
+        'retention': 'crates/engine/src/retention.rs',
         'compile_cache': 'crates/core/src/host/wasmtime/compile_cache.rs',
         'mod': 'crates/standalone/src/native_world.rs',
         'feed': 'crates/standalone/src/native_feed.rs',

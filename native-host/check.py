@@ -3916,6 +3916,7 @@ def main():
     parser.add_argument('--load-group-size', type=int, default=16)
     parser.add_argument('--check-recovery', action='store_true')
     parser.add_argument('--check-reload', action='store_true')
+    parser.add_argument('--check-retention', action='store_true')
     parser.add_argument('--check-slow-readers', action='store_true')
     parser.add_argument('--check-sessions', action='store_true')
     parser.add_argument('--check-admission', action='store_true')
@@ -3924,7 +3925,7 @@ def main():
     if (not 0 <= args.load_clients <= 4096 or args.load_group_size <= 0
             or any(not math.isfinite(value) or value <= 0 for value in [args.load_seconds, args.load_hz])):
         parser.error('load bounds require 0-4096 clients and positive duration, frequency and group size')
-    if sum([bool(args.load_clients), args.check_recovery, args.check_reload, args.check_slow_readers, args.check_sessions, args.check_admission, args.check_accept_recovery]) > 1:
+    if sum([bool(args.load_clients), args.check_recovery, args.check_reload, args.check_retention, args.check_slow_readers, args.check_sessions, args.check_admission, args.check_accept_recovery]) > 1:
         parser.error('select one load measurement or behavior check')
     with tempfile.TemporaryDirectory(prefix='lyracore-native-check-') as directory:
         run = Path(directory)
@@ -3939,10 +3940,12 @@ def main():
         database = f'disposable-native-{time.time_ns()}'
         address = f'http://127.0.0.1:{http_port}'
         env = dict(os.environ, LYRACORE_NATIVE_WORLD_ADDR=f'127.0.0.1:{world_port}', LYRACORE_NATIVE_LOGON_ADDR=f'127.0.0.1:{logon_port}', LYRACORE_NATIVE_DATABASE=database)
-        if args.check_reload:
+        if args.check_reload or args.check_retention:
             env['LYRACORE_NATIVE_DEV'] = '1'
         (run / 'data').mkdir()
         config = '[logs]\nlevel = "WARN"\ndirectives = ["spacetimedb_standalone::native_world=debug"]\n'
+        if args.check_retention:
+            config += '[commitlog]\nmax-segment-size = 33554432\n'
         (run / 'data/config.toml').write_text(config)
         token = None
 
@@ -3974,10 +3977,12 @@ def main():
             def start_host():
                 return subprocess.Popen([str(args.host), 'start', '--listen-addr', f'127.0.0.1:{http_port}', '--data-dir', str(run / 'data'), '--non-interactive', '--jwt-priv-key-path', str(private), '--jwt-pub-key-path', str(public), '--page_pool_max_size', '1073741824'], env=env, stdout=log, stderr=subprocess.STDOUT)
 
-            def restart():
+            def restart(before_start=None):
                 nonlocal host
                 host.kill()
                 host.wait(timeout=10)
+                if before_start:
+                    before_start()
                 host = start_host()
                 for _ in range(200):
                     try:
@@ -4008,7 +4013,7 @@ def main():
                     else:
                         raise AssertionError(f'{name} accepted an anonymous caller')
                 call('install_guid_range', [0])
-                if args.check_reload:
+                if args.check_reload or args.check_retention:
                     import reload
                     call('debug_seed_scenario_fixtures', [])
 
@@ -4021,6 +4026,13 @@ def main():
                     before = commitlog_bytes()
                     reload.run(world_port, call, sql, publish, wasm.read_bytes())
                     print(f'Reload storage: WASM {wasm.stat().st_size} bytes; commit log grew {commitlog_bytes() - before} bytes')
+                    if args.check_retention:
+                        import retention
+                        await_empty('game_native_player')
+                        retention.check(run / 'data', world_port, sql, restart)
+                        env.pop('LYRACORE_NATIVE_DEV')
+                        restart()
+                        retention.check_normal(run / 'data', publish, wasm.read_bytes())
                     return
                 if args.check_accept_recovery:
                     check_accept_recovery(host, world_port, logon_port, run / 'host.log', sql)
