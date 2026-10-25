@@ -5,7 +5,7 @@ use lyracore_shared::gossip::{
     evaluate_option, evaluate_reference, CharacterFacts, Condition, QuestState,
 };
 
-use crate::{field, gmo, parse_table};
+use crate::dump::{field, gmo, parse_table};
 
 pub(super) type Conditions = BTreeMap<u32, Condition>;
 

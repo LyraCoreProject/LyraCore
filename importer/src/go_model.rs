@@ -6,8 +6,9 @@ use wow_dbc::vanilla_tables::game_object_display_info::{
 };
 use wow_dbc::Indexable;
 
+use crate::dump::{field, got, parse_table};
 use crate::nav::Tri;
-use crate::{field, got, parse_table, GO_BUTTON, GO_DOOR};
+use crate::{GO_BUTTON, GO_DOOR};
 
 // Shuffle Y-up placement coordinates to Z-up world axes before rotation and scale.
 fn shuffle(v: [f32; 3]) -> [f32; 3] {
@@ -94,7 +95,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         .dump
         .as_ref()
         .context("--go-models needs --dump too (gameobject_template is the template source)")?;
-    let dump = crate::read_dump(dump_path)?;
+    let dump = crate::dump::read_dump(dump_path)?;
     let templates = door_templates(&dump);
     if templates.is_empty() {
         println!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");

@@ -2,7 +2,7 @@ use std::collections::BTreeMap;
 
 use lyracore_package_delta::{packed_spell_effect_id, FieldValue};
 
-use crate::sql_text;
+use crate::dump::sql_text;
 
 const SNAPSHOT_VERSION: u32 = 1;
 

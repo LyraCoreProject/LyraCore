@@ -10,9 +10,10 @@ use wow_dbc::{DbcTable, Indexable};
 use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
+use crate::dump::push_insert;
 use crate::package_delta;
 use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
-use crate::{push_insert, Args};
+use crate::Args;
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{

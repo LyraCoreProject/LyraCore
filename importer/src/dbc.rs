@@ -29,7 +29,8 @@ use wow_dbc::{DbcTable, Indexable};
 use wow_mpq::PatchChain;
 use wow_world_base::vanilla::LockType;
 
-use crate::{push_insert, sql_text, Args};
+use crate::dump::{push_insert, sql_text};
+use crate::Args;
 
 pub(crate) fn open_chain(data_dir: &Path) -> Result<PatchChain> {
     let mut chain = PatchChain::new();
@@ -116,7 +117,7 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
 }
 
 pub fn run(data_dir: &str, args: &Args) -> Result<()> {
-    let mount_dump = crate::read_dump(args.taxi_mounts.as_deref().context(
+    let mount_dump = crate::dump::read_dump(args.taxi_mounts.as_deref().context(
         "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays and transports",
     )?)?;
     run_from_dump(data_dir, args, &mount_dump)
@@ -460,7 +461,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     }
     let n = rows.len();
     let mut stmts = vec!["DELETE FROM game_start_item WHERE id >= 0 AND id < 1000000".to_string()];
-    crate::push_insert(
+    push_insert(
         &mut stmts,
         "game_start_item",
         "id,race_class,item_entry",
@@ -739,17 +740,17 @@ struct TaxiCatalogueSql {
 }
 
 fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
-    let rows = crate::parse_complete_table(dump, "creature_template")?;
+    let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");
     }
     let mut mounts = HashMap::with_capacity(rows.len());
     for row in rows {
-        let entry: u32 = crate::field(&row, crate::ct::ENTRY)
+        let entry: u32 = crate::dump::field(&row, crate::dump::ct::ENTRY)
             .parse()
             .context("taxi mount dump has an invalid creature entry")?;
         let mut display = 0;
-        for index in crate::ct::MODEL_ID1..crate::ct::MODEL_ID1 + 4 {
+        for index in crate::dump::ct::MODEL_ID1..crate::dump::ct::MODEL_ID1 + 4 {
             let model: u32 = row
                 .get(index)
                 .with_context(|| {

@@ -2,10 +2,8 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{bail, Context, Result};
 
-use crate::{
-    cr, creature_row_kept_in_scope, field, parse_complete_table, sql_str, world_guid,
-    CreatureSpawnRow, WorldImportScope,
-};
+use crate::dump::{cr, field, parse_complete_table, sql_str};
+use crate::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow, WorldImportScope};
 
 pub(crate) struct PopulationPlan {
     pub(crate) spawns: Vec<CreatureSpawnRow>,
@@ -22,13 +20,13 @@ impl PopulationPlan {
             .push("DELETE FROM game_creature_population_selection WHERE population_id > 0".into());
         statements.push("DELETE FROM game_creature_population_member WHERE source_guid > 0".into());
         statements.push("DELETE FROM game_creature_population WHERE population_id > 0".into());
-        crate::push_insert(
+        crate::dump::push_insert(
             statements,
             "game_creature_population",
             "population_id,max_count,world_state_condition,world_state_expression,flags,entries,is_pool",
             &self.definition_rows,
         );
-        crate::push_insert(
+        crate::dump::push_insert(
             statements,
             "game_creature_population_member",
             "source_guid,population_id,entry,choices,chance_bp,event_ids",
@@ -589,7 +587,8 @@ mod tests {
     #[test]
     #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL"]
     fn pinned_legacy_pools_cover_every_direct_and_template_position() {
-        let dump = crate::read_dump(&std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap()).unwrap();
+        let dump =
+            crate::dump::read_dump(&std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap()).unwrap();
         let plan = collect(&dump, &full_scope()).unwrap();
         assert_eq!(plan.spawns.len(), 66_310);
         assert_eq!(

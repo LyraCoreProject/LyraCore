@@ -7,7 +7,8 @@ use wow_dbc::vanilla_tables::talent_tab::TalentTab as DbcTalentTab;
 use wow_dbc::DbcTable;
 
 use crate::dbc::{open_chain, read_table};
-use crate::{push_insert, sql_text, Args};
+use crate::dump::{push_insert, sql_text};
+use crate::Args;
 
 fn map_talent_tabs(tabs: &DbcTalentTab) -> (Vec<String>, usize) {
     let rows: Vec<String> = tabs

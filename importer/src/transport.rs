@@ -5,7 +5,7 @@ use wow_dbc::vanilla_tables::taxi_path::TaxiPath;
 use wow_dbc::vanilla_tables::taxi_path_node::TaxiPathNode;
 use wow_dbc::DbcTable;
 
-use crate::{field, got, push_insert, sql_text};
+use crate::dump::{field, got, push_insert, sql_text};
 
 const MO_TRANSPORT: u32 = 15;
 
@@ -28,12 +28,12 @@ pub(crate) fn catalogue_sql(
     dump: &str,
 ) -> Result<TransportCatalogueSql> {
     let templates: HashMap<u32, Vec<String>> =
-        crate::parse_complete_table(dump, "gameobject_template")?
+        crate::dump::parse_complete_table(dump, "gameobject_template")?
             .into_iter()
             .filter_map(|row| Some((field(&row, got::ENTRY).parse().ok()?, row)))
             .collect();
     let path_ids: HashSet<u32> = paths.rows().iter().map(|row| row.id.id).collect();
-    let transports = crate::parse_complete_table(dump, "transports")?;
+    let transports = crate::dump::parse_complete_table(dump, "transports")?;
     if transports.is_empty() {
         bail!("transport dump has no transports rows");
     }

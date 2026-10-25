@@ -1,6 +1,7 @@
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
-use crate::{bt, eventai_presentation, field, go_guid, parse_table, sql_text, world_guid};
+use crate::dump::{bt, field, parse_table, sql_text};
+use crate::{eventai_presentation, go_guid, world_guid};
 
 pub(crate) const SOURCE_PROFILE_NAME: &str = "cmangos-classic-z2815";
 pub(crate) const LOADER_CONTRACT: &str = "creature-ai-scripts-24-columns-ordered-by-id-v1";
@@ -3212,8 +3213,8 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
 }
 
 fn source_overlap_census(dump: &str, rules: &[RawRule]) -> (u64, u64, u64) {
-    let template_rows = crate::parse_table(dump, "creature_template");
-    let schedule_rows = crate::parse_table(dump, "creature_template_spells");
+    let template_rows = crate::dump::parse_table(dump, "creature_template");
+    let schedule_rows = crate::dump::parse_table(dump, "creature_template_spells");
     let template_schedule_entries: HashSet<u64> = schedule_rows
         .into_iter()
         .filter_map(|row| row.first()?.parse().ok())
@@ -8360,7 +8361,7 @@ mod tests {
             bytes
         };
         assert_eq!(
-            crate::sha256_hex(&bytes).unwrap(),
+            crate::dump::sha256_hex(&bytes).unwrap(),
             "d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6"
         );
         let source = parse(std::str::from_utf8(&bytes).unwrap());
