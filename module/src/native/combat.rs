@@ -5,7 +5,7 @@ use lyracore_protocol::{
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
-use crate::combat::{game_melee_attack, CombatEvent, MeleeAttack};
+use crate::combat::{game_melee_attack, AttackRefusal, CombatEvent, MeleeAttack};
 
 pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(), Rollback> {
     super::actor(ctx, guid)?;
@@ -15,14 +15,16 @@ pub(super) fn attack(ctx: &ReducerContext, guid: u64, target: u64) -> Result<(),
         .attacker_guid()
         .find(guid)
         .is_some_and(|row| row.target_guid == target && row.ranged_spell_id == 0);
-    crate::actor::attack(ctx, guid, target).map_err(|cause| {
-        if cause.contains(lyracore_shared::ERR_ATTACK_TARGET_DEAD) {
-            Rollback::reply(ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET, cause)
-        } else if cause.contains(lyracore_shared::ERR_ATTACK_FRIENDLY) {
-            Rollback::reply(ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK, cause)
-        } else {
-            Rollback::silent(cause)
-        }
+    crate::combat::start_melee_attack(ctx, guid, target).map_err(|refusal| match refusal {
+        AttackRefusal::DeadTarget => Rollback::reply(
+            ServerOpcodeMessage::SMSG_ATTACKSWING_DEADTARGET,
+            "target is dead",
+        ),
+        AttackRefusal::FriendlyTarget => Rollback::reply(
+            ServerOpcodeMessage::SMSG_ATTACKSWING_CANT_ATTACK,
+            "target is friendly",
+        ),
+        AttackRefusal::Refused(refusal) => Rollback::silent(refusal),
     })?;
     if already_armed {
         emit(

@@ -382,27 +382,55 @@ pub struct RangedImpactSchedule {
     pub is_crit: bool,
 }
 
+pub(crate) enum AttackRefusal {
+    DeadTarget,
+    FriendlyTarget,
+    Refused(ActionRefusal),
+}
+
+impl From<ActionRefusal> for AttackRefusal {
+    fn from(refusal: ActionRefusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<AttackRefusal> for ActionRefusal {
+    fn from(refusal: AttackRefusal) -> Self {
+        match refusal {
+            AttackRefusal::DeadTarget => {
+                ActionRefusal::new(ActionRefusalKind::DeadTarget, "target is dead")
+            }
+            AttackRefusal::FriendlyTarget => "target is friendly".to_string().into(),
+            AttackRefusal::Refused(refusal) => refusal,
+        }
+    }
+}
+
 pub(crate) fn validate_attack_target(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target_guid: u64,
 ) -> Result<WorldEntity, ActionRefusal> {
+    attack_target(ctx, attacker, target_guid).map_err(Into::into)
+}
+
+fn attack_target(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target_guid: u64,
+) -> Result<WorldEntity, AttackRefusal> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such target"))?;
     if target.map_id != attacker.map_id || target.instance_id != attacker.instance_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "target on another map",
-        ));
+        return Err(
+            ActionRefusal::new(ActionRefusalKind::OtherPartition, "target on another map").into(),
+        );
     }
     if target.dead {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::DeadTarget,
-            lyracore_shared::ERR_ATTACK_TARGET_DEAD,
-        ));
+        return Err(AttackRefusal::DeadTarget);
     }
     if ctx.db.game_faction_template().count() > 0 && !may_harm(ctx, attacker, &target) {
-        return Err(lyracore_shared::ERR_ATTACK_FRIENDLY.to_string().into());
+        return Err(AttackRefusal::FriendlyTarget);
     }
     Ok(target)
 }
@@ -412,9 +440,16 @@ pub(crate) fn apply_start_attack(
     attacker_guid: u64,
     target_guid: u64,
 ) -> Result<(), String> {
-    start_attack(ctx, attacker_guid, target_guid, false)
-        .map(|_| ())
-        .map_err(Into::into)
+    start_melee_attack(ctx, attacker_guid, target_guid)
+        .map_err(|refusal| ActionRefusal::from(refusal).into())
+}
+
+pub(crate) fn start_melee_attack(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+) -> Result<(), AttackRefusal> {
+    start_attack(ctx, attacker_guid, target_guid, false).map(|_| ())
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq, Eq)]
@@ -429,7 +464,8 @@ pub(crate) fn request_attack(
     attacker_guid: u64,
     target_guid: u64,
 ) -> Result<AttackStart, ActionRefusal> {
-    let accepted = start_attack(ctx, attacker_guid, target_guid, true)?;
+    let accepted =
+        start_attack(ctx, attacker_guid, target_guid, true).map_err(ActionRefusal::from)?;
     face_requested_melee_target(ctx, attacker_guid, target_guid);
     Ok(accepted)
 }
@@ -506,7 +542,7 @@ fn start_attack(
     attacker_guid: u64,
     target_guid: u64,
     retain_current: bool,
-) -> Result<AttackStart, ActionRefusal> {
+) -> Result<AttackStart, AttackRefusal> {
     let attacker = crate::helpers::live_entity(ctx, attacker_guid).map_err(|_| {
         ActionRefusal::new(ActionRefusalKind::MissingActor, "attacker not in world")
     })?;
@@ -514,18 +550,20 @@ fn start_attack(
         return Err(ActionRefusal::new(
             ActionRefusalKind::DeadActor,
             "dead attackers cannot attack",
-        ));
+        )
+        .into());
     }
     if crate::spell::is_action_blocked(ctx, attacker.guid) {
         return Err(ActionRefusal::new(
             ActionRefusalKind::CannotAct,
             format!("attacker {} cannot act (stun/poly/fear)", attacker.guid),
-        ));
+        )
+        .into());
     }
     if target_guid == attacker.guid {
-        return Err("cannot attack self".to_string().into());
+        return Err(ActionRefusal::from("cannot attack self".to_string()).into());
     }
-    validate_attack_target(ctx, &attacker, target_guid)?;
+    attack_target(ctx, &attacker, target_guid)?;
 
     // Dismount only after the last attack Gate so a Refusal leaves the mount intact.
     crate::mount::dismount(ctx, attacker.guid);
