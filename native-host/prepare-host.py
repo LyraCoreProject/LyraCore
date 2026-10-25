@@ -61,6 +61,7 @@ def main():
         'mod': 'crates/standalone/src/native_world.rs',
         'feed': 'crates/standalone/src/native_feed.rs',
         'wire': 'crates/standalone/src/native_wire.rs',
+        'delivery_rows': 'crates/standalone/src/native_delivery_rows.rs',
     }
     for name, destination in sources.items():
         source, target = ROOT / f'src/{name}.rs', checkout / destination

@@ -47,7 +47,7 @@ jobs:
           CARGO_PROFILE_RELEASE_DEBUG: 0
           CARGO_PROFILE_RELEASE_LTO: "false"
         run: cargo +"$HOST_TOOLCHAIN" test --release --locked -p spacetimedb-engine --lib retention::tests
-      - name: Check delivery routing
+      - name: Check delivery routing and the Module row layouts
         working-directory: .lyracore/native-host/SpacetimeDB
         env:
           CARGO_PROFILE_RELEASE_DEBUG: 0

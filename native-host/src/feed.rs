@@ -14,6 +14,7 @@ use crate::StandaloneEnv;
 
 #[derive(SpacetimeType)]
 #[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(super) struct Cipher {
     connection_id: ConnectionId,
     pub username: String,
@@ -24,6 +25,7 @@ pub(super) struct Cipher {
 
 #[derive(SpacetimeType, Clone, Copy)]
 #[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 enum Audience {
     Connection(ConnectionId),
     Aoi(Aoi),
@@ -34,6 +36,7 @@ enum Audience {
 
 #[derive(SpacetimeType, Clone, Copy)]
 #[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct Aoi {
     layer: u8,
     entity_guid: u64,
@@ -42,6 +45,7 @@ struct Aoi {
 
 #[derive(SpacetimeType, Clone, Copy)]
 #[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 struct Recipient {
     connection_id: ConnectionId,
     layer: u8,
@@ -50,6 +54,7 @@ struct Recipient {
 
 #[derive(SpacetimeType)]
 #[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
 pub(super) struct Packet {
     id: u64,
     audience: Audience,
@@ -433,6 +438,9 @@ async fn create(ctx: Arc<StandaloneEnv>, database: Identity, owner: Identity) ->
 mod tests {
     use super::*;
 
+    include!("native_delivery_rows.rs");
+
+    const CONNECTION: ConnectionId = ConnectionId::from_u128(7);
     const VIEWER: ConnectionId = ConnectionId::from_u128(1);
     const OTHER_VIEWER: ConnectionId = ConnectionId::from_u128(2);
     const EXCLUDED_VIEWER: ConnectionId = ConnectionId::from_u128(3);
@@ -637,5 +645,69 @@ mod tests {
     fn aoi_packet_without_recipients_reaches_nobody() {
         let mut router = granted(&[VIEWER], SUBJECT);
         assert!(route(&mut router, vec![aoi(10, OTHER_SUBJECT)]).is_empty());
+    }
+
+    #[test]
+    fn module_cipher_row_decodes() {
+        let cipher = Cipher {
+            connection_id: CONNECTION,
+            username: "AB".into(),
+            session_key: vec![1, 2],
+            client_seed: 9,
+            client_proof: vec![3],
+        };
+        assert_eq!(bsatn::from_slice::<Cipher>(CIPHER).unwrap(), cipher);
+        assert_eq!(bsatn::to_vec(&cipher).unwrap(), CIPHER);
+    }
+
+    #[test]
+    fn module_packet_rows_decode() {
+        let recipient = Recipient {
+            connection_id: CONNECTION,
+            layer: 2,
+            entity_guid: 8,
+        };
+        let rows = [
+            (
+                Packet {
+                    close_after: true,
+                    not_before_micros: 6,
+                    ..row(1, Audience::Connection(CONNECTION), Some(0x1dd), vec![42])
+                },
+                CONNECTION_PACKET,
+            ),
+            (
+                Packet {
+                    authentication_complete: true,
+                    ..row(
+                        2,
+                        Audience::Aoi(Aoi {
+                            layer: 1,
+                            entity_guid: 8,
+                            exclude_connection: Some(CONNECTION),
+                        }),
+                        Some(0xb5),
+                        vec![43, 44],
+                    )
+                },
+                AOI_PACKET,
+            ),
+            (
+                row(3, Audience::Grant(recipient), None, Vec::new()),
+                GRANT_PACKET,
+            ),
+            (
+                row(4, Audience::Revoke(recipient), Some(0xaa), vec![8]),
+                REVOKE_PACKET,
+            ),
+            (
+                row(5, Audience::Clear(CONNECTION), None, Vec::new()),
+                CLEAR_PACKET,
+            ),
+        ];
+        for (expected, fixture) in rows {
+            assert_eq!(bsatn::from_slice::<Packet>(fixture).unwrap(), expected);
+            assert_eq!(bsatn::to_vec(&expected).unwrap(), fixture);
+        }
     }
 }
