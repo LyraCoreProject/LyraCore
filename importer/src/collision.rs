@@ -172,12 +172,12 @@ fn read_m2_bounding_tris(chain: &mut PatchChain, name: &str) -> Result<u32> {
     Ok(crate::nav::m2_tris(chain, name)?.len() as u32)
 }
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let data_dir = Path::new(args.dump_collision.as_ref().expect("caller checked"));
+pub(crate) fn run(data_dir: &str, map: i64, center: (f64, f64, f64)) -> Result<()> {
+    let data_dir = Path::new(data_dir);
     let mut chain = open_geometry_chain(data_dir)?;
-    let map_name = crate::terrain::map_dir(args.map as u32)?;
+    let map_name = crate::terrain::map_dir(map as u32)?;
 
-    let (cx, cy) = (args.center.0 as f32, args.center.1 as f32);
+    let (cx, cy) = (center.0 as f32, center.1 as f32);
     let (Some(cell_x), Some(cell_y)) = (cell_index(cx), cell_index(cy)) else {
         bail!("--center ({cx},{cy}) outside the map square");
     };

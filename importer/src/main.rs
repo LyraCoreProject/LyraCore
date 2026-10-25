@@ -4078,16 +4078,16 @@ fn main() -> Result<()> {
         return pack_client::run_pack_out(&dir);
     }
 
-    if args.terrain.is_some() {
-        return terrain::run(&args);
+    if let Some(dir) = &args.terrain {
+        return terrain::run(dir, &args.world_import_scope()?, args.apply, &args.shard);
     }
 
-    if args.dump_collision.is_some() {
-        return collision::run(&args);
+    if let Some(dir) = &args.dump_collision {
+        return collision::run(dir, args.map, args.center);
     }
 
-    if args.nav.is_some() {
-        return nav::run(&args);
+    if let Some(dir) = &args.nav {
+        return nav::run(dir, &args.world_import_scope()?, args.apply, &args.shard);
     }
 
     if args.vmap.is_some() || args.vmap_status {

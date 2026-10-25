@@ -630,8 +630,12 @@ pub(crate) fn calibrate_from_placements_with_evidence(
     calibration(&samples)
 }
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let scope = args.world_import_scope()?;
+pub(crate) fn run(
+    data_dir: &str,
+    scope: &crate::world_import_scope::WorldImportScope,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
     if scope.bounded_slices.is_empty() {
         println!(
             "nav: scope {} has no bounded map slices; no navigation chunks to import",
@@ -639,7 +643,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         );
         return Ok(());
     }
-    let data_dir = Path::new(args.nav.as_ref().expect("caller checked"));
+    let data_dir = Path::new(data_dir);
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let mut slice_rows = Vec::with_capacity(scope.bounded_slices.len());
     for slice in &scope.bounded_slices {
@@ -660,7 +664,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         scope.name(),
         batches.len()
     );
-    if !args.apply {
+    if !apply {
         println!(
             "-- DRY RUN: would call import_nav_chunks (batch 0, clears) + {} × import_nav_chunks_append",
             batches.len().saturating_sub(1)
@@ -668,7 +672,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         return Ok(());
     }
     for (i, batch) in batches.iter().enumerate() {
-        args.shard.call_reducer(
+        shard.call_reducer(
             if i == 0 {
                 "import_nav_chunks"
             } else {

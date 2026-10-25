@@ -138,8 +138,12 @@ pub(crate) fn slice_cell_range(
     }
 }
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let scope = args.world_import_scope()?;
+pub(crate) fn run(
+    data_dir: &str,
+    scope: &crate::world_import_scope::WorldImportScope,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
     if scope.bounded_slices.is_empty() {
         println!(
             "terrain: scope {} has no bounded map slices; Instance Vmap Slices do not import terrain",
@@ -147,9 +151,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         );
         return Ok(());
     }
-    let data_dir = Path::new(args.terrain.as_ref().expect("caller checked"));
+    let data_dir = Path::new(data_dir);
     let mut chain = open_terrain_chain(data_dir)?;
-    let (rows, tiles_read) = collect_scope(&mut chain, &scope)?;
+    let (rows, tiles_read) = collect_scope(&mut chain, scope)?;
     let batches: Vec<String> = rows
         .chunks(24)
         .map(|c| c.iter().map(CellRow::packed).collect::<Vec<_>>().join(";"))
@@ -160,7 +164,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         scope.name(),
         batches.len()
     );
-    if !args.apply {
+    if !apply {
         println!(
             "-- DRY RUN: would call import_terrain_chunks (batch 0, clears) + {} × import_terrain_chunks_append",
             batches.len() - 1
@@ -173,7 +177,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         } else {
             "import_terrain_chunks_append"
         };
-        args.shard.call_reducer(reducer, batch)?;
+        shard.call_reducer(reducer, batch)?;
     }
     println!("terrain: applied.");
     Ok(())
