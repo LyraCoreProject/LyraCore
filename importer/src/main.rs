@@ -33,25 +33,25 @@ use shard::Shard;
 use world_import::FAMILIES;
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
-pub(crate) struct Args {
+struct Args {
     taxi_mounts: Option<String>,
     dump: Option<String>,
     dbc: Option<String>,
-    pub(crate) terrain: Option<String>,
-    pub(crate) dump_collision: Option<String>,
-    pub(crate) nav: Option<String>,
-    pub(crate) vmap: Option<String>,
-    pub(crate) vmap_status: bool,
-    pub(crate) vmap_prepare_coverage: Option<u64>,
-    pub(crate) go_models: Option<String>,
+    terrain: Option<String>,
+    dump_collision: Option<String>,
+    nav: Option<String>,
+    vmap: Option<String>,
+    vmap_status: bool,
+    vmap_prepare_coverage: Option<u64>,
+    go_models: Option<String>,
     pack_client: Option<String>,
     pack_out: Option<String>,
     print_extents: bool,
     spells: bool,
     talents: bool,
-    pub(crate) only: Vec<u32>,
-    pub(crate) trainers: Vec<(u32, Vec<u32>)>,
-    pub(crate) world_profile: Option<WorldImportProfile>,
+    only: Vec<u32>,
+    trainers: Vec<(u32, Vec<u32>)>,
+    world_profile: Option<WorldImportProfile>,
     map: i64,
     include_maps: Vec<i64>,
     center: (f64, f64, f64),
@@ -59,13 +59,13 @@ pub(crate) struct Args {
     include_creatures: Vec<u64>,
     bbox: Option<(f64, f64, f64, f64)>,
     exclude: Option<(f64, f64, f64, f64)>,
-    pub(crate) shard: Shard,
-    pub(crate) apply: bool,
-    pub(crate) family: Option<String>,
-    pub(crate) source_sha: String,
-    pub(crate) eventai_profile: String,
-    pub(crate) packages: Option<String>,
-    pub(crate) spell_snapshot: Option<String>,
+    shard: Shard,
+    apply: bool,
+    family: Option<String>,
+    source_sha: String,
+    eventai_profile: String,
+    packages: Option<String>,
+    spell_snapshot: Option<String>,
 }
 
 fn parse_args() -> Result<Args> {
@@ -430,7 +430,7 @@ where
 }
 
 impl Args {
-    pub(crate) fn world_import_scope(&self) -> Result<WorldImportScope> {
+    fn world_import_scope(&self) -> Result<WorldImportScope> {
         let mut scope = match self.world_profile {
             Some(profile) => WorldImportScope::canonical(profile),
             None => WorldImportScope::legacy(
