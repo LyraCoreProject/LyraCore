@@ -19,7 +19,7 @@ entry in both files.
 
 **C** [Cancellation](#auctions) · [Candidate](#bots) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Companion Order](#bots) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#retired-terms) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
 
@@ -1124,6 +1124,11 @@ Core terms used here: [Seam](CORE_TERMS.md#seam), [Protocol Family](CORE_TERMS.m
 **Prototype**:
 Throwaway code built to answer a design question. Never shipped.
 _Avoid_: spike, poc
+
+**Disposable Host**:
+A Native Host that the native check starts on free local ports, with its own data directory, the
+Module published and the Operator claimed. It stops and deletes its data when the check ends.
+_Avoid_: test server, harness
 
 **Spec**:
 The statement of what a feature must do. Lives on the GitHub issue unless a `docs/*.md` supersedes it.

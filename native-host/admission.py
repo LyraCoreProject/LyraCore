@@ -2,24 +2,20 @@ import socket
 import struct
 import time
 
-from check import KEY, World, creates
+from headless import creates
 
 
-def run(world_port, call, sql, await_empty, idle_seconds=0):
+def run(host, idle_seconds=0):
     clients = []
     accounts = {}
     guids = {}
-    for index, suffix in enumerate('ABCDEFGH'):
-        username, name = 'QUEUE' + suffix, 'Queued' + suffix.lower()
-        call('provision_account', [username, [0] * 32, [1] * 32])
-        account = sql(f"SELECT id FROM game_account WHERE username = '{username}'")[0]['rows'][0][0]
-        call('establish_session', [account, list(KEY), [f'0x{index + 7000:064x}']])
-        call('create_character', [account, name, 1, 1, 0, 0, 0, 0, 0, 0])
-        accounts[suffix] = account
-        guids[suffix] = sql(f"SELECT guid FROM game_character WHERE name = '{name}'")[0]['rows'][0][0]
+    for suffix in 'ABCDEFGH':
+        account = host.account('QUEUE' + suffix)
+        accounts[suffix] = account.id
+        guids[suffix] = host.character('Queued' + suffix.lower(), account=account)
 
     def open_client(suffix, position=0):
-        client = World(world_port, username='QUEUE' + suffix)
+        client = host.connect('QUEUE' + suffix)
         clients.append(client)
         expect_auth(client, position)
         return client
@@ -58,12 +54,12 @@ def run(world_port, call, sql, await_empty, idle_seconds=0):
         for client in clients:
             client.close()
         clients.clear()
-        await_empty('game_native_admission')
-        await_empty('game_native_player')
-        call('native_set_admission_limits', [0, 0, 0])
+        host.await_empty('game_native_admission')
+        host.await_empty('game_native_player')
+        host.call('native_set_admission_limits', [0, 0, 0])
 
     try:
-        call('native_set_admission_limits', [1, 0, 0])
+        host.call('native_set_admission_limits', [1, 0, 0])
         first = open_client('A')
         cancelled = open_client('B', 1)
         next_client = open_client('C', 2)
@@ -78,21 +74,21 @@ def run(world_port, call, sql, await_empty, idle_seconds=0):
         assert guids['C'] in creates(next_client.collect())
         reset()
 
-        call('native_set_admission_limits', [1, 0, 0])
+        host.call('native_set_admission_limits', [1, 0, 0])
         first = open_client('A')
         refused = open_client('B', 1)
         refused.send(0x3d, struct.pack('<Q', guids['B']))
         closed(refused)
-        assert not sql(f"SELECT guid FROM game_world_entity WHERE guid = {guids['B']}")[0]['rows']
+        assert not host.rows(f"SELECT guid FROM game_world_entity WHERE guid = {guids['B']}")
         revoked = open_client('D', 1)
-        sql(f"DELETE FROM game_session WHERE account_id = {accounts['D']}")
+        host.sql(f"DELETE FROM game_session WHERE account_id = {accounts['D']}")
         closed(revoked)
         replacement = open_client('A', 0)
         closed(first)
-        assert len(sql('SELECT * FROM game_native_admission')[0]['rows']) == 1
+        assert len(host.rows('SELECT * FROM game_native_admission')) == 1
         reset()
 
-        call('native_set_admission_limits', [1, 0, 0])
+        host.call('native_set_admission_limits', [1, 0, 0])
         first = open_client('A')
         older = open_client('B', 1)
         replacement = open_client('A', 1)
@@ -102,7 +98,7 @@ def run(world_port, call, sql, await_empty, idle_seconds=0):
         admitted(replacement)
         reset()
 
-        call('native_set_admission_limits', [0, 1, 0])
+        host.call('native_set_admission_limits', [0, 1, 0])
         first = open_client('A')
         next_client = open_client('B', 1)
         first.send(0x3d, struct.pack('<Q', guids['A']))
@@ -115,15 +111,14 @@ def run(world_port, call, sql, await_empty, idle_seconds=0):
         reset()
 
         time.sleep(1.1)
-        call('native_set_admission_limits', [0, 0, 1])
+        host.call('native_set_admission_limits', [0, 0, 1])
         first = open_client('E')
         second = open_client('F', 1)
         third = open_client('G', 2)
         second_at = admitted(second)
         third_at = admitted(third)
         assert third_at - second_at >= 0.8
-        assert len(sql('SELECT ticket FROM game_native_admission WHERE admitted = true')[0]['rows']) == 3
+        assert len(host.rows('SELECT ticket FROM game_native_admission WHERE admitted = true')) == 3
         reset()
-        print('PASS Module Login Queue: FIFO, cancellation, Gates, replacement, entry timeout and admission rate')
     finally:
         reset()

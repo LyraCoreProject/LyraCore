@@ -81,7 +81,7 @@ files.
 | `load_sample.rs`, `stage_timing.rs`, `movement_batch_metrics.rs`, `provision_cli.rs` | Gone |
 | Gateway Shard routing and Transfer coordination | Gone. The Module's `realm_core.rs` and `transfer/` remain for legacy tables |
 | `gateway/src/world/*_tests.rs`, `test_support/world_fake` | Module unit tests, `module/tests/*` and `native-host/check.py` |
-| `gateway/tests/*` | `native-host/check.py --check-admission`, `--check-recovery` and durable tests |
+| `gateway/tests/*` | The `admission-wait` and `recovery` checks in `native-host/check.py`, and durable tests |
 
 These handlers have new names. `char.rs` is `character.rs`, `gameobject.rs` is `object.rs`, `item.rs` is
 `inventory.rs` and `weather.rs` is `environment.rs`. Vendor and bank requests are in `economy.rs`.
@@ -145,7 +145,7 @@ them before you start.
 5. For each hunk in the saved diff, find the new location in the table. Read the new code, then make
    the same change in a new commit.
 6. Move Gateway tests to the matching Module tests. If a test checks wire bytes or packet order,
-   add a case to `native-host/check.py`.
+   add a check to `native-host/check.py` as [testing.md](./testing.md#native-protocol-tier) describes.
 7. Run the checks in [testing.md](./testing.md), including the native protocol check.
 
 The runtime change already includes some fixes. Before you port a change, read the new handler.

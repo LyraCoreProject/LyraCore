@@ -2,10 +2,24 @@ import os
 import struct
 import time
 
-from check import World, creates
+import reload
+
+CONFIG = '[commitlog]\nmax-segment-size = 33554432\n'
 
 
-def check(data, world_port, sql, restart):
+def check(host):
+    """Runs the reload check on a development Host, then checks history cleanup and recovery,
+    then restarts as a normal Host and checks that it keeps history."""
+    reload.run(host)
+    host.await_empty('game_native_player')
+    check_cleanup(host)
+    host.restart(dev=False)
+    check_normal(host)
+
+
+def check_cleanup(host):
+    data = host.data
+
     def files():
         snapshots = sorted(path for path in data.glob('replicas/*/snapshots/*.snapshot_dir')
             if (path / (path.stem + '.snapshot_bsatn')).is_file() and not path.with_suffix('.lock').exists())
@@ -28,31 +42,22 @@ def check(data, world_port, sql, restart):
         'SELECT guid, name, x, y, z, money FROM game_character',
         'SELECT guid, owner_guid, entry, stack_count FROM game_item_instance',
     ]
-    expected = [sorted(sql(query)[0]['rows']) for query in queries]
+    expected = [sorted(host.rows(query)) for query in queries]
     assert expected[2] and expected[3]
 
     def verify():
         for query, rows in zip(queries, expected):
-            assert sorted(sql(query)[0]['rows']) == rows, query
-        guid = sql("SELECT guid FROM game_character WHERE name = 'Reloadalpha'")[0]['rows'][0][0]
-        client = World(world_port, username='RELOADALPHA')
-        try:
-            assert client.read()[0] == 0x1ee
-            client.send(0x3d, struct.pack('<Q', guid))
-            assert guid in creates(client.collect())
-            text = b'Recovered after history cleanup'
-            client.send(0x95, struct.pack('<II', 0, 7) + text + b'\0')
-            assert any(opcode == 0x96 and text in body for opcode, body in client.collect())
-        finally:
-            client.close()
-        for _ in range(100):
-            if not sql('SELECT connection_id FROM game_native_player')[0]['rows']:
-                break
-            time.sleep(0.05)
-        else:
-            raise AssertionError('recovery client did not leave the world')
+            assert sorted(host.rows(query)) == rows, query
+        guid = host.rows("SELECT guid FROM game_character WHERE name = 'Reloadalpha'")[0][0]
+        client = host.log_in(guid)
+        text = b'Recovered after history cleanup'
+        client.send(0x95, struct.pack('<II', 0, 7) + text + b'\0')
+        assert any(opcode == 0x96 and text in body for opcode, body in client.collect())
+        client.close()
+        host.wait_until(lambda: not host.rows('SELECT connection_id FROM game_native_player'),
+            'recovery client did not leave the world')
 
-    restart()
+    host.restart()
     verify()
 
     def damage_latest_snapshot():
@@ -72,18 +77,19 @@ def check(data, world_port, sql, restart):
             os.fsync(damaged.fileno())
         assert fallback_file.read_bytes() == expected
 
-    restart(damage_latest_snapshot)
+    host.restart(damage_latest_snapshot)
     verify()
     assert list(data.glob('replicas/*/snapshots/*.invalid_snapshot'))
-    print('PASS automatic history cleanup retains state after a killed Host and in-place snapshot corruption')
 
 
-def check_normal(data, publish, wasm):
+def check_normal(host):
+    data = host.data
+    wasm = host.module.read_bytes()
     old_segments = set(data.glob('replicas/*/clog/*.log'))
     old_snapshots = set(data.glob('replicas/*/snapshots/*.snapshot_dir'))
     for iteration in range(21, 27):
         section = b'\x13native-reload-check' + bytes([iteration])
-        publish(wasm + b'\x00' + bytes([len(section)]) + section)
+        host.publish(wasm + b'\x00' + bytes([len(section)]) + section)
     for _ in range(300):
         snapshots = set(data.glob('replicas/*/snapshots/*.snapshot_dir'))
         compressed = []
@@ -99,4 +105,3 @@ def check_normal(data, publish, wasm):
         raise AssertionError('normal Host did not retain and compress history after rotation')
     assert old_snapshots <= snapshots
     assert all(path.exists() for path in old_segments)
-    print('PASS normal Host retains old snapshots and log segments and still compresses history')
