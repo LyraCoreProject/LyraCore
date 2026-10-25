@@ -43,7 +43,8 @@ REFUSED_OPENSSL = (
 
 
 class InstallerPrerequisiteTests(unittest.TestCase):
-    def run_installer(self, banner, platform="Linux", openssl_status=0, compiler=True):
+    def run_installer(self, banner, platform="Linux", openssl_status=0, compiler=True,
+                      python=True):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             tools = root / "tools"
@@ -56,6 +57,7 @@ class InstallerPrerequisiteTests(unittest.TestCase):
                 "git": 'echo "TEST: clone reached"; exit 1',
                 "curl": 'echo "TEST: unexpected download"; exit 99',
                 **({"cc": "exit 0"} if compiler else {}),
+                **({"python3": "exit 0"} if python else {}),
                 "pkg-config": "exit 0",
                 "apt-get": "exit 99",
                 "cargo": "echo 'cargo 1.93.0'",
@@ -125,6 +127,16 @@ class InstallerPrerequisiteTests(unittest.TestCase):
         self.assertIn('export PATH="$(brew --prefix openssl@3)/bin:$PATH"', result.stderr)
         self.assertIn("LibreSSL is not supported", result.stderr)
         self.assertNotIn("TEST: clone reached", result.stdout)
+
+    def test_missing_python_stops_before_clone(self):
+        for platform, install in (("Linux", "sudo apt-get install -y python3"),
+                                  ("Darwin", "brew install python3")):
+            with self.subTest(platform=platform):
+                result = self.run_installer("OpenSSL 3.6.5", platform, python=False)
+                self.assertEqual(result.returncode, 1)
+                self.assertIn("missing prerequisite(s): python3", result.stderr)
+                self.assertIn(install, result.stderr)
+                self.assertNotIn("TEST: clone reached", result.stdout)
 
 
 if __name__ == "__main__":
