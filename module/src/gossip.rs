@@ -30,15 +30,19 @@ pub(crate) fn select_gate(
     source_menu_id: u32,
     selected_action: u32,
 ) -> Result<(), String> {
-    let (actor, npc) = crate::items::npc_interaction_gate(
-        ctx,
-        character_guid,
-        npc_guid,
-        u32::MAX,
-        "gossip creature",
-        "target has no gossip",
-        "use gossip",
-    )?;
+    let (actor, npc) = if selected_action == gossip_option::SPIRITHEALER {
+        crate::ghost::spirit_healer_gate(ctx, character_guid, npc_guid)?
+    } else {
+        crate::items::npc_interaction_gate(
+            ctx,
+            character_guid,
+            npc_guid,
+            u32::MAX,
+            "gossip creature",
+            "target has no gossip",
+            "use gossip",
+        )?
+    };
     let active_menu = active_menu(ctx, &npc);
     if source_menu_id != active_menu.as_ref().map_or(0, |menu| menu.menu_id) {
         return Err("gossip menu has changed".into());

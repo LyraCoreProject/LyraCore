@@ -1,10 +1,43 @@
 use spacetimedb::ReducerContext;
 
-use crate::{game_aura, game_world_entity};
-use lyracore_shared::constants::{player_flags, unit_vis_flags};
+use crate::{game_aura, game_world_entity, WorldEntity};
+use lyracore_shared::constants::{npc_flags, player_flags, unit_vis_flags};
 
 const GHOST: u32 = 8326;
 const WISP_SPIRIT: u32 = 20584;
+const SPIRIT_HEALER_RANGE_SQ: f32 = 100.0;
+
+pub(crate) fn spirit_healer_gate(
+    ctx: &ReducerContext,
+    ghost_guid: u64,
+    healer_guid: u64,
+) -> Result<(WorldEntity, WorldEntity), String> {
+    let entities = ctx.db.game_world_entity();
+    let ghost = entities
+        .guid()
+        .find(ghost_guid)
+        .ok_or_else(|| "caller not in world".to_string())?;
+    if !ghost.dead || ghost.player_flags & player_flags::GHOST == 0 {
+        return Err("caller is not a ghost".to_string());
+    }
+    let healer = entities
+        .guid()
+        .find(healer_guid)
+        .filter(|healer| {
+            !healer.is_player()
+                && !healer.dead
+                && healer.health != 0
+                && healer.npc_flags & npc_flags::SPIRITHEALER != 0
+        })
+        .ok_or_else(|| "target is not a Spirit Healer".to_string())?;
+    if !crate::helpers::in_same_partition(&healer, ghost.map_id, ghost.instance_id) {
+        return Err("Spirit Healer on another map".to_string());
+    }
+    if crate::helpers::dist_sq(&ghost, &healer) > SPIRIT_HEALER_RANGE_SQ {
+        return Err("Spirit Healer out of range".to_string());
+    }
+    Ok((ghost, healer))
+}
 
 pub(crate) fn is_ghost_spell(spell_id: u32) -> bool {
     matches!(spell_id, GHOST | WISP_SPIRIT)
