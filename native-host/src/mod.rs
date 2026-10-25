@@ -3,7 +3,7 @@ use anyhow::{ensure, Context, Result};
 use spacetimedb::client::{
     ClientActorId, ClientConfig, ClientConnection, ClientConnectionReceiver, Protocol, WsVersion,
 };
-use spacetimedb::host::{FunctionArgs, ReducerOutcome};
+use spacetimedb::host::{FunctionArgs, ReducerCallError, ReducerOutcome};
 use spacetimedb_auth::identity::ConnectionAuthCtx;
 use spacetimedb_client_api::{ControlStateReadAccess, NodeDelegate};
 use spacetimedb_client_api_messages::websocket::v1;
@@ -199,16 +199,23 @@ async fn call(
     reducer: &str,
     arguments: &impl Serialize,
 ) -> Result<ReducerOutcome> {
-    Ok(client
-        .call_reducer(
+    let arguments = FunctionArgs::Bsatn(bsatn::to_vec(arguments)?.into());
+    let timer = Instant::now();
+    let invoke = || {
+        client.call_reducer(
             reducer,
-            FunctionArgs::Bsatn(bsatn::to_vec(arguments)?.into()),
+            arguments.clone(),
             0,
-            Instant::now(),
+            timer,
             v1::CallReducerFlags::NoSuccessNotify,
         )
-        .await?
-        .outcome)
+    };
+    let result = match invoke().await {
+        // NoSuchModule means the replaced Module refused dispatch before the request could execute.
+        Err(ReducerCallError::NoSuchModule(_)) => invoke().await,
+        result => result,
+    };
+    Ok(result?.outcome)
 }
 
 async fn serve(

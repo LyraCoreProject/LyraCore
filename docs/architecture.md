@@ -31,6 +31,10 @@ match the reducer parameters' order and BSATN layout. The host owns secure rando
 framing, socket deadlines and bounded output queues. It applies Module-issued grant and revoke
 instructions; it does not calculate spatial visibility or gameplay Gates.
 
+If replacement closes the selected Module before dispatch, the Host retries that unexecuted
+request once against the current Module. It does not retry failed reducer outcomes or requests
+whose execution outcome is unknown.
+
 `game_native_packet.id` orders delivery instructions within a transaction. A grant's CREATE precedes
 the packets delivered through that grant. A revoke removes its recipient before later packets can
 use it. Logout clears all delivery permissions for that connection before it returns to Character

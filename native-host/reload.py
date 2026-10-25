@@ -94,7 +94,7 @@ def run(world_port, call, sql, publish, wasm):
                 worker.join(timeout=10)
             traffic_seconds += time.monotonic() - started
             assert not worker.is_alive(), 'native requests stalled during replacement'
-            assert not failures, failures
+            assert not failures, (iteration, failures)
             assert relayed.is_set(), 'movement was not relayed during replacement'
             current_hash = sql('SELECT program_hash FROM st_module')[0]['rows']
             assert current_hash != previous_hash, 'publish did not replace the Module'
