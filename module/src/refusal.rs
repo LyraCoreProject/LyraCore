@@ -1,4 +1,4 @@
-/// A Gate's Refusal that carries no reply choice; the text is for logs and Gateway Verbs.
+/// A Gate's Refusal whose client reply does not depend on the reason.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Refusal(String);
 

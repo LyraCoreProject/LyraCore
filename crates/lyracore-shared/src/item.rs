@@ -49,24 +49,6 @@ pub enum ItemRefusal {
 }
 
 impl ItemRefusal {
-    pub const ALL: [Self; 15] = [
-        Self::ItemNotFound,
-        Self::InventoryFull,
-        Self::WrongSlot,
-        Self::CannotEquip,
-        Self::TwoHandedWeaponEquipped,
-        Self::NoProficiency,
-        Self::RequiredSkill,
-        Self::RequiredReputation,
-        Self::PlayerDead,
-        Self::BankUnavailable,
-        Self::ItemNotUsable,
-        Self::NotRightNow,
-        Self::Indestructible,
-        Self::BagNotEmpty,
-        Self::Internal,
-    ];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::ItemNotFound => "item:item_not_found",
@@ -85,12 +67,6 @@ impl ItemRefusal {
             Self::BagNotEmpty => "item:bag_not_empty",
             Self::Internal => "item:internal",
         }
-    }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
     }
 }
 
@@ -273,18 +249,6 @@ mod tests {
     }
 
     const PLAYABLE: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
-
-    #[test]
-    fn every_refusal_tag_round_trips() {
-        for refusal in ItemRefusal::ALL {
-            assert_eq!(ItemRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(ItemRefusal::parse_tag("item:"), None);
-        assert_eq!(
-            ItemRefusal::parse_tag("gw_move_item reducer timed out after 10s"),
-            None
-        );
-    }
 
     fn armor_set(proficiency: Proficiency) -> Vec<u8> {
         (0..=SHIELD)

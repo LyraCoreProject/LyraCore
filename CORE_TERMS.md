@@ -46,7 +46,9 @@ A Module rule that refuses a request. This includes presence, name resolution an
 _Avoid_: validation, guard
 
 <a id="refusal"></a>**Refusal**:
-A Gate saying no to a Durable Request. An expected gameplay outcome, not a Transport Loss.
+A Gate saying no to a Durable Request. An expected gameplay outcome, not a Transport Loss. Core code
+returns it as a type: its Protocol Family's enum when the client reply depends on the reason, or
+`crate::Refusal` when the reply does not depend on the reason.
 _Avoid_: reject, deny, error (for gameplay refusals)
 
 <a id="transport-loss"></a>**Transport Loss**:

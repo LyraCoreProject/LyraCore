@@ -106,8 +106,8 @@ in the same file sends a reply. `native/gossip.rs` calls it.
 transaction, and the Native Host then sends its reply packets. The list of packets can be empty.
 `Rollback::Failure` ends the World Session with a Transport Loss. A plain `String` error converts to
 `Failure`. A core operation that refuses returns a typed Refusal: the family's enum when the
-client reply depends on the reason, or `crate::Refusal` when the client gets no reply. The `?`
-operator converts `crate::Refusal` to a silent `Rollback::Refusal`. The handler maps a family enum
+client reply depends on the reason, or `crate::Refusal` when it does not. The `?` operator
+converts `crate::Refusal` to a silent `Rollback::Refusal`. The handler maps a family enum
 to its reply packets with an exhaustive `match`, as `native/social.rs` does. Only
 `native_world_receive` writes the `native_reply:` envelope.
 
