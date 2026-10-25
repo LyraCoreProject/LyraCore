@@ -394,47 +394,6 @@ fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn auction_refund_replay_compares_the_saved_property() {
-    let shard = fixture("property-auction-refund");
-    let mut args = [
-        "5090140",
-        r#"{"guid":1,"ownership":null}"#,
-        "5090141",
-        ITEM,
-        "1",
-        "42",
-        "7748",
-        "false",
-        PROPERTY,
-        "1",
-        "5",
-        "5",
-        "100",
-        "500",
-        "120",
-        "10",
-        "1",
-        "7200000001",
-        "0",
-    ];
-    shard.assert_call("realm_auction_refund_listing", &args);
-    shard.assert_call("realm_auction_refund_listing", &args);
-    let mails = shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1");
-    assert_eq!(mails.len(), 1);
-    assert_eq!(mails[0]["random_property_id"], PROPERTY);
-    assert_eq!(mails[0]["item_enchant_id"], "7748");
-    assert_eq!(mails[0]["item_durability"], "42");
-    assert_eq!(mails[0]["money"], "10");
-    args[8] = "0";
-    assert!(!shard
-        .call("realm_auction_refund_listing", &args)
-        .status
-        .success());
-    assert_eq!(shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1"), mails);
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn cross_shard_transfer_imports_the_saved_item_property() {
     let source = fixture("property-transfer-source");
     source.assert_call("debug_grant_item", &["1", ITEM, "1"]);

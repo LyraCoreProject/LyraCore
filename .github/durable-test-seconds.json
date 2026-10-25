@@ -1,7 +1,5 @@
 {
   "account_ownership": 96,
-  "auction_buyout": 69,
-  "auction_cancel": 101,
   "auction_expiry": 5,
   "aura_tick": 7,
   "away_and_whisper": 17,
