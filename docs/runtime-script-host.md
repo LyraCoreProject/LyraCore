@@ -22,7 +22,7 @@ Every invocation gets:
 that succeeded, and collects a bounded diagnostic for the ones that did not. One bad script
 never stops the next one, and never stops the core work that follows.
 
-# Host operations
+## Host operations
 
 Authors bind a named function to an event. The toolchain emits a local wrapper that calls that
 function with the event table and returns its Script Answer. Event Binding does not execute
@@ -69,7 +69,7 @@ A host operation called with a missing entity, the wrong type, an out-of-range a
 the staging cap raises a Lua error naming the call and the fault. The Invocation returns a
 `ScriptDiagnostic`, drops all staged effects, and leaves the reducer running.
 
-# What an Invocation is allowed
+## What an Invocation is allowed
 
 The environment is built from `ALLOWED_GLOBALS` and `ALLOWED_LIBRARY_MEMBERS`, name by name,
 into tables made for that Invocation. A name outside those lists is nil inside a Runtime Script,

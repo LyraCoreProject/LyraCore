@@ -1,7 +1,7 @@
 # Instance lifecycle
 
 `module/src/instance.rs` owns dungeon leases, Character bindings, population, and removal timers.
-Instance zero is the open world. SpacetimeDB allocates `game_instance.id` from one.
+Instance zero is the open world. SpacetimeDB allocates `game_instance.instance_id` from one.
 
 `resolve_or_create_instance` handles dungeon Area Trigger entry. It resolves the Group's live
 Instance first, then the Character's live binding, then creates an Instance. A solo Instance can be
@@ -9,8 +9,13 @@ adopted by a Group its holder joins, so the other members enter the same run. Ch
 survive Group disband and expire when the Instance is reaped.
 
 `create_instance` builds creature entities from the map's authored spawn rows and makes copies of
-interactive GameObjects. Templates and authored spawn rows are shared. With `hosts_instances` off,
-it creates only a lease; the Shard that owns the map builds population through `ensure_instance`.
+doors, buttons, chests and goobers. Templates and authored spawn rows are shared. With
+`game_config.hosts_instances` off, it creates only a lease. The flag is on by default.
+
+The Operator reducers `ensure_instance` and `evict_instance_population` create a lease with a given
+id and remove an Instance's population while keeping its lease. Outside tests, only the debug
+Package fixture `admit_to_instance` calls `ensure_instance`.
+
 The global creature tick covers every Instance without a dedicated tick row. Operators may arm one
 for a different cadence.
 
@@ -22,13 +27,11 @@ bindings, and finally the lease.
 Each Instance copies its selected source spawn rows and waypoint routes. The copies own their death and
 respawn timers, movement home, and life sequence. Reaping an Instance deletes those copies,
 including dead creatures awaiting respawn. Imported dungeon and battleground source rows stay
-dormant at instance zero. Battleground creation remains unimplemented. The Deeprun Tram and faction
-halls use shared populations at instance zero.
+dormant at instance zero. Battleground creation is unimplemented.
 
 Dungeon exits and graveyard release use imported Area Trigger, area, and graveyard metadata.
 Missing exit metadata sends a reaped-instance login to the Character's home. The small fixture keeps
-its Deadmines bootstrap fallback. Raid admission uses map capacity; saved raid lockouts and encounter
-scripts remain separate gameplay work.
+its Deadmines bootstrap fallback. Raid admission uses map capacity.
 
 Creature copies use `encounter::wave_guid` with bit 23 set in the low field. This separates their
 identities from imported spawns and encounter wave allocation. A copy skips any guid that a spawn
@@ -40,11 +43,4 @@ A Character standing in a Group's dungeon Instance without membership gets a 60-
 timer. `reconcile_instance_removal` runs when membership or location changes, including login and
 Group projection. `expire_instance_removal` checks the rule again before moving the Character home.
 
-All tables are private. The Coordinator subscribes to leases for Transfer admission and removal
-rows for countdown messages. Character bindings have no subscription.
-
-Grow an Instance Pool only while it is idle. The Gateway keeps a Character already inside a live
-Instance on its holder Shard if that Shard remains in the pool. A Group member who has not entered
-still follows the current bucket assignment. Reassigning that bucket during a run can send the
-member to a separate copy of the Instance. There is no realm-wide Instance-to-Shard index to join
-those routing decisions.
+All tables are private.

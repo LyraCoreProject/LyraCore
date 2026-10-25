@@ -1,4 +1,4 @@
-//! Before adding Actor verbs or changing their Gates, read docs/actor-verbs.md.
+//! Before adding Actor verbs or changing their Gates, read docs/package-api.md (Actor verbs).
 
 use crate::import_meta::game_import_meta;
 use spacetimedb::ReducerContext;

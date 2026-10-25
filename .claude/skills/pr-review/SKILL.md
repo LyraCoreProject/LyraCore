@@ -13,8 +13,8 @@ with a concrete account of what their work made possible.
 
 ## Establish the outcome
 
-Read `AGENTS.md`, `CONTRIBUTING.md`, `CODING_STANDARDS.md`, and `CORE_TERMS.md`. Reach the architecture,
-testing, danger-zone, and maintainer documents when the affected code calls for them.
+Read `AGENTS.md`, `CONTRIBUTING.md`, `CODING_STANDARDS.md`, and `CORE_TERMS.md`. Use `docs/README.md`
+to find the documents the affected code calls for.
 
 Read the PR body, commits, discussion, review threads, and originating issue. Fetch the current
 base and head and record their SHAs. Inspect the implementation and callers beyond the diff.
@@ -94,7 +94,7 @@ Decide which workflows need to run, and say why:
 
 Keep test results tied to the code that ran. A passing PR run does not cover unpushed additions.
 Record local commands, outcomes, and material gaps. Use the verification ladder in
-`docs/architecture.md`; a lower rung does not prove a higher one. If asked to monitor CI and the
+`docs/testing.md#verification-ladder`; a lower rung does not prove a higher one. If asked to monitor CI and the
 app provides a PR watcher, use it instead of polling.
 
 ## Decide whether it is ready

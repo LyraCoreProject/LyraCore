@@ -1,61 +1,23 @@
 # Character Transfer
 
-`module/src/transfer/mod.rs` owns the Escrow ledger, planners, Store traits, and reducer shims.
-`transport.rs` owns the row manifest and BSATN encoding. `tests.rs` checks planner outcomes and
-manifest coverage. `harness.rs` executes the protocol against two Fakes.
+The native runtime has one Shard, so nothing starts a Character Transfer. No Native Host or Module
+code calls `begin_transfer` or the other Transfer reducers outside tests. They stay published, with
+their tables, for schema compatibility.
 
-A Transfer freezes the source Character before importing it at the destination. The source durable
-copy survives until the destination copy is committed. Import is idempotent by Transfer id.
-`finish_transfer` refuses without an import receipt, so a retry cannot delete the only durable copy.
+`module/src/transfer/mod.rs` holds the Escrow ledger (`game_transfer_out`, `game_transfer_in`), the
+planners, the Store traits and the Operator reducer shims. `transport.rs` holds the row manifest and
+BSATN encoding. `tests.rs` and `harness.rs` run the protocol against two Fakes.
 
-```text
-Source                          Destination
-begin_transfer
-    export blob -------------> import_character_blob
-    committed <--------------- import receipt
-confirm_import
-finish_transfer
-    source gone -------------> release_transfer
-```
+A Transfer freezes the source Character, imports it at the destination, and deletes the source copy
+only after the import receipt exists. `finish_transfer` refuses without that receipt.
 
-`confirm_import` records the destination's commitment on the source. `release_transfer` clears the
-destination fence only after the source copy is gone. A same-database Transfer uses the same ledger
-and planners, but changes the Character's partition without making a second durable copy.
+The rest of the Module still reads the ledger:
 
-An out-row or in-row makes the Character in transit. Four boundaries enforce the fence:
-
-- `helpers::entity_by_owner` refuses player actions.
-- `world::player_login` refuses to materialize another live entity.
-- `begin_transfer` deletes the source live entity, which removes it from target lookup and relays.
-- `helpers::character_by_guid` and `character_by_name` hide the durable Character from by-guid callers.
-
-A by-guid operation needs a deliberate outcome. Most operations refuse through the fenced lookup.
-`loot::credit_purse` defers a third party's copper into the Transfer blob. `auth::establish_session`
-regenerates connection identity at the destination. Group membership is authoritative on Realm-core;
-the Gateway projects it at world entry, and it is excluded from the blob. The Architecture Test in
-`module/src/tripwires.rs` enforces the documented raw-lookup exclusions.
-
-Every transported table has a `character_owned!(transfer, ..)` marker beside its declaration.
-Generated registries name each arm and whether it transports rows. The manifest tests reject a
-missing arm. `ExportBlob` carries the Character row and one opaque `TableRows` payload per table.
-Before applying rows, import refuses unknown tables, malformed payloads, and missing registry
-entries. Deliberately untransported tables still require an empty payload entry.
-
-Recovery never guesses whether a destination import committed. A same-database reaper reads the
-local receipt and may roll back an unimported stale Escrow. Across databases, a missing local
-receipt means the destination is unconsulted. The reaper holds the Escrow, and the Gateway resumes
-forward recovery at the next world entry. A frozen Character is recoverable; deleting or duplicating
-one is not.
-
-A Character's first cross-shard Transfer may have no Realm-core locator. The Gateway supplies its
-source Character's location with predecessor revision zero. Realm-core creates revision one
-directly as pending, so the destination is never advertised as settled before import. Only that
-exact pending crossing can replay the initialization. Bot Transfers still require their bound
-predecessor.
-
-While the locator is pending, login checks the World Shards for source Escrow before accepting a
-destination copy. After the source finishes, login can settle and release the destination's exact
-arrival fence. Login repair never overwrites a pending locator.
-
-The Fakes execute the shared planners and protocol bodies. Durable tests exercise reducer shims,
-real table arms, and SpacetimeDB transaction rollback. These checks cover different boundaries.
+- `transfer::is_in_transit` hides a Character with an Escrow row from by-guid lookups
+  (`helpers::character_by_guid`, `character_by_name`), refuses `world::player_login`, and keeps
+  the rest and quest passes from touching it.
+- Every Character-keyed table needs a `character_owned!` delete sweep and transfer arm. The build
+  derives `CHARACTER_OWNED_TABLES` from them, and the manifest tests in `transfer/tests.rs` reject a
+  missing arm. See `docs/module-build.md`.
+- Package Teardown refuses while a Package Character has an Escrow row or a claimed Transfer Intent.
+- The Architecture Test in `module/src/tripwires.rs` enforces the documented raw-lookup exclusions.

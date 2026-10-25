@@ -1,216 +1,31 @@
-# Vanilla data ingestion — strategy & licensing
+# World data import
 
-**Status:** the **strategy and licensing reasoning** are current and load-bearing. The
-implementation-status statements are not — this began life as a planning document.
+This how-to covers the importer: how world content and client data reach a Realm's Shard, what each
+pass checks, and what the seeded fixture contains. The everyday path is `./lyracore import`; the
+[quickstart](./quickstart.md#getting-the-real-world) covers it. Use the commands below to run one
+stage at a time or to inspect a dry run. Why the repository ships tools and no data is recorded in
+[ADR 0001](./adr/0001-ship-tools-not-data.md), [ADR 0002](./adr/0002-opt-in-pinned-classic-db-pull.md)
+and [ADR 0003](./adr/0003-parse-world-data-never-execute.md). [Danger zones](./danger-zones.md) §2
+lists the traps a content import can spring.
 
-> **Correction (2026-08-04).** The title and opening paragraph used to say "planning, not yet
-> implemented" and "no importer is built yet". **The importer is built and is the canonical way
-> content reaches the databases**: `importer/` reads client DBCs through `wow-mpq` + `wow_dbc`, and
-> a full starting zone (2,200+ spawns, 420 quests) has been built with it end to end. Everything
-> below about the **two pipelines**, the **licensing firewall** (ship the extractor, never the data),
-> and the schema decisions remains exactly the design that was implemented. See
-> [`danger-zones.md`](./danger-zones.md) §2 for the traps a content import can spring.
+Content comes from two places. The Operator's own 1.12.1 client supplies the DBC tables, terrain,
+navigation and model geometry, read in memory through `wow-mpq` and `wow_dbc`. cmangos `classic-db`
+supplies the world content: creature templates and spawns, items, gameobjects, loot, quests,
+gossip text, vendors, trainers and level stats. `importer/scripts/pull-classic-db.sh` fetches it
+into the gitignored `.import/`.
 
-Exact collision geometry has an additional shard-ownership and live-acceptance contract: see
-[`vmap-rollout.md`](./verification/vmap-rollout.md). Its importer preflight admits map 0 only on shards that own
-both its terrain and nav data; importing never enables collision consumption.
+Exact collision geometry has its own live-acceptance contract in
+[`vmap-rollout.md`](./operations/vmap-rollout.md). Importing it never turns on collision.
 
-How real vanilla 1.12.1 content reaches the SpacetimeDB backend. Captured from the 2026-06-17
-data-research pass so the implementation carries the reasoning, not just the conclusion.
+## Full source import
 
-> ### Two worlds: the fixture, and the one you build
->
-> Two things are easy to conflate. The **seeded fixture** — the realm row, start positions,
-> graveyards, a test account and a small demo population — is written by the module's `init` reducer,
-> ships in this repository, and is what a fresh checkout gives you. It needs no client, no MPQ or DBC
-> extraction, and no third-party world database.
->
-> **An imported world is a different thing, and you build it yourself.** The whole pipeline ships:
-> the importer binary, the opt-in dump puller with its pinned commit and checksum, the per-family
-> import manifest, and the ETL that sequences the loads and asserts the result
-> (`importer/scripts/`). `lyracore import` drives it end to end behind a consent interstitial. What
-> does **not** ship, and never will, is the data.
->
-> #### The firewall, in user-facing terms
->
-> **We ship the tools. You fetch the data. No database produced by this pipeline is ever
-> distributed or hosted by this project.** Concretely:
->
-> - The world-database dump comes from **cmangos' own public repository** (`classic-db`, GPL-3.0),
->   pulled by a script *you* run, to *your* disk. This project does not mirror it, vendor it, or
->   include a single row of it — no bulk table (creature templates, quests, loot, or the world's
->   scale) ships pre-populated. `.import/` is gitignored, and the pull script never *executes* any
->   cmangos SQL — it only assembles the dump for the importer to parse. (The hand-authored seeded
->   fixture is a narrower, disclosed exception — see the carve-out below.)
-> - The client-side half — spells, talents, areas, factions, terrain, model geometry — is read out
->   of **your own legally obtained 1.12.1 client's `Data/` archives**. We distribute no client and
->   no client assets, and the importer only ever reads them.
-> - `lyracore import` states all of this and requires an explicit `yes` (or `--accept`) before it
->   fetches or reads anything.
-> - What comes out is a database on your machine. Publishing, hosting or redistributing *that* is
->   your decision and your responsibility; it is not something this project does or endorses.
->
-> Provenance is recorded rather than assumed: `--source-sha` and `game_import_meta` stamps say
-> exactly what was loaded, from which upstream commit.
-
-## The core reframe: two separate problems
-
-Mangos solves "vanilla data" with **two distinct pipelines**, and conflating them is the main
-confusion to avoid:
-
-1. **Client-derived data** — the ~138 DBC tables + terrain/maps/vmaps/mmaps. **No mangos project
-   redistributes these.** The server admin *extracts* them locally from their own legally-owned
-   1.12.1 client MPQs using extractor binaries. The 1.12 client already reads its own DBCs; the
-   server needs only a small subset for gameplay it computes itself.
-2. **Server-side world content** — `creature_template`, spawns, `item_template`, the loot-template
-   family, quests, `npc_text`/vendor/trainer, `playercreateinfo`. This is the big lift, shipped as a
-   curated SQL dump in a *separate* DB repo (cmangos `classic-db`), hand-authored + packet-sniff
-   corrected over ~15 years. **Not in the client.**
-
-## What OUR server actually needs
-
-- **From DBCs (the server-computed subset):** spells, talents, areas, faction-template relations,
-  creature displays/scales/model bounds, map and start-position data, stat curves, and the complete
-  taxi and auction-house catalogues. `AuctionHouse.dbc` supplies each market's id, parent faction,
-  deposit percentage, consignment percentage, and localized name. `TaxiNodes.dbc` supplies each
-  node's map position, name, and faction mount
-  displays; its DBC id becomes both the storage id and the bounded client/wire id. `TaxiPath.dbc`
-  supplies directed endpoints and fares; `TaxiPathNode.dbc` supplies ordered geometry, raw signed
-  `int32` flag containers, and non-negative delays in seconds, which the import stores in
-  milliseconds.
-- **Server-side world content (the road from "one chicken" to a real world):** creature templates +
-  spawns + waypoints, items, gameobjects + spawns, the loot tables, quests + relations, npc/gossip
-  text, vendors, trainers, `playercreateinfo_spell`, `player_levelstats`/`player_classlevelstats`
-  (the per-level HP/mana curve our hardcoded `health:60` currently fakes), faction/reputation.
-
-## Our schema is already a mangos subset
-
-`game_*` is a deliberate, near-1:1 **denormalized subset** of the mangos shape, so transcribing is
-mechanical, not a redesign. The seed already uses real cmangos ClassicDB values (Chicken entry 620,
-ModelId1 304, BaseAttackTime; Human/Warrior start `(-8949.95, -132.493, 83.5312)` matches
-`playercreateinfo` exactly) — proof the "copy the values" path produces client-correct data.
-
-Clean mappings today: `game_creature_template` ← `creature_template`; `game_creature_spawn` ←
-`creature`; `game_creature_waypoint` ← `creature_movement`; `game_start_position` ←
-`playercreateinfo`. Gaps (future tables, not blockers): `item_template`, gameobjects, the
-*_loot_template family (collapsible into ONE `game_loot_template` keyed by `(loot_type, entry)` —
-all 11 mangos loot tables share the same shape), quests, npc/gossip text, vendors/trainers,
-level-stats, starting spells, faction/reputation.
-
-## SpacetimeDB strengths / tradeoffs as a world DB
-
-**Strengths:** kill→loot-roll→grant is ONE ACID transaction (no ORM, no cache-coherency layer);
-live subscriptions already *are* the visibility/broadcast layer (a creature is "just a
-`game_world_entity` row"); content versions independently of code (re-import, not recompile); one
-language (Rust) end-to-end reusing the gtker crate family (incl. `wow_dbc`); our schema is already a
-subset so growth is append-only.
-
-**Tradeoffs:** production capacity needs measurement on the target topology. Imports use external
-batches to stay within reducer argument and execution limits. The pinned source has 10,384
-creature definitions and 66,310 positions; expanded creature loot reaches 1,316,655 rows.
-Content loads from data instead of compiled seed code. Migrations remain append-only, and source
-semantics such as multiplier-based stats still need explicit mappings to the Module's fields.
-
-**Republish & data retention (re-verified 2026-06-17, Slice 2):** a plain `spacetime publish` (no
-`-c`) is **never destructive** — it either auto-migrates while RETAINING all data, or it *aborts*
-with a clear error. It never silently wipes. `-c/--delete-data` is the *only* destructive path and
-is explicit opt-in. The auto-migrate rule is narrower than earlier notes claimed:
-
-- **Logic-only republishes** (new/changed reducers, new tables/indexes) auto-migrate trivially.
-  Confirmed live: kept the player's level/XP intact.
-- **Adding a column auto-migrates ONLY IF** (a) the new field carries a **default-value annotation**
-  *and* (b) it is **appended at the END of the struct**. Inserting a column mid-struct triggers
-  `Reordering table <t> requires a manual migration` and the publish **aborts** (no wipe). A column
-  without a default likewise aborts with `Adding a column <c> ... requires a default value annotation`.
-- When a publish aborts, the data is untouched; you then either fix the struct (default + append) or
-  accept a `-c` reseed.
-
-Slice 2 added `dynamic_flags`/`dead` to `game_world_entity` mid-struct → plain publish aborted
-safely → we chose a `-c` reseed (level-3 was throwaway test data). So: content re-imports and
-*end-appended, defaulted* schema growth do **not** wipe player data; mid-struct column inserts need a
-manual migration or `-c`. (The earlier note here that called column-adds unconditionally safe was
-wrong — corrected after this deploy.)
-
-## Licensing — the decisive constraint (NOT technical)
-
-cmangos `classic-db` is **GPLv3** (the mangos *core* is GPLv2; same logic applies). Its **content**
-is asserted to remain Blizzard's, offered only as non-commercial "fair-use demo content."
-
-**GPL impact, by scenario:**
-- **Trigger is distribution, not use.** Private import/transform/run with no redistribution → **zero**
-  copyleft obligation.
-- **A. Hybrid / private (recommended): GPL impact ≈ none** — we distribute none of their data.
-- **B. If we ship their data:** GPL attaches to the artifact (must be GPL-licensed, must offer
-  source; no permissive/proprietary relicensing). **Copyleft-spread risk:** a separate runtime-loaded
-  file is arguably mere aggregation (our code stays ours), but **compiling the data into the module**
-  risks the whole module being a derivative → GPL on our code. So: never compile third-party data in.
-- **C. Hosted-only SaaS:** GPLv3 has **no network clause** (unlike AGPL) → not "conveying" → no
-  distribution obligation. But the Blizzard layer remains.
-- Commercial use is *allowed* by GPL (you can sell it); it just forbids making it proprietary.
-
-**The bigger, independent risk is Blizzard.** GPL is only cmangos's wrapper and can't grant rights to
-Blizzard's underlying copyright. For any public/commercial future, **Blizzard — not GPL — gates.**
-Same instinct as our `game_`-not-`wow_` naming discipline.
-
-## Recommended approach: hybrid with a hard licensing firewall
-
-Ship **zero** third-party-derived data. Three streams, each with its own provenance story:
-1. **Client-owned constants via `wow_dbc`** (gtker, same vendor as our deps): read the few
-   DBC-derived values we compute server-side from the **user's own** client MPQs at build/setup time.
-   Cleanest provenance, never redistributed; replaces today's hardcoded `49`/`304`.
-2. **Ship a tiny, wholly-ours curated starter fixture** (Elwynn / map 0 first): small enough to
-   hand-author, real out of the box, zero third-party exposure. Adopt mangos table *shapes* so the
-   schema is a recognized superset (append-only).
-3. **Optional user-run ETL for breadth** — an operator points it at *their own* classic-db copy; it
-   emits a neutral bundle the module loads. We ship the **extractor, not the data** — exactly how
-   mangos ships extractors, not Blizzard MPQs.
-
-## Decisions taken (2026-06-17)
-
-- **Mechanism: an explicit opt-in pull-script**, not a git submodule. Same licensing posture (the user
-  fetches classic-db from cmangos and transforms locally; we ship the script + our own ETL, never
-  their data), but nothing auto-fetches Blizzard-derived content for a casual cloner and the
-  association stays out of our default repo graph.
-- **Source tracking: pinned for the default import.** The lock now selects classic-db commit
-  `cd0c426a3b2ff56dd518bf009025299468e60fdb` because the default `creature-ai` family requires its
-  exact EventAI Source Profile. A floating `master` fetch remains available with `--skip-verify`, but
-  it cannot pass EventAI apply until a matching profile is reviewed and committed.
-- **Record the resolved commit SHA per import** (in the generated bundle / a small lockfile). Keeps
-  master reproducible-after-the-fact and makes "pin if unstable" a one-line change to the recorded
-  SHA. (Floating-ref + lock pattern.)
-- **The ETL parses the data we use and validates + fails loudly on schema drift** — it never executes
-  cmangos's SQL/scripts (that would be running GPL code) and never silently imports a changed shape.
-- **Resolved (2026-06-17): the repo WILL be published eventually.** Blizzard intervention is treated
-  as an accepted, inherent risk of the emulation space. This makes the firewall **mandatory, not
-  optional**: a public repo must ship ZERO third-party/Blizzard-derived data — only our own code, the
-  opt-in pull-script, and our hand-authored starter fixture; our own code stays permissively
-  licensable. Still deferrable to importer-build time: scale target (starter zone vs whole world) and
-  the client-DBC extraction UX.
-
-## Phased roadmap (tracer-bullet)
-
-- **P0 — Decide the firewall + lock table shapes** (no data movement). Record the licensing decision;
-  lock mangos-mirrored shapes (migrations are append-only).
-- **P1 — Per-(race,class) start data from the user's own client** (smallest real win): stand up the
-  `wow_dbc` path; replace hardcoded start coords + `display_id` with extracted values; all races/
-  classes start correctly.
-- **P2 — Elwynn creature_template + spawn slice** (map 0): "one chicken" → a living starter zone;
-  validates the import mechanism at small scale.
-- **P3 — Level-stat curve + starting spells**: add `game_player_levelstats`/`_classlevelstats` +
-  `playercreateinfo_spell`; kills the hardcoded `health:60` fiction.
-- **P4 — Loot + items**: collapsed `game_loot_template` + `game_item_template` (only the columns we
-  use); first content that exercises the transactional kill→roll→grant strength.
-- **P5 — Quests** (+ the npc/gossip relations they need): densest behavioral content; depends on
-  creatures/items/gossip.
-
-**Per-shard scope.** World Import Profiles assign spatial rows to a World Shard or Instance Pool.
-`full-eastern` owns maps 0, 369 and 449; `full-kalimdor` owns maps 1 and 450;
-`full-instances` owns the dungeon, raid and battleground maps. Each full profile imports every
-creature definition and builds a shared quest catalogue from the full source. Runnable AI follows local creature
-populations and their summon dependencies, so its spatial references stay on their owning Shard.
-Quest-giver relations follow local spawns.
-`full-world` imports every source map into one database. Legacy map and box imports retain their
-selected scope. Reimports replace each selected family; two runs do not combine spatial scopes.
+`--world-profile` selects the World Import Scope. `lyracore import` uses `alliance-single` on
+`lyracore`; `full-world` imports every source map into one database. `full-eastern`,
+`full-kalimdor` and `full-instances` still parse; they are the legacy multi-Shard scopes. Each full profile imports
+every creature definition and builds a shared quest catalogue from the full source. Runnable AI
+follows the imported creature populations and their summon dependencies, and quest-giver relations
+follow the imported spawns. Reimports replace each selected family; two runs do not combine
+spatial scopes.
 
 For a complete source import, supply the dump and client data together:
 
@@ -248,8 +63,8 @@ and are removed with the Instance. This supplies map populations; it does not su
 encounter scripts, raid lockouts or battleground rules. Continent terrain covers the full client
 grid; imported spawn coverage does not imply complete collision coverage for every interior.
 Zone-wide creature speech requires imported terrain and area metadata to resolve its audience.
-Reimport clears creature copies in existing Instances but retains their leases. Recreate those
-Instances before resuming play.
+Reimport clears creature copies in existing Instances but keeps their Instance leases. Recreate
+those Instances before play resumes.
 
 The EventAI compatibility gate still applies to the full catalogue. A larger scope does not
 approve dropped rules or unknown behavior. Existing smaller profiles retain their shared starting
@@ -306,13 +121,12 @@ and guid definitions compose by source rule id, with entry order retained for an
 The family replaces native definitions through the operator-only
 `import_creature_ai_definitions` and `import_creature_ai_definitions_append` reducers. Broadcast text
 and summon locations remain family-only SQL catalogues. The old flat `game_creature_ai_event` table
-is retained for migration safety but is no longer a production evaluator boundary. The Gateway does
-not subscribe to any EventAI table.
+is kept for migration safety and is not an evaluator boundary.
 
 Each subject revision is derived from its normalized native definition. A creature compares its
 durable revision on its next behavior visit. A mismatch clears that creature's phase, Ranged
 Posture, and Rule State before evaluation, then stamps the new revision. Cleanup does not scan the
-World Shard, touch another creature, replay an edge event, or undo a committed one-shot outcome.
+Shard, touch another creature, replay an edge event, or undo a committed one-shot outcome.
 Unchanged definitions keep their revision and Rule State across scheduled Module calls.
 
 The current instruction compiler preserves the speech, emote, cast, phase, flee, call-for-help,
@@ -325,20 +139,22 @@ After import, `import-world.sh` verifies that native definition subjects are wel
 The Compatibility Manifest remains the authority for source values and dependency paths. Real-client
 Verification should cover one source-backed rule and one creature with no native definition.
 
+## Client catalogues and Transports
+
 The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
 the other client tables. It validates every endpoint/path reference and every `(path, node_index)`
 ordinal, client id against the vanilla 1..=256 mask range, reserved wire-id collisions, and negative
 delays before issuing SQL. Apply is a recoverable clear-and-reload: points are cleared before paths
 and nodes, then imported rows and the reserved fixture are inserted deterministically. A database
-failure during those statements can leave a partial family, but `import-world.sh` now stops on that
+failure during those statements can leave a partial family, but `import-world.sh` stops on that
 failure and the next run clears the family again before rebuilding it. No DBC bytes or generated
 catalogue artifact is written into the repository.
 
 TaxiNodes mount fields name creature-template entries, despite the `wow_dbc` field name
 `mount_creature_display_info`. The standalone DBC pass requires `--taxi-mounts <dump.sql[.gz]>`
-and resolves them through the full dump, not the spatially filtered creature catalogue. The world
-import script passes its existing `DUMP` input. This makes import order independent of which mount
-creatures have spawns in the World Shard.
+and resolves them through the full dump, not the spatially filtered creature catalogue, so import
+order does not depend on which mount creatures have spawns in scope. The world import script
+passes its existing `DUMP` input.
 
 For each faction, a zero creature entry selects the other faction's entry before lookup. A missing
 template, a template with no model, or a selected model absent from `CreatureDisplayInfo` produces
@@ -360,7 +176,7 @@ points, or a zero speed, acceleration or period is also omitted with a warning.
 
 Existing catalogues need the standalone DBC pass again with the same client and full dump. Updating
 the binary alone does not repair stored displays. With flights stopped, an Operator can rebuild
-them on each affected World Shard with explicit targets:
+them on the Shard with explicit targets:
 
 ```bash
 cargo run -p lyracore-importer -- --server "$SPACETIME_SERVER" --db "$DB" \
@@ -371,42 +187,32 @@ cargo run -p lyracore-importer -- --server "$SPACETIME_SERVER" --db "$DB" \
 This reloads all standalone DBC catalogues, including taxi nodes, paths and points. It preserves the
 reserved taxi fixture. Flights already active retain their captured mount display until they end.
 
-## What the seeded fixture knowingly contains
+## What the seeded fixture contains
 
-The firewall above is about **bulk data**: this project never vendors, mirrors, or ships a
-world-database dump, and `init` never reads one. It is not a promise that every id in the seeded
-fixture is invented. The 1.12.1 client renders items, spells, and NPCs by numeric id against its
-**own** local DBCs and item cache — a hand-authored fixture using fake ids would either show blank
-tooltips or, worse, silently collide with a real id a later import introduces. So the fixture
-deliberately reuses real vanilla ids and, for a handful of rows, real names and coordinates:
+`init` never reads a world-database dump, but not every id in the seeded fixture is invented. The
+1.12.1 client renders items, spells and NPCs by numeric id against its own DBCs and item cache. A
+fixture with fake ids would show blank tooltips, or collide with a real id that a later import
+brings in. So the fixture reuses real vanilla ids and, for a few rows, real names and coordinates:
 
-- **Items** — a few dozen entries at real ids so their names/icons/tooltips render correctly (e.g.
-  25 Worn Shortsword, 6948 Hearthstone, 769 Chunk of Boar Meat, 2318 Light Leather), enumerated in
-  `module/src/seed.rs`'s starter-kit and profession-item blocks.
-- **Spells** — around a dozen real ids used by the starter kit and profession recipes (e.g. 772
-  Rend, 133 Fireball).
-- **Gameobjects** — the Goldshire-area gather-node demo, entries 1731/1732 (Copper/Tin Vein).
-- **Graveyards** — five real Elwynn/Westfall world-safe-locations, with their real names and
-  coordinates (`module/src/seed.rs`, mirrored as the fallback constants in `module/src/world.rs`).
-- **The start position** — the real Northshire Valley coordinates a fresh Human Warrior spawns at.
-- **Taxi harness** — two reserved nodes, one one-way test route with three hand-authored points and
-  fare, and a nearby flight master. The 5090000+ values are storage ids; separate wire ids 255/256
-  fit the client's fixed taxi mask and are rejected if imported DBC nodes already claim them. These
-  synthetic nodes exist for headless protocol tests. A real client can only render flight-map nodes
-  present in its own DBCs, so visual real-client testing uses the imported catalogue instead. Taxi
-  activation charges the path's imported copper fare and selects the source node's Horde/Alliance
-  mount display from the character's race team; a zero display is rejected safely.
-- **A handful of quest/NPC display strings** exercised by the gateway's own test fixtures.
+- Items: a few dozen real ids so names, icons and tooltips render, such as 25 Worn Shortsword,
+  6948 Hearthstone, 769 Chunk of Boar Meat and 2318 Light Leather. The starter-kit and
+  profession-item blocks in `module/src/seed.rs` list them.
+- Spells: about a dozen real ids used by the starter kit and profession recipes, such as 772 Rend
+  and 133 Fireball.
+- Gameobjects: the Goldshire gather-node demo, entries 1731 and 1732 (Copper and Tin Vein).
+- Graveyards: five real Elwynn and Westfall world-safe-locations with their names and coordinates,
+  in `module/src/seed.rs` and as fallback constants in `module/src/world.rs`.
+- The start position: the Northshire Valley coordinates where a new Human Warrior spawns.
+- The taxi fixture: two reserved nodes, one one-way route with three points and a fare, and a
+  nearby flight master. [Schema](./schema.md#7-the-seeded-fixture) gives its id rules.
+- A few quest and NPC display strings used by the test fixtures.
 
-None of these came from a bulk import: they are hand-typed, one row at a time, using ids,
-coordinates, and (where the numbers needed to be authentic) magnitudes that are facts about the
-shipped 1.12.1 client and the public game world, not rows copied out of a third-party database.
-What never ships, and never will by default, is content at the *scale* an actual `classic-db`
-import produces — hundreds of creature templates, quests, or loot rows. That only exists on a
-machine where **you** ran `./lyracore import` against **your own** client and **your own** fetched
-dump.
+Each row is typed by hand, from facts about the 1.12.1 client and the public game world, not copied
+from a third-party database. Content at the scale of a `classic-db` import, hundreds of creature
+templates, quests or loot rows, exists only where an Operator ran `./lyracore import` against their
+own client and dump.
 
-## Starter aura families — provenance (reconciled 2026-08-13)
+## Starter aura families: provenance
 
 `module/src/seed.rs`'s `seed_spell_groups` hand-authors the mutually exclusive aura families. This
 records what its rows were checked against, because "hand-authored" is not the same as "unverified"
@@ -463,15 +269,12 @@ Both require spell focus 83, and their event scripts set a 360000 ms despawn del
 set faction 14 and attack the summoner. The importer maps these source events to `E_SUMMON_HOSTILE`
 and preserves the focus requirement.
 
-Every World Import Profile loads the same full Spell catalogue. After this importer change, each
-World Shard and Instance Pool needs the normal Spell reimport and curated class-spell pass. Rebuild
-Base Snapshots and review Package Deltas that name affected effect indices before replaying them.
-Publishing the Module alone does not correct stored rows. No live Realm update is part of this change.
+Every World Import Profile loads the same full Spell catalogue. Publishing the Module alone does not
+correct stored Spell rows; that needs the Spell reimport and the curated class-spell pass.
 
 **Not used, deliberately:** cmangos `spell_group` / `spell_group_stack_rules`. That dataset would
-answer the rule questions directly, but it is GPL-licensed content this project ships zero rows of, and
-transcribing its group assignments into a permissively licensed repository is exactly the copy the
-firewall forbids. Operators who run the importer against their own dump get it locally; the shipped
+answer the rule questions directly, but it is GPL-licensed content, and transcribing its group assignments into this repository is the
+copy [ADR 0001](./adr/0001-ship-tools-not-data.md) forbids. Operators who run the importer against their own dump get it locally; the shipped
 starter set does not.
 
 **Verified against the client (membership):** every id in all nine families, by spell name and rank
@@ -481,9 +284,9 @@ subtext. Corrections this produced:
 |---|---|
 | Mark of the Wild | Rank 4 (`5234`) was missing from an otherwise complete 7-rank chain. |
 | Paladin Blessings | Added Might rank 7 (`25291`), Wisdom rank 6 (`25290`), Sanctuary ranks 2-4 (`20912`/`20913`/`20914`), and the eight Greater Blessings (a Greater Blessing is the same buff as its single-target form). |
-| Armor debuffs | Added Faerie Fire (Feral) ranks 1-4 (`16857`/`17390`/`17391`/`17392`) — the druid form-shifted cast of the same debuff. |
+| Armor debuffs | Added Faerie Fire (Feral) ranks 1-4 (`16857`/`17390`/`17391`/`17392`), the druid's form-shifted cast of the same debuff. |
 | Well Fed | Added the real food-buff ids alongside the sandbox's synthetic `50116`. |
-| Fortitude, Battle Shout, Intellect, Spirit, Shadow Protection | No membership change — the existing ids matched the client exactly. |
+| Fortitude, Battle Shout, Intellect, Spirit, Shadow Protection | No membership change. The existing ids matched the client. |
 
 **Verified by reasoning over the client's own magnitudes (comparability):** `rank_is_comparable` was
 `true` for eight of nine families and is now `true` only for Battle Shout, the sole family built from a
@@ -503,30 +306,4 @@ families now compare effect magnitude, with an existing aura's stack count folde
 - **Expose Armor's magnitude**, which the client stores as a combo-point coefficient rather than a flat
   value. The policy tests use its 5-combo-point value.
 
-**How the families are checked on a live database:**
-[`aura-stacking-probes.md`](./verification/aura-stacking-probes.md) — replacement, refusal, per-caster Blessings,
-and persisted `game_aura` rows, through the debug reducers on a development database.
-
-## Where these questions landed
-
-The open questions this document originally posed have all been answered, and the answers are the
-reason the firewall above is mandatory rather than advisory:
-
-- **The red line** is the strict one: ship ZERO third-party-derived data. No separately-licensed data
-  pack, optional or otherwise.
-- **The project is public**, so the Blizzard fair-use calculus — not the GPL — is the dominant risk,
-  and it is treated as an accepted, inherent risk of the space.
-- **Out of the box, the default is the hand-authored fixture.** Breadth is for operators who opt into
-  the importer with their own data.
-- **Client extraction happens through `wow_dbc`**, reading the operator's own client, rather than
-  keeping hardcoded constants.
-- **Scale target: a polished starting zone first**, not the whole vanilla world.
-- **When importing, the reference source** is cmangos `classic-db` (5875-exact, ~13 MB of SQL) rather
-  than the sniff-heavy, patch-ranged alternatives.
-
-## Sources
-
-cmangos `classic-db` (GPLv3, ClassicDB_1_12_1), mangos-classic core (GPLv2), and gtker `wow_dbc`
-(a Rust 1.12 DBC reader, same family as `wow_world_messages` / `wow_srp`). The general lesson from
-the codec work applies to sourcing data values too: prefer a known-good fixture as ground truth over
-a value reasoned out from documentation.
+The policy tests in `module/src/spell/stacking.rs` and `module/tests/aura_tick.rs` cover the families.

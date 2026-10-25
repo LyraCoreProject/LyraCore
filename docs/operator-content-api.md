@@ -10,9 +10,7 @@ The source is `module/src/operator_content.rs`. The durable tests are in
 
 ## Which database
 
-Call the Shard database that holds the map. On a realm with several Shards, a spawn written to a
-Shard that does not host its map never shows. Each Shard allocates its own Operator Spawn Range
-identifiers.
+Call the Realm's Shard, `lyracore` on a local Realm. Every map is in that one Shard.
 
 ## Who can call
 

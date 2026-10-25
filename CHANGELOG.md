@@ -84,7 +84,7 @@ The first public alpha. The promise it makes, and nothing beyond it:
   `account create` writes SRP6 credentials without ever putting a password on a command line,
   `dev smoke` drives a real build-5875 login over the wire, and `dev status`/`logs`/`down` manage
   what it started — verified by process *identity*, not by a bare PID. The CLI is pinned per
-  checkout in `.lyracore-cli-rev`. See [`docs/development-cli.md`](./docs/development-cli.md).
+  checkout in `.lyracore-cli-rev`. See [`docs/quickstart.md`](./docs/quickstart.md#lyracore-vs-lyracore).
 - **A private-LAN mode** — `dev up --lan <RFC1918 address>` binds the two client-facing listeners
   and advertises the matching realm address, while SpacetimeDB stays on loopback in every mode.
 - **[`docs/quickstart.md`](./docs/quickstart.md)**: the whole clone-to-connected-client path,

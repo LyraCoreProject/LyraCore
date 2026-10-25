@@ -383,7 +383,6 @@ fn next_name_timestamp(previous: u32, now: u32) -> u32 {
     now.max(previous.saturating_add(1))
 }
 
-/// See docs/benilla-compatibility.md, Combat feedback, for rename Gates and client replies.
 pub(crate) fn rename_hunter_pet(
     ctx: &ReducerContext,
     owner_guid: u64,

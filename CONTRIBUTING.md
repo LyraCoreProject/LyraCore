@@ -18,16 +18,13 @@ Human and agent contributions follow the same
 default; the policy defines which contracts, technical facts, documentation pointers and tool
 annotations belong beside it.
 
-Look everything else up when a change needs it:
+Look everything else up when a change needs it. [`docs/README.md`](docs/README.md) lists every
+document and who reads it. The ones a first change most often needs:
 
 - [`docs/quickstart.md`](docs/quickstart.md): from a clone to a connected client.
-- [`docs/windows.md`](docs/windows.md): the same on Windows, through WSL2.
 - [`docs/testing.md`](docs/testing.md): the commands CI runs, tier by tier.
 - The recipes for [a new opcode](docs/recipes/add-an-opcode.md) and
   [a new spell effect](docs/recipes/add-a-spell-effect.md): every file and step, in order.
-- [`CONTEXT.md`](CONTEXT.md): the full glossary, with an alphabetical index.
-- [`docs/architecture.md`](docs/architecture.md): how the tiers fit together, and the index of the
-  other documents.
 - [`docs/danger-zones.md`](docs/danger-zones.md): schema migrations, publishing, and the traps that
   have broken a Realm.
 

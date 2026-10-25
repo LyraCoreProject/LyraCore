@@ -1,5 +1,3 @@
-//! Before changing Loot Roll promotion or voting, read docs/realm-loot-routing.md.
-
 pub mod event_kind {
     pub const ROLL_START: u8 = 4;
     pub const ROLL_VOTE: u8 = 5;

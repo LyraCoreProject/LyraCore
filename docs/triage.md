@@ -60,9 +60,8 @@ to the message it prints. If the symptom matches an entry, give the person its f
 
 Work from evidence. In rough order of value:
 
-- `./lyracore dev logs gateway` and `./lyracore dev logs spacetime` around the time of the failure.
-  Add `--all` when the tail is not enough. The files are `.lyracore/logs/gateway.log` and
-  `.lyracore/logs/spacetime.log`.
+- `./lyracore dev logs spacetime` around the time of the failure. Add `--all` when the tail is not
+  enough. The file is `.lyracore/logs/spacetime.log`; it holds the Native Host and Module output.
 - The source. Map each error message and log line to code with `git grep`. A claim about cause
   needs a file and line.
 - Shard state through `spacetime sql` with `SELECT` statements only.
@@ -130,7 +129,8 @@ pasted screenshots, remind them to drag the images into the issue after it exist
 
 ## Redaction
 
-Never read `.lyracore/coordinator-token` or `~/.config/spacetime/cli.toml`. They hold credentials.
+Never read `.lyracore/native-owner-token`, `.lyracore/native-cli.toml`, `.lyracore/native-jwt/` or
+`~/.config/spacetime/cli.toml`. They hold credentials and keys.
 
 Remove these from everything you post: tokens, passwords, the home directory path, LAN and public IP
 addresses, and account names unless the person agrees to keep them. Never attach client files,

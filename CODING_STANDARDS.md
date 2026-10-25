@@ -2,14 +2,15 @@
 
 These standards govern new and changed code. They do not require cleanup of unrelated legacy code.
 Repository configuration and tool output are the source of truth for formatting, lints, and generated
-code. `docs/danger-zones.md` remains authoritative for schema changes, publishing, and deployment.
+code. `docs/danger-zones.md` is authoritative for schema changes, publishing and the traps that have
+broken a Realm. `docs/native-operations.md` holds the deploy procedure.
 
 ## Order of decisions
 
 Use this order when two good practices compete:
 
 1. Preserve the behavior promised by the Spec.
-2. Use the domain language in `CONTEXT.md`.
+2. Use the domain language in the glossary (`CORE_TERMS.md`, `CONTEXT.md`).
 3. Put authority in the tier described by `docs/architecture.md`.
 4. Choose the smallest design that makes the behavior explicit and testable.
 5. Verify at the lowest sufficient rung, then run every higher rung the change requires.
@@ -27,9 +28,8 @@ Use this order when two good practices compete:
 
 ## Domain language and types
 
-- Use `CONTEXT.md` terms in identifiers, tests, comments, logs, docs, commits, and PRs. Update the
-  glossary in the same change when a term is introduced or sharpened, and `CORE_TERMS.md` too when
-  it lists the term.
+- Use the glossary terms in identifiers, tests, comments, logs, docs, commits, and PRs. Update the
+  term's one entry in the same change when a term is introduced or sharpened.
 - Make illegal states hard to represent. Prefer an enum or a small domain type when it prevents two
   meanings, units, identifiers, or states from being mixed.
 - Do not wrap a primitive only to satisfy a style rule. A domain type earns its place by enforcing an
@@ -40,16 +40,15 @@ Use this order when two good practices compete:
 
 ## Authority and placement
 
-- The native host migration follows the single-Shard boundary in
-  `docs/architecture.md#native-host-migration`. New native request handling, AOI, recipient Gates
-  and packet construction belong in the Module. The native host handles sockets, cryptographic
-  scratch state and the Module's ordered delivery instructions.
+- Request handling, AOI, recipient Gates and packet construction belong in the Module. The Native
+  Host handles sockets, cryptographic scratch state and the Module's ordered delivery instructions.
+  `docs/architecture.md#native-host-migration` draws this line.
 - The Module handles request admission, durable state and gameplay rules in one Shard.
 - Put code in `lyracore-shared` only when more than one crate genuinely shares the same pure concept or
   calculation. It is not a neutral dumping ground.
 - Gameplay partitions use map and Instance. They do not select another Shard.
-- Keep the Host delivery types and native reducer arguments in sync with the Module.
-  Run the native protocol check after changing this interface.
+- Keep the Host delivery types and native reducer arguments in sync with the Module. Run the native
+  protocol check (`docs/testing.md#native-protocol-tier`) after changing this interface.
 
 ## Interface depth and seams
 
@@ -96,7 +95,7 @@ Use this order when two good practices compete:
   one atomic transition.
 - Choose the cheapest test that reaches the real behavior: pure calculation, Store-level behavior,
   codec round-trip, durable integration, Headless Client, or real client. No lower rung proves a
-  higher one; use the verification ladder in `docs/architecture.md`.
+  higher one; use the verification ladder in `docs/testing.md#verification-ladder`.
 - Use an Architecture Test for a structural invariant that behavior tests cannot observe reliably.
   Keep its scanner narrow, prove it detects the forbidden mutation, and exclude comments and test-only
   code from lexical checks.

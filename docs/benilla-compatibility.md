@@ -2,9 +2,8 @@
 
 `lyracore-protocol` pins the independent Benilla codec to
 `c2fc3cf304075a0fa1c9accffaf5efb99be9edfe`. Its tests compare movement and other packet layouts with
-that codec. The Gateway crate has been removed. The native TCP check runs separately against the
-real Module, using a Python client that implements logon, header encryption and the checked packet
-layouts.
+that codec. The native TCP check runs separately against the real Module, using a Python client
+that implements logon, header encryption and the checked packet layouts.
 
 ```sh
 cargo test --locked -p lyracore-protocol
@@ -12,9 +11,8 @@ python3 native-host/check.py --host <path>/target/release/spacetimedb-standalone
 ```
 
 The native check covers the gameplay exchanges listed in
-[the architecture](./architecture.md#native-host-migration), with committed-state and packet
-assertions. These tests do not establish every gameplay path or real-client presentation. The
-removed Gateway's Fake Store scenarios are no longer evidence for the native runtime.
+[the architecture](./architecture.md#native-protocol-coverage), with committed-state and packet
+assertions. These tests do not establish every gameplay path or real-client presentation.
 
 ## Generate the opcode inventory
 
@@ -43,9 +41,8 @@ calls. A decoder in Benilla does not require every Realm to emit that message.
 
 The curated `behaviors` list names retained Rust tests in
 `crates/lyracore-protocol/examples/benilla_inventory/behaviors.json`. The inventory checks their
-declarations and records whether they are ignored. It does not run them. Removed Gateway tests
-are omitted; native Python scenarios are separate. An empty test list means no retained Rust
-scenario in this inventory. Real-client Verification remains unverified.
+declarations and records whether they are ignored. It does not run them. Native Python scenarios
+are separate. An empty test list means no retained Rust scenario in this inventory. Real-client Verification remains unverified.
 
 ## Transport movement
 
@@ -136,7 +133,7 @@ the aura. Turning in place also preserves it.
 
 The shared [corpse codec](../crates/lyracore-protocol/src/codec/corpse.rs) writes reclaim delay in
 milliseconds. The pinned library writes seconds. It also writes both resurrection-offer flags after
-the sized caster name; the library omits the second flag. The native runtime uses these raw codecs. The
+the sized caster name; the library omits the second flag. The Module uses these raw codecs. The
 [CMaNGOS packet writers](https://github.com/cmangos/mangos-classic/blob/master/src/game/Entities/Player.cpp#L17442)
 define the offer layout and reclaim-delay units.
 
@@ -145,7 +142,7 @@ define the offer layout and reclaim-delay units.
 The protocol crate supplies raw codecs where the pinned generated library differs. These include
 transport movement, teleport acknowledgements, packed movement-control GUIDs, reclaim-delay units,
 resurrection-offer flags and XP layouts. Partial VALUES updates omit `OBJECT_FIELD_TYPE`.
-See [the protocol traps](./danger-zones.md#1-do-not-touch--high-risk-traps-these-have-bitten-before)
+See [the protocol traps](./danger-zones.md#1-do-not-touch-traps)
 before changing those packets.
 
 Native Character creation, inventory changes, quests, Mail and auctions return gameplay Refusals
@@ -171,5 +168,5 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Instance resets and raid lockout queries | Specific System Messages |
 | Taxi chains | Activation failure; single-hop taxis have their own implementation |
 
-The Module handles current native presence, name lookup, party authority and recipient Gates in
-one Shard. Cross-Shard instance routing and Gateway relays are no longer part of these exchanges.
+The Module handles current presence, name lookup, party authority and recipient Gates in one
+Shard.

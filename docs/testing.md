@@ -97,13 +97,20 @@ python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/rel
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-admission
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-recovery
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-reload
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-retention
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-slow-readers
+python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone --check-accept-recovery
 ```
 
+CI also runs the patched Host's `compile_cache` and `retention` unit tests in the SpacetimeDB
+checkout with the Host toolchain.
+
 The normal check covers authentication, Character lifecycle and the gameplay paths listed in
-[the architecture](./architecture.md#native-host-migration). The recovery check kills its own Host
-and checks committed state after restart. The slow-reader check fills one connection's output while
-another remains responsive. Native builds use no generated Gateway bindings.
+[the architecture](./architecture.md#native-protocol-coverage). The recovery check kills its own
+Host and checks committed state after restart. The retention check runs cleanup and crash recovery
+during Development reload. The slow-reader check fills one connection's output while another
+remains responsive. The accept-recovery check exhausts a disposable Host's descriptors and requires
+both game listeners to recover after the sockets close.
 
 The reload check changes the WASM program hash with a custom section and replaces the Module
 20 times under the development Host's definition check and confirms each installed program hash.
@@ -161,8 +168,42 @@ Run the terrain check before an `--apply` after you change a profile anchor.
 
 A Package test runner sets `LYRACORE_TEST_CORE` to the Core checkout it builds against.
 
-## Higher rungs
+## Verification ladder
 
-A live stack, a real client and a load run each catch what the tiers above cannot.
-[`architecture.md`](./architecture.md#verification) describes the ladder, and
-[`verification/`](./verification/README.md) holds the written checks.
+Each check establishes a different property, and a lower rung does not prove a higher one. A codec
+test does not establish native TCP behaviour, and a protocol check does not establish real-client
+presentation or world capacity.
+
+| Check | Command or source | Establishes |
+| --- | --- | --- |
+| Module and protocol tests | `cargo test -p lyracore-module --lib --features=debug_reducers`, `cargo test -p lyracore-protocol` | Gameplay calculations, packet layouts and Architecture Tests |
+| Durable Module tests | `module/tests/` with `--ignored` | Transactions in disposable Shards |
+| Build and schema | `./lyracore preflight` | The publish feature set and offline schema extraction |
+| Native protocol | `python3 native-host/check.py --host <binary>` | TCP authentication, requests, committed state and emitted packets |
+| Login Queue | Add `--check-admission` | Admission Gates and a waiting client kept connected past 90 seconds |
+| Crash recovery | Add `--check-recovery` | Restart with durable Character and inventory state, connection cleanup and fresh AOI |
+| Slow readers | Add `--check-slow-readers` | A blocked output connection closes while another client stays responsive |
+| Movement load | Add `--load-clients 1000 --load-seconds 30 --load-group-size 16` | Throughput, latency and final observer positions for the stated fixture |
+| Real client | WoW build 5875 | Presentation and client interaction |
+
+The native checks create temporary keys, ports and data directories. The crash check kills its own
+Host with a Character online; restart must clear stale connections, channel membership and AOI,
+keep committed position and inventory, and permit world entry with the saved Session key.
+
+The load check reads Linux `/proc` for Host CPU and sampled RSS. It uses the full Module with seed
+fixtures, pre-established world-session keys and synthetic Characters, and it imports no world and
+runs no Package AI. Heartbeats can coalesce before the 50 ms movement publication tick, so the
+final stop check verifies that every expected observer receives the final position. Driver CPU and
+loop delay are reported so a saturated driver is not mistaken for the Host's limit. A movement
+throughput result is not a concurrent-Character capacity claim.
+[`full-module-1000.json`](../native-host/results/full-module-1000.json) is a recorded run with the
+Module and Host binary hashes.
+
+A live stack, a real client and a load run each catch what the tiers above cannot. The
+`verify-lyracore` skill drives those checks, and
+[its checklist](../.claude/skills/verify-lyracore/checks.md) says what a person must see on a real
+client.
+
+`dev smoke` fetches the wire harness that `.wire-harness-rev` pins into the ignored
+`.lyracore/wire-harness/<sha>/`. A harness change is a harness release and a pin bump, never a
+patch to that cache from a LyraCore pull request.

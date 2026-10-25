@@ -25,9 +25,10 @@ File: `crates/lyracore-shared/src/spell/taxonomy.rs`.
 File: `importer/src/spell.rs`.
 
 - Import the new byte name from `lyracore_shared::spell::taxonomy`.
-- Map the raw effect id in `instant_effect_to_kind` (or the aura mapping) and name the kind in
-  `kind_name`.
-- If the effect needs parameters, set them in `resolve_instant_params`. If it needs a header
+- Map the raw effect id in `instant_effect_to_kind`, or for an aura the raw aura id in
+  `aura_mod_to_kind`, and name the kind in `kind_name`.
+- If the effect needs parameters, set them in `resolve_instant_params` (`resolve_aura_params` for an
+  aura). If it needs a header
   attribute (Distract keeps stealth), add it in `spell_flag_attributes`.
 - Add a unit test for the mapping, and an ignored test that reads the real spell from
   `LYRACORE_TEST_DBC` and asserts the values from step 1.
@@ -48,8 +49,8 @@ Files: `module/src/spell/cast/resolve.rs`, `module/src/spell/outcome.rs`.
 ## 5. Apply the effect
 
 File: `module/src/spell/cast/targeting.rs`. The exhaustive `EffectKind` match in `apply_effect`
-requires an arm for the new variant. Call the owning
-family. The behaviour lives in that family's module, not in the arm. Distract calls
+requires an arm for the new variant. An aura kind joins the arm that calls `apply_aura_effect`.
+The behaviour lives in the owning family's module, not in the arm. Distract calls
 `crate::creatures::distraction::distract`, a new module declared in `module/src/creatures/mod.rs`.
 
 ## 6. Store the effect's state
@@ -58,7 +59,7 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
 
 - A new table needs no default. A new column on an existing table goes at the END of the struct
   with `#[default(...)]`. A `String` column cannot take a default, so string data goes in a new
-  table. [`danger-zones.md`](../danger-zones.md) section 1 has the rules.
+  table. [`danger-zones.md`](../danger-zones.md) has the rules.
 - End the state on every path that ends it. Distract clears its row on death
   (`module/src/combat/death.rs`), on a new Engagement (`module/src/combat/engage.rs`), when a pet
   despawns (`module/src/creatures/pet.rs`) and when a creature's lifecycle resets
@@ -69,9 +70,8 @@ Only when the effect outlives the cast. Add the table in the owning family's mod
 
 ## 7. Check schema and delivery
 
-Run `./lyracore preflight` for a table or reducer change. Native handlers read the Shard directly;
-there are no generated Gateway bindings or Coordinator subscriptions. If the effect changes
-persistent state, update its native Relay and any world-entry replay that restores it.
+Run `./lyracore preflight` for a table or reducer change. If the effect changes persistent state,
+update its native Relay and any world-entry replay that restores it.
 
 ## 8. Change the packets when needed
 
@@ -84,19 +84,17 @@ persistent state, update its native Relay and any world-entry replay that restor
 
 File: `module/tests/<effect>.rs`, `#[ignore]`d like its siblings. It publishes the Module to its own
 standalone, writes the real spell's `game_spell` and `game_spell_effect` rows (the effect row id is
-`(spell_id << 2) | effect_index`), casts through a debug or `gw_*` reducer, and reads the result
-with SQL. Run it as [`testing.md`](../testing.md) shows. CI picks up a new target with no workflow
-edit.
+`(spell_id << 2) | effect_index`), casts through a debug or `gw_*` reducer such as
+`debug_cast_spell_at`, and reads the result with SQL. [`testing.md`](../testing.md) shows how to run
+it and how CI picks up a new target.
 
 ## 10. Record the words and the client check
 
 - A new term goes in `CONTEXT.md`, and in `CORE_TERMS.md` if a first change meets it. Distract
   added **Distraction**.
-- What only a real client shows goes in a write-up under
-  [`docs/verification/`](../verification/README.md), with a row in its index. Distract added
-  `distract-client-check.md`.
+- What only a real client shows goes in a section of
+  [`checks.md`](../../.claude/skills/verify-lyracore/checks.md). Distract added its Distract section.
 
 ## 11. Run the checks
 
-Run every command in [`testing.md`](../testing.md) that the change reaches: the unit tier, the
-wasm check, the new durable target, preflight and the native protocol check.
+Run every tier in [`testing.md`](../testing.md) that the change reaches.
