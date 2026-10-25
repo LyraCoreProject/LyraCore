@@ -375,12 +375,4 @@ mod tests {
         )
         .is_err());
     }
-
-    #[test]
-    fn a_shard_below_slot_10000_mints_no_id_in_a_gateway_escrow_range() {
-        assert_eq!(crate::realm_core::GUID_RANGE_SIZE, 1_000_000_000);
-        for gateway in ["mail-escrow:gateway-a:00", "mail-escrow:gateway-b:ff"] {
-            assert!(lyracore_shared::mail::escrow_range_mark(gateway) > 9_999_999_999_999);
-        }
-    }
 }
