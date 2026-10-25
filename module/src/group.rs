@@ -248,21 +248,6 @@ pub(crate) fn clear_unclaimed_group_intents(ctx: &ReducerContext, character_guid
     }
 }
 
-#[reducer]
-pub fn claim_bot_invite_intent(ctx: &ReducerContext, intent_id: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let intent = ctx
-        .db
-        .game_bot_invite_intent()
-        .id()
-        .find(intent_id)
-        .ok_or_else(|| refused(GroupRefusal::IntentAlreadyClaimed, "Group Intent is gone"))?;
-    crate::sessionless::group_action_gate(ctx, intent.inviter_guid)
-        .map_err(|refusal| refused(refusal, "Group Intent admission"))?;
-    ctx.db.game_bot_invite_intent().id().delete(intent_id);
-    Ok(())
-}
-
 pub(crate) fn refused(refusal: GroupRefusal, detail: &str) -> String {
     let tag = refusal.as_tag();
     spacetimedb::log::info!("group refused {tag}: {detail}");
