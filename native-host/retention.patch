@@ -5,7 +5,7 @@ index 77ec4a7..7249599 100644
 @@ -53,6 +53,22 @@ pub struct Generic<R: Repo, T> {
      panicked: bool,
  }
- 
+
 +impl<T> Generic<repo::Fs, T> {
 +    pub(crate) fn prune_before(&mut self, first_required: u64) -> io::Result<usize> {
 +        let mut removed = 0;
@@ -32,7 +32,7 @@ index 599c71c..24eda6e 100644
 @@ -190,6 +190,11 @@ impl<T> Commitlog<T, repo::Fs> {
          Self::open_with_repo(repo::Fs::new(root, on_new_segment)?, opts)
      }
- 
+
 +    /// Caller must retain a durable snapshot and exclude concurrent compression and history readers.
 +    pub fn prune_before(&self, first_required: u64) -> io::Result<usize> {
 +        self.inner.write().unwrap().prune_before(first_required)
@@ -48,7 +48,7 @@ index fe8f160..941c87a 100644
 @@ -131,6 +131,15 @@ impl Fs {
          Ok(size)
      }
- 
+
 +    pub(crate) fn remove_segment_durably(&self, offset: u64) -> io::Result<()> {
 +        match self.remove_segment(offset) {
 +            Ok(()) => {}
@@ -67,7 +67,7 @@ index 0fef5f7..a5d3d9c 100644
 +++ b/crates/durability/src/imp/local.rs
 @@ -238,6 +238,11 @@ where
  }
- 
+
  impl<T: Send + Sync + 'static> Local<T, Fs> {
 +    /// Caller must retain a durable snapshot and exclude concurrent compression and history readers.
 +    pub fn prune_before(&self, first_required: TxOffset) -> io::Result<usize> {
@@ -96,7 +96,7 @@ index de152b0..4b1a902 100644
 @@ -228,26 +228,42 @@ impl PersistenceProvider for LocalPersistenceProvider {
          let snapshot_dir = replica_dir.snapshots();
          let runtime = Handle::tokio_current();
- 
+
 -        let snapshot_worker = asyncify(&runtime, move || {
 +        let development = std::env::var("LYRACORE_NATIVE_DEV").as_deref() == Ok("1");
 +        let compression = if development {
@@ -124,7 +124,7 @@ index de152b0..4b1a902 100644
 +        let (durability, disk_size) =
 +            relational_db::local_durability_with_options(replica_dir, runtime.clone(), Some(&snapshot_worker), options)
 +                .await?;
- 
+
 -        runtime.spawn(relational_db::snapshot_watching_commitlog_compressor(
 -            snapshot_worker.subscribe(),
 -            None,
@@ -149,6 +149,6 @@ index de152b0..4b1a902 100644
 +                runtime.clone(),
 +            ));
 +        }
- 
+
          Ok(Persistence {
              durability,
