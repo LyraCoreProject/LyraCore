@@ -9,8 +9,8 @@ body:
         belongs in a Package; see [Building on top](https://github.com/LyraCoreProject/LyraCore/blob/main/CONTRIBUTING.md#building-on-top).
 
         Out of scope for this alpha, and closed as such: public/VPS hosting as a supported product,
-        Windows/WSL support, clients other than build 5875, and anything requiring redistributed
-        game data (`SUPPORT.md` has the full list).
+        native Windows support (WSL2 is supported), clients other than build 5875, and anything
+        requiring redistributed game data (`SUPPORT.md` has the full list).
 
   - type: textarea
     id: problem

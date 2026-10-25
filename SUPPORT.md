@@ -46,6 +46,8 @@ We support:
 
 - The local development fixture on Linux and macOS: `./lyracore` and everything
   [`docs/quickstart.md`](./docs/quickstart.md) describes.
+- WSL2 with Ubuntu on Windows, as [`docs/windows.md`](./docs/windows.md) describes. The maintainers
+  do not test it on every change.
 - An unmodified 1.12.1 build 5875 client over loopback or a private LAN.
 - The seeded world that the Module's `init` reducer writes. It needs no client data import.
 - Errors in this repository, such as a broken command, a stale document or a dead link.
@@ -53,7 +55,7 @@ We support:
 We close these as out of scope:
 
 - Public or VPS hosting. The [`README.md`](./README.md) says why.
-- Windows and WSL. Nobody tests them.
+- Native Windows, Git Bash, and WSL 1. Use WSL2.
 - A client that is not build 5875, or a modified or launcher-patched client.
 - Requests for game data: a client, MPQ or DBC files, or a world database dump. This project
   distributes none of them and does not say where to find them.
