@@ -1314,7 +1314,6 @@ mod character_fence_tripwire {
     use crate::test_scan::repo_root;
 
     const WHITELIST: &[(&str, usize, &str)] = &[
-        ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
         ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
