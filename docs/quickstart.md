@@ -548,11 +548,14 @@ still require a code edit. Package Deltas and Runtime Scripts use `packages appl
 publish Rust Packages; it is a separate workflow from watching Rust source.
 
 Each replacement writes the old and new WASM to the local commit log, about 66 MB in total with
-the current 33 MB development artifact. The development Host rotates log segments at 256 MiB
-and takes a snapshot after rotation. Once two snapshots are complete and their transactions are
-durable, it verifies both snapshots and removes older snapshots and unneeded log segments.
+the current 33 MB development artifact. During Development reload, the Native Host rotates a log
+segment after a write reaches 256 MiB and takes a snapshot. A segment can exceed that size by one
+transaction. Once two snapshots are complete and their transactions are durable, it verifies
+both snapshots and removes older snapshots and unneeded log segments.
 Accounts, Characters, items and the installed Module stay in the retained state. Cleanup keeps
-enough history to recover from either retained snapshot; it does not reset the Realm.
+enough history to recover from either retained snapshot; it does not reset the Realm. Each snapshot
+has its own object files, so in-place file damage cannot spread to the other through a hard link.
+These separate copies require more disk space and writes than shared snapshot files.
 
 This is a recovery window, not a fixed disk quota. Large transactions, snapshot work and cleanup
 errors can leave more history on disk. The Host logs cleanup failures and keeps the recovery files.

@@ -38,7 +38,8 @@ def main():
             raise RuntimeError(f'refusing to overwrite unrelated changes in {target}')
         if current != desired:
             target.write_text(desired)
-    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch', 'retention.patch'):
+    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch', 'retention.patch',
+            'independent-snapshots.patch'):
         patch = str(ROOT / name)
         check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
         if check.returncode == 0:

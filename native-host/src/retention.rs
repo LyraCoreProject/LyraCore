@@ -1,7 +1,7 @@
 use std::{fs, sync::Arc};
 
 use anyhow::{ensure, Context};
-use spacetimedb_durability::Durability as _;
+use spacetimedb_durability::{Durability as _, DurableOffset};
 use spacetimedb_runtime::{sync::watch, Handle};
 use spacetimedb_snapshot::{SnapshotRepository, CURRENT_MODULE_ABI_VERSION};
 use spacetimedb_table::page_pool::PagePool;
@@ -16,18 +16,8 @@ pub(crate) async fn run(
     runtime: Handle,
 ) {
     snapshots.borrow_and_update();
-    while snapshots.changed().await.is_ok() {
-        let Some(offset) = *snapshots.borrow_and_update() else {
-            continue;
-        };
-        if durability
-            .durable_tx_offset()
-            .wait_for(offset)
-            .await
-            .is_err()
-        {
-            return;
-        }
+    let mut durable = durability.durable_tx_offset();
+    while let Some(offset) = next_durable_snapshot(&mut snapshots, &mut durable).await {
         let repo = repo.clone();
         let durability = durability.clone();
         let result = asyncify(&runtime, move || {
@@ -44,7 +34,21 @@ pub(crate) async fn run(
                 log::info!("Development reload retained two snapshots; removed {removed} commit log segments");
             }
             Ok(_) => {}
-            Err(error) => log::warn!("Development reload history cleanup stopped: {error:#}"),
+            Err(error) => log::warn!("Development reload history cleanup pass failed: {error:#}"),
+        }
+    }
+}
+
+async fn next_durable_snapshot(
+    snapshots: &mut watch::Receiver<Option<u64>>,
+    durable: &mut DurableOffset,
+) -> Option<u64> {
+    loop {
+        snapshots.changed().await.ok()?;
+        let offset = *snapshots.borrow_and_update();
+        if let Some(offset) = offset {
+            durable.wait_for(offset).await.ok()?;
+            return Some(offset);
         }
     }
 }
@@ -176,9 +180,42 @@ mod tests {
         let reopened = Commitlog::<()>::open(fixture.log_path, Options::default(), None).unwrap();
         assert_eq!(reopened.min_committed_offset(), Some(18));
         assert_eq!(reopened.max_committed_offset(), Some(47));
-        assert!(reopened.commits_from(20).all(|commit| commit.is_ok()));
+        let replayed: Vec<_> = reopened
+            .commits_from(20)
+            .flat_map(|commit| commit.unwrap().tx_range())
+            .filter(|offset| *offset >= 20)
+            .collect();
+        assert_eq!(replayed, (20..48).collect::<Vec<_>>());
         assert_eq!(reopened.prune_before(u64::MAX).unwrap(), 9);
         assert_eq!(reopened.existing_segment_offsets().unwrap(), [45]);
+    }
+
+    #[tokio::test]
+    async fn snapshot_notification_waits_for_its_durable_offset() {
+        let (snapshots, mut notifications) = watch::channel(None);
+        let (persisted, offsets) = watch::channel(Some(18));
+        let mut durable = DurableOffset::from(offsets);
+        let next = next_durable_snapshot(&mut notifications, &mut durable);
+        futures::pin_mut!(next);
+        snapshots.send(Some(29)).unwrap();
+        assert!(futures::poll!(&mut next).is_pending());
+        persisted.send(Some(28)).unwrap();
+        assert!(futures::poll!(&mut next).is_pending());
+        persisted.send(Some(29)).unwrap();
+        assert_eq!(next.await, Some(29));
+    }
+
+    #[tokio::test]
+    async fn durability_shutdown_cannot_authorize_snapshot_cleanup() {
+        let (snapshots, mut notifications) = watch::channel(None);
+        let (persisted, offsets) = watch::channel(Some(18));
+        let mut durable = DurableOffset::from(offsets);
+        let next = next_durable_snapshot(&mut notifications, &mut durable);
+        futures::pin_mut!(next);
+        snapshots.send(Some(29)).unwrap();
+        assert!(futures::poll!(&mut next).is_pending());
+        drop(persisted);
+        assert_eq!(next.await, None);
     }
 
     #[test]

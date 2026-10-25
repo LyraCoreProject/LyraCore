@@ -1,3 +1,4 @@
+import os
 import struct
 import time
 
@@ -6,7 +7,8 @@ from check import World, creates
 
 def check(data, world_port, sql, restart):
     def files():
-        snapshots = sorted(data.glob('replicas/*/snapshots/*.snapshot_dir'))
+        snapshots = sorted(path for path in data.glob('replicas/*/snapshots/*.snapshot_dir')
+            if (path / (path.stem + '.snapshot_bsatn')).is_file() and not path.with_suffix('.lock').exists())
         segments = sorted(data.glob('replicas/*/clog/*.log'))
         return snapshots, segments
 
@@ -58,15 +60,24 @@ def check(data, world_port, sql, restart):
     def damage_latest_snapshot():
         current, _ = files()
         assert len(current) >= 2
-        object_file = next(path for path in (current[-1] / 'objects').rglob('*') if path.is_file())
-        damaged = object_file.with_suffix('.damaged')
-        damaged.write_bytes(b'damaged snapshot object')
-        damaged.replace(object_file)
+        newest = current[-1] / 'objects'
+        older = current[-2] / 'objects'
+        common = [(path, older / path.relative_to(newest)) for path in newest.rglob('*')
+            if path.is_file() and (older / path.relative_to(newest)).is_file()]
+        assert common, 'snapshots have no unchanged objects to test'
+        assert all(not os.path.samefile(a, b) for a, b in common), 'retained snapshots share object files'
+        object_file, fallback_file = common[0]
+        expected = fallback_file.read_bytes()
+        with object_file.open('r+b') as damaged:
+            damaged.write(b'damaged snapshot object')
+            damaged.flush()
+            os.fsync(damaged.fileno())
+        assert fallback_file.read_bytes() == expected
 
     restart(damage_latest_snapshot)
     verify()
     assert list(data.glob('replicas/*/snapshots/*.invalid_snapshot'))
-    print('PASS automatic history cleanup retains state after a killed Host and fallback from a damaged snapshot')
+    print('PASS automatic history cleanup retains state after a killed Host and in-place snapshot corruption')
 
 
 def check_normal(data, publish, wasm):

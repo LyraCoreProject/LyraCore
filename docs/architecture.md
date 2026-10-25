@@ -80,21 +80,26 @@ Watch sends a single authenticated PUT to the loopback Host with compatible migr
 `clear=false`. It skips the CLI's separate pre-publish request. The Host checks compatibility before
 replacement and confirms the checked program hash inside the transaction.
 
-The development Host also retains a recovery window through
+The Native Host retains a recovery window during Development reload through
 [`retention.rs`](../native-host/src/retention.rs) and the
-[persistence patch](../native-host/retention.patch). Log segments rotate at no more than 256 MiB,
-unless one transaction exceeds that size. Rotation requests a snapshot. Cleanup waits until the
-snapshot's transaction is durable, then reads the two newest completed snapshots within that
-boundary and verifies their contents, identity, replica and offset. It persists their directory
-entries before removing older snapshots. It removes only a closed log prefix that ends before
+[persistence patch](../native-host/retention.patch). Log segments rotate after a write reaches
+256 MiB, so a segment can exceed that size by one transaction. Rotation requests a snapshot.
+Cleanup waits until the snapshot's transaction is durable, then reads the two newest completed
+snapshots within that boundary and verifies their contents, identity, replica and offset. It
+persists their directory entries before removing older snapshots. It removes only a closed log prefix that ends before
 the first transaction needed by the older retained snapshot, and updates the open log's offset
 list under its write lock. Each segment deletion reaches disk before the next one starts.
 
-Development mode disables background snapshot and log compression so compression cannot recreate
-a file after cleanup deletes it. Snapshot creation remains serial and always keeps its latest
-source. Normal Hosts retain upstream compression and history behavior. Cleanup failures stop that
-pass and log a warning. The retained window is not an archive or a fixed disk limit; recovery still
-needs one readable retained snapshot and the log that follows it.
+Development reload disables background snapshot and log compression so compression cannot recreate
+a file after cleanup deletes it. The [snapshot patch](../native-host/independent-snapshots.patch)
+gives each completed snapshot its own object files. It copies them after releasing the
+committed-state lock and before making the snapshot available for recovery. In-place damage to
+one snapshot therefore cannot corrupt the other's copy through a hard link. Snapshot creation
+remains serial and always keeps its latest source. Normal Hosts retain upstream compression and
+history behavior. Cleanup failures stop that pass and log a warning. The retained window is not
+an archive or a fixed disk limit; recovery still needs one readable retained snapshot and the
+log that follows it. Independent snapshot files cost more disk space and writes than shared files.
+Copying and checking a full imported Realm remain unmeasured.
 
 A compatible update replaces the Module in the running Host. The sockets, header ciphers and
 World Session rows remain. A Rust build failure sends no update. A malformed WASM or changed

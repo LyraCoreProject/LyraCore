@@ -1,0 +1,23 @@
+diff --git i/crates/snapshot/src/lib.rs w/crates/snapshot/src/lib.rs
+index a92b287..1a643e0 100644
+--- i/crates/snapshot/src/lib.rs
++++ w/crates/snapshot/src/lib.rs
+@@ -283,11 +283,18 @@ struct UnflushedSnapshotInner {
+
+ impl UnflushedSnapshotInner {
+     fn sync_all(self) -> Result<SnapshotDirPath, SnapshotError> {
++        let independent = std::env::var("LYRACORE_NATIVE_DEV").as_deref() == Ok("1");
+         // Sync all objects and their parent directories.
+         // The paths yielded by the [Snapshot::files] iterator are constructed
+         // by [DirTree::file_path], which creates a path with a parent.
+         // `parent()` is thus known to succeed.
+         for (_, path) in self.snapshot.files(&self.object_repo) {
++            // Detach before completion, after the datastore releases its committed-state lock.
++            if independent {
++                let mut copy = tempfile::NamedTempFile::new_in(path.parent().unwrap())?;
++                io::copy(&mut File::open(&path)?, copy.as_file_mut())?;
++                copy.persist(&path).map_err(|error| error.error)?;
++            }
+             FileOrDirPath::File(&path).sync_all()?;
+             FileOrDirPath::Dir(path.parent().unwrap()).sync_all()?;
+         }
