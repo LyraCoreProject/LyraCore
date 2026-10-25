@@ -3938,9 +3938,12 @@ def main():
         http_port, world_port, logon_port = ports
         database = f'disposable-native-{time.time_ns()}'
         address = f'http://127.0.0.1:{http_port}'
-        env = dict(os.environ, LYRACORE_NATIVE_WORLD_ADDR=f'127.0.0.1:{world_port}', LYRACORE_NATIVE_LOGON_ADDR=f'127.0.0.1:{logon_port}', LYRACORE_NATIVE_DATABASE=database, RUST_LOG='warn')
+        env = dict(os.environ, LYRACORE_NATIVE_WORLD_ADDR=f'127.0.0.1:{world_port}', LYRACORE_NATIVE_LOGON_ADDR=f'127.0.0.1:{logon_port}', LYRACORE_NATIVE_DATABASE=database)
         if args.check_reload:
             env['LYRACORE_NATIVE_DEV'] = '1'
+        (run / 'data').mkdir()
+        config = '[logs]\nlevel = "WARN"\ndirectives = ["spacetimedb_standalone::native_world=debug"]\n'
+        (run / 'data/config.toml').write_text(config)
         token = None
 
         def request(path, body=None, method='GET', content_type='application/json', authenticated=True):
@@ -4905,7 +4908,7 @@ def main():
                 admission.run(world_port, call, sql, await_empty)
                 print('PASS native logon and world protocol checks')
             except BaseException:
-                print('\n'.join((run / 'host.log').read_text().splitlines()[-15:]))
+                print('\n'.join((run / 'host.log').read_text().splitlines()[-100:]))
                 raise
             finally:
                 host.terminate()
