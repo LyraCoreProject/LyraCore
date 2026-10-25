@@ -1,0 +1,61 @@
+{
+  "recorded_at": "2026-10-24",
+  "scope": "Local development with minimal scenario fixtures and a real Benilla client",
+  "core_revision": "1f5a63853d3ead8fc6ad0df5576afb3d105914cb",
+  "cli_revision": "e7ffa14eb3e190141028e05921cb2f2753438df1",
+  "host_sha256": "82679bbbd92600a74121d4ab6db6aca5dfea0efadf20206ace682fa3f9d7188c",
+  "cli_sha256": "304ba8ddba53c18a13efd86971bb53777e4d04590400fae84c146668dad99ee9",
+  "video": {
+    "filename": "hot-reload-full-raw-1x.mp4",
+    "seconds": 193.6,
+    "width": 2240,
+    "height": 1080,
+    "frames_per_second": 20,
+    "continuous": true,
+    "playback_speed": 1
+  },
+  "edits": [
+    {
+      "change": "Add a prefix to Speech",
+      "build_seconds": 19.9,
+      "publish_seconds": 17.54,
+      "total_seconds": 37.85,
+      "save_to_effect_seconds": 38.931885957717896
+    },
+    {
+      "change": "Fix a Rust compile error with a second Speech prefix",
+      "build_seconds": 15.69,
+      "publish_seconds": 15.54,
+      "total_seconds": 31.62,
+      "save_to_effect_seconds": 32.16797232627869
+    }
+  ],
+  "compile_failure": {
+    "seconds": 9.62,
+    "published": false,
+    "previous_behavior_continued": true
+  },
+  "checks": {
+    "same_host_process": true,
+    "host_alive_with_same_start_time": true,
+    "same_world_session_rows": true,
+    "one_world_login": true,
+    "old_speech_after_failed_build": true,
+    "prefixes_present_in_received_wire_packets": true,
+    "speech_after_ctrl_c": true,
+    "success_prefixes_received": true
+  },
+  "trace_world_login_counts": {
+    "CMSG_AUTH_SESSION": 1,
+    "CMSG_CHAR_ENUM": 1,
+    "CMSG_PLAYER_LOGIN": 1,
+    "SMSG_LOGIN_VERIFY_WORLD": 1
+  },
+  "limits": [
+    "Speech was sampled every two seconds.",
+    "Recording ran alongside the builds.",
+    "Later watcher repairs are outside this recording.",
+    "Full imported content, production load and macOS were not exercised.",
+    "These timings do not compare against a release build."
+  ]
+}

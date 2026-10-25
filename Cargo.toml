@@ -27,3 +27,15 @@ lyracore-shared = { path = "crates/lyracore-shared" }
 lyracore-protocol = { path = "crates/lyracore-protocol" }
 lyracore-test-support = { path = "crates/lyracore-test-support" }
 lyracore-package-delta = { path = "crates/lyracore-package-delta" }
+
+[profile.dev-reload]
+inherits = "dev"
+opt-level = 1
+debug = 0
+incremental = true
+
+[profile.dev-reload.package.lyracore-module]
+opt-level = 0
+
+[profile.dev-reload.build-override]
+opt-level = 3

@@ -47,6 +47,52 @@ that list and submits its packets to `native_world_reply` on the same connection
 refusal through the ordered output stream. The host does not classify gameplay errors. Other
 failures close the connection.
 
+### Development reload
+
+`./lyracore dev watch` runs a local Native Host with `LYRACORE_NATIVE_DEV=1`. It watches Module
+source and builds the `dev-reload` WASM profile incrementally. Dependencies use optimization level
+1; the Module uses level 0, and build scripts and procedural macros use level 3. Watch requests only
+the WASM library from Cargo. Debug information is off. The Host uses Cranelift without optimization
+and retains fuel metering and epoch interruption. These settings shorten development builds and
+WASM compilation; they are not the release performance configuration.
+The development engines share a bounded in-memory Cranelift function cache. Unchanged functions
+can reuse machine code across different WASM files. Cached keys and records occupy at most 256 MiB,
+plus collection bookkeeping. It evicts the oldest entries when full, which can make later edits
+recompile functions. The cache disappears when the Host stops. Normal Hosts do not enable
+it. This uses Wasmtime 39's experimental incremental compiler cache.
+Local measurements and their limits are in
+[`development-reload-speed.json`](../native-host/results/development-reload-speed.json).
+The profile also keeps Rust's development assertions and integer overflow checks. These can stop
+a reducer where a release build would continue, so a development build can expose additional bugs.
+
+The [Host patch](../native-host/dev-reload.patch) checks the complete normalized Module definition
+both when planning an update and when applying it. It compares the definition version and its
+BSATN encoding, including reducer arguments and private tables. This deliberately refuses additions
+that SpacetimeDB's normal migration check permits. Type ordering changes can also require a planned
+update. SpacetimeDB's normal compatibility check alone does not protect the Native Host's binary
+argument and delivery BSATN types. It cannot check semantic contracts encoded in strings or packet
+bodies, such as the `native_reply:` envelope.
+Watch sends a single authenticated PUT to the loopback Host with compatible migration policy and
+`clear=false`. It skips the CLI's separate pre-publish request. The Host checks compatibility before
+replacement and confirms the checked program hash inside the transaction.
+
+A compatible update replaces the Module in the running Host. The sockets, header ciphers and
+World Session rows remain. A Rust build failure sends no update. A malformed WASM or changed
+definition fails before replacement. An HTTP failure can leave the update outcome unknown; the
+watcher reports the failure instead of claiming a rollback. The watcher does not pause gameplay,
+restore durable data or make changed gameplay semantics compatible with existing state.
+
+This workflow covers Module code changes in a local development Realm. Host changes still require
+a restart, and schema changes need a planned update. It does not implement paused production
+updates. See [the workflow](./quickstart.md#development-reload) for startup and failure handling.
+
+The [recorded Benilla check](../native-host/results/development-reload.json) kept one World Session
+through two source edits, a compile failure and Ctrl+C. Build plus publish took 37.85 and 31.62
+seconds while recording. This is a development workflow with minimal fixture content, not a
+release-build comparison or a populated-Realm performance result.
+
+### Native protocol coverage
+
 The native protocol check covers SRP logon, world proof authentication, Character creation,
 enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTROY, stealth visibility,
 melee stance and damage messages, spell casts and interruptions, delayed spell damage, Aura timers,
