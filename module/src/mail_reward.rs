@@ -147,15 +147,16 @@ mod fixture {
             .ok_or_else(|| "reward letter fixture giver source is not live".to_string())?;
         crate::WorldEntity::delete(ctx, GIVER);
         giver.guid = GIVER;
-        giver.x = character.x + 1.0;
-        giver.y = character.y;
-        giver.z = character.z;
         giver.map_id = character.map_id;
         giver.instance_id = character.instance_id;
-        let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(giver.x, giver.y);
-        giver.grid_x = grid_x;
-        giver.grid_y = grid_y;
-        giver.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+        giver
+            .place(
+                character.x + 1.0,
+                character.y,
+                character.z,
+                crate::world::MoveClock::Unchanged,
+            )
+            .unexplored();
         giver.insert(ctx);
 
         let templates = ctx.db.game_mail_template();

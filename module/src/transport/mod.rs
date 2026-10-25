@@ -1,10 +1,9 @@
 use lyracore_protocol::messages::vanilla::TransportInfo;
 use lyracore_shared::movement_flags::ON_TRANSPORT;
-use lyracore_shared::spatial;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::config::game_taxi_path_node;
-use crate::world::{game_world_entity, WorldEntity};
+use crate::world::{game_world_entity, MoveClock, WorldEntity};
 
 pub(crate) mod timetable;
 
@@ -301,24 +300,9 @@ fn offset(passenger: &TransportPassenger) -> [f32; 4] {
 }
 
 fn carry(ctx: &ReducerContext, mut entity: WorldEntity, [x, y, z, orientation]: [f32; 4]) {
-    let previous_cell = entity.cell;
-    let (grid_x, grid_y) = spatial::grid_cell(x, y);
-    entity.x = x;
-    entity.y = y;
-    entity.z = z;
     entity.orientation = orientation;
-    entity.grid_x = grid_x;
-    entity.grid_y = grid_y;
-    entity.cell = spatial::grid_cell_id(grid_x, grid_y);
-    if entity.cell != previous_cell && !entity.dead {
-        if let Some(area) = crate::terrain::area_at(ctx, entity.map_id, x, y) {
-            crate::exploration::check_area_exploration(ctx, &mut entity, &area);
-            crate::world::apply_zone_transition(
-                ctx,
-                &mut entity,
-                Some(crate::terrain::zone_of(&area)),
-            );
-        }
-    }
+    entity
+        .place(x, y, z, MoveClock::Unchanged)
+        .explore(ctx, &mut entity);
     entity.update(ctx);
 }

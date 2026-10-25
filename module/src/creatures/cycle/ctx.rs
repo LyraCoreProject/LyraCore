@@ -1,6 +1,6 @@
 use std::collections::HashSet;
 
-use lyracore_shared::{constants, spatial};
+use lyracore_shared::constants;
 use spacetimedb::{ReducerContext, Table};
 
 use super::{
@@ -17,6 +17,7 @@ use crate::creatures::eventai::movement::{AuthoredIdleMovement, AuthoredWalkingM
 use crate::creatures::eventai::{self, EventAiRequest};
 use crate::creatures::pet;
 use crate::creatures::tick::{self, CreatureSpline, TickSweep};
+use crate::world::MoveClock;
 use crate::{
     game_aura, game_creature_cast, game_creature_spawn, game_creature_spell, game_creature_spline,
     game_creature_template, game_creature_waypoint, game_melee_attack, game_spell,
@@ -78,19 +79,11 @@ impl CtxWorld<'_> {
     ) -> Option<WorldEntity> {
         let entities = self.ctx.db.game_world_entity();
         let mut e = entities.guid().find(guid)?;
-        let (gx, gy) = spatial::grid_cell(at.x, at.y);
-        e.x = at.x;
-        e.y = at.y;
-        e.z = at.z;
-        e.grid_x = gx;
-        e.grid_y = gy;
-        e.cell = spatial::grid_cell_id(gx, gy);
-        // Native World Sessions supply client time; bots and creatures use the Realm Clock.
-        if !crate::native::is_player(self.ctx, guid) {
-            if let Some(ms) = moved_ms {
-                e.last_move_ms = ms;
-            }
-        }
+        let clock = moved_ms.map_or(MoveClock::Unchanged, |ms| {
+            MoveClock::realm(self.ctx, guid, ms)
+        });
+        // Creature legs explore nothing, including those that move a sessionless Character.
+        e.place(at.x, at.y, at.z, clock).unexplored();
         if let Some(rad) = orientation {
             e.orientation = rad;
         }
@@ -1127,16 +1120,10 @@ impl PetSink for CtxWorld<'_> {
         let Some(mut p) = entities.guid().find(guid) else {
             return;
         };
-        let (gx, gy) = spatial::grid_cell(at.x, at.y);
         p.map_id = map_id;
         p.instance_id = instance_id;
-        p.x = at.x;
-        p.y = at.y;
-        p.z = at.z;
-        p.grid_x = gx;
-        p.grid_y = gy;
-        p.cell = spatial::grid_cell_id(gx, gy);
-        p.last_move_ms = now_ms;
+        p.place(at.x, at.y, at.z, MoveClock::At(now_ms))
+            .unexplored();
         p.update(self.ctx);
     }
 }

@@ -1802,8 +1802,8 @@ pub(crate) fn run_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
                     },
                     heading: None,
                 },
+                crate::world::MoveClock::At(crate::creatures::tick::now_ms(ctx)),
             );
-            source.last_move_ms = crate::creatures::tick::now_ms(ctx);
             source.update(ctx);
             ctx.db
                 .game_creature_spline()
