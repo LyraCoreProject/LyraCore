@@ -1,4 +1,8 @@
 use crate::creatures::build_creature_entity;
+use lyracore_package_delta::{
+    packed_creature_spawn_guid, packed_gameobject_spawn_guid, packed_race_class_id,
+    packed_spell_effect_id,
+};
 use lyracore_shared::constants;
 use spacetimedb::{reducer, Identity, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -58,7 +62,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         });
 
     ctx.db.game_start_position().insert(StartPosition {
-        race_class: ((hw::RACE as u16) << 8) | hw::CLASS as u16,
+        race_class: packed_race_class_id(hw::RACE, hw::CLASS) as u16,
         race: hw::RACE,
         class: hw::CLASS,
         map_id: hw::MAP_ID,
@@ -214,8 +218,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         trainer_class: 0,
     });
 
-    // Creature guids pack HIGHGUID_UNIT in bits 48..63 and the template entry in bits 24..47.
-    let chicken_guid: u64 = (0xF130_u64 << 48) | ((CHICKEN_ENTRY as u64) << 24) | 1;
+    let chicken_guid: u64 = packed_creature_spawn_guid(CHICKEN_ENTRY, 1);
 
     let chicken_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
         guid: chicken_guid,
@@ -293,7 +296,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     ctx.db.game_item_template().insert(tough_jerky_template(52));
 
     let wolf_tmpl = ctx.db.game_creature_template().insert(test_wolf_template());
-    let wolf_guid: u64 = (0xF130_u64 << 48) | ((TEST_WOLF_ENTRY as u64) << 24) | 1;
+    let wolf_guid: u64 = packed_creature_spawn_guid(TEST_WOLF_ENTRY, 1);
     let wolf_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
         guid: wolf_guid,
         entry: TEST_WOLF_ENTRY,
@@ -319,7 +322,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         .db
         .game_creature_template()
         .insert(profession_trainer_template());
-    let trainer_guid: u64 = (0xF130_u64 << 48) | ((PROFESSION_TRAINER_ENTRY as u64) << 24) | 1;
+    let trainer_guid: u64 = packed_creature_spawn_guid(PROFESSION_TRAINER_ENTRY, 1);
     let trainer_spawn = ctx.db.game_creature_spawn().insert(CreatureSpawn {
         guid: trainer_guid,
         entry: PROFESSION_TRAINER_ENTRY,
@@ -399,7 +402,6 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
         quest_only: false,
     });
 
-    const GO_HIGH: u64 = 0xF110 << 48;
     ctx.db
         .game_gameobject_template()
         .insert(GameObjectTemplate {
@@ -416,7 +418,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             size: 0.0,
         });
     GameObject {
-        guid: GO_HIGH | 1,
+        guid: packed_gameobject_spawn_guid(1),
         template_entry: 50100,
         map_id: hw::MAP_ID,
         x: hw::X + 5.0,
@@ -452,7 +454,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             size: 0.0,
         });
     GameObject {
-        guid: GO_HIGH | 2,
+        guid: packed_gameobject_spawn_guid(2),
         template_entry: 50101,
         map_id: hw::MAP_ID,
         x: hw::X + 8.0,
@@ -489,7 +491,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             size: 0.0,
         });
     GameObject {
-        guid: GO_HIGH | 3,
+        guid: packed_gameobject_spawn_guid(3),
         template_entry: 50102,
         map_id: hw::MAP_ID,
         x: hw::X + 6.0,
@@ -525,7 +527,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
             size: 0.0,
         });
     GameObject {
-        guid: GO_HIGH | 4,
+        guid: packed_gameobject_spawn_guid(4),
         template_entry: 50103,
         map_id: hw::MAP_ID,
         x: hw::X + 7.0,
@@ -644,7 +646,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
                   p0: i32,
                   p0_kind: u8| {
         ctx.db.game_spell_effect().insert(SpellEffect {
-            id: ((spell_id as u64) << 2) | idx as u64,
+            id: packed_spell_effect_id(spell_id, idx),
             spell_id,
             effect_index: idx,
             kind,
@@ -1097,7 +1099,7 @@ fn legacy_lesser_heal_header(spell: &Spell) -> bool {
 }
 
 fn legacy_lesser_heal_effect(effect: &SpellEffect) -> bool {
-    effect.id == (2050u64 << 2)
+    effect.id == packed_spell_effect_id(2050, 0)
         && effect.spell_id == 2050
         && effect.effect_index == 0
         && effect.kind == 0x02

@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_spell_effect_id;
 use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::{game_character, game_spell, game_spell_effect, game_world_entity, Spell, SpellEffect};
@@ -626,7 +627,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 });
                 let effect_index: u8 = 0;
                 ctx.db.game_spell_effect().insert(SpellEffect {
-                    id: ((spell_id as u64) << 2) | (effect_index as u64),
+                    id: packed_spell_effect_id(spell_id, effect_index),
                     spell_id,
                     effect_index,
                     kind,
@@ -691,7 +692,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 proc_charges: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
-                id: (spell_id as u64) << 2,
+                id: packed_spell_effect_id(spell_id, 0),
                 spell_id,
                 effect_index: 0,
                 kind,

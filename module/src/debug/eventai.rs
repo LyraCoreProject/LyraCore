@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_creature_spawn_guid;
 use spacetimedb::{reducer, ReducerContext, Table};
 
 use crate::{
@@ -5,7 +6,7 @@ use crate::{
 };
 
 const FIXTURE_OWNER_ENTRY: u32 = 51_000;
-const FIXTURE_OWNER_GUID: u64 = (0xF130_u64 << 48) | ((FIXTURE_OWNER_ENTRY as u64) << 24) | 1;
+const FIXTURE_OWNER_GUID: u64 = packed_creature_spawn_guid(FIXTURE_OWNER_ENTRY, 1);
 
 #[reducer]
 pub fn debug_verify_eventai_spell_guardian_cleanup(ctx: &ReducerContext) -> Result<(), String> {

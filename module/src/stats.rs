@@ -1,3 +1,4 @@
+use lyracore_package_delta::{packed_class_level_id, packed_race_class_level_id};
 use lyracore_shared::packing::power_type;
 use spacetimedb::{table, ReducerContext};
 
@@ -28,10 +29,10 @@ pub struct LevelStats {
 }
 
 pub(crate) fn class_level_key(class: u8, level: u32) -> u32 {
-    ((class as u32) << 8) | (level & 0xFF)
+    packed_class_level_id(class, level as u8) as u32
 }
 pub(crate) fn race_class_level_key(race: u8, class: u8, level: u32) -> u32 {
-    ((race as u32) << 16) | ((class as u32) << 8) | (level & 0xFF)
+    packed_race_class_level_id(race, class, level as u8) as u32
 }
 
 pub(crate) fn hp_from_stamina(stamina: u32) -> u32 {

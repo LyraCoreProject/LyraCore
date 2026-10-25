@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_creature_spawn_guid;
 use spacetimedb::{ReducerContext, TimeDuration};
 
 use crate::{game_corpse_loot, game_gameobject, game_gameobject_pool_member, game_loot_roll};
@@ -127,7 +128,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
             spawn.respawn_at = crate::creatures::timer_never(ctx);
             spawns.guid().update(spawn.clone());
             spawn.source_guid = guid;
-            spawn.guid = (guid & !(0xFF_FFFFu64 << 24)) | (u64::from(entry) << 24);
+            spawn.guid = packed_creature_spawn_guid(entry, guid as u32);
             spawn.entry = entry;
             if spawns.guid().find(spawn.guid).is_some() {
                 continue;

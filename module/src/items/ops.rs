@@ -1,6 +1,7 @@
 use crate::actor::{ActionRefusal, ActionRefusalKind};
 use spacetimedb::{Identity, ReducerContext};
 
+use lyracore_package_delta::packed_race_class_id;
 use lyracore_shared::constants::starter_item;
 use lyracore_shared::item::ItemRefusal;
 
@@ -71,7 +72,7 @@ pub(crate) fn grant_starter_item(
         .game_character()
         .guid()
         .find(owner_guid)
-        .map(|c| ((c.race as u16) << 8) | c.class as u16)
+        .map(|c| packed_race_class_id(c.race, c.class) as u16)
         .unwrap_or(0);
     let outfit: Vec<u32> = ctx
         .db

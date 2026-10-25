@@ -4,6 +4,7 @@ use std::io::Cursor;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
+use lyracore_package_delta::packed_race_class_id;
 use wow_dbc::vanilla_tables::area_table::AreaTable as DbcAreaTable;
 use wow_dbc::vanilla_tables::area_trigger::AreaTrigger as DbcAreaTrigger;
 use wow_dbc::vanilla_tables::auction_house::AuctionHouse as DbcAuctionHouse;
@@ -402,7 +403,7 @@ fn char_base_info_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
         .map(|r| {
             format!(
                 "({},{},{})",
-                ((r.race.id) << 8) | r.class.id,
+                packed_race_class_id(r.race.id as u8, r.class.id as u8),
                 r.race.id,
                 r.class.id
             )
@@ -421,15 +422,15 @@ fn char_base_info_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
 
 pub(crate) fn outfit_item_set(
     chain: &mut PatchChain,
-) -> Result<std::collections::HashSet<(u32, i32)>> {
+) -> Result<std::collections::HashSet<(u64, i32)>> {
     let outfits: DbcCharStartOutfit = read_table(chain)?;
-    let mut seen: std::collections::HashSet<(u32, i32)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(u64, i32)> = std::collections::HashSet::new();
     for o in outfits.rows().iter() {
         let (race, class) = (o.race.id, o.class.id);
         if race == 0 || class == 0 {
             continue;
         }
-        let race_class = (race << 8) | class;
+        let race_class = packed_race_class_id(race as u8, class as u8);
         for &item in o.item_id.iter() {
             if item > 0 {
                 seen.insert((race_class, item));
@@ -441,7 +442,7 @@ pub(crate) fn outfit_item_set(
 
 fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     let outfits: DbcCharStartOutfit = read_table(chain)?;
-    let mut seen: std::collections::HashSet<(u32, i32)> = std::collections::HashSet::new();
+    let mut seen: std::collections::HashSet<(u64, i32)> = std::collections::HashSet::new();
     let mut rows: Vec<String> = Vec::new();
     let mut id: u64 = 1;
     for o in outfits.rows().iter() {
@@ -449,7 +450,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
         if race == 0 || class == 0 {
             continue;
         }
-        let race_class = (race << 8) | class;
+        let race_class = packed_race_class_id(race as u8, class as u8);
         for &item in o.item_id.iter() {
             if item > 0 && seen.insert((race_class, item)) {
                 rows.push(format!("({id},{race_class},{item})"));

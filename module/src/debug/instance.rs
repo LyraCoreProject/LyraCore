@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_creature_spawn_guid;
 use spacetimedb::{log, reducer, ReducerContext, Table};
 
 use crate::creatures::build_creature_entity;
@@ -339,8 +340,6 @@ pub fn debug_assert_floor_snap(
     let snapped = crate::terrain::snap_z(ctx, map_id, 0, ORIGIN.0, ORIGIN.1, TERRAIN_FALLBACK);
     let ground = crate::terrain::ground_z(ctx, map_id, ORIGIN.0, ORIGIN.1);
 
-    const HIGHGUID_UNIT: u64 = 0xF130;
-    let entry_hi = (creature_entry as u64) << 24;
     let spawn_max = ctx
         .db
         .game_creature_spawn()
@@ -358,7 +357,7 @@ pub fn debug_assert_floor_snap(
         .max()
         .unwrap_or(0);
     let next_low = spawn_max.max(entity_max) + 1;
-    let new_guid = (HIGHGUID_UNIT << 48) | entry_hi | next_low;
+    let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
     let mut spawned_entity_guid = None;
     let spawn_result: Result<(), String> = (|| {
         let tmpl = ctx
