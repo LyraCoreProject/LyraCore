@@ -77,6 +77,7 @@ openssl version
 
 Keep that PATH entry in your shell configuration. `openssl version` must report OpenSSL 3 or newer.
 The CLI refuses LibreSSL before writing key files.
+The installer and `./lyracore doctor` also check this requirement before Native Host startup.
 
 ### SpacetimeDB 2.7.1 (both platforms)
 

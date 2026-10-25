@@ -123,12 +123,40 @@ want_recommended() {
 have git || want git git
 have curl || want curl curl
 
+need_openssl=1
+openssl_banner='not found'
+if have openssl && openssl_banner=$(openssl version 2>/dev/null); then
+    case "$openssl_banner" in
+        'OpenSSL '*)
+            openssl_version=${openssl_banner#OpenSSL }
+            openssl_version=${openssl_version%% *}
+            openssl_major=${openssl_version%%.*}
+            openssl_rest=${openssl_version#*.}
+            openssl_minor=${openssl_rest%%.*}
+            openssl_patch=${openssl_rest#*.}
+            case "$openssl_major:$openssl_minor:$openssl_patch" in
+                *[!0-9:]* | :* | *::* | *:) ;;
+                *)
+                    if [ "$openssl_version" != "$openssl_rest" ] &&
+                       [ "$openssl_rest" != "$openssl_patch" ] &&
+                       [ "$openssl_major" -ge 3 ] 2>/dev/null; then
+                        need_openssl=0
+                    fi
+                    ;;
+            esac
+            ;;
+    esac
+fi
+if [ "$need_openssl" -eq 1 ]; then
+    want "OpenSSL 3 or newer command" openssl
+    note "OpenSSL command: ${openssl_banner:-unavailable}"
+fi
+
 if [ "$os" = Linux ]; then
     if ! have cc && ! have gcc && ! have clang; then
         want "a C compiler" build-essential
     fi
     if have pkg-config; then
-        # The Gateway's native-tls dependency links system OpenSSL on Linux.
         if ! pkg-config --exists openssl; then
             want "OpenSSL development headers" libssl-dev
         fi
@@ -149,6 +177,11 @@ if [ -n "$missing" ]; then
     printf 'install.sh: this installer never runs sudo — install them yourself, then re-run it:\n' >&2
     if [ "$os" = Darwin ]; then
         printf '\n  xcode-select --install\n\n' >&2
+        if [ "$need_openssl" -eq 1 ]; then
+            printf '%s\n' '  brew install openssl@3' \
+                '  export PATH="$(brew --prefix openssl@3)/bin:$PATH"' \
+                '  Keep that PATH entry in your shell configuration; LibreSSL is not supported.' >&2
+        fi
     elif have apt-get; then
         printf '\n  sudo apt-get update\n  sudo apt-get install -y%s\n\n' "$apt_pkgs" >&2
     else
