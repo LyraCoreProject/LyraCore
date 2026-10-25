@@ -4061,7 +4061,7 @@ fn run_full_world_catalogues(dump: &str, args: &Args) -> Result<()> {
             .dbc
             .as_deref()
             .context("a complete world import requires --dbc <client Data directory>")?;
-        dbc::run_from_dump(data_dir, args, dump)?;
+        dbc::run_from_dump(data_dir, dump, args.apply, &args.shard)?;
         spell::run_spells(data_dir, args)?;
     }
     Ok(())
@@ -4071,7 +4071,7 @@ fn main() -> Result<()> {
     let args = parse_args()?;
 
     if let Some(dir) = args.pack_client.clone() {
-        return pack_client::run(&dir, &args);
+        return pack_client::run(&dir, args.apply);
     }
 
     if let Some(dir) = args.pack_out.clone() {
@@ -4098,8 +4098,8 @@ fn main() -> Result<()> {
         return vmap::run_coverage(&args, generation_id);
     }
 
-    if args.go_models.is_some() {
-        return go_model::run(&args);
+    if let Some(dir) = &args.go_models {
+        return go_model::run(dir, args.dump.as_deref(), args.apply, &args.shard);
     }
 
     if args.dump.is_none() {
@@ -4108,7 +4108,7 @@ fn main() -> Result<()> {
             .clone()
             .expect("parse_args guarantees --dump or --dbc");
         if args.talents {
-            return talent::run_talents(&dir, &args);
+            return talent::run_talents(&dir, args.apply, &args.shard);
         }
         if let Some(path) = args.spell_snapshot.clone() {
             return spell::run_spell_snapshot(&dir, &path);
@@ -4116,7 +4116,7 @@ fn main() -> Result<()> {
         if args.spells {
             return spell::run_spells(&dir, &args);
         }
-        return dbc::run(&dir, &args);
+        return dbc::run(&dir, args.taxi_mounts.as_deref(), args.apply, &args.shard);
     }
 
     let dump_path = args
@@ -6706,13 +6706,6 @@ mod tests {
             "world.sql"
         ])
         .is_err());
-    }
-
-    #[test]
-    fn standalone_dbc_requires_mount_templates_before_opening_inputs() {
-        let args = parse_args_from(["--dbc", "/nonexistent/client/Data"]).unwrap();
-        let error = dbc::run("/nonexistent/client/Data", &args).unwrap_err();
-        assert!(error.to_string().contains("--taxi-mounts"));
     }
 
     fn test_args() -> Args {

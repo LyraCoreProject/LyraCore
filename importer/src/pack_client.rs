@@ -9,7 +9,6 @@ use wow_dbc::DbcTable;
 use wow_mpq::{compression::flags, ArchiveBuilder, FormatVersion, PatchChain};
 
 use crate::ui_transform::{self, Edit};
-use crate::Args;
 
 const PATCH_MPQ: &str = "patch-3.MPQ";
 const SRC: &str = "client-patch";
@@ -242,10 +241,10 @@ fn compose_ui_transforms(data: &Path, groups: &[(&str, Vec<&Edit>)]) -> Result<V
     Ok(packed)
 }
 
-pub fn run(data_dir: &str, args: &Args) -> Result<()> {
+pub fn run(data_dir: &str, apply: bool) -> Result<()> {
     pack_client(
         Path::new(data_dir),
-        args.apply,
+        apply,
         Path::new(SRC),
         Path::new("packages"),
     )

@@ -89,11 +89,14 @@ fn door_templates(dump: &str) -> Vec<DoorTemplate> {
 
 const BATCH_BYTES: usize = 28_000;
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let data_dir = Path::new(args.go_models.as_ref().expect("caller checked"));
-    let dump_path = args
-        .dump
-        .as_ref()
+pub(crate) fn run(
+    data_dir: &str,
+    dump_path: Option<&str>,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
+    let data_dir = Path::new(data_dir);
+    let dump_path = dump_path
         .context("--go-models needs --dump too (gameobject_template is the template source)")?;
     let dump = crate::dump::read_dump(dump_path)?;
     let templates = door_templates(&dump);
@@ -155,7 +158,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         templates.len()
     );
 
-    if !args.apply {
+    if !apply {
         println!(
             "-- DRY RUN: would import {} game_go_model row(s)",
             rows.len()
@@ -186,7 +189,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         } else {
             "import_go_models_append"
         };
-        args.shard.call_reducer(reducer, batch)?;
+        shard.call_reducer(reducer, batch)?;
     }
     println!(
         "go-models: applied {} row(s) across {} batch(es).",

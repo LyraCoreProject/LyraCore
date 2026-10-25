@@ -30,7 +30,7 @@ use wow_mpq::PatchChain;
 use wow_world_base::vanilla::LockType;
 
 use crate::dump::{push_insert, sql_text};
-use crate::Args;
+use crate::shard::Shard;
 
 pub(crate) fn open_chain(data_dir: &Path) -> Result<PatchChain> {
     let mut chain = PatchChain::new();
@@ -116,17 +116,22 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
     })
 }
 
-pub fn run(data_dir: &str, args: &Args) -> Result<()> {
-    let mount_dump = crate::dump::read_dump(args.taxi_mounts.as_deref().context(
+pub fn run(data_dir: &str, taxi_mounts: Option<&str>, apply: bool, shard: &Shard) -> Result<()> {
+    let mount_dump = crate::dump::read_dump(taxi_mounts.context(
         "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays and transports",
     )?)?;
-    run_from_dump(data_dir, args, &mount_dump)
+    run_from_dump(data_dir, &mount_dump, apply, shard)
 }
 
-pub(crate) fn run_from_dump(data_dir: &str, args: &Args, mount_dump: &str) -> Result<()> {
+pub(crate) fn run_from_dump(
+    data_dir: &str,
+    mount_dump: &str,
+    apply: bool,
+    shard: &Shard,
+) -> Result<()> {
     let statements = catalogue_statements(data_dir, mount_dump)?;
-    if args.apply {
-        args.shard.run_sql_statements(&statements, "dbc")?;
+    if apply {
+        shard.run_sql_statements(&statements, "dbc")?;
         eprintln!(
             "dbc: loaded client catalogues ({} SQL statements)",
             statements.len()
@@ -2505,5 +2510,15 @@ mod tests {
         }
         crate::assert_profession_tier_parity(&map)
             .expect("fixture data must satisfy the parity guard");
+    }
+
+    #[test]
+    fn standalone_dbc_requires_mount_templates_before_opening_inputs() {
+        let shard = Shard {
+            server: "local".into(),
+            db: "lyracore".into(),
+        };
+        let error = run("/nonexistent/client/Data", None, false, &shard).unwrap_err();
+        assert!(error.to_string().contains("--taxi-mounts"));
     }
 }
