@@ -351,6 +351,7 @@ pub(crate) struct Pursuit {
     pub victim_movement_flags: u32,
     pub victim_is_player: bool,
     pub last_move_ms: u32,
+    pub leg_ends_ms: u32,
     pub routing: bool,
     pub leg: Option<LegInFlight>,
 }
@@ -548,6 +549,11 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
     for leg in w.legs_in_flight(&tick.scope) {
         if leg.mover_gone {
             w.drop_leg(leg.guid);
+            continue;
+        }
+        if leg.start == leg.dest && leg.waypoints.is_empty() {
+            w.drop_leg(leg.guid);
+            visited += 1;
             continue;
         }
         let (at, arrived) = leg.rendered_at(tick.now_micros);
@@ -1052,7 +1058,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            if !backing_off(&c) && !back_off(w, tick, &c, gap_sq) {
+            if !backing_off(&c, tick.now_ms) && !back_off(w, tick, &c, gap_sq) {
                 stand_and_face(w, tick, &c);
             }
             continue;
@@ -1134,19 +1140,16 @@ fn back_off<W: IdleSink>(w: &mut W, tick: &TickContext, c: &Pursuit, gap_sq: f32
             z_fallback: c.at.z,
             dur_ms,
             gait: Gait::Walk,
-            hold_until_landed: false,
+            hold_until_landed: true,
         },
         tick.now_ms,
     );
     true
 }
 
-// A leg that starts inside the victim and moves away from it is a back-off in flight.
-fn backing_off(c: &Pursuit) -> bool {
-    c.leg.as_ref().is_some_and(|leg| {
-        dist_sq(leg.start, c.victim_at) < OVERLAP_YD * OVERLAP_YD
-            && dist_sq(leg.dest, c.victim_at) > dist_sq(c.at, c.victim_at)
-    })
+// Chase legs are not held, so a held leg in flight during a chase is a back-off.
+fn backing_off(c: &Pursuit, now_ms: u32) -> bool {
+    c.leg.is_some() && leg_in_flight(now_ms, c.leg_ends_ms)
 }
 
 fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {

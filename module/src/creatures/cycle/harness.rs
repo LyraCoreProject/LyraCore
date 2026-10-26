@@ -2462,9 +2462,14 @@ impl IdleSink for Scenario {
         let mut creatures = self.creatures.borrow_mut();
         let c = creatures.get_mut(&guid).unwrap();
         c.last_move_ms = now_ms;
-        if leg.hold_until_landed {
-            c.leg_ends_ms = now_ms + leg.dur_ms;
+        if (dest.x, dest.y) != (from.at.x, from.at.y) {
+            c.orientation = (dest.y - from.at.y).atan2(dest.x - from.at.x);
         }
+        c.leg_ends_ms = if leg.hold_until_landed {
+            now_ms + leg.dur_ms
+        } else {
+            0
+        };
     }
 }
 
@@ -2822,6 +2827,7 @@ impl PursuitSink for Scenario {
                     victim_movement_flags,
                     victim_is_player: self.players.borrow().iter().any(|p| p.guid == f.victim),
                     last_move_ms: c.last_move_ms,
+                    leg_ends_ms: c.leg_ends_ms,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
@@ -4431,6 +4437,62 @@ fn a_creature_that_moved_within_two_seconds_holds_its_ground() {
         w.effects().iter().all(|e| e.facing),
         "a mob steps back only after standing still for 2 s, or it shuffles every time the player \
          brushes it"
+    );
+}
+
+#[test]
+fn a_creature_that_walked_back_out_of_a_player_turns_to_face_them_again() {
+    let mut w = wolf_with_a_player_inside_it();
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].facing_angle == 0.0,
+        "the client walks the mob back facing away from the player; once it lands it must turn \
+         back to them: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_only_turned_still_walks_back_out_of_a_player() {
+    let mut w = wolf_with_a_player_inside_it()
+        .facing(WOLF, std::f32::consts::PI)
+        .tweak(WOLF, |c| c.last_move_ms = (SETTLED / 1000) as u32 - 1_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.advance_clock(1_500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[0].facing && !effects[1].facing && effects[1].dur_ms > 0,
+        "turning in place is standing still; a turn must not restart the 2 s wait: {effects:?}"
+    );
+}
+
+#[test]
+fn a_pulled_wanderer_stops_its_chase_leg_when_the_player_reappears_beside_it() {
+    let mut w = wolf_fighting(p(20.3, 0.0, 10.0))
+        .kiting(HUNTER, p(20.3, 0.0, 10.0))
+        .mid_leg(WOLF, (SETTLED / 1000) as u32 + 10_000)
+        .attacking(WOLF, HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.advance_clock(500_000);
+    w = w.kiting(HUNTER, p(0.3, 0.0, 10.0)).stopped(HUNTER);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "a chase leg running away from a player who blinked back is no back-off, even when the \
+         wander leg it replaced was held: {effects:?}"
     );
 }
 

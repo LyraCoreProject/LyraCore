@@ -452,10 +452,16 @@ pub(crate) fn emit_creature_leg(
         (e.grid_x, e.grid_y),
         None,
     );
-    e.last_move_ms = now_ms;
-    if set_leg_ends {
-        e.leg_ends_ms = now_ms + duration_ms;
+    // A normal spline leaves the client facing along the leg.
+    if to != (e.x, e.y) {
+        e.orientation = (to.1 - e.y).atan2(to.0 - e.x);
     }
+    e.last_move_ms = now_ms;
+    e.leg_ends_ms = if set_leg_ends {
+        now_ms + duration_ms
+    } else {
+        0
+    };
     e.update(ctx);
 }
 
