@@ -1836,6 +1836,13 @@ def check_transport_crossings(host):
         assert creates(lander.collect(), transport)
         assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
 
+        until(lambda: crossing_map() == 0, 30)
+        assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
+        sailor.send(0xdc)
+        stranded = sailor.collect(auto_ack=False)
+        assert (0x3f, struct.pack('<III', 0, entry, 1)) in stranded
+        assert (0x3e, struct.pack('<Iffff', 0, 2, 1, 0, 0)) in stranded
+
         sailor.send(0xdc)
         arrived = sailor.collect()
         assert creates(arrived, transport)[0] < creates(arrived, sailor.guid)[0]
@@ -1845,14 +1852,20 @@ def check_transport_crossings(host):
         flags, _, _, _, _, _, carried_by, *carried_at = struct.unpack_from('<IIffffQffff', own, offset + 2)
         assert flags & 0x02000000 and carried_by == transport and carried_at == [2, 1, 0, 0]
         assert len(creates(arrived, transport)) == 1
-        until(lambda: host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {sailor.guid}') == [[1]], 3)
-        until(lambda: 7070 <= host.rows(f'SELECT x FROM game_world_entity WHERE guid = {sailor.guid}')[0][0] <= 7170, 3)
+        until(lambda: host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {sailor.guid}') == [[0]], 3)
+        until(lambda: 6950 <= host.rows(f'SELECT x FROM game_world_entity WHERE guid = {sailor.guid}')[0][0] <= 7070, 3)
         assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
         assert not host.rows(f'SELECT guid FROM game_movement_violation WHERE guid = {sailor.guid}')
 
-        sailor.send(0x4b)
+        x, y = host.rows(f'SELECT x, y FROM game_world_entity WHERE guid = {sailor.guid}')[0]
+        sailor.send(0xee, struct.pack('<IIffffI', 0, 20000, x, y, 0, 0, 0))
         sailor.collect()
         assert not host.rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {sailor.guid}')
+
+        docker.collect()
+        host.sql(f'DELETE FROM game_transport WHERE entry = {entry}')
+        until(lambda: crossing_map() is None, 30)
+        assert (0xaa, struct.pack('<Q', transport)) in docker.collect()
     finally:
         host.sql(f'DELETE FROM game_transport WHERE entry = {entry}')
         host.sql(f'DELETE FROM game_taxi_path_node WHERE path_id = {path}')

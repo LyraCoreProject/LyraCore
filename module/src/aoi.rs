@@ -281,14 +281,23 @@ fn replace_subject(ctx: &ReducerContext, layer: u8, entity_guid: u64, mut wanted
     }
 }
 
-/// Every viewer in the open world of `map_id` holds the Transport's Grant.
-pub(crate) fn transport_moved(ctx: &ReducerContext, transport_guid: u64, map_id: u32) {
-    let wanted = ctx
-        .db
-        .game_aoi_viewer()
+/// Every viewer in the open world of `map_id`, and each of `aboard`, holds the Transport's Grant.
+pub(crate) fn transport_moved(
+    ctx: &ReducerContext,
+    transport_guid: u64,
+    map_id: u32,
+    aboard: impl IntoIterator<Item = u64>,
+) {
+    let viewers = ctx.db.game_aoi_viewer();
+    let wanted = viewers
         .iter()
         .filter(|viewer| viewer.map_id == map_id && viewer.instance_id == 0)
         .map(|viewer| viewer.guid)
+        .chain(
+            aboard
+                .into_iter()
+                .filter(|guid| viewers.guid().find(guid).is_some()),
+        )
         .collect();
     replace_subject(ctx, TRANSPORT, transport_guid, wanted);
 }

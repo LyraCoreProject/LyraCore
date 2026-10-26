@@ -16,8 +16,7 @@ const MAX_OFFSET_XY: f32 = 50.0;
 const MAX_OFFSET_Z: f32 = 100.0;
 const BOARDING_REACH_YD: f32 = 30.0;
 
-/// One imported MO_TRANSPORT route. `period_ms` is the client's cycle from the world database;
-/// `map_id` is the map of its first path node.
+/// One imported MO_TRANSPORT route; docs/schema.md defines `period_ms` and `map_id`.
 #[table(
     accessor = game_transport,
     public,
@@ -37,6 +36,7 @@ pub struct Transport {
     pub map_id: u32,
 }
 
+#[derive(Clone)]
 #[table(
     accessor = game_transport_passenger,
     index(accessor = by_transport, btree(columns = [transport_entry]))
@@ -156,7 +156,7 @@ pub(crate) fn arm_crossings(ctx: &ReducerContext) {
         if let Some(crossing) = next_crossing(ctx, &transport, &timetable) {
             let map_id = crossing.map_id;
             ctx.db.game_transport_crossing().insert(crossing);
-            crate::aoi::transport_moved(ctx, guid(transport.entry), map_id);
+            crate::aoi::transport_moved(ctx, guid(transport.entry), map_id, []);
         }
     }
 }
@@ -195,6 +195,7 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
     // Fired rows remain until reducer return; delete before inserting the next unique entry.
     crossings.transport_entry().delete(fired.transport_entry);
     let Some(transport) = ctx.db.game_transport().entry().find(fired.transport_entry) else {
+        crate::aoi::remove_subject(ctx, crate::aoi::TRANSPORT, guid(fired.transport_entry));
         return;
     };
     let timetable = timetable(ctx, &transport);
@@ -217,30 +218,43 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
         .by_transport()
         .filter(transport.entry)
         .collect();
+    // Destination observers need the Transport before a sessionless Passenger's CREATE names it.
+    crate::aoi::transport_moved(
+        ctx,
+        guid(transport.entry),
+        map_id,
+        passengers.iter().map(|passenger| passenger.character_guid),
+    );
     for passenger in passengers {
-        let on_departed_map = ctx
+        let entity = ctx
             .db
             .game_world_entity()
             .guid()
-            .find(passenger.character_guid)
-            .is_some_and(|entity| entity.map_id == fired.map_id && entity.instance_id == 0);
-        match pose.filter(|_| on_departed_map) {
-            Some(pose) => {
-                let [x, y, z, orientation] = pose.carry(offset(&passenger));
-                crate::world::teleport_aboard(
-                    ctx,
-                    map_id,
-                    [x, y, z, orientation],
-                    Aboard {
-                        passenger,
-                        from_map_id: fired.map_id,
-                    },
-                );
+            .find(passenger.character_guid);
+        match (entity, pose) {
+            (Some(entity), Some(pose))
+                if entity.map_id == fired.map_id && entity.instance_id == 0 =>
+            {
+                carry_across(ctx, passenger, fired.map_id, pose);
             }
-            None => leave(ctx, passenger.character_guid),
+            // World entry carries a Passenger still loading the previous map on to this one.
+            (None, _) if crate::native::is_world_porting(ctx, passenger.character_guid) => {}
+            _ => leave(ctx, passenger.character_guid),
         }
     }
-    crate::aoi::transport_moved(ctx, guid(transport.entry), map_id);
+}
+
+fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id: u32, pose: Pose) {
+    let world = pose.carry(offset(&passenger));
+    crate::world::teleport_aboard(
+        ctx,
+        pose.map_id,
+        world,
+        Aboard {
+            passenger,
+            from_map_id,
+        },
+    );
 }
 
 pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
@@ -300,11 +314,14 @@ pub(crate) fn passenger_moved(
     previous_flags: u32,
     transport: Option<&TransportInfo>,
 ) -> Boarding {
-    if !mover.is_player() || (previous_flags | mover.movement_flags) & ON_TRANSPORT == 0 {
+    if !mover.is_player() {
         return Boarding::Ashore;
     }
     let passengers = ctx.db.game_transport_passenger();
     let aboard = passengers.character_guid().find(mover.guid);
+    if aboard.is_none() && (previous_flags | mover.movement_flags) & ON_TRANSPORT == 0 {
+        return Boarding::Ashore;
+    }
     let boarded = match claim(mover, transport) {
         Claim::Refused => return Boarding::Refused,
         Claim::Ground => None,
@@ -398,6 +415,33 @@ pub(crate) fn leave(ctx: &ReducerContext, character_guid: u64) {
         .game_transport_passenger()
         .character_guid()
         .delete(character_guid);
+}
+
+/// Carries a Passenger whose world port ended on a map its Transport has since left.
+pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
+    let Some(passenger) = passenger(ctx, character_guid) else {
+        return;
+    };
+    let entity = ctx.db.game_world_entity().guid().find(character_guid);
+    let transport = ctx
+        .db
+        .game_transport()
+        .entry()
+        .find(passenger.transport_entry);
+    let target = transport.as_ref().and_then(|transport| {
+        Some((
+            current_map(ctx, transport),
+            pose(ctx, transport, now_ms(ctx))?,
+        ))
+    });
+    match (entity, target) {
+        (Some(entity), Some((map_id, pose)))
+            if entity.instance_id == 0 && entity.map_id != map_id && pose.map_id == map_id =>
+        {
+            carry_across(ctx, passenger, entity.map_id, pose);
+        }
+        _ => leave(ctx, character_guid),
+    }
 }
 
 /// Restores the attachment a map crossing's teleport ended.

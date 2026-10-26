@@ -225,8 +225,7 @@ pub struct TransportCrossing {
     pub from_map_id: u32,
 }
 
-/// Queue TRANSFER_PENDING and NEW_WORLD together to keep loading and arrival ordered. With a
-/// Transport, the pose is the Passenger's offset on it.
+/// Queue TRANSFER_PENDING and NEW_WORLD together; with a Transport the pose is the offset on it.
 pub fn build_cross_map_teleport(
     map_id: u32,
     x: f32,

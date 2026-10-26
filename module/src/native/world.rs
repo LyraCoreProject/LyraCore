@@ -141,16 +141,17 @@ pub(super) fn enter_character(
     crate::aoi::enter_viewer(ctx, guid)?;
     let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
     grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
-    match super::transport::passenger_movement(ctx, &live) {
-        Some(movement) => {
-            // A Passenger's self CREATE names its Transport, so the client must already have it.
-            let carrier = crate::transport::passenger(ctx, guid)
-                .map(|passenger| crate::transport::guid(passenger.transport_entry));
-            if let Some(index) = grants.iter().position(|grant| {
-                grant.layer == crate::aoi::TRANSPORT && Some(grant.entity_guid) == carrier
-            }) {
-                super::visibility::create(ctx, connection.connection_id, &grants.remove(index))?;
-            }
+    // A Passenger's self CREATE names its Transport, so the client must already have it.
+    let carrier = crate::transport::passenger(ctx, guid).and_then(|passenger| {
+        let carrier = crate::transport::guid(passenger.transport_entry);
+        grants
+            .iter()
+            .position(|grant| grant.layer == crate::aoi::TRANSPORT && grant.entity_guid == carrier)
+    });
+    let movement = carrier.and_then(|_| super::transport::passenger_movement(ctx, &live));
+    match (carrier, movement) {
+        (Some(index), Some(movement)) => {
+            super::visibility::create(ctx, connection.connection_id, &grants.remove(index))?;
             let body = codec::create_with_movement(&self_create, &movement)
                 .map_err(|error| error.to_string())?;
             super::send_raw(
@@ -161,7 +162,7 @@ pub(super) fn enter_character(
                 false,
             );
         }
-        None => super::send(
+        _ => super::send(
             ctx,
             connection.connection_id,
             ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(self_create)),
@@ -204,6 +205,9 @@ pub(super) fn enter_character(
     });
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant)?;
+    }
+    if carrier.is_none() {
+        crate::transport::rejoin(ctx, guid);
     }
     super::economy::replay_buyback(ctx, connection.connection_id, guid)?;
     super::progression::replay_exploration(ctx, connection.connection_id, guid);

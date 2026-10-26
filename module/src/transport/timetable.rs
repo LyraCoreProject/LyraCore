@@ -251,8 +251,7 @@ impl Timetable {
         }
     }
 
-    /// The wait until the Transport next appears on another map, and that map; `None` when the
-    /// route stays on one map.
+    /// The wait until the next map change and its map; `None` for a single-map route.
     pub(crate) fn next_map_change(&self, cycle_ms: u32) -> Option<(u32, u32)> {
         let cycle_ms = cycle_ms % self.period_ms;
         let count = self.frames.len();

@@ -34,7 +34,8 @@ packets can use it. Logout clears every delivery permission of the connection be
 Character selection. The Host applies these instructions in order. A failed output subscription
 closes its native clients, because the Host cannot continue from a missed instruction.
 
-World entry registers the Character as an AOI viewer after self CREATE and before grant replay.
+World entry registers the Character as an AOI viewer before self CREATE and replays its grants
+after it. A Passenger's Transport is the one grant replayed before self CREATE.
 Sessionless Characters stay AOI subjects but allocate no viewer Grants, so Companion populations
 create no delivery subscriptions for Characters without native connections.
 

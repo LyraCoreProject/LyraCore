@@ -501,6 +501,9 @@ fn teleport(
         if let Some(zone) = destination_zone {
             e.zone_id = zone;
         }
+        if let Some(aboard) = &aboard {
+            crate::transport::reboard(ctx, aboard.passenger.clone());
+        }
         e.update(ctx);
     }
 
@@ -562,7 +565,7 @@ fn teleport(
         cross_map,
     });
     crate::native::teleport_changed(ctx, &event, teleport_counter, aboard.as_ref());
-    if let Some(aboard) = aboard {
+    if let Some(aboard) = aboard.filter(|_| cross_map && !sessionless) {
         crate::transport::reboard(ctx, aboard.passenger);
     }
 

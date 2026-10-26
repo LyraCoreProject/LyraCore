@@ -104,11 +104,12 @@ successful rerun removes stale geometry.
 ### Transports (`module/src/transport/mod.rs`)
 
 `game_transport` is a public catalogue with one row per imported route. A Transport's position is
-a function of the Realm Clock and its timetable, so no row stores it. `map_id` is the map of the
-route's first node. `game_transport_crossing` is private and holds the current map of each route
+a function of the Realm Clock and its timetable, so no row stores it. `period_ms` is the client's
+cycle from the world database, and `map_id` is the map of the route's first node. `game_transport_crossing` is private and holds the current map of each route
 that crosses maps. Its one-shot schedule fires at the next map change and arms the one after it.
 `game_transport_passenger` is private and holds one row per Passenger with its offset on the
-Transport. Leaving the Transport, a teleport or leaving the world deletes the row.
+Transport. Leaving the Transport, a teleport other than its Transport's map crossing, or leaving
+the world deletes the row.
 `game_transport_carry_schedule` has one 500 ms schedule per Transport with Passengers; it deletes
 itself when none remain.
 
