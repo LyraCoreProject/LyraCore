@@ -169,6 +169,14 @@ impl Row {
         }
     }
 
+    pub(crate) fn optional_text(&self, column: &str) -> Result<Option<&str>> {
+        match self.cell(column)? {
+            StoredCell::Null => Ok(None),
+            StoredCell::Text(value) => Ok(Some(self.value(value))),
+            _ => bail!("{}.{}: expected text or NULL", self.columns.table, column),
+        }
+    }
+
     pub(crate) fn raw(&self, column: &str) -> Result<&str> {
         Ok(match self.cell(column)? {
             StoredCell::Null => "NULL",
