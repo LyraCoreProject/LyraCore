@@ -1894,7 +1894,7 @@ def check_areatriggers(host):
         for opcode, body in packets:
             if opcode == 0x286:
                 timer, reason = struct.unpack('<II', body)
-                assert reason == 1
+                assert reason == (timer > 0)
                 result.append(timer)
         return result
 

@@ -1,4 +1,4 @@
-use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
+use lyracore_protocol::codec;
 use spacetimedb::{ReducerContext, ScheduleAt};
 
 use super::game_native_player;
@@ -19,17 +19,8 @@ pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&Inst
     let timer = row.map_or(0, |row| {
         remaining_ms(row.scheduled_at, ctx.timestamp.to_micros_since_unix_epoch())
     });
-    let packet = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_RAID_GROUP_ONLY(
-        codec::build_raid_group_only(timer),
-    ))
-    .expect("Instance countdown fits a world frame");
-    super::send_raw(
-        ctx,
-        connection.connection_id,
-        packet.opcode,
-        packet.body,
-        false,
-    );
+    let (opcode, body) = codec::build_raid_group_only(timer);
+    super::send_raw(ctx, connection.connection_id, opcode, body, false);
 }
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64) {

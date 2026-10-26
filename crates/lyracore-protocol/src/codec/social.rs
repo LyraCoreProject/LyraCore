@@ -917,13 +917,13 @@ pub fn build_minimap_ping(pinger_guid: u64, x: f32, y: f32) -> MSG_MINIMAP_PING_
     }
 }
 
-use wow_world_messages::vanilla::{RaidGroupError, SMSG_RAID_GROUP_ONLY};
-
-pub fn build_raid_group_only(timer_ms: u32) -> SMSG_RAID_GROUP_ONLY {
-    SMSG_RAID_GROUP_ONLY {
-        homebind_timer: timer_ms,
-        error: RaidGroupError::Required,
-    }
+/// A zero timer cancels with error 0, which the typed enum lacks; error 1 prints the raid-only text.
+pub fn build_raid_group_only(timer_ms: u32) -> (u16, Vec<u8>) {
+    let error = u32::from(timer_ms > 0);
+    (
+        0x0286,
+        [timer_ms.to_le_bytes(), error.to_le_bytes()].concat(),
+    )
 }
 
 #[cfg(test)]
@@ -1178,26 +1178,15 @@ mod party_tests {
 
     #[test]
     fn the_raid_group_only_packet_is_the_countdown_then_the_error() {
-        use wow_world_messages::vanilla::ServerMessage;
         for (timer_ms, expected) in [
-            (
-                60_000,
-                [
-                    0x00, 0x0A, 0x86, 0x02, 0x60, 0xEA, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-                ],
-            ),
-            (
-                0,
-                [
-                    0x00, 0x0A, 0x86, 0x02, 0x00, 0x00, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00,
-                ],
-            ),
+            (60_000, [0x60, 0xEA, 0x00, 0x00, 0x01, 0x00, 0x00, 0x00]),
+            (0, [0x00; 8]),
         ] {
-            let mut framed = Vec::new();
-            build_raid_group_only(timer_ms)
-                .write_unencrypted_server(&mut framed)
-                .unwrap();
-            assert_eq!(framed, expected, "timer {timer_ms}");
+            assert_eq!(
+                build_raid_group_only(timer_ms),
+                (0x0286, expected.to_vec()),
+                "timer {timer_ms}"
+            );
         }
     }
 
