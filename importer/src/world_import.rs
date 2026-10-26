@@ -194,7 +194,7 @@ fn normalize_item_mask(source: &str, unrestricted: u32) -> u32 {
     }
 }
 // ClassicDB z2815 uses subclass zero for both food and drink.
-fn is_drink_consumable(class: u8, subclass: u8, name: &str) -> bool {
+pub(crate) fn is_drink_consumable(class: u8, subclass: u8, name: &str) -> bool {
     if class != 0 || (subclass != 0 && subclass != 5) {
         return false;
     }
@@ -1038,11 +1038,11 @@ type ReferenceLoot = std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>;
 fn parse_ref_pools(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<ReferenceLoot> {
     let mut refs: ReferenceLoot = std::collections::HashMap::new();
     for row in parse_table(dump, "reference_loot_template")?.iter() {
-        let g: u64 = field(row, clt::ENTRY)?.parse().unwrap_or(0);
-        let item: u64 = field(row, clt::ITEM)?.parse().unwrap_or(0);
-        let chance: f64 = field(row, clt::CHANCE)?.parse().unwrap_or(0.0);
-        let mincount_or_ref: i64 = field(row, clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
-        let cnt: u32 = field(row, clt::MAXCOUNT)?.parse().unwrap_or(1);
+        let g: u64 = row.numeric_text(clt::ENTRY)?.parse().unwrap_or(0);
+        let item: u64 = row.numeric_text(clt::ITEM)?.parse().unwrap_or(0);
+        let chance: f64 = row.numeric_text(clt::CHANCE)?.parse().unwrap_or(0.0);
+        let mincount_or_ref: i64 = row.numeric_text(clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
+        let cnt: u32 = row.numeric_text(clt::MAXCOUNT)?.parse().unwrap_or(1);
         refs.entry(g)
             .or_default()
             .push((item, chance, mincount_or_ref, cnt));
@@ -1097,12 +1097,12 @@ fn parse_loot_family(
     let bp = |pct: f64| (pct * 100.0).round() as i64;
     let mut drops_by_entry: HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> = HashMap::new();
     for row in parse_table(dump, table)?.iter() {
-        let entry: u64 = field(row, clt::ENTRY)?.parse().unwrap_or(0);
-        let item: u64 = field(row, clt::ITEM)?.parse().unwrap_or(0);
-        let raw_chance: f64 = field(row, clt::CHANCE)?.parse().unwrap_or(0.0);
-        let groupid: u32 = field(row, clt::GROUPID)?.parse().unwrap_or(0);
-        let ref_or_min: i64 = field(row, clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
-        let maxcount: u32 = field(row, clt::MAXCOUNT)?.parse().unwrap_or(1);
+        let entry: u64 = row.numeric_text(clt::ENTRY)?.parse().unwrap_or(0);
+        let item: u64 = row.numeric_text(clt::ITEM)?.parse().unwrap_or(0);
+        let raw_chance: f64 = row.numeric_text(clt::CHANCE)?.parse().unwrap_or(0.0);
+        let groupid: u32 = row.numeric_text(clt::GROUPID)?.parse().unwrap_or(0);
+        let ref_or_min: i64 = row.numeric_text(clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
+        let maxcount: u32 = row.numeric_text(clt::MAXCOUNT)?.parse().unwrap_or(1);
         let quest_only = raw_chance < 0.0;
         let chance = raw_chance.abs();
         if chance == 0.0 {
@@ -1124,7 +1124,7 @@ fn parse_loot_family(
                 .map(|(_, c, _)| (gate_bp as f64 * c / 100.0).round() as i64)
                 .sum();
             let n_zero = items.iter().filter(|(_, c, _)| *c <= 0.0).count().max(1) as i64;
-            let leftover = (gate_bp as i64 - sum_explicit).max(0);
+            let leftover = (gate_bp - sum_explicit).max(0);
 
             let group_id = 1_000_000 + drops.len() as u32;
             for &(ritem, rchance, rcount) in &items {
@@ -1584,6 +1584,47 @@ fn build_quests(
     })
 }
 
+pub(crate) fn vmangos_drink_spells(
+    dump: &(impl TableRows + ?Sized),
+) -> Result<std::collections::HashSet<u32>> {
+    let mut drinks = std::collections::HashSet::new();
+    let columns = [
+        "entry",
+        "effect1",
+        "effect2",
+        "effect3",
+        "effectApplyAuraName1",
+        "effectApplyAuraName2",
+        "effectApplyAuraName3",
+        "effectMiscValue1",
+        "effectMiscValue2",
+        "effectMiscValue3",
+    ];
+    for row in dump.columns("spell_template", &columns)?.iter() {
+        for effect in 1..=3 {
+            if row.number::<u32>(&format!("effect{effect}"))?
+                == wow_world_base::vanilla::SpellEffect::ApplyAura.as_int()
+                && row.number::<u32>(&format!("effectApplyAuraName{effect}"))?
+                    == wow_world_base::vanilla::AuraMod::ModPowerRegen as u32
+                && row.number::<i32>(&format!("effectMiscValue{effect}"))? == 0
+            {
+                drinks.insert(row.number("entry")?);
+            }
+        }
+    }
+    Ok(drinks)
+}
+
+fn forbidden_items(dump: &(impl TableRows + ?Sized)) -> Result<std::collections::HashSet<u64>> {
+    if dump.kind() == SourceKind::ClassicDb {
+        return Ok(Default::default());
+    }
+    dump.rows("forbidden_items")?
+        .iter()
+        .map(|row| row.number("entry"))
+        .collect()
+}
+
 #[allow(clippy::too_many_lines)]
 fn build_items_and_loot(
     dump: &(impl crate::dump::TableRows + ?Sized),
@@ -1595,6 +1636,7 @@ fn build_items_and_loot(
     use std::collections::HashSet;
 
     let drops_by_lootid = parse_creature_drops(dump)?;
+    let forbidden = forbidden_items(dump)?;
 
     let mut loot_rows: Vec<String> = Vec::new();
     let mut item_ids: HashSet<u64> = [25, 50, 51, 52].into_iter().collect();
@@ -1608,6 +1650,9 @@ fn build_items_and_loot(
             continue;
         };
         for &(item, chance_bp, count, group_id, quest_only) in drops {
+            if forbidden.contains(&item) {
+                continue;
+            }
             item_ids.insert(item);
             loot_rows.push(format!(
                 "({loot_id},{creature_entry},{item},{chance_bp},{count},{group_id},{quest_only})"
@@ -1620,16 +1665,16 @@ fn build_items_and_loot(
     let mut vendor_id: u64 = 1;
     let mut nv_seen: HashSet<(u64, u64)> = HashSet::new();
     for row in parse_table(dump, "npc_vendor")?.iter() {
-        let entry: u64 = field(row, nv::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.numeric_text(nv::ENTRY)?.parse().unwrap_or(0);
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let item: u64 = field(row, nv::ITEM)?.parse().unwrap_or(0);
-        if item == 0 || !nv_seen.insert((entry, item)) {
+        let item: u64 = row.numeric_text(nv::ITEM)?.parse().unwrap_or(0);
+        if item == 0 || forbidden.contains(&item) || !nv_seen.insert((entry, item)) {
             continue;
         }
-        let slot: u32 = field(row, nv::SLOT)?.parse().unwrap_or(0);
-        let max_count: u32 = field(row, nv::MAXCOUNT)?.parse().unwrap_or(0);
+        let slot: u32 = row.numeric_text(nv::SLOT)?.parse().unwrap_or(0);
+        let max_count: u32 = row.numeric_text(nv::MAXCOUNT)?.parse().unwrap_or(0);
         item_ids.insert(item);
         vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
         vendor_id += 1;
@@ -1637,24 +1682,30 @@ fn build_items_and_loot(
 
     let mut tmpl_stock: HashMap<u64, Vec<(u64, u32, u32)>> = HashMap::new();
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
-        let t: u64 = field(row, "entry")?.parse().unwrap_or(0);
-        let item: u64 = field(row, "item")?.parse().unwrap_or(0);
-        let max_count: u32 = field(row, "maxcount")?.parse().unwrap_or(0);
-        let slot: u32 = field(row, "slot")?.parse().unwrap_or(0);
-        if t != 0 && item != 0 {
+        let t: u64 = row.numeric_text("entry")?.parse().unwrap_or(0);
+        let item: u64 = row.numeric_text("item")?.parse().unwrap_or(0);
+        let max_count: u32 = row.numeric_text("maxcount")?.parse().unwrap_or(0);
+        let slot: u32 = row.numeric_text("slot")?.parse().unwrap_or(0);
+        if t != 0 && item != 0 && !forbidden.contains(&item) {
             tmpl_stock
                 .entry(t)
                 .or_default()
                 .push((item, slot, max_count));
         }
     }
-    const CT_VENDOR_TEMPLATE_ID: &str = "VendorTemplateId";
-    for row in parse_table(dump, "creature_template")?.iter() {
-        let entry: u64 = field(row, ct::ENTRY)?.parse().unwrap_or(0);
+    let (creature_entry, vendor_id_column) = match dump.kind() {
+        SourceKind::ClassicDb => (ct::ENTRY, "VendorTemplateId"),
+        SourceKind::Vmangos => ("entry", "vendor_id"),
+    };
+    for row in dump
+        .columns("creature_template", &[creature_entry, vendor_id_column])?
+        .iter()
+    {
+        let entry: u64 = row.numeric_text(creature_entry)?.parse().unwrap_or(0);
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let vt: u64 = field(row, CT_VENDOR_TEMPLATE_ID)?.parse().unwrap_or(0);
+        let vt: u64 = row.numeric_text(vendor_id_column)?.parse().unwrap_or(0);
         let Some(stock) = tmpl_stock.get(&vt).filter(|_| vt != 0) else {
             continue;
         };
@@ -1668,24 +1719,26 @@ fn build_items_and_loot(
         }
     }
 
+    let drink_spells = if dump.kind() == SourceKind::Vmangos {
+        Some(vmangos_drink_spells(dump)?)
+    } else {
+        None
+    };
     let mut item_rows: Vec<String> = Vec::new();
     let mut emitted: HashSet<u64> = HashSet::new();
     let mut resist_nonzero_count: u64 = 0;
     let mut startquest_nonzero_count: u64 = 0;
     for row in parse_table(dump, "item_template")?.iter() {
-        let entry: u64 = field(row, it::ENTRY)?.parse().unwrap_or(0);
+        let read = |column: &str| it::read(row, dump.kind(), column);
+        let entry: u64 = read(it::ENTRY)?.parse().unwrap_or(0);
         if entry == 0 {
             continue;
         }
         emitted.insert(entry);
         let (mut s_str, mut s_agi, mut s_sta, mut s_int, mut s_spi) = (0i32, 0, 0, 0, 0);
         for i in 0..10 {
-            let st: u8 = field(row, &format!("stat_type{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let sv: i32 = field(row, &format!("stat_value{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
+            let st: u8 = read(&format!("stat_type{}", i + 1))?.parse().unwrap_or(0);
+            let sv: i32 = read(&format!("stat_value{}", i + 1))?.parse().unwrap_or(0);
             match st {
                 3 => s_agi += sv,
                 4 => s_str += sv,
@@ -1695,77 +1748,79 @@ fn build_items_and_loot(
                 _ => {}
             }
         }
-        let stack: u32 = field(row, it::STACKABLE)?
-            .parse::<u32>()
-            .unwrap_or(1)
-            .max(1);
-        let allowed_class =
-            normalize_item_mask(field(row, it::ALLOWED_CLASS)?, ALL_PLAYABLE_CLASS_MASK);
-        let allowed_race =
-            normalize_item_mask(field(row, it::ALLOWED_RACE)?, ALL_PLAYABLE_RACE_MASK);
-        let class_v: u8 = field(row, it::CLASS)?.parse().unwrap_or(0);
-        let subclass_v: u8 = field(row, it::SUBCLASS)?.parse().unwrap_or(0);
-        let is_drink = is_drink_consumable(class_v, subclass_v, field(row, it::NAME)?);
-        let holy: i32 = field(row, it::HOLY_RES)?.parse().unwrap_or(0);
-        let fire: i32 = field(row, it::FIRE_RES)?.parse().unwrap_or(0);
-        let nature: i32 = field(row, it::NATURE_RES)?.parse().unwrap_or(0);
-        let frost: i32 = field(row, it::FROST_RES)?.parse().unwrap_or(0);
-        let shadow: i32 = field(row, it::SHADOW_RES)?.parse().unwrap_or(0);
-        let arcane: i32 = field(row, it::ARCANE_RES)?.parse().unwrap_or(0);
+        let stack: u32 = read(it::STACKABLE)?.parse::<u32>().unwrap_or(1).max(1);
+        let allowed_class = normalize_item_mask(read(it::ALLOWED_CLASS)?, ALL_PLAYABLE_CLASS_MASK);
+        let allowed_race = normalize_item_mask(read(it::ALLOWED_RACE)?, ALL_PLAYABLE_RACE_MASK);
+        let class_v: u8 = read(it::CLASS)?.parse().unwrap_or(0);
+        let subclass_v: u8 = read(it::SUBCLASS)?.parse().unwrap_or(0);
+        let is_drink = match &drink_spells {
+            None => is_drink_consumable(class_v, subclass_v, read(it::NAME)?),
+            Some(spells) => {
+                let mut drink = false;
+                for slot in 1..=5 {
+                    let spell: u32 = row.number(&format!("spellid_{slot}"))?;
+                    let trigger: u32 = row.number(&format!("spelltrigger_{slot}"))?;
+                    drink |= class_v == 0 && trigger == 0 && spells.contains(&spell);
+                }
+                drink
+            }
+        };
+        let holy: i32 = read(it::HOLY_RES)?.parse().unwrap_or(0);
+        let fire: i32 = read(it::FIRE_RES)?.parse().unwrap_or(0);
+        let nature: i32 = read(it::NATURE_RES)?.parse().unwrap_or(0);
+        let frost: i32 = read(it::FROST_RES)?.parse().unwrap_or(0);
+        let shadow: i32 = read(it::SHADOW_RES)?.parse().unwrap_or(0);
+        let arcane: i32 = read(it::ARCANE_RES)?.parse().unwrap_or(0);
         if holy != 0 || fire != 0 || nature != 0 || frost != 0 || shadow != 0 || arcane != 0 {
             resist_nonzero_count += 1;
         }
-        let sp3: u32 = field(row, it::SPELLID_3)?.parse().unwrap_or(0);
-        let spt3: u8 = field(row, it::SPELLTRIGGER_3)?.parse().unwrap_or(0);
-        let sp4: u32 = field(row, it::SPELLID_4)?.parse().unwrap_or(0);
-        let spt4: u8 = field(row, it::SPELLTRIGGER_4)?.parse().unwrap_or(0);
-        let sp5: u32 = field(row, it::SPELLID_5)?.parse().unwrap_or(0);
-        let spt5: u8 = field(row, it::SPELLTRIGGER_5)?.parse().unwrap_or(0);
-        let req_skill: u32 = field(row, it::REQUIRED_SKILL)?.parse().unwrap_or(0);
-        let req_skill_rank: u32 = field(row, it::REQUIRED_SKILL_RANK)?.parse().unwrap_or(0);
-        let req_rep_faction: u32 = field(row, it::REQUIRED_REPUTATION_FACTION)?
-            .parse()
-            .unwrap_or(0);
-        let req_rep_rank: u32 = field(row, it::REQUIRED_REPUTATION_RANK)?
-            .parse()
-            .unwrap_or(0);
-        let max_count: u32 = field(row, it::MAX_COUNT)?.parse().unwrap_or(0);
-        let item_flags: u32 = field(row, it::FLAGS)?.parse().unwrap_or(0);
-        let page_text: u32 = field(row, it::PAGE_TEXT)?.parse().unwrap_or(0);
-        let start_quest: u32 = field(row, it::START_QUEST)?.parse().unwrap_or(0);
+        let sp3: u32 = read(it::SPELLID_3)?.parse().unwrap_or(0);
+        let spt3: u8 = read(it::SPELLTRIGGER_3)?.parse().unwrap_or(0);
+        let sp4: u32 = read(it::SPELLID_4)?.parse().unwrap_or(0);
+        let spt4: u8 = read(it::SPELLTRIGGER_4)?.parse().unwrap_or(0);
+        let sp5: u32 = read(it::SPELLID_5)?.parse().unwrap_or(0);
+        let spt5: u8 = read(it::SPELLTRIGGER_5)?.parse().unwrap_or(0);
+        let req_skill: u32 = read(it::REQUIRED_SKILL)?.parse().unwrap_or(0);
+        let req_skill_rank: u32 = read(it::REQUIRED_SKILL_RANK)?.parse().unwrap_or(0);
+        let req_rep_faction: u32 = read(it::REQUIRED_REPUTATION_FACTION)?.parse().unwrap_or(0);
+        let req_rep_rank: u32 = read(it::REQUIRED_REPUTATION_RANK)?.parse().unwrap_or(0);
+        let max_count: u32 = read(it::MAX_COUNT)?.parse().unwrap_or(0);
+        let item_flags: u32 = read(it::FLAGS)?.parse().unwrap_or(0);
+        let page_text: u32 = read(it::PAGE_TEXT)?.parse().unwrap_or(0);
+        let start_quest: u32 = read(it::START_QUEST)?.parse().unwrap_or(0);
         if start_quest != 0 {
             startquest_nonzero_count += 1;
         }
-        let bag_family: u32 = field(row, it::BAG_FAMILY)?.parse().unwrap_or(0);
-        let buy_count: u32 = field(row, it::BUY_COUNT)?.parse().unwrap_or(1).max(1);
-        let food_type: u8 = field(row, it::FOOD_TYPE)?.parse().unwrap_or(0);
+        let bag_family: u32 = read(it::BAG_FAMILY)?.parse().unwrap_or(0);
+        let buy_count: u32 = read(it::BUY_COUNT)?.parse().unwrap_or(1).max(1);
+        let food_type: u8 = read(it::FOOD_TYPE)?.parse().unwrap_or(0);
         item_rows.push(format!(
             "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property})",
-            sheath = field(row, it::SHEATH)?.parse::<u8>().unwrap_or(0),
-            sp1 = field(row, it::SPELLID_1)?.parse::<u32>().unwrap_or(0),
-            spt1 = field(row, it::SPELLTRIGGER_1)?.parse::<u8>().unwrap_or(0),
-            sp2 = field(row, it::SPELLID_2)?.parse::<u32>().unwrap_or(0),
-            spt2 = field(row, it::SPELLTRIGGER_2)?.parse::<u8>().unwrap_or(0),
-            cslots = field(row, it::CONTAINER_SLOTS)?.parse::<u8>().unwrap_or(0),
-            bonding = field(row, it::BONDING)?.parse::<u8>().unwrap_or(0),
-            class = field(row, it::CLASS)?,
-            subclass = field(row, it::SUBCLASS)?,
-            name = sql_text(field(row, it::NAME)?),
+            sheath = read(it::SHEATH)?.parse::<u8>().unwrap_or(0),
+            sp1 = read(it::SPELLID_1)?.parse::<u32>().unwrap_or(0),
+            spt1 = read(it::SPELLTRIGGER_1)?.parse::<u8>().unwrap_or(0),
+            sp2 = read(it::SPELLID_2)?.parse::<u32>().unwrap_or(0),
+            spt2 = read(it::SPELLTRIGGER_2)?.parse::<u8>().unwrap_or(0),
+            cslots = read(it::CONTAINER_SLOTS)?.parse::<u8>().unwrap_or(0),
+            bonding = read(it::BONDING)?.parse::<u8>().unwrap_or(0),
+            class = read(it::CLASS)?,
+            subclass = read(it::SUBCLASS)?,
+            name = sql_text(read(it::NAME)?),
             drink = is_drink,
-            disp = field(row, it::DISPLAY_ID)?,
-            qual = field(row, it::QUALITY)?,
-            inv = field(row, it::INVENTORY_TYPE)?,
-            ilvl = field(row, it::ITEM_LEVEL)?,
-            rlvl = field(row, it::REQUIRED_LEVEL)?,
-            dur = field(row, it::MAX_DURABILITY)?,
-            buy = field(row, it::BUY_PRICE)?,
-            sell = field(row, it::SELL_PRICE)?,
-            dmin = field(row, it::DMG_MIN1)?,
-            dmax = field(row, it::DMG_MAX1)?,
-            delay = field(row, it::DELAY)?,
-            armor = field(row, it::ARMOR)?,
-            block = field(row, it::BLOCK)?,
-            random_property = item_property::template_pool(row)?,
+            disp = read(it::DISPLAY_ID)?,
+            qual = read(it::QUALITY)?,
+            inv = read(it::INVENTORY_TYPE)?,
+            ilvl = read(it::ITEM_LEVEL)?,
+            rlvl = read(it::REQUIRED_LEVEL)?,
+            dur = read(it::MAX_DURABILITY)?,
+            buy = read(it::BUY_PRICE)?,
+            sell = read(it::SELL_PRICE)?,
+            dmin = read(it::DMG_MIN1)?,
+            dmax = read(it::DMG_MAX1)?,
+            delay = read(it::DELAY)?,
+            armor = read(it::ARMOR)?,
+            block = read(it::BLOCK)?,
+            random_property = item_property::template_pool(row, dump.kind())?,
             allowed_class = allowed_class,
             allowed_race = allowed_race,
         ));
@@ -1932,7 +1987,7 @@ pub(crate) struct DumpPlan {
     pub(crate) eventai_relay_definition_count: u64,
     pub(crate) eventai_instruction_count: u64,
     pub(crate) eventai_manifest: Option<String>,
-    world_source_manifest: Option<String>,
+    pub(crate) world_source_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
@@ -3092,6 +3147,30 @@ fn build_loot_family_rows(
     })
 }
 
+fn push_item_statements(
+    stmts: &mut Vec<String>,
+    item_rows: &[String],
+    loot_rows: &[String],
+    vendor_rows: &[String],
+) {
+    stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
+    stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
+    stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
+    push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property", item_rows);
+    push_insert(
+        stmts,
+        "game_creature_loot",
+        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
+        loot_rows,
+    );
+    push_insert(
+        stmts,
+        "game_npc_vendor",
+        "id,creature_entry,item_entry,slot,max_count",
+        vendor_rows,
+    );
+}
+
 fn push_world_content_statements(
     args: &WorldImportArgs,
     content: MappedContent,
@@ -3123,22 +3202,7 @@ fn push_world_content_statements(
     }
 
     if family_active(args, "items") {
-        stmts.push("DELETE FROM game_item_template WHERE entry > 0".into());
-        stmts.push("DELETE FROM game_creature_loot WHERE id > 0".into());
-        stmts.push("DELETE FROM game_npc_vendor WHERE id > 0".into());
-        push_insert(stmts, "game_item_template", "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property", item_rows);
-        push_insert(
-            stmts,
-            "game_creature_loot",
-            "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
-            loot_rows,
-        );
-        push_insert(
-            stmts,
-            "game_npc_vendor",
-            "id,creature_entry,item_entry,slot,max_count",
-            vendor_rows,
-        );
+        push_item_statements(stmts, item_rows, loot_rows, vendor_rows);
     }
 
     if family_active(args, "loot") {
@@ -3572,18 +3636,165 @@ pub(crate) fn globals_statements(
     Ok(statements)
 }
 
-fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
-    if args.family.as_deref() != Some("globals") {
-        bail!("vmangos currently supports --family globals");
+fn vmangos_creature_entries(
+    dump: &impl TableRows,
+    args: &WorldImportArgs,
+) -> Result<std::collections::HashSet<u64>> {
+    if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+    {
+        return dump
+            .columns("creature_template", &["entry"])?
+            .iter()
+            .map(|row| row.number("entry"))
+            .collect();
     }
-    let stmts = globals_statements(dump, args.dbc.as_deref())?;
-    let count = insert_row_count(&stmts);
+    let mut entries = args
+        .scope
+        .forced_creature_entries
+        .iter()
+        .copied()
+        .collect::<std::collections::HashSet<_>>();
+    for row in dump.rows("creature")?.iter() {
+        let choices = ["id", "id2", "id3", "id4", "id5"]
+            .iter()
+            .map(|column| row.number::<u64>(column))
+            .collect::<Result<Vec<_>>>()?;
+        if args.scope.contains(
+            row.number("map")?,
+            row.number("position_x")?,
+            row.number("position_y")?,
+            row.number("position_z")?,
+        ) || choices
+            .iter()
+            .any(|entry| args.scope.forced_creature_entries.contains(entry))
+        {
+            entries.extend(choices.into_iter().filter(|entry| *entry != 0));
+        }
+    }
+    entries.extend([416, 1860, 1863, 5676, 5677, 12861]);
+    Ok(entries)
+}
+
+fn items_findings(
+    dump: &impl TableRows,
+    entries: &std::collections::HashSet<u64>,
+) -> Result<serde_json::Value> {
+    use std::collections::{BTreeMap, BTreeSet};
+    let forbidden = forbidden_items(dump)?;
+    let templates = dump.columns("creature_template", &["entry", "vendor_id"])?;
+    let mut template_users: BTreeMap<u64, Vec<u64>> = BTreeMap::new();
+    for row in templates.iter() {
+        let entry: u64 = row.number("entry")?;
+        let vendor: u64 = row.number("vendor_id")?;
+        if entries.contains(&entry) && vendor != 0 {
+            template_users.entry(vendor).or_default().push(entry);
+        }
+    }
+    let mut findings: BTreeMap<&str, BTreeSet<(u64, u64)>> = BTreeMap::new();
+    for table in ["npc_vendor", "npc_vendor_template"] {
+        for row in dump.rows(table)?.iter() {
+            let entry: u64 = row.number("entry")?;
+            let item: u64 = row.number("item")?;
+            if forbidden.contains(&item) || item == 0 {
+                continue;
+            }
+            let users = if table == "npc_vendor" {
+                if entries.contains(&entry) {
+                    vec![entry]
+                } else {
+                    Vec::new()
+                }
+            } else {
+                template_users.get(&entry).cloned().unwrap_or_default()
+            };
+            for (column, code) in [
+                ("condition_id", "items.vendor-condition"),
+                ("incrtime", "items.vendor-restock"),
+                ("itemflags", "items.vendor-item-flags"),
+            ] {
+                if row.number::<u64>(column)? != 0 {
+                    findings
+                        .entry(code)
+                        .or_default()
+                        .extend(users.iter().map(|&user| (user, item)));
+                }
+            }
+        }
+    }
+    let findings = findings.into_iter().filter(|(_, keys)| !keys.is_empty()).map(|(code, keys)| serde_json::json!({"code": code, "classification": "unsupported", "occurrences": keys.len(), "source_keys": keys})).collect::<Vec<_>>();
+    Ok(
+        serde_json::json!({"format_version": 1, "source": "vmangos", "family": "items", "patch": crate::source_selection::PATCH, "client_build": crate::source_selection::CLIENT_BUILD, "findings": findings}),
+    )
+}
+
+fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let entries = vmangos_creature_entries(dump, args)?;
+    let mut loot_ids = HashMap::new();
+    for row in dump
+        .columns("creature_template", &["entry", "loot_id"])?
+        .iter()
+    {
+        let entry = row.number::<u64>("entry")?;
+        let loot = row.number::<u64>("loot_id")?;
+        if entries.contains(&entry) && loot != 0 {
+            loot_ids.insert(entry, loot);
+        }
+    }
+    let (items, loot, vendors) = build_items_and_loot(
+        dump,
+        &loot_ids,
+        &entries,
+        &Default::default(),
+        &Default::default(),
+    )?;
+    let (mut stmts, properties) = item_property::dump_sql(dump, args.dbc.as_deref())?;
+    push_item_statements(&mut stmts, &items, &loot, &vendors);
     Ok(DumpPlan {
         stmts,
-        stamps: vec![("globals", count)],
-        world_source_manifest: Some(serde_json::to_string_pretty(&globals_findings(dump)?)?),
+        stamps: vec![("items", items.len() as u64 + properties)],
+        world_source_manifest: Some(serde_json::to_string_pretty(&items_findings(
+            dump, &entries,
+        )?)?),
         ..Default::default()
     })
+}
+
+fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    match args.family.as_deref() {
+        Some("items") => vmangos_items_plan(dump, args),
+        Some("globals") => {
+            let stmts = globals_statements(dump, args.dbc.as_deref())?;
+            let count = insert_row_count(&stmts);
+            Ok(DumpPlan {
+                stmts,
+                stamps: vec![("globals", count)],
+                world_source_manifest: Some(serde_json::to_string_pretty(&globals_findings(
+                    dump,
+                )?)?),
+                ..Default::default()
+            })
+        }
+        _ => bail!("vmangos currently supports --family globals or items"),
+    }
+}
+
+pub(crate) fn census_plan(source: &WorldSource, args: &WorldImportArgs) -> Result<DumpPlan> {
+    if source.kind() == SourceKind::Vmangos {
+        return build_vmangos_plan(source, args);
+    }
+    let scales = args
+        .dbc
+        .as_deref()
+        .map(dbc::load_display_scales)
+        .transpose()?;
+    let tiers = args
+        .dbc
+        .as_deref()
+        .map(dbc::profession_tier_values)
+        .transpose()?;
+    build_dump_plan(source, args, &scales, &tiers)
 }
 
 pub(crate) fn globals_findings(dump: &impl TableRows) -> Result<serde_json::Value> {
@@ -3726,6 +3937,10 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "world_import_items_tests.rs"]
+mod items_tests;
 
 #[cfg(test)]
 mod tests {

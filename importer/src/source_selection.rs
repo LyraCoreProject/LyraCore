@@ -9,7 +9,7 @@ use crate::world_source::Row;
 pub(crate) const PATCH: u32 = 10;
 pub(crate) const CLIENT_BUILD: u32 = 5875;
 
-fn selection_columns(table: &str) -> &'static [&'static str] {
+pub(crate) fn required_columns(table: &str) -> &'static [&'static str] {
     match table {
         "creature_template"
         | "item_template"
@@ -59,6 +59,7 @@ fn selection_columns(table: &str) -> &'static [&'static str] {
         | "spell_elixir"
         | "playercreateinfo_spell" => &["build_min", "build_max"],
         "taxi_path_transitions" => &["build_min"],
+        "conditions" => &["type", "value1", "value2"],
         "forbidden_items" => &["patch", "after_or_before"],
         _ if table.ends_with("_loot_template") => &["patch_min", "patch_max"],
         _ => &[],
@@ -71,7 +72,7 @@ pub(crate) fn select(
     primary_key: &[String],
     rows: Vec<Row>,
 ) -> Result<Vec<Row>> {
-    for &column in selection_columns(table) {
+    for &column in required_columns(table) {
         if !columns.contains(column) {
             bail!("{table}.{column}: missing selection column");
         }
