@@ -747,7 +747,41 @@ pub fn create_character(
         hair_color,
         facial_hair,
     };
-    insert_new_character(ctx, account_id, name, race, class, appearance).map(|_| ())
+    insert_new_character(ctx, account_id, name, race, class, appearance)
+        .map(|_| ())
+        .map_err(String::from)
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum CreateCharacterRefusal {
+    NameInUse,
+    InvalidRaceClass,
+    AccountFull,
+    Refused(crate::Refusal),
+}
+
+impl From<String> for CreateCharacterRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+// The create_character reducer and the Package API return this text.
+impl std::fmt::Display for CreateCharacterRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::NameInUse => "NAME_IN_USE".fmt(f),
+            Self::InvalidRaceClass => "INVALID_RACE_CLASS".fmt(f),
+            Self::AccountFull => "SERVER_LIMIT".fmt(f),
+            Self::Refused(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
+impl From<CreateCharacterRefusal> for String {
+    fn from(refusal: CreateCharacterRefusal) -> Self {
+        refusal.to_string()
+    }
 }
 
 pub(crate) fn check_new_character(
@@ -755,7 +789,7 @@ pub(crate) fn check_new_character(
     name: &str,
     race: u8,
     class: u8,
-) -> Result<(), String> {
+) -> Result<(), CreateCharacterRefusal> {
     require_guid_range(ctx)?;
     if ctx
         .db
@@ -764,7 +798,7 @@ pub(crate) fn check_new_character(
         .find(name.to_string())
         .is_some()
     {
-        return Err("NAME_IN_USE".to_string());
+        return Err(CreateCharacterRefusal::NameInUse);
     }
     let cbi = ctx.db.game_char_base_info();
     if cbi.count() > 0
@@ -773,7 +807,7 @@ pub(crate) fn check_new_character(
             .find(packed_race_class_id(race, class) as u16)
             .is_none()
     {
-        return Err("INVALID_RACE_CLASS".to_string());
+        return Err(CreateCharacterRefusal::InvalidRaceClass);
     }
     Ok(())
 }
@@ -794,10 +828,10 @@ pub(crate) fn insert_new_character(
     race: u8,
     class: u8,
     appearance: Appearance,
-) -> Result<u64, String> {
+) -> Result<u64, CreateCharacterRefusal> {
     check_new_character(ctx, &name, race, class)?;
     if !account_has_room(ctx, account_id) {
-        return Err("SERVER_LIMIT".to_string());
+        return Err(CreateCharacterRefusal::AccountFull);
     }
     let chars = ctx.db.game_character();
     let account = ctx
@@ -869,9 +903,9 @@ pub(crate) fn insert_new_character(
 
     if chars.try_insert(row).is_err() {
         return if chars.name().find(&name).is_some() {
-            Err("NAME_IN_USE".to_string())
+            Err(CreateCharacterRefusal::NameInUse)
         } else {
-            Err("character create failed".to_string())
+            Err("character create failed".to_string().into())
         };
     }
     let owner = account.identity.unwrap_or(Identity::ZERO);

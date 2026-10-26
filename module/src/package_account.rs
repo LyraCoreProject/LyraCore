@@ -20,14 +20,14 @@ pub(crate) fn create_package_character(
 ) -> Result<u64, String> {
     crate::auth::check_new_character(ctx, name, race, class)?;
     let account_id = owned_account_with_room(ctx, package_name)?;
-    crate::auth::insert_new_character(
+    Ok(crate::auth::insert_new_character(
         ctx,
         account_id,
         name.to_string(),
         race,
         class,
         Appearance::default(),
-    )
+    )?)
 }
 
 fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u64, String> {
