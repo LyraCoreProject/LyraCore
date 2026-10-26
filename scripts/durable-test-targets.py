@@ -8,8 +8,9 @@ from pathlib import Path
 
 
 ROOT = Path(__file__).resolve().parents[1]
+# Durations from https://github.com/LyraCoreProject/LyraCore/actions/runs/40283961113.
 # Job 2 also compiles the populated-upgrade baseline.
-JOB_SECONDS = (0, 0, 135)
+JOB_SECONDS = (0, 0, 82)
 DEFAULT_TARGET_SECONDS = 20
 
 
