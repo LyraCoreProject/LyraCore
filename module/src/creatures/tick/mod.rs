@@ -74,6 +74,9 @@ pub struct CreatureSpline {
     pub facing_angle: f32,
     #[default(None::<CreaturePath>)]
     pub path: Option<CreaturePath>,
+    // The victim a back-off steps away from; 0 on every other leg.
+    #[default(0u64)]
+    pub back_off_from: u64,
 }
 
 impl CreatureSpline {
@@ -298,7 +301,37 @@ pub(crate) fn emit_move_spline(
     grid: (i32, i32),
     path: Option<CreaturePath>,
 ) {
-    let row = CreatureSpline {
+    move_spline_row(
+        ctx,
+        guid,
+        start,
+        dest,
+        dur_ms,
+        run,
+        spline_id,
+        map_id,
+        instance_id,
+        grid,
+        path,
+    )
+    .replace(ctx);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn move_spline_row(
+    ctx: &ReducerContext,
+    guid: u64,
+    start: (f32, f32, f32),
+    dest: (f32, f32, f32),
+    dur_ms: u32,
+    run: bool,
+    spline_id: u32,
+    map_id: u32,
+    instance_id: u64,
+    grid: (i32, i32),
+    path: Option<CreaturePath>,
+) -> CreatureSpline {
+    CreatureSpline {
         guid,
         start_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
         dur_ms,
@@ -318,8 +351,8 @@ pub(crate) fn emit_move_spline(
         facing: false,
         facing_angle: 0.0,
         path,
-    };
-    row.replace(ctx);
+        back_off_from: 0,
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -353,6 +386,7 @@ pub(crate) fn emit_facing_spline(
         facing: true,
         facing_angle: angle_rad,
         path: None,
+        back_off_from: 0,
     };
     row.replace(ctx);
 }
@@ -422,6 +456,42 @@ pub(crate) fn emit_creature_path(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_creature_leg(
     ctx: &ReducerContext,
+    e: WorldEntity,
+    to: (f32, f32),
+    z_fallback: f32,
+    duration_ms: u32,
+    run: bool,
+    now_ms: u32,
+    set_leg_ends: bool,
+) {
+    emit_leg(
+        ctx,
+        e,
+        to,
+        z_fallback,
+        duration_ms,
+        run,
+        now_ms,
+        set_leg_ends,
+        0,
+    );
+}
+
+pub(crate) fn emit_back_off_leg(
+    ctx: &ReducerContext,
+    e: WorldEntity,
+    to: (f32, f32),
+    duration_ms: u32,
+    now_ms: u32,
+    victim: u64,
+) {
+    let z = e.z;
+    emit_leg(ctx, e, to, z, duration_ms, false, now_ms, false, victim);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_leg(
+    ctx: &ReducerContext,
     mut e: WorldEntity,
     to: (f32, f32),
     z_fallback: f32,
@@ -429,6 +499,7 @@ pub(crate) fn emit_creature_leg(
     run: bool,
     now_ms: u32,
     set_leg_ends: bool,
+    back_off_from: u64,
 ) {
     let nz = crate::terrain::snap_z(ctx, e.map_id, e.instance_id, to.0, to.1, z_fallback);
     if !crate::creatures::ai::finite_point(to.0, to.1, nz) {
@@ -439,19 +510,27 @@ pub(crate) fn emit_creature_leg(
         );
         return;
     }
-    emit_move_spline(
-        ctx,
-        e.guid,
-        (e.x, e.y, e.z),
-        (to.0, to.1, nz),
-        duration_ms.max(1),
-        run,
-        now_ms,
-        e.map_id,
-        e.instance_id,
-        (e.grid_x, e.grid_y),
-        None,
-    );
+    CreatureSpline {
+        back_off_from,
+        ..move_spline_row(
+            ctx,
+            e.guid,
+            (e.x, e.y, e.z),
+            (to.0, to.1, nz),
+            duration_ms.max(1),
+            run,
+            now_ms,
+            e.map_id,
+            e.instance_id,
+            (e.grid_x, e.grid_y),
+            None,
+        )
+    }
+    .replace(ctx);
+    // A normal spline leaves the client facing along the leg.
+    if to != (e.x, e.y) {
+        e.orientation = (to.1 - e.y).atan2(to.0 - e.x);
+    }
     e.last_move_ms = now_ms;
     if set_leg_ends {
         e.leg_ends_ms = now_ms + duration_ms;
@@ -684,6 +763,7 @@ mod advance_persist_gate {
             facing: false,
             facing_angle: 0.0,
             path: None,
+            back_off_from: 0,
         }
     }
 

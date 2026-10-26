@@ -945,6 +945,7 @@ impl Scenario {
             dur_ms,
             map_id: partition.0,
             instance_id: partition.1,
+            back_off_from: 0,
             mover_gone: !self.creatures.borrow().contains_key(&guid),
             waypoints: Vec::new(),
         });
@@ -1119,6 +1120,7 @@ impl Scenario {
             dur_ms: 0,
             map_id,
             instance_id,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         });
@@ -2456,12 +2458,16 @@ impl IdleSink for Scenario {
             dur_ms,
             map_id: MAP,
             instance_id: INSTANCE,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         });
         let mut creatures = self.creatures.borrow_mut();
         let c = creatures.get_mut(&guid).unwrap();
         c.last_move_ms = now_ms;
+        if (dest.x, dest.y) != (from.at.x, from.at.y) {
+            c.orientation = (dest.y - from.at.y).atan2(dest.x - from.at.x);
+        }
         if leg.hold_until_landed {
             c.leg_ends_ms = now_ms + leg.dur_ms;
         }
@@ -2811,6 +2817,7 @@ impl PursuitSink for Scenario {
                 let (victim_at, victim_movement_flags) = self.unit(f.victim)?;
                 scope.covers(c.instance_id).then_some(Pursuit {
                     guid: f.attacker,
+                    victim: f.victim,
                     at: c.at,
                     orientation: c.orientation,
                     victim_at,
@@ -2820,6 +2827,8 @@ impl PursuitSink for Scenario {
                         .get(&f.victim)
                         .map_or(0.0, |victim| victim.orientation),
                     victim_movement_flags,
+                    victim_is_character: self.players.borrow().iter().any(|p| p.guid == f.victim),
+                    last_move_ms: c.last_move_ms,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
@@ -2869,6 +2878,35 @@ impl PursuitSink for Scenario {
             return 0.0;
         }
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
+    }
+    fn casting(&self, guid: u64) -> bool {
+        self.eventai_is_casting(guid)
+    }
+    fn commit_back_off(
+        &mut self,
+        guid: u64,
+        victim: u64,
+        to: (f32, f32),
+        dur_ms: u32,
+        now_ms: u32,
+    ) {
+        let z_fallback = self.at(guid).at.z;
+        self.commit_leg(
+            guid,
+            Leg {
+                to,
+                z_fallback,
+                dur_ms,
+                gait: Gait::Walk,
+                hold_until_landed: false,
+            },
+            now_ms,
+        );
+        for committed in self.legs.borrow_mut().iter_mut() {
+            if committed.guid == guid {
+                committed.back_off_from = victim;
+            }
+        }
     }
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
         let Some(c) = self.place(guid, at, None, Some(orientation)) else {
@@ -4377,6 +4415,218 @@ fn a_victim_moving_inside_contact_distance_is_turned_to_not_chased() {
     );
 }
 
+// 0.3 yd is inside two 0.389 yd bounding radii; at SETTLED the wolf has stood still for 4 s.
+fn wolf_with_a_character_inside_it() -> Scenario {
+    wolf_fighting(p(0.3, 0.0, 10.0)).attacking(WOLF, HUNTER)
+}
+
+#[test]
+fn a_creature_walks_back_out_of_a_character_standing_inside_it() {
+    let mut w = wolf_with_a_character_inside_it();
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let legs = w.effects();
+    assert!(
+        legs.len() == 1
+            && !legs[0].run
+            && !legs[0].facing
+            && legs[0].dur_ms > 0
+            && near(legs[0].dest, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
+        "a mob a Character walked into must take a walking step straight back to contact distance, \
+         not stand inside them: {legs:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_moved_within_two_seconds_holds_its_ground() {
+    let mut w = wolf_with_a_character_inside_it().tweak(WOLF, |c| {
+        c.last_move_ms = (SETTLED / 1000) as u32 - 1_999;
+    });
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().iter().all(|e| e.facing),
+        "a mob steps back only after standing still for 2 s, or it shuffles every time the Character \
+         brushes it"
+    );
+}
+
+#[test]
+fn a_creature_that_walked_back_out_of_a_character_turns_to_face_them_again() {
+    let mut w = wolf_with_a_character_inside_it();
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.advance_clock(500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2
+            && effects[1].facing
+            && effects[1].facing_angle == 0.0
+            && near(effects[1].dest, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
+        "the walk back lands within one firing, and the client shows the mob facing away from the \
+         Character; the next firing must turn it back to them: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_only_turned_still_walks_back_out_of_a_character() {
+    let mut w = wolf_with_a_character_inside_it()
+        .facing(WOLF, std::f32::consts::PI)
+        .tweak(WOLF, |c| c.last_move_ms = (SETTLED / 1000) as u32 - 1_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.advance_clock(1_500_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[0].facing && !effects[1].facing && effects[1].dur_ms > 0,
+        "turning in place is standing still; a turn must not restart the 2 s wait: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_pulled_mid_patrol_does_not_walk_on_through_the_character() {
+    let mut w = wolf_with_a_character_inside_it()
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(10.0, 0.0, 10.0), SETTLED, 4_000)
+        .mid_leg(WOLF, (SETTLED / 1000) as u32 + 4_000);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    let effects = w.effects();
+    assert!(
+        effects.len() == 1 && effects[0].facing && effects[0].dur_ms == 0,
+        "the held patrol leg it was walking when pulled must stop at the Character: {effects:?}"
+    );
+}
+
+#[test]
+fn a_casting_creature_does_not_walk_back_out_of_a_character() {
+    let mut w = wolf_with_a_character_inside_it().mid_cast(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().iter().all(|e| e.start == e.dest),
+        "a cast roots its caster; cmangos does not step a casting chaser"
+    );
+}
+
+#[test]
+fn a_creature_does_not_walk_back_out_of_another_creature() {
+    let mut w = Scenario::new(SETTLED)
+        .creature(WOLF, p(0.0, 0.0, 10.0))
+        .creature(PACK_MATE, p(0.3, 0.0, 10.0))
+        .attacking(WOLF, PACK_MATE);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().iter().all(|e| e.facing),
+        "cmangos backs a chaser off Characters only; two creatures that back off each other never \
+         settle"
+    );
+}
+
+#[test]
+fn a_walk_back_rides_out_a_firing_that_comes_early() {
+    let mut w = wolf_with_a_character_inside_it();
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    let tick = w.firing(
+        SETTLED + 100_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    assert_eq!(
+        w.effects().len(),
+        1,
+        "a lagged firing lands soon before the next one; stopping the walk back there leaves the \
+         mob inside the Character"
+    );
+
+    let tick = w.firing(
+        SETTLED + 500_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    assert!(
+        near(w.at(WOLF).at, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
+        "the walk back must reach the contact point: {:?}",
+        w.at(WOLF).at
+    );
+}
+
+#[test]
+fn a_creature_that_starts_casting_stops_walking_back() {
+    let mut w = wolf_with_a_character_inside_it();
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    w = w.mid_cast(WOLF);
+    let tick = w.firing(
+        SETTLED + 100_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "a cast that begins mid-walk roots the caster where it stands: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_starts_casting_stops_walking_back_while_its_victim_moves_off() {
+    let mut w = wolf_with_a_character_inside_it().caster(WOLF, 30.0);
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    w = w.mid_cast(WOLF).kiting(HUNTER, p(1.0, 0.0, 10.0));
+    let tick = w.firing(
+        SETTLED + 200_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "a cast roots the caster wherever its victim has gone: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_switches_victim_stops_walking_back() {
+    let mut w = wolf_with_a_character_inside_it().player(RANGER, p(0.3, 2.0, 10.0));
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.retarget(WOLF, RANGER);
+    let tick = w.firing(
+        SETTLED + 100_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "the walk back was aimed away from the old victim; the new one needs a fresh decision: \
+         {effects:?}"
+    );
+}
+
 #[test]
 fn a_chase_leg_is_stopped_where_it_renders_once_the_victim_stops() {
     let mut w = wolf_fighting(p(6.0, 0.0, 10.0))
@@ -4445,6 +4695,7 @@ fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
         dur_ms: LEG_MS,
         map_id: MAP,
         instance_id: INSTANCE,
+        back_off_from: 0,
         mover_gone: false,
         waypoints: Vec::new(),
     };

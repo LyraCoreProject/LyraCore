@@ -39,6 +39,7 @@ pub(crate) struct LegInFlight {
     pub map_id: u32,
     pub instance_id: u64,
     pub mover_gone: bool,
+    pub back_off_from: u64,
     pub waypoints: Vec<(f32, f32, f32)>,
 }
 
@@ -344,11 +345,14 @@ pub(crate) trait ThreatSink {
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Pursuit {
     pub guid: u64,
+    pub victim: u64,
     pub at: Point,
     pub orientation: f32,
     pub victim_at: Point,
     pub victim_orientation: f32,
     pub victim_movement_flags: u32,
+    pub victim_is_character: bool,
+    pub last_move_ms: u32,
     pub routing: bool,
     pub leg: Option<LegInFlight>,
 }
@@ -364,6 +368,8 @@ pub(crate) trait PursuitSink {
     }
     fn target_not_reachable(&mut self, _guid: u64) {}
     fn caster_hold_range(&self, guid: u64) -> f32;
+    fn casting(&self, guid: u64) -> bool;
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32, now_ms: u32);
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
@@ -546,6 +552,11 @@ fn advance_legs<W: MotionSink>(w: &mut W, tick: &TickContext) -> usize {
     for leg in w.legs_in_flight(&tick.scope) {
         if leg.mover_gone {
             w.drop_leg(leg.guid);
+            continue;
+        }
+        if leg.start == leg.dest && leg.waypoints.is_empty() {
+            w.drop_leg(leg.guid);
+            visited += 1;
             continue;
         }
         let (at, arrived) = leg.rendered_at(tick.now_micros);
@@ -988,8 +999,15 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
     visited
 }
 
-// Two default 0.389 yd bounding radii plus the 0.5 yd vanilla contact distance.
-const CHASE_CONTACT_YD: f32 = 2.0 * 0.389 + 0.5;
+const BOUNDING_RADIUS_YD: f32 = 0.389;
+
+// Two default bounding radii plus the 0.5 yd vanilla contact distance.
+const CHASE_CONTACT_YD: f32 = 2.0 * BOUNDING_RADIUS_YD + 0.5;
+
+const OVERLAP_YD: f32 = 2.0 * BOUNDING_RADIUS_YD;
+
+// CHASE_CLOSENESS_TIMER in cmangos ChaseMovementGenerator::Backpedal.
+const BACK_OFF_AFTER_STILL_MS: u32 = 2_000;
 
 const _: () = assert!(
     CHASE_CONTACT_YD * CHASE_CONTACT_YD < CHASE_MELEE_SQ,
@@ -1024,6 +1042,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
             continue;
         }
+        let back_off_from = c.leg.as_ref().map_or(0, |leg| leg.back_off_from);
+        if back_off_from != 0 && (back_off_from != c.victim || w.casting(c.guid)) {
+            stand_and_face(w, tick, &c);
+            continue;
+        }
         let gap_sq = dist_sq(c.at, c.victim_at);
         if gap_sq > CHASE_LEASH_SQ {
             continue;
@@ -1043,7 +1066,9 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            stand_and_face(w, tick, &c);
+            if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
+                stand_and_face(w, tick, &c);
+            }
             continue;
         }
         if posture.is_none() {
@@ -1094,6 +1119,43 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
         },
         now_ms,
     );
+}
+
+// cmangos ChaseMovementGenerator::Backpedal, measured with our contact and overlap distances.
+fn back_off<W: IdleSink + PursuitSink>(
+    w: &mut W,
+    tick: &TickContext,
+    c: &Pursuit,
+    gap_sq: f32,
+) -> bool {
+    let still_ms = tick.now_ms.wrapping_sub(c.last_move_ms);
+    if !c.victim_is_character
+        || c.leg.is_some()
+        || still_ms < BACK_OFF_AFTER_STILL_MS
+        || gap_sq >= OVERLAP_YD * OVERLAP_YD
+        || w.casting(c.guid)
+    {
+        return false;
+    }
+    let (dx, dy) = (c.at.x - c.victim_at.x, c.at.y - c.victim_at.y);
+    let len = (dx * dx + dy * dy).sqrt();
+    let away = if len > 0.0 {
+        (dx / len, dy / len)
+    } else {
+        (-c.orientation.cos(), -c.orientation.sin())
+    };
+    let to = (
+        c.victim_at.x + CHASE_CONTACT_YD * away.0,
+        c.victim_at.y + CHASE_CONTACT_YD * away.1,
+    );
+    let gap = ((to.0 - c.at.x).powi(2) + (to.1 - c.at.y).powi(2)).sqrt();
+    let step = w.navigate(c.guid, to, gap, 0.0);
+    let speed = w.speed_of(c.guid, Gait::Walk);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
+        return false;
+    };
+    w.commit_back_off(c.guid, c.victim, (x, y), dur_ms, tick.now_ms);
+    true
 }
 
 fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {
@@ -1450,6 +1512,7 @@ mod chase_leg_tests {
             dur_ms: 4_000,
             map_id: 0,
             instance_id: 0,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         }
