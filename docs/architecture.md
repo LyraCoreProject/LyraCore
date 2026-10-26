@@ -144,7 +144,8 @@ enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTR
 melee stance and damage messages, spell casts and interruptions, delayed spell damage, combo points,
 Aura timers,
 pet commands, action bars, Hunter pet rename, care and progression updates,
-inventory gains, swaps and equipment, quest acceptance, credit, rewards, the next quest in a chain,
+inventory gains, swaps and equipment, permanent enchants on items and worn gear,
+quest acceptance, credit, rewards, the next quest in a chain,
 expiry and abandonment,
 vendor purchases, partial sales and buyback, bank access and storage, training, spellbook and skill
 notifications, talent learning and reset, gossip menus and home binding, taxi discovery, fares,
