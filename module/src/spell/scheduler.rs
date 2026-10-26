@@ -390,6 +390,21 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 } else {
                     pending.insert(a.target_guid, damaged_value(cur, amount));
                 }
+                let lost = pending
+                    .get(&a.target_guid)
+                    .map_or(0, |&health| cur.saturating_sub(health));
+                if lost > 0
+                    && a.caster_guid != a.target_guid
+                    && target.is_player()
+                    && crate::combat::is_rage_user(&target)
+                {
+                    let power = pending_power
+                        .get(&a.target_guid)
+                        .copied()
+                        .unwrap_or(target.power);
+                    let gained = crate::combat::rage_from_damage(lost, false);
+                    pending_power.insert(a.target_guid, (power + gained).min(target.max_power));
+                }
             }
             A_PERIODIC_HEAL => {
                 if dying.contains_key(&a.target_guid) || duel_losers.contains(&a.target_guid) {
