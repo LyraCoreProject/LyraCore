@@ -50,13 +50,30 @@ pub(crate) fn held_points(ctx: &ReducerContext, owner_guid: u64) -> u32 {
 
 /// Combo points sit on one live target; a point on another target restarts the count there.
 pub(crate) fn add_combo_point(ctx: &ReducerContext, owner_guid: u64, target_guid: u64) {
-    let live = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(target_guid)
-        .is_some_and(|target| !target.dead);
-    if !live {
+    let entities = ctx.db.game_world_entity();
+    let (Some(owner), Some(target)) = (
+        entities.guid().find(owner_guid),
+        entities.guid().find(target_guid),
+    ) else {
+        return;
+    };
+    if target.dead {
+        return;
+    }
+    let player_side = if target.is_player() {
+        Some(target.guid)
+    } else {
+        entities
+            .guid()
+            .find(target.owner_guid)
+            .filter(|side| side.is_player())
+            .map(|side| side.guid)
+    };
+    // A builder that ends a Duel leaves the loser alive but no longer an enemy.
+    if player_side.is_some_and(|side| {
+        !crate::duel::active_opponents(ctx, owner_guid, side)
+            && !crate::faction::is_hostile(ctx, owner.faction_template, target.faction_template)
+    }) {
         return;
     }
     let points = capped_inc(combo_points(ctx, owner_guid, target_guid));
@@ -90,17 +107,22 @@ pub(crate) fn forget(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-/// Clears `owner_guid`'s points when they sit on `side_guid` or on a unit it owns.
+/// Clears `owner_guid`'s points when any sit on `side_guid` or on a unit it owns.
 pub(crate) fn forget_side(ctx: &ReducerContext, owner_guid: u64, side_guid: u64) {
-    let on_side = held(ctx, owner_guid).is_some_and(|r| {
-        r.target_guid == side_guid
-            || ctx
-                .db
-                .game_world_entity()
-                .guid()
-                .find(r.target_guid)
-                .is_some_and(|target| target.owner_guid == side_guid)
-    });
+    let on_side = ctx
+        .db
+        .game_combo_point()
+        .by_owner()
+        .filter(&owner_guid)
+        .any(|r| {
+            r.target_guid == side_guid
+                || ctx
+                    .db
+                    .game_world_entity()
+                    .guid()
+                    .find(r.target_guid)
+                    .is_some_and(|target| target.owner_guid == side_guid)
+        });
     if on_side {
         spend_combo(ctx, owner_guid);
     }

@@ -1148,7 +1148,10 @@ fn check_cast_gate_suffix(
         }
     }
 
-    let combo_points = if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
+    // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
+    let combo_points = if !caster.is_player() {
+        None
+    } else if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
         Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
     } else if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
         Some(crate::combo::held_points(ctx, caster_guid))
