@@ -5,7 +5,7 @@ Lines to carry in every implementer dispatch prompt. The orchestrator pastes wha
 ## Worktree and branch
 
 - Shared feature branches may be checked out in another agent's worktree. Work on a local tracking branch: `git checkout -b <local> origin/<branch>`, push with `git push origin <local>:<branch>`. Parallel slices push their own branch (`<epic>-tN`) and leave merging to the integrate step.
-- On ENOSPC from `/tmp`, set `TMPDIR` to a scratch dir inside your own worktree.
+- Keep cargo target dirs, worktrees, clones and other large scratch output out of `/tmp` and `/dev/shm`. A throwaway, baseline or review build uses `CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/<task>/target"` and puts its checkout under `$HOME/.cache/lyracore-scratch/<task>/`; delete it when done. Your own worktree keeps the default `./target`.
 
 ## Verification
 

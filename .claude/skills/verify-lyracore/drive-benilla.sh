@@ -4,7 +4,7 @@ set -uo pipefail
 : "${BENILLA_DIR:?set BENILLA_DIR to a Benilla checkout}"
 : "${WOW_USER:?}" "${WOW_PASS:?}" "${WOW_CHAR:?}"
 secs=${1:-60}
-out=${EVIDENCE:-/tmp/lyracore-verify/$(date -u +%Y%m%dT%H%M%SZ)}
+out=${EVIDENCE:-$HOME/.cache/lyracore-scratch/verify/$(date -u +%Y%m%dT%H%M%SZ)}
 mkdir -p "$out"
 
 # BENILLA_HOME isolates this run from the Operator's saved settings.
