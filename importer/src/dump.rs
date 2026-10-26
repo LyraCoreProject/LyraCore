@@ -538,45 +538,45 @@ fn visit_inserts(
     while let Some(rel) = dump[search..].find(needle) {
         let mut i = search + rel + needle.len();
         let bytes = dump.as_bytes();
-        let mut field = String::new();
+        let mut field = Vec::new();
         let mut tuple: Vec<String> = Vec::new();
         let mut in_tuple = false;
         let mut in_quote = false;
         while i < bytes.len() {
-            let c = bytes[i] as char;
+            let c = bytes[i];
             if in_quote {
-                if c == '\\' && i + 1 < bytes.len() {
-                    let n = bytes[i + 1] as char;
+                if c == b'\\' && i + 1 < bytes.len() {
+                    let n = bytes[i + 1];
                     field.push(match n {
-                        'n' => '\n',
-                        'r' => '\r',
-                        't' => '\t',
+                        b'n' => b'\n',
+                        b'r' => b'\r',
+                        b't' => b'\t',
                         other => other,
                     });
                     i += 2;
                     continue;
-                } else if c == '\'' {
+                } else if c == b'\'' {
                     in_quote = false;
                 } else {
                     field.push(c);
                 }
             } else {
                 match c {
-                    '(' if !in_tuple => {
+                    b'(' if !in_tuple => {
                         in_tuple = true;
                         tuple.clear();
                         field.clear();
                     }
-                    '\'' if in_tuple => in_quote = true,
-                    ',' if in_tuple => {
-                        tuple.push(std::mem::take(&mut field));
+                    b'\'' if in_tuple => in_quote = true,
+                    b',' if in_tuple => {
+                        tuple.push(String::from_utf8(std::mem::take(&mut field))?);
                     }
-                    ')' if in_tuple => {
-                        tuple.push(std::mem::take(&mut field));
+                    b')' if in_tuple => {
+                        tuple.push(String::from_utf8(std::mem::take(&mut field))?);
                         visit(std::mem::take(&mut tuple))?;
                         in_tuple = false;
                     }
-                    ';' if !in_tuple => break,
+                    b';' if !in_tuple => break,
                     _ if in_tuple => field.push(c),
                     _ => {}
                 }
@@ -880,6 +880,16 @@ pub(crate) mod tests {
         ] {
             assert!(named_table(&format!("{schema}{insert}"), "example").is_err());
         }
+    }
+
+    #[test]
+    fn named_reader_preserves_utf8_through_mysql_escapes() {
+        let rows = named_table(
+            "CREATE TABLE `example` (\n`id` int,\n`label` text\n); INSERT INTO `example` VALUES (1,'Café, 雪 \\'🔥\\'\\nété');",
+            "example",
+        )
+        .unwrap();
+        assert_eq!(rows[0].text("label").unwrap(), "Café, 雪 '🔥'\nété");
     }
 
     #[test]
