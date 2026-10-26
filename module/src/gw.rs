@@ -1,10 +1,10 @@
 use lyracore_shared::loot::LootBoundaryFailure;
-use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Table, Timestamp};
+use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Timestamp};
 
 use crate::game_account;
-use crate::game_world_entity;
 use crate::helpers::{acting_entity_by_guid, require_operator};
 
+// Retired Gateway lease tables keep their declarations; see docs/danger-zones.md.
 #[table(accessor = game_gateway_lease)]
 pub struct GatewayLease {
     #[primary_key]
@@ -22,6 +22,7 @@ pub struct GatewaySession {
     pub lease_id: u64,
 }
 
+// The schedule keeps its published name; it now reaps expired Account Claims only.
 #[table(accessor = game_gateway_lease_reaper_schedule, scheduled(reap_gateway_leases))]
 pub struct GatewayLeaseReaperSchedule {
     #[primary_key]
@@ -30,32 +31,7 @@ pub struct GatewayLeaseReaperSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
-pub(crate) const LEASE_REAP_MICROS: i64 = 15_000_000;
-pub(crate) const LEASE_TTL_MICROS: i64 = 60_000_000;
-
-pub(crate) fn lease_expired(now_micros: i64, heartbeat_micros: i64, ttl_micros: i64) -> bool {
-    now_micros - heartbeat_micros > ttl_micros
-}
-
-#[reducer]
-pub fn gw_heartbeat(ctx: &ReducerContext) -> Result<(), String> {
-    require_operator(ctx)?;
-    let leases = ctx.db.game_gateway_lease();
-    match leases.identity().find(ctx.sender()) {
-        Some(mut lease) => {
-            lease.last_heartbeat = ctx.timestamp;
-            leases.id().update(lease);
-        }
-        None => {
-            leases.insert(GatewayLease {
-                id: 0,
-                identity: ctx.sender(),
-                last_heartbeat: ctx.timestamp,
-            });
-        }
-    }
-    Ok(())
-}
+pub(crate) const ACCOUNT_CLAIM_REAP_MICROS: i64 = 15_000_000;
 
 #[reducer]
 pub fn reap_gateway_leases(
@@ -65,45 +41,7 @@ pub fn reap_gateway_leases(
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".to_string());
     }
-    crate::account_ownership::reap_account_fences(ctx);
     crate::account_ownership::reap_account_claims(ctx);
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
-    let dead: Vec<GatewayLease> = ctx
-        .db
-        .game_gateway_lease()
-        .iter()
-        .filter(|l| {
-            lease_expired(
-                now,
-                l.last_heartbeat.to_micros_since_unix_epoch(),
-                LEASE_TTL_MICROS,
-            )
-        })
-        .collect();
-    for lease in dead {
-        let sessions: Vec<GatewaySession> = ctx
-            .db
-            .game_gateway_session()
-            .iter()
-            .filter(|s| s.lease_id == lease.id)
-            .collect();
-        spacetimedb::log::warn!(
-            "gateway lease {} lapsed (no heartbeat for >{}s) — despawning {} leased session(s)",
-            lease.id,
-            LEASE_TTL_MICROS / 1_000_000,
-            sessions.len()
-        );
-        for session in sessions {
-            if let Some(entity) = ctx.db.game_world_entity().guid().find(session.entity_guid) {
-                crate::world::remove_from_world(ctx, entity.owner_identity);
-            }
-            ctx.db
-                .game_gateway_session()
-                .entity_guid()
-                .delete(session.entity_guid);
-        }
-        ctx.db.game_gateway_lease().id().delete(lease.id);
-    }
     Ok(())
 }
 
@@ -626,30 +564,9 @@ fn enter_world(
         .find(account_id)
         .ok_or_else(|| format!("no such account: {account_id}"))?;
     let owner = account.identity.ok_or_else(|| {
-        "account has no bound identity — establish_session must run before a gateway login"
-            .to_string()
+        "account has no bound identity — establish_session must run before login".to_string()
     })?;
-    let lease = ctx
-        .db
-        .game_gateway_lease()
-        .identity()
-        .find(ctx.sender())
-        .ok_or_else(|| {
-            "no lease for this gateway — gw_heartbeat must run before logins".to_string()
-        })?;
-    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)?;
-    // Bind the lease only after login succeeds so a Refusal leaves no reaper-owned Session.
-    let sessions = ctx.db.game_gateway_session();
-    let row = GatewaySession {
-        entity_guid: character_guid,
-        lease_id: lease.id,
-    };
-    if sessions.entity_guid().find(character_guid).is_some() {
-        sessions.entity_guid().update(row);
-    } else {
-        sessions.insert(row);
-    }
-    Ok(())
+    crate::world::apply_player_login(ctx, &account, character_guid, owner, entry)
 }
 
 #[reducer]
@@ -1374,7 +1291,7 @@ pub fn gw_gm_command(
 
 #[cfg(test)]
 mod tests {
-    use super::{apply_movement_batch, lease_expired, GwMove, LEASE_REAP_MICROS, LEASE_TTL_MICROS};
+    use super::{apply_movement_batch, GwMove};
     use std::collections::{HashMap, HashSet};
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
@@ -1428,17 +1345,6 @@ mod tests {
             move_time_ms,
             relay: None,
         }
-    }
-
-    #[test]
-    fn a_lease_dies_past_the_ttl_and_survives_missed_beats_up_to_it() {
-        assert!(!lease_expired(1_000_000, 1_000_000, LEASE_TTL_MICROS));
-        assert!(!lease_expired(LEASE_TTL_MICROS, 0, LEASE_TTL_MICROS));
-        assert!(lease_expired(LEASE_TTL_MICROS + 1, 0, LEASE_TTL_MICROS));
-        const _: () = assert!(
-            LEASE_TTL_MICROS >= 3 * LEASE_REAP_MICROS,
-            "TTL must tolerate at least two missed heartbeats plus a reap interval"
-        );
     }
 
     #[test]

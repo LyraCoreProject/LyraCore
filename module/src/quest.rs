@@ -868,7 +868,7 @@ pub(crate) fn request_turn_in_quest(
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
     if player.level < QUEST_MAX_LEVEL_PAYOUT {
-        crate::xp::XpEvent::insert(
+        crate::xp::XpEvent::send(
             ctx,
             player_guid,
             crate::xp::XpEvent {

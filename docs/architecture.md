@@ -223,8 +223,7 @@ through AOI. Login sends the MOTD to the Character and sign-on to other members;
 announce no sign-off. [Charter and emblem purchases](../module/src/native/petition.rs) commit
 copper, items, guild state and notifications in one transaction. Petition signatures use the actual
 Account and Character facts. Turn-in creates the Guild and removes its charter and signatures
-atomically. World entry restores charter petition fields and removes inert charters when no
-legacy Fee Hold is pending.
+atomically. World entry restores charter petition fields and removes inert charters.
 
 **Trade and duels.** The [trade handler](../module/src/native/trade.rs) applies requests to the
 Trade Session. Offer and status events select the two recipients in the same transaction, and

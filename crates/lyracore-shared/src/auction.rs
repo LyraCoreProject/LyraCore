@@ -92,23 +92,6 @@ pub fn market_of(house_id: u32) -> AuctionMarket {
     }
 }
 
-pub mod bid_outcome {
-    pub const PENDING: u8 = 0;
-    pub const ACCEPTED: u8 = 1;
-    pub const ITEM_NOT_FOUND: u8 = 2;
-    pub const HIGHER_BID: u8 = 3;
-    pub const BID_INCREMENT: u8 = 4;
-    pub const BID_OWN: u8 = 5;
-    pub const DATABASE: u8 = 6;
-    pub const CANCELLED: u8 = 7;
-}
-
-// Older Hold rows default to BID.
-pub mod hold_operation {
-    pub const BID: u8 = 0;
-    pub const CANCEL: u8 = 1;
-}
-
 // Notice kinds use a different numbering from Auction Mail subject codes.
 pub mod auction_notice {
     pub const OUTBID: u8 = 0;

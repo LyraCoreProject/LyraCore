@@ -116,26 +116,6 @@ pub fn expires_at_secs(created_secs: i64, deliver_secs: i64, cod: u32) -> i64 {
     let lifetime_days = if cod > 0 { 3 } else { 30 };
     arrived_at_secs(created_secs, deliver_secs).saturating_add(lifetime_days * DAY_SECS)
 }
-pub fn escrow_range_mark(gateway_id: &str) -> u64 {
-    const OFFSET: u64 = 10_000;
-    const SLOTS: u64 = 50_000;
-    let hash = gateway_id.bytes().fold(0xcbf2_9ce4_8422_2325u64, |h, b| {
-        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
-    });
-    (OFFSET + hash % SLOTS) * 1_000_000_000
-}
-pub fn resume_escrow_range(
-    base: u64,
-    size: u64,
-    seen: impl Iterator<Item = u64>,
-) -> Option<(u64, u64)> {
-    let end = base.checked_add(size)?;
-    let next = seen
-        .filter(|id| *id >= base && *id < end)
-        .max()
-        .map_or(base.max(1), |id| id.saturating_add(1));
-    (next < end).then_some((next, end))
-}
 pub const POSTAGE_COPPER: u32 = 30;
 pub fn postage() -> u32 {
     POSTAGE_COPPER
@@ -259,29 +239,6 @@ mod tests {
         assert_eq!(unread_mail_signal(true), 0.0);
         assert!(unread_mail_signal(false) < 0.0);
         assert_eq!(unread_mail_signal(false), -86400.0);
-    }
-
-    #[test]
-    fn escrow_range_choice_is_stable_and_separate_for_gateway_identities() {
-        assert_eq!(
-            escrow_range_mark("gateway-a"),
-            escrow_range_mark("gateway-a")
-        );
-        assert_ne!(
-            escrow_range_mark("gateway-a"),
-            escrow_range_mark("gateway-b")
-        );
-        assert!(escrow_range_mark("gateway-a") >= 10_000_000_000_000);
-    }
-
-    #[test]
-    fn escrow_range_resume_ignores_other_ranges_and_refuses_exhaustion() {
-        assert_eq!(
-            resume_escrow_range(100, 10, [3, 102, 999].into_iter()),
-            Some((103, 110))
-        );
-        assert_eq!(resume_escrow_range(100, 10, [109].into_iter()), None);
-        assert_eq!(resume_escrow_range(0, 10, [].into_iter()), Some((1, 10)));
     }
 
     #[test]

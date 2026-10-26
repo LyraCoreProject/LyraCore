@@ -93,8 +93,9 @@ pub(crate) fn file_reward_letter(
             return Ok(());
         }
     };
-    if crate::native::is_player(ctx, character_guid) {
-        let delivery = crate::mail::Letter::reward(
+    crate::mail::insert_letter(
+        ctx,
+        crate::mail::Letter::reward(
             letter.header,
             character_guid,
             letter.body,
@@ -104,12 +105,9 @@ pub(crate) fn file_reward_letter(
         .delayed(
             ctx.timestamp.to_micros_since_unix_epoch(),
             letter.delay_secs,
-        );
-        crate::mail::insert_letter(ctx, delivery);
-        return Ok(());
-    }
-    let escrow_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)?.start();
-    crate::mail_escrow::file_reward(ctx, escrow_id, character_guid, &letter)
+        ),
+    );
+    Ok(())
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -376,13 +374,5 @@ mod tests {
             None
         )
         .is_err());
-    }
-
-    #[test]
-    fn a_shard_below_slot_10000_mints_no_id_in_a_gateway_escrow_range() {
-        assert_eq!(crate::realm_core::GUID_RANGE_SIZE, 1_000_000_000);
-        for gateway in ["mail-escrow:gateway-a:00", "mail-escrow:gateway-b:ff"] {
-            assert!(lyracore_shared::mail::escrow_range_mark(gateway) > 9_999_999_999_999);
-        }
     }
 }

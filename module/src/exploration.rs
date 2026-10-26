@@ -63,7 +63,7 @@ pub(crate) fn check_area_exploration(
     crate::native::explored(ctx, &explored);
     if xp > 0 {
         crate::xp::grant_xp(ctx, mover, xp);
-        XpEvent::insert(
+        XpEvent::send(
             ctx,
             mover.guid,
             XpEvent {

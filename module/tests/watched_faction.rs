@@ -138,7 +138,6 @@ fn enter_world(shard: &Standalone) {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
     shard.assert_call("gw_player_login", &["1", &actor(CHARACTER)]);
 }
 

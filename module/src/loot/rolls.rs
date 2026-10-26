@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_corpse_loot;
 use crate::game_group;
@@ -36,18 +36,6 @@ pub struct LootRoll {
     pub promotion_source: Identity,
 }
 
-// Keep promotion receipts after resolution; delayed retries must not recreate rolls.
-#[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
-pub struct LootRollPromotionReceipt {
-    #[primary_key]
-    #[auto_inc]
-    pub id: u64,
-    pub promotion_source: Identity,
-    pub corpse_guid: u64,
-    pub slot: u8,
-    pub source_roll_id: u64,
-}
-
 #[derive(Clone)]
 #[table(accessor = game_loot_roll_vote, index(accessor = by_roll, btree(columns = [roll_id])))]
 pub struct LootRollVote {
@@ -59,6 +47,18 @@ pub struct LootRollVote {
     pub voted: bool,
     pub vote: u8,   // Meaningful only when voted is true.
     pub rolled: u8, // 1..=100 for Need or Greed; zero otherwise.
+}
+
+// Retired Loot Roll promotion table keeps its declaration; see docs/danger-zones.md.
+#[table(accessor = game_loot_roll_promotion_receipt, index(accessor = by_source_slot, btree(columns = [promotion_source, corpse_guid, slot])))]
+pub struct LootRollPromotionReceipt {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    pub promotion_source: Identity,
+    pub corpse_guid: u64,
+    pub slot: u8,
+    pub source_roll_id: u64,
 }
 
 pub(crate) const ROLL_WINDOW_MICROS: i64 = 60_000_000;
@@ -257,7 +257,6 @@ fn insert_roll_rows(
     recipients: &[u64],
     deadline_micros: i64,
     random_property_id: u32,
-    promotion_source: Identity,
 ) -> u64 {
     let rolls = ctx.db.game_loot_roll();
     if let Some(existing) = rolls
@@ -275,7 +274,7 @@ fn insert_roll_rows(
         deadline_micros,
         resolved: false,
         random_property_id,
-        promotion_source,
+        promotion_source: ctx.database_identity(),
     });
     let votes = ctx.db.game_loot_roll_vote();
     for &guid in recipients {
@@ -308,7 +307,6 @@ fn start_roll(
         recipients,
         now_micros + ROLL_WINDOW_MICROS,
         random_property_id,
-        ctx.database_identity(),
     );
     let payload = lyracore_shared::loot_roll::encode_start(
         corpse_guid,
@@ -323,7 +321,7 @@ fn start_roll(
 }
 
 #[cfg(feature = "debug_reducers")]
-#[reducer]
+#[spacetimedb::reducer]
 pub fn debug_stage_loot_roll_fixture(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     start_roll(
@@ -412,11 +410,9 @@ pub(crate) fn settle_roll_grant(
         .filter(&corpse_guid)
         .find(|l| l.slot == slot)
     else {
-        // Settlement fans out to every World Shard, so a missing corpse row is expected.
         spacetimedb::log::info!(
-            "settle_roll_grant: corpse {corpse_guid} slot {slot} — no loot row on this database \
-             (expected on every shard but the corpse's owner; if NO shard granted, the corpse was \
-             reaped before the roll settled and the winner got nothing)"
+            "settle_roll_grant: corpse {corpse_guid} slot {slot} — no loot row; the corpse was \
+             reaped before the roll settled and the winner got nothing"
         );
         return;
     };
@@ -493,7 +489,6 @@ fn resolve_roll(ctx: &ReducerContext, roll: &LootRoll, votes: &[LootRollVote], r
     let winner_guid = votes[tier[w]].voter_guid;
     let winning_vote = votes[tier[w]].vote;
 
-    // Realm-core has no corpse loot; its ROLL_WON Relay settles on the owning World Shard.
     settle_roll_grant(ctx, roll.corpse_guid, roll.slot, winner_guid);
     let payload = lyracore_shared::loot_roll::encode_won(
         roll.corpse_guid,
@@ -605,136 +600,6 @@ pub(crate) fn force_resolve_rolls_for_disband(
         }
         cleanup_roll(ctx, roll.id);
     }
-}
-
-#[allow(clippy::too_many_arguments)]
-// Realm-core has no live Actor; the Operator must authenticate the supplied guid.
-#[reducer]
-pub fn realm_loot_op(
-    ctx: &ReducerContext,
-    op: u8,
-    corpse_guid: u64,
-    slot: u8,
-    item_entry: u32,
-    request_actor: crate::account_ownership::SessionActor,
-    vote: u8,
-    deadline_micros: i64,
-    recipients: Vec<u64>,
-    random_property_id: u32,
-    promotion_source: Identity,
-    source_roll_id: u64,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    use lyracore_shared::loot_roll::loot_op;
-    match op {
-        loot_op::START => accept_promotion(
-            ctx,
-            corpse_guid,
-            slot,
-            item_entry,
-            &recipients,
-            deadline_micros,
-            random_property_id,
-            promotion_source,
-            source_roll_id,
-        ),
-        loot_op::VOTE => cast_vote_on(ctx, corpse_guid, slot, actor_guid, vote),
-        other => Err(format!("unknown realm loot op {other}")),
-    }
-}
-
-#[allow(clippy::too_many_arguments)]
-fn accept_promotion(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    slot: u8,
-    item_entry: u32,
-    recipients: &[u64],
-    deadline_micros: i64,
-    random_property_id: u32,
-    promotion_source: Identity,
-    source_roll_id: u64,
-) -> Result<(), String> {
-    if promotion_source == Identity::ZERO || source_roll_id == 0 {
-        return Err(refused(
-            LootRefusal::RollUnavailable,
-            "promotion identity is missing",
-        ));
-    }
-    let receipts = ctx.db.game_loot_roll_promotion_receipt();
-    let receipt = receipts
-        .by_source_slot()
-        .filter((promotion_source, corpse_guid, slot))
-        .next();
-    if receipt
-        .as_ref()
-        .is_some_and(|r| r.source_roll_id >= source_roll_id)
-    {
-        return Ok(());
-    }
-    if ctx
-        .db
-        .game_loot_roll()
-        .by_corpse()
-        .filter(&corpse_guid)
-        .any(|r| r.slot == slot)
-    {
-        return Err(refused(
-            LootRefusal::RollUnavailable,
-            "another Loot Roll is active in this slot",
-        ));
-    }
-    insert_roll_rows(
-        ctx,
-        corpse_guid,
-        slot,
-        item_entry,
-        recipients,
-        deadline_micros,
-        random_property_id,
-        promotion_source,
-    );
-    if let Some(mut receipt) = receipt {
-        receipt.source_roll_id = source_roll_id;
-        receipts.id().update(receipt);
-    } else {
-        receipts.insert(LootRollPromotionReceipt {
-            id: 0,
-            promotion_source,
-            corpse_guid,
-            slot,
-            source_roll_id,
-        });
-    }
-    Ok(())
-}
-
-#[reducer]
-pub fn settle_loot_roll(
-    ctx: &ReducerContext,
-    corpse_guid: u64,
-    slot: u8,
-    winner_guid: u64,
-    request_actor: crate::account_ownership::SessionActor,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
-    settle_roll_grant(ctx, corpse_guid, slot, winner_guid);
-    Ok(())
-}
-
-// Clear staging only after promotion succeeds on Realm-core.
-#[reducer]
-pub fn clear_promoted_loot_roll(
-    ctx: &ReducerContext,
-    roll_id: u64,
-    request_actor: crate::account_ownership::SessionActor,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    crate::account_ownership::require_actor(ctx, request_actor)?;
-    cleanup_roll(ctx, roll_id);
-    Ok(())
 }
 
 pub(crate) fn apply_master_give(

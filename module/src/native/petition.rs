@@ -422,7 +422,6 @@ fn charter_values(ctx: &ReducerContext, connection: ConnectionId, item: u64, pet
 
 pub(super) fn replay(ctx: &ReducerContext, guid: u64, connection: ConnectionId) {
     let petition = ctx.db.game_guild_petition().owner_guid().find(guid);
-    let fee_pending = fee::character_has_fee_hold(ctx, guid);
     for item in ctx
         .db
         .game_item_instance()
@@ -436,7 +435,7 @@ pub(super) fn replay(ctx: &ReducerContext, guid: u64, connection: ConnectionId) 
             .filter(|petition| petition.charter_item_guid == item.guid)
         {
             charter_values(ctx, connection, item.guid, petition.petition_id);
-        } else if !fee_pending {
+        } else {
             crate::ItemInstance::delete(ctx, item.guid);
         }
     }

@@ -91,8 +91,8 @@ fn participant(ctx: &ReducerContext, connection: ConnectionId, row: &DuelEvent) 
                 .find(row.flag_entry)
             else {
                 spacetimedb::log::warn!(
-                    "duel event {} has no flag template {}",
-                    row.id,
+                    "duel {} has no flag template {}",
+                    row.duel_id,
                     row.flag_entry
                 );
                 return;
@@ -157,7 +157,7 @@ fn participant(ctx: &ReducerContext, connection: ConnectionId, row: &DuelEvent) 
                 codec::build_destroy_object(row.flag_guid),
             ));
         }
-        _ => spacetimedb::log::warn!("unknown duel event {} kind {}", row.id, row.kind),
+        _ => spacetimedb::log::warn!("unknown duel {} event kind {}", row.duel_id, row.kind),
     }
 }
 

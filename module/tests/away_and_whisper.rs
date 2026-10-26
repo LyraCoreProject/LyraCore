@@ -98,7 +98,6 @@ fn away_status_lives_on_the_entity_and_ends_at_login() {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
 
     shard.assert_call("gw_player_world_port", &["1", &actor("1")]);
     assert_eq!(player_flags(&shard), "4", "a world-port keeps DND");

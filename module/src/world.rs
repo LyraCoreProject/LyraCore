@@ -1356,13 +1356,6 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
     }
 }
 
-pub(crate) fn remove_from_world(ctx: &ReducerContext, owner: Identity) {
-    let Some(entity) = entity_by_owner(ctx, owner) else {
-        return;
-    };
-    remove_live_character(ctx, entity);
-}
-
 pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
     // Fire logout hooks before deletion while handlers can still read the live entity.
     crate::hooks::fire_on_logout(

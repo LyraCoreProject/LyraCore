@@ -44,7 +44,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
             }
         }};
     }
-    // Legacy event tables remain for additive upgrades; see docs/danger-zones.md.
+    // Some of these tables are retired and only drain old rows; see docs/danger-zones.md.
     reap!(game_combat_event);
     reap!(game_xp_event);
     reap!(game_levelup_event);

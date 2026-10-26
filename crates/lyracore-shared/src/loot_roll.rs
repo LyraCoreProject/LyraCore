@@ -7,12 +7,6 @@ pub mod event_kind {
     pub const ALL_PASSED: u8 = 12;
 }
 
-// START preserves the World Shard deadline so promotion does not restart the roll clock.
-pub mod loot_op {
-    pub const START: u8 = 0;
-    pub const VOTE: u8 = 1;
-}
-
 // RollVote wire values: Pass = 0, Need = 1, Greed = 2.
 pub mod vote_kind {
     pub const PASS: u8 = 0;
@@ -296,11 +290,5 @@ mod tests {
         assert!(decode_money_share("").is_none());
         assert!(decode_money_share("12x").is_none());
         assert!(decode_money_share("-1").is_none());
-    }
-
-    #[test]
-    fn realm_loot_op_codes_are_stable_and_distinct() {
-        assert_eq!(loot_op::START, 0);
-        assert_eq!(loot_op::VOTE, 1);
     }
 }

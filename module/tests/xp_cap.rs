@@ -16,19 +16,9 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
 
     grant_xp(&standalone, 1_000_000);
     assert_capped(&standalone);
-    let levels = standalone.query_rows("SELECT new_level FROM game_levelup_event");
-    assert_eq!(levels.len(), 1);
-    assert_eq!(levels[0]["new_level"], "60");
 
     grant_xp(&standalone, 25);
     assert_capped(&standalone);
-    assert_eq!(
-        standalone
-            .query_rows("SELECT new_level FROM game_levelup_event")
-            .len(),
-        1,
-        "a later award must not produce another level-up"
-    );
 
     standalone.assert_sql("UPDATE game_character SET rested_xp = 1000 WHERE guid = 1");
     standalone.assert_sql("DELETE FROM game_creature_spawn WHERE entry = 51000");
@@ -49,9 +39,6 @@ fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     assert_capped(&standalone);
     let character = standalone.query_rows("SELECT rested_xp FROM game_character WHERE guid = 1");
     assert_eq!(character[0]["rested_xp"], "1000");
-    assert!(standalone
-        .query_rows("SELECT id FROM game_xp_event")
-        .is_empty());
     let corpse = standalone.query_rows(&format!(
         "SELECT dead FROM game_world_entity WHERE guid = {creature}"
     ));

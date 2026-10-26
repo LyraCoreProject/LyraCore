@@ -1029,25 +1029,6 @@ def check_petitions(host):
     assert inert in destroys(client.collect())
     assert not host.rows(f'SELECT guid FROM game_item_instance WHERE guid = {inert}')
     peer.collect()
-    peer_money = host.rows(f'SELECT money FROM game_world_entity WHERE guid = {peer_guid}')[0][0]
-    host.call('debug_set_money', [peer_guid, 1000])
-    peer.collect()
-    host.call('gw_guild_fee_hold', [5090499, {'guid': peer_guid, 'ownership': None},
-                              {'charter': {'npc_guid': vendor, 'name': 'Pending Legacy Charter'}}])
-    held = host.rows(f'SELECT charter_item_guid FROM game_guild_fee_hold WHERE payer_guid = {peer_guid}')[0][0]
-    peer.collect()
-    peer.send(0x4b)
-    peer.collect()
-    client.collect()
-    peer.send(0x3d, struct.pack('<Q', peer_guid))
-    pending = peer.collect()
-    assert held in creates(pending) and held not in destroys(pending)
-    assert host.rows(f'SELECT guid FROM game_item_instance WHERE guid = {held}') == [[held]]
-    host.call('gw_guild_fee_finish', [5090499, {'guid': peer_guid, 'ownership': None}, False])
-    assert held in destroys(peer.collect())
-    assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {peer_guid}') == [[1000]]
-    assert not host.rows('SELECT payer_guid FROM game_guild_fee_hold')
-    host.call('debug_set_money', [peer_guid, peer_money])
     host.call('debug_set_money', [guid, old_money])
     client.collect()
     peer.collect()

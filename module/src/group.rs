@@ -114,7 +114,7 @@ crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, charact
     }
 });
 
-// Membership snapshots must not travel because they can overwrite a newer Realm-core roster.
+// Membership snapshots must not travel because they can overwrite a newer roster.
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_member());
 
 // Transfer removes the local mirror without leave or disband semantics.
@@ -248,21 +248,6 @@ pub(crate) fn clear_unclaimed_group_intents(ctx: &ReducerContext, character_guid
     }
 }
 
-#[reducer]
-pub fn claim_bot_invite_intent(ctx: &ReducerContext, intent_id: u64) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let intent = ctx
-        .db
-        .game_bot_invite_intent()
-        .id()
-        .find(intent_id)
-        .ok_or_else(|| refused(GroupRefusal::IntentAlreadyClaimed, "Group Intent is gone"))?;
-    crate::sessionless::group_action_gate(ctx, intent.inviter_guid)
-        .map_err(|refusal| refused(refusal, "Group Intent admission"))?;
-    ctx.db.game_bot_invite_intent().id().delete(intent_id);
-    Ok(())
-}
-
 pub(crate) fn refused(refusal: GroupRefusal, detail: &str) -> String {
     let tag = refusal.as_tag();
     spacetimedb::log::info!("group refused {tag}: {detail}");
@@ -304,7 +289,6 @@ pub struct GroupEvent {
     pub other_name: String,
     pub created_at: Timestamp,
     pub payload: String,
-    // Identities are Shard-local; Realm-core addresses recipients by Character guid.
     #[default(0u64)]
     pub recipient_guid: u64,
 }

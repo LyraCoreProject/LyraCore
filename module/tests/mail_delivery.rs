@@ -6,14 +6,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 use support::{actor, Standalone};
 
 const TESTER: &str = "1";
-const SELLER: &str = "5090070";
 const FRIEND: &str = "5090075";
 const PURSE: u64 = 1_000;
 const BLADE: &str = "5090050";
-const COD: &str = "250";
-const SEND_ESCROW: &str = "5090080";
-const PAYMENT_ESCROW: &str = "5090081";
-const TAKE_ESCROW: &str = "5090082";
 const HOUR_MICROS: i64 = 3_600 * 1_000_000;
 
 fn now_micros() -> i64 {
@@ -44,14 +39,6 @@ fn deliver_micros(row: &BTreeMap<String, String>) -> i64 {
     row["deliver_micros"].parse().expect("a delivery instant")
 }
 
-fn purse(standalone: &Standalone) -> u64 {
-    standalone.query_rows(&format!(
-        "SELECT money FROM game_world_entity WHERE guid = {TESTER}"
-    ))[0]["money"]
-        .parse()
-        .expect("a purse is a number")
-}
-
 fn blades(standalone: &Standalone) -> Vec<String> {
     standalone
         .query_rows(&format!(
@@ -61,10 +48,6 @@ fn blades(standalone: &Standalone) -> Vec<String> {
         .filter(|row| row["entry"] == BLADE)
         .map(|row| row["guid"].clone())
         .collect()
-}
-
-fn arrivals_of(guid: &str) -> String {
-    format!("SELECT * FROM game_mail_arrival WHERE recipient_guid = {guid}")
 }
 
 fn tester_with_purse(test_name: &str) -> Standalone {
@@ -79,152 +62,6 @@ fn tester_with_purse(test_name: &str) -> Standalone {
 
 fn refused(standalone: &Standalone, reducer: &str, args: &[&str]) -> bool {
     !standalone.call(reducer, args).status.success()
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_delayed_priced_letter_is_hidden_until_it_arrives_and_its_price_is_paid_after() {
-    let standalone = tester_with_purse("mail-delivery-cod");
-    let tester = actor(TESTER);
-    let subject = quoted("delivery: cod");
-    let committed_from = now_micros();
-    standalone.assert_call(
-        "realm_mail_commit",
-        &[
-            SEND_ESCROW,
-            &actor(SELLER),
-            TESTER,
-            &subject,
-            "\"\"",
-            "0",
-            BLADE,
-            "1",
-            "17",
-            "0",
-            "false",
-            "0",
-            COD,
-            "0",
-            "3600",
-            "0",
-            "0",
-            "0",
-            "0",
-        ],
-    );
-    let committed_by = now_micros();
-    let priced = letter(&standalone, TESTER, "delivery: cod");
-    assert!(
-        (committed_from + HOUR_MICROS..=committed_by + HOUR_MICROS)
-            .contains(&deliver_micros(&priced)),
-        "the letter arrives an hour after the commit: {priced:?}"
-    );
-
-    let id = priced["id"].clone();
-    assert!(refused(
-        &standalone,
-        "realm_mail_take_item_fence",
-        &[TAKE_ESCROW, &tester, &id, BLADE]
-    ));
-    assert!(refused(
-        &standalone,
-        "realm_mail_mark_read",
-        &[&tester, &id]
-    ));
-    standalone.assert_call(
-        "realm_mail_fence",
-        &[
-            PAYMENT_ESCROW,
-            &tester,
-            SELLER,
-            &subject,
-            "\"\"",
-            COD,
-            "0",
-            "0",
-            "0",
-            &id,
-            "false",
-        ],
-    );
-    let commit_payment = [
-        PAYMENT_ESCROW,
-        &tester,
-        SELLER,
-        &subject,
-        "\"\"",
-        COD,
-        "0",
-        "0",
-        "0",
-        "0",
-        "false",
-        "0",
-        "0",
-        &id,
-        "0",
-        "0",
-        "0",
-        "0",
-        "0",
-    ];
-    assert!(
-        refused(&standalone, "realm_mail_commit", &commit_payment),
-        "a payment for a letter that has not arrived pays nobody"
-    );
-    assert_eq!(
-        purse(&standalone),
-        PURSE - 250,
-        "the price waits in its fence"
-    );
-
-    let arrival = standalone.capture_updates(&arrivals_of(TESTER), 1, || {
-        standalone.assert_call("debug_deliver_mail_fixture", &[TESTER, &subject]);
-    });
-    let inserted = arrival[0]["game_mail_arrival"]["inserts"]
-        .as_array()
-        .map_or(0, Vec::len);
-    assert_eq!(inserted, 1, "one Mail Arrival, at delivery: {arrival:?}");
-    assert_eq!(letter(&standalone, TESTER, "delivery: cod")["cod"], COD);
-
-    standalone.assert_call("realm_mail_commit", &commit_payment);
-    standalone.assert_call("realm_mail_confirm_delivery", &[PAYMENT_ESCROW, &tester]);
-    standalone.assert_call("realm_mail_settle", &[PAYMENT_ESCROW, &tester]);
-    let payment = letter(&standalone, SELLER, "delivery: cod");
-    assert_eq!(
-        (payment["money"].as_str(), payment["check_flags"].as_str()),
-        (COD, "8"),
-        "the seller is paid once, with the COD payment bit"
-    );
-    assert_eq!(
-        deliver_micros(&payment),
-        0,
-        "a COD payment arrives at once (cmangos MailHandler.cpp:475-477)"
-    );
-    assert_eq!(letter(&standalone, TESTER, "delivery: cod")["cod"], "0");
-
-    let before = blades(&standalone).len();
-    standalone.assert_call(
-        "realm_mail_take_item_fence",
-        &[TAKE_ESCROW, &tester, &id, BLADE],
-    );
-    standalone.assert_call(
-        "realm_mail_item_payout",
-        &[
-            TAKE_ESCROW,
-            &tester,
-            &id,
-            BLADE,
-            "1",
-            "17",
-            "0",
-            "false",
-            "0",
-            "0",
-        ],
-    );
-    assert_eq!(blades(&standalone).len(), before + 1);
-    assert_eq!(purse(&standalone), PURSE - 250, "charged once");
 }
 
 #[test]

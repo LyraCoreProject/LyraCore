@@ -195,16 +195,6 @@ impl Letter {
             ..self
         }
     }
-    pub(crate) fn into_returned(self) -> Self {
-        let (_, writer_guid, _) = self.sender.columns();
-        Self {
-            recipient_guid: writer_guid,
-            sender: MailSender::Character(self.recipient_guid),
-            cod: 0,
-            check_flags: CHECK_MASK_RETURNED,
-            ..self
-        }
-    }
     pub(crate) fn delayed(self, now_micros: i64, delay_secs: u32) -> Self {
         if delay_secs == 0 {
             return self;
@@ -370,9 +360,6 @@ pub(crate) fn plan_take_item(row: Option<(u64, u32)>, caller_guid: u64) -> TakeI
         None => TakeItem::NotYours,
     }
 }
-pub(crate) fn mail_item(ctx: &ReducerContext, mail_id: u64) -> Option<(u64, ItemSnapshot)> {
-    delivered_mail(ctx, mail_id).map(|m| (m.recipient_guid, m.snapshot()))
-}
 pub(crate) fn clear_mail_item(ctx: &ReducerContext, mail_id: u64) {
     let mails = ctx.db.game_mail();
     if let Some(row) = mails.id().find(mail_id) {
@@ -404,10 +391,6 @@ pub(crate) fn clear_mail_money(ctx: &ReducerContext, mail_id: u64) {
 }
 pub(crate) fn credited(purse: u32, amount: u32) -> u32 {
     purse.saturating_add(amount)
-}
-pub(crate) fn split_refund(purse: u32, refund: u32) -> (u32, u32) {
-    let purse_credit = refund.min(u32::MAX - purse);
-    (purse + purse_credit, refund - purse_credit)
 }
 pub(crate) fn apply_take_money(
     ctx: &ReducerContext,
@@ -648,21 +631,6 @@ pub fn realm_mail_take_money(
     apply_take_money(ctx, recipient_guid, mail_id)
 }
 #[reducer]
-pub fn realm_mail_item_room(
-    ctx: &ReducerContext,
-    request_actor: crate::account_ownership::SessionActor,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let payee_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    if crate::helpers::acting_entity_by_guid(ctx, payee_guid).is_none() {
-        return Err(lyracore_shared::mail::NOT_IN_WORLD.to_string());
-    }
-    if !crate::items::has_free_slot(ctx, payee_guid) {
-        return Err(lyracore_shared::mail::INVENTORY_FULL.to_string());
-    }
-    Ok(())
-}
-#[reducer]
 pub fn realm_mail_delete(
     ctx: &ReducerContext,
     request_actor: crate::account_ownership::SessionActor,
@@ -879,25 +847,6 @@ mod tests {
     fn a_credited_purse_saturates_rather_than_wrapping() {
         assert_eq!(credited(100, 30), 130);
         assert_eq!(credited(u32::MAX, 1), u32::MAX);
-    }
-
-    #[test]
-    fn both_planes_charge_the_same_total_for_the_same_letter() {
-        for money in [0, 1, 100, u32::MAX - 1, u32::MAX] {
-            let draft = crate::mail_escrow::Draft {
-                recipient_guid: 1,
-                subject: String::new(),
-                body: String::new(),
-                money,
-                postage: lyracore_shared::mail::postage(),
-                cod: 0,
-            };
-            assert_eq!(
-                lyracore_shared::mail::total_cost(money),
-                draft.fenced_copper(),
-                "the two planes must charge the same for {money} copper attached"
-            );
-        }
     }
 
     #[test]

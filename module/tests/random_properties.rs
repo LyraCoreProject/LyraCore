@@ -286,76 +286,6 @@ fn splitting_and_moving_stacks_never_mix_properties() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn mail_escrow_and_replayed_payout_preserve_both_plain_and_random_items() {
-    let shard = fixture("property-mail");
-    for (escrow_id, property) in [(5090110, PROPERTY), (5090120, "0")] {
-        let send = escrow_id.to_string();
-        shard.assert_call(
-            "realm_mail_commit",
-            &[
-                &send,
-                r#"{"guid":2,"ownership":null}"#,
-                "1",
-                "\"Fixture\"",
-                "\"\"",
-                "0",
-                ITEM,
-                "1",
-                "42",
-                "7748",
-                "false",
-                property,
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-            ],
-        );
-        let mails = shard.query_rows("SELECT id,random_property_id FROM game_mail WHERE recipient_guid = 1 AND item_entry = 5090050");
-        assert_eq!(mails.len(), 1);
-        assert_eq!(mails[0]["random_property_id"], property);
-        let payout = (escrow_id + 1).to_string();
-        shard.assert_call(
-            "realm_mail_take_item_fence",
-            &[
-                &payout,
-                r#"{"guid":1,"ownership":null}"#,
-                &mails[0]["id"],
-                ITEM,
-            ],
-        );
-        let fenced = shard.query_rows(&format!(
-            "SELECT random_property_id FROM game_mail_escrow WHERE escrow_id = {payout}"
-        ));
-        assert_eq!(fenced[0]["random_property_id"], property);
-        let args = [
-            &payout,
-            r#"{"guid":1,"ownership":null}"#,
-            &mails[0]["id"],
-            ITEM,
-            "1",
-            "42",
-            "7748",
-            "false",
-            property,
-            "0",
-        ];
-        shard.assert_call("realm_mail_item_payout", &args);
-        shard.assert_call("realm_mail_item_payout", &args);
-        let items = shard.query_rows("SELECT random_property_id,enchant_id,durability FROM game_item_instance WHERE owner_guid = 1");
-        assert_eq!(items.len(), 1, "payout replay must not duplicate the item");
-        assert_eq!(items[0]["random_property_id"], property);
-        assert_eq!(items[0]["enchant_id"], "7748");
-        assert_eq!(items[0]["durability"], "42");
-        shard.assert_sql("DELETE FROM game_item_instance WHERE owner_guid = 1");
-    }
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
     let shard = fixture("property-buyback");
     shard.assert_call("debug_spawn_at_feet", &["1", "51004", "1"]);
@@ -390,47 +320,6 @@ fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
             "UPDATE game_item_template SET random_property = {POOL} WHERE entry = {ITEM}"
         ));
     }
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn auction_refund_replay_compares_the_saved_property() {
-    let shard = fixture("property-auction-refund");
-    let mut args = [
-        "5090140",
-        r#"{"guid":1,"ownership":null}"#,
-        "5090141",
-        ITEM,
-        "1",
-        "42",
-        "7748",
-        "false",
-        PROPERTY,
-        "1",
-        "5",
-        "5",
-        "100",
-        "500",
-        "120",
-        "10",
-        "1",
-        "7200000001",
-        "0",
-    ];
-    shard.assert_call("realm_auction_refund_listing", &args);
-    shard.assert_call("realm_auction_refund_listing", &args);
-    let mails = shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1");
-    assert_eq!(mails.len(), 1);
-    assert_eq!(mails[0]["random_property_id"], PROPERTY);
-    assert_eq!(mails[0]["item_enchant_id"], "7748");
-    assert_eq!(mails[0]["item_durability"], "42");
-    assert_eq!(mails[0]["money"], "10");
-    args[8] = "0";
-    assert!(!shard
-        .call("realm_auction_refund_listing", &args)
-        .status
-        .success());
-    assert_eq!(shard.query_rows("SELECT random_property_id,item_enchant_id,item_durability,money FROM game_mail WHERE recipient_guid = 1"), mails);
 }
 
 #[test]

@@ -25,7 +25,6 @@ fn bind_session(shard: &Standalone) {
         "establish_session",
         &[RIDER, &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
 }
 
 fn reins(shard: &Standalone) -> Vec<Row> {

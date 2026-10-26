@@ -86,8 +86,8 @@ pub(crate) fn bid(
     let operation_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)
         .map_err(|_| AuctionRefusal::Database)?
         .start();
-    let request = hold_request(
-        HoldOperation::Bid,
+    let request = bid_request(
+        BidOperation::Bid,
         operation_id,
         bidder_guid,
         auction_id,
@@ -98,9 +98,9 @@ pub(crate) fn bid(
     let auction = market.auction(auction_id);
     let decision = decide_bid(auction, request, market.now_micros());
     let price = match decision {
-        HoldDecision::Accepted(accepted) => accepted.price,
-        HoldDecision::ItemNotFound => return Err(AuctionRefusal::ItemNotFound.into()),
-        HoldDecision::HigherBid {
+        BidDecision::Accepted(accepted) => accepted.price,
+        BidDecision::ItemNotFound => return Err(AuctionRefusal::ItemNotFound.into()),
+        BidDecision::HigherBid {
             bidder_guid,
             current_bid,
             minimum_increment,
@@ -111,9 +111,9 @@ pub(crate) fn bid(
                 minimum_increment,
             })
         }
-        HoldDecision::BidIncrement => return Err(BidRefusal::Increment),
-        HoldDecision::BidOwn => return Err(BidRefusal::Own),
-        HoldDecision::Database | HoldDecision::Cancelled { .. } => {
+        BidDecision::BidIncrement => return Err(BidRefusal::Increment),
+        BidDecision::BidOwn => return Err(BidRefusal::Own),
+        BidDecision::Database | BidDecision::Cancelled { .. } => {
             return Err(AuctionRefusal::Database.into())
         }
     };
@@ -154,8 +154,8 @@ pub(crate) fn cancel(
     let operation_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)
         .map_err(|_| AuctionRefusal::Database)?
         .start();
-    let request = hold_request(
-        HoldOperation::Cancel,
+    let request = bid_request(
+        BidOperation::Cancel,
         operation_id,
         seller_guid,
         auction_id,
@@ -163,7 +163,7 @@ pub(crate) fn cancel(
         cut,
     );
     let decision = decide_cancel(Some(auction), request, market.now_micros());
-    if !matches!(decision, HoldDecision::Cancelled { .. }) {
+    if !matches!(decision, BidDecision::Cancelled { .. }) {
         return Err(AuctionRefusal::Database);
     }
     seller.money -= cut;

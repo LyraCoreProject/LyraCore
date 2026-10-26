@@ -16,28 +16,28 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
-            &[
-                "game_account_claim",
-                "game_account_fence",
-                "game_account_character_owner",
-            ],
-            "Realm Account ownership retained across Character deletion and Transfer",
+            &["game_account_claim"],
+            "Account Claim keyed by Account and retained across Character deletion",
         ),
         (
-            &[
-                "game_auction",
-                "game_auction_bid_decision",
-                "game_auction_operation_receipt",
-            ],
-            "realm-owned Auction value and protocol state",
+            &["game_account_fence", "game_account_character_owner"],
+            "retired Account Fence tables that nothing writes",
+        ),
+        (
+            &["game_auction", "game_auction_operation_receipt"],
+            "realm-owned Auction value and listing receipts",
+        ),
+        (
+            &["game_auction_bid_decision"],
+            "retired Auction decision table that nothing writes",
         ),
         (
             &["game_bot_invite_intent"],
-            "short-lived Group Intent consumed by the Gateway or event GC",
+            "short-lived Group Intent reaped by event GC",
         ),
         (
             &["game_bot_transfer_intent"],
-            "durable source-side Transfer Intent consumed by exact Gateway completion",
+            "durable source-side Transfer Intent consumed by its Transfer completion",
         ),
         (
             &["game_party_command_intent"],
@@ -118,7 +118,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_group"],
-            "Realm-core Group authority shared by all members",
+            "Group authority shared by all members",
         ),
         (
             &[
@@ -132,7 +132,7 @@ pub(crate) mod character_owned_tripwire {
         ),
         (
             &["game_guild_fee_decision"],
-            "Realm-core guild fee decision kept as the replay answer for its operation id",
+            "retired guild fee table that nothing writes",
         ),
         (
             &["game_loot_roll_vote"],
@@ -152,13 +152,16 @@ pub(crate) mod character_owned_tripwire {
                 "game_chat_channel_ban",
                 "game_chat_channel_member",
             ],
-            "Realm-core Chat Channel state; membership ends with the Account Claim that admitted it",
+            "Chat Channel state; membership ends at World Session end or with its Account Claim",
         ),
         (
             &["game_meeting_stone_seeker"],
-            "Realm-core Meeting Stone Queue; a solo Seeker ends with its Account Claim, a party Seeker with its party membership",
+            "Meeting Stone Queue; a solo Seeker ends at World Session end or with its Account Claim, a party Seeker with its party membership",
         ),
-        (&["game_gateway_session"], "live Session routing state"),
+        (
+            &["game_gateway_session"],
+            "retired Gateway Session table that nothing writes",
+        ),
         (
             &["game_entity_motion_pending"],
             "short-lived motion staging row drained by the next publish tick",
@@ -1311,11 +1314,10 @@ mod character_fence_tripwire {
     use crate::test_scan::repo_root;
 
     const WHITELIST: &[(&str, usize, &str)] = &[
-        ("module/src/account_ownership.rs", 2, "Account fencing reads ownership even during Transfer. These two reads only check the Account name before fencing or removing a live entity; Character rows and Transfer records remain intact."),
         ("module/src/helpers.rs", 2, "`character_by_guid` and `characters_by_name` apply the Transfer Gate to raw Character reads"),
         ("module/src/transfer/mod.rs", 4, "Transfer reads the fenced Character for export, destination materialization, durability checks, and the in-transit Instance census."),
         ("module/src/world.rs", 8, "player_login carries its own `is_in_transit` fence (the re-materialisation chokepoint, 2 reads); teleport_player, set_home, persist_entity and is_gm_character take a guid already resolved through a fenced entity (persist_entity is called BY begin_transfer); debug_delete_character keeps a raw existence probe so a missing character stays a no-op while an in-transit one is REFUSED, with the fence on the same expression; cascade_delete_character's raw row DELETE is the sweep that probe guards. `recall_to_home` is now FENCED (character_by_guid) — it was the one teleport_player caller needing no live entity"),
-        ("module/src/group.rs", 3, "Group accept, uninvite, and leave read member identity while changing membership, which is authoritative on Realm-core."),
+        ("module/src/group.rs", 3, "Group accept, uninvite, and leave read member identity while changing membership."),
         ("module/src/auth.rs", 4, "Character creation checks name uniqueness and initializes the guid allocator. Character deletion distinguishes absence, ownership, and the Transfer fence."),
         ("module/src/items/ops.rs", 2, "race/class reads for the starter loadout and the mana-class gate — no write to the character"),
         ("module/src/spell/cast/targeting.rs", 1, "caster NAME for the resurrect prompt — no write"),
@@ -1429,7 +1431,7 @@ mod character_fence_tripwire {
              `crate::helpers::character_by_guid(ctx, guid)` or \
              `crate::helpers::character_by_name(ctx, name)`; both read an in-transit character as \
              absent, so your existing not-found arm fires and no new error string reaches the \
-             gateway. If refusal is the WRONG answer for your path (it would drop a third party's \
+             client. If refusal is the WRONG answer for your path (it would drop a third party's \
              value, or the field is connection-derived and regenerated at the destination), pick the \
              DEFER or REGENERATE verdict instead and add the site WITH its verdict — to `WHITELIST` \
              (module/src/tripwires.rs) for a Core file, or to `PACKAGE_FILE_BUDGET` for a Package \
@@ -1470,7 +1472,7 @@ mod gc_reap_tripwire {
         "game_creature_move_event",
         "game_channel_event",
         "game_mail",
-        // Keep source Intents until exact Gateway completion can finish the destination release.
+        // Keep source Intents until their Transfer completes.
         "game_bot_transfer_intent",
     ];
 

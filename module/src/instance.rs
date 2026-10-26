@@ -864,7 +864,7 @@ pub(crate) fn teardown_instance_inner(ctx: &ReducerContext, instance_id: u64, de
     if !delete_row {
         log::info!(
             "teardown_instance: instance {instance_id} population EVICTED ({} entities, {} GO \
-             copies) — row + bindings kept as a cross-shard lease",
+             copies) — row + bindings kept for later party arrivals",
             doomed.len(),
             copies.len()
         );

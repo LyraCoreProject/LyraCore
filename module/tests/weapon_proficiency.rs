@@ -86,7 +86,6 @@ fn login_restores_a_missing_kit_weapon_proficiency() {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    shard.assert_call("gw_heartbeat", &[]);
     shard.assert_call("gw_player_login", &["1", &actor("1")]);
 
     assert!(spellbook(&shard, "1").contains(&"201".to_string()));

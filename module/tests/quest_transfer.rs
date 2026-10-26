@@ -138,7 +138,6 @@ fn quest_progress_survives_cross_shard_transfer_and_world_port() {
         "establish_session",
         &["1", &key, r#"{"__identity__":"0x1"}"#],
     );
-    destination.assert_call("gw_heartbeat", &[]);
     destination.assert_call("gw_player_world_port", &["1", &actor(CHARACTER)]);
     assert_eq!(
         quests(&destination),
