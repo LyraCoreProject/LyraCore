@@ -173,9 +173,15 @@ next milestone in the same run.
   mismatch.
 - Make the classic-db text reader expose rows by column name too, taking the names from the
   dump's `CREATE TABLE` statements, so both sources share one interface.
+- First, as its own slice (S1-pre, `vmangos/s1-deterministic-output`), make the classic-db
+  import deterministic. Two runs of the same binary on the same input must produce identical
+  dry-run SQL and reducer batches. Decided on 2026-10-26: the gossip text slot ids came from
+  `HashSet` iteration (`needed_text_ids` in `world_import.rs`). Sort before assigning ids, and
+  check every other hash-ordered loop that feeds output. That deterministic revision is the
+  baseline.
 - Move every positional index in `dump.rs` and its callers onto names. A classic-db import must
-  produce identical output before and after, so compare the dry-run SQL and the reducer batches
-  byte for byte.
+  produce identical output before and after, compared with the S1-pre baseline, so compare the
+  dry-run SQL and the reducer batches byte for byte.
 - Add the patch and build selection module (decision 3) and the `--source vmangos|classic-db`
   switch, which defaults to classic-db for now.
 - Add a test helper that builds a small SQLite database from named rows, so vmangos fixtures stay
