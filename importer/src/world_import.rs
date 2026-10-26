@@ -1,5 +1,7 @@
 #[path = "world_import_loot.rs"]
 mod vmangos_loot;
+#[path = "world_import_trainers.rs"]
+mod trainers;
 
 use std::collections::HashMap;
 
@@ -3412,13 +3414,7 @@ fn push_quest_and_gameobject_statements(
         push_gameobject_statements(stmts, go_template_rows, go_trap_rows, go_meeting_stone_rows);
     }
     if family_active(args, "trainers") {
-        stmts.push("DELETE FROM game_trainer_spell WHERE id > 0".into());
-        push_insert(
-            stmts,
-            "game_trainer_spell",
-            "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
-            trainer_rows,
-        );
+        trainers::statements(stmts, trainer_rows);
     }
 }
 
@@ -3983,6 +3979,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
         Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
+        Some("trainers") => trainers::plan(dump, args),
         Some("globals") => {
             let stmts = globals_statements(dump, args.dbc.as_deref())?;
             let count = insert_row_count(&stmts);
@@ -3995,7 +3992,9 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
                 ..Default::default()
             })
         }
-        _ => bail!("vmangos currently supports --family globals, items, loot or gameobjects"),
+        _ => bail!(
+            "vmangos currently supports --family globals, items, loot, gameobjects or trainers"
+        ),
     }
 }
 

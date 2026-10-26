@@ -56,3 +56,15 @@ are not implemented by this family import.
 
 The 16 portal conditions remain unsupported. Gameobject source states are translated; they are
 not an unsupported finding.
+
+Trainer findings count emitted offers after shared-list precedence and profile filtering.
+
+| Finding | Full-world | Alliance-single | Current limit |
+| --- | ---: | ---: | --- |
+| `trainers.skill-requirement` | 4879 | 1839 | Trainer offers have no required skill/rank columns. |
+| `trainers.multiple-learn-targets` | 14 | 10 | The Module grants the first learn target. |
+| `trainers.racial-riding` | 7 | 0 | The Module's mount gates use skill 762, not the older racial riding lines. |
+
+The import retains source skill lines and marks the older riding behavior unsupported. Missing or
+non-learning source spells would be omitted with findings; neither occurs at this pin. The 16
+portal conditions remain unsupported.

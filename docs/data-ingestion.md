@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items|loot|gameobjects` imports the selected SQLite rows for those families.
+`--source vmangos --family globals|items|loot|gameobjects|trainers` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -86,6 +86,18 @@ Transports use selected build rows and template versions with the client's TaxiP
 TaxiPathNode tables. `--go-models <client/Data> --source vmangos --dump <sqlite>` resolves door and
 button meshes through the same template reader. The gameobjects census includes these two
 companion catalogues, plus planned spawn counts for each consumed map floor.
+
+The trainers family joins shared offers through `creature_template.trainer_id`. Shared offers
+win when the same spell also appears on the creature's direct list. It keeps source wrapper spell
+IDs and uses the selected wrapper's spell level when the offer has no required level. This follows
+`LoadTrainers` in [ObjectMgr.cpp at the pinned commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L10600-L10744).
+
+vmangos profession offers come from its skill-step effects. Constant steps 1 through 4 grant
+75 through 300 ranks, following [EffectLearnSkill at the same commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEffects.cpp#L2959-L2975).
+The vmangos import adds no synthetic profession offers. Its manifest compares the selected skill
+targets with the classic-db `PROFESSION_LEARN` list and reports source skill prerequisites and
+multiple learn targets that the current Module cannot represent. Classic-db keeps its existing
+trainer output.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
