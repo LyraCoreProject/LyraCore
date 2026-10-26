@@ -46,6 +46,16 @@ pub fn log_dir() -> PathBuf {
     std::env::temp_dir().join("lyracore-standalone-logs")
 }
 
+// Wasmtime keys entries by Module and compiler, and its cache tolerates concurrent processes.
+fn share_compile_cache(data_dir: &Path) {
+    let shared = std::env::temp_dir().join("lyracore-wasmtime-cache");
+    fs::create_dir_all(&shared).expect("failed to create the shared Wasm compile cache");
+    let cache = data_dir.join("cache");
+    fs::create_dir(&cache).expect("failed to create the standalone cache directory");
+    std::os::unix::fs::symlink(&shared, cache.join("wasmtime"))
+        .expect("failed to link the shared Wasm compile cache");
+}
+
 // A synchronous probe must return on its own; the deadline cannot interrupt it.
 pub fn poll_until(timeout: Duration, mut probe: impl FnMut() -> bool) -> bool {
     let deadline = Instant::now() + timeout;
@@ -144,6 +154,7 @@ impl Standalone {
         let name = format!("{test_name}-{}-{nonce}", std::process::id());
         let data_dir = std::env::temp_dir().join(format!("lyracore-{name}"));
         fs::create_dir(&data_dir).expect("failed to create standalone data directory");
+        share_compile_cache(&data_dir);
         let cli_config = data_dir.join("cli.toml");
 
         let log_dir = log_dir();

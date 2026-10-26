@@ -1,0 +1,11 @@
+name: Set up the Host toolchain
+description: Install the Rust toolchain pinned for the native Host and export it as HOST_TOOLCHAIN.
+runs:
+  using: composite
+  steps:
+    - shell: bash
+      run: |
+        toolchain=$(sed -n 's/^[[:space:]]*channel[[:space:]]*=[[:space:]]*"\([^"]*\)".*/\1/p' native-host/rust-toolchain.toml)
+        test -n "$toolchain"
+        echo "HOST_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+        rustup toolchain install "$toolchain" --profile minimal --component rustfmt
