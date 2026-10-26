@@ -1400,19 +1400,6 @@ pub fn gw_client_command(
     )?)
 }
 
-#[reducer]
-pub fn gw_gm_command(
-    ctx: &ReducerContext,
-    request_actor: crate::account_ownership::SessionActor,
-    alpha_test_tools: bool,
-    text: String,
-) -> Result<(), String> {
-    require_operator(ctx)?;
-    let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    let caller = actor(ctx, actor_guid)?;
-    crate::gm::apply_gm_command(ctx, caller, alpha_test_tools, text)
-}
-
 #[cfg(test)]
 mod tests {
     use super::{apply_movement_batch, GwMove};

@@ -166,8 +166,10 @@ world machinery. `owner_identity` is `Identity::ZERO` until `establish_session` 
 ### Accounts and Sessions (`module/src/auth.rs`, `module/src/account_ownership.rs`)
 
 All private. `game_account` holds the SRP6 salt and verifier, never a password, and the Account's
-Alpha Test Tools authority. New Accounts copy `game_alpha_test_tools_enrollment`, which starts
-enabled; changing enrollment never changes an existing Account. `game_session` holds the SRP6
+Alpha Test Tools authority and GM level. `game_character.gm_level` is legacy:
+`debug_repair_after_publish` moves a nonzero value onto the Account and zeroes it. New Accounts copy
+`game_alpha_test_tools_enrollment`, which starts enabled; changing enrollment never changes an
+existing Account. `game_session` holds the SRP6
 session key K. A row is valid for one hour from its logon (`expires_at`): world authentication
 refuses an expired row like an absent one, and `reap_sessions` deletes expired rows every five
 minutes. `game_operator` is a singleton holding the one Operator identity, captured by

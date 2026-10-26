@@ -25,7 +25,7 @@ entry in both files.
 
 **F** [Fake](CORE_TERMS.md#fake) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#bots) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Home Shard](#retired-terms) · [Host Operation](#runtime-scripts)
 
@@ -197,6 +197,14 @@ _Avoid_: deleted bot, orphan bot, frozen bot
 **Alpha Test Tools**:
 Account-owned authority for a limited set of alpha testing dot-commands. The Module reads it from
 the Account for every command and applies the final Gate.
+
+**GM level**:
+Account-owned authority for every dot-command. Any nonzero level grants all of them. It also lets
+each Character on the Account create a Guild with `.guild create`, stay in another party's
+Instance, chat past the Chat Flood Limiter and move without logging movement violations. The
+Operator sets it with `set_gm_level`, which takes a Character name and writes that Character's
+Account. Godmode (`.god`), not the GM level, keeps creatures from choosing a Character as a target.
+_Avoid_: GM character
 
 **Login Queue**:
 The Module's line of authenticated World Sessions waiting for admission in ticket order. The vanilla
@@ -428,7 +436,7 @@ Chat Line.
 
 **Chat Flood Limiter**:
 The native connection's count of fast chat lines. A burst mutes the World Session for a short time.
-`/afk`, `/dnd` and addon lines do not count, a Character with a GM level is never muted, and the
+`/afk`, `/dnd` and addon lines do not count, a Character whose Account has a GM level is never muted, and the
 count survives Character logout. See `module/src/native/chat_flood.rs`.
 _Avoid_: rate limiter, throttle, spam filter
 

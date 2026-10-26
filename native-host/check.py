@@ -654,7 +654,7 @@ def check_guild(host):
     peer.send(0x81, b'Forbidden Guild\0')
     assert not any(op in (0x55, 0x93) for op, _ in peer.collect())
     assert not host.rows(f'SELECT guild_id FROM game_guild_member WHERE character_guid = {peer_guid}')
-    gm = host.rows(f'SELECT gm_level FROM game_character WHERE guid = {guid}')[0][0]
+    gm = host.rows("SELECT gm_level FROM game_account WHERE username = 'NATIVE'")[0][0]
     host.call('set_gm_level', ['Native', 1])
     client.send(0x81, b'Temporary Guild\0')
     assert values(client.collect(), guid)[191] != 0
@@ -2898,7 +2898,7 @@ def check_channels(host):
     command(peer, 0x9a)
     roster = next(body for opcode, body in peer.collect() if opcode == 0x9b)
     assert struct.pack('<Q', guid) in roster and struct.pack('<Q', peer_guid) in roster
-    host.sql(f'UPDATE game_character SET gm_level = 1 WHERE guid = {guid}')
+    host.call('set_gm_level', ['Native', 1])
     say(client, 'channel line')
     assert any(opcode == 0x96 and b'channel line\0' in body for opcode, body in client.collect())
     assert any(opcode == 0x96 and b'channel line\0' in body for opcode, body in peer.collect())
@@ -2996,7 +2996,7 @@ def check_channels(host):
     assert notices(client.collect()) == [bytes([17]) + b'WorldDefense\0']
     command(client, 0x98, channel=b'WorldDefense\0')
     client.collect()
-    host.sql(f'UPDATE game_character SET gm_level = 0 WHERE guid = {guid}')
+    host.call('set_gm_level', ['Native', 0])
     host.call('debug_teleport', [peer_guid, 0, 11, 0, 0, 0])
     peer.collect()
     client.collect()
@@ -3255,7 +3255,7 @@ def check_chat(host):
     def chat(packets):
         return [packet for packet in packets if packet[0] == 0x96]
 
-    host.sql(f'UPDATE game_character SET gm_level = 1 WHERE guid = {guid}')
+    host.call('set_gm_level', ['Native', 1])
     send(client, 0, '  native say  ')
     expected = line(0, guid, 'native say', 7)
     assert chat(client.collect()) == [expected]
@@ -3350,7 +3350,7 @@ def check_chat(host):
     host.call('debug_teleport', [peer_guid, 0, 11, 0, 0, 0])
     peer.collect()
     client.collect()
-    host.sql(f'UPDATE game_character SET gm_level = 0 WHERE guid = {guid}')
+    host.call('set_gm_level', ['Native', 0])
     client.send(0x4b)
     client.collect()
     client.send(0x3d, struct.pack('<Q', guid))
@@ -3441,6 +3441,34 @@ def check_session_expiry(host):
     host.await_empty('game_native_player')
     host.wait_until(lambda: not host.rows(f'SELECT account_id FROM game_session WHERE account_id = {active.id}'),
         'Expired Session remained after its World Session closed')
+
+
+def check_gm_commands(host):
+    account = host.account('GMACCOUNT')
+    host.call('revoke_alpha_test_tools', ['GMACCOUNT'])
+    alt = host.character('Gmalt', account=account)
+    client = host.enter_world('Gmmain', account=account)
+
+    def command(text):
+        client.send(0x95, struct.pack('<II', 0, 7) + text.encode() + b'\0')
+        return b''.join(body for opcode, body in client.collect() if opcode == 0x96)
+
+    def speed():
+        return host.rows(f'SELECT run_speed_mult_bp FROM game_world_entity WHERE guid = {client.guid}')[0][0]
+
+    assert b'permission denied' in command('.speed 2')
+    assert speed() == 10000
+    host.call('grant_alpha_test_tools', ['GMACCOUNT'])
+    command('.speed 2')
+    assert speed() == 20000
+    assert b'permission denied' in command('.gps')
+    host.call('set_gm_level', ['Gmmain', 1])
+    assert b'Position: map' in command('.gps')
+    client.send(0x4b)
+    client.collect()
+    client.send(0x3d, struct.pack('<Q', alt))
+    client.collect()
+    assert b'Position: map' in command('.gps'), 'the GM level covers every Character on the Account'
 
 
 def check_who_bounds(host):
@@ -4543,7 +4571,7 @@ SHARED = named(
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
     check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_addon, check_chat,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,
-    check_session_expiry, check_who_bounds, check_session_revocation,
+    check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation,
 ) | {'admission': admission.run}
 
 # Each of these checks gets its own Host, built from these options.

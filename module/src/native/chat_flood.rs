@@ -82,7 +82,8 @@ pub(super) fn judge(
     }
     let flood = connection.chat_flood.get_or_insert_with(ChatFlood::default);
     let seconds = flood.admit(rule, ctx.timestamp.to_micros_since_unix_epoch(), || {
-        crate::helpers::character_by_guid(ctx, speaker.guid).is_some_and(|c| c.gm_level > 0)
+        crate::helpers::character_by_guid(ctx, speaker.guid)
+            .is_some_and(|c| crate::auth::gm_level(ctx, c.account_id) != 0)
     });
     if rule == Rule::Counted && seconds.is_none() {
         // The limiter belongs to the TCP connection and survives Character logout.

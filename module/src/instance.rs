@@ -958,7 +958,7 @@ fn instance_removal_standing(ctx: &ReducerContext, character_guid: u64) -> Optio
         instance_id,
         instance_party,
         own_group,
-        character.gm_level,
+        crate::auth::gm_level(ctx, character.account_id),
     )
     .then_some(RemovalStanding {
         instance_id,

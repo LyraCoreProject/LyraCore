@@ -1564,8 +1564,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .filter(|target| {
                 target.is_player()
                     && !target.dead
-                    && crate::helpers::character_by_guid(self.ctx, target.guid)
-                        .is_none_or(|character| character.gm_level == 0)
+                    && !target.godmode
                     && target.map_id == creature.map_id
                     && target.instance_id == creature.instance_id
                     && crate::combat::may_harm(self.ctx, &creature, target)

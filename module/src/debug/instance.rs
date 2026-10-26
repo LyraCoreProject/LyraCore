@@ -975,7 +975,7 @@ pub fn debug_stage_instance_removal_fixture(
     ctx: &ReducerContext,
     party_id: u64,
 ) -> Result<(), String> {
-    use crate::game_character;
+    use crate::{game_account, game_character};
     crate::helpers::require_operator(ctx)?;
     let instances = ctx.db.game_instance();
     instances.instance_id().delete(REMOVAL_FIXTURE_INSTANCE);
@@ -995,7 +995,15 @@ pub fn debug_stage_instance_removal_fixture(
             .ok_or("the seeded Tester is the fixture template")?;
         character.guid = guid;
         character.name = name.to_string();
-        character.gm_level = gm_level;
+        character.account_id = guid;
+        crate::auth::ensure_shadow_account(ctx, guid);
+        let accounts = ctx.db.game_account();
+        let mut account = accounts
+            .id()
+            .find(guid)
+            .ok_or("the fixture Account exists")?;
+        account.gm_level = gm_level;
+        accounts.id().update(account);
         character.online = online;
         character.first_login = false;
         (character.home_map, character.home_x, character.home_y) = (home_map, home_x, home_y);

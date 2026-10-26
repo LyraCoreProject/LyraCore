@@ -59,6 +59,7 @@ fn owned_account_with_room(ctx: &ReducerContext, package_name: &str) -> Result<u
             identity: None,
             banned: false,
             alpha_test_tools: false,
+            gm_level: 0,
         })
         .map_err(|error| format!("Package Account for {package_name} not created: {error}"))?;
     ctx.db.game_package_account().insert(PackageAccount {
