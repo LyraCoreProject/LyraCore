@@ -9,19 +9,23 @@ struct Extents {
     anchor: (f64, f64, f64),
 }
 
-fn compute_extents(dump: &str, map: i64, bbox: Option<(f64, f64, f64, f64)>) -> Option<Extents> {
+fn compute_extents(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    map: i64,
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> Option<Extents> {
     let mut count = 0u64;
     let mut min = (f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut kept: Vec<(f64, f64, f64)> = Vec::new();
-    for row in parse_table(dump, "creature") {
-        let m: i64 = field(&row, cr::MAP).parse().unwrap_or(-1);
+    for row in parse_table(dump, "creature").iter() {
+        let m: i64 = field(row, cr::MAP).parse().unwrap_or(-1);
         if m != map {
             continue;
         }
-        let x: f64 = field(&row, cr::X).parse().unwrap_or(0.0);
-        let y: f64 = field(&row, cr::Y).parse().unwrap_or(0.0);
-        let z: f64 = field(&row, cr::Z).parse().unwrap_or(0.0);
+        let x: f64 = field(row, cr::X).parse().unwrap_or(0.0);
+        let y: f64 = field(row, cr::Y).parse().unwrap_or(0.0);
+        let z: f64 = field(row, cr::Z).parse().unwrap_or(0.0);
         if matches!(bbox, Some((x0, x1, y0, y1)) if x < x0 || x > x1 || y < y0 || y > y1) {
             continue;
         }
@@ -49,7 +53,10 @@ fn compute_extents(dump: &str, map: i64, bbox: Option<(f64, f64, f64, f64)>) -> 
     })
 }
 
-fn start_positions_on_map(dump: &str, map: i64) -> Vec<(u32, u32, u32, f64, f64, f64)> {
+fn start_positions_on_map(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    map: i64,
+) -> Vec<(u32, u32, u32, f64, f64, f64)> {
     parse_table(dump, "playercreateinfo")
         .iter()
         .filter_map(|r| {

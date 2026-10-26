@@ -1258,144 +1258,140 @@ struct RawRelayStep {
 
 impl RelaySource {
     #[allow(clippy::too_many_lines)]
-    fn parse(dump: &str) -> Self {
+    fn parse(dump: &(impl crate::dump::TableRows + ?Sized)) -> Self {
         let mut source = Self::default();
         source.broadcast_ids.extend(
             parse_table(dump, "broadcast_text")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "Id"))),
         );
         source.broadcast_ids.extend(
             parse_table(dump, "script_texts")
-                .into_iter()
-                .filter_map(|row| field(&row, 0).parse::<i32>().ok())
+                .iter()
+                .filter_map(|row| field(row, "entry").parse::<i32>().ok())
                 .map(|id| id as u32),
         );
         source.spell_ids.extend(
             parse_table(dump, "spell_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "Id"))),
         );
         source.item_entries.extend(
             parse_table(dump, "item_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "entry"))),
         );
         source.creature_entries.extend(
             parse_table(dump, "creature_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "Entry"))),
         );
-        for row in parse_table(dump, "gameobject_template") {
-            let Some(entry) = source_u32(field(&row, 0)) else {
+        for row in parse_table(dump, "gameobject_template").iter() {
+            let Some(entry) = source_u32(field(row, "entry")) else {
                 continue;
             };
             source.gameobject_entries.insert(entry);
-            if source_u32(field(&row, 1)) == Some(6) {
-                if let Some(spell_id) = source_u32(field(&row, 11)).filter(|id| *id != 0) {
+            if source_u32(field(row, "type")) == Some(6) {
+                if let Some(spell_id) = source_u32(field(row, "data3")).filter(|id| *id != 0) {
                     source.gameobject_trap_spells.insert(entry, spell_id);
                 }
             }
         }
-        source.creature_spawns.extend(
-            parse_table(dump, "creature")
-                .into_iter()
-                .filter_map(|row| Some((source_u32(field(&row, 0))?, source_u32(field(&row, 1))?))),
-        );
-        source.gameobject_spawns.extend(
-            parse_table(dump, "gameobject")
-                .into_iter()
-                .filter_map(|row| Some((source_u32(field(&row, 0))?, source_u32(field(&row, 1))?))),
-        );
+        source
+            .creature_spawns
+            .extend(parse_table(dump, "creature").iter().filter_map(|row| {
+                Some((
+                    source_u32(field(row, "guid"))?,
+                    source_u32(field(row, "id"))?,
+                ))
+            }));
+        source
+            .gameobject_spawns
+            .extend(parse_table(dump, "gameobject").iter().filter_map(|row| {
+                Some((
+                    source_u32(field(row, "guid"))?,
+                    source_u32(field(row, "id"))?,
+                ))
+            }));
         source.path_ids.extend(
             parse_table(dump, "creature_movement_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "Entry"))),
         );
         source.path_ids.extend(
             parse_table(dump, "waypoint_path")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "PathId"))),
         );
         source.pool_ids.extend(
             parse_table(dump, "pool_template")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "entry"))),
         );
         source.gossip_menu_ids.extend(
             parse_table(dump, "gossip_menu")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "entry"))),
         );
         source.world_state_ids.extend(
             parse_table(dump, "worldstate_name")
-                .into_iter()
-                .filter_map(|row| source_u32(field(&row, 0))),
+                .iter()
+                .filter_map(|row| source_u32(field(row, "Id"))),
         );
-        for (row_number, row) in parse_table(dump, "dbscripts_on_relay")
-            .into_iter()
-            .enumerate()
-        {
-            if row.len() < 22 {
-                source.parse_failures.push(format!(
-                    "dbscripts_on_relay row {row_number} has {} fields, expected 22",
-                    row.len()
-                ));
-                continue;
-            }
+        for (row_number, row) in parse_table(dump, "dbscripts_on_relay").iter().enumerate() {
             let parsed = (|| -> Result<(u32, RawRelayStep), String> {
-                let u32_at = |index: usize, name: &str| {
-                    field(&row, index).parse::<u32>().map_err(|_| {
+                let u32_at = |name: &str| {
+                    field(row, name).parse::<u32>().map_err(|_| {
                         format!(
                             "dbscripts_on_relay row {row_number} field {name} is not u32: {}",
-                            field(&row, index)
+                            field(row, name)
                         )
                     })
                 };
-                let i32_at = |index: usize, name: &str| {
-                    field(&row, index).parse::<i32>().map_err(|_| {
+                let i32_at = |name: &str| {
+                    field(row, name).parse::<i32>().map_err(|_| {
                         format!(
                             "dbscripts_on_relay row {row_number} field {name} is not i32: {}",
-                            field(&row, index)
+                            field(row, name)
                         )
                     })
                 };
-                let f32_at = |index: usize, name: &str| {
-                    field(&row, index).parse::<f32>().map_err(|_| {
+                let f32_at = |name: &str| {
+                    field(row, name).parse::<f32>().map_err(|_| {
                         format!(
                             "dbscripts_on_relay row {row_number} field {name} is not f32: {}",
-                            field(&row, index)
+                            field(row, name)
                         )
                     })
                 };
-                let relay_id = u32_at(0, "id")?;
-                f32_at(14, "datafloat")?;
-                let speed = f32_at(19, "speed")?;
+                let relay_id = u32_at("id")?;
+                f32_at("datafloat")?;
+                let speed = f32_at("speed")?;
                 Ok((
                     relay_id,
                     RawRelayStep {
-                        offset_ms: u32_at(1, "delay")?,
-                        priority: u32_at(2, "priority")?,
+                        offset_ms: u32_at("delay")?,
+                        priority: u32_at("priority")?,
                         source_order: row_number as u32,
-                        command: u32_at(3, "command")?,
-                        datalong: u32_at(4, "datalong")?,
-                        datalong2: u32_at(5, "datalong2")?,
-                        datalong3: u32_at(6, "datalong3")?,
-                        buddy_entry: u32_at(7, "buddy_entry")?,
-                        search_radius: u32_at(8, "search_radius")?,
-                        flags: u32_at(9, "data_flags")?,
+                        command: u32_at("command")?,
+                        datalong: u32_at("datalong")?,
+                        datalong2: u32_at("datalong2")?,
+                        datalong3: u32_at("datalong3")?,
+                        buddy_entry: u32_at("buddy_entry")?,
+                        search_radius: u32_at("search_radius")?,
+                        flags: u32_at("data_flags")?,
                         dataints: [
-                            i32_at(10, "dataint")?,
-                            i32_at(11, "dataint2")?,
-                            i32_at(12, "dataint3")?,
-                            i32_at(13, "dataint4")?,
+                            i32_at("dataint")?,
+                            i32_at("dataint2")?,
+                            i32_at("dataint3")?,
+                            i32_at("dataint4")?,
                         ],
-                        x: f32_at(15, "x")?,
-                        y: f32_at(16, "y")?,
-                        z: f32_at(17, "z")?,
-                        orientation: f32_at(18, "o")?,
+                        x: f32_at("x")?,
+                        y: f32_at("y")?,
+                        z: f32_at("z")?,
+                        orientation: f32_at("o")?,
                         speed,
-                        condition_id: u32_at(20, "condition_id")?,
+                        condition_id: u32_at("condition_id")?,
                     },
                 ))
             })();
@@ -1407,27 +1403,20 @@ impl RelaySource {
             }
         }
         for (row_number, row) in parse_table(dump, "dbscript_random_templates")
-            .into_iter()
+            .iter()
             .enumerate()
         {
-            if row.len() < 4 {
-                source.parse_failures.push(format!(
-                    "dbscript_random_templates row {row_number} has {} fields, expected at least 4",
-                    row.len()
-                ));
-                continue;
-            }
             let parsed = (|| -> Result<(u32, u32, i32, u32), String> {
-                let template_id = field(&row, 0).parse::<u32>().map_err(|_| {
+                let template_id = field(row, "id").parse::<u32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid id")
                 })?;
-                let template_type = field(&row, 1).parse::<u32>().map_err(|_| {
+                let template_type = field(row, "type").parse::<u32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid type")
                 })?;
-                let target_id = field(&row, 2).parse::<i32>().map_err(|_| {
+                let target_id = field(row, "target_id").parse::<i32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid target_id")
                 })?;
-                let chance = field(&row, 3).parse::<u32>().map_err(|_| {
+                let chance = field(row, "chance").parse::<u32>().map_err(|_| {
                     format!("dbscript_random_templates row {row_number} has invalid chance")
                 })?;
                 Ok((template_id, template_type, target_id, chance))
@@ -2896,10 +2885,11 @@ impl RawRelayStep {
     }
 }
 
-fn parse_source_maps(dump: &str) -> HashMap<u32, BTreeSet<u32>> {
+fn parse_source_maps(dump: &(impl crate::dump::TableRows + ?Sized)) -> HashMap<u32, BTreeSet<u32>> {
     let mut maps = HashMap::new();
-    for row in parse_table(dump, "creature") {
-        let (Some(entry), Some(map_id)) = (source_u32(field(&row, 1)), source_u32(field(&row, 2)))
+    for row in parse_table(dump, "creature").iter() {
+        let (Some(entry), Some(map_id)) =
+            (source_u32(field(row, "id")), source_u32(field(row, "map")))
         else {
             continue;
         };
@@ -3035,7 +3025,7 @@ pub(crate) struct EventAiSource {
     coverage: Coverage,
 }
 
-pub(crate) fn parse(dump: &str) -> EventAiSource {
+pub(crate) fn parse(dump: &(impl crate::dump::TableRows + ?Sized)) -> EventAiSource {
     let mut coverage = Coverage::default();
     let mut broadcasts = parse_broadcasts(dump, &mut coverage);
     broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage));
@@ -3044,7 +3034,7 @@ pub(crate) fn parse(dump: &str) -> EventAiSource {
     let quest_rows = parse_table(dump, "quest_template");
     let quest_entries = quest_rows
         .iter()
-        .filter_map(|row| source_u32(field(row, 0)))
+        .filter_map(|row| source_u32(field(row, "entry")))
         .collect();
     let mut rules = parse_rules(dump, &mut coverage);
     rules.sort_by_key(|rule| rule.id);
@@ -3104,7 +3094,10 @@ fn movement_dependency_census(rules: &[RawRule]) -> MovementDependencyCensus {
     census
 }
 
-fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus {
+fn reachable_relay_census(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    rules: &[RawRule],
+) -> ReachableRelayCensus {
     const RANDOM_TEMPLATE_SCRIPT: u32 = 1;
     const COMMAND_MOVE_TO: u32 = 3;
     const COMMAND_MOVEMENT: u32 = 20;
@@ -3116,11 +3109,11 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
     const COMMAND_START_RELAY: u32 = 45;
 
     let random_templates = parse_table(dump, "dbscript_random_templates")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
-            let template_id = source_u32(field(&row, 0))?;
-            let kind = source_u32(field(&row, 1))?;
-            let relay_id = field(&row, 2).parse::<i64>().ok()?;
+            let template_id = source_u32(field(row, "id"))?;
+            let kind = source_u32(field(row, "type"))?;
+            let relay_id = field(row, "target_id").parse::<i64>().ok()?;
             (kind == RANDOM_TEMPLATE_SCRIPT && relay_id > 0)
                 .then_some((template_id, relay_id as u32))
         })
@@ -3131,11 +3124,12 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
                 by_template
             },
         );
-    let relay_rows = parse_table(dump, "dbscripts_on_relay")
-        .into_iter()
-        .filter_map(|row| Some((source_u32(field(&row, 0))?, row)))
+    let relay_table = parse_table(dump, "dbscripts_on_relay");
+    let relay_rows = relay_table
+        .iter()
+        .filter_map(|row| Some((source_u32(field(row, "id"))?, row)))
         .fold(
-            BTreeMap::<u32, Vec<Vec<String>>>::new(),
+            BTreeMap::<u32, Vec<&crate::world_source::Row>>::new(),
             |mut by_id, value| {
                 by_id.entry(value.0).or_default().push(value.1);
                 by_id
@@ -3175,7 +3169,7 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
         };
         for row in rows {
             census.rows += 1;
-            let Some(command) = source_u32(field(row, 3)) else {
+            let Some(command) = source_u32(field(row, "command")) else {
                 continue;
             };
             *census.command.entry(u64::from(command)).or_default() += 1;
@@ -3190,7 +3184,24 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
                     | COMMAND_MOVE_DYNAMIC
             ) {
                 let raw = [
-                    3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20,
+                    "command",
+                    "datalong",
+                    "datalong2",
+                    "datalong3",
+                    "buddy_entry",
+                    "search_radius",
+                    "data_flags",
+                    "dataint",
+                    "dataint2",
+                    "dataint3",
+                    "dataint4",
+                    "datafloat",
+                    "x",
+                    "y",
+                    "z",
+                    "o",
+                    "speed",
+                    "condition_id",
                 ]
                 .into_iter()
                 .map(|index| field(row, index))
@@ -3200,8 +3211,8 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
             }
             if command == COMMAND_START_RELAY {
                 census.nested_edges += 1;
-                let direct = source_u32(field(row, 4)).unwrap_or(0);
-                let template = source_u32(field(row, 5)).unwrap_or(0);
+                let direct = source_u32(field(row, "datalong")).unwrap_or(0);
+                let template = source_u32(field(row, "datalong2")).unwrap_or(0);
                 if direct != 0 {
                     pending.insert(direct);
                 } else if template != 0 {
@@ -3213,21 +3224,25 @@ fn reachable_relay_census(dump: &str, rules: &[RawRule]) -> ReachableRelayCensus
     census
 }
 
-fn source_overlap_census(dump: &str, rules: &[RawRule]) -> (u64, u64, u64) {
+fn source_overlap_census(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    rules: &[RawRule],
+) -> (u64, u64, u64) {
     let template_rows = crate::dump::parse_table(dump, "creature_template");
     let schedule_rows = crate::dump::parse_table(dump, "creature_template_spells");
     let template_schedule_entries: HashSet<u64> = schedule_rows
-        .into_iter()
-        .filter_map(|row| row.first()?.parse().ok())
+        .iter()
+        .filter_map(|row| field(row, "entry").parse().ok())
         .collect();
     let creature_spell_list_entries: HashSet<u64> = template_rows
-        .into_iter()
+        .iter()
         .filter(|row| {
-            row.get(80)
+            row.raw("SpellList")
+                .ok()
                 .and_then(|value| value.parse::<i64>().ok())
                 .is_some_and(|spell_list| spell_list > 0)
         })
-        .filter_map(|row| row.first()?.parse().ok())
+        .filter_map(|row| field(row, "Entry").parse().ok())
         .collect();
     let cast_action_entries: HashSet<u64> = rules
         .iter()
@@ -3903,41 +3918,42 @@ fn record_dropped_rule(coverage: &mut Coverage, rule: &RawRule, failures: Vec<Ma
     }
 }
 
-fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
+fn parse_rules(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    coverage: &mut Coverage,
+) -> Vec<RawRule> {
     parse_table(dump, "creature_ai_scripts")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
             coverage.total_rules += 1;
-            if row.len() < 24 {
-                coverage.drop("malformed_rule", row.len() as u64);
-                return None;
-            }
-            let Some(id) = source_u32(field(&row, 0)) else {
+            let Some(id) = source_u32(field(row, "id")) else {
                 coverage.drop("invalid_numeric", 0);
                 return None;
             };
-            let Some(subject) = field(&row, 1).parse::<i32>().ok() else {
+            let Some(subject) = field(row, "creature_id").parse::<i32>().ok() else {
                 coverage.drop("invalid_numeric", 1);
                 return None;
             };
             if subject < 0 {
                 coverage.source_guid_rules += 1;
             }
-            let Some(event) = source_loader_u32(field(&row, 2)) else {
+            let Some(event) = source_loader_u32(field(row, "event_type")) else {
                 coverage.drop("invalid_numeric", 2);
                 return None;
             };
             Coverage::source_value(&mut coverage.event, event as u64);
-            let Some(inverse_phase_mask) = source_loader_u32(field(&row, 3)) else {
+            let Some(inverse_phase_mask) =
+                source_loader_u32(field(row, "event_inverse_phase_mask"))
+            else {
                 coverage.drop("invalid_numeric", 3);
                 return None;
             };
-            let Some(raw_chance) = source_u8(field(&row, 4)) else {
+            let Some(raw_chance) = source_u8(field(row, "event_chance")) else {
                 coverage.drop("invalid_numeric", 4);
                 return None;
             };
             let chance = raw_chance.min(100);
-            let Some(flags) = source_loader_u32(field(&row, 5)) else {
+            let Some(flags) = source_loader_u32(field(row, "event_flags")) else {
                 coverage.drop("invalid_numeric", 5);
                 return None;
             };
@@ -3967,16 +3983,18 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                 });
             }
             for (index, param) in params.iter_mut().enumerate() {
-                let Some(value) = source_loader_u32(field(&row, 6 + index)) else {
+                let Some(value) =
+                    source_loader_u32(field(row, &format!("event_param{}", index + 1)))
+                else {
                     coverage.drop("invalid_numeric", (6 + index) as u64);
                     return None;
                 };
                 *param = value;
             }
             for (slot, action) in actions.iter_mut().enumerate() {
-                let action_column = 12 + slot * 4;
-                let Some(kind) = source_loader_u16(field(&row, action_column)) else {
-                    coverage.drop("invalid_numeric", action_column as u64);
+                let action_column = format!("action{}_type", slot + 1);
+                let Some(kind) = source_loader_u16(field(row, &action_column)) else {
+                    coverage.drop("invalid_numeric", slot as u64);
                     return None;
                 };
                 if kind >= ACTION_END {
@@ -3994,10 +4012,10 @@ fn parse_rules(dump: &str, coverage: &mut Coverage) -> Vec<RawRule> {
                     Coverage::source_value(&mut coverage.action, kind as u64);
                 }
                 for (part, value) in action.iter_mut().enumerate().skip(1) {
-                    let column = action_column + part;
-                    let parsed = source_loader_u32(field(&row, column));
+                    let column = format!("action{}_param{part}", slot + 1);
+                    let parsed = source_loader_u32(field(row, &column));
                     let Some(parsed) = parsed else {
-                        coverage.drop("invalid_numeric", column as u64);
+                        coverage.drop("invalid_numeric", part as u64);
                         return None;
                     };
                     *value = parsed;
@@ -4132,11 +4150,14 @@ fn movement_action_kind(action: u32) -> bool {
     )
 }
 
-fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadcast> {
+fn parse_broadcasts(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    coverage: &mut Coverage,
+) -> BTreeMap<u32, Broadcast> {
     parse_table(dump, "broadcast_text")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
-            let Some(id) = source_u32(field(&row, bt::ID)) else {
+            let Some(id) = source_u32(field(row, bt::ID)) else {
                 coverage.drop("malformed_broadcast_text", 0);
                 return None;
             };
@@ -4145,33 +4166,28 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
                 return None;
             }
             let Some(chat_type) =
-                source_u32(field(&row, bt::CHAT_TYPE)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(row, bt::CHAT_TYPE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
             };
             let Some(language) =
-                source_u32(field(&row, bt::LANGUAGE)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(row, bt::LANGUAGE)).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
                 return None;
             };
-            if row.len() < 12 {
-                coverage.drop("malformed_broadcast_text", id as u64);
-                return None;
-            }
-            let (emote_start, delay_start) = if row.len() >= 17 { (10, 13) } else { (6, 9) };
             let emotes = std::array::from_fn(|index| {
                 (
-                    source_u32(field(&row, delay_start + index)).unwrap_or(0),
-                    source_u32(field(&row, emote_start + index)).unwrap_or(0),
+                    source_u32(field(row, &format!("EmoteDelay{}", index + 1))).unwrap_or(0),
+                    source_u32(field(row, &format!("EmoteID{}", index + 1))).unwrap_or(0),
                 )
             });
             Some((
                 id,
                 Broadcast {
-                    male: field(&row, bt::TEXT).to_string(),
-                    female: field(&row, bt::TEXT1).to_string(),
+                    male: field(row, bt::TEXT).to_string(),
+                    female: field(row, bt::TEXT1).to_string(),
                     chat_type,
                     language,
                     emotes,
@@ -4182,33 +4198,29 @@ fn parse_broadcasts(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, Broadc
 }
 
 fn parse_legacy_texts(
-    dump: &str,
+    dump: &(impl crate::dump::TableRows + ?Sized),
     broadcasts: &BTreeMap<u32, Broadcast>,
     coverage: &mut Coverage,
 ) -> BTreeMap<u32, Broadcast> {
     parse_table(dump, "script_texts")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
-            let Some(id) = field(&row, 0).parse::<i64>().ok() else {
+            let Some(id) = field(row, "entry").parse::<i64>().ok() else {
                 coverage.drop("malformed_legacy_text", 0);
                 return None;
             };
-            if row.len() < 15 {
-                coverage.drop("malformed_legacy_text", id.unsigned_abs());
-                return None;
-            }
-            let broadcast_id = source_u32(field(&row, 14)).unwrap_or(0);
+            let broadcast_id = source_u32(field(row, "broadcast_text_id")).unwrap_or(0);
             let text = broadcasts.get(&broadcast_id).cloned().unwrap_or(Broadcast {
-                male: field(&row, 1).to_string(),
-                female: field(&row, 1).to_string(),
-                chat_type: source_u32(field(&row, 11))
+                male: field(row, "content_default").to_string(),
+                female: field(row, "content_default").to_string(),
+                chat_type: source_u32(field(row, "type"))
                     .and_then(|value| u8::try_from(value).ok())
                     .unwrap_or(0),
-                language: source_u32(field(&row, 12))
+                language: source_u32(field(row, "language"))
                     .and_then(|value| u8::try_from(value).ok())
                     .unwrap_or(0),
                 emotes: [
-                    (0, source_u32(field(&row, 13)).unwrap_or(0)),
+                    (0, source_u32(field(row, "emote")).unwrap_or(0)),
                     (0, 0),
                     (0, 0),
                 ],
@@ -4218,14 +4230,16 @@ fn parse_legacy_texts(
         .collect()
 }
 
-fn parse_event_predicates(dump: &str) -> BTreeMap<u32, SourceEventPredicate> {
+fn parse_event_predicates(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> BTreeMap<u32, SourceEventPredicate> {
     parse_table(dump, "conditions")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
-            let id = source_u32(field(&row, 0))?;
-            let kind = field(&row, 1).parse::<i32>().ok()?;
-            let value = source_u32(field(&row, 2))?;
-            let second = source_u32(field(&row, 3))?;
+            let id = source_u32(field(row, "condition_entry"))?;
+            let kind = field(row, "type").parse::<i32>().ok()?;
+            let value = source_u32(field(row, "value1"))?;
+            let second = source_u32(field(row, "value2"))?;
             let predicate = match (kind, value, second) {
                 (6, 469, 0) => SourceEventPredicate::Alliance,
                 (6, 67, 0) => SourceEventPredicate::Horde,
@@ -4237,11 +4251,14 @@ fn parse_event_predicates(dump: &str) -> BTreeMap<u32, SourceEventPredicate> {
         .collect()
 }
 
-fn parse_summons(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, SummonLocation> {
+fn parse_summons(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    coverage: &mut Coverage,
+) -> BTreeMap<u32, SummonLocation> {
     parse_table(dump, "creature_ai_summons")
-        .into_iter()
+        .iter()
         .filter_map(|row| {
-            let Some(id) = source_u32(field(&row, 0)) else {
+            let Some(id) = source_u32(field(row, "id")) else {
                 coverage.drop("malformed_summon_location", 0);
                 return None;
             };
@@ -4251,12 +4268,12 @@ fn parse_summons(dump: &str, coverage: &mut Coverage) -> BTreeMap<u32, SummonLoc
             }
             let parsed = || {
                 Some((
-                    field(&row, 1).parse::<f32>().ok()?,
-                    field(&row, 2).parse::<f32>().ok()?,
-                    field(&row, 3).parse::<f32>().ok()?,
-                    field(&row, 4).parse::<f32>().ok()?,
+                    field(row, "position_x").parse::<f32>().ok()?,
+                    field(row, "position_y").parse::<f32>().ok()?,
+                    field(row, "position_z").parse::<f32>().ok()?,
+                    field(row, "orientation").parse::<f32>().ok()?,
                     // The source column says seconds, but the summon API consumes milliseconds.
-                    source_u32(field(&row, 5))?,
+                    source_u32(field(row, "spawntimesecs"))?,
                 ))
             };
             let Some((x, y, z, orientation, lifetime_ms)) = parsed() else {
@@ -5977,19 +5994,26 @@ mod tests {
         params: [i64; 6],
         actions: [[i64; 4]; 3],
     ) -> String {
-        let mut fields = vec![
-            id.to_string(),
-            subject.to_string(),
-            event.to_string(),
-            "0".to_string(),
-            chance.to_string(),
-            flags.to_string(),
-        ];
-        fields.extend(params.map(|value| value.to_string()));
-        for action in actions {
-            fields.extend(action.map(|value| value.to_string()));
+        let mut row = crate::dump::FixtureRow::new("creature_ai_scripts");
+        for (name, value) in [
+            ("id", id.to_string()),
+            ("creature_id", subject.to_string()),
+            ("event_type", event.to_string()),
+            ("event_chance", chance.to_string()),
+            ("event_flags", flags.to_string()),
+        ] {
+            row[name] = value;
         }
-        format!("({})", fields.join(","))
+        for (index, value) in params.into_iter().enumerate() {
+            row[&format!("event_param{}", index + 1)] = value.to_string();
+        }
+        for (index, action) in actions.into_iter().enumerate() {
+            row[&format!("action{}_type", index + 1)] = action[0].to_string();
+            for (param, value) in action[1..].iter().enumerate() {
+                row[&format!("action{}_param{}", index + 1, param + 1)] = value.to_string();
+            }
+        }
+        format!("({})", row.join(","))
     }
 
     fn dump(rules: &[String]) -> String {
@@ -6887,7 +6911,7 @@ mod tests {
     #[test]
     fn an_accepted_relay_forces_the_creature_template_its_step_names() {
         let sql = format!(
-            "INSERT INTO `creature_template` VALUES (777,'Cured Deer'); \
+            "INSERT INTO `creature_template` (`Entry`, `Name`) VALUES (777,'Cured Deer'); \
              INSERT INTO `creature_ai_scripts` VALUES {}; \
              INSERT INTO `dbscripts_on_relay` VALUES \
              (1,0,0,44,777,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'update template');",
@@ -7175,7 +7199,7 @@ mod tests {
     #[test]
     fn pinned_quest_credit_actions_map_to_typed_recipient_policies() {
         let source = parse(&format!(
-            "INSERT INTO `quest_template` VALUES (77); {}",
+            "INSERT INTO `quest_template` (`entry`) VALUES (77); {}",
             dump(&[rule(
                 10,
                 100,
@@ -7319,7 +7343,7 @@ mod tests {
             ],
         )]));
         let missing_context = parse(&format!(
-            "INSERT INTO `quest_template` VALUES (77); {}",
+            "INSERT INTO `quest_template` (`entry`) VALUES (77); {}",
             dump(&[rule(
                 13,
                 100,
@@ -7527,7 +7551,7 @@ mod tests {
         assert_refusal(&missing_manifest, "missing:spell_template");
 
         let complete = parse(&format!(
-            "INSERT INTO `spell_template` VALUES (123); {}",
+            "INSERT INTO `spell_template` (`Id`) VALUES (123); {}",
             dump(&[rule])
         ))
         .assemble(&entries, &guids, &templates);
@@ -7879,7 +7903,7 @@ mod tests {
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
         );
         let missing_quest_dump = format!(
-            "{} INSERT INTO `conditions` VALUES (100,9,7734,0);",
+            "{} INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (100,9,7734,0);",
             dump(std::slice::from_ref(&death))
         );
         let source = parse(&missing_quest_dump);
@@ -7900,7 +7924,7 @@ mod tests {
             .contains("rule:544102 -> conditions:100 -> quest_template:7734"));
 
         let complete_dump =
-            format!("{missing_quest_dump} INSERT INTO `quest_template` VALUES (7734);");
+            format!("{missing_quest_dump} INSERT INTO `quest_template` (`entry`) VALUES (7734);");
         let source = parse(&complete_dump);
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7935,7 +7959,15 @@ mod tests {
 
     #[test]
     fn manifest_refuses_source_rows_without_a_terminal_classification() {
-        let source = parse(&dump(&["(10,100)".to_string()]));
+        let source = parse(&dump(&[rule(
+            "bad",
+            100,
+            EVENT_AGGRO,
+            100,
+            0,
+            [0; 6],
+            [[0; 4]; 3],
+        )]));
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);

@@ -1,3 +1,5 @@
+mod census;
+mod classic_columns;
 mod collision;
 mod creature_population;
 mod dbc;
@@ -14,6 +16,7 @@ mod nav;
 mod pack_client;
 mod package_delta;
 mod shard;
+mod source_selection;
 mod spell;
 mod spell_dbc;
 mod spell_snapshot;
@@ -24,6 +27,7 @@ mod ui_transform;
 mod vmap;
 mod world_import;
 mod world_import_scope;
+mod world_source;
 
 #[cfg(test)]
 use lyracore_test_support as standalone_support;
@@ -34,6 +38,8 @@ use world_import::FAMILIES;
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 struct Args {
+    source: world_source::SourceKind,
+    census: Option<String>,
     taxi_mounts: Option<String>,
     dump: Option<String>,
     dbc: Option<String>,
@@ -79,6 +85,8 @@ where
     S: Into<String>,
 {
     let mut a = Args {
+        source: world_source::SourceKind::ClassicDb,
+        census: None,
         dump: None,
         taxi_mounts: None,
         dbc: None,
@@ -119,6 +127,18 @@ where
     let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--source" => {
+                a.source = it
+                    .next()
+                    .context("--source needs classic-db or vmangos")?
+                    .parse()?
+            }
+            "--census" => {
+                a.census = Some(
+                    it.next()
+                        .context("--census needs the comparison classic-db dump path")?,
+                )
+            }
             "--taxi-mounts" => {
                 a.taxi_mounts = Some(it.next().context("--taxi-mounts needs a dump path")?)
             }
@@ -411,6 +431,30 @@ where
             );
         }
     }
+    if a.census.is_some() {
+        if a.source != world_source::SourceKind::Vmangos
+            || a.dump.is_none()
+            || a.dbc.is_none()
+            || a.family.as_deref() != Some("globals")
+            || a.apply
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.go_models.is_some()
+            || a.spells
+            || a.talents
+            || a.print_extents
+        {
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals, without --apply");
+        }
+    } else if a.source == world_source::SourceKind::Vmangos {
+        bail!("vmangos family imports are not ported yet; use --source vmangos with --census <classic.sql> --family globals");
+    }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
         if !a.spells {
@@ -476,6 +520,18 @@ impl Args {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    if let Some(classic) = &args.census {
+        print!(
+            "{}",
+            census::run(
+                std::path::Path::new(classic),
+                std::path::Path::new(args.dump.as_deref().context("missing census source")?),
+                args.dbc.as_deref().context("missing census client")?,
+                &args.source_sha,
+            )?
+        );
+        return Ok(());
+    }
 
     if let Some(dir) = args.pack_client.clone() {
         return pack_client::run(&dir, args.apply);
@@ -548,6 +604,32 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn source_defaults_to_classic_and_vmangos_census_cannot_apply() {
+        assert_eq!(
+            parse_args_from(["--dump", "source.sql"]).unwrap().source,
+            world_source::SourceKind::ClassicDb
+        );
+        assert!(parse_args_from(["--dump", "source.sql", "--source", "unknown"]).is_err());
+        let args = [
+            "--dump",
+            "source.sqlite",
+            "--source",
+            "vmangos",
+            "--census",
+            "classic.sql",
+            "--dbc",
+            "client/Data",
+            "--family",
+            "globals",
+        ];
+        assert_eq!(
+            parse_args_from(args).unwrap().source,
+            world_source::SourceKind::Vmangos
+        );
+        assert!(parse_args_from(args.into_iter().chain(["--apply"])).is_err());
+    }
 
     #[test]
     fn the_enabled_packages_root_is_absent_until_the_operator_names_it() {
@@ -847,6 +929,8 @@ mod tests {
 
     fn test_args() -> Args {
         Args {
+            source: world_source::SourceKind::ClassicDb,
+            census: None,
             dump: None,
             taxi_mounts: None,
             dbc: None,

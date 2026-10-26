@@ -307,7 +307,7 @@ fn decimal_weight(value: &str) -> Result<u32> {
     Ok(weight)
 }
 
-pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
+pub(crate) fn template_pool(row: &crate::world_source::Row) -> Result<u32> {
     field(row, crate::dump::it::RANDOM_PROPERTY)
         .parse::<u32>()
         .with_context(|| {
@@ -318,11 +318,14 @@ pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
         })
 }
 
-pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>, u64)> {
+pub(crate) fn dump_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    dbc_dir: Option<&str>,
+) -> Result<(Vec<String>, u64)> {
     let raw = parse_table(dump, "item_enchantment_template");
     let required: BTreeSet<u32> = parse_table(dump, "item_template")
         .iter()
-        .map(|row| template_pool(row))
+        .map(template_pool)
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|id| *id != 0)
@@ -337,15 +340,17 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>
     let (mut sql, properties, catalogue_row_count) = catalogue_sql(&mut chain)?;
     let mut rows = BTreeMap::new();
     let mut pools = BTreeSet::new();
-    for row in raw {
-        let pool: u32 = field(&row, 0).parse().context("invalid Property Pool ID")?;
-        let property: u32 = field(&row, 1)
+    for row in raw.iter() {
+        let pool: u32 = field(row, "entry")
+            .parse()
+            .context("invalid Property Pool ID")?;
+        let property: u32 = field(row, "ench")
             .parse()
             .context("invalid Random Property ID")?;
         if pool == 0 || !properties.contains(&property) {
             bail!("pool {pool} references missing Random Property {property}");
         }
-        let weight = decimal_weight(field(&row, 2))?;
+        let weight = decimal_weight(field(row, "chance"))?;
         let id = (u64::from(pool) << 32) | u64::from(property);
         if rows
             .insert(id, format!("({id},{pool},{property},{weight})"))

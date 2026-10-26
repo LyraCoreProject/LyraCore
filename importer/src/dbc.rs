@@ -125,7 +125,7 @@ pub fn run(data_dir: &str, taxi_mounts: Option<&str>, apply: bool, shard: &Shard
 
 pub(crate) fn run_from_dump(
     data_dir: &str,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     apply: bool,
     shard: &Shard,
 ) -> Result<()> {
@@ -145,7 +145,10 @@ pub(crate) fn run_from_dump(
     Ok(())
 }
 
-pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<Vec<String>> {
+pub(crate) fn catalogue_statements(
+    data_dir: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("dbc: opened MPQ chain from {}", dir.display());
@@ -744,20 +747,23 @@ struct TaxiCatalogueSql {
     warnings: Vec<String>,
 }
 
-fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
+fn taxi_mount_displays(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    display_ids: &HashSet<u32>,
+) -> Result<HashMap<u32, u32>> {
     let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");
     }
     let mut mounts = HashMap::with_capacity(rows.len());
-    for row in rows {
-        let entry: u32 = crate::dump::field(&row, crate::dump::ct::ENTRY)
+    for row in rows.iter() {
+        let entry: u32 = crate::dump::field(row, crate::dump::ct::ENTRY)
             .parse()
             .context("taxi mount dump has an invalid creature entry")?;
         let mut display = 0;
-        for index in crate::dump::ct::MODEL_ID1..crate::dump::ct::MODEL_ID1 + 4 {
+        for index in ["ModelId1", "ModelId2", "ModelId3", "ModelId4"] {
             let model: u32 = row
-                .get(index)
+                .raw(index)
                 .with_context(|| {
                     format!("taxi mount creature {entry} is missing model column {index}")
                 })?
@@ -783,7 +789,7 @@ fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
     path_nodes: &DbcTaxiPathNode,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     display_ids: &HashSet<u32>,
 ) -> Result<TaxiCatalogueSql> {
     use lyracore_shared::constants::taxi_fixture as fixture;
@@ -1559,7 +1565,7 @@ mod tests {
             nodes,
             paths,
             points,
-            "INSERT INTO `creature_template` VALUES \
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES \
                 (1100,'Horde mount','',1,1,295,0,0,0),
                 (1101,'Alliance mount','',1,1,1147,0,0,0),
                 (2200,'Other Horde mount','',1,1,295,0,0,0),
@@ -1626,7 +1632,7 @@ mod tests {
             &nodes,
             &paths,
             &points,
-            "INSERT INTO `creature_template` VALUES \
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES \
                 (1100,'Horde mount','',1,1, 0, 295, 1147, 0),
                 (1101,'Alliance mount','',1,1,0,0,0,1147);",
             &HashSet::from([295, 1147]),
@@ -1645,7 +1651,7 @@ mod tests {
             &nodes,
             &paths,
             &points,
-            "INSERT INTO `creature_template` VALUES \
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES \
                 (1100,'Unknown model','',1,1,9999,0,0,0),
                 (1101,'No model','',1,1,0,0,0,0);",
             &HashSet::from([295, 1147]),
@@ -1671,9 +1677,9 @@ mod tests {
         for dump in [
             "",
             "INSERT INTO `creature_template` VALUES (1100,'Short row');",
-            "INSERT INTO `creature_template` VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
-            "INSERT INTO `creature_template` VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
-            "INSERT INTO `creature_template` VALUES \
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
+            "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES \
                 (1100,'First','',1,1,295,0,0,0),(1100,'Duplicate','',1,1,1147,0,0,0);",
         ] {
             assert!(
@@ -1695,7 +1701,7 @@ mod tests {
         let (nodes, paths, points) = synthetic_taxi_catalogue();
         for tail in [",(1101,'Unfinished", ",(1101,'Mount',1", ""] {
             let dump = format!(
-                "INSERT INTO `creature_template` VALUES (1100,'Mount','',1,1,295,0,0,0){tail}"
+                "INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`, `MaxLevel`, `ModelId1`, `ModelId2`, `ModelId3`, `ModelId4`) VALUES (1100,'Mount','',1,1,295,0,0,0){tail}"
             );
             let error = super::taxi_catalogue_sql(
                 &nodes,
