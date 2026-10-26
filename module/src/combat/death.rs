@@ -407,6 +407,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     crate::duel::interrupt_duel_for(ctx, victim_guid);
     victim.health = 0;
     victim.dead = true;
+    victim.next_swing_spell = 0;
     victim.combat_until_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
     victim.update(ctx);
     let killer = (killer_guid != 0).then_some(killer_guid);

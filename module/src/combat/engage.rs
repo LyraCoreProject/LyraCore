@@ -276,7 +276,17 @@ impl MeleeAttack {
         row
     }
 
+    // Stops the attack; vmangos AttackStop also interrupts the queued strike.
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) -> bool {
+        let deleted = Self::end_auto_repeat(ctx, guid);
+        if deleted {
+            crate::combat::interrupt_queued_strike_of(ctx, guid);
+        }
+        deleted
+    }
+
+    // Ends only an Auto Shot loop; vmangos interrupts just the repeat, not a queued strike.
+    pub(crate) fn end_auto_repeat(ctx: &ReducerContext, guid: u64) -> bool {
         let table = ctx.db.game_melee_attack();
         let Some(old) = table.attacker_guid().find(guid) else {
             return false;

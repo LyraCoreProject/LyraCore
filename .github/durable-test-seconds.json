@@ -73,7 +73,7 @@
   "quest_choice_reward": 2,
   "quest_log_full": 6,
   "quest_transfer": 3,
-  "queued_strike_fizzle": 3,
+  "queued_strike": 20,
   "raid_broadcasts": 5,
   "raid_chat": 9,
   "raid_convert": 7,
