@@ -292,14 +292,23 @@ fn build_start_position_sql(dump: &str) -> Vec<String> {
 fn build_graveyard_zone_sql(dump: &str) -> Result<Vec<String>> {
     let source_rows = parse_table(dump, "game_graveyard_zone");
     let columns = if source_rows.is_empty() {
-        [0; 3]
+        [0; 4]
     } else {
         [
             crate::dump::column_index(dump, "game_graveyard_zone", "id")?,
             crate::dump::column_index(dump, "game_graveyard_zone", "ghost_loc")?,
             crate::dump::column_index(dump, "game_graveyard_zone", "faction")?,
+            crate::dump::column_index(dump, "game_graveyard_zone", "link_kind")?,
         ]
     };
+    for row in &source_rows {
+        let link_kind: u32 = field(row, columns[3])
+            .parse()
+            .context("game_graveyard_zone.link_kind: expected an unsigned integer")?;
+        if link_kind != 0 {
+            bail!("game_graveyard_zone.link_kind: unsupported value {link_kind}");
+        }
+    }
     let rows: Vec<String> = source_rows
         .iter()
         .enumerate()
@@ -3862,6 +3871,24 @@ mod tests {
         assert!(statements[1].contains("(1,105,12,67)"));
         let error = build_graveyard_zone_sql(&dump.replace("`faction`", "`other`")).unwrap_err();
         assert!(error.to_string().contains("game_graveyard_zone.faction"));
+    }
+
+    #[test]
+    fn graveyard_map_links_fail_instead_of_treating_a_map_as_a_zone() {
+        let schema = "CREATE TABLE `game_graveyard_zone` (\n`link_kind` int,\n`faction` int,\n`id` int,\n`ghost_loc` int\n);";
+        for kind in [1, 2] {
+            let dump =
+                format!("{schema} INSERT INTO `game_graveyard_zone` VALUES ({kind},0,105,1);");
+            let error = build_graveyard_zone_sql(&dump).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("game_graveyard_zone.link_kind: unsupported value {kind}")
+            );
+        }
+        assert!(build_graveyard_zone_sql(&format!(
+            "{schema} INSERT INTO `game_graveyard_zone` VALUES (0,0,105,12);"
+        ))
+        .is_ok());
     }
 
     #[test]
