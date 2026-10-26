@@ -119,7 +119,7 @@ fn as_leg(s: CreatureSpline, mover_gone: bool) -> LegInFlight {
         map_id: s.map_id,
         instance_id: s.instance_id,
         mover_gone,
-        back_off: s.back_off,
+        back_off_from: s.back_off_from,
         waypoints: s
             .path
             .map(|path| path.points)
@@ -495,7 +495,7 @@ impl IdleSink for CtxWorld<'_> {
                 leg.gait == Gait::Run,
                 now_ms,
                 leg.hold_until_landed,
-                false,
+                0,
             );
         }
     }
@@ -882,6 +882,7 @@ impl PursuitSink for CtxWorld<'_> {
                 let victim = entities.guid().find(row.target_guid)?;
                 Some(Pursuit {
                     guid: c.guid,
+                    victim: row.target_guid,
                     at: Point {
                         x: c.x,
                         y: c.y,
@@ -936,7 +937,7 @@ impl PursuitSink for CtxWorld<'_> {
     fn casting(&self, guid: u64) -> bool {
         crate::spell::is_non_melee_spell_casting(self.ctx, guid)
     }
-    fn commit_back_off(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
             tick::emit_creature_leg(
                 self.ctx,
@@ -947,7 +948,7 @@ impl PursuitSink for CtxWorld<'_> {
                 leg.gait == Gait::Run,
                 now_ms,
                 leg.hold_until_landed,
-                true,
+                victim,
             );
         }
     }

@@ -945,7 +945,7 @@ impl Scenario {
             dur_ms,
             map_id: partition.0,
             instance_id: partition.1,
-            back_off: false,
+            back_off_from: 0,
             mover_gone: !self.creatures.borrow().contains_key(&guid),
             waypoints: Vec::new(),
         });
@@ -1120,7 +1120,7 @@ impl Scenario {
             dur_ms: 0,
             map_id,
             instance_id,
-            back_off: false,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         });
@@ -2458,7 +2458,7 @@ impl IdleSink for Scenario {
             dur_ms,
             map_id: MAP,
             instance_id: INSTANCE,
-            back_off: false,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         });
@@ -2817,6 +2817,7 @@ impl PursuitSink for Scenario {
                 let (victim_at, victim_movement_flags) = self.unit(f.victim)?;
                 scope.covers(c.instance_id).then_some(Pursuit {
                     guid: f.attacker,
+                    victim: f.victim,
                     at: c.at,
                     orientation: c.orientation,
                     victim_at,
@@ -2881,11 +2882,11 @@ impl PursuitSink for Scenario {
     fn casting(&self, guid: u64) -> bool {
         self.eventai_is_casting(guid)
     }
-    fn commit_back_off(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32) {
         self.commit_leg(guid, leg, now_ms);
         for committed in self.legs.borrow_mut().iter_mut() {
             if committed.guid == guid {
-                committed.back_off = true;
+                committed.back_off_from = victim;
             }
         }
     }
@@ -4568,6 +4569,47 @@ fn a_creature_that_starts_casting_stops_walking_back() {
 }
 
 #[test]
+fn a_creature_that_starts_casting_stops_walking_back_while_its_victim_moves_off() {
+    let mut w = wolf_with_a_character_inside_it().caster(WOLF, 30.0);
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    w = w.mid_cast(WOLF).kiting(HUNTER, p(1.0, 0.0, 10.0));
+    let tick = w.firing(
+        SETTLED + 200_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "a cast roots the caster wherever its victim has gone: {effects:?}"
+    );
+}
+
+#[test]
+fn a_creature_that_switches_victim_stops_walking_back() {
+    let mut w = wolf_with_a_character_inside_it().player(RANGER, p(0.3, 2.0, 10.0));
+    let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
+    run_cycle(&mut w, tick);
+
+    w.retarget(WOLF, RANGER);
+    let tick = w.firing(
+        SETTLED + 100_000,
+        crate::creatures::ai::MOVE_TICK_MICROS,
+        catch_all(),
+    );
+    run_cycle(&mut w, tick);
+    let effects = w.effects();
+    assert!(
+        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
+        "the walk back was aimed away from the old victim; the new one needs a fresh decision: \
+         {effects:?}"
+    );
+}
+
+#[test]
 fn a_chase_leg_is_stopped_where_it_renders_once_the_victim_stops() {
     let mut w = wolf_fighting(p(6.0, 0.0, 10.0))
         .kiting(HUNTER, p(6.0, 0.0, 10.0))
@@ -4635,7 +4677,7 @@ fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
         dur_ms: LEG_MS,
         map_id: MAP,
         instance_id: INSTANCE,
-        back_off: false,
+        back_off_from: 0,
         mover_gone: false,
         waypoints: Vec::new(),
     };

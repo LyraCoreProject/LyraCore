@@ -39,7 +39,7 @@ pub(crate) struct LegInFlight {
     pub map_id: u32,
     pub instance_id: u64,
     pub mover_gone: bool,
-    pub back_off: bool,
+    pub back_off_from: u64,
     pub waypoints: Vec<(f32, f32, f32)>,
 }
 
@@ -345,6 +345,7 @@ pub(crate) trait ThreatSink {
 #[derive(Clone, PartialEq, Debug)]
 pub(crate) struct Pursuit {
     pub guid: u64,
+    pub victim: u64,
     pub at: Point,
     pub orientation: f32,
     pub victim_at: Point,
@@ -368,7 +369,7 @@ pub(crate) trait PursuitSink {
     fn target_not_reachable(&mut self, _guid: u64) {}
     fn caster_hold_range(&self, guid: u64) -> f32;
     fn casting(&self, guid: u64) -> bool;
-    fn commit_back_off(&mut self, guid: u64, leg: Leg, now_ms: u32);
+    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32);
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
@@ -1041,6 +1042,11 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
             continue;
         }
+        let back_off_from = c.leg.as_ref().map_or(0, |leg| leg.back_off_from);
+        if back_off_from != 0 && (back_off_from != c.victim || w.casting(c.guid)) {
+            stand_and_face(w, tick, &c);
+            continue;
+        }
         let gap_sq = dist_sq(c.at, c.victim_at);
         if gap_sq > CHASE_LEASH_SQ {
             continue;
@@ -1060,9 +1066,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            let riding_back_off =
-                c.leg.as_ref().is_some_and(|leg| leg.back_off) && !w.casting(c.guid);
-            if !riding_back_off && !back_off(w, tick, &c, gap_sq) {
+            if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
                 stand_and_face(w, tick, &c);
             }
             continue;
@@ -1152,6 +1156,7 @@ fn back_off<W: IdleSink + PursuitSink>(
     };
     w.commit_back_off(
         c.guid,
+        c.victim,
         Leg {
             to: (x, y),
             z_fallback: c.at.z,
@@ -1518,7 +1523,7 @@ mod chase_leg_tests {
             dur_ms: 4_000,
             map_id: 0,
             instance_id: 0,
-            back_off: false,
+            back_off_from: 0,
             mover_gone: false,
             waypoints: Vec::new(),
         }

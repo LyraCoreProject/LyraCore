@@ -74,8 +74,9 @@ pub struct CreatureSpline {
     pub facing_angle: f32,
     #[default(None::<CreaturePath>)]
     pub path: Option<CreaturePath>,
-    #[default(false)]
-    pub back_off: bool,
+    // The victim a back-off steps away from; 0 on every other leg.
+    #[default(0u64)]
+    pub back_off_from: u64,
 }
 
 impl CreatureSpline {
@@ -350,7 +351,7 @@ fn move_spline_row(
         facing: false,
         facing_angle: 0.0,
         path,
-        back_off: false,
+        back_off_from: 0,
     }
 }
 
@@ -385,7 +386,7 @@ pub(crate) fn emit_facing_spline(
         facing: true,
         facing_angle: angle_rad,
         path: None,
-        back_off: false,
+        back_off_from: 0,
     };
     row.replace(ctx);
 }
@@ -462,7 +463,7 @@ pub(crate) fn emit_creature_leg(
     run: bool,
     now_ms: u32,
     set_leg_ends: bool,
-    back_off: bool,
+    back_off_from: u64,
 ) {
     let nz = crate::terrain::snap_z(ctx, e.map_id, e.instance_id, to.0, to.1, z_fallback);
     if !crate::creatures::ai::finite_point(to.0, to.1, nz) {
@@ -474,7 +475,7 @@ pub(crate) fn emit_creature_leg(
         return;
     }
     CreatureSpline {
-        back_off,
+        back_off_from,
         ..move_spline_row(
             ctx,
             e.guid,
@@ -726,7 +727,7 @@ mod advance_persist_gate {
             facing: false,
             facing_angle: 0.0,
             path: None,
-            back_off: false,
+            back_off_from: 0,
         }
     }
 

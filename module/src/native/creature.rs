@@ -214,7 +214,7 @@ mod tests {
             facing: false,
             facing_angle: 0.0,
             path: None,
-            back_off: false,
+            back_off_from: 0,
         }
     }
 
