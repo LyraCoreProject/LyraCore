@@ -349,6 +349,8 @@ pub(crate) struct Pursuit {
     pub victim_at: Point,
     pub victim_orientation: f32,
     pub victim_movement_flags: u32,
+    pub victim_is_player: bool,
+    pub last_move_ms: u32,
     pub routing: bool,
     pub leg: Option<LegInFlight>,
 }
@@ -988,8 +990,15 @@ fn threat_retarget<W: ThreatSink>(w: &mut W, scope: &TickScope) -> usize {
     visited
 }
 
-// Two default 0.389 yd bounding radii plus the 0.5 yd vanilla contact distance.
-const CHASE_CONTACT_YD: f32 = 2.0 * 0.389 + 0.5;
+const BOUNDING_RADIUS_YD: f32 = 0.389;
+
+// Two default bounding radii plus the 0.5 yd vanilla contact distance.
+const CHASE_CONTACT_YD: f32 = 2.0 * BOUNDING_RADIUS_YD + 0.5;
+
+const OVERLAP_YD: f32 = 2.0 * BOUNDING_RADIUS_YD;
+
+// CHASE_CLOSENESS_TIMER in cmangos ChaseMovementGenerator::Backpedal.
+const BACK_OFF_AFTER_STILL_MS: u32 = 2_000;
 
 const _: () = assert!(
     CHASE_CONTACT_YD * CHASE_CONTACT_YD < CHASE_MELEE_SQ,
@@ -1043,7 +1052,9 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            stand_and_face(w, tick, &c);
+            if !backing_off(&c) && !back_off(w, tick, &c, gap_sq) {
+                stand_and_face(w, tick, &c);
+            }
             continue;
         }
         if posture.is_none() {
@@ -1094,6 +1105,48 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
         },
         now_ms,
     );
+}
+
+// cmangos ChaseMovementGenerator::Backpedal, measured with our contact and overlap distances.
+fn back_off<W: IdleSink>(w: &mut W, tick: &TickContext, c: &Pursuit, gap_sq: f32) -> bool {
+    let still_ms = tick.now_ms.wrapping_sub(c.last_move_ms);
+    if !c.victim_is_player
+        || c.leg.is_some()
+        || still_ms < BACK_OFF_AFTER_STILL_MS
+        || gap_sq >= OVERLAP_YD * OVERLAP_YD
+    {
+        return false;
+    }
+    let to = (
+        c.victim_at.x - CHASE_CONTACT_YD * c.orientation.cos(),
+        c.victim_at.y - CHASE_CONTACT_YD * c.orientation.sin(),
+    );
+    let gap = ((to.0 - c.at.x).powi(2) + (to.1 - c.at.y).powi(2)).sqrt();
+    let step = w.navigate(c.guid, to, gap, 0.0);
+    let speed = w.speed_of(c.guid, Gait::Walk);
+    let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
+        return false;
+    };
+    w.commit_leg(
+        c.guid,
+        Leg {
+            to: (x, y),
+            z_fallback: c.at.z,
+            dur_ms,
+            gait: Gait::Walk,
+            hold_until_landed: false,
+        },
+        tick.now_ms,
+    );
+    true
+}
+
+// A leg that starts inside the victim and moves away from it is a back-off in flight.
+fn backing_off(c: &Pursuit) -> bool {
+    c.leg.as_ref().is_some_and(|leg| {
+        dist_sq(leg.start, c.victim_at) < OVERLAP_YD * OVERLAP_YD
+            && dist_sq(leg.dest, c.victim_at) > dist_sq(c.at, c.victim_at)
+    })
 }
 
 fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {

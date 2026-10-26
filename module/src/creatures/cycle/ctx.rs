@@ -896,6 +896,8 @@ impl PursuitSink for CtxWorld<'_> {
                         &victim,
                         splines.guid().find(row.target_guid),
                     ),
+                    victim_is_player: victim.is_player(),
+                    last_move_ms: c.last_move_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),
                 })
