@@ -945,6 +945,7 @@ impl Scenario {
             dur_ms,
             map_id: partition.0,
             instance_id: partition.1,
+            back_off: false,
             mover_gone: !self.creatures.borrow().contains_key(&guid),
             waypoints: Vec::new(),
         });
@@ -1119,6 +1120,7 @@ impl Scenario {
             dur_ms: 0,
             map_id,
             instance_id,
+            back_off: false,
             mover_gone: false,
             waypoints: Vec::new(),
         });
@@ -2456,6 +2458,7 @@ impl IdleSink for Scenario {
             dur_ms,
             map_id: MAP,
             instance_id: INSTANCE,
+            back_off: false,
             mover_gone: false,
             waypoints: Vec::new(),
         });
@@ -2877,6 +2880,14 @@ impl PursuitSink for Scenario {
     }
     fn casting(&self, guid: u64) -> bool {
         self.eventai_is_casting(guid)
+    }
+    fn commit_back_off(&mut self, guid: u64, leg: Leg, now_ms: u32) {
+        self.commit_leg(guid, leg, now_ms);
+        for committed in self.legs.borrow_mut().iter_mut() {
+            if committed.guid == guid {
+                committed.back_off = true;
+            }
+        }
     }
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
         let Some(c) = self.place(guid, at, None, Some(orientation)) else {
@@ -4537,12 +4548,12 @@ fn a_walk_back_rides_out_a_firing_that_comes_early() {
 }
 
 #[test]
-fn a_walk_back_stops_when_the_character_moves_into_its_path() {
+fn a_creature_that_starts_casting_stops_walking_back() {
     let mut w = wolf_with_a_character_inside_it();
     let tick = w.firing(SETTLED, crate::creatures::ai::MOVE_TICK_MICROS, catch_all());
     run_cycle(&mut w, tick);
 
-    w = w.tweak_player(HUNTER, |c| c.at = p(-0.5, 0.0, 10.0));
+    w = w.mid_cast(WOLF);
     let tick = w.firing(
         SETTLED + 100_000,
         crate::creatures::ai::MOVE_TICK_MICROS,
@@ -4552,7 +4563,7 @@ fn a_walk_back_stops_when_the_character_moves_into_its_path() {
     let effects = w.effects();
     assert!(
         effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
-        "a walk back aimed at where the Character stood is stale once they move: {effects:?}"
+        "a cast that begins mid-walk roots the caster where it stands: {effects:?}"
     );
 }
 
@@ -4624,6 +4635,7 @@ fn the_fake_refuses_a_second_carrier_row_for_one_creature_in_one_firing() {
         dur_ms: LEG_MS,
         map_id: MAP,
         instance_id: INSTANCE,
+        back_off: false,
         mover_gone: false,
         waypoints: Vec::new(),
     };
