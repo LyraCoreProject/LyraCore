@@ -56,7 +56,8 @@ and excludes transport movement from fall damage.
 `wow_world_messages` 0.3.0 uses a later transport layout. Its typed movement values
 remain the internal carrier, while the protocol crate owns the build-5875 movement bytes. Benilla
 checks transport, jump and swim tails together. The transport regression test is
-enabled in the normal suite.
+enabled in the normal suite. Benilla also reads a Passenger's map crossing: `SMSG_TRANSFER_PENDING` names
+the Transport and the old map, and `SMSG_NEW_WORLD` carries the offset on it.
 
 The real Module scenario also checks late-observer transport attachment. Speed,
 root, hover, feather-fall, water-walk, knockback, teleport and spline completion

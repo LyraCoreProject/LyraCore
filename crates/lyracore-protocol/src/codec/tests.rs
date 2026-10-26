@@ -3177,7 +3177,7 @@ fn teleport_ack_carries_target_position_with_no_movement_flags() {
 
 #[test]
 fn cross_map_teleport_sends_transfer_pending_then_new_world_carrying_target_map_and_position() {
-    let [pending, new_world] = build_cross_map_teleport(36, 10.0, 20.0, 30.0, 1.5).unwrap();
+    let [pending, new_world] = build_cross_map_teleport(36, 10.0, 20.0, 30.0, 1.5, None).unwrap();
     match pending {
         ServerOpcodeMessage::SMSG_TRANSFER_PENDING(p) => {
             assert_eq!(p.map.as_int(), 36);
@@ -3208,7 +3208,7 @@ fn cross_map_teleport_sends_transfer_pending_then_new_world_carrying_target_map_
 
 #[test]
 fn cross_map_teleport_rejects_an_unknown_map_id() {
-    assert!(build_cross_map_teleport(u32::MAX, 0.0, 0.0, 0.0, 0.0).is_err());
+    assert!(build_cross_map_teleport(u32::MAX, 0.0, 0.0, 0.0, 0.0, None).is_err());
 }
 
 #[test]

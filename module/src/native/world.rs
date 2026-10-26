@@ -74,13 +74,13 @@ pub(super) fn enter_character(
         super::disconnect(ctx, previous.connection_id);
     }
     crate::world::apply_player_login(ctx, &account, guid, owner, entry)?;
-    let entity = ctx
+    let live = ctx
         .db
         .game_world_entity()
         .guid()
         .find(guid)
         .ok_or("world entry did not create a player")?;
-    let entity = super::view::entity(ctx, &entity);
+    let entity = super::view::entity(ctx, &live);
     let items = super::view::items(ctx, guid);
     let learned = ctx
         .db
@@ -136,15 +136,38 @@ pub(super) fn enter_character(
         )?;
     }
     let quests = super::view::quests(ctx, guid);
-    super::send(
-        ctx,
-        connection.connection_id,
-        ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
-            codec::build_self_create_object(&entity, &items, &skills, &quests)
-                .map_err(|error| error.to_string())?,
-        )),
-        false,
-    )?;
+    let self_create = codec::build_self_create_object(&entity, &items, &skills, &quests)
+        .map_err(|error| error.to_string())?;
+    crate::aoi::enter_viewer(ctx, guid)?;
+    let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
+    grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
+    match super::transport::passenger_movement(ctx, &live) {
+        Some(movement) => {
+            // A Passenger's self CREATE names its Transport, so the client must already have it.
+            let carrier = crate::transport::passenger(ctx, guid)
+                .map(|passenger| crate::transport::guid(passenger.transport_entry));
+            if let Some(index) = grants.iter().position(|grant| {
+                grant.layer == crate::aoi::TRANSPORT && Some(grant.entity_guid) == carrier
+            }) {
+                super::visibility::create(ctx, connection.connection_id, &grants.remove(index))?;
+            }
+            let body = codec::create_with_movement(&self_create, &movement)
+                .map_err(|error| error.to_string())?;
+            super::send_raw(
+                ctx,
+                connection.connection_id,
+                codec::SMSG_UPDATE_OBJECT_OPCODE,
+                body,
+                false,
+            );
+        }
+        None => super::send(
+            ctx,
+            connection.connection_id,
+            ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(self_create)),
+            false,
+        )?,
+    }
     super::environment::enter_zone(ctx, connection.connection_id, entity.map_id, entity.zone_id);
     for (opcode, body) in items.iter().filter_map(codec::build_random_property_values) {
         super::send_raw(ctx, connection.connection_id, opcode, body, false);
@@ -169,7 +192,6 @@ pub(super) fn enter_character(
             ..connection
         });
     super::admission::entered(ctx, connection.connection_id);
-    crate::aoi::enter_viewer(ctx, guid)?;
     ctx.db.game_native_player().insert(NativePlayer {
         connection_id: connection.connection_id,
         character_guid: guid,
@@ -180,8 +202,6 @@ pub(super) fn enter_character(
         teleport_counter,
         zone_id: entity.zone_id,
     });
-    let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
-    grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant)?;
     }

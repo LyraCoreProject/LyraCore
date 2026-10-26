@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, HashMap, HashSet};
+use std::collections::{HashMap, HashSet};
 
 use anyhow::{bail, Context, Result};
 use wow_dbc::vanilla_tables::taxi_path::TaxiPath;
@@ -86,14 +86,7 @@ pub(crate) fn catalogue_sql(
             ));
             continue;
         }
-        let maps: BTreeSet<u32> = nodes.iter().map(|point| point.map.id).collect();
-        let &[map_id] = maps.iter().copied().collect::<Vec<_>>().as_slice() else {
-            warnings.push(format!(
-                "transports: WARN transport {entry} path {path_id} crosses maps {maps:?}; \
-                 map crossings are not supported yet; omitted"
-            ));
-            continue;
-        };
+        let map_id = nodes[0].map.id;
         let size: f32 = field(template, got::SIZE)
             .parse()
             .with_context(|| format!("transport {entry} has an invalid size"))?;
@@ -167,21 +160,26 @@ mod tests {
         (99999,'Missing',1000);";
 
     #[test]
-    fn a_single_map_route_imports_with_its_template_and_period() {
+    fn a_route_imports_with_its_template_period_and_first_map() {
         let mut nodes = points(293, &[1, 1, 1, 1]);
         nodes.extend(points(292, &[0, 0, 1, 1]));
         let catalogue =
             catalogue_sql(&paths(&[292, 293]), &TaxiPathNode { rows: nodes }, DUMP).unwrap();
-        assert_eq!(catalogue.count, 1);
+        assert_eq!(catalogue.count, 2);
         assert_eq!(
             catalogue.statements[0],
             "DELETE FROM game_transport WHERE entry >= 0"
         );
-        assert!(
-            catalogue.statements[1].contains("(176244,'Moonspray',3015,1,40,293,30,1,316251,1)"),
-            "{}",
-            catalogue.statements[1]
-        );
+        for row in [
+            "(176244,'Moonspray',3015,1,40,293,30,1,316251,1)",
+            "(176231,'Proudmore''s Treasure',3015,1,40,292,30,1,329313,0)",
+        ] {
+            assert!(
+                catalogue.statements[1].contains(row),
+                "{}",
+                catalogue.statements[1]
+            );
+        }
     }
 
     #[test]
@@ -191,7 +189,6 @@ mod tests {
         let catalogue =
             catalogue_sql(&paths(&[292, 293]), &TaxiPathNode { rows: nodes }, DUMP).unwrap();
         let warnings = catalogue.warnings.join("\n");
-        assert!(warnings.contains("transport 176231 path 292 crosses maps {0, 1}"));
         assert!(warnings.contains("transport 50100 is not an MO_TRANSPORT"));
         assert!(warnings.contains("transport 99999 has no gameobject_template row"));
     }

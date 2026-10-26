@@ -31,7 +31,12 @@ pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<
     Some(counter)
 }
 
-pub(crate) fn changed(ctx: &ReducerContext, event: &TeleportEvent, counter: Option<u32>) {
+pub(crate) fn changed(
+    ctx: &ReducerContext,
+    event: &TeleportEvent,
+    counter: Option<u32>,
+    aboard: Option<&crate::transport::Aboard>,
+) {
     let Some(player) = ctx
         .db
         .game_native_player()
@@ -43,9 +48,30 @@ pub(crate) fn changed(ctx: &ReducerContext, event: &TeleportEvent, counter: Opti
     if counter != Some(player.teleport_counter) {
         return;
     }
-    let messages = if event.cross_map {
-        codec::build_cross_map_teleport(event.map_id, event.x, event.y, event.z, event.orientation)
-            .map(Vec::from)
+    let messages = if let Some(aboard) = aboard {
+        let passenger = &aboard.passenger;
+        codec::build_cross_map_teleport(
+            event.map_id,
+            passenger.x,
+            passenger.y,
+            passenger.z,
+            passenger.orientation,
+            Some(codec::TransportCrossing {
+                entry: passenger.transport_entry,
+                from_map_id: aboard.from_map_id,
+            }),
+        )
+        .map(Vec::from)
+    } else if event.cross_map {
+        codec::build_cross_map_teleport(
+            event.map_id,
+            event.x,
+            event.y,
+            event.z,
+            event.orientation,
+            None,
+        )
+        .map(Vec::from)
     } else {
         Ok(vec![ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(Box::new(
             codec::build_teleport_ack(

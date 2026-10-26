@@ -171,10 +171,9 @@ faction fallback follow [CMaNGOS Classic's taxi mount selection](https://github.
 
 The same pass builds the Transport catalogue, `game_transport`. Each row of the dump's `transports`
 table names a type-15 `gameobject_template`. Its `data0`, `data1` and `data2` give the TaxiPath,
-speed and acceleration, and `transports.period` gives the client's cycle in milliseconds. A route
-whose path crosses maps is omitted with a warning, because the Module does not yet move
-Passengers between maps. A missing template, a different GameObject type, a path without imported
-points, or a zero speed, acceleration or period is also omitted with a warning.
+speed and acceleration, and `transports.period` gives the client's cycle in milliseconds. `map_id`
+is the map of the path's first node. A missing template, a different GameObject type, a path
+without imported points, or a zero speed, acceleration or period is omitted with a warning.
 
 Existing catalogues need the standalone DBC pass again with the same client and full dump. Updating
 the binary alone does not repair stored displays. With flights stopped, an Operator can rebuild

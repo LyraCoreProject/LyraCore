@@ -103,8 +103,10 @@ successful rerun removes stale geometry.
 
 ### Transports (`module/src/transport/mod.rs`)
 
-`game_transport` is a public catalogue with one row per imported single-map route. A Transport's
-position is a function of the Realm Clock and its timetable, so no row stores it.
+`game_transport` is a public catalogue with one row per imported route. A Transport's position is
+a function of the Realm Clock and its timetable, so no row stores it. `map_id` is the map of the
+route's first node. `game_transport_crossing` is private and holds the current map of each route
+that crosses maps. Its one-shot schedule fires at the next map change and arms the one after it.
 `game_transport_passenger` is private and holds one row per Passenger with its offset on the
 Transport. Leaving the Transport, a teleport or leaving the world deletes the row.
 `game_transport_carry_schedule` has one 500 ms schedule per Transport with Passengers; it deletes
@@ -417,6 +419,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
 | `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
+| `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by world entry | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
 | `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |

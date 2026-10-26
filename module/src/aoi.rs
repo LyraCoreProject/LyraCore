@@ -281,6 +281,18 @@ fn replace_subject(ctx: &ReducerContext, layer: u8, entity_guid: u64, mut wanted
     }
 }
 
+/// Every viewer in the open world of `map_id` holds the Transport's Grant.
+pub(crate) fn transport_moved(ctx: &ReducerContext, transport_guid: u64, map_id: u32) {
+    let wanted = ctx
+        .db
+        .game_aoi_viewer()
+        .iter()
+        .filter(|viewer| viewer.map_id == map_id && viewer.instance_id == 0)
+        .map(|viewer| viewer.guid)
+        .collect();
+    replace_subject(ctx, TRANSPORT, transport_guid, wanted);
+}
+
 pub(crate) fn entity_removed(ctx: &ReducerContext, guid: u64) {
     ctx.db.game_aoi_viewer().guid().delete(guid);
     remove_viewer_grants(ctx, guid);
