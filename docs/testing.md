@@ -98,8 +98,10 @@ python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/rel
 python3 native-host/check.py --host .lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone recovery reload
 ```
 
-CI also runs the patched Host's `compile_cache` and `retention` unit tests in the SpacetimeDB
-checkout with the Host toolchain.
+CI builds the Host once and reuses the binary until `prepare-host.py`, the Host toolchain, a
+patch or a file in `native-host/src` changes. A parallel job runs the patched Host's
+`compile_cache`, `retention` and delivery `feed` unit tests in the SpacetimeDB checkout with the
+Host toolchain.
 
 `check.py` runs named checks. Without names it runs every shared check on one seeded Disposable
 Host. Give names to run only those checks, and use `--list` to print them. Checks run in the order
@@ -111,7 +113,7 @@ registry order, in the reverse order and one at a time. Creatures that a check s
 world. The runner prints `PASS` or `FAIL` with the check name, and for a failure the Host log lines
 written during that check.
 
-These checks get their own Host, and CI runs each of them separately:
+These checks get their own Host. CI runs the shared checks and these checks in three parallel jobs:
 
 | Check | Covers |
 |---|---|
