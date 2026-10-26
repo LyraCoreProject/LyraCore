@@ -102,7 +102,17 @@ crate::character_owned!(delete, fn sweep_delete_game_group_member_partition(ctx,
 crate::character_owned!(not_transported, fn sweep_transfer_game_group_member_partition());
 
 crate::character_owned!(delete, fn sweep_delete_game_group_member(ctx, character_guid) {
-    remove_member(ctx, character_guid, Departure::Left);
+    if group_of(ctx, character_guid).is_none() {
+        return;
+    }
+    let deleted = GroupAction::Leave {
+        cause: leave_cause::CHARACTER_DELETED,
+    };
+    let left = apply_action(ctx, Plane::Shard, character_guid, deleted);
+    // A member row whose Group is missing still goes with its Character.
+    if let Err(GroupOpError::Invariant(_)) = left {
+        remove_member(ctx, character_guid, Departure::Left);
+    }
 });
 crate::character_owned!(restamp, fn sweep_restamp_game_group_member(ctx, character_guid, identity) {
     let members = ctx.db.game_group_member();
@@ -288,8 +298,12 @@ fn logged(error: GroupOpError, detail: &str) -> GroupOpError {
     error
 }
 
-fn group_op_error(error: GroupOpError, detail: &str) -> String {
-    logged(error, detail).to_string()
+pub(crate) fn apply_action_for(
+    ctx: &ReducerContext,
+    actor_guid: u64,
+    action: GroupAction,
+) -> Result<(), String> {
+    apply_action(ctx, Plane::Shard, actor_guid, action).map_err(|error| error.to_string())
 }
 
 use lyracore_shared::group::{event_kind as group_event_kind, leave_cause, GroupRefusal};
@@ -1023,19 +1037,6 @@ fn push_list_to_all(ctx: &ReducerContext, group_id: u64) {
     );
 }
 
-pub(crate) fn invite_core(
-    ctx: &ReducerContext,
-    inviter_guid: u64,
-    target_guid: u64,
-) -> Result<(), String> {
-    invite_core_on(ctx, Plane::Shard, inviter_guid, target_guid).map_err(|error| {
-        group_op_error(
-            error,
-            &format!("{inviter_guid} could not invite {target_guid}"),
-        )
-    })
-}
-
 fn character_online(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db
         .game_native_player()
@@ -1115,12 +1116,7 @@ pub(crate) fn accept_invite_for(ctx: &ReducerContext, acceptor_guid: u64) -> Res
             .map_err(|refusal| refused(refusal, "session-less group acceptance"))?;
     }
     let class = acceptor.map_or(0, |character| character.class);
-    accept_invite_on(ctx, Plane::Shard, acceptor_guid, class).map_err(|error| {
-        group_op_error(
-            error,
-            &format!("{acceptor_guid} could not accept its invite"),
-        )
-    })
+    apply_action_for(ctx, acceptor_guid, GroupAction::Accept { class })
 }
 
 fn has_pending_leader_invite(ctx: &ReducerContext, character_guid: u64) -> bool {
@@ -1173,13 +1169,13 @@ pub(crate) enum JoinTarget {
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct JoinedGroup {
-    pub(crate) group_id: u64,
-    pub(crate) formed: bool,
+struct JoinedGroup {
+    group_id: u64,
+    formed: bool,
 }
 
 // A checked JoinPlan remains valid only while intervening writes leave membership unchanged.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub(crate) struct JoinPlan {
     joiner_guid: u64,
     target: JoinTarget,
@@ -1230,7 +1226,7 @@ pub(crate) fn plan_join(
 }
 
 impl JoinPlan {
-    pub(crate) fn apply(self, ctx: &ReducerContext) -> JoinedGroup {
+    fn apply(self, ctx: &ReducerContext) -> JoinedGroup {
         let Self {
             joiner_guid,
             target,
@@ -1299,15 +1295,6 @@ fn member_identity(ctx: &ReducerContext, character_guid: u64) -> Identity {
     )
 }
 
-pub(crate) fn decline_invite_for(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), String> {
-    decline_invite_on(ctx, decliner_guid).map_err(|error| {
-        group_op_error(
-            error,
-            &format!("{decliner_guid} could not decline an invite"),
-        )
-    })
-}
-
 fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), GroupOpError> {
     let invites = ctx.db.game_group_invite();
     let invite = invites
@@ -1327,8 +1314,13 @@ fn decline_invite_on(ctx: &ReducerContext, decliner_guid: u64) -> Result<(), Gro
 }
 
 pub(crate) fn leave_group_for(ctx: &ReducerContext, leaver_guid: u64) -> Result<(), String> {
-    leave_group_on(ctx, leaver_guid, leave_cause::LEFT)
-        .map_err(|error| group_op_error(error, &format!("{leaver_guid} could not leave its party")))
+    apply_action_for(
+        ctx,
+        leaver_guid,
+        GroupAction::Leave {
+            cause: leave_cause::LEFT,
+        },
+    )
 }
 
 fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(), GroupOpError> {
@@ -1340,16 +1332,6 @@ fn leave_group_on(ctx: &ReducerContext, leaver_guid: u64, cause: u8) -> Result<(
     }
     remove_member(ctx, leaver_guid, Departure::Left);
     Ok(())
-}
-
-pub(crate) fn uninvite_from_group(
-    ctx: &ReducerContext,
-    actor_guid: u64,
-    target_guid: u64,
-) -> Result<(), String> {
-    uninvite_on(ctx, actor_guid, target_guid).map_err(|error| {
-        group_op_error(error, &format!("{actor_guid} could not kick {target_guid}"))
-    })
 }
 
 fn uninvite_on(
@@ -1374,23 +1356,6 @@ fn uninvite_on(
     }
     remove_member(ctx, target_guid, Departure::Kicked);
     Ok(())
-}
-
-pub(crate) fn set_loot_method_for(
-    ctx: &ReducerContext,
-    leader_guid: u64,
-    loot_setting: u8,
-    master_guid: u64,
-    loot_threshold: u8,
-) -> Result<(), String> {
-    set_loot_method_on(ctx, leader_guid, loot_setting, master_guid, loot_threshold).map_err(
-        |error| {
-            group_op_error(
-                error,
-                &format!("{leader_guid} could not set the party loot rules"),
-            )
-        },
-    )
 }
 
 fn set_loot_method_on(
@@ -1822,6 +1787,7 @@ pub(crate) enum GroupAction {
         min: u64,
         max: u64,
     },
+    StoneAdd(JoinPlan),
 }
 
 pub(crate) fn apply_action(
@@ -1847,6 +1813,11 @@ pub(crate) fn apply_action(
         if let SetLeader(target) = action {
             if !character_online(ctx, target) {
                 return Err(logged(GroupRefusal::TargetOffline.into(), "group leader"));
+            }
+        }
+        if let Accept { .. } = action {
+            if accepts_other_team(ctx, actor_guid) {
+                return Err(logged(GroupRefusal::WrongFaction.into(), "group accept"));
             }
         }
     }
@@ -1880,26 +1851,41 @@ pub(crate) fn apply_action(
             minimap_ping_on(ctx, actor_guid, x_bits, y_bits).map(|()| Unchanged)
         }
         RandomRoll { min, max } => random_roll_on(ctx, actor_guid, min, max).map(|()| Unchanged),
+        StoneAdd(plan) => {
+            plan.apply(ctx);
+            Ok(Changed)
+        }
     };
     let change =
         ran.map_err(|error| logged(error, &format!("group action {action:?} for {actor_guid}")))?;
     if change == Changed {
         let after_groups = action_groups(ctx, actor_guid, action);
-        let touched: std::collections::BTreeSet<_> = before_groups
-            .iter()
-            .chain(after_groups.iter())
-            .copied()
-            .collect();
-        for group_id in touched {
+        for group_id in before_groups.union(&after_groups) {
             advance_group_revision(
                 ctx,
-                group_id,
-                before_groups.contains(&group_id),
-                after_groups.contains(&group_id),
+                *group_id,
+                before_groups.contains(group_id),
+                ctx.db.game_group().group_id().find(*group_id).is_some(),
             );
         }
     }
     Ok(())
+}
+
+fn accepts_other_team(ctx: &ReducerContext, acceptor_guid: u64) -> bool {
+    let Some(invite) = ctx
+        .db
+        .game_group_invite()
+        .by_target()
+        .filter(&acceptor_guid)
+        .next()
+    else {
+        return false;
+    };
+    let race = |guid| crate::helpers::character_by_guid(ctx, guid).map(|c| c.race);
+    race(acceptor_guid)
+        .zip(race(invite.inviter_guid))
+        .is_some_and(|(acceptor, inviter)| !lyracore_shared::faction::same_team(acceptor, inviter))
 }
 
 fn action_groups(
@@ -1908,20 +1894,28 @@ fn action_groups(
     action: GroupAction,
 ) -> std::collections::BTreeSet<u64> {
     let mut guids = vec![actor_guid];
-    if let GroupAction::Uninvite(target) = action {
-        guids.push(target);
-    }
-    if matches!(action, GroupAction::Accept { .. }) {
-        if let Some(invite) = ctx
-            .db
-            .game_group_invite()
-            .by_target()
-            .filter(&actor_guid)
-            .next()
-            .filter(|invite| invite.group_id == 0)
-        {
-            guids.push(invite.inviter_guid);
+    let mut joined = None;
+    match action {
+        GroupAction::Uninvite(target) => guids.push(target),
+        GroupAction::Accept { .. } => {
+            if let Some(invite) = ctx
+                .db
+                .game_group_invite()
+                .by_target()
+                .filter(&actor_guid)
+                .next()
+            {
+                match invite.group_id {
+                    0 => guids.push(invite.inviter_guid),
+                    group_id => joined = Some(group_id),
+                }
+            }
         }
+        GroupAction::StoneAdd(plan) => match plan.target {
+            JoinTarget::Group(group_id) => joined = Some(group_id),
+            JoinTarget::NewParty { leader_guid } => guids.push(leader_guid),
+        },
+        _ => {}
     }
     guids
         .into_iter()
@@ -1933,16 +1927,12 @@ fn action_groups(
                 .next()
                 .map(|member| member.group_id)
         })
+        .chain(joined)
         .filter(|group_id| ctx.db.game_group().group_id().find(*group_id).is_some())
         .collect()
 }
 
-pub(crate) fn advance_group_revision(
-    ctx: &ReducerContext,
-    group_id: u64,
-    was_active: bool,
-    active: bool,
-) {
+fn advance_group_revision(ctx: &ReducerContext, group_id: u64, was_active: bool, active: bool) {
     let table = ctx.db.game_group_roster_revision();
     let current = table.group_id().find(group_id);
     let revision = next_group_revision(current.as_ref().map(|row| row.revision), was_active);
@@ -2303,17 +2293,12 @@ mod tests {
 
     #[test]
     fn broken_group_relationship_is_not_a_gameplay_refusal() {
-        let failure = group_op_error(
-            GroupOpError::Invariant("member 7 points to missing group 9".to_string()),
-            "party operation",
-        );
+        let failure =
+            GroupOpError::Invariant("member 7 points to missing group 9".to_string()).to_string();
 
         assert!(failure.contains("group invariant failed"));
         assert_eq!(
-            group_op_error(
-                GroupOpError::Refused(GroupRefusal::NotLeader),
-                "party operation"
-            ),
+            GroupOpError::Refused(GroupRefusal::NotLeader).to_string(),
             GroupRefusal::NotLeader.as_tag()
         );
     }
