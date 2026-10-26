@@ -7,7 +7,7 @@ pub fn next_bank_slot_price(owned: u8) -> Option<u32> {
     BANK_SLOT_PRICES.get(owned as usize).copied()
 }
 
-// SMSG_BUY_BANK_SLOT_RESULT wire values; relay without remapping.
+// SMSG_BUY_BANK_SLOT_RESULT wire values.
 pub mod result {
     pub const FAILED_TOO_MANY: u8 = 0;
     pub const INSUFFICIENT_FUNDS: u8 = 1;

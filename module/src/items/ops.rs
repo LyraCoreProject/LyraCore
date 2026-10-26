@@ -216,7 +216,7 @@ pub(crate) fn store_item(
     count: u32,
     force_soulbound: bool,
     preselected_property: Option<u32>,
-) -> Result<(), String> {
+) -> Result<(), StoreRefusal> {
     store_item_typed(
         ctx,
         player_guid,
@@ -226,7 +226,10 @@ pub(crate) fn store_item(
         force_soulbound,
         preselected_property,
     )
-    .map_err(Into::into)
+    .map_err(|refusal| match refusal.kind {
+        ActionRefusalKind::InventoryFull => StoreRefusal::InventoryFull,
+        _ => StoreRefusal::Refused(refusal.into()),
+    })
 }
 
 fn store_item_typed(
@@ -263,6 +266,12 @@ impl From<StoreRefusal> for String {
             StoreRefusal::InventoryFull => lyracore_shared::mail::INVENTORY_FULL.into(),
             StoreRefusal::Refused(refusal) => refusal.into(),
         }
+    }
+}
+
+impl From<StoreRefusal> for crate::Refusal {
+    fn from(refusal: StoreRefusal) -> Self {
+        String::from(refusal).into()
     }
 }
 

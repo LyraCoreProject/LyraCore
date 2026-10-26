@@ -20,10 +20,12 @@ pub(crate) fn refused(refusal: ItemRefusal) -> String {
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use economy::apply_repair_item;
+#[cfg(test)]
+pub(crate) use economy::NpcRefusal;
 pub(crate) use economy::{
     apply_buy_bank_slot, apply_buy_item, apply_buyback_item, apply_item_sell,
-    apply_item_sell_count, apply_player_repair, buy_bank_slot_result, innkeeper_access_gate,
-    npc_interaction_gate,
+    apply_item_sell_count, apply_player_repair, innkeeper_access_gate, npc_interaction_gate,
+    BankSlotRefusal, BuyRefusal, NpcGate, SellRefusal,
 };
 pub(crate) use exchange::{exchange_items, ItemStoragePlan};
 pub(crate) use guids::{allocate_item_guids, next_item_guid};

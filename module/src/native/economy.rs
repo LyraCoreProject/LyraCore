@@ -1,6 +1,9 @@
 use lyracore_protocol::{
     codec,
-    messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+    messages::vanilla::{
+        opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+        BuyBankSlotResult, BuyResult, SellItemResult,
+    },
 };
 use lyracore_shared::constants::npc_flags;
 use spacetimedb::{ConnectionId, ReducerContext};
@@ -8,7 +11,7 @@ use spacetimedb::{ConnectionId, ReducerContext};
 use super::Rollback;
 use crate::items::{
     game_character_buyback, game_item_instance, game_item_random_property, game_item_template,
-    game_npc_vendor, BuybackEntry,
+    game_npc_vendor, BankSlotRefusal, BuyRefusal, BuybackEntry, NpcGate, SellRefusal,
 };
 use crate::Refusal;
 
@@ -17,7 +20,7 @@ fn interaction(
     guid: u64,
     npc: u64,
     flag: u32,
-) -> Result<crate::WorldEntity, String> {
+) -> Result<crate::WorldEntity, Refusal> {
     super::actor(ctx, guid)?;
     crate::items::npc_interaction_gate(
         ctx,
@@ -29,6 +32,7 @@ fn interaction(
         "use this service",
     )
     .map(|(_, npc)| npc)
+    .map_err(Refusal::from)
 }
 
 pub(super) fn vendor(
@@ -192,24 +196,26 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
             let vendor = c.vendor.guid();
             super::actor(ctx, guid)
-                .map_err(String::from)
+                .map_err(BuyRefusal::from)
                 .and_then(|_| {
                     crate::items::apply_buy_item(ctx, guid, vendor, c.item, u32::from(c.amount))
                 })
-                .map_err(|reason| {
+                .map_err(|refusal| {
                     Rollback::reply(
                         ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
-                            vendor, c.item, &reason,
+                            vendor,
+                            c.item,
+                            buy_result(&refusal),
                         ))),
-                        reason,
+                        refusal,
                     )
                 })
         }
         ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
             let previous = buyback(ctx, guid).len();
             let result = super::actor(ctx, guid)
-                .map_err(String::from)
-                .and_then(|_| owned_slot(ctx, guid, c.item.guid()))
+                .map_err(SellRefusal::from)
+                .and_then(|_| owned_slot(ctx, guid, c.item.guid()).map_err(SellRefusal::from))
                 .and_then(|slot| {
                     crate::items::apply_item_sell_count(
                         ctx,
@@ -219,14 +225,14 @@ pub(super) fn receive(
                         u32::from(c.amount),
                     )
                 });
-            result.map_err(|reason| {
+            result.map_err(|refusal| {
                 Rollback::reply(
                     ServerOpcodeMessage::SMSG_SELL_ITEM(Box::new(codec::build_sell_item_refusal(
                         c.vendor.guid(),
                         c.item.guid(),
-                        codec::sell_refusal_result(&reason),
+                        sell_result(&refusal),
                     ))),
-                    reason,
+                    refusal,
                 )
             })?;
             Ok(send_buyback(
@@ -274,21 +280,21 @@ pub(super) fn receive(
             })
         }
         ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
-            let result = super::actor(ctx, guid).map_err(String::from).and_then(|_| {
-                crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
-                    ctx,
-                    guid,
-                    c.guid.guid(),
+            let reply = |result| {
+                ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(codec::build_buy_bank_slot_result(
+                    result,
                 ))
-            });
-            let reply =
-                ServerOpcodeMessage::SMSG_BUY_BANK_SLOT_RESULT(codec::build_buy_bank_slot_reply(
-                    result.as_ref().map(|_| ()).map_err(String::as_str),
-                ));
-            match result {
-                Ok(()) => Ok(super::send(ctx, connection, reply, false)?),
-                Err(reason) => Err(Rollback::reply(reply, reason)),
-            }
+            };
+            super::actor(ctx, guid)
+                .map_err(|refusal| Rollback::reply(reply(BuyBankSlotResult::NotBanker), refusal))?;
+            crate::items::apply_buy_bank_slot(ctx, guid, c.guid.guid())
+                .map_err(|refusal| Rollback::reply(reply(bank_slot_result(&refusal)), refusal))?;
+            Ok(super::send(
+                ctx,
+                connection,
+                reply(BuyBankSlotResult::Ok),
+                false,
+            )?)
         }
         ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
             auto_bank(ctx, guid, c.bag_index, c.slot_index)
@@ -297,6 +303,48 @@ pub(super) fn receive(
             auto_bank(ctx, guid, c.bag_index, c.slot_index)
         }
         _ => Err("invalid economy opcode".into()),
+    }
+}
+
+fn buy_result(refusal: &BuyRefusal) -> BuyResult {
+    match refusal {
+        BuyRefusal::Vendor(refusal) => match refusal.gate {
+            NpcGate::OtherMap | NpcGate::OutOfRange => BuyResult::DistanceTooFar,
+            NpcGate::CharacterAbsent
+            | NpcGate::CharacterDead
+            | NpcGate::NpcAbsent
+            | NpcGate::WrongService
+            | NpcGate::NpcDead
+            | NpcGate::Unfriendly => BuyResult::CantFindItem,
+        },
+        BuyRefusal::NotEnoughMoney { .. } => BuyResult::NotEnoughMoney,
+        BuyRefusal::InventoryFull => BuyResult::CantCarryMore,
+        BuyRefusal::Refused(_) => BuyResult::CantFindItem,
+    }
+}
+
+fn sell_result(refusal: &SellRefusal) -> SellItemResult {
+    match refusal {
+        SellRefusal::Vendor(refusal) => match refusal.gate {
+            NpcGate::CharacterAbsent => SellItemResult::CantSellItem,
+            NpcGate::CharacterDead
+            | NpcGate::NpcAbsent
+            | NpcGate::WrongService
+            | NpcGate::NpcDead
+            | NpcGate::OtherMap
+            | NpcGate::OutOfRange
+            | NpcGate::Unfriendly => SellItemResult::CantFindVendor,
+        },
+        SellRefusal::NoItemInSlot(_) => SellItemResult::CantFindItem,
+        SellRefusal::Refused(_) => SellItemResult::CantSellItem,
+    }
+}
+
+fn bank_slot_result(refusal: &BankSlotRefusal) -> BuyBankSlotResult {
+    match refusal {
+        BankSlotRefusal::AlreadyMaxed => BuyBankSlotResult::FailedTooMany,
+        BankSlotRefusal::CannotAfford { .. } => BuyBankSlotResult::InsufficientFunds,
+        BankSlotRefusal::Banker(_) => BuyBankSlotResult::NotBanker,
     }
 }
 
@@ -315,4 +363,82 @@ fn auto_bank(ctx: &ReducerContext, guid: u64, bag: u8, slot: u8) -> Result<(), R
             reason,
         )
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::items::NpcRefusal;
+
+    fn npc(gate: NpcGate, message: &str) -> NpcRefusal {
+        NpcRefusal::new(gate, message)
+    }
+
+    #[test]
+    fn every_buy_refusal_reports_its_smsg_buy_failed_result() {
+        use BuyRefusal as R;
+        use NpcGate as G;
+        for (refusal, code) in [
+            (R::Vendor(npc(G::CharacterAbsent, "user not in world")), 0),
+            (
+                R::Vendor(npc(G::CharacterDead, "dead players cannot buy")),
+                0,
+            ),
+            (R::Vendor(npc(G::NpcAbsent, "no such vendor")), 0),
+            (R::Vendor(npc(G::WrongService, "target is not a vendor")), 0),
+            (R::Vendor(npc(G::NpcDead, "vendor is dead")), 0),
+            (R::Vendor(npc(G::OtherMap, "vendor on another map")), 5),
+            (R::Vendor(npc(G::OutOfRange, "vendor out of range")), 5),
+            (
+                R::Vendor(npc(G::Unfriendly, "vendor refuses interaction")),
+                0,
+            ),
+            (R::NotEnoughMoney { have: 9, need: 10 }, 2),
+            (R::InventoryFull, 8),
+            (R::Refused("vendor does not sell that item".into()), 0),
+        ] {
+            assert_eq!(buy_result(&refusal).as_int(), code, "{refusal}");
+        }
+    }
+
+    #[test]
+    fn every_sell_refusal_reports_its_smsg_sell_item_result() {
+        use NpcGate as G;
+        use SellRefusal as R;
+        for (refusal, code) in [
+            (R::Vendor(npc(G::CharacterAbsent, "user not in world")), 2),
+            (
+                R::Vendor(npc(G::CharacterDead, "dead players cannot sell")),
+                3,
+            ),
+            (R::Vendor(npc(G::NpcAbsent, "no such vendor")), 3),
+            (R::Vendor(npc(G::WrongService, "target is not a vendor")), 3),
+            (R::Vendor(npc(G::NpcDead, "vendor is dead")), 3),
+            (R::Vendor(npc(G::OtherMap, "vendor on another map")), 3),
+            (R::Vendor(npc(G::OutOfRange, "vendor out of range")), 3),
+            (
+                R::Vendor(npc(G::Unfriendly, "vendor refuses interaction")),
+                3,
+            ),
+            (R::NoItemInSlot(40), 1),
+            (R::Refused("item has no sell value".into()), 2),
+        ] {
+            assert_eq!(sell_result(&refusal).as_int(), code, "{refusal}");
+        }
+    }
+
+    #[test]
+    fn every_bank_slot_refusal_reports_its_smsg_buy_bank_slot_result() {
+        use BankSlotRefusal as R;
+        for (refusal, code) in [
+            (R::AlreadyMaxed, 0),
+            (R::CannotAfford { price: 1_000 }, 1),
+            (
+                R::Banker(npc(NpcGate::OutOfRange, "banker out of range")),
+                2,
+            ),
+        ] {
+            assert_eq!(bank_slot_result(&refusal).as_int(), code, "{refusal}");
+        }
+    }
 }
