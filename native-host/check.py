@@ -4088,7 +4088,7 @@ def check_quest_chain(host):
         literals = ["'" + value.replace("'", "''") + "'" if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else str(value) for value in quest.values()]
         host.restore('game_quest_template', f'entry = {entry}')
         host.sql(f"INSERT INTO game_quest_template ({','.join(quest)}) VALUES ({','.join(literals)})")
-    for relation, entry, role in [(first, first, 1), (second, second, 0), (second + 10, second, 1)]:
+    for relation, entry, role in [(first, first, 1), (second, second, 0), (second + 10, second, 1), (elsewhere, elsewhere, 1)]:
         host.restore('game_creature_quest', f'id = {relation}')
         host.sql(f'INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({relation},51003,{entry},{role})')
     giver = spawn(host, guid, 51003, 2)
