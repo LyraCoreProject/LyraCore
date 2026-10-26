@@ -87,7 +87,10 @@ data come from the same project.
     player's own `Spell.dbc`.
 11. **Mixing sources.** Never take some columns of one table from vmangos and the rest from a DBC.
     Different tables may come from different sources. If a vmangos table lacks a column LyraCore
-    uses today, stop that slice and report the column, where it's used, and your options.
+    uses today, stop that slice and report the column, where it's used, and your options. This
+    rule covers only vmangos data that is missing. A column that only one source has and LyraCore
+    doesn't read (for example `link_kind`) isn't a stop. Neither is a defect in today's classic-db
+    reader (see the standing rule in S1).
 
 ## Rules
 
@@ -179,6 +182,17 @@ next milestone in the same run.
   `HashSet` iteration (`needed_text_ids` in `world_import.rs`). Sort before assigning ids, and
   check every other hash-ordered loop that feeds output. That deterministic revision is the
   baseline.
+- **Standing rule for defects in the current reader** (decided on 2026-10-26, after
+  `game_graveyard_zone` was found reading `link_kind` as `faction`). Moving onto column names will
+  expose places where the classic-db reader reads the wrong column. These are defects, not
+  decision-11 cases, so don't stop for them:
+  - Fix each one in its own commit, with a test, on a prerequisite slice
+    (`vmangos/s1-classic-reader-fixes`, stacked before the named-column refactor).
+  - Rebuild the deterministic baseline after the fixes, and run S1's byte comparison against that.
+  - List every fix in the handoff, with the column, the cause and how many rows change.
+
+  Stop only if a fix needs a Module change, or touches something the brief already marks as a
+  decision.
 - Move every positional index in `dump.rs` and its callers onto names. A classic-db import must
   produce identical output before and after, compared with the S1-pre baseline, so compare the
   dry-run SQL and the reducer batches byte for byte.
