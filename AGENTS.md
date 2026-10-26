@@ -13,6 +13,11 @@ We build complex things as simply as possible, and we look for ways to remove co
   [comment review](CODING_STANDARDS.md#comment-review) before handoff.
 - [`docs/README.md`](docs/README.md) lists every document and when to read it. Open a document when
   your change reaches its subject.
+- Keep cargo target dirs, worktrees, clones and other large scratch output out of `/tmp` and
+  `/dev/shm`, which are often RAM-backed. A throwaway, baseline or review build uses
+  `CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/<task>/target"` and puts its checkout under
+  `$HOME/.cache/lyracore-scratch/<task>/`. Delete that directory when the task is done. Builds in
+  the main checkout or a normal worktree keep the default `./target`.
 
 ## Words
 

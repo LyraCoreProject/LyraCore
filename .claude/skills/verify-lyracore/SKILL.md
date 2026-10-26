@@ -60,7 +60,7 @@ Set `BENILLA_DIR` to the client checkout and `WOW_DATA` to its 1.12.1 data. The 
 working display. `drive-benilla.sh` builds it and stores the evidence under `EVIDENCE`.
 
 ```bash
-EVIDENCE=/tmp/lyracore-verify/movement \
+EVIDENCE="$HOME/.cache/lyracore-scratch/verify/movement" \
 WOW_USER=TEST WOW_PASS=test123 WOW_CHAR=Tester \
 WOW_PROBE_KEY='W@15:2' \
 WOW_PROBE_LUA='ProbeLog("zone=" .. GetZoneText())' WOW_PROBE_LUA_AT=25 \
