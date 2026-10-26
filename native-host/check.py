@@ -4077,6 +4077,35 @@ def check_inventory(host):
     assert not host.rows(f'SELECT id FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900')
 
 
+def check_enchantments(host):
+    client, peer = native_and_peer(host)
+    guid = client.guid
+    weapon = host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND slot = 15')[0][0]
+    # Build 5875 PLAYER_VISIBLE_ITEM_16_0 is descriptor 440; the permanent enchant follows the entry.
+    visible_enchant = 441
+    host.restore('game_item_template', 'entry = 10940')
+    template = host.sql('SELECT * FROM game_item_template WHERE entry = 5090052')[0]
+    dust = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
+    dust.update(entry=10940, name='Strange Dust')
+    literals = ["'" + value.replace("'", "''") + "'" if isinstance(value, str) else str(value) for value in dust.values()]
+    host.sql(f"INSERT INTO game_item_template ({','.join(dust)}) VALUES ({','.join(literals)})")
+    host.call('debug_grant_item', [guid, 10940, 1])
+    client.collect()
+    host.call('debug_enchant_item', [guid, 15, 7745])
+    enchanted = client.collect()
+    assert values(enchanted, weapon)[22] == 823
+    assert values(enchanted, guid)[visible_enchant] == 823
+    assert values(peer.collect(), guid)[visible_enchant] == 823
+    observer = host.enter_world('Observer', at=(0, 5, 0, 0))
+    assert values(observer.entered, guid, create=True)[visible_enchant] == 823
+    client.close()
+    host.wait_until(lambda: host.rows(f'SELECT online FROM game_character WHERE guid = {guid}') == [[False]],
+                    'Native did not log out')
+    entered = host.log_in(guid).entered
+    assert values(entered, weapon, create=True)[22] == 823
+    assert values(entered, guid, create=True)[visible_enchant] == 823
+
+
 def check_quest_chain(host):
     client = host.enter_world('Chainer')
     guid = client.guid
@@ -4703,7 +4732,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
