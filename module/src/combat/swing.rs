@@ -521,7 +521,11 @@ fn fire_melee_swing(
         attacker_guid,
         target_guid,
         damage,
-        Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT),
+        if swing_is_spell {
+            Hit::spell(HitSource::MainHand, queued_spell, hit_info == HIT_CRIT)
+        } else {
+            Hit::weapon(HitSource::MainHand, hit_info == HIT_CRIT)
+        },
     )
     .combat_ended();
     if swing_is_spell {

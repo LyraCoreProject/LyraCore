@@ -128,6 +128,37 @@ fn a_queued_strike_fizzles_into_a_white_swing_when_the_rage_is_gone() {
         "a fizzled strike must not report a cast, got {casts:?}"
     );
     assert_eq!(landed["spell_swing"], "false");
+
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET godmode = false WHERE guid = {wolf}"
+    ));
+
+    let after = landed_swing(&standalone, || stage_power(&standalone, 0));
+    assert!(
+        power(&after) > 0,
+        "a landed white swing must reward rage, so the strike check below is not vacuous"
+    );
+
+    let after = landed_swing(&standalone, || {
+        stage_power(&standalone, HEROIC_STRIKE_COST);
+        cast(&standalone, HEROIC_STRIKE, wolf);
+    });
+    assert_eq!(
+        power(&after),
+        0,
+        "the landed strike must spend its cost and reward no rage"
+    );
+}
+
+fn landed_swing(standalone: &Standalone, mut stage: impl FnMut()) -> SqlRow {
+    for _ in 0..20 {
+        stage();
+        let (_, landed) = swing(standalone);
+        if landed["damage"] != "0" {
+            return player(standalone);
+        }
+    }
+    panic!("no swing landed in 20 attempts");
 }
 
 fn stage_on_next_swing_spell(standalone: &Standalone, spell_id: u32, name: &str, cost: u32) {
