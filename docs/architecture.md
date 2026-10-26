@@ -143,7 +143,8 @@ The native protocol check covers SRP logon, world proof authentication, Characte
 enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTROY, stealth visibility,
 melee stance and damage messages, spell casts and interruptions, delayed spell damage, Aura timers,
 pet commands, action bars, Hunter pet rename, care and progression updates,
-inventory gains, swaps and equipment, quest acceptance, credit, rewards, expiry and abandonment,
+inventory gains, swaps and equipment, quest acceptance, credit, rewards, the next quest in a chain,
+expiry and abandonment,
 vendor purchases, partial sales and buyback, bank access and storage, training, spellbook and skill
 notifications, talent learning and reset, gossip menus and home binding, taxi discovery, fares,
 flight splines and landing, XP and level-up notifications, exploration and rest updates, reputation

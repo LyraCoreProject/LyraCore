@@ -4077,6 +4077,36 @@ def check_inventory(host):
     assert not host.rows(f'SELECT id FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900')
 
 
+def check_quest_chain(host):
+    client = host.enter_world('Chainer')
+    guid = client.guid
+    first, second, elsewhere = range(5090670, 5090673)
+    template = host.sql('SELECT * FROM game_quest_template WHERE entry = 50900')[0]
+    quest = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
+    for entry, next_quest in [(first, second), (second, elsewhere), (elsewhere, 0)]:
+        quest.update(entry=entry, title=f'Chain {entry}', repeatable=False, next_quest_id=next_quest)
+        literals = ["'" + value.replace("'", "''") + "'" if isinstance(value, str) else str(value).lower() if isinstance(value, bool) else str(value) for value in quest.values()]
+        host.restore('game_quest_template', f'entry = {entry}')
+        host.sql(f"INSERT INTO game_quest_template ({','.join(quest)}) VALUES ({','.join(literals)})")
+    for relation, entry, role in [(first, first, 1), (second, second, 0), (second + 10, second, 1)]:
+        host.restore('game_creature_quest', f'id = {relation}')
+        host.sql(f'INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({relation},51003,{entry},{role})')
+    giver = spawn(host, guid, 51003, 2)
+    host.call('debug_grant_quest', [guid, first])
+    client.collect()
+    client.send(0x18e, struct.pack('<QII', giver, first, 0))
+    turned_in = [(opcode, body) for opcode, body in client.collect() if opcode in (0x191, 0x188)]
+    assert [opcode for opcode, _ in turned_in] == [0x191, 0x188], turned_in
+    assert turned_in[0][1][:4] == struct.pack('<I', first)
+    assert turned_in[1][1][:12] == struct.pack('<QI', giver, second)
+    host.call('debug_grant_quest', [guid, second])
+    client.collect()
+    client.send(0x18e, struct.pack('<QII', giver, second, 0))
+    last = client.collect()
+    assert any(opcode == 0x191 and body[:4] == struct.pack('<I', second) for opcode, body in last)
+    assert not any(opcode == 0x188 for opcode, _ in last)
+
+
 def check_group_loot(host):
     client, peer = native_and_peer(host, at=(0, 0, 0, 0))
     guid, peer_guid = client.guid, peer.guid
@@ -4566,8 +4596,8 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_group_loot, check_aoi, check_auras, check_melee, check_casting, check_progression,
-    check_taxi, check_death, check_environment, check_fatigue, check_social, check_channels, check_party,
+    check_inventory, check_quest_chain, check_group_loot, check_aoi, check_auras, check_melee, check_casting,
+    check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social, check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
     check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_addon, check_chat,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,

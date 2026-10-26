@@ -183,22 +183,9 @@ fn details(ctx: &ReducerContext, giver: u64, quest: u32) -> Vec<Packet> {
         .collect()
 }
 
-pub(super) fn evaluations(
-    ctx: &ReducerContext,
-    giver: u64,
-    guid: u64,
-) -> Vec<codec::GiverQuestEval> {
+fn giver_relations(ctx: &ReducerContext, giver: u64) -> Vec<(u32, u8)> {
     use crate::{game_gameobject, game_world_entity};
-    let Some(actor) = ctx
-        .db
-        .game_world_entity()
-        .guid()
-        .find(guid)
-        .filter(|e| !e.dead)
-    else {
-        return Vec::new();
-    };
-    let relations: Vec<_> = if let Some(entity) = ctx.db.game_world_entity().guid().find(giver) {
+    if let Some(entity) = ctx.db.game_world_entity().guid().find(giver) {
         ctx.db
             .game_creature_quest()
             .by_creature()
@@ -213,9 +200,38 @@ pub(super) fn evaluations(
             .map(|r| (r.quest_entry, r.role))
             .collect()
     } else {
+        Vec::new()
+    }
+}
+
+fn next_in_chain(ctx: &ReducerContext, giver: u64, quest: u32) -> Option<u32> {
+    let next = ctx
+        .db
+        .game_quest_template()
+        .entry()
+        .find(quest)?
+        .next_quest_id;
+    giver_relations(ctx, giver)
+        .contains(&(next, codec::ROLE_START))
+        .then_some(next)
+}
+
+pub(super) fn evaluations(
+    ctx: &ReducerContext,
+    giver: u64,
+    guid: u64,
+) -> Vec<codec::GiverQuestEval> {
+    use crate::game_world_entity;
+    let Some(actor) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .filter(|e| !e.dead)
+    else {
         return Vec::new();
     };
-    relations
+    giver_relations(ctx, giver)
         .into_iter()
         .filter_map(|(entry, role)| {
             let template = ctx.db.game_quest_template().entry().find(entry)?;
@@ -386,7 +402,7 @@ pub(super) fn receive(
                     .collect();
                 return Err(Rollback::replies(packets, reason));
             }
-            quest_detail_view(ctx, q.quest_id)
+            let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
                 .map(|detail| {
                     packet(ServerOpcodeMessage::SMSG_QUESTGIVER_QUEST_COMPLETE(
                         Box::new(codec::build_quest_complete(&detail)),
@@ -394,7 +410,11 @@ pub(super) fn receive(
                 })
                 .transpose()?
                 .into_iter()
-                .collect()
+                .collect();
+            if let Some(next) = next_in_chain(ctx, q.guid.guid(), q.quest_id) {
+                packets.extend(details(ctx, q.guid.guid(), next));
+            }
+            packets
         }
         ClientOpcodeMessage::CMSG_QUESTLOG_REMOVE_QUEST(q) => {
             super::actor(ctx, guid)?;
