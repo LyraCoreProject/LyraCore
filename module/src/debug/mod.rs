@@ -16,6 +16,7 @@ pub use instance::debug_set_vmap_enabled;
 
 pub use readout::{game_debug_readout, DebugReadout};
 
+use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
 use lyracore_shared::{constants, spatial};
 use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -218,8 +219,6 @@ pub fn debug_spawn_at_feet(
         .find(creature_entry)
         .ok_or_else(|| format!("no creature template for entry {creature_entry}"))?;
 
-    const HIGHGUID_UNIT: u64 = 0xF130;
-    let entry_hi = (creature_entry as u64) << 24;
     let spawn_max = ctx
         .db
         .game_creature_spawn()
@@ -237,7 +236,7 @@ pub fn debug_spawn_at_feet(
         .max()
         .unwrap_or(0);
     let next_low = spawn_max.max(entity_max) + 1;
-    let new_guid = (HIGHGUID_UNIT << 48) | entry_hi | next_low;
+    let new_guid = packed_creature_spawn_guid(creature_entry, next_low as u32);
 
     let (sin_o, cos_o) = player.orientation.sin_cos();
     let spawn = CreatureSpawn {
@@ -600,7 +599,7 @@ pub fn debug_spawn_gameobject(
                 size: 0.0,
             });
     }
-    let guid = (0xF110u64 << 48) | template_entry as u64;
+    let guid = packed_gameobject_spawn_guid(template_entry);
     crate::GameObject::delete(ctx, guid);
     ctx.db.game_gameobject_unlocked().go_guid().delete(guid);
     let go = crate::gameobject::GameObject {

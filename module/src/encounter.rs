@@ -1,5 +1,6 @@
 use spacetimedb::{table, ReducerContext, Table};
 
+use lyracore_package_delta::packed_creature_spawn_guid;
 use lyracore_shared::constants;
 
 use crate::game_item_template;
@@ -259,8 +260,7 @@ pub(crate) fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32
 }
 
 pub(crate) fn wave_guid(entry: u32, next_low: u64) -> u64 {
-    const HIGHGUID_UNIT: u64 = 0xF130;
-    (HIGHGUID_UNIT << 48) | ((entry as u64) << 24) | (next_low & 0x00FF_FFFF)
+    packed_creature_spawn_guid(entry, next_low as u32)
 }
 
 #[allow(dead_code, reason = "retained Package API encounter choreography")]

@@ -2520,10 +2520,7 @@ impl RawRelayStep {
             ))
         } else if self.flags & SCRIPT_FLAG_BUDDY_BY_GUID != 0 {
             if self.buddy_is_gameobject() {
-                Some(format!(
-                    "gameobject-guid:{}",
-                    go_guid(u64::from(self.search_radius))
-                ))
+                Some(format!("gameobject-guid:{}", go_guid(self.search_radius)))
             } else {
                 let entry = source_data
                     .creature_spawns

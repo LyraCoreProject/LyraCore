@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_spell_effect_id;
 use spacetimedb::{ReducerContext, Table};
 
 use crate::items::{ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK};
@@ -409,7 +410,7 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
 
 pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
     SpellEffect {
-        id: ((spell_id as u64) << 2) | effect_index as u64,
+        id: packed_spell_effect_id(spell_id, effect_index),
         spell_id,
         effect_index,
         kind: 0,

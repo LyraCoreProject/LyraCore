@@ -30,6 +30,10 @@ use std::process::Command;
 
 use anyhow::{bail, Context, Result};
 use flate2::read::GzDecoder;
+use lyracore_package_delta::{
+    packed_class_level_id, packed_creature_spawn_guid, packed_gameobject_spawn_guid,
+    packed_race_class_id, packed_race_class_level_id,
+};
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 const ALL_PLAYABLE_CLASS_MASK: u32 = 0x5df;
@@ -338,16 +342,12 @@ mod qr {
     pub const CREATURE: usize = 0;
     pub const QUEST: usize = 1;
 }
-const HIGHGUID_UNIT: u64 = 0xF130;
-
 fn world_guid(entry: u64, db_guid: u64) -> u64 {
-    (HIGHGUID_UNIT << 48) | ((entry & 0xFF_FFFF) << 24) | (db_guid & 0xFF_FFFF)
+    packed_creature_spawn_guid(entry as u32, db_guid as u32)
 }
 
-const HIGHGUID_GAMEOBJECT: u64 = 0xF110;
-
-fn go_guid(db_guid: u64) -> u64 {
-    (HIGHGUID_GAMEOBJECT << 48) | (db_guid & 0xFFFF_FFFF_FFFF)
+fn go_guid(db_guid: u32) -> u64 {
+    packed_gameobject_spawn_guid(db_guid)
 }
 
 const GATHER_RESPAWN_SECS: u32 = 300;
@@ -1203,7 +1203,7 @@ fn build_stats_sql(dump: &str) -> Vec<String> {
             let level: u32 = field(r, cls::LEVEL).parse().ok()?;
             Some(format!(
                 "({},{class},{level},{},{})",
-                (class << 8) | (level & 0xFF),
+                packed_class_level_id(class as u8, level as u8),
                 field(r, cls::BASEHP),
                 field(r, cls::BASEMANA),
             ))
@@ -1223,7 +1223,7 @@ fn build_stats_sql(dump: &str) -> Vec<String> {
             let level: u32 = field(r, lvl::LEVEL).parse().ok()?;
             Some(format!(
                 "({},{race},{class},{level},{},{},{},{},{})",
-                (race << 16) | (class << 8) | (level & 0xFF),
+                packed_race_class_level_id(race as u8, class as u8, level as u8),
                 field(r, lvl::STR),
                 field(r, lvl::AGI),
                 field(r, lvl::STA),
@@ -1254,7 +1254,7 @@ fn build_start_position_sql(dump: &str) -> Vec<String> {
             let class: u32 = field(r, pc::CLASS).parse().ok()?;
             Some(format!(
                 "({},{race},{class},{},{},{},{},{},{},0)",
-                (race << 8) | class,
+                packed_race_class_id(race as u8, class as u8),
                 field(r, pc::MAP),
                 field(r, pc::ZONE),
                 field(r, pc::X),
@@ -1400,7 +1400,7 @@ fn build_createinfo_action_sql(dump: &str) -> Vec<String> {
 const CREATEINFO_ITEM_ID_FLOOR: u64 = 1_000_000;
 
 fn build_createinfo_item_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<String>> {
-    let outfit_seen: std::collections::HashSet<(u32, i32)> = match dbc_dir {
+    let outfit_seen: std::collections::HashSet<(u64, i32)> = match dbc_dir {
         Some(dir) => {
             let mut chain = dbc::open_chain(std::path::Path::new(dir))?;
             dbc::outfit_item_set(&mut chain)?
@@ -1408,7 +1408,7 @@ fn build_createinfo_item_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<St
         None => std::collections::HashSet::new(),
     };
     let mut race_class_pairs: Vec<(u32, u32)> = Vec::new();
-    let mut seen_extra: std::collections::HashSet<(u32, i32)> = std::collections::HashSet::new();
+    let mut seen_extra: std::collections::HashSet<(u64, i32)> = std::collections::HashSet::new();
     let mut deduped = 0usize;
     let mut id = CREATEINFO_ITEM_ID_FLOOR;
     let mut rows: Vec<String> = Vec::new();
@@ -1423,7 +1423,7 @@ fn build_createinfo_item_sql(dump: &str, dbc_dir: Option<&str>) -> Result<Vec<St
         if item <= 0 {
             continue;
         }
-        let race_class = (race << 8) | class;
+        let race_class = packed_race_class_id(race as u8, class as u8);
         if outfit_seen.contains(&(race_class, item)) {
             deduped += 1;
             continue;
@@ -3901,7 +3901,7 @@ fn collect_gameobject_spawns(dump: &str, scope: &WorldImportScope) -> Gameobject
         if !scope.contains(map, x, y, z) {
             continue;
         }
-        let db_guid: u64 = field(&row, go::GUID).parse().unwrap_or(0);
+        let db_guid: u32 = field(&row, go::GUID).parse().unwrap_or(0);
         let o: f64 = field(&row, go::O).parse().unwrap_or(0.0);
         // A zero quaternion is valid packed identity, not a signal to derive rotation from facing.
         let rot0: f64 = field(&row, go::ROT0).parse().unwrap_or(0.0);
@@ -4851,7 +4851,7 @@ mod tests {
     #[test]
     fn world_guid_is_highguid_unit_encoded_and_unique_per_spawn() {
         let g = world_guid(299, 42);
-        assert_eq!(g >> 48, HIGHGUID_UNIT);
+        assert_eq!(g >> 48, 0xF130);
         assert_eq!((g >> 24) & 0xFF_FFFF, 299);
         assert_eq!(g & 0xFF_FFFF, 42);
         assert_ne!(world_guid(299, 42), world_guid(299, 43));

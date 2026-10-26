@@ -1,3 +1,4 @@
+use lyracore_package_delta::packed_race_class_id;
 use spacetimedb::{
     reducer, table, Identity, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp,
 };
@@ -769,7 +770,7 @@ pub(crate) fn check_new_character(
     if cbi.count() > 0
         && cbi
             .race_class()
-            .find(((race as u16) << 8) | class as u16)
+            .find(packed_race_class_id(race, class) as u16)
             .is_none()
     {
         return Err("INVALID_RACE_CLASS".to_string());
@@ -807,8 +808,8 @@ pub(crate) fn insert_new_character(
         .ok_or_else(|| format!("no such account id: {account_id}"))?;
 
     let positions = ctx.db.game_start_position();
-    let race_class = ((race as u16) << 8) | class as u16;
-    let human_warrior = (1u16 << 8) | 1u16;
+    let race_class = packed_race_class_id(race, class) as u16;
+    let human_warrior = packed_race_class_id(1, 1) as u16;
     let sp = positions
         .race_class()
         .find(race_class)
