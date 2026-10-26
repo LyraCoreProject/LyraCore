@@ -4107,6 +4107,32 @@ def check_quest_chain(host):
     assert not any(opcode == 0x188 for opcode, _ in last)
 
 
+def check_quest_items(host):
+    client = host.enter_world('Collector')
+    guid = client.guid
+    host.restore('game_quest_objective', 'id = 5090660')
+    host.sql('INSERT INTO game_quest_objective (id,quest_entry,obj_index,kind,target_entry,required_count) VALUES (5090660,50900,1,1,5090052,8)')
+    host.call('debug_grant_quest', [guid, 50900])
+    client.collect()
+    # The client's toast adds the packet's count to its bags, so the packet leads the item's update.
+    for count in (3, 1):
+        host.call('debug_grant_item', [guid, 5090052, count])
+        packets = client.collect()
+        opcodes = [opcode for opcode, _ in packets]
+        assert (0x19a, struct.pack('<II', 5090052, count)) in packets
+        assert opcodes.index(0x19a) < opcodes.index(0xa9)
+    jerky_slot = host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052')[0][0]
+    used = {row[0] for row in host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid}')}
+    split_slot = next(slot for slot in range(23, 39) if slot not in used)
+    client.send(0x10e, bytes([255, jerky_slot, 255, split_slot, 2]))
+    split = client.collect()
+    assert host.rows(f'SELECT stack_count FROM game_item_instance WHERE owner_guid = {guid} AND slot = {split_slot}') == [[2]]
+    client.send(0x10d, bytes([split_slot, jerky_slot]))
+    merged = client.collect()
+    assert host.rows(f'SELECT slot, stack_count FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052') == [[jerky_slot, 4]]
+    assert not any(opcode in (0x166, 0x19a) for opcode, _ in split + merged)
+
+
 def check_group_loot(host):
     client, peer = native_and_peer(host, at=(0, 0, 0, 0))
     guid, peer_guid = client.guid, peer.guid
@@ -4623,8 +4649,9 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_quest_chain, check_group_loot, check_aoi, check_auras, check_melee, check_casting,
-    check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social, check_channels, check_party,
+    check_inventory, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
+    check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
     check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_addon, check_chat,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,

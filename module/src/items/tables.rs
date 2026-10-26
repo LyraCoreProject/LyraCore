@@ -142,16 +142,34 @@ pub struct ItemInstance {
 
 impl ItemInstance {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
+        Self::insert_as(ctx, row, true)
+    }
+
+    /// Inserts a stack split off the character's own, without the item push or quest toast.
+    pub(crate) fn insert_split(ctx: &ReducerContext, row: Self) -> Self {
+        Self::insert_as(ctx, row, false)
+    }
+
+    fn insert_as(ctx: &ReducerContext, row: Self, received: bool) -> Self {
         let row = ctx.db.game_item_instance().insert(row);
-        crate::native::item_changed(ctx, None, Some(&row));
+        crate::native::item_changed(ctx, None, Some(&row), received);
         row
     }
 
     pub(crate) fn update(self, ctx: &ReducerContext) -> Self {
+        self.update_as(ctx, true)
+    }
+
+    /// Updates a stack merged from the character's own, without the item push or quest toast.
+    pub(crate) fn update_merged(self, ctx: &ReducerContext) -> Self {
+        self.update_as(ctx, false)
+    }
+
+    fn update_as(self, ctx: &ReducerContext, received: bool) -> Self {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(self.guid);
         let row = items.guid().update(self);
-        crate::native::item_changed(ctx, previous.as_ref(), Some(&row));
+        crate::native::item_changed(ctx, previous.as_ref(), Some(&row), received);
         row
     }
 
@@ -160,7 +178,7 @@ impl ItemInstance {
         let previous = items.guid().find(guid);
         let removed = items.guid().delete(guid);
         if let Some(row) = previous {
-            crate::native::item_changed(ctx, Some(&row), None);
+            crate::native::item_changed(ctx, Some(&row), None, false);
         }
         removed
     }

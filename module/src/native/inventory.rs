@@ -80,29 +80,17 @@ fn gain(
             row.random_property_id,
         )),
     )));
-    use crate::quest::{game_character_quest, game_quest_objective};
-    if ctx
-        .db
-        .game_character_quest()
-        .by_character()
-        .filter(row.owner_guid)
-        .any(|quest| {
-            !quest.rewarded
-                && !quest.failed
-                && ctx
-                    .db
-                    .game_quest_objective()
-                    .by_quest()
-                    .filter(quest.quest_entry)
-                    .any(|objective| objective.kind == 1 && objective.target_entry == row.entry)
-        })
-    {
-        packets.push(packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
-            lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
-                required_item_id: row.entry,
-                items_required: count,
-            },
-        )));
+    if super::quest::collects(ctx, row.owner_guid, row.entry) {
+        // The client's toast adds this count to its bags, so it must lead the item's update.
+        packets.insert(
+            0,
+            packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
+                lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
+                    required_item_id: row.entry,
+                    items_required: count,
+                },
+            )),
+        );
     }
 }
 
@@ -110,6 +98,7 @@ pub(crate) fn changed(
     ctx: &ReducerContext,
     previous: Option<&ItemInstance>,
     current: Option<&ItemInstance>,
+    received: bool,
 ) {
     if ctx.db.game_native_player().count() == 0 {
         return;
@@ -130,8 +119,8 @@ pub(crate) fn changed(
         .zip(current)
         .is_some_and(|(old, row)| old.owner_guid != row.owner_guid)
     {
-        changed(ctx, previous, None);
-        changed(ctx, None, current);
+        changed(ctx, previous, None, received);
+        changed(ctx, None, current, received);
         return;
     }
     let Some(row) = current.or(previous) else {
@@ -154,7 +143,9 @@ pub(crate) fn changed(
                 packets.push(Packet { opcode, body });
             }
             slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
-            gain(ctx, row, row.stack_count, false, &mut packets);
+            if received {
+                gain(ctx, row, row.stack_count, false, &mut packets);
+            }
         }
         (Some(old), None) => {
             clear_slot(ctx, old, &mut packets);
@@ -202,7 +193,7 @@ pub(crate) fn changed(
                     row.durability,
                 )));
             }
-            if old.slot == row.slot {
+            if received && old.slot == row.slot {
                 gain(
                     ctx,
                     row,

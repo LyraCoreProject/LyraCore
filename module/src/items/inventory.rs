@@ -108,7 +108,7 @@ pub(crate) fn apply_item_split(
     let soulbound = inst.soulbound;
     let item_text_id = inst.item_text_id;
     inst.update(ctx);
-    crate::ItemInstance::insert(
+    crate::ItemInstance::insert_split(
         ctx,
         ItemInstance {
             guid: new_guid,
@@ -282,7 +282,7 @@ pub(crate) fn apply_item_move(
                     let moved = merge_amount(src.stack_count, dst.stack_count, tmpl.max_stack);
                     if moved > 0 {
                         dst.stack_count += moved;
-                        dst.update(ctx);
+                        dst.update_merged(ctx);
                         if moved >= src.stack_count {
                             crate::ItemInstance::delete(ctx, src.guid);
                         } else {

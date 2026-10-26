@@ -561,8 +561,14 @@ pub(crate) fn group_event(
 }
 
 pub(super) fn item_changed(ctx: &ReducerContext, guid: u64, entry: u32) {
-    if ctx
-        .db
+    if collects(ctx, guid, entry) {
+        refresh(ctx, guid);
+    }
+}
+
+/// Whether an active quest of the character has an objective to collect the item.
+pub(super) fn collects(ctx: &ReducerContext, guid: u64, entry: u32) -> bool {
+    ctx.db
         .game_character_quest()
         .by_character_active()
         .filter((guid, false, false))
@@ -576,7 +582,4 @@ pub(super) fn item_changed(ctx: &ReducerContext, guid: u64, entry: u32) {
                         && objective.target_entry == entry
                 })
         })
-    {
-        refresh(ctx, guid);
-    }
 }
