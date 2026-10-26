@@ -1842,6 +1842,10 @@ def check_transport_crossings(host):
         stranded = sailor.collect(auto_ack=False)
         assert (0x3f, struct.pack('<III', 0, entry, 1)) in stranded
         assert (0x3e, struct.pack('<Iffff', 0, 2, 1, 0, 0)) in stranded
+        seen = lander.collect()
+        stranded_create = seen[creates(seen, sailor.guid)[0]][1]
+        offset = 7 + stranded_create[6].bit_count()
+        assert not struct.unpack_from('<I', stranded_create, offset + 2)[0] & 0x02000000
 
         sailor.send(0xdc)
         arrived = sailor.collect()

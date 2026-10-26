@@ -218,13 +218,7 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
         .by_transport()
         .filter(transport.entry)
         .collect();
-    // Destination observers need the Transport before a sessionless Passenger's CREATE names it.
-    crate::aoi::transport_moved(
-        ctx,
-        guid(transport.entry),
-        map_id,
-        passengers.iter().map(|passenger| passenger.character_guid),
-    );
+    let mut crossing = Vec::new();
     for passenger in passengers {
         let entity = ctx
             .db
@@ -235,12 +229,24 @@ pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
             (Some(entity), Some(pose))
                 if entity.map_id == fired.map_id && entity.instance_id == 0 =>
             {
-                carry_across(ctx, passenger, fired.map_id, pose);
+                crossing.push((passenger, pose));
             }
             // World entry carries a Passenger still loading the previous map on to this one.
             (None, _) if crate::native::is_world_porting(ctx, passenger.character_guid) => {}
             _ => leave(ctx, passenger.character_guid),
         }
+    }
+    // Destination observers need the Transport before a sessionless Passenger's CREATE names it.
+    crate::aoi::transport_moved(
+        ctx,
+        guid(transport.entry),
+        map_id,
+        crossing
+            .iter()
+            .map(|(passenger, _)| passenger.character_guid),
+    );
+    for (passenger, pose) in crossing {
+        carry_across(ctx, passenger, fired.map_id, pose);
     }
 }
 
@@ -434,6 +440,7 @@ pub(crate) fn rejoin(ctx: &ReducerContext, character_guid: u64) {
             pose(ctx, transport, now_ms(ctx))?,
         ))
     });
+    // During a pending crossing the client already holds a self CREATE without the Transport.
     match (entity, target) {
         (Some(entity), Some((map_id, pose)))
             if entity.instance_id == 0 && entity.map_id != map_id && pose.map_id == map_id =>

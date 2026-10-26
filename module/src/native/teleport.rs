@@ -139,7 +139,7 @@ pub(super) fn acknowledge(
             Ok(())
         }
         (ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK, Some(NativeTeleport::WorldPort)) => {
-            // Rebuild without a recipient until self CREATE precedes AOI and owner replays.
+            // Rebuild without a recipient; a Passenger's Transport, then self CREATE, precede AOI.
             ctx.db
                 .game_native_player()
                 .connection_id()
