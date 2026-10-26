@@ -89,3 +89,40 @@ fn benilla_places_a_late_seen_passenger_on_its_transport() {
         "ON_TRANSPORT with the steering flags"
     );
 }
+
+#[test]
+fn benilla_reads_a_passenger_map_crossing_as_boat_local() {
+    let crossing = codec::TransportCrossing {
+        entry: 176_231,
+        from_map_id: 0,
+    };
+    let messages =
+        codec::build_cross_map_teleport(1, 1.5, -2.0, 6.25, 0.5, Some(crossing)).unwrap();
+    let [pending, new_world] = messages.map(|message| {
+        let packet = lyracore_protocol::world::encode(message).unwrap();
+        let (packet, tail) = messages::parse_server_with_tail(packet.opcode, &packet.body).unwrap();
+        assert_eq!(tail, 0, "unread bytes for {}", packet.name());
+        packet
+    });
+    let ServerPacket::TransferPending { map, transport } = pending else {
+        panic!("expected SMSG_TRANSFER_PENDING");
+    };
+    assert_eq!((map, transport), (1, Some((176_231, 0))));
+    let ServerPacket::NewWorld {
+        map,
+        position,
+        orientation,
+    } = new_world
+    else {
+        panic!("expected SMSG_NEW_WORLD");
+    };
+    assert_eq!((map, orientation), (1, 0.5));
+    assert_eq!(
+        position,
+        Vector3d {
+            x: 1.5,
+            y: -2.0,
+            z: 6.25,
+        }
+    );
+}

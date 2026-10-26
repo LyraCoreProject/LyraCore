@@ -478,15 +478,16 @@ Projection. Idempotent, and a no-op for a rider who is not mounted.
 
 **Transport**:
 A boat or zeppelin: a type-15 `MO_TRANSPORT` GameObject that travels one TaxiPathNode path on a
-fixed cycle. Every Character on its map sees it. The client moves it from its Path Progress, and the
+fixed cycle. A path can cross maps, and every Character on the Transport's current map sees it. The client moves it from its Path Progress, and the
 Module computes the same timetable to carry Passengers. Elevators and trams are not Transports, and
 neither is the network transport of a Transport Loss.
 _Avoid_: ship, vehicle
 
 **Passenger**:
 A Character standing on a Transport. Its movement names the Transport and its offset on it, and the
-Module moves its world position with the Transport between movement updates. Movement without the
-Transport, a teleport or leaving the world ends it. The taxi code's `passenger` names a Character in
+Module moves its world position with the Transport between movement updates, and to the next map
+when the Transport crosses maps. Movement without the Transport, any other teleport or leaving the
+world ends it. The taxi code's `passenger` names a Character in
 flight, not a Passenger.
 _Avoid_: rider (a rider is on a mount)
 

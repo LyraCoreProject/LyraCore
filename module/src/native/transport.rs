@@ -28,6 +28,10 @@ pub(super) fn create(ctx: &ReducerContext, guid: u64) -> Result<SMSG_UPDATE_OBJE
 
 pub(super) fn passenger_movement(ctx: &ReducerContext, entity: &WorldEntity) -> Option<Vec<u8>> {
     let passenger = crate::transport::passenger(ctx, entity.guid)?;
+    let transport = crate::transport::find(ctx, crate::transport::guid(passenger.transport_entry))?;
+    if crate::transport::current_map(ctx, &transport) != entity.map_id {
+        return None;
+    }
     Some(codec::passenger_movement_bytes(
         entity.movement_flags,
         entity.last_move_ms,

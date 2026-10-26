@@ -1,9 +1,10 @@
 use super::*;
 use wow_world_messages::vanilla::{
     MSG_MOVE_SET_PITCH_Server, MSG_MOVE_START_PITCH_DOWN_Server, MSG_MOVE_START_PITCH_UP_Server,
-    MSG_MOVE_STOP_PITCH_Server, SMSG_FORCE_RUN_BACK_SPEED_CHANGE, SMSG_FORCE_SWIM_SPEED_CHANGE,
-    SMSG_MOVE_LAND_WALK, SMSG_MOVE_WATER_WALK, SMSG_SPLINE_SET_RUN_BACK_SPEED,
-    SMSG_SPLINE_SET_RUN_SPEED, SMSG_SPLINE_SET_SWIM_SPEED,
+    MSG_MOVE_STOP_PITCH_Server, SMSG_TRANSFER_PENDING_has_transport,
+    SMSG_FORCE_RUN_BACK_SPEED_CHANGE, SMSG_FORCE_SWIM_SPEED_CHANGE, SMSG_MOVE_LAND_WALK,
+    SMSG_MOVE_WATER_WALK, SMSG_SPLINE_SET_RUN_BACK_SPEED, SMSG_SPLINE_SET_RUN_SPEED,
+    SMSG_SPLINE_SET_SWIM_SPEED,
 };
 
 pub fn relayed_move_opcode(msg: &ClientOpcodeMessage) -> Option<u32> {
@@ -217,19 +218,37 @@ pub fn build_teleport_ack(
     }
 }
 
-/// Queue TRANSFER_PENDING and NEW_WORLD together to keep loading and arrival ordered.
+/// A Passenger's map crossing: its Transport's entry and the map the Transport leaves.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct TransportCrossing {
+    pub entry: u32,
+    pub from_map_id: u32,
+}
+
+/// Queue TRANSFER_PENDING and NEW_WORLD together; with a Transport the pose is the offset on it.
 pub fn build_cross_map_teleport(
     map_id: u32,
     x: f32,
     y: f32,
     z: f32,
     o: f32,
+    transport: Option<TransportCrossing>,
 ) -> Result<[ServerOpcodeMessage; 2]> {
     let map = Map::try_from(map_id).map_err(|_| anyhow!("invalid map {map_id}"))?;
+    let has_transport = transport
+        .map(|transport| {
+            Map::try_from(transport.from_map_id)
+                .map(|transport_map| SMSG_TRANSFER_PENDING_has_transport {
+                    transport: transport.entry,
+                    transport_map,
+                })
+                .map_err(|_| anyhow!("invalid map {}", transport.from_map_id))
+        })
+        .transpose()?;
     Ok([
         ServerOpcodeMessage::SMSG_TRANSFER_PENDING(Box::new(SMSG_TRANSFER_PENDING {
             map,
-            has_transport: None,
+            has_transport,
         })),
         ServerOpcodeMessage::SMSG_NEW_WORLD(Box::new(SMSG_NEW_WORLD {
             map,

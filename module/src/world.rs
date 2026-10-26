@@ -435,6 +435,28 @@ pub(crate) fn teleport_player(
     z: f32,
     o: f32,
 ) {
+    teleport(ctx, player_guid, map_id, instance_id, [x, y, z, o], None);
+}
+
+/// Carries a Passenger to `map_id` with its Transport; `pose` is its world pose there.
+pub(crate) fn teleport_aboard(
+    ctx: &ReducerContext,
+    map_id: u32,
+    pose: [f32; 4],
+    aboard: crate::transport::Aboard,
+) {
+    let guid = aboard.passenger.character_guid;
+    teleport(ctx, guid, map_id, 0, pose, Some(aboard));
+}
+
+fn teleport(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    [x, y, z, o]: [f32; 4],
+    aboard: Option<crate::transport::Aboard>,
+) {
     if crate::taxi::movement_is_suppressed(ctx, player_guid) {
         return;
     }
@@ -478,6 +500,9 @@ pub(crate) fn teleport_player(
         e.instance_id = instance_id;
         if let Some(zone) = destination_zone {
             e.zone_id = zone;
+        }
+        if let Some(aboard) = &aboard {
+            crate::transport::reboard(ctx, aboard.passenger.clone());
         }
         e.update(ctx);
     }
@@ -539,7 +564,10 @@ pub(crate) fn teleport_player(
         created_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
         cross_map,
     });
-    crate::native::teleport_changed(ctx, &event, teleport_counter);
+    crate::native::teleport_changed(ctx, &event, teleport_counter, aboard.as_ref());
+    if let Some(aboard) = aboard.filter(|_| cross_map && !sessionless) {
+        crate::transport::reboard(ctx, aboard.passenger);
+    }
 
     if changes_partition {
         crate::instance::reconcile_instance_removal(ctx, player_guid);
@@ -686,6 +714,7 @@ pub(crate) fn apply_player_login(
     crate::ghost::restore(ctx, character_guid);
     crate::spell::recompute_display(ctx, character_guid);
     crate::taxi::arm_taxi_flight(ctx, character_guid);
+    crate::transport::arm_crossings(ctx);
     crate::mount::restore_mount_on_rebuild(ctx, character_guid);
 
     crate::items::grant_starter_item(ctx, character.guid, owner)?;

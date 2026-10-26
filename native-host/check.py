@@ -1783,6 +1783,98 @@ def check_transports(host):
         host.sql(f'DELETE FROM game_taxi_path_node WHERE path_id = {path}')
 
 
+
+def check_transport_crossings(host):
+
+    entry, path = 5090410, 5090411
+    transport = (0x1FC0 << 48) | entry
+
+    def creates(packets, guid):
+        return [index for index, (opcode, body) in enumerate(packets)
+                if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == guid]
+
+    def crossing_map():
+        rows = host.rows(f'SELECT map_id FROM game_transport_crossing WHERE transport_entry = {entry}')
+        return rows[0][0] if rows else None
+
+    def until(predicate, seconds):
+        deadline = time.time() + seconds
+        while time.time() < deadline:
+            if predicate():
+                return
+            time.sleep(0.05)
+        raise AssertionError('Transport crossing did not settle')
+
+    nodes = [(0, 6980, 0, 0), (0, 7000, 2, 3), (0, 7020, 0, 0), (0, 7040, 0, 0), (0, 7060, 0, 0),
+             (1, 7080, 0, 0), (1, 7100, 0, 0), (1, 7120, 2, 3), (1, 7140, 0, 0), (1, 7160, 0, 0)]
+    for index, (map_id, x, flags, delay) in enumerate(nodes):
+        host.sql(f'INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) '
+            f'VALUES ({path + 1 + index},{path},{index},{map_id},{x},7000,0,{flags},{delay * 1000})')
+    host.sql(f"INSERT INTO game_transport (entry,name,display_id,size,flags,taxi_path_id,move_speed,accel_rate,"
+        f"period_ms,map_id) VALUES ({entry},'Native crossing',3015,1,40,{path},10,5,24000,0)")
+    try:
+        sailor = host.enter_world('Sailor', at=(0, 7020, 7000, 0))
+        docker = host.enter_world('Docker', at=(0, 6900, 7000, 0))
+        lander = host.enter_world('Lander', at=(1, 7200, 7000, 0))
+        until(lambda: crossing_map() == 0, 30)
+        for world in (sailor, docker, lander):
+            world.collect()
+
+        heartbeat = struct.pack('<IIffff', 0x02000000, 10000, 7020, 7000.5, 0, 0)
+        sailor.send(0xee, heartbeat + struct.pack('<QffffI', transport, 2, 1, 0, 0, 0))
+        sailor.collect()
+        assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
+
+        departing = []
+        until(lambda: departing.extend(sailor.collect(auto_ack=False)) or any(opcode == 0x3e for opcode, _ in departing), 30)
+        pending = next(body for opcode, body in departing if opcode == 0x3f)
+        assert struct.unpack('<III', pending) == (1, entry, 0)
+        new_world = next(body for opcode, body in departing if opcode == 0x3e)
+        assert struct.unpack('<Iffff', new_world) == (1, 2, 1, 0, 0)
+        assert crossing_map() == 1
+        assert (0xaa, struct.pack('<Q', transport)) in docker.collect()
+        assert creates(lander.collect(), transport)
+        assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
+
+        until(lambda: crossing_map() == 0, 30)
+        assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
+        sailor.send(0xdc)
+        stranded = sailor.collect(auto_ack=False)
+        assert (0x3f, struct.pack('<III', 0, entry, 1)) in stranded
+        assert (0x3e, struct.pack('<Iffff', 0, 2, 1, 0, 0)) in stranded
+        seen = lander.collect()
+        stranded_create = seen[creates(seen, sailor.guid)[0]][1]
+        offset = 7 + stranded_create[6].bit_count()
+        assert not struct.unpack_from('<I', stranded_create, offset + 2)[0] & 0x02000000
+
+        sailor.send(0xdc)
+        arrived = sailor.collect()
+        assert creates(arrived, transport)[0] < creates(arrived, sailor.guid)[0]
+        own = arrived[creates(arrived, sailor.guid)[0]][1]
+        offset = 7 + own[6].bit_count()
+        assert own[offset] == 4
+        flags, _, _, _, _, _, carried_by, *carried_at = struct.unpack_from('<IIffffQffff', own, offset + 2)
+        assert flags & 0x02000000 and carried_by == transport and carried_at == [2, 1, 0, 0]
+        assert len(creates(arrived, transport)) == 1
+        until(lambda: host.rows(f'SELECT map_id FROM game_world_entity WHERE guid = {sailor.guid}') == [[0]], 3)
+        until(lambda: 6950 <= host.rows(f'SELECT x FROM game_world_entity WHERE guid = {sailor.guid}')[0][0] <= 7070, 3)
+        assert host.rows(f'SELECT transport_entry FROM game_transport_passenger WHERE character_guid = {sailor.guid}') == [[entry]]
+        assert not host.rows(f'SELECT guid FROM game_movement_violation WHERE guid = {sailor.guid}')
+
+        x, y = host.rows(f'SELECT x, y FROM game_world_entity WHERE guid = {sailor.guid}')[0]
+        sailor.send(0xee, struct.pack('<IIffffI', 0, 20000, x, y, 0, 0, 0))
+        sailor.collect()
+        assert not host.rows(f'SELECT character_guid FROM game_transport_passenger WHERE character_guid = {sailor.guid}')
+
+        docker.collect()
+        host.sql(f'DELETE FROM game_transport WHERE entry = {entry}')
+        until(lambda: crossing_map() is None, 30)
+        assert (0xaa, struct.pack('<Q', transport)) in docker.collect()
+    finally:
+        host.sql(f'DELETE FROM game_transport WHERE entry = {entry}')
+        host.sql(f'DELETE FROM game_taxi_path_node WHERE path_id = {path}')
+
+
 def check_areatriggers(host):
 
     sphere, box, dungeon, exit_trigger, exploration = range(5090630, 5090635)
@@ -4736,7 +4828,7 @@ SHARED = named(
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
-    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_addon, check_chat,
+    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,
     check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation, check_combo_points,
 ) | {'admission': admission.run}

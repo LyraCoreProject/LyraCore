@@ -251,6 +251,35 @@ impl Timetable {
         }
     }
 
+    /// The wait until the next map change and its map; `None` for a single-map route.
+    pub(crate) fn next_map_change(&self, cycle_ms: u32) -> Option<(u32, u32)> {
+        let cycle_ms = cycle_ms % self.period_ms;
+        let count = self.frames.len();
+        (0..count)
+            .filter_map(|index| {
+                let previous = &self.frames[(index + count - 1) % count];
+                let frame = &self.frames[index];
+                let starts_ms = if index == 0 {
+                    0
+                } else {
+                    previous.next_arrival_ms
+                };
+                (frame.map_id != previous.map_id).then_some((starts_ms, frame.map_id))
+            })
+            .map(|(starts_ms, map_id)| {
+                let wait_ms = (starts_ms + self.period_ms - cycle_ms) % self.period_ms;
+                (
+                    if wait_ms == 0 {
+                        self.period_ms
+                    } else {
+                        wait_ms
+                    },
+                    map_id,
+                )
+            })
+            .min_by_key(|&(wait_ms, _)| wait_ms)
+    }
+
     fn distance_after(&self, seconds: f32) -> f32 {
         if seconds < self.accel_time {
             0.5 * self.accel * seconds * seconds
@@ -421,6 +450,40 @@ mod tests {
             .find(|pose| pose.map_id == 1 && pose.position[0] == 5_200.0)
             .expect("the second stop is reached");
         assert_eq!(docked.position, [5_200.0, 0.0, 0.0]);
+    }
+
+    #[test]
+    fn a_map_change_is_scheduled_when_the_pose_reaches_the_next_map() {
+        let points = [
+            point(0, -100.0, 0, 0),
+            point(0, 0.0, STOP_FLAG, 10_000),
+            point(0, 100.0, 0, 0),
+            point(0, 200.0, 0, 0),
+            point(0, 300.0, 0, 0),
+            point(1, 5_000.0, 0, 0),
+            point(1, 5_100.0, 0, 0),
+            point(1, 5_200.0, STOP_FLAG, 10_000),
+            point(1, 5_300.0, 0, 0),
+            point(1, 5_400.0, 0, 0),
+        ];
+        let timetable = Timetable::build(&points, 10, 5, 100_000).expect("valid path");
+        let (wait_ms, map_id) = timetable
+            .next_map_change(0)
+            .expect("the route crosses maps");
+        assert_eq!(map_id, 1);
+        assert_eq!(timetable.pose(wait_ms - 1).map_id, 0);
+        assert_eq!(timetable.pose(wait_ms).map_id, 1);
+        let (back_ms, map_id) = timetable
+            .next_map_change(wait_ms)
+            .expect("the route returns");
+        assert_eq!((map_id, wait_ms + back_ms), (0, 100_000));
+        assert_eq!(timetable.pose(wait_ms + back_ms - 1).map_id, 1);
+        assert_eq!(timetable.next_map_change(99_999), Some((1, 0)));
+    }
+
+    #[test]
+    fn a_single_map_route_has_no_map_change() {
+        assert_eq!(ferry().next_map_change(0), None);
     }
 
     #[test]

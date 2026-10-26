@@ -34,7 +34,8 @@ packets can use it. Logout clears every delivery permission of the connection be
 Character selection. The Host applies these instructions in order. A failed output subscription
 closes its native clients, because the Host cannot continue from a missed instruction.
 
-World entry registers the Character as an AOI viewer after self CREATE and before grant replay.
+World entry registers the Character as an AOI viewer before self CREATE and replays its grants
+after it. A Passenger's Transport is the one grant replayed before self CREATE.
 Sessionless Characters stay AOI subjects but allocate no viewer Grants, so Companion populations
 create no delivery subscriptions for Characters without native connections.
 
@@ -166,6 +167,7 @@ auction browsing, listings, bids, buyouts, cancellation, expiry and private noti
 AreaTrigger exploration and dungeon entry, creature movement and facing splines,
 GameObject changes, encounter equipment, ground-effect visuals and Instance-removal notices,
 Transport creation, template queries, boarding, Passenger carriage, late observers and leaving,
+Transport map crossings with their Passengers' loading screens and arrival aboard,
 Addon bridge requests and local Companion command admission,
 logout and replacement of a World Session.
 
@@ -290,8 +292,8 @@ DynamicObjects use a separate AOI layer and a map, Instance and cell index. Grou
 removes their Grants and sends DESTROY. Existing rows need the
 [DynamicObject cell backfill](./danger-zones.md#dynamicobject-aoi-migration).
 
-**Transports.** The [Transport module](../module/src/transport/mod.rs) runs each imported single-map
-route from the Realm Clock. Every Character in the open world of a Transport's map holds its AOI
+**Transports.** The [Transport module](../module/src/transport/mod.rs) runs each imported route
+from the Realm Clock. Every Character in the open world of a Transport's current map holds its AOI
 Grant, and those Grants come before other CREATEs so a Passenger's CREATE can name its Transport.
 The CREATE carries the Path Progress as the phase within the current cycle, not as an uptime, and
 the client moves the Transport from it. The world database's period can differ from the client's
@@ -303,8 +305,14 @@ As in CMaNGOS, the Module refuses an offset beyond 50 yards across or 100 yards 
 Characters leaving a Transport, are exempt from movement-violation scoring. While Passengers
 remain, a 500 ms schedule moves their world positions with the Transport for AOI and zone changes;
 it sends no movement. Late observers receive the Passenger's CREATE with the Transport GUID and
-offset. Teleports and leaving the world end the attachment. Routes that cross maps are not imported
-yet.
+offset. Teleports and leaving the world end the attachment.
+
+A route that crosses maps has a one-shot schedule for its next map change. World entry arms it. When
+it fires, Characters on the old map lose the Transport's Grant and Characters on the new map gain
+it. Each Passenger on the old map teleports with it, as CMaNGOS `Transport::TeleportTransport`
+does: `SMSG_TRANSFER_PENDING` names the Transport and the old map, and `SMSG_NEW_WORLD` carries the
+offset instead of a world position. The attachment survives the loading screen. On arrival the
+Transport's CREATE precedes the Character's own CREATE, which names the Transport and the offset.
 
 **Instance Removal.** Inserts and cancellations send the countdown only to the affected Character.
 World entry replays the remaining time, or clears a stale countdown. Scheduled removal clears the
