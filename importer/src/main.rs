@@ -435,7 +435,10 @@ where
         if a.source != world_source::SourceKind::Vmangos
             || a.dump.is_none()
             || a.dbc.is_none()
-            || !matches!(a.family.as_deref(), Some("globals" | "items" | "loot"))
+            || !matches!(
+                a.family.as_deref(),
+                Some("globals" | "items" | "loot" | "gameobjects")
+            )
             || a.apply
             || a.pack_client.is_some()
             || a.pack_out.is_some()
@@ -450,11 +453,16 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items|loot, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items|loot|gameobjects, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
-            || !matches!(a.family.as_deref(), Some("globals" | "items" | "loot"))
+            || (a.go_models.is_none()
+                && !matches!(
+                    a.family.as_deref(),
+                    Some("globals" | "items" | "loot" | "gameobjects")
+                ))
+            || (a.go_models.is_some() && a.family.is_some())
             || a.pack_client.is_some()
             || a.pack_out.is_some()
             || a.terrain.is_some()
@@ -463,12 +471,11 @@ where
             || a.vmap_status
             || a.vmap_prepare_coverage.is_some()
             || a.dump_collision.is_some()
-            || a.go_models.is_some()
             || a.spells
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos currently supports --dump <sqlite> --family globals|items|loot");
+        bail!("vmangos needs --dump <sqlite> and --family globals|items|loot|gameobjects, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -586,7 +593,13 @@ fn main() -> Result<()> {
     }
 
     if let Some(dir) = &args.go_models {
-        return go_model::run(dir, args.dump.as_deref(), args.apply, &args.shard);
+        return go_model::run(
+            dir,
+            args.dump.as_deref(),
+            args.source,
+            args.apply,
+            &args.shard,
+        );
     }
 
     if args.dump.is_none() {

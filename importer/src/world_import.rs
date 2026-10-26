@@ -45,7 +45,7 @@ const GATHER_NODES: &[(u64, u32, u32, u32, u32)] = &[
     (1622, 182, 2453, 100, 175),
 ];
 
-fn gather_node(entry: u64) -> Option<(u32, u32, u32, u32)> {
+pub(crate) fn gather_node(entry: u64) -> Option<(u32, u32, u32, u32)> {
     GATHER_NODES
         .iter()
         .find(|n| n.0 == entry)
@@ -60,12 +60,12 @@ const GO_GOOBER: u8 = 10;
 const GO_MEETINGSTONE: u8 = lyracore_shared::constants::go_type::MEETINGSTONE;
 // Synthetic GATHER collides with vanilla FISHINGHOLE type 25; classify raw types first.
 const GO_GATHER: u8 = 25;
-const CMANGOS_FISHINGHOLE_TYPE: u32 = 25;
+const VANILLA_FISHINGHOLE_TYPE: u32 = 25;
 
 pub(crate) fn classify_go_type(entry: u64, raw_type: u32) -> Option<u8> {
     match raw_type {
         3 if gather_node(entry).is_some() => Some(GO_GATHER),
-        CMANGOS_FISHINGHOLE_TYPE => None,
+        VANILLA_FISHINGHOLE_TYPE => None,
         t if t <= u8::MAX as u32 => Some(t as u8),
         _ => None,
     }
@@ -2749,10 +2749,10 @@ fn collect_gameobject_spawns(
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
         .iter()
         .map(|row| -> Result<_> {
-            let Ok(entry) = field(row, got::ENTRY)?.parse::<u64>() else {
+            let Ok(entry) = row.numeric_text(got::ENTRY)?.parse::<u64>() else {
                 return Ok(None);
             };
-            let Ok(raw_type) = field(row, got::TYPE)?.parse::<u32>() else {
+            let Ok(raw_type) = row.numeric_text(got::TYPE)?.parse::<u32>() else {
                 return Ok(None);
             };
             let stored_type = match classify_go_type(entry, raw_type) {
@@ -2762,26 +2762,26 @@ fn collect_gameobject_spawns(
                     return Ok(None);
                 }
             };
-            let disp: u32 = field(row, got::DISPLAY_ID)?.parse().unwrap_or(0);
-            let name = field(row, got::NAME)?.to_string();
-            let data0: u32 = field(row, got::DATA0)?.parse().unwrap_or(0);
-            let data1: u32 = field(row, got::DATA1)?.parse().unwrap_or(0);
+            let disp: u32 = row.numeric_text(got::DISPLAY_ID)?.parse().unwrap_or(0);
+            let name = row.text(got::NAME)?.trim().to_string();
+            let data0: u32 = row.numeric_text(got::DATA0)?.parse().unwrap_or(0);
+            let data1: u32 = row.numeric_text(got::DATA1)?.parse().unwrap_or(0);
             let trap_spell_id = if raw_type == 6 {
-                field(row, got::DATA3)?.parse().unwrap_or(0)
+                row.numeric_text(got::DATA3)?.parse().unwrap_or(0)
             } else {
                 0
             };
             let trap_cooldown_secs = if raw_type == 6 {
-                field(row, got::DATA5)?.parse().unwrap_or(0)
+                row.numeric_text(got::DATA5)?.parse().unwrap_or(0)
             } else {
                 0
             };
             let meeting_stone_area_id = if raw_type == u32::from(GO_MEETINGSTONE) {
-                field(row, got::DATA2)?.parse().unwrap_or(0)
+                row.numeric_text(got::DATA2)?.parse().unwrap_or(0)
             } else {
                 0
             };
-            let size: f32 = field(row, got::SIZE)?.parse().unwrap_or(0.0);
+            let size: f32 = row.numeric_text(got::SIZE)?.parse().unwrap_or(0.0);
             Ok(Some((
                 entry,
                 GoMeta {
@@ -2810,25 +2810,37 @@ fn collect_gameobject_spawns(
     let mut go_whole_map_counts: std::collections::BTreeMap<i64, usize> =
         std::collections::BTreeMap::new();
     for row in parse_table(dump, "gameobject")?.iter() {
-        let map = field(row, go::MAP)?.parse::<i64>().unwrap_or(-1);
-        let id: u64 = field(row, go::ID)?.parse().unwrap_or(0);
+        let map = row.numeric_text(go::MAP)?.parse::<i64>().unwrap_or(-1);
+        let id: u64 = row.numeric_text(go::ID)?.parse().unwrap_or(0);
         let Some(meta) = go_meta.get(&id) else {
             continue;
         };
-        let x: f64 = field(row, go::X)?.parse().unwrap_or(0.0);
-        let y: f64 = field(row, go::Y)?.parse().unwrap_or(0.0);
-        let z: f64 = field(row, go::Z)?.parse().unwrap_or(0.0);
+        let x: f64 = row.numeric_text(go::X)?.parse().unwrap_or(0.0);
+        let y: f64 = row.numeric_text(go::Y)?.parse().unwrap_or(0.0);
+        let z: f64 = row.numeric_text(go::Z)?.parse().unwrap_or(0.0);
         if !scope.contains(map, x, y, z) {
             continue;
         }
-        let db_guid: u32 = field(row, go::GUID)?.parse().unwrap_or(0);
-        let o: f64 = field(row, go::O)?.parse().unwrap_or(0.0);
+        let db_guid: u32 = row.numeric_text(go::GUID)?.parse().unwrap_or(0);
+        let o: f64 = row.numeric_text(go::O)?.parse().unwrap_or(0.0);
         // A zero quaternion is valid packed identity, not a signal to derive rotation from facing.
-        let rot0: f64 = field(row, go::ROT0)?.parse().unwrap_or(0.0);
-        let rot1: f64 = field(row, go::ROT1)?.parse().unwrap_or(0.0);
-        let rot2: f64 = field(row, go::ROT2)?.parse().unwrap_or(0.0);
-        let rot3: f64 = field(row, go::ROT3)?.parse().unwrap_or(0.0);
-        let initial_state = go_initial_state(meta.stored_type, meta.data0);
+        let rot0: f64 = row.numeric_text(go::ROT0)?.parse().unwrap_or(0.0);
+        let rot1: f64 = row.numeric_text(go::ROT1)?.parse().unwrap_or(0.0);
+        let rot2: f64 = row.numeric_text(go::ROT2)?.parse().unwrap_or(0.0);
+        let rot3: f64 = row.numeric_text(go::ROT3)?.parse().unwrap_or(0.0);
+        let initial_state = if dump.kind() == SourceKind::Vmangos {
+            if row.number::<u32>("spawn_flags")? & 2 != 0 {
+                continue;
+            }
+            match row.number::<u8>("state")? {
+                0 => 1,
+                1 => 0,
+                2 => 2,
+                state => bail!("gameobject {db_guid}: unknown source state {state}"),
+            }
+        } else {
+            go_initial_state(meta.stored_type, meta.data0)
+        };
         go_packed_rows.push(format!(
             "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3}",
             g = go_guid(db_guid),
@@ -2953,7 +2965,7 @@ fn gameobject_template_rows(
     }
     if !dropped_type25.is_empty() {
         eprintln!(
-            "  TYPE-25 COLLISION GUARD: dropped {} real cmangos FISHINGHOLE (type 25) template(s) from \
+            "  TYPE-25 COLLISION GUARD: dropped {} source FISHINGHOLE (type 25) template(s) from \
              import entirely (entries {:?}) — module type 25 is reserved for the synthetic GATHER marker",
             dropped_type25.len(), dropped_type25
         );
@@ -3279,6 +3291,30 @@ fn push_world_content_statements(
     }
 }
 
+fn push_gameobject_statements(
+    stmts: &mut Vec<String>,
+    go_template_rows: &[String],
+    go_trap_rows: &[String],
+    go_meeting_stone_rows: &[String],
+) {
+    stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
+    stmts.push("DELETE FROM game_meeting_stone WHERE entry > 0".into());
+    stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
+    push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", go_template_rows);
+    push_insert(
+        stmts,
+        "game_gameobject_trap",
+        "entry,spell_id,cooldown_secs",
+        go_trap_rows,
+    );
+    push_insert(
+        stmts,
+        "game_meeting_stone",
+        "entry,min_level,max_level,area_id",
+        go_meeting_stone_rows,
+    );
+}
+
 fn push_quest_and_gameobject_statements(
     args: &WorldImportArgs,
     content: MappedContent,
@@ -3369,22 +3405,7 @@ fn push_quest_and_gameobject_statements(
     }
 
     if family_active(args, "gameobjects") {
-        stmts.push("DELETE FROM game_gameobject_trap WHERE entry > 0".into());
-        stmts.push("DELETE FROM game_meeting_stone WHERE entry > 0".into());
-        stmts.push("DELETE FROM game_gameobject_template WHERE entry > 0".into());
-        push_insert(stmts, "game_gameobject_template", "entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size", go_template_rows);
-        push_insert(
-            stmts,
-            "game_gameobject_trap",
-            "entry,spell_id,cooldown_secs",
-            go_trap_rows,
-        );
-        push_insert(
-            stmts,
-            "game_meeting_stone",
-            "entry,min_level,max_level,area_id",
-            go_meeting_stone_rows,
-        );
+        push_gameobject_statements(stmts, go_template_rows, go_trap_rows, go_meeting_stone_rows);
     }
     if family_active(args, "trainers") {
         stmts.push("DELETE FROM game_trainer_spell WHERE id > 0".into());
@@ -3851,10 +3872,113 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
     Ok(findings)
 }
 
+fn transport_statements(dump: &impl TableRows, client: Option<&str>) -> Result<Vec<String>> {
+    let Some(client) = client else {
+        return Ok(Vec::new());
+    };
+    let mut chain = dbc::open_chain(std::path::Path::new(client))?;
+    let paths = dbc::read_table(&mut chain)?;
+    let nodes = dbc::read_table(&mut chain)?;
+    let catalogue = crate::transport::catalogue_sql(&paths, &nodes, dump)?;
+    for warning in catalogue.warnings {
+        eprintln!("{warning}");
+    }
+    Ok(catalogue.statements)
+}
+
+fn vmangos_gameobjects_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let spawns = collect_gameobject_spawns(dump, &args.scope)?;
+    let templates = gameobject_template_rows(&spawns, &Default::default())?;
+    let mut stmts = Vec::new();
+    push_gameobject_statements(
+        &mut stmts,
+        &templates.templates,
+        &templates.traps,
+        &templates.meeting_stones,
+    );
+    stmts.extend(transport_statements(dump, args.dbc.as_deref())?);
+    let count = insert_row_count(&stmts) + spawns.go_packed_rows.len() as u64;
+    Ok(DumpPlan {
+        stmts,
+        go_row_count: spawns.go_packed_rows.len(),
+        go_batches: spawns
+            .go_packed_rows
+            .chunks(SPAWN_BATCH)
+            .map(|rows| rows.join(";"))
+            .collect(),
+        stamps: vec![("gameobjects", count)],
+        world_source_manifest: Some(serde_json::to_string_pretty(&gameobject_findings(
+            dump, args,
+        )?)?),
+        ..Default::default()
+    })
+}
+
+fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<serde_json::Value> {
+    let mut counts: std::collections::BTreeMap<&str, usize> = Default::default();
+    let mut add = |code, present: bool| {
+        if present {
+            *counts.entry(code).or_default() += 1;
+        }
+    };
+    let mut placed = std::collections::HashSet::new();
+    for row in dump.rows("gameobject")?.iter() {
+        if !args.scope.contains(
+            row.number("map")?,
+            row.number("position_x")?,
+            row.number("position_y")?,
+            row.number("position_z")?,
+        ) {
+            continue;
+        }
+        let flags = row.number::<u32>("spawn_flags")?;
+        if flags & 2 != 0 {
+            continue;
+        }
+        placed.insert(row.number::<u32>("guid")?);
+        add("gameobjects.spawn-flags", flags & !2 != 0);
+        add(
+            "gameobjects.summoned-spawn",
+            row.number::<i32>("spawntimesecsmin")? < 0,
+        );
+        add(
+            "gameobjects.animation",
+            row.number::<u32>("animprogress")? != 100,
+        );
+        add(
+            "gameobjects.visibility",
+            row.number::<f32>("visibility_mod")? != 0.0,
+        );
+        add(
+            "gameobjects.respawn-range",
+            row.number::<i32>("spawntimesecsmin")? != row.number::<i32>("spawntimesecsmax")?,
+        );
+    }
+    for (table, code) in [
+        ("game_event_gameobject", "gameobjects.game-event"),
+        ("pool_gameobject", "gameobjects.pool"),
+    ] {
+        for row in dump.rows(table)?.iter() {
+            add(code, placed.contains(&row.number::<u32>("guid")?));
+        }
+    }
+    for row in dump.rows("gameobject_template")?.iter() {
+        let entry = row.number::<u64>("entry")?;
+        add("gameobjects.fishinghole", row.number::<u32>("type")? == 25);
+        add("gameobjects.gather-loot", gather_node(entry).is_some());
+        add("gameobjects.script", !row.text("script_name")?.is_empty());
+    }
+    let findings = counts.into_iter().map(|(code, occurrences)| serde_json::json!({"code":code,"classification":"unsupported","occurrences":occurrences})).collect::<Vec<_>>();
+    Ok(
+        serde_json::json!({"format_version":1,"source":"vmangos","family":"gameobjects","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),
+    )
+}
+
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
+        Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
         Some("globals") => {
             let stmts = globals_statements(dump, args.dbc.as_deref())?;
             let count = insert_row_count(&stmts);
@@ -3867,7 +3991,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
                 ..Default::default()
             })
         }
-        _ => bail!("vmangos currently supports --family globals, items or loot"),
+        _ => bail!("vmangos currently supports --family globals, items, loot or gameobjects"),
     }
 }
 
@@ -3885,7 +4009,12 @@ pub(crate) fn census_plan(source: &WorldSource, args: &WorldImportArgs) -> Resul
         .as_deref()
         .map(dbc::profession_tier_values)
         .transpose()?;
-    build_dump_plan(source, args, &scales, &tiers)
+    let mut plan = build_dump_plan(source, args, &scales, &tiers)?;
+    if args.family.as_deref() == Some("gameobjects") {
+        plan.stmts
+            .extend(transport_statements(source, args.dbc.as_deref())?);
+    }
+    Ok(plan)
 }
 
 pub(crate) fn globals_findings(dump: &impl TableRows) -> Result<serde_json::Value> {
@@ -4028,6 +4157,10 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "world_import_gameobjects_tests.rs"]
+mod gameobjects_tests;
 
 #[cfg(test)]
 #[path = "world_import_loot_tests.rs"]

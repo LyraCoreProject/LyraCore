@@ -5,7 +5,7 @@ use wow_dbc::vanilla_tables::taxi_path::TaxiPath;
 use wow_dbc::vanilla_tables::taxi_path_node::TaxiPathNode;
 use wow_dbc::DbcTable;
 
-use crate::dump::{field, got, push_insert, sql_text};
+use crate::dump::{got, push_insert, sql_text};
 
 const MO_TRANSPORT: u32 = 15;
 
@@ -32,7 +32,7 @@ pub(crate) fn catalogue_sql(
         .iter()
         .map(|row| -> anyhow::Result<_> {
             Ok(Some((
-                match field(row, got::ENTRY)?.parse().ok() {
+                match row.numeric_text(got::ENTRY)?.parse().ok() {
                     Some(value) => value,
                     None => return Ok(None),
                 },
@@ -49,10 +49,12 @@ pub(crate) fn catalogue_sql(
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     for transport in transports.iter() {
-        let entry: u32 = field(transport, tr::ENTRY)?
+        let entry: u32 = transport
+            .numeric_text(tr::ENTRY)?
             .parse()
             .context("transports has an invalid entry")?;
-        let period_ms: u32 = field(transport, tr::PERIOD)?
+        let period_ms: u32 = transport
+            .numeric_text(tr::PERIOD)?
             .parse()
             .with_context(|| format!("transport {entry} has an invalid period"))?;
         let Some(template) = templates.get(&entry) else {
@@ -62,7 +64,8 @@ pub(crate) fn catalogue_sql(
             continue;
         };
         let number = |column: &str| -> Result<u32> {
-            field(template, column)?
+            template
+                .numeric_text(column)?
                 .parse()
                 .with_context(|| format!("transport {entry} template column {column} is invalid"))
         };
@@ -96,12 +99,13 @@ pub(crate) fn catalogue_sql(
             continue;
         }
         let map_id = nodes[0].map.id;
-        let size: f32 = field(template, got::SIZE)?
+        let size: f32 = template
+            .numeric_text(got::SIZE)?
             .parse()
             .with_context(|| format!("transport {entry} has an invalid size"))?;
         rows.push(format!(
             "({entry},{},{},{size},{},{path_id},{speed},{accel},{period_ms},{map_id})",
-            sql_text(field(template, got::NAME)?),
+            sql_text(template.text(got::NAME)?.trim()),
             number(got::DISPLAY_ID)?,
             number(got::FLAGS)?,
         ));
@@ -167,6 +171,72 @@ mod tests {
         INSERT INTO `transports` VALUES (176244,'Teldrassil and Auberdine',316251),\
         (176231,'Menethil Harbor and Theramore Isle',329313),(50100,'Not a ship',1000),\
         (99999,'Missing',1000);";
+
+    #[test]
+    fn vmangos_transports_select_build_and_template_patch_by_name() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::{Integer as N, Text};
+        let template = |patch, display| {
+            [
+                ("entry", N(7)),
+                ("patch", N(patch)),
+                ("type", N(15)),
+                ("displayId", N(display)),
+                ("name", Text("Boat".into())),
+                ("size", N(1)),
+                ("flags", N(40)),
+                ("data0", N(1)),
+                ("data1", N(10)),
+                ("data2", N(2)),
+            ]
+        };
+        let transport =
+            |build, period| [("entry", N(7)), ("build", N(build)), ("period", N(period))];
+        let source = sqlite_fixture(&[
+            FixtureTable {
+                name: "gameobject_template",
+                columns: &[
+                    ("entry", "INTEGER"),
+                    ("patch", "INTEGER"),
+                    ("type", "INTEGER"),
+                    ("displayId", "INTEGER"),
+                    ("name", "TEXT"),
+                    ("size", "REAL"),
+                    ("flags", "INTEGER"),
+                    ("data0", "INTEGER"),
+                    ("data1", "INTEGER"),
+                    ("data2", "INTEGER"),
+                ],
+                key: &["entry", "patch"],
+                rows: &[&template(0, 1), &template(10, 2)],
+            },
+            FixtureTable {
+                name: "transports",
+                columns: &[
+                    ("period", "INTEGER"),
+                    ("build", "INTEGER"),
+                    ("entry", "INTEGER"),
+                ],
+                key: &["entry", "build"],
+                rows: &[
+                    &transport(5860, 1000),
+                    &transport(5875, 2000),
+                    &transport(6000, 999),
+                ],
+            },
+        ])
+        .unwrap();
+        let catalogue = catalogue_sql(
+            &paths(&[1]),
+            &TaxiPathNode {
+                rows: points(1, &[0, 1, 1]),
+            },
+            &source,
+        )
+        .unwrap();
+        assert_eq!(catalogue.count, 1);
+        assert!(catalogue.statements[1].contains("(7,'Boat',2,1,40,1,10,2,2000,0)"));
+    }
 
     #[test]
     fn a_route_imports_with_its_template_period_and_first_map() {

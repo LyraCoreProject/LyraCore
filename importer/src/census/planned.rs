@@ -12,6 +12,8 @@ use crate::world_source::{SourceKind, WorldSource};
 struct TableCount {
     rows: usize,
     keys: BTreeSet<String>,
+    per_entry: BTreeMap<String, usize>,
+    per_map: BTreeMap<u32, usize>,
 }
 type Records = BTreeMap<String, TableCount>;
 
@@ -49,7 +51,10 @@ fn records(statements: &[String]) -> Result<Records> {
                         .collect::<BTreeMap<_, _>>();
                     let count = output.entry(table.to_string()).or_default();
                     count.rows += 1;
-                    count.keys.extend(keys(&[fields], key_columns(table)?)?);
+                    for key in keys(&[fields], key_columns(table)?)? {
+                        *count.per_entry.entry(key.clone()).or_default() += 1;
+                        count.keys.insert(key);
+                    }
                 }
                 ',' if !quoted => {}
                 _ => field.push(c),
@@ -65,6 +70,12 @@ fn records(statements: &[String]) -> Result<Records> {
 
 fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
+        "game_gameobject_template"
+        | "game_gameobject_trap"
+        | "game_meeting_stone"
+        | "game_transport" => &["entry"],
+        "game_go_model" => &["entry"],
+        "game_gameobject" => &["template_entry"],
         "game_item_template" => &["entry"],
         "game_creature_loot" => &["creature_entry"],
         "game_pickpocket_loot" => &["creature_entry"],
@@ -115,8 +126,46 @@ pub(super) fn run(
     let vmangos = WorldSource::open(vmangos, SourceKind::Vmangos)?;
     let before_plan = census_plan(&classic, args)?;
     let after_plan = census_plan(&vmangos, args)?;
-    let before = records(&before_plan.stmts)?;
-    let after = records(&after_plan.stmts)?;
+    let mut before = records(&before_plan.stmts)?;
+    let mut after = records(&after_plan.stmts)?;
+    if family == "gameobjects" {
+        for (records, plan) in [(&mut before, &before_plan), (&mut after, &after_plan)] {
+            let count = records.entry("game_gameobject".into()).or_default();
+            for row in plan.go_batches.iter().flat_map(|batch| batch.split(';')) {
+                let mut fields = row.split(',');
+                let entry = fields
+                    .nth(1)
+                    .context("planned GameObject entry")?
+                    .to_string();
+                let map = fields.next().context("planned GameObject map")?.parse()?;
+                *count.per_map.entry(map).or_default() += 1;
+                *count.per_entry.entry(entry.clone()).or_default() += 1;
+                count.keys.insert(entry);
+                count.rows += 1;
+            }
+            anyhow::ensure!(
+                count.rows == plan.go_row_count,
+                "GameObject census differs from reducer batches"
+            );
+        }
+    }
+    if family == "gameobjects" {
+        let client = Path::new(args.dbc.as_deref().context("model census client")?);
+        for (records, source) in [(&mut before, &classic), (&mut after, &vmangos)] {
+            let models = crate::go_model::packed_rows(client, source)?;
+            let count = records.entry("game_go_model".into()).or_default();
+            for row in &models {
+                let entry = row
+                    .split(',')
+                    .next()
+                    .context("planned model entry")?
+                    .to_string();
+                count.keys.insert(entry.clone());
+                count.per_entry.insert(entry, 1);
+            }
+            count.rows = models.len();
+        }
+    }
     let tables = before
         .keys()
         .chain(after.keys())
@@ -207,6 +256,17 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         }
         writeln!(output, "- Pickpocket differences follow selected creature-to-loot links and source drops. Skinning imports distinct loot ids shared by those creatures.\n- Chest loot follows every selected chest template except the eight authored gather nodes. Fishing imports every selected zone. Both retain source membership after patch selection and reference expansion.\n- vmangos zero-chance group members share the probability left by explicit members. Classic-db keeps its existing omission of direct zero-chance rows for byte parity. Forbidden items are removed before reference weights are expanded, so forbidden children do not take a share of the remaining reference weight. Direct quest-only drops retain the sign as a separate flag where the Module table supports it.\n- Item-container and disenchant tables have no World Source import path in the current Module; they are counted in unsupported findings. Mail loot belongs to quests and is integrated in S3f.\n- Reference group-zero entries roll independently, group selectors select only the named group, and maxcount repeats each reference. Largest-remainder allocation keeps grouped shares within the reference chance. The manifest retains variable counts, runtime conditions and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.")?;
     }
+    if family == "gameobjects" {
+        for table in ["gameobject_template", "gameobject", "transports"] {
+            writeln!(
+                output,
+                "- `{table}`: patch/build selection keeps {} of {} source rows.",
+                vmangos.rows(table)?.len(),
+                vmangos.row_count(table)?
+            )?;
+        }
+        writeln!(output, "- Template differences are selected catalogue membership, with real type-25 fishing holes omitted because the Module uses 25 for authored gather nodes. Trap and meeting-stone rows follow those selected templates.\n- Spawn differences follow source placements, profile coordinates, patch ranges, disabled flags and omitted fishing-hole templates. Source ready state maps to Module closed state; active maps to open and alternative-active stays 2. The Module converts its closed/open values back to client READY/ACTIVE states when sending packets.\n- The eight gather entries still use the authored skill, item and threshold rules. The source's additional loot is unsupported.\n- Transport counts include the production transport catalogue builder for both sources. Classic-db runs it in the client catalogue pass; vmangos runs it with gameobjects. Model counts use the separate `--go-models` builder with the same client meshes; empty meshes are omitted. Routes use unchanged client TaxiPath and TaxiPathNode tables; the first path node supplies the initial map.\n- Spawn entry keys identify templates with placed spawns, not source spawn GUIDs. No Realm was modified.")?;
+    }
     Ok(())
 }
 
@@ -238,6 +298,52 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
             )?;
         }
         writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.")?;
+    }
+    if family == "gameobjects" {
+        let gather = |records: &Records| {
+            records.get("game_gameobject").map_or(0, |count| {
+                count
+                    .per_entry
+                    .iter()
+                    .filter(|(entry, _)| {
+                        entry
+                            .parse::<u64>()
+                            .ok()
+                            .is_some_and(|id| crate::world_import::gather_node(id).is_some())
+                    })
+                    .map(|(_, count)| count)
+                    .sum::<usize>()
+            })
+        };
+        writeln!(
+            output,
+            "| GATHER_NODE_GO | {} | {} | {} |",
+            super::floor("GATHER_NODE_GO")?,
+            before.get("game_gameobject").map_or(0, |count| count.rows),
+            after.get("game_gameobject").map_or(0, |count| count.rows)
+        )?;
+        for (name, map) in [
+            ("DEADMINES_GAMEOBJECTS", 36),
+            ("CORRIDOR_GAMEOBJECTS map 0", 0),
+            ("CORRIDOR_GAMEOBJECTS map 1", 1),
+        ] {
+            let floor = name.split(' ').next().unwrap();
+            let count = |records: &Records| {
+                records
+                    .get("game_gameobject")
+                    .and_then(|count| count.per_map.get(&map))
+                    .copied()
+                    .unwrap_or(0)
+            };
+            writeln!(
+                output,
+                "| {name} | {} | {} | {} |",
+                super::floor(floor)?,
+                count(before),
+                count(after)
+            )?;
+        }
+        writeln!(output, "\nThe script's `GATHER_NODE_GO` query counts every GameObject spawn. Actual authored gather-node spawns are {} classic and {} vmangos. The corridor floors apply only to the profile's included continents. These are planned counts; a Realm import remains a later integration check.", gather(before), gather(after))?;
     }
     Ok(())
 }

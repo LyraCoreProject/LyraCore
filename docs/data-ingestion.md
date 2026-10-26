@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items|loot` imports the selected SQLite rows for those families.
+`--source vmangos --family globals|items|loot|gameobjects` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -73,6 +73,18 @@ keeps each group's basis-point total equal to its intended share.
 The classic-db output remains unchanged. Runtime conditions, variable counts and quest-only skinning or fishing drops
 appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
+
+The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and
+translates source READY/ACTIVE states to the Module's closed/open states. Native packets convert
+these back to the client's numbering. The eight authored gather entries retain their skill and
+item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
+remaining spawn flags, animation, visibility, respawn ranges and script names appear in the
+Compatibility Manifest. The import retains those placements at current parity.
+
+Transports use selected build rows and template versions with the client's TaxiPath and
+TaxiPathNode tables. `--go-models <client/Data> --source vmangos --dump <sqlite>` resolves door and
+button meshes through the same template reader. The gameobjects census includes these two
+companion catalogues, plus planned spawn counts for each consumed map floor.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
