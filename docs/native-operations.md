@@ -62,9 +62,9 @@ python3 native-host/check.py \
 ./lyracore preflight
 ```
 
-The native check also has `--check-admission`, `--check-recovery`, `--check-slow-readers` and
-`--check-accept-recovery` modes. Run them when the change affects those paths. They create their
-own instances and must not be adapted to clear or seed a live Shard. Importer changes also require
+The native check also has the `admission-wait`, `recovery`, `slow-readers` and `accept-recovery`
+checks. Name them after `--host` when the change affects those paths. They create their own
+instances and must not be adapted to clear or seed a live Shard. Importer changes also require
 `cargo test -p lyracore-importer`.
 
 Preflight must complete the pinned toolchain checks, Module build, offline schema extraction and

@@ -3,7 +3,7 @@ import struct
 import threading
 import time
 
-from check import KEY, World, creates, packed_guid
+from headless import creates, packed_guid
 
 
 def rename_private_table(wasm):
@@ -31,38 +31,36 @@ def rename_private_table(wasm):
     return bytes(candidate)
 
 
-def run(world_port, call, sql, publish, wasm):
+def commitlog_bytes(host):
+    return sum(path.stat().st_size for path in host.data.glob('replicas/*/clog/*.log'))
+
+
+def run(host):
+    """Replaces the Module 20 times while two World Sessions move and speak, then checks that a
+    changed Module definition is refused. Leaves the Characters Reloadalpha and Reloadbeta."""
+    wasm = host.module.read_bytes()
+    before = commitlog_bytes(host)
     clients = []
     guids = []
     try:
-        for index, name in enumerate(['Reloadalpha', 'Reloadbeta']):
-            username = name.upper()
-            call('provision_account', [username, [0] * 32, [1] * 32])
-            account = sql(f"SELECT id FROM game_account WHERE username = '{username}'")[0]['rows'][0][0]
-            call('establish_session', [account, list(KEY), [f'0x{index + 8000:064x}']])
-            call('create_character', [account, name, 1, 1, 0, 0, 0, 0, 0, 0])
-            guid = sql(f"SELECT guid FROM game_character WHERE name = '{name}'")[0]['rows'][0][0]
-            sql(f'UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {guid}')
-            client = World(world_port, username=username)
+        for name in ['Reloadalpha', 'Reloadbeta']:
+            client = host.enter_world(name, at=(0, 0, 0, 0))
             client.socket.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-            clients.append(client)
-            guids.append(guid)
             client.socket.settimeout(120)
-            assert client.read()[0] == 0x1ee
-            client.send(0x3d, struct.pack('<Q', guid))
-            assert guid in creates(client.collect())
+            clients.append(client)
+            guids.append(client.guid)
         client, peer = clients
         guid = guids[0]
         assert guids[1] in creates(client.collect())
-        connections = sql('SELECT connection_id, character_guid FROM game_native_player')[0]['rows']
-        items = sql(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')[0]['rows']
+        connections = host.rows('SELECT connection_id, character_guid FROM game_native_player')
+        items = host.rows(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')
         assert items
-        call('debug_set_money', [guid, 123456])
+        host.call('debug_set_money', [guid, 123456])
         client.collect()
         peer.collect()
         sequence = 0
         traffic_seconds = 0
-        previous_hash = sql('SELECT program_hash FROM st_module')[0]['rows']
+        previous_hash = host.rows('SELECT program_hash FROM st_module')
         for iteration in range(1, 21):
             # A WASM custom section changes the program hash without changing the Module definition.
             section = b'\x13native-reload-check' + bytes([iteration])
@@ -88,7 +86,7 @@ def run(world_port, call, sql, publish, wasm):
             started = time.monotonic()
             worker.start()
             try:
-                publish(candidate)
+                host.publish(candidate)
             finally:
                 stopped.set()
                 worker.join(timeout=10)
@@ -96,19 +94,19 @@ def run(world_port, call, sql, publish, wasm):
             assert not worker.is_alive(), 'native requests stalled during replacement'
             assert not failures, (iteration, failures)
             assert relayed.is_set(), 'movement was not relayed during replacement'
-            current_hash = sql('SELECT program_hash FROM st_module')[0]['rows']
+            current_hash = host.rows('SELECT program_hash FROM st_module')
             assert current_hash != previous_hash, 'publish did not replace the Module'
             previous_hash = current_hash
-            assert sql('SELECT connection_id, character_guid FROM game_native_player')[0]['rows'] == connections
-            state = sql(f'SELECT x, money FROM game_world_entity WHERE guid = {guid}')[0]['rows']
+            assert host.rows('SELECT connection_id, character_guid FROM game_native_player') == connections
+            state = host.rows(f'SELECT x, money FROM game_world_entity WHERE guid = {guid}')
             assert state == [[iteration, 123456]], (iteration, state)
-            assert sorted(sql(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')[0]['rows']) == sorted(items)
+            assert sorted(host.rows(f'SELECT guid, entry, stack_count FROM game_item_instance WHERE owner_guid = {guid}')) == sorted(items)
             text = f'Reload {iteration}'.encode()
             client.send(0x95, struct.pack('<II', 0, 7) + text + b'\0')
             assert any(opcode == 0x96 and text in body for opcode, body in client.collect())
             assert any(opcode == 0x96 and text in body for opcode, body in peer.collect())
         try:
-            publish(b'not wasm')
+            host.publish(b'not wasm')
         except RuntimeError:
             pass
         else:
@@ -116,16 +114,17 @@ def run(world_port, call, sql, publish, wasm):
         for client in clients:
             client.collect()
         try:
-            publish(rename_private_table(wasm))
+            host.publish(rename_private_table(wasm))
         except RuntimeError as error:
             assert 'Development reload requires an unchanged Module definition' in str(error), error
         else:
             raise AssertionError('development Host accepted a private table rename')
-        assert sql('SELECT program_hash FROM st_module')[0]['rows'] == previous_hash
+        assert host.rows('SELECT program_hash FROM st_module') == previous_hash
         for client in clients:
             client.collect()
-        assert sql('SELECT connection_id, character_guid FROM game_native_player')[0]['rows'] == connections
-        print(f'PASS 20 development reloads with {sequence} movement requests ({sequence / traffic_seconds:.1f}/s) preserve World Sessions, ciphers, AOI and durable items; schema changes are refused')
+        assert host.rows('SELECT connection_id, character_guid FROM game_native_player') == connections
+        print(f'{sequence} movement requests ({sequence / traffic_seconds:.1f}/s) during 20 development reloads')
+        print(f'Reload storage: WASM {len(wasm)} bytes; commit log grew {commitlog_bytes(host) - before} bytes')
     finally:
         for client in clients:
             client.close()

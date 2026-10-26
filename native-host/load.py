@@ -1,3 +1,5 @@
+#!/usr/bin/env python3
+import argparse
 import asyncio
 import hashlib
 import json
@@ -5,11 +7,11 @@ import math
 import os
 from pathlib import Path
 import resource
-import secrets
 import struct
 import time
 
-from check import Cipher, KEY, ROOT, sha
+from headless import AUTH_CHALLENGE, Cipher, KEY, auth_session, packed_guid, reply_header, request_header
+from host import MODULE, Host
 
 
 def usage(pid):
@@ -41,15 +43,11 @@ class Client:
         self.task = None
 
     async def read(self):
-        header = self.decrypt.decrypt(await self.reader.readexactly(4))
-        size, opcode = struct.unpack('>H', header[:2])[0], struct.unpack('<H', header[2:])[0]
-        if size < 2:
-            raise ValueError('invalid world frame size')
-        return opcode, await self.reader.readexactly(size - 2)
+        size, opcode = reply_header(self.decrypt.decrypt(await self.reader.readexactly(4)))
+        return opcode, await self.reader.readexactly(size)
 
     def send(self, opcode, body=b''):
-        header = struct.pack('>H', len(body) + 4) + struct.pack('<I', opcode)
-        self.writer.write(self.encrypt.encrypt(header) + body)
+        self.writer.write(self.encrypt.encrypt(request_header(opcode, len(body))) + body)
 
     async def drain(self):
         buffered = bytearray()
@@ -65,11 +63,7 @@ class Client:
                     if frame is None:
                         if len(buffered) - offset < 4:
                             break
-                        header = self.decrypt.decrypt(buffered[offset:offset + 4])
-                        size = int.from_bytes(header[:2], 'big')
-                        if size < 2:
-                            raise ValueError('invalid world frame size')
-                        frame = size - 2, int.from_bytes(header[2:], 'little')
+                        frame = reply_header(self.decrypt.decrypt(buffered[offset:offset + 4]))
                         offset += 4
                     size, opcode = frame
                     if len(buffered) - offset < size:
@@ -103,8 +97,7 @@ class Client:
                 elapsed = (time.monotonic() - self.metrics['started']) * 1000
                 self.metrics['motion_ms'].append(elapsed - timestamp)
         elif opcode == 0xb7 and self.final_positions:
-            values = iter(body[1:])
-            guid = int.from_bytes(bytes(next(values) if body[0] & (1 << i) else 0 for i in range(8)), 'little')
+            guid = packed_guid(body)
             offset = 1 + body[0].bit_count()
             position = struct.unpack_from('<fff', body, offset + 8)
             if guid not in self.final_positions or position != self.final_positions[guid]:
@@ -138,36 +131,26 @@ class Client:
             await asyncio.gather(self.task, return_exceptions=True)
 
 
-async def run(pid, port, call, sql, count, seconds, frequency, group_size):
-    wasm = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
-    module_hash = hashlib.sha256(wasm.read_bytes()).hexdigest()
+async def run(host, count, seconds, frequency, group_size):
+    pid = host.pid
+    module_hash = hashlib.sha256(host.module.read_bytes()).hexdigest()
     metrics = {'started': None, 'received_movements': 0, 'motion_ms': []}
     clients = []
-    call('debug_seed_scenario_fixtures', [])
     try:
         for index in range(count):
-            username = f'LOAD{index}'
             digits, value = [], index
             for _ in range(4):
                 digits.append(chr(ord('a') + value % 26))
                 value //= 26
             name = 'Load' + ''.join(digits)
-            call('provision_account', [username, [0] * 32, [1] * 32])
-            account = sql(f"SELECT id FROM game_account WHERE username = '{username}'")[0]['rows'][0][0]
-            call('establish_session', [account, list(KEY), [f'0x{index + 1000:064x}']])
-            call('create_character', [account, name, 1, 1, 0, 0, 0, 0, 0, 0])
-            guid = sql(f"SELECT guid FROM game_character WHERE name = '{name}'")[0]['rows'][0][0]
             x = 1000 + (index // group_size) * 500
-            sql(f'UPDATE game_character SET x = {x}, y = 1000, z = 0 WHERE guid = {guid}')
-            reader, writer = await asyncio.open_connection('127.0.0.1', port)
+            guid = host.character(name, at=(0, x, 1000, 0))
+            reader, writer = await asyncio.open_connection('127.0.0.1', host.world_port)
             client = Client(reader, writer, guid, x, metrics)
             clients.append(client)
             challenge = await asyncio.wait_for(reader.readexactly(8), timeout=10)
-            assert challenge[:4] == bytes([0, 6, 0xec, 1])
-            seed = secrets.token_bytes(4)
-            proof = sha(username.encode(), bytes(4), seed, challenge[4:], KEY)
-            body = struct.pack('<II', 5875, 0) + username.encode() + b'\0' + seed + proof + bytes(4)
-            writer.write(struct.pack('>H', len(body) + 4) + struct.pack('<I', 0x1ed) + body)
+            assert challenge[:4] == AUTH_CHALLENGE
+            writer.write(auth_session(name.upper(), KEY, challenge[4:]))
             await writer.drain()
             opcode, body = await asyncio.wait_for(client.read(), timeout=10)
             assert opcode == 0x1ee and body[0] == 12, (opcode, body.hex())
@@ -175,7 +158,7 @@ async def run(pid, port, call, sql, count, seconds, frequency, group_size):
             client.send(0x3d, struct.pack('<Q', guid))
             await client.fence()
         await asyncio.gather(*(client.fence() for client in clients))
-        assert len(sql('SELECT character_guid FROM game_native_player')[0]['rows']) == count
+        assert len(host.rows('SELECT character_guid FROM game_native_player')) == count
         cpu_start, rss = usage(pid)
         own_start = resource.getrusage(resource.RUSAGE_SELF)
         metrics['started'] = time.monotonic()
@@ -235,12 +218,36 @@ async def run(pid, port, call, sql, count, seconds, frequency, group_size):
             'request_fence_p95_ms': percentile(ping_ms, 0.95),
             'movement_delivery_p95_ms': percentile(metrics['motion_ms'], 0.95),
             'driver_loop_p95_ms': percentile(loop_ms, 0.95),
-            'live_native_characters': len(sql('SELECT character_guid FROM game_native_player')[0]['rows']),
-            'aoi_viewers': len(sql('SELECT guid FROM game_aoi_viewer')[0]['rows']),
-            'aoi_grants': len(sql('SELECT id FROM game_aoi_grant')[0]['rows']),
+            'live_native_characters': len(host.rows('SELECT character_guid FROM game_native_player')),
+            'aoi_viewers': len(host.rows('SELECT guid FROM game_aoi_viewer')),
+            'aoi_grants': len(host.rows('SELECT id FROM game_aoi_grant')),
         }
         print(json.dumps(result, indent=2))
         assert result['closed_clients'] == 0, 'native clients closed during movement load'
         assert result['final_positions_received'] == result['final_positions_expected'], 'missing final observer positions'
     finally:
         await asyncio.gather(*(client.close() for client in clients), return_exceptions=True)
+
+
+def main():
+    parser = argparse.ArgumentParser(description='Measures movement load on a Disposable Host.')
+    parser.add_argument('--host', type=Path, required=True, help='spacetimedb-standalone built by prepare-host.py')
+    parser.add_argument('--module', type=Path, default=MODULE)
+    parser.add_argument('--clients', type=int, default=1000)
+    parser.add_argument('--seconds', type=float, default=30)
+    parser.add_argument('--hz', type=float, default=10)
+    parser.add_argument('--group-size', type=int, default=16)
+    args = parser.parse_args()
+    if (not 1 <= args.clients <= 4096 or args.group_size <= 0
+            or any(not math.isfinite(value) or value <= 0 for value in [args.seconds, args.hz])):
+        parser.error('load bounds require 1-4096 clients and positive duration, frequency and group size')
+    with Host(args.host, args.module, seeded=True) as host:
+        try:
+            asyncio.run(run(host, args.clients, args.seconds, args.hz, args.group_size))
+        except BaseException:
+            print('\n'.join(host.log_text().splitlines()[-100:]))
+            raise
+
+
+if __name__ == '__main__':
+    main()
