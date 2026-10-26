@@ -4121,6 +4121,15 @@ def check_quest_items(host):
         opcodes = [opcode for opcode, _ in packets]
         assert (0x19a, struct.pack('<II', 5090052, count)) in packets
         assert opcodes.index(0x19a) < opcodes.index(0xa9)
+    jerky_slot = host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052')[0][0]
+    used = {row[0] for row in host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid}')}
+    split_slot = next(slot for slot in range(23, 39) if slot not in used)
+    client.send(0x10e, bytes([255, jerky_slot, 255, split_slot, 2]))
+    split = client.collect()
+    client.send(0x10d, bytes([split_slot, jerky_slot]))
+    merged = client.collect()
+    assert host.rows(f'SELECT slot, stack_count FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052') == [[jerky_slot, 4]]
+    assert not any(opcode in (0x166, 0x19a) for opcode, _ in split + merged)
 
 
 def check_group_loot(host):
