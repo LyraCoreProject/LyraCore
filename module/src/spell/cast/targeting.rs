@@ -1467,17 +1467,8 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     );
     // The spline animates the client; combat needs the authoritative landing position immediately.
     if let Some(mut c) = entities.guid().find(caster_guid) {
-        let (gx, gy) = lyracore_shared::spatial::grid_cell(nx, ny);
-        c.x = nx;
-        c.y = ny;
-        c.z = nz;
-        c.grid_x = gx;
-        c.grid_y = gy;
-        c.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
-        // Native World Sessions supply client time; bots and creatures use the Realm Clock.
-        if !crate::native::is_player(ctx, caster_guid) {
-            c.last_move_ms = now_ms;
-        }
+        let clock = crate::world::MoveClock::realm(ctx, caster_guid, now_ms);
+        c.place(nx, ny, nz, clock).unexplored();
         c.orientation = facing;
         c.update(ctx);
     }

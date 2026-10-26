@@ -33,15 +33,16 @@ pub fn debug_stage_choice_reward_fixture(
         .ok_or_else(|| "choice fixture giver source is not live".to_string())?;
     crate::WorldEntity::delete(ctx, CHOICE_FIXTURE_GIVER);
     giver.guid = CHOICE_FIXTURE_GIVER;
-    giver.x = player.x + 1.0;
-    giver.y = player.y;
-    giver.z = player.z;
     giver.map_id = player.map_id;
     giver.instance_id = player.instance_id;
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(giver.x, giver.y);
-    giver.grid_x = grid_x;
-    giver.grid_y = grid_y;
-    giver.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    giver
+        .place(
+            player.x + 1.0,
+            player.y,
+            player.z,
+            crate::world::MoveClock::Unchanged,
+        )
+        .unexplored();
     giver.insert(ctx);
 
     let templates = ctx.db.game_item_template();
@@ -412,14 +413,15 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         .ok_or_else(|| "EventAI credit fixture player is not live".to_string())?;
     player.map_id = source.map_id;
     player.instance_id = source.instance_id;
-    player.x = source.x;
-    player.y = source.y;
-    player.z = source.z;
+    player
+        .place(
+            source.x,
+            source.y,
+            source.z,
+            crate::world::MoveClock::Unchanged,
+        )
+        .unexplored();
     player.dead = false;
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(player.x, player.y);
-    player.grid_x = grid_x;
-    player.grid_y = grid_y;
-    player.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
     let fixture_owner = player.owner_identity;
     player.update(ctx);
 
@@ -434,11 +436,10 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         .find(EVENTAI_CREDIT_FIXTURE_PLAYER)
         .ok_or_else(|| "EventAI credit fixture player disappeared".to_string())?;
     distant_member.guid = EVENTAI_CREDIT_FIXTURE_DISTANT_MEMBER;
-    distant_member.x = source.x + 100.0;
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(distant_member.x, distant_member.y);
-    distant_member.grid_x = grid_x;
-    distant_member.grid_y = grid_y;
-    distant_member.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    let (y, z) = (distant_member.y, distant_member.z);
+    distant_member
+        .place(source.x + 100.0, y, z, crate::world::MoveClock::Unchanged)
+        .unexplored();
     distant_member.insert(ctx);
     let mut beneficiary = entities
         .guid()
@@ -698,11 +699,10 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         .guid()
         .find(EVENTAI_CREDIT_FIXTURE_PLAYER)
         .ok_or_else(|| "EventAI credit fixture player disappeared".to_string())?;
-    tapped_player.x = source.x + 100.0;
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(tapped_player.x, tapped_player.y);
-    tapped_player.grid_x = grid_x;
-    tapped_player.grid_y = grid_y;
-    tapped_player.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    let (y, z) = (tapped_player.y, tapped_player.z);
+    tapped_player
+        .place(source.x + 100.0, y, z, crate::world::MoveClock::Unchanged)
+        .unexplored();
     tapped_player.update(ctx);
     if apply_eventai_credit(ctx, kill_request, &fallback_context) != QuestCreditOutcome::Refused
         || eventai_credit_fixture_count(

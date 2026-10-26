@@ -1417,20 +1417,20 @@ pub fn debug_backfill_cell_ids(ctx: &ReducerContext) -> Result<(), String> {
 #[reducer]
 pub fn debug_regrid(ctx: &ReducerContext) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
-    let updates: Vec<(u64, i32, i32)> = entities
+    let updates: Vec<u64> = entities
         .iter()
         .filter_map(|e| {
             let (gx, gy) = spatial::grid_cell(e.x, e.y);
             (e.grid_x != gx || e.grid_y != gy || e.cell != spatial::grid_cell_id(gx, gy))
-                .then_some((e.guid, gx, gy))
+                .then_some(e.guid)
         })
         .collect();
     let n = updates.len();
-    for (guid, gx, gy) in updates {
+    for guid in updates {
         if let Some(mut e) = entities.guid().find(guid) {
-            e.grid_x = gx;
-            e.grid_y = gy;
-            e.cell = lyracore_shared::spatial::grid_cell_id(gx, gy);
+            let (x, y, z) = (e.x, e.y, e.z);
+            e.place(x, y, z, crate::world::MoveClock::Unchanged)
+                .unexplored();
             e.update(ctx);
         }
     }

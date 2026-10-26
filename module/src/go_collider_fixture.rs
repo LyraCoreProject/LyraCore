@@ -58,12 +58,10 @@ fn blink(ctx: &ReducerContext, instance: u64, expected_x: f32) -> Result<(), Str
         .ok_or("missing fixture Character")?;
     caster.map_id = MAP;
     caster.instance_id = instance;
-    caster.x = A[0];
-    caster.y = A[1];
-    caster.z = A[2];
+    caster
+        .place(A[0], A[1], A[2], crate::world::MoveClock::Unchanged)
+        .unexplored();
     caster.orientation = 0.0;
-    (caster.grid_x, caster.grid_y) = lyracore_shared::spatial::grid_cell(caster.x, caster.y);
-    caster.cell = lyracore_shared::spatial::cell_id_at(caster.x, caster.y);
     caster.update(ctx);
     crate::spell::blink_forward(ctx, 1, 8.0);
     let landed = ctx

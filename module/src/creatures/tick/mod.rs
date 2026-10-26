@@ -1,6 +1,7 @@
 use lyracore_shared::spatial;
 use spacetimedb::{log, reducer, table, ReducerContext, ScheduleAt, Table, Timestamp};
 
+use crate::world::MoveClock;
 use crate::{
     game_creature_ai_state, game_entity_motion, game_melee_attack, game_sessionless_action_consent,
     game_world_entity, WorldEntity,
@@ -510,7 +511,7 @@ fn place_where_rendered(ctx: &ReducerContext, mover: &mut WorldEntity) -> Option
     let leg = ctx.db.game_creature_spline().guid().find(mover.guid)?;
     let spline_id = leg.spline_id;
     if let Some(stop) = super::cycle::stop_on_stored_leg(ctx, leg) {
-        place_stopped(mover, stop);
+        place_stopped(mover, stop, MoveClock::Unchanged);
     }
     Some(spline_id)
 }
@@ -524,14 +525,10 @@ pub(crate) fn now_ms(ctx: &ReducerContext) -> u32 {
     (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32
 }
 
-pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop) {
-    let (grid_x, grid_y) = spatial::grid_cell(stop.at.x, stop.at.y);
-    mover.x = stop.at.x;
-    mover.y = stop.at.y;
-    mover.z = stop.at.z;
-    mover.grid_x = grid_x;
-    mover.grid_y = grid_y;
-    mover.cell = spatial::grid_cell_id(grid_x, grid_y);
+pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop, clock: MoveClock) {
+    mover
+        .place(stop.at.x, stop.at.y, stop.at.z, clock)
+        .unexplored();
     if let Some(heading) = stop.heading {
         mover.orientation = heading;
     }
@@ -797,6 +794,7 @@ mod advance_persist_gate {
 mod stop_between_firings {
     use super::{next_spline_id, place_stopped};
     use crate::creatures::cycle::{Point, Stop};
+    use crate::world::MoveClock;
     use crate::WorldEntity;
     use lyracore_shared::spatial;
 
@@ -822,6 +820,7 @@ mod stop_between_firings {
                 },
                 heading: Some(1.5),
             },
+            MoveClock::Unchanged,
         );
         let (grid_x, grid_y) = spatial::grid_cell(20.0, 0.0);
         assert_ne!(before.0, grid_x, "the stop must cross the cell edge");
@@ -846,6 +845,7 @@ mod stop_between_firings {
                 },
                 heading: None,
             },
+            MoveClock::Unchanged,
         );
         assert_eq!(creature.orientation, 0.7);
     }

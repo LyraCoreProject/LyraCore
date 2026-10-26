@@ -1575,12 +1575,6 @@ pub(crate) mod grid_cell_tripwire {
 
     const WINDOW: usize = 400;
 
-    fn is_exempt(path: &str) -> bool {
-        ["module/src/tripwires.rs", "module/src/region.rs"]
-            .iter()
-            .any(|p| path.ends_with(p) || path.replace('\\', "/").ends_with(p))
-    }
-
     fn is_field_declaration(code: &str, idx: usize) -> bool {
         let line_start = code[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
         let line_end = code[idx..]
@@ -1767,13 +1761,17 @@ pub(crate) mod grid_cell_tripwire {
     }
 
     #[test]
-    fn every_grid_x_write_also_writes_the_packed_cell() {
+    fn every_package_grid_x_write_also_writes_the_packed_cell() {
+        let packages = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("module/ has a parent (the repo root)")
+            .join("packages");
         let mut violations = Vec::new();
         for file in super::character_owned_tripwire::scanned_files() {
-            let display = file.display().to_string();
-            if is_exempt(&display) {
+            if !file.starts_with(&packages) {
                 continue;
             }
+            let display = file.display().to_string();
             let code = std::fs::read_to_string(&file)
                 .unwrap_or_else(|e| panic!("cannot read {display}: {e}"));
             for line in grid_x_writes_missing_cell(&code) {
@@ -1890,6 +1888,168 @@ pub(crate) mod grid_cell_tripwire {
             grid_x_writes_missing_cell(&good).is_empty(),
             "a compact one-line shorthand initializer that also sets `cell` must PASS"
         );
+    }
+}
+
+#[cfg(test)]
+pub(crate) mod grid_address_writes {
+    use std::collections::BTreeSet;
+
+    use super::character_owned_tripwire::production_code;
+    use crate::test_scan::line_of;
+
+    /// Each function derives grid and cell from its row's position, or cell from its grid.
+    const PLACEMENT_OPERATIONS: &[(&str, &str)] = &[
+        ("module/src/world/placement.rs", "place"),
+        ("module/src/corpse.rs", "insert"),
+        ("module/src/corpse.rs", "update"),
+        ("module/src/spell/tables.rs", "insert"),
+        ("module/src/spell/tables.rs", "repair_cell"),
+        ("module/src/creatures/tick/mod.rs", "repair_cell"),
+        ("module/src/package_import/gameobjects.rs", "stamp_cell"),
+        ("module/src/debug/instance.rs", "debug_backfill_go_grid"),
+        ("module/src/debug/mod.rs", "debug_backfill_cell_ids"),
+    ];
+
+    const FIELDS: &[&str] = &[".grid_x", ".grid_y", ".cell"];
+
+    fn is_assignment(code: &str, after: usize) -> bool {
+        let rest = code[after..].trim_start();
+        (rest.starts_with('=') && !rest.starts_with("=="))
+            || rest.starts_with("+=")
+            || rest.starts_with("-=")
+    }
+
+    // `(e.grid_x, e.grid_y) = ...` assigns through its closing parenthesis.
+    fn is_tuple_assignment(code: &str, after: usize) -> bool {
+        let mut depth = 0usize;
+        for (offset, c) in code[after..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' if depth == 0 => return is_assignment(code, after + offset + 1),
+                ')' => depth -= 1,
+                ';' | '{' | '}' => return false,
+                _ => {}
+            }
+        }
+        false
+    }
+
+    fn enclosing_fn(code: &str, idx: usize) -> Option<&str> {
+        let start = code[..idx].rfind("fn ")? + "fn ".len();
+        let name = &code[start..];
+        let end = name.find(|c: char| !(c.is_alphanumeric() || c == '_'))?;
+        Some(&name[..end])
+    }
+
+    fn grid_address_writes(code: &str) -> BTreeSet<(usize, String)> {
+        let mut writes = BTreeSet::new();
+        for field in FIELDS {
+            for (idx, _) in code.match_indices(field) {
+                let after = idx + field.len();
+                let whole_field = code[after..]
+                    .chars()
+                    .next()
+                    .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+                if whole_field && (is_assignment(code, after) || is_tuple_assignment(code, after)) {
+                    let function = enclosing_fn(code, idx).unwrap_or_default().to_string();
+                    writes.insert((line_of(code, idx), function));
+                }
+            }
+        }
+        writes
+    }
+
+    // A file whose `mod` declaration carries `#[cfg(test)]` holds only test code.
+    fn is_test_only_file(file: &std::path::Path) -> bool {
+        let (Some(stem), Some(dir)) = (file.file_stem().and_then(|s| s.to_str()), file.parent())
+        else {
+            return false;
+        };
+        let declaring = [dir.join("mod.rs"), dir.with_extension("rs")];
+        let declaration = format!("mod {stem};");
+        declaring.iter().any(|parent| {
+            std::fs::read_to_string(parent).is_ok_and(|code| {
+                code.match_indices(&declaration).any(|(idx, _)| {
+                    let before = code[..idx].trim_end();
+                    let before = before
+                        .strip_suffix("pub(crate)")
+                        .or_else(|| before.strip_suffix("pub"))
+                        .unwrap_or(before)
+                        .trim_end();
+                    before.ends_with("#[cfg(test)]")
+                })
+            })
+        })
+    }
+
+    fn violations(path: &str, source: &str) -> Vec<String> {
+        let code = production_code(source);
+        grid_address_writes(&code)
+            .into_iter()
+            .filter(|(_, function)| {
+                !PLACEMENT_OPERATIONS
+                    .iter()
+                    .any(|(file, allowed)| path.ends_with(file) && function == allowed)
+            })
+            .map(|(line, function)| format!("{path}:{line} in `{function}`"))
+            .collect()
+    }
+
+    #[test]
+    fn only_placement_operations_write_a_grid_address() {
+        let src = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("src");
+        let mut files = Vec::new();
+        super::character_owned_tripwire::collect_rs_files(&src, &mut files);
+        let mut found = Vec::new();
+        for file in files {
+            let path = file.display().to_string().replace('\\', "/");
+            if path.ends_with("module/src/tripwires.rs") || is_test_only_file(&file) {
+                continue;
+            }
+            let source = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {path}: {e}"));
+            found.extend(violations(&path, &source));
+        }
+        assert!(
+            found.is_empty(),
+            "`grid_x`, `grid_y` and `cell` must agree with the row's position, so only a placement \
+             operation writes them. Call `WorldEntity::place` instead:\n  {}",
+            found.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_scan_finds_grid_writes_outside_placement_operations() {
+        let source =
+            "fn carry(e: &mut E) {\n    e.grid_x = 1;\n    (e.grid_x, e.grid_y) = g;\n    \
+                      e.cell = 2;\n}\nfn place(e: &mut E) {\n    e.cell = 3;\n}\n";
+        assert_eq!(
+            violations("module/src/transport/mod.rs", source),
+            [
+                "module/src/transport/mod.rs:2 in `carry`",
+                "module/src/transport/mod.rs:3 in `carry`",
+                "module/src/transport/mod.rs:4 in `carry`",
+                "module/src/transport/mod.rs:7 in `place`",
+            ]
+        );
+        assert_eq!(
+            violations("module/src/world/placement.rs", source),
+            [
+                "module/src/world/placement.rs:2 in `carry`",
+                "module/src/world/placement.rs:3 in `carry`",
+                "module/src/world/placement.rs:4 in `carry`",
+            ]
+        );
+    }
+
+    #[test]
+    fn the_scan_ignores_reads_comparisons_tests_and_comments() {
+        let source = "fn f(e: &E) -> bool {\n    let cell = e.cell;\n    \
+                      let (gx, gy) = (e.grid_x, e.grid_y);\n    // e.cell = 1;\n    \
+                      e.cell == cell && e.cell_count >= 0\n}\n\
+                      #[cfg(test)]\nmod tests {\n    fn g(e: &mut E) {\n        e.grid_x = 1;\n    }\n}\n";
+        assert!(violations("module/src/aoi.rs", source).is_empty());
     }
 }
 

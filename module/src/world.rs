@@ -10,7 +10,10 @@ use crate::{
     game_aura, game_character, game_character_buyback, game_creature_spline, game_instance,
 };
 
+mod placement;
 mod simulation;
+
+pub(crate) use placement::MoveClock;
 pub(crate) use simulation::backfill_simulation;
 
 #[table(accessor = game_world_state_name)]
@@ -465,19 +468,14 @@ pub(crate) fn teleport_player(
     if cross_map && !sessionless {
         crate::WorldEntity::delete(ctx, player_guid);
     } else {
-        let (grid_x, grid_y) = spatial::grid_cell(x, y);
         let Some(mut e) = entities.guid().find(player_guid) else {
             return;
         };
         e.map_id = map_id;
-        e.x = x;
-        e.y = y;
-        e.z = z;
+        // A teleport takes the destination zone below; it explores nothing.
+        e.place(x, y, z, MoveClock::Unchanged).unexplored();
         e.orientation = o;
         e.movement_flags = 0;
-        e.grid_x = grid_x;
-        e.grid_y = grid_y;
-        e.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
         e.instance_id = instance_id;
         if let Some(zone) = destination_zone {
             e.zone_id = zone;
@@ -913,15 +911,9 @@ pub(crate) fn apply_movement_update(
     let old_move_ms = mover.last_move_ms;
     let (old_flags, old_resting, old_health) = (mover.movement_flags, mover.resting, mover.health);
 
-    let (grid_x, grid_y) = spatial::grid_cell(x, y);
-    mover.x = x;
-    mover.y = y;
-    mover.z = z;
+    let crossing = mover.place(x, y, z, MoveClock::At(move_time_ms));
+    let (grid_x, grid_y) = (mover.grid_x, mover.grid_y);
     mover.orientation = o;
-    mover.grid_x = grid_x;
-    mover.grid_y = grid_y;
-    mover.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
-    mover.last_move_ms = move_time_ms;
     mover.movement_flags = movement.flags();
     let boarding = crate::transport::passenger_moved(ctx, &mover, old_flags, movement.transport());
     if boarding == crate::transport::Boarding::Refused {
@@ -943,12 +935,7 @@ pub(crate) fn apply_movement_update(
         fall_lethal = lethal;
         crate::native::fall_damage(ctx, mover.guid, dmg);
     }
-    if mover.is_player() && !mover.dead && (grid_x != old_gx || grid_y != old_gy) {
-        if let Some(area) = crate::terrain::area_at(ctx, mover.map_id, mover.x, mover.y) {
-            crate::exploration::check_area_exploration(ctx, &mut mover, &area);
-            apply_zone_transition(ctx, &mut mover, Some(crate::terrain::zone_of(&area)));
-        }
-    }
+    crossing.explore(ctx, &mut mover);
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
         crate::rest::check_rest_state(ctx, &mut mover);
     }

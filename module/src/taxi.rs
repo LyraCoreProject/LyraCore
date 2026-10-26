@@ -1,5 +1,6 @@
 use spacetimedb::{table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
+use crate::world::MoveClock;
 use crate::{
     game_character, game_taxi_node, game_taxi_path, game_taxi_path_node, game_world_entity,
     GameTaxiNode, GameTaxiPath, GameTaxiPathNode, WorldEntity,
@@ -553,9 +554,6 @@ struct LandingPosition {
     y: f32,
     z: f32,
     orientation: f32,
-    grid_x: i32,
-    grid_y: i32,
-    cell: i64,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -607,13 +605,11 @@ impl FlightEndSink for CtxFlightEndSink<'_> {
         };
         if let Some(landing) = landing {
             player.map_id = landing.map_id;
-            player.x = landing.x;
-            player.y = landing.y;
-            player.z = landing.z;
+            // Landing takes the destination zone below; it explores nothing.
+            player
+                .place(landing.x, landing.y, landing.z, MoveClock::Unchanged)
+                .unexplored();
             player.orientation = landing.orientation;
-            player.grid_x = landing.grid_x;
-            player.grid_y = landing.grid_y;
-            player.cell = landing.cell;
             if let Some(zone_id) = zone_id {
                 player.zone_id = zone_id;
             }
@@ -706,16 +702,12 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(destination.x, destination.y);
     LandingPosition {
         map_id: destination.map_id,
         x: destination.x,
         y: destination.y,
         z: destination.z,
         orientation,
-        grid_x,
-        grid_y,
-        cell: lyracore_shared::spatial::grid_cell_id(grid_x, grid_y),
     }
 }
 
@@ -1175,14 +1167,12 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     }
 
     let previous_cell = (player.grid_x, player.grid_y);
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(position.x, position.y);
-    player.x = position.x;
-    player.y = position.y;
-    player.z = position.z;
+    // A flight explores nothing and keeps its zone until landing.
+    player
+        .place(position.x, position.y, position.z, MoveClock::Unchanged)
+        .unexplored();
+    let (grid_x, grid_y) = (player.grid_x, player.grid_y);
     player.orientation = position.orientation;
-    player.grid_x = grid_x;
-    player.grid_y = grid_y;
-    player.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
     player.movement_flags = TAXI_MOVEMENT_FORWARD;
     let crossed_point = flight.current_node_index != position.point_index as u32;
     flight.current_node_index = position.point_index as u32;
@@ -1643,10 +1633,6 @@ mod tests {
             ),
             (0, -9443.5, 58.25, 56.75, 1.25)
         );
-        assert_eq!(
-            durable.cell,
-            lyracore_shared::spatial::grid_cell_id(durable.grid_x, durable.grid_y)
-        );
     }
 
     #[test]
@@ -1695,9 +1681,6 @@ mod tests {
             y: -2.0,
             z: -3.0,
             orientation: 0.0,
-            grid_x: 1,
-            grid_y: 2,
-            cell: lyracore_shared::spatial::grid_cell_id(1, 2),
         };
         let mut destination = node(20, 256, 0);
         (destination.x, destination.y, destination.z) = (-9443.5, 58.25, 56.75);
@@ -1739,9 +1722,6 @@ mod tests {
             y: 25.0,
             z: 60.0,
             orientation: 0.75,
-            grid_x: 2,
-            grid_y: 3,
-            cell: lyracore_shared::spatial::grid_cell_id(2, 3),
         };
         let mut sink = fake_end(last);
         apply_flight_end(

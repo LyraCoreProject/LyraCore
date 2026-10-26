@@ -907,11 +907,10 @@ fn move_fixture_entity(ctx: &ReducerContext, guid: u64, x: f32) -> Result<(), St
         .guid()
         .find(guid)
         .ok_or_else(|| format!("Loot Tag fixture entity {guid} is missing"))?;
-    entity.x = x;
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(entity.x, entity.y);
-    entity.grid_x = grid_x;
-    entity.grid_y = grid_y;
-    entity.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
+    let (y, z) = (entity.y, entity.z);
+    entity
+        .place(x, y, z, crate::world::MoveClock::Unchanged)
+        .unexplored();
     entity.update(ctx);
     Ok(())
 }
