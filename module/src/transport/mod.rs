@@ -1,4 +1,5 @@
-use lyracore_shared::env::MOVEMENT_FLAG_ON_TRANSPORT;
+use lyracore_protocol::messages::vanilla::TransportInfo;
+use lyracore_shared::movement_flags::ON_TRANSPORT;
 use lyracore_shared::spatial;
 use spacetimedb::{reducer, table, ReducerContext, ScheduleAt, Table, TimeDuration};
 
@@ -144,16 +145,14 @@ pub(crate) fn passenger_moved(
     ctx: &ReducerContext,
     mover: &WorldEntity,
     previous_flags: u32,
-    movement_info: &[u8],
+    transport: Option<&TransportInfo>,
 ) -> Boarding {
-    if !mover.is_player()
-        || (previous_flags | mover.movement_flags) & MOVEMENT_FLAG_ON_TRANSPORT == 0
-    {
+    if !mover.is_player() || (previous_flags | mover.movement_flags) & ON_TRANSPORT == 0 {
         return Boarding::Ashore;
     }
     let passengers = ctx.db.game_transport_passenger();
     let aboard = passengers.character_guid().find(mover.guid);
-    let boarded = match claim(mover, movement_info) {
+    let boarded = match claim(mover, transport) {
         Claim::Refused => return Boarding::Refused,
         Claim::Ground => None,
         Claim::Transport(guid, offset) => find(ctx, guid)
@@ -205,14 +204,11 @@ enum Claim {
     Transport(u64, [f32; 4]),
 }
 
-fn claim(mover: &WorldEntity, movement_info: &[u8]) -> Claim {
-    if mover.movement_flags & MOVEMENT_FLAG_ON_TRANSPORT == 0 || mover.instance_id != 0 {
+fn claim(mover: &WorldEntity, transport: Option<&TransportInfo>) -> Claim {
+    if mover.movement_flags & ON_TRANSPORT == 0 || mover.instance_id != 0 {
         return Claim::Ground;
     }
-    let Ok(info) = lyracore_protocol::codec::bytes_to_movement_info(movement_info) else {
-        return Claim::Ground;
-    };
-    let Some(tail) = info.flags.get_on_transport().map(|tail| &tail.transport) else {
+    let Some(tail) = transport else {
         return Claim::Ground;
     };
     let offset = [

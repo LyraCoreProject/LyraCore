@@ -72,7 +72,32 @@ pub fn gw_movement_update(
         return Ok(());
     }
     let mover = actor(ctx, actor_guid)?;
-    crate::world::apply_movement_update(ctx, mover, opcode, movement_info, x, y, z, o, move_time_ms)
+    let movement = gw_movement(&movement_info, x, y, z, o, move_time_ms);
+    crate::world::apply_movement_update(ctx, mover, opcode, &movement, movement_info)
+}
+
+/// The pose arguments are authoritative; a body that does not decode supplies only its flag word.
+fn gw_movement(
+    movement_info: &[u8],
+    x: f32,
+    y: f32,
+    z: f32,
+    o: f32,
+    move_time_ms: u32,
+) -> lyracore_protocol::codec::ClientMovement {
+    use lyracore_protocol::codec::ClientMovement;
+    ClientMovement::decode(movement_info)
+        .unwrap_or_else(|_| {
+            let flags = movement_info
+                .get(0..4)
+                .map_or(0, |b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]));
+            ClientMovement::from_flags(flags)
+        })
+        .with_pose(
+            move_time_ms,
+            lyracore_protocol::messages::vanilla::Vector3d { x, y, z },
+            o,
+        )
 }
 
 #[derive(spacetimedb::SpacetimeType)]
@@ -115,17 +140,8 @@ pub fn gw_movement_batch(ctx: &ReducerContext, moves: Vec<GwMove>) -> Result<(),
         |m| {
             let actor_guid = crate::account_ownership::require_actor(ctx, m.actor)?;
             let mover = actor(ctx, actor_guid)?;
-            crate::world::apply_movement_update(
-                ctx,
-                mover,
-                m.opcode,
-                m.movement_info,
-                m.x,
-                m.y,
-                m.z,
-                m.o,
-                m.move_time_ms,
-            )
+            let movement = gw_movement(&m.movement_info, m.x, m.y, m.z, m.o, m.move_time_ms);
+            crate::world::apply_movement_update(ctx, mover, m.opcode, &movement, m.movement_info)
         },
     );
     // Drain motion inside the batch transaction so its subscription sweep runs once.

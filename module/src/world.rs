@@ -1,5 +1,6 @@
+use lyracore_protocol::codec::ClientMovement;
 use lyracore_shared::constants::sheath_state;
-use lyracore_shared::spatial;
+use lyracore_shared::{movement_flags, spatial};
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
 
 use crate::faction::game_faction_template;
@@ -831,18 +832,6 @@ pub(crate) struct MovementPlan {
     pub moved: bool,
 }
 
-/// Forward, backward and strafe: the movement a root forbids.
-const STEERING_FLAGS: u32 = 0xF;
-/// Steering plus jumping and falling far: "any movement" for a break-on-move aura.
-const MOVING_FLAGS: u32 = STEERING_FLAGS | 0x2000 | 0x4000;
-
-/// MovementInfo starts with a little-endian u32 movement mask.
-pub(crate) fn carries_movement_flags(movement_info: &[u8], mask: u32) -> bool {
-    movement_info
-        .get(0..4)
-        .is_some_and(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]) & mask != 0)
-}
-
 pub(crate) fn movement_is_accepted(
     last_move_ms: u32,
     move_time_ms: u32,
@@ -881,18 +870,17 @@ pub(crate) fn plan_movement(
     }
 }
 
-#[allow(clippy::too_many_arguments)]
+/// `relay_body` is the MovementInfo the motion Relay sends to observers unchanged.
 pub(crate) fn apply_movement_update(
     ctx: &ReducerContext,
     mut mover: WorldEntity,
     opcode: u16,
-    movement_info: Vec<u8>,
-    x: f32,
-    y: f32,
-    z: f32,
-    o: f32,
-    move_time_ms: u32,
+    movement: &ClientMovement,
+    relay_body: Vec<u8>,
 ) -> Result<(), String> {
+    let info = movement.info();
+    let (x, y, z) = (info.position.x, info.position.y, info.position.z);
+    let (o, move_time_ms) = (info.orientation, info.timestamp);
     if crate::taxi::movement_is_suppressed(ctx, mover.guid) {
         return Ok(());
     }
@@ -907,14 +895,14 @@ pub(crate) fn apply_movement_update(
     }
 
     // Rooted landings still need fall damage; stop receipts and turning remain accepted.
-    if carries_movement_flags(&movement_info, STEERING_FLAGS)
+    if movement.carries(movement_flags::STEERING)
         && opcode as u32 != lyracore_shared::opcodes::movement::MSG_MOVE_FALL_LAND
         && crate::spell::is_movement_blocked(ctx, mover.guid)
     {
         return Ok(());
     }
 
-    let breaks_on_move = carries_movement_flags(&movement_info, MOVING_FLAGS);
+    let breaks_on_move = movement.carries(movement_flags::MOVING);
 
     if !movement_is_accepted(mover.last_move_ms, move_time_ms, x, y, z, o) {
         return Ok(());
@@ -934,11 +922,8 @@ pub(crate) fn apply_movement_update(
     mover.grid_y = grid_y;
     mover.cell = lyracore_shared::spatial::grid_cell_id(grid_x, grid_y);
     mover.last_move_ms = move_time_ms;
-    mover.movement_flags = movement_info
-        .get(0..4)
-        .map(|b| u32::from_le_bytes([b[0], b[1], b[2], b[3]]))
-        .unwrap_or(0);
-    let boarding = crate::transport::passenger_moved(ctx, &mover, old_flags, &movement_info);
+    mover.movement_flags = movement.flags();
+    let boarding = crate::transport::passenger_moved(ctx, &mover, old_flags, movement.transport());
     if boarding == crate::transport::Boarding::Refused {
         return Ok(());
     }
@@ -950,14 +935,13 @@ pub(crate) fn apply_movement_update(
         && !mover.dead
         && !mover.godmode
         && mover.is_player()
+        && !movement.carries(movement_flags::ON_TRANSPORT)
     {
-        if let Some(ft) = lyracore_shared::env::fall_time_from_movement_info(&movement_info) {
-            let dmg = lyracore_shared::env::fall_damage(ft, mover.max_health);
-            let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
-            mover.health = health;
-            fall_lethal = lethal;
-            crate::native::fall_damage(ctx, mover.guid, dmg);
-        }
+        let dmg = lyracore_shared::env::fall_damage(movement.fall_time_ms(), mover.max_health);
+        let (health, lethal) = resolve_environmental_damage(dmg, mover.health);
+        mover.health = health;
+        fall_lethal = lethal;
+        crate::native::fall_damage(ctx, mover.guid, dmg);
     }
     if mover.is_player() && !mover.dead && (grid_x != old_gx || grid_y != old_gy) {
         if let Some(area) = crate::terrain::area_at(ctx, mover.map_id, mover.x, mover.y) {
@@ -1047,7 +1031,7 @@ pub(crate) fn apply_movement_update(
             grid_x,
             grid_y,
             opcode,
-            movement_info,
+            relay_body,
         );
     }
 

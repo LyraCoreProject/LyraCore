@@ -193,6 +193,20 @@ fn movement_info_bytes_roundtrip() {
 }
 
 #[test]
+fn client_movement_keeps_the_flag_word_and_the_millisecond_fall_time() {
+    use lyracore_shared::movement_flags::{FORWARD, SWIMMING};
+    let flags = FORWARD | 0x8000 | SWIMMING;
+    let mut body = flags.to_le_bytes().to_vec();
+    body.extend_from_slice(&[0; 20]);
+    body.extend_from_slice(&0.5f32.to_le_bytes());
+    body.extend_from_slice(&2000u32.to_le_bytes());
+    let movement = ClientMovement::decode(&body).unwrap();
+    assert_eq!(movement.flags(), flags);
+    assert_eq!(movement.fall_time_ms(), 2000);
+    assert!(movement.transport().is_none());
+}
+
+#[test]
 fn name_query_response_maps_seeded_warrior() {
     let c = CharacterView {
         guid: 1,

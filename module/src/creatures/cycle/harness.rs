@@ -1,5 +1,4 @@
 use super::*;
-use crate::combat::MOVE_FLAG_FORWARD;
 use crate::creatures::ai::ROUT_DURATION_MS;
 use crate::creatures::eventai::{
     self, BroadcastLine, CallForHelpInstruction, CastInstruction, CreatureAiEvent,
@@ -16,6 +15,7 @@ use crate::creatures::eventai::{
 };
 use crate::creatures::{chase_step, rout_window_open};
 use crate::quest::{EventAiQuestCredit, EventAiQuestCreditContext, QuestCreditOutcome};
+use lyracore_shared::movement_flags::FORWARD;
 use lyracore_shared::spatial;
 use std::cell::{Cell, RefCell};
 use std::collections::{BTreeMap, HashMap, VecDeque};
@@ -762,9 +762,7 @@ impl Scenario {
     fn kiting(self, guid: u64, at: Point) -> Self {
         let now_ms = (self.now_micros.get() / 1000) as u32;
         self.player_moved_ms.borrow_mut().insert(guid, now_ms);
-        self.player_move_flags
-            .borrow_mut()
-            .insert(guid, MOVE_FLAG_FORWARD);
+        self.player_move_flags.borrow_mut().insert(guid, FORWARD);
         self.tweak_player(guid, |p| p.at = at)
     }
 
@@ -1133,7 +1131,7 @@ impl Scenario {
                 .borrow()
                 .iter()
                 .any(|l| l.guid == guid && l.dur_ms > 0);
-            return Some((c.at, if carried { MOVE_FLAG_FORWARD } else { 0 }));
+            return Some((c.at, if carried { FORWARD } else { 0 }));
         }
         let flags = self.player_move_flags.borrow().get(&guid).copied();
         self.players
