@@ -6050,7 +6050,7 @@ mod tests {
         assert_eq!(manifest["counts"]["ticket"]["relay_loader_skipped_rows"], 2);
         assert_eq!(
             manifest["counts"]["ticket"]["text_emote_dependency_occurrences"],
-            300
+            307
         );
         let result = |action: u32, classification: &str, reason: &str| {
             let raw_value = action.to_string();
@@ -6076,7 +6076,7 @@ mod tests {
             (45, 1, 1),
             (47, 2, 2),
             (50, 3, 3),
-            (56, 14, 14),
+            (56, 15, 15),
         ] {
             let emitted = result(action, "emitted", "emitted");
             assert_eq!(emitted["source_rule_ids"].as_array().unwrap().len(), rules);
