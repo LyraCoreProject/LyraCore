@@ -88,14 +88,6 @@ pub fn build_spell_start(
     }
 }
 
-pub fn build_spell_failure(caster_guid: u64, spell_id: u32) -> SMSG_SPELL_FAILURE {
-    SMSG_SPELL_FAILURE {
-        guid: Guid::new(caster_guid),
-        spell: spell_id,
-        result: SpellCastResult::Interrupted,
-    }
-}
-
 pub fn build_spell_delayed(caster_guid: u64, delay_ms: u32) -> SMSG_SPELL_DELAYED {
     SMSG_SPELL_DELAYED {
         guid: Guid::new(caster_guid),
@@ -138,8 +130,10 @@ pub mod cast_failure {
 
 pub fn cast_failure_reason_for_code(code: u8) -> Option<u8> {
     const CAST_FAIL_NO_POWER: u8 = 1;
+    const CAST_FAIL_INTERRUPTED: u8 = 2;
     match code {
         CAST_FAIL_NO_POWER => Some(cast_failure::NO_POWER),
+        CAST_FAIL_INTERRUPTED => Some(cast_failure::INTERRUPTED),
         _ => None,
     }
 }
@@ -495,15 +489,6 @@ mod tests {
             want.extend_from_slice(&coordinate.to_le_bytes());
         }
         assert_eq!(bytes, want);
-    }
-
-    #[test]
-    fn spell_failure_carries_interrupted_for_the_caster() {
-        let caster = 0xF130_0000_0000_0005u64;
-        let f = build_spell_failure(caster, 686);
-        assert_eq!(f.guid, Guid::new(caster));
-        assert_eq!(f.spell, 686);
-        assert_eq!(f.result, SpellCastResult::Interrupted);
     }
 
     #[test]

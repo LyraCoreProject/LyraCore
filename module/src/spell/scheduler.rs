@@ -38,11 +38,12 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             sched.caster_guid,
             e
         );
-        // A failed completion needs SMSG_SPELL_FAILURE to clear the filled client cast bar.
+        // Only a failed SMSG_CAST_RESULT clears the 1.12 client's filled cast bar.
         crate::spell::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
+                failure_reason: CAST_FAIL_INTERRUPTED,
                 ..SpellCastEvent::signal(
                     ctx,
                     sched.caster_guid,

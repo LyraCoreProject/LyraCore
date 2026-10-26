@@ -219,6 +219,7 @@ crate::character_owned!(transfer, fn sweep_transfer_game_aura(ctx, character_gui
 
 pub const CAST_FAIL_NONE: u8 = 0;
 pub const CAST_FAIL_NO_POWER: u8 = 1;
+pub const CAST_FAIL_INTERRUPTED: u8 = 2;
 
 // Codes are append-only for rolling Module and Gateway updates.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
