@@ -60,6 +60,7 @@ pub(crate) enum CastRefusalReason {
     WrongStance,
     NotBehind,
     NotStealthed,
+    NoComboPoints,
     SchoolLocked,
     ReactWindowClosed,
     Stunned,

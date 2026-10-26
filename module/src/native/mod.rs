@@ -53,7 +53,7 @@ pub(crate) use book::{
 };
 pub(crate) use channel::notice as channel_notice;
 pub(crate) use chat::{realm_chat_line, speech, system_message, text_emote};
-pub(crate) use combat::{combat_event, engagement_changed};
+pub(crate) use combat::{combat_event, combo_points_changed, engagement_changed};
 pub(crate) use creature::{
     changed as creature_spline_changed, equipment_changed as creature_equipment_changed,
 };

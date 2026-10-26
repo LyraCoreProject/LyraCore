@@ -50,10 +50,13 @@ pub mod idx {
     // Build 5875: UNIT_END 188 + 0x0A; gtker exposes no quest-log setter.
     pub const PLAYER_QUEST_LOG_1_1: u16 = 198;
     pub const QUEST_LOG_SLOTS: u16 = 20;
+    pub const PLAYER_FIELD_COMBO_TARGET: u16 = 714;
     pub const PLAYER_XP: u16 = 716;
     pub const PLAYER_EXPLORED_ZONES_1: u16 = 1111;
     pub const EXPLORED_ZONES_WORDS: u16 = 64;
     pub const PLAYER_FIELD_COINAGE: u16 = 1176;
+    /// Byte 1 is the combo point count; bytes 0, 2 and 3 hold flags, action bars and honor rank.
+    pub const PLAYER_FIELD_BYTES: u16 = 1222;
 
     pub const GAMEOBJECT_ROTATION: u16 = 10;
 }
@@ -86,7 +89,6 @@ impl UpdateMaskValues {
         self.set_u32(index, value.to_bits())
     }
 
-    #[allow(dead_code)]
     pub fn set_bytes(&mut self, index: u16, a: u8, b: u8, c: u8, d: u8) -> &mut Self {
         self.set_u32(index, u32::from_le_bytes([a, b, c, d]))
     }

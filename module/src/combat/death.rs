@@ -255,6 +255,7 @@ fn kill_creature_with_attribution(
         .map(|t| (t.source_guid, t.threat))
         .collect();
     disengage(ctx, target_guid);
+    crate::combo::forget(ctx, target_guid);
     crate::threat::clear_taunt_lock(ctx, target_guid);
     crate::spell::break_channel(ctx, target_guid);
     crate::spell::remove_auras_on_death(ctx, target_guid);
@@ -411,6 +412,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     let killer = (killer_guid != 0).then_some(killer_guid);
     crate::creatures::begin_death_dispatch(ctx, victim_guid, killer);
     disengage(ctx, victim_guid);
+    crate::combo::forget(ctx, victim_guid);
     crate::spell::break_channel(ctx, victim_guid);
     crate::spell::record_self_resurrect_option(ctx, victim_guid);
     crate::spell::remove_auras_on_death(ctx, victim_guid);

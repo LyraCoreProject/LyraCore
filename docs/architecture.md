@@ -141,7 +141,8 @@ Host changes still need a restart, and schema changes need a planned update. See
 
 The native protocol check covers SRP logon, world proof authentication, Character creation,
 enumeration and deletion, world entry, player motion, entity CREATE/VALUES/DESTROY, stealth visibility,
-melee stance and damage messages, spell casts and interruptions, delayed spell damage, Aura timers,
+melee stance and damage messages, spell casts and interruptions, delayed spell damage, combo points,
+Aura timers,
 pet commands, action bars, Hunter pet rename, care and progression updates,
 inventory gains, swaps and equipment, quest acceptance, credit, rewards, the next quest in a chain,
 expiry and abandonment,

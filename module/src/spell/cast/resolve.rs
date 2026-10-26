@@ -297,7 +297,6 @@ fn run_spell_effects(
                     ..Default::default()
                 }
             } else {
-                // Combo finishers use the explicit enemy even for self-targeted effects.
                 apply_effect(
                     ctx,
                     e,
@@ -1147,6 +1146,23 @@ fn check_cast_gate_suffix(
                 "spell {spell_id} requires a dagger equipped in the main hand (caster {caster_guid})"
             )));
         }
+    }
+
+    // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
+    let combo_points = if !caster.is_player() {
+        None
+    } else if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
+        Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
+    } else if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
+        Some(crate::combo::held_points(ctx, caster_guid))
+    } else {
+        None
+    };
+    if combo_points == Some(0) {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NoComboPoints,
+            format!("spell {spell_id} needs combo points on target {target_guid}"),
+        ));
     }
 
     // Creatures have no managed power pool, so only Characters pay spell costs.

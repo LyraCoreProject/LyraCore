@@ -340,6 +340,23 @@ fn coinage_values_is_player_mask_without_object_type() {
 }
 
 #[test]
+fn combo_points_values_set_the_combo_target_and_byte_1_of_player_field_bytes() {
+    let (opcode, body) = build_combo_points_values(0x10, 0xF130_0000_0000_0042, 3);
+    assert_eq!(opcode, SMSG_UPDATE_OBJECT_OPCODE);
+    let mut expected = vec![1, 0, 0, 0, 0, 0, 0x01, 0x10, 39];
+    let mut mask = [0u32; 39];
+    mask[714 / 32] |= 1 << (714 % 32) | 1 << (715 % 32);
+    mask[1222 / 32] |= 1 << (1222 % 32);
+    for word in mask {
+        expected.extend_from_slice(&word.to_le_bytes());
+    }
+    expected.extend_from_slice(&0x0000_0042u32.to_le_bytes());
+    expected.extend_from_slice(&0xF130_0000u32.to_le_bytes());
+    expected.extend_from_slice(&[0, 3, 0, 0]);
+    assert_eq!(body, expected);
+}
+
+#[test]
 fn aura_values_is_player_mask_without_object_type() {
     use super::update_mask::{self, idx, AuraSlot};
     let win = |b: &[u8], needle: &[u8]| b.windows(needle.len()).any(|w| w == needle);
