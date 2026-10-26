@@ -550,6 +550,14 @@ pub(crate) fn fold_incoming_damage(
     (dealt, incoming - dealt)
 }
 
+// vmangos rewards a Character taken rage for health lost to another unit, weapon or not.
+fn reward_taken_rage(target: &mut WorldEntity, attacker_guid: u64, health_before: u32) {
+    if attacker_guid != target.guid && target.is_player() && is_rage_user(target) {
+        let lost = health_before.saturating_sub(target.health);
+        target.power = (target.power + rage_from_damage(lost, false)).min(target.max_power);
+    }
+}
+
 pub(crate) fn apply_hit(
     ctx: &ReducerContext,
     attacker_guid: u64,
@@ -606,7 +614,9 @@ pub(crate) fn apply_hit(
     }
 
     if is_lethal(target.health, dmg) && duel_takes_lethal_hit(ctx, attacker_guid, &target) {
+        let before = target.health;
         target.health = 1;
+        reward_taken_rage(&mut target, attacker_guid, before);
         target.update(ctx);
         if let Some(duel) = crate::duel::active_duel_between(ctx, attacker_guid, target_guid) {
             crate::duel::complete_duel(
@@ -647,10 +657,9 @@ pub(crate) fn apply_hit(
     if weapon && target_is_player {
         crate::skill::gain_defense_skill(ctx, &target);
     }
+    let before = target.health;
     target.health = crate::spell::damaged_value(target.health, dmg as i32);
-    if weapon && is_rage_user(&target) {
-        target.power = (target.power + rage_from_damage(dmg, false)).min(target.max_power);
-    }
+    reward_taken_rage(&mut target, attacker_guid, before);
     target.update(ctx);
     if damage.lethal_prevented {
         commit_death_prevention(ctx, target_guid, attacker_guid);
