@@ -4287,6 +4287,18 @@ def check_casting(host):
     peer.send(0xee, struct.pack('<IIffffI', 0, (timestamp + 1000) & 0xffffffff, x, y, z, orientation, 0))
     peer.collect()
     client.collect()
+    host.sql('UPDATE game_spell SET cost = 10 WHERE spell_id = 133')
+    host.sql(f'UPDATE game_world_entity SET power = 10 WHERE guid = {peer_guid}')
+    peer.send(0x12e, cast(133, spell_target))
+    started = peer.collect()
+    assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
+    host.sql(f'UPDATE game_world_entity SET power = 0 WHERE guid = {peer_guid}')
+    time.sleep(1.6)
+    refused = peer.collect()
+    assert [packet for packet in refused if packet[0] in (0x130, 0x132, 0x133, 0x2a6)] == interrupted, refused
+    assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
+    host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 133')
+    client.collect()
     for _ in range(10):
         peer.send(0x12e, cast(133, spell_target))
         completed = []
