@@ -15,7 +15,7 @@ mod matching;
 
 use matching::{formation, next_stone_add, open_roles};
 
-use crate::group::{Departure, JoinPlan, JoinTarget};
+use crate::group::{Departure, GroupAction, JoinPlan, JoinTarget};
 use crate::{game_account_claim, game_group};
 
 const REMINDER_INTERVAL_MICROS: i64 = 5 * 60 * 1_000_000;
@@ -522,7 +522,7 @@ fn fill_party(
             event_kind::MEMBER_ADDED,
             joiner.character_guid,
         );
-        stone_add(ctx, &joiner, plan);
+        stone_add(ctx, &joiner, plan)?;
         upsert_seeker(
             ctx,
             joiner.character_guid,
@@ -567,7 +567,7 @@ fn form_party(
         .game_meeting_stone_seeker()
         .character_guid()
         .delete(leader.character_guid);
-    let group_id = stone_add(ctx, member, plan);
+    let group_id = stone_add(ctx, member, plan)?;
     queue_party(
         ctx,
         group_id,
@@ -594,15 +594,20 @@ fn plan_stone_add(
     })
 }
 
-fn stone_add(ctx: &ReducerContext, joiner: &MeetingStoneSeeker, plan: JoinPlan) -> u64 {
+fn stone_add(
+    ctx: &ReducerContext,
+    joiner: &MeetingStoneSeeker,
+    plan: JoinPlan,
+) -> Result<u64, String> {
     ctx.db
         .game_meeting_stone_seeker()
         .character_guid()
         .delete(joiner.character_guid);
-    let joined = plan.apply(ctx);
-    crate::group::advance_group_revision(ctx, joined.group_id, !joined.formed, true);
+    crate::group::apply_action_for(ctx, joiner.character_guid, GroupAction::StoneAdd(plan))?;
     crate::native::party_roster(ctx, joiner.character_guid, true);
-    joined.group_id
+    crate::group::group_of(ctx, joiner.character_guid)
+        .map(|member| member.group_id)
+        .ok_or_else(|| format!("stone add left {} outside a group", joiner.character_guid))
 }
 
 pub(crate) fn party_joined(

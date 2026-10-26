@@ -2,6 +2,7 @@ use lyracore_shared::loot::LootBoundaryFailure;
 use spacetimedb::{reducer, table, Identity, ReducerContext, ScheduleAt, Timestamp};
 
 use crate::game_account;
+use crate::group::GroupAction;
 use crate::helpers::{acting_entity_by_guid, require_operator};
 
 // Retired Gateway lease tables keep their declarations; see docs/danger-zones.md.
@@ -701,7 +702,7 @@ pub fn gw_group_invite(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
-    crate::group::invite_core(ctx, actor_guid, target_guid)
+    crate::group::apply_action_for(ctx, actor_guid, GroupAction::Invite(target_guid))
 }
 
 #[reducer]
@@ -712,7 +713,7 @@ pub fn gw_group_decline(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
-    crate::group::decline_invite_for(ctx, actor_guid)
+    crate::group::apply_action_for(ctx, actor_guid, GroupAction::Decline)
 }
 
 #[reducer]
@@ -884,7 +885,7 @@ pub fn gw_group_uninvite(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
-    crate::group::uninvite_from_group(ctx, actor_guid, target_guid)
+    crate::group::apply_action_for(ctx, actor_guid, GroupAction::Uninvite(target_guid))
 }
 
 #[reducer]
@@ -898,7 +899,15 @@ pub fn gw_group_loot_method(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     group_actor(ctx, actor_guid)?;
-    crate::group::set_loot_method_for(ctx, actor_guid, loot_setting, master_guid, loot_threshold)
+    crate::group::apply_action_for(
+        ctx,
+        actor_guid,
+        GroupAction::LootMethod {
+            method: loot_setting,
+            master: master_guid,
+            threshold: loot_threshold,
+        },
+    )
 }
 
 #[reducer]
