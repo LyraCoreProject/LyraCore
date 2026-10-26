@@ -11,6 +11,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+from urllib.error import HTTPError
 from urllib.request import Request, urlopen
 import zipfile
 
@@ -164,14 +165,19 @@ def write_json(path, value):
             temporary.unlink(missing_ok=True)
 
 
-def compare_lock(accepted, actual):
+def compare_lock(accepted, actual, accept_lock=False):
     if accepted is None:
         return "unlocked"
     if accepted == actual:
         return "matches"
     if accepted["commit"] == actual["commit"]:
         return "migration fingerprint changed"
-    comparison = api_json(f"compare/{accepted['commit']}...{actual['commit']}")
+    try:
+        comparison = api_json(f"compare/{accepted['commit']}...{actual['commit']}")
+    except HTTPError as error:
+        if not accept_lock or error.code != 404:
+            raise
+        return "previous lock unreachable"
     status = comparison.get("status")
     relations = {"ahead": "newer", "behind": "older", "diverged": "diverged"}
     if status not in relations:
@@ -200,7 +206,7 @@ def fetch(output, lock_path=DEFAULT_LOCK, accept_lock=False):
         extract_sqlite(archive, sqlite)
         migrations = migration_fingerprint(sqlite)
         actual = snapshot_lock(commit, migrations)
-        comparison = compare_lock(accepted, actual)
+        comparison = compare_lock(accepted, actual, accept_lock)
         sqlite_digest = digest(sqlite)
         destination = output / f"{commit}-{asset['digest'][7:23]}"
         if destination.exists():
