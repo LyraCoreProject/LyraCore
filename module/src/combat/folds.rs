@@ -1,8 +1,8 @@
 use spacetimedb::ReducerContext;
 
 use crate::{
-    game_aura, game_creature_template, game_item_instance, game_item_template, game_spell_effect,
-    game_world_entity, ItemInstance, WorldEntity,
+    game_aura, game_creature_template, game_item_instance, game_item_template, game_spell,
+    game_spell_effect, game_world_entity, ItemInstance, WorldEntity,
 };
 
 use super::*;
@@ -76,27 +76,97 @@ fn seal_swing_holy(seal: i32, attack_time_ms: u32) -> u32 {
     ((seal as u64 * attack_time_ms as u64) / 100_000) as u32
 }
 
-fn queued_strike_bonus(queued_spell_id: u32, base_points: i32) -> u32 {
-    if queued_spell_id == 0 {
-        return 0;
-    }
-    base_points.max(0) as u32
+#[derive(Clone, Copy, Default)]
+pub(crate) struct QueuedStrikeDamage {
+    pub(crate) bonus: u32,
+    pub(crate) mod_flat: i32,
+    pub(crate) mod_pct: i32,
 }
 
-pub(crate) fn queued_strike_on_swing(ctx: &ReducerContext, attacker: &WorldEntity) -> u32 {
-    let queued = attacker.next_swing_spell;
-    if queued == 0 {
-        return 0;
+pub(crate) fn queued_strike_damage(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    strike: &crate::spell::Spell,
+) -> QueuedStrikeDamage {
+    let (mod_flat, mod_pct) =
+        crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, strike);
+    QueuedStrikeDamage {
+        bonus: queued_strike_bonus(ctx, attacker, strike),
+        mod_flat,
+        mod_pct,
     }
-    let base_points = ctx
+}
+
+// vmangos interrupts a form-bound queued strike whenever its form is lost, even for a sibling form.
+pub(crate) fn interrupt_form_bound_queued_strike(ctx: &ReducerContext, unit: &WorldEntity) {
+    let Some(strike) = ctx.db.game_spell().spell_id().find(unit.next_swing_spell) else {
+        return;
+    };
+    if strike.stances != 0 {
+        interrupt_queued_strike(ctx, unit);
+    }
+}
+
+// vmangos AttackStop interrupts the queued melee spell.
+pub(crate) fn interrupt_queued_strike_of(ctx: &ReducerContext, guid: u64) {
+    if let Some(unit) = ctx.db.game_world_entity().guid().find(guid) {
+        interrupt_queued_strike(ctx, &unit);
+    }
+}
+
+fn interrupt_queued_strike(ctx: &ReducerContext, unit: &WorldEntity) {
+    if unit.next_swing_spell == 0 {
+        return;
+    }
+    clear_queued_strike(ctx, unit.guid);
+    crate::spell::SpellCastEvent::insert(
+        ctx,
+        crate::spell::SpellCastEvent {
+            is_interrupted: true,
+            failure_reason: crate::spell::CAST_FAIL_INTERRUPTED,
+            ..crate::spell::SpellCastEvent::signal_at(
+                ctx,
+                unit,
+                unit.next_swing_spell,
+                crate::spell::SpellCastEventKind::Interrupt,
+            )
+        },
+    );
+}
+
+fn queued_strike_bonus(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    strike: &crate::spell::Spell,
+) -> u32 {
+    let Some(effect) = ctx
         .db
         .game_spell_effect()
         .by_spell()
-        .filter(&queued)
+        .filter(&strike.spell_id)
         .find(|e| e.kind == crate::spell::E_NEXT_SWING)
-        .map(|e| e.base_points)
-        .unwrap_or(0);
-    queued_strike_bonus(queued, base_points)
+    else {
+        return 0;
+    };
+    strike_bonus_points(&effect, strike, attacker.level, ctx.random::<u32>())
+}
+
+fn strike_bonus_points(
+    effect: &crate::spell::SpellEffect,
+    strike: &crate::spell::Spell,
+    attacker_level: u32,
+    roll: u32,
+) -> u32 {
+    crate::spell::effect_amount(
+        effect.base_points,
+        effect.die_sides,
+        effect.per_level,
+        attacker_level,
+        strike.spell_level,
+        strike.max_level,
+        roll,
+    )
+    .max(0) as u32
 }
 
 pub(crate) fn clear_queued_strike(ctx: &ReducerContext, guid: u64) {
@@ -383,17 +453,19 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
     );
 }
 
+// `strike` is a firing queued strike's damage; `None` rolls a white swing.
 pub(crate) fn roll_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
+    strike: Option<QueuedStrikeDamage>,
 ) -> (u32, u8, u32) {
     let range = crate::creatures::scale_hunter_pet_swing(
         ctx,
         attacker.guid,
         swing_range_ctx(ctx, attacker),
     );
-    roll_swing_with_range(ctx, attacker, target, range)
+    roll_swing_with_range(ctx, attacker, target, range, strike)
 }
 
 pub(crate) fn roll_swing_with_range(
@@ -401,6 +473,7 @@ pub(crate) fn roll_swing_with_range(
     attacker: &WorldEntity,
     target: &WorldEntity,
     range: (u32, u32),
+    strike: Option<QueuedStrikeDamage>,
 ) -> (u32, u8, u32) {
     let block_value = effective_block_value(ctx, target);
     let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
@@ -417,26 +490,68 @@ pub(crate) fn roll_swing_with_range(
             0
         },
     };
-    let roll = ctx.random::<u32>() % 10_000;
-    let outcome = attack_outcome(roll, &table);
+    let rolls = SwingRolls {
+        outcome: ctx.random::<u32>() % 10_000,
+        weapon: ctx.random::<u32>(),
+        block: ctx.random::<u32>() % 10_000,
+    };
+    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+    resolve_swing(table, rolls, range, strike, mit_pct, block_value)
+}
+
+struct SwingRolls {
+    outcome: u32,
+    weapon: u32,
+    block: u32,
+}
+
+// Returns (damage, outcome, blocked); a blocked crit stays a crit.
+fn resolve_swing(
+    mut table: AttackTable,
+    rolls: SwingRolls,
+    (min, max): (u32, u32),
+    strike: Option<QueuedStrikeDamage>,
+    mit_pct: u32,
+    block_value: u32,
+) -> (u32, u8, u32) {
+    // vmangos rolls a queued strike's partial block after the table, so it can crit and block.
+    let block_bp = table.block;
+    if strike.is_some() {
+        table.block = 0;
+    }
+    let outcome = attack_outcome(rolls.outcome, &table);
     if matches!(outcome, HIT_MISS | HIT_DODGE | HIT_PARRY) {
         return (0, outcome, 0);
     }
-    let (min, max) = range;
-    let base = min + ctx.random::<u32>() % (max - min + 1);
+    let weapon = min + rolls.weapon % (max - min + 1);
+    let base = strike.map_or(weapon, |strike| {
+        crate::spell::apply_spell_mod(
+            weapon.saturating_add(strike.bonus),
+            strike.mod_flat,
+            strike.mod_pct,
+        )
+    });
     let pre_mit = match outcome {
         HIT_CRIT => base * CRIT_MULT,
         HIT_GLANCING => (base * GLANCING_DAMAGE_PCT / 100).max(1),
         HIT_CRUSHING => base * CRUSH_DAMAGE_PCT / 100,
         _ => base,
     };
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
     let dmg = (pre_mit * (100 - mit_pct) / 100).max(1);
-    if outcome == HIT_BLOCK {
-        let blocked = block_value.min(dmg);
-        return (dmg - blocked, HIT_BLOCK, blocked);
+    let blocks = match strike {
+        Some(_) => rolls.block < block_bp,
+        None => outcome == HIT_BLOCK,
+    };
+    if !blocks {
+        return (dmg, outcome, 0);
     }
-    (dmg, outcome, 0)
+    let blocked = block_value.min(dmg);
+    let outcome = if outcome == HIT_CRIT {
+        HIT_CRIT
+    } else {
+        HIT_BLOCK
+    };
+    (dmg - blocked, outcome, blocked)
 }
 
 pub(crate) fn roll_ranged_swing(
@@ -491,25 +606,136 @@ mod seal_tests {
 }
 
 #[cfg(test)]
-mod next_swing_tests {
-    use super::queued_strike_bonus;
+mod queued_strike_tests {
+    use super::{resolve_swing, strike_bonus_points, QueuedStrikeDamage, SwingRolls};
+    use crate::combat::{AttackTable, HIT_BLOCK, HIT_CRIT, HIT_GLANCING, HIT_NORMAL};
+    use crate::seed::{base_effect, base_spell};
 
-    #[test]
-    fn no_queue_adds_nothing() {
-        assert_eq!(queued_strike_bonus(0, 0), 0);
-        assert_eq!(queued_strike_bonus(0, 137), 0);
+    fn bonus(base_points: i32, die_sides: i32, per_level: f32) -> crate::spell::SpellEffect {
+        crate::spell::SpellEffect {
+            base_points,
+            die_sides,
+            per_level,
+            ..base_effect(1, 0)
+        }
+    }
+
+    fn strike(spell_level: u8) -> crate::spell::Spell {
+        crate::spell::Spell {
+            spell_level,
+            ..base_spell(1, "Strike")
+        }
     }
 
     #[test]
-    fn queued_strike_adds_its_flat_base() {
-        assert_eq!(queued_strike_bonus(78, 11), 11);
-        assert_eq!(queued_strike_bonus(845, 5), 5);
+    fn heroic_strike_rank_one_adds_its_flat_eleven() {
+        assert_eq!(
+            strike_bonus_points(&bonus(11, 1, 0.0), &strike(1), 60, 7),
+            11
+        );
     }
 
     #[test]
-    fn non_positive_base_clamps_to_zero() {
-        assert_eq!(queued_strike_bonus(78, 0), 0);
-        assert_eq!(queued_strike_bonus(78, -50), 0);
+    fn a_creature_strike_scales_with_the_attacker_level() {
+        // Strike 11976: 5 points plus 1.5 per level above 1; level 60 adds 5 + 88.
+        assert_eq!(
+            strike_bonus_points(&bonus(5, 1, 1.5), &strike(1), 60, 0),
+            93
+        );
+    }
+
+    fn table(block: u32, crit: u32, glancing: u32) -> AttackTable {
+        AttackTable {
+            miss: 0,
+            dodge: 0,
+            parry: 0,
+            glancing,
+            block,
+            crit,
+            crushing: 0,
+        }
+    }
+
+    fn rolls(block: u32) -> SwingRolls {
+        SwingRolls {
+            outcome: 0,
+            weapon: 0,
+            block,
+        }
+    }
+
+    fn heroic_strike(bonus: u32) -> Option<QueuedStrikeDamage> {
+        Some(QueuedStrikeDamage {
+            bonus,
+            ..Default::default()
+        })
+    }
+
+    #[test]
+    fn a_queued_strike_can_crit_and_be_blocked() {
+        // (100 + 11) doubled by the crit, halved by armor, then 30 blocked.
+        assert_eq!(
+            resolve_swing(
+                table(10_000, 10_000, 0),
+                rolls(0),
+                (100, 100),
+                heroic_strike(11),
+                50,
+                30
+            ),
+            (81, HIT_CRIT, 30)
+        );
+    }
+
+    #[test]
+    fn a_white_swing_blocks_before_it_can_crit() {
+        assert_eq!(
+            resolve_swing(table(10_000, 10_000, 0), rolls(0), (100, 100), None, 50, 30),
+            (20, HIT_BLOCK, 30)
+        );
+    }
+
+    #[test]
+    fn a_queued_strike_misses_its_block_roll_above_the_block_chance() {
+        assert_eq!(
+            resolve_swing(
+                table(5_000, 0, 0),
+                rolls(5_000),
+                (100, 100),
+                heroic_strike(11),
+                0,
+                30
+            ),
+            (111, HIT_NORMAL, 0)
+        );
+    }
+
+    #[test]
+    fn damage_modifiers_scale_the_weapon_and_the_bonus_together() {
+        let maul = Some(QueuedStrikeDamage {
+            bonus: 1000,
+            mod_flat: 0,
+            mod_pct: 100,
+        });
+        assert_eq!(
+            resolve_swing(table(0, 0, 0), rolls(9_999), (1, 1), maul, 0, 0),
+            (2002, HIT_NORMAL, 0)
+        );
+    }
+
+    #[test]
+    fn a_glancing_strike_reduces_the_whole_hit() {
+        assert_eq!(
+            resolve_swing(
+                table(0, 0, 10_000),
+                rolls(9_999),
+                (100, 100),
+                heroic_strike(100),
+                0,
+                0
+            ),
+            (140, HIT_GLANCING, 0)
+        );
     }
 }
 

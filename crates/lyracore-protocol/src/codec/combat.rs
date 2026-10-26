@@ -116,11 +116,11 @@ pub mod cast_failure {
     pub const LINE_OF_SIGHT: u8 = 0x2A;
     pub const NOT_BEHIND: u8 = 0x33;
     pub const NOT_READY: u8 = 0x3C;
-    pub const NOT_SHAPESHIFT: u8 = 0x3D;
     pub const NO_COMBO_POINTS: u8 = 0x46;
     pub const NO_POWER: u8 = 0x4D;
     pub const ONLY_ABOVEWATER: u8 = 0x50;
     pub const ONLY_OUTDOORS: u8 = 0x55;
+    pub const ONLY_SHAPESHIFT: u8 = 0x56;
     pub const ONLY_STEALTHED: u8 = 0x57;
     pub const OUT_OF_RANGE: u8 = 0x59;
     pub const STUNNED: u8 = 0x64;

@@ -75,6 +75,31 @@ fn form_to_stance(form_id: i32) -> Option<i32> {
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
 const ATTR_EX1_EXCLUDE_CASTER: u32 = 0x0008_0000;
 const ATTR_EX2_AUTOREPEAT: u32 = 0x0000_0020;
+// Attributes 0x04 and 0x400 both mark an on-next-swing spell.
+const ATTR_ON_NEXT_SWING_MASK: u32 = 0x0000_0404;
+
+const SCHOOL_MASK_PHYSICAL: u8 = 1;
+const EFFECT_WEAPON_DAMAGE_NOSCHOOL: i32 = 17;
+const EFFECT_WEAPON_DAMAGE: i32 = 58;
+const EFFECT_NORMALIZED_WEAPON_DAMAGE: i32 = 121;
+
+fn is_weapon_strike(effect_id: i32, kind: u8) -> bool {
+    kind == E_DAMAGE
+        && matches!(
+            effect_id,
+            EFFECT_WEAPON_DAMAGE_NOSCHOOL | EFFECT_WEAPON_DAMAGE | EFFECT_NORMALIZED_WEAPON_DAMAGE
+        )
+}
+
+// A queued strike is one physical weapon swing plus flat damage; any other spell stays instant.
+fn queues_on_next_swing(attributes: u32, school_mask: u8, effects: &[(i32, u8)]) -> bool {
+    attributes & ATTR_ON_NEXT_SWING_MASK != 0
+        && school_mask == SCHOOL_MASK_PHYSICAL
+        && effects.iter().any(|&(id, kind)| is_weapon_strike(id, kind))
+        && effects
+            .iter()
+            .all(|&(id, kind)| is_weapon_strike(id, kind) || kind == E_SCRIPTED)
+}
 
 const EFFECT_APPLY_AURA: i32 = 6;
 const EFFECT_PERSISTENT_AREA_AURA: i32 = 27;
@@ -245,9 +270,6 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
 fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
     if kind == E_DAMAGE && name == "Eviscerate" {
         return E_FINISHER_DAMAGE;
-    }
-    if kind == E_DAMAGE && matches!(name, "Heroic Strike" | "Cleave") {
-        return E_NEXT_SWING;
     }
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
@@ -990,14 +1012,19 @@ fn push_spell_effect_rows(
     } = acc;
     let spell_id = s.id;
     let name = header.name.as_str();
+    let resolved: Vec<(usize, ResolvedEffect)> = (0..3)
+        .filter(|&i| s.effect[i] != 0)
+        .map(|i| (i, resolve_effect_kind(s, i, header, creature_displays, cov)))
+        .collect();
+    let effect_kinds: Vec<(i32, u8)> = resolved
+        .iter()
+        .map(|(i, effect)| (s.effect[*i], effect.kind))
+        .collect();
+    let queued_strike = queues_on_next_swing(s.attributes, header.school_mask, &effect_kinds);
     let mut used_slots = [false; 4];
     let mut healed_target = T_SELF;
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..3 {
+    for (i, effect) in resolved {
         let effect_id = s.effect[i];
-        if effect_id == 0 {
-            continue;
-        }
         used_slots[i] = true;
         let effect_index = i as u8;
         let ResolvedEffect {
@@ -1008,7 +1035,12 @@ fn push_spell_effect_rows(
             die_sides,
             per_level,
             period_ms,
-        } = resolve_effect_kind(s, i, header, creature_displays, cov);
+        } = effect;
+        let kind = if queued_strike && is_weapon_strike(effect_id, kind) {
+            E_NEXT_SWING
+        } else {
+            kind
+        };
         let binding_entry = binding_summon_entry(
             spell_id,
             effect_id,
@@ -2715,15 +2747,60 @@ mod tests {
         assert!(!is_ranged_auto_repeat(0x1, "Frostbolt"));
     }
 
+    fn melee_ability(id: u32, name: &str, attributes: u32, effect: [i32; 3]) -> Spell {
+        Spell {
+            id,
+            name: name.into(),
+            attributes,
+            effect,
+            effect_aura: effect.map(|id| {
+                if id == EFFECT_APPLY_AURA {
+                    AuraMod::ModStun as u32
+                } else {
+                    0
+                }
+            }),
+            implicit_target_a: [6, 6, 0],
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn on_next_swing_reclassifies_heroic_strike_and_cleave() {
+    fn the_on_next_swing_attribute_queues_every_weapon_strike() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![
+            melee_ability(78, "Heroic Strike", 0x0005_0014, [17, 0, 0]),
+            melee_ability(2973, "Raptor Strike", 0x0005_0404, [58, 0, 0]),
+            melee_ability(6807, "Maul", 0x0000_0414, [58, 0, 0]),
+            melee_ability(20666, "Cleave", 0x0004_0014, [58, 98, 0]),
+            melee_ability(14112, "Flaying Vine", 0x0004_0410, [58, 0, 0]),
+            melee_ability(3242, "Ravage", 0x0000_0014, [58, 6, 0]),
+            melee_ability(678, "zzOLDHoly Strike", 0x0000_0404, [2, 0, 0]),
+            Spell {
+                school: 1,
+                ..melee_ability(13953, "Holy Strike", 0x0005_0404, [58, 0, 0])
+            },
+            melee_ability(1752, "Sinister Strike", 0x0005_0010, [17, 0, 0]),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let kind = |id| first_effect(&rows, id).kind;
+        for queued in [78, 2973, 6807, 20666, 14112] {
+            assert_eq!(kind(queued), E_NEXT_SWING, "spell {queued}");
+            assert_eq!(first_effect(&rows, queued).target, T_TARGET_ENEMY);
+        }
         assert_eq!(
-            correct_script_effect_kind("Heroic Strike", E_DAMAGE),
-            E_NEXT_SWING
+            kind(3242),
+            E_DAMAGE,
+            "a strike with a live aura stays instant"
         );
-        assert_eq!(correct_script_effect_kind("Cleave", E_DAMAGE), E_NEXT_SWING);
-        assert_eq!(correct_script_effect_kind("Heroic Strike", A_FLAG), A_FLAG);
-        assert_eq!(correct_script_effect_kind("Frostbolt", E_DAMAGE), E_DAMAGE);
+        assert_eq!(kind(678), E_DAMAGE, "school damage is not a weapon swing");
+        assert_eq!(
+            kind(13953),
+            E_DAMAGE,
+            "a holy weapon strike is not a physical swing"
+        );
+        assert_eq!(kind(1752), E_DAMAGE, "no on-next-swing attribute");
     }
 
     #[test]

@@ -1230,12 +1230,14 @@ fn apply_character_effect(
                     // Preserve byte 3, which carries the ghost visibility flag.
                     let form_id = client_form_for_stance(new_stance) << 16;
                     c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
-                    c.update(ctx);
+                    let c = c.update(ctx);
+                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
                 } else if form_recast_toggles_off(c.stance, new_stance) {
                     // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
                     c.stance = 0;
                     c.unit_bytes_1 &= 0xFF00_0000;
-                    c.update(ctx);
+                    let c = c.update(ctx);
+                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
                 }
             }
             EffectHit::none()

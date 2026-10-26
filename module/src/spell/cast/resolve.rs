@@ -84,11 +84,7 @@ pub(crate) fn resolve_cast_at_typed(
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !queues_next_swing(&effects) {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
-        caster.power = caster.power.saturating_sub(hdr.cost);
-        if hdr.power_type == lyracore_shared::packing::power_type::MANA {
-            caster.mana_regen_paused_until_ms = now_ms + 5000;
-        }
+        charge_spell_cost(ctx, &mut caster, &hdr);
         caster.update(ctx);
     }
 
@@ -135,27 +131,9 @@ pub(crate) fn resolve_cast_at_typed(
         start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     }
 
-    if hdr.cooldown_ms > 0 {
-        let ready_at = ctx
-            .timestamp
-            .checked_add(TimeDuration::from_micros((hdr.cooldown_ms as i64) * 1000))
-            .unwrap_or(ctx.timestamp);
-        let cds = ctx.db.game_spell_cd();
-        if let Some(mut row) = cds
-            .by_caster()
-            .filter(&caster_guid)
-            .find(|r| r.spell_id == spell_id)
-        {
-            row.ready_at = ready_at;
-            cds.id().update(row);
-        } else {
-            cds.insert(SpellCd {
-                id: 0,
-                caster_guid,
-                spell_id,
-                ready_at,
-            });
-        }
+    // A queued strike starts its cooldown when its swing fires.
+    if !queues_next_swing(&effects) {
+        start_spell_cooldown(ctx, caster_guid, spell_id, hdr.cooldown_ms);
     }
 
     crate::hooks::fire_on_cast_resolved(
@@ -196,6 +174,45 @@ impl CastOrigin {
             } => (is_completion, client_initiated),
             Self::Triggered | Self::DeadCreatureCallbackTriggered => (false, false),
         }
+    }
+}
+
+pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
+    caster.power = caster.power.saturating_sub(hdr.cost);
+    if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
+        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        caster.mana_regen_paused_until_ms = now_ms + 5000;
+    }
+}
+
+pub(crate) fn start_spell_cooldown(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    cooldown_ms: u32,
+) {
+    if cooldown_ms == 0 {
+        return;
+    }
+    let ready_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros((cooldown_ms as i64) * 1000))
+        .unwrap_or(ctx.timestamp);
+    let cds = ctx.db.game_spell_cd();
+    if let Some(mut row) = cds
+        .by_caster()
+        .filter(&caster_guid)
+        .find(|r| r.spell_id == spell_id)
+    {
+        row.ready_at = ready_at;
+        cds.id().update(row);
+    } else {
+        cds.insert(SpellCd {
+            id: 0,
+            caster_guid,
+            spell_id,
+            ready_at,
+        });
     }
 }
 

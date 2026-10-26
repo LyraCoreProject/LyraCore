@@ -52,7 +52,7 @@ fn cast_result(reason: CastRefusalReason) -> u8 {
         R::NotInFront => code::UNIT_NOT_INFRONT,
         R::NoLineOfSight => code::LINE_OF_SIGHT,
         R::NoAmmo => code::NO_AMMO,
-        R::WrongStance => code::NOT_SHAPESHIFT,
+        R::WrongStance => code::ONLY_SHAPESHIFT,
         R::NotBehind => code::NOT_BEHIND,
         R::NotStealthed => code::ONLY_STEALTHED,
         R::NoComboPoints => code::NO_COMBO_POINTS,
@@ -280,7 +280,7 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
         .find(guid)
         .is_some_and(|row| row.ranged_spell_id != 0)
     {
-        crate::combat::stop_attack_for(ctx, guid);
+        crate::combat::MeleeAttack::end_auto_repeat(ctx, guid);
     }
 }
 
@@ -300,7 +300,7 @@ mod tests {
             (R::NotInFront, 0x7C),
             (R::NoLineOfSight, 0x2A),
             (R::NoAmmo, 0x24),
-            (R::WrongStance, 0x3D),
+            (R::WrongStance, 0x56),
             (R::NotBehind, 0x33),
             (R::NotStealthed, 0x57),
             (R::NoComboPoints, 0x46),

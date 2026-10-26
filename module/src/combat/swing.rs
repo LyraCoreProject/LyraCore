@@ -141,7 +141,7 @@ fn resolve_offhand_swing(
     let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
     let range = apply_offhand_penalty(raw_min, raw_max);
 
-    let (rolled, hit_info, blocked) = roll_swing_with_range(ctx, attacker, &target, range);
+    let (rolled, hit_info, blocked) = roll_swing_with_range(ctx, attacker, &target, range, None);
 
     crate::spell::break_stealth(ctx, attacker_guid);
 
@@ -221,7 +221,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             match equipped_ranged_weapon(ctx, atk.attacker_guid) {
                 Some(w) => Some(w),
                 None => {
-                    crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+                    crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
                     continue;
                 }
             }
@@ -236,7 +236,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             use crate::items::weapon_subclass as ws;
             if attacker.is_player() && is_translating(attacker.movement_flags) {
                 if subclass == ws::WAND {
-                    crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+                    crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
                 } else if ranged_due {
                     if let Some(mut fresh) = melee.attacker_guid().find(atk.attacker_guid) {
                         fresh.last_swing_ms = now_ms
@@ -260,7 +260,7 @@ fn resolve_swing(ctx: &ReducerContext) {
             swing_blocked(ctx, &attacker, &target, ranged.is_some(), dist_sq, now_ms)
         {
             if ranged_due {
-                crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
+                crate::combat::MeleeAttack::end_auto_repeat(ctx, atk.attacker_guid);
             } else if ranged.is_none() && attacker.is_player() {
                 record_swing_error(ctx, &atk, &attacker, block.swing_error(), now_ms);
             }
@@ -403,6 +403,46 @@ fn record_swing_error(
     }
 }
 
+// A Character pays when the swing fires, even on a miss; short of the cost, it swings white.
+fn charge_queued_strike(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    queued_spell: u32,
+    strike: Option<&crate::spell::Spell>,
+) -> bool {
+    if !attacker.is_player() {
+        return true;
+    }
+    let Some(mut payer) = ctx.db.game_world_entity().guid().find(attacker.guid) else {
+        return false;
+    };
+    if strike.is_some_and(|strike| payer.power < strike.cost) {
+        crate::spell::SpellCastEvent::insert(
+            ctx,
+            SpellCastEvent {
+                is_interrupted: true,
+                failure_reason: crate::spell::CAST_FAIL_NO_POWER,
+                ..SpellCastEvent::signal_at(
+                    ctx,
+                    attacker,
+                    queued_spell,
+                    SpellCastEventKind::Interrupt,
+                )
+            },
+        );
+        return false;
+    }
+    if let Some(strike) = strike {
+        crate::spell::charge_spell_cost(ctx, &mut payer, strike);
+    }
+    payer.update(ctx);
+    true
+}
+
+fn arms_revenge(hit_info: u8, blocked: u32) -> bool {
+    matches!(hit_info, HIT_DODGE | HIT_PARRY | HIT_BLOCK) || blocked > 0
+}
+
 fn fire_melee_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
@@ -411,10 +451,21 @@ fn fire_melee_swing(
 ) {
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
-    let entities = ctx.db.game_world_entity();
     let melee = ctx.db.game_melee_attack();
 
-    let (mut rolled, hit_info, blocked) = roll_swing(ctx, attacker, target);
+    let queued_spell = attacker.next_swing_spell;
+    let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
+    let swing_is_spell = queued_spell != 0
+        && charge_queued_strike(ctx, attacker, queued_spell, queued_header.as_ref());
+    let strike = swing_is_spell.then(|| {
+        queued_header
+            .as_ref()
+            .map_or_else(Default::default, |strike| {
+                queued_strike_damage(ctx, attacker, strike)
+            })
+    });
+
+    let (mut rolled, hit_info, blocked) = roll_swing(ctx, attacker, target, strike);
 
     if hit_info == HIT_DODGE {
         arm_react(ctx, attacker_guid, ReactKind::Overpower);
@@ -428,45 +479,7 @@ fn fire_melee_swing(
         rolled += seal_portion;
     }
 
-    let queued_spell = attacker.next_swing_spell;
-    // Charge queued-strike rage when the swing fires, including a miss.
-    let mut swing_is_spell = false;
-    if queued_spell != 0 && attacker.is_player() {
-        let cost = ctx
-            .db
-            .game_spell()
-            .spell_id()
-            .find(queued_spell)
-            .map(|h| h.cost)
-            .unwrap_or(0);
-        if let Some(mut a) = entities.guid().find(attacker_guid) {
-            if a.power >= cost {
-                a.power -= cost;
-                a.update(ctx);
-                swing_is_spell = true;
-            } else {
-                crate::spell::SpellCastEvent::insert(
-                    ctx,
-                    SpellCastEvent {
-                        is_interrupted: true,
-                        failure_reason: crate::spell::CAST_FAIL_NO_POWER,
-                        ..SpellCastEvent::signal_at(
-                            ctx,
-                            attacker,
-                            queued_spell,
-                            SpellCastEventKind::Interrupt,
-                        )
-                    },
-                );
-            }
-        }
-    } else if queued_spell != 0 {
-        swing_is_spell = true;
-    }
     let queued_fired = swing_is_spell && rolled > 0;
-    if queued_fired {
-        rolled += queued_strike_on_swing(ctx, attacker);
-    }
     clear_queued_strike(ctx, attacker_guid);
 
     crate::spell::break_stealth(ctx, attacker_guid);
@@ -491,6 +504,8 @@ fn fire_melee_swing(
         },
     );
     if swing_is_spell {
+        let cooldown_ms = queued_header.as_ref().map_or(0, |h| h.cooldown_ms);
+        crate::spell::start_spell_cooldown(ctx, attacker_guid, queued_spell, cooldown_ms);
         crate::spell::SpellCastEvent::insert(
             ctx,
             SpellCastEvent {
@@ -499,6 +514,7 @@ fn fire_melee_swing(
                 damage: if queued_fired { projected_swing } else { 0 },
                 is_crit: hit_info == HIT_CRIT,
                 swing_hit_info: hit_info,
+                cooldown_ms,
                 ..SpellCastEvent::signal_at(ctx, attacker, queued_spell, SpellCastEventKind::Go)
             },
         );
@@ -529,11 +545,8 @@ fn fire_melee_swing(
     )
     .combat_ended();
     if swing_is_spell {
-        let school_mask = ctx
-            .db
-            .game_spell()
-            .spell_id()
-            .find(queued_spell)
+        let school_mask = queued_header
+            .as_ref()
             .map_or(1, |spell| u32::from(spell.school_mask));
         crate::creatures::eventai_on_spell_hit(
             ctx,
@@ -548,7 +561,7 @@ fn fire_melee_swing(
     }
 
     // Arm Revenge after damage so a stale defender snapshot cannot erase its deadline.
-    if matches!(hit_info, HIT_DODGE | HIT_PARRY | HIT_BLOCK) {
+    if arms_revenge(hit_info, blocked) {
         arm_react(ctx, target_guid, ReactKind::Revenge);
     }
 
@@ -604,7 +617,7 @@ fn fire_ranged_shot(
                 disp
             }
             None => {
-                crate::combat::MeleeAttack::delete(ctx, attacker_guid);
+                crate::combat::MeleeAttack::end_auto_repeat(ctx, attacker_guid);
                 return;
             }
         }
@@ -728,5 +741,17 @@ mod damage_pipeline_drift_tests {
         assert_eq!(super::split_damage_projection(0, 5), (0, 0));
         assert_eq!(super::split_damage_projection(3, 5), (0, 3));
         assert_eq!(super::split_damage_projection(9, 5), (4, 5));
+    }
+}
+
+#[cfg(test)]
+mod revenge_tests {
+    use super::{arms_revenge, HIT_CRIT, HIT_DODGE, HIT_NORMAL};
+
+    #[test]
+    fn a_blocked_crit_arms_revenge() {
+        assert!(arms_revenge(HIT_CRIT, 30));
+        assert!(arms_revenge(HIT_DODGE, 0));
+        assert!(!arms_revenge(HIT_NORMAL, 0));
     }
 }
