@@ -2882,8 +2882,26 @@ impl PursuitSink for Scenario {
     fn casting(&self, guid: u64) -> bool {
         self.eventai_is_casting(guid)
     }
-    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32) {
-        self.commit_leg(guid, leg, now_ms);
+    fn commit_back_off(
+        &mut self,
+        guid: u64,
+        victim: u64,
+        to: (f32, f32),
+        dur_ms: u32,
+        now_ms: u32,
+    ) {
+        let z_fallback = self.at(guid).at.z;
+        self.commit_leg(
+            guid,
+            Leg {
+                to,
+                z_fallback,
+                dur_ms,
+                gait: Gait::Walk,
+                hold_until_landed: false,
+            },
+            now_ms,
+        );
         for committed in self.legs.borrow_mut().iter_mut() {
             if committed.guid == guid {
                 committed.back_off_from = victim;

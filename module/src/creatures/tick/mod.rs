@@ -456,6 +456,42 @@ pub(crate) fn emit_creature_path(
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn emit_creature_leg(
     ctx: &ReducerContext,
+    e: WorldEntity,
+    to: (f32, f32),
+    z_fallback: f32,
+    duration_ms: u32,
+    run: bool,
+    now_ms: u32,
+    set_leg_ends: bool,
+) {
+    emit_leg(
+        ctx,
+        e,
+        to,
+        z_fallback,
+        duration_ms,
+        run,
+        now_ms,
+        set_leg_ends,
+        0,
+    );
+}
+
+pub(crate) fn emit_back_off_leg(
+    ctx: &ReducerContext,
+    e: WorldEntity,
+    to: (f32, f32),
+    duration_ms: u32,
+    now_ms: u32,
+    victim: u64,
+) {
+    let z = e.z;
+    emit_leg(ctx, e, to, z, duration_ms, false, now_ms, false, victim);
+}
+
+#[allow(clippy::too_many_arguments)]
+fn emit_leg(
+    ctx: &ReducerContext,
     mut e: WorldEntity,
     to: (f32, f32),
     z_fallback: f32,

@@ -495,7 +495,6 @@ impl IdleSink for CtxWorld<'_> {
                 leg.gait == Gait::Run,
                 now_ms,
                 leg.hold_until_landed,
-                0,
             );
         }
     }
@@ -937,19 +936,16 @@ impl PursuitSink for CtxWorld<'_> {
     fn casting(&self, guid: u64) -> bool {
         crate::spell::is_non_melee_spell_casting(self.ctx, guid)
     }
-    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32) {
+    fn commit_back_off(
+        &mut self,
+        guid: u64,
+        victim: u64,
+        to: (f32, f32),
+        dur_ms: u32,
+        now_ms: u32,
+    ) {
         if let Some(e) = self.ctx.db.game_world_entity().guid().find(guid) {
-            tick::emit_creature_leg(
-                self.ctx,
-                e,
-                leg.to,
-                leg.z_fallback,
-                leg.dur_ms,
-                leg.gait == Gait::Run,
-                now_ms,
-                leg.hold_until_landed,
-                victim,
-            );
+            tick::emit_back_off_leg(self.ctx, e, to, dur_ms, now_ms, victim);
         }
     }
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {

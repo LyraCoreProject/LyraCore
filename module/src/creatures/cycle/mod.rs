@@ -369,7 +369,7 @@ pub(crate) trait PursuitSink {
     fn target_not_reachable(&mut self, _guid: u64) {}
     fn caster_hold_range(&self, guid: u64) -> f32;
     fn casting(&self, guid: u64) -> bool;
-    fn commit_back_off(&mut self, guid: u64, victim: u64, leg: Leg, now_ms: u32);
+    fn commit_back_off(&mut self, guid: u64, victim: u64, to: (f32, f32), dur_ms: u32, now_ms: u32);
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
@@ -1154,18 +1154,7 @@ fn back_off<W: IdleSink + PursuitSink>(
     let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
         return false;
     };
-    w.commit_back_off(
-        c.guid,
-        c.victim,
-        Leg {
-            to: (x, y),
-            z_fallback: c.at.z,
-            dur_ms,
-            gait: Gait::Walk,
-            hold_until_landed: false,
-        },
-        tick.now_ms,
-    );
+    w.commit_back_off(c.guid, c.victim, (x, y), dur_ms, tick.now_ms);
     true
 }
 
