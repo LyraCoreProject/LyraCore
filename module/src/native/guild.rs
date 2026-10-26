@@ -89,7 +89,11 @@ pub(super) fn receive(
             return Ok(super::send(ctx, id, packet, false)?);
         }
         C::CMSG_GUILD_CREATE(request) => (
-            create(&actor, actor.gm_level, request.guild_name),
+            create(
+                &actor,
+                crate::auth::gm_level(ctx, actor.account_id),
+                request.guild_name,
+            ),
             Reply::Silent,
         ),
         C::CMSG_GUILD_INVITE(request) => {
@@ -622,13 +626,13 @@ pub(super) fn dot_command(
     let character =
         crate::helpers::character_by_guid(ctx, actor.guid).ok_or("Character is not available")?;
     let result = (|| {
-        if character.gm_level == 0 {
+        let gm_level = crate::auth::gm_level(ctx, character.account_id);
+        if gm_level == 0 {
             return Err("permission denied".to_string());
         }
         let (leader_name, name) =
             parse_create(text).ok_or("usage: .guild create [<leader>] \"<name>\"")?;
         let account_id = character.account_id;
-        let gm_level = character.gm_level;
         let leader = match leader_name {
             Some(name) => crate::helpers::character_by_name(ctx, name)
                 .ok_or_else(|| format!("no player named {name}"))?,

@@ -62,6 +62,7 @@ pub struct Character {
 
     #[default(0u64)]
     pub pending_instance_id: u64,
+    // Legacy: debug_repair_after_publish moves a nonzero value onto the Account and zeroes it.
     #[default(0)]
     pub gm_level: u8,
 

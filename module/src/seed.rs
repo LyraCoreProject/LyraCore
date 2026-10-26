@@ -123,6 +123,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         identity: None,
         banned: false,
         alpha_test_tools: true,
+        gm_level: 3,
     });
 
     seed_createinfo_spells(ctx);
@@ -166,7 +167,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         respec_count: 0,
         death_expire_micros: 0,
         pending_instance_id: 0,
-        gm_level: 3,
+        gm_level: 0,
         pending_ghost: false,
         resting: false,
         rested_since_micros: 0,

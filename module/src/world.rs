@@ -315,8 +315,7 @@ fn is_gm_character(ctx: &ReducerContext, guid: u64) -> bool {
         .game_character()
         .guid()
         .find(guid)
-        .map(|c| c.gm_level != 0)
-        .unwrap_or(false)
+        .is_some_and(|c| crate::auth::gm_level(ctx, c.account_id) != 0)
 }
 
 pub(crate) struct MovementDelta {

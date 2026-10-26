@@ -1,7 +1,7 @@
 use spacetimedb::{log, reducer, table, ReducerContext, Table};
 
 use crate::helpers::require_operator;
-use crate::{game_character, game_world_entity};
+use crate::{game_account, game_character, game_world_entity};
 
 #[table(accessor = game_world_config, public)]
 pub struct GmWorldConfig {
@@ -219,32 +219,36 @@ pub(crate) fn parse_gm_command(text: &str) -> Result<GmCommand, String> {
 #[reducer]
 pub fn set_gm_level(ctx: &ReducerContext, character_name: String, level: u8) -> Result<(), String> {
     require_operator(ctx)?;
-    let chars = ctx.db.game_character();
-    let mut c = crate::helpers::character_by_name(ctx, &character_name)
+    let character = crate::helpers::character_by_name(ctx, &character_name)
         .ok_or_else(|| format!("no player named {character_name}"))?;
-    let guid = c.guid;
-    c.gm_level = level;
-    chars.guid().update(c);
-    log::info!("set_gm_level: {character_name} (guid {guid}) -> gm_level {level}");
+    let accounts = ctx.db.game_account();
+    let mut account = accounts
+        .id()
+        .find(character.account_id)
+        .ok_or_else(|| format!("{character_name} has no Account"))?;
+    let account_id = account.id;
+    account.gm_level = level;
+    accounts.id().update(account);
+    log::info!("set_gm_level: {character_name} (Account {account_id}) -> GM level {level}");
     Ok(())
 }
 
 pub(crate) fn apply_gm_command(
     ctx: &ReducerContext,
     caller: crate::WorldEntity,
-    alpha_test_tools: bool,
     text: String,
 ) -> Result<(), String> {
     let entities = ctx.db.game_world_entity();
     let mut caller = caller;
-    let gm_level = ctx
+    let authority = ctx
         .db
         .game_character()
         .guid()
         .find(caller.guid)
-        .map(|c| c.gm_level)
-        .unwrap_or(0);
-    let authority = gm_authority(gm_level, alpha_test_tools);
+        .and_then(|c| ctx.db.game_account().id().find(c.account_id))
+        .map_or(GmAuthority::None, |account| {
+            gm_authority(account.gm_level, account.alpha_test_tools)
+        });
     if !authority_accepts_command_name(authority, &text) {
         return Err("permission denied".to_string());
     }

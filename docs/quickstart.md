@@ -434,7 +434,7 @@ order, backups). None of that is what `lyracore dev up` gives you.
 ./lyracore import                    # replace the seed fixture with the real world (see above)
 ./lyracore config                    # show the remembered client-data path (unset by default)
 ./lyracore config set client-data PATH   # remember one, so `import` stops asking
-./lyracore character gm NAME true    # flip GM commands on for a character (false to revoke)
+./lyracore character gm NAME true    # flip GM commands on for the character's Account (false to revoke)
 ./lyracore update                    # pull the latest LyraCore and restart the stack (see below)
 ```
 

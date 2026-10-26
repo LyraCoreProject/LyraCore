@@ -68,7 +68,8 @@ Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not 
 auto-migrating publish, so this reducer re-arms the interval schedules, re-freezes Proc profiles,
 restores missing Auction expiries, re-tags legacy auction mail as Auction Mail before the Mail Timer
 pass (so a legacy "Auction won" is deleted, not returned), arms a Mail Timer for each Mail that has
-none and re-seeds the fixtures `init` seeds. `packages apply` calls it for each Shard it publishes.
+none, moves each legacy Character GM level onto its Account and re-seeds the fixtures `init`
+seeds. `packages apply` calls it for each Shard it publishes.
 A skipped call looks like a mid-session hang, not an error.
 
 The first run on a Shard with Mail from before the Mail Timer applies the vanilla 30-day rule

@@ -3,11 +3,11 @@ use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration}
 use crate::spell::stacking::game_spell_group;
 use crate::{
     game_auction, game_auction_expiry, game_aura, game_aura_schedule, game_breath_schedule,
-    game_character, game_createinfo_spell, game_creature_move_schedule, game_duel_schedule,
-    game_faction, game_gateway_lease_reaper_schedule, game_ground_area_schedule,
-    game_instance_reaper_schedule, game_item_template, game_motion_publish_schedule,
-    game_pet_care_schedule, game_spell, game_talent, AuctionExpiry, AuraSchedule, BreathSchedule,
-    CreatureMoveSchedule, DuelSchedule, GroundAreaSchedule, PetCareSchedule,
+    game_createinfo_spell, game_creature_move_schedule, game_duel_schedule, game_faction,
+    game_gateway_lease_reaper_schedule, game_ground_area_schedule, game_instance_reaper_schedule,
+    game_item_template, game_motion_publish_schedule, game_pet_care_schedule, game_spell,
+    game_talent, AuctionExpiry, AuraSchedule, BreathSchedule, CreatureMoveSchedule, DuelSchedule,
+    GroundAreaSchedule, PetCareSchedule,
 };
 
 #[reducer]
@@ -18,10 +18,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     crate::talent::seed_talents(ctx);
     let talents = ctx.db.game_talent().count();
 
-    if let Some(mut c) = ctx.db.game_character().guid().find(1) {
-        c.gm_level = 3;
-        ctx.db.game_character().guid().update(c);
-    }
+    let gm_levels = crate::auth::adopt_character_gm_levels(ctx);
 
     crate::seed::seed_createinfo_spells(ctx);
     let createinfo = ctx.db.game_createinfo_spell().count();
@@ -304,6 +301,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         + mail_timers
         + proc_profiles
         + legacy_auction_mail
+        + gm_levels
         + 3;
     crate::import_meta::stamp(ctx, "debug_repair_after_publish", "", "", total);
     log::info!("debug_repair_after_publish: repaired {total} fixture/schedule row(s), including missing Auction expiries and {mail_timers} Mail Timer(s)");

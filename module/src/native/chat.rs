@@ -82,16 +82,14 @@ pub(super) fn receive(
                 if super::guild::is_dot_command(&chat.message) {
                     return super::guild::dot_command(ctx, &actor, &chat.message);
                 }
-                return crate::gm::apply_gm_command(ctx, actor, false, chat.message).map_err(
-                    |cause| {
-                        Rollback::reply(
-                            ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
-                                codec::build_gm_system_message(cause.clone()),
-                            )),
-                            cause,
-                        )
-                    },
-                );
+                return crate::gm::apply_gm_command(ctx, actor, chat.message).map_err(|cause| {
+                    Rollback::reply(
+                        ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
+                            codec::build_gm_system_message(cause.clone()),
+                        )),
+                        cause,
+                    )
+                });
             }
             if matches!(kind, chat_kind::AFK | chat_kind::DND) {
                 return Ok(crate::away::apply_set_away(ctx, actor, kind, chat.message)?);

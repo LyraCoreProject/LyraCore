@@ -139,7 +139,7 @@ Setup. Import spell 7266 and its duel-flag gameobject. Two living same-faction C
 Tests: `guild_core.rs`, `guild_membership.rs`, `guild_chat.rs`, `guild_settings.rs`,
 `guild_petition.rs`, `guild_cleanup.rs`. Scenarios: `check_guild`, `check_petitions`.
 
-Setup. GM (GM level above 0), Alpha (level 20 or higher, in Stormwind at a Tabard Designer, 11
+Setup. GM (an Account with a GM level above 0), Alpha (level 20 or higher, in Stormwind at a Tabard Designer, 11
 gold or more) and Beta (level 20 or higher, inside the Deadmines), each on its own Account. A
 Petitioner that sells Guild Charters (item 5863). The Charter step needs nine more Characters or
 Headless Clients.

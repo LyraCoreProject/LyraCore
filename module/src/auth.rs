@@ -21,6 +21,8 @@ pub struct Account {
     pub banned: bool,
     #[default(true)]
     pub alpha_test_tools: bool,
+    #[default(0)]
+    pub gm_level: u8,
 }
 
 #[table(accessor = game_alpha_test_tools_enrollment)]
@@ -71,6 +73,7 @@ pub(crate) fn ensure_shadow_account(ctx: &ReducerContext, account_id: u64) {
         identity: None,
         banned: false,
         alpha_test_tools: false,
+        gm_level: 0,
     });
 }
 
@@ -241,6 +244,7 @@ pub fn provision_account(
                     None,
                     current_alpha_test_tools_enrollment(ctx),
                 ),
+                gm_level: 0,
             });
         }
     }
@@ -296,6 +300,30 @@ pub fn grant_alpha_test_tools(ctx: &ReducerContext, account_name: String) -> Res
 pub fn revoke_alpha_test_tools(ctx: &ReducerContext, account_name: String) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     set_account_alpha_test_tools(ctx, &account_name, false)
+}
+
+pub(crate) fn gm_level(ctx: &ReducerContext, account_id: u64) -> u8 {
+    ctx.db
+        .game_account()
+        .id()
+        .find(account_id)
+        .map_or(0, |account| account.gm_level)
+}
+
+pub(crate) fn adopt_character_gm_levels(ctx: &ReducerContext) -> u64 {
+    let characters = ctx.db.game_character();
+    let accounts = ctx.db.game_account();
+    let legacy: Vec<Character> = characters.iter().filter(|c| c.gm_level != 0).collect();
+    let adopted = legacy.len() as u64;
+    for mut character in legacy {
+        if let Some(mut account) = accounts.id().find(character.account_id) {
+            account.gm_level = account.gm_level.max(character.gm_level);
+            accounts.id().update(account);
+        }
+        character.gm_level = 0;
+        characters.guid().update(character);
+    }
+    adopted
 }
 
 #[cfg(test)]
