@@ -1,546 +1,328 @@
-# Schema — the SpacetimeDB data model
+# Schema
 
-This document is a *map* of the data model, not a copy of it. **The code is authoritative**: every table is a Rust `#[table]` struct in
-`module/src/**` — or in an extension package compiled into the same module — and where a snippet here
-and the code disagree, the code wins.
+This page is a map of the data model, not a copy of it. Every table is a Rust `#[table]` struct in
+`module/src/**`, or in a Package compiled into the same Module. Where this page and the code
+disagree, the code wins. Read a struct for its columns; this page records what the struct cannot
+say: invariants, why a column exists and ordering rules.
 
-Start at [`architecture.md`](./architecture.md) for how these tables fit into the system.
-[`danger-zones.md`](./danger-zones.md) §1.2 is authoritative for migrations.
-
-> **Historical note.** Until this rewrite, this document described the ten tables of the 2026-06
-> vertical slice, and included two tables — `game_opcode_route` and `game_event_smsg_map` — that
-> were designed but **never built**. The gateway's opcode routing is a `match` in
-> `gateway/src/world/mod.rs`, not a config table. Those two entries have been removed rather than
-> corrected.
-
----
+[`architecture.md`](./architecture.md) explains how the tables fit into the runtime.
+[`danger-zones.md`](./danger-zones.md) §1.2 is the authority for migrations.
 
 ## 1. Conventions
 
-- **Naming.** Core tables take the `game_` prefix; package tables take `pkg_<name>_`. External gtker
-  crates keep their `wow_` names and are never renamed.
+- **Naming.** Core tables take the `game_` prefix; Package tables take `pkg_<name>_`. External
+  gtker crates keep their `wow_` names.
 - **`accessor`** is the Rust identifier the macro exposes as `ctx.db.<accessor>()`. SpacetimeDB 2.x
-  syntax: `#[table(accessor = …)]` (1.x's `name =` was renamed), with all indexes declared inside the
-  single `#[table(…)]` attribute.
-- **Visibility.** `public` = subscribable by a client connection. Omitting it makes the table
-  **private** — only the database owner (the gateway's coordinator connection) can read it.
-- **RLS.** The module declares no `#[client_visibility_filter]` today; §4 says why, and what a new
-  one would still have to satisfy. `module/Cargo.toml` keeps SpacetimeDB's `unstable` feature
-  pinned, because the attribute needs it.
-- **Migration discipline.** Every table is designed to grow by **END-appending** a column with an
-  explicitly typed `#[default(...)]`. Ordering-sensitive data uses explicit sequence or timestamp
-  columns, never auto-inc ordering.
+  syntax is `#[table(accessor = …)]`, with every index declared inside that one attribute.
+- **Visibility.** `public` means any connection can subscribe to the table. Without it the table
+  is private, and only the Shard's owner can read it. The Native Host connects in process as that
+  owner.
+- **RLS.** The Module declares no `#[client_visibility_filter]`; §4 says why. `module/Cargo.toml`
+  keeps SpacetimeDB's `unstable` feature, because the attribute needs it.
+- **Migration discipline.** Every table grows by END-appending a column with an explicitly typed
+  `#[default(...)]`. Ordering-sensitive data uses explicit sequence or timestamp columns, never
+  auto-inc ordering.
 
-### The three migration rules that have actually bitten
+### The three migration rules that have bitten
 
-1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64` column
-   encodes as a 4-byte i32 and the publish migration rejects it (`data too short for u64`). Write
-   `#[default(0u64)]`. See the typed field defaults in `module/src/character.rs`.
-2. **`#[default(...)]` cannot default a `String`.** The macro type-checks the expression in a const
-   block, and dropping a `String` in const-evaluated Rust is `error[E0493]` on stable. This is a Rust
-   limitation, not a repo convention. Put new string data in a **new table** instead — the same
-   one-row-plus-child-rows shape the codebase already uses (`game_creature_waypoint`,
-   `game_npc_text_slot`).
-3. After a schema change, run `./lyracore bindings`. The generated Rust files stay outside the
-   source tree. Use the generator's field names, including digit separators. See `danger-zones.md`
-   §1.2. `gateway/tests/schema_parity.rs` checks every Coordinator subscription against the Module
-   schema.
-
-And the one that is not about a single table: **a schema change must reach every shard.** A partial
-publish presents as an unrelated mid-session hang, not a loud "no such table".
-
----
+1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`
+   column encodes as a 4-byte i32, and the publish migration rejects it (`data too short for
+   u64`). Write `#[default(0u64)]`. See the typed field defaults in `module/src/character.rs`.
+2. **`#[default(...)]` cannot default a `String`.** The macro type-checks the expression in a
+   const block, and dropping a `String` in const-evaluated Rust is `error[E0493]` on stable. Put
+   new string data in a new table, the one-row-plus-child-rows shape that `game_creature_waypoint`
+   and `game_npc_text_slot` use.
+3. **Native reducer arguments are a binary contract.** The Native Host passes them as BSATN with
+   no field names, and shares the `game_native_cipher` and `game_native_packet` layouts with the
+   Module. Change both sides together and run the native protocol check. `./lyracore dev watch`
+   refuses any change to reducer arguments or private tables.
 
 ## 2. Inventory
 
-**285 tables**, all of them in `module/src/**`: 128 public, 157 private. No table comes from a
-Package in this tree. Packages are installed separately. Recount
-rather than trust the numbers below, which drift on every schema change. The pattern matches both
-`#[table(...)]` and the fully qualified `#[spacetimedb::table(...)]`; missing the second form
-undercounts. The second command lists the tables per file, which is what the rows below add up:
+Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully
+qualified `#[spacetimedb::table(...)]`; missing the second form undercounts.
 
 ```bash
-grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l   # 288 on 2026-10-07
-grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # tables per file
+grep -rEn '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | wc -l
+grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':0$'  # per file
 ```
 
-| Domain | Tables | Public | Where |
-|---|---:|---:|---|
-| Auth / session / identity | 11 | 0 | `auth.rs`, `account_ownership.rs`, `sessionless.rs` |
-| Character and per-character progression | 23 | 19 | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `graveyard.rs` |
-| World entity and movement | 8 | 3 | `world.rs`, `motion.rs` |
-| Terrain / nav / exact vmap | 10 | 6 | `terrain.rs`, `nav.rs`, `vmap.rs` |
-| Chat / social / addon bridge | 19 | 9 | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat / threat / duel | 10 | 4 | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
-| Spell / aura | 21 | 10 | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
-| Quest | 13 | 8 | `quest.rs` |
-| Item / vendor / trade / mail | 20 | 8 | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
-| Auction house | 8 | 2 | `auction.rs` |
-| Creature (template, spawn, AI, pet, trainer) | 42 | 17 | `creatures/*`, `trainer.rs` |
-| GameObject | 10 | 6 | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
-| Loot | 13 | 6 | `loot/*` |
-| Group / party | 8 | 5 | `group.rs` |
-| Meeting stones | 4 | 0 | `meeting_stone/mod.rs` |
-| Guild | 9 | 0 | `guild/mod.rs`, `guild/fee.rs`, `guild/membership.rs`, `guild/petition.rs` |
-| Instance / encounter | 8 | 1 | `instance.rs`, `encounter.rs` |
-| Sharding: region, transfer, load | 9 | 0 | `region.rs`, `transfer/mod.rs`, `load.rs` |
-| Realm-core | 2 | 0 | `realm_core.rs` |
-| Gateway leases | 3 | 0 | `gw.rs` |
-| Taxi | 5 | 1 | `taxi.rs` |
-| Transport | 3 | 1 | `transport/mod.rs` |
-| Weather | 3 | 1 | `weather.rs` |
-| Packages | 5 | 1 | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
-| Event GC | 1 | 0 | `gc.rs` |
-| Config / static data / diagnostics | 22 | 21 | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
+| Domain | Where |
+|---|---|
+| Auth, Sessions, guid allocation | `auth.rs`, `account_ownership.rs`, `sessionless.rs` |
+| Native connections, admission and AOI Grants | `native/mod.rs`, `native/logon.rs`, `native/admission.rs`, `native/member_stats.rs`, `aoi.rs` |
+| Character and per-Character progression | `character.rs`, `skill.rs`, `reputation.rs`, `talent.rs`, `spell/spellbook.rs`, `action_bar.rs`, `combo.rs`, `rest.rs`, `corpse.rs`, `xp.rs`, `exploration.rs`, `breath.rs`, `breath_relay.rs`, `fatigue.rs`, `graveyard.rs` |
+| World entity and movement | `world.rs`, `motion.rs` |
+| Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
+| Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
+| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
+| Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
+| Quest | `quest.rs` |
+| Item, trade and mail | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |
+| Auction house | `auction.rs` |
+| Creature (template, spawn, AI, pet, trainer) | `creatures/*`, `trainer.rs`, `gossip.rs` |
+| GameObject | `gameobject.rs`, `go_model.rs`, `go_collider.rs` |
+| Loot | `loot/*` |
+| Group, Meeting Stones and Guild | `group.rs`, `meeting_stone/mod.rs`, `guild/*` |
+| Instance and encounter | `instance.rs`, `encounter.rs` |
+| Taxi, Transport and weather | `taxi.rs`, `transport/mod.rs`, `weather.rs` |
+| Packages | `package_account.rs`, `package_config.rs`, `package_import.rs`, `package_teardown.rs`, `script_binding.rs` |
+| Event GC | `gc.rs` |
+| Config, static data and diagnostics | `config.rs`, `gm.rs`, `faction.rs`, `skilldata.rs`, `stats.rs`, `import_meta.rs`, `debug/*` |
+| Guid ranges and retired coordination | `realm_core.rs`, `gw.rs`, `region.rs`, `load.rs`, `transfer/mod.rs` |
 
-Two shapes recur and are worth naming:
+`claim_guid_range` in `realm_core.rs` installs the Realm's guid range. The other tables in that
+last row held multi-Shard routing, Gateway leases, load samples and cross-Shard Transfers. They
+stay because dropping a table is a destructive migration. Native requests do not route through
+them.
 
-- **`[static]` / catalogue tables** — `game_item_template` (17,720 rows), `game_spell`,
-  `game_spell_effect`, `game_creature_template`, `game_quest_*`, `game_faction*`, the three
-  `game_taxi_*` tables, and other DBC-derived reference data. Written only by the importer,
-  replicated identically to every shard, and checked for skew by the maintainers' cross-shard
-  catalogue-parity check. Per-player connections are gone
-  (#483) — there is now exactly one connection per database, so a catalogue is read into exactly one
-  cache copy by construction. See §5 for why that used to need enforcing.
-- **`[event]` tables** — transient outbound signals that cannot be derived from a row diff (a
-  movement relay carries the *animation opcode*, which field sync cannot). Inserted inside the
-  transaction that caused them and reaped ~1 s later. Delivery is the insert delta; the row itself is
-  not a mailbox.
+Two shapes recur:
 
----
+- **Catalogue tables**: `game_item_template`, `game_spell`, `game_spell_effect`,
+  `game_creature_template`, `game_quest_*`, `game_faction*`, the three `game_taxi_*` tables and
+  other DBC-derived reference data. Only the importer writes them.
+- **Event tables**: transient outbound signals that a row diff cannot carry, such as a movement
+  Relay's animation opcode. The Module inserts them inside the transaction that caused them. The
+  `*_live` tables are SpacetimeDB event tables and keep no rows; older event tables are reaped by
+  `gc.rs` about one second later. See [Native Relay events](./danger-zones.md#native-relay-events).
 
-## 3. The load-bearing tables
+## 3. Tables with rules the struct cannot show
 
-Read the structs; this section gives you the shape and the reason.
+### Taxi catalogue (`module/src/config.rs`)
 
-### `game_taxi_node` / `game_taxi_path` / `game_taxi_path_node` (`module/src/config.rs`)
+`game_taxi_node`, `game_taxi_path` and `game_taxi_path_node` are public rows imported from the
+Operator's `TaxiNodes.dbc`, `TaxiPath.dbc` and `TaxiPathNode.dbc`. A node's `id` is its storage key
+and `client_node_id` is its unique wire id in the client's fixed 256-bit taxi mask. Imported nodes
+use their DBC id for both; reserved fixtures keep 509xxxx storage ids with bounded synthetic wire
+ids. Paths are directed edges with their fare in copper; the reverse direction exists only when the
+DBC has a second row. Path nodes keep explicit `(path_id, node_index)` order. `flags` stays the DBC's
+signed `int32` container so every raw bit survives, and `delay_ms` holds the DBC's seconds in
+milliseconds. The importer validates references, wire-id bounds and collisions, and duplicate
+ordinals before it writes. It replaces nodes first, paths second and path nodes last, so a
+successful rerun removes stale geometry.
 
-Public static catalogue rows imported from the operator's `TaxiNodes.dbc`, `TaxiPath.dbc`, and
-`TaxiPathNode.dbc`. A node's `id` is its storage key and `client_node_id` is its unique wire id in
-the vanilla client's fixed eight-word (256-bit) taxi mask. Imported nodes use their DBC id for both;
-reserved fixtures keep 509xxxx storage ids but use bounded synthetic wire ids. Nodes also retain map
-position, name, and the Horde/Alliance mount-display pair. Paths are directed source-to-destination
-edges with their fare in copper; the reverse direction is present only when the DBC contains a
-second row. Path nodes keep their stable DBC id and explicit `(path_id, node_index)` order, plus map
-position, flags, and delay. `flags` remains the DBC's signed `int32` container so every raw bit
-survives; `delay_ms` holds the DBC's seconds in milliseconds, and the importer rejects negative
-time. The importer validates references, wire-id bounds/collisions, and duplicate ordinals before
-writing, then replaces the family point-first/path-second/node-last so a successful rerun removes
-stale geometry.
+### Transports (`module/src/transport/mod.rs`)
 
-### `game_transport` / `game_transport_passenger` / `game_transport_carry_schedule` (`module/src/transport/mod.rs`)
+`game_transport` is a public catalogue with one row per imported single-map route. A Transport's
+position is a function of the Realm Clock and its timetable, so no row stores it.
+`game_transport_passenger` is private and holds one row per Passenger with its offset on the
+Transport. Leaving the Transport, a teleport or leaving the world deletes the row.
+`game_transport_carry_schedule` has one 500 ms schedule per Transport with Passengers; it deletes
+itself when none remain.
 
-`game_transport` is a public catalogue of Transports, one row per imported single-map route. It
-keeps the GameObject display and flags, the TaxiPath, speed, acceleration, cycle period and map. A
-Transport's position is a function of the Realm Clock and its timetable, so no row stores it.
-`game_transport_passenger` is private and holds one row per Passenger: the Transport and the
-Passenger's offset on it. Leaving the Transport, a teleport or leaving the world deletes the row.
-`game_transport_carry_schedule` has one 500 ms schedule per Transport with Passengers. Each firing
-moves its Passengers' world positions with the Transport and deletes the schedule when none remain.
+### Taxi flights (`module/src/taxi.rs`)
 
-### Taxi progression, schedule, spline, and service tables (`module/src/taxi.rs`)
+`game_character_taxi_node` is private, durable taxi progression: one row per known node, by storage
+id. Opening a nearby friendly flight master discovers its node idempotently; a status query only
+reads.
 
-`game_character_taxi_node` is a private module table containing durable, character-scoped taxi
-progression. Each row records a known catalogue node by its server storage id. Opening a nearby,
-living, selectable, friendly flight master discovers its source node idempotently; a status query
-only reads this state. The table participates in character deletion and shard transfer, and remints
-its local surrogate id at the destination. The gateway does not subscribe or read it.
+`game_active_taxi_flight` has at most one row per Character, because `character_guid` is its
+primary key. A successful activation creates the row in the same transaction that deducts the
+fare, so a duplicate activation sees the row before it can charge again. The Module queues the
+activation reply before it arms the flight schedule. `game_taxi_flight_schedule` drives the 250 ms
+route clock. The public `game_taxi_passenger_spline` row carries the remaining route to the owner
+and AOI observers, and is refreshed when the passenger changes AOI cell.
 
-`game_active_taxi_flight` is private and has one row at most per character because
-`character_guid` is its primary key. A successful direct-route activation creates the row in the
-same serialized transaction that deducts the imported fare. It records the storage ids for the path
-and endpoints, the selected mount display, the paid fare, the starting point cursor, and the start
-time. The gateway queues the successful activation reply before an idempotent arm reducer sets the
-live mount/flight flag and starts the schedule. Duplicate activation therefore sees
-the existing row before it can charge again. Character deletion removes the row. It is explicitly
-not transported because supported baseline flights are confined to one open-world shard.
+### `game_world_entity` (`module/src/world.rs`)
 
-`game_taxi_flight_schedule` drives the 250 ms authoritative route clock. The public
-`game_taxi_passenger_spline` row carries the current remaining route to the owner and visibility-
-checked AOI observers; it is refreshed whenever the passenger changes AOI cell.
+Public. One row per Character in the world and per spawned creature. Login creates it; disconnect
+deletes it. It is the visibility source and the descriptor source for `SMSG_UPDATE_OBJECT`.
 
-`game_taxi_service_reply` is a private transient request/reply seam between the gateway and the
-module. The owner-token coordinator subscribes it; ordinary clients cannot. The gateway sends a
-status, open, or activation request with a unique request id, and the module writes an independently
-keyed reply, so overlapping requests for one character cannot overwrite each other before
-observation. Each observed row is acknowledged and deleted by an operator-gated reducer. Writes
-also reap crash
-leftovers older than 60 seconds, while never deleting a young unobserved row regardless of overlap.
-The module owns NPC, range, reaction, discovery, topology, and direct-route policy. Replies expose
-client node ids for the fixed 256-bit wire mask while catalogue paths and discoveries keep storage
-ids. Activation replies also carry a stable numeric result which the gateway maps directly to the
-closest vanilla `ActivateTaxiReply`; refusal prose remains diagnostic. The mailbox is deleted with
-the character but is not transported, so a stale request can never become progression on the
-destination shard.
+- `by_grid` has four columns, `(map_id, instance_id, grid_x, grid_y)`. `instance_id` is in the key
+  because an Instance is its own spatial partition.
+- `by_cell` serves AOI. SpacetimeDB 2.7.1 serves that subscription only with three
+  equality-indexed columns, `(map_id, instance_id, cell)`.
+- `by_owner` turns the owner lookup in `helpers::entity_by_owner` into an index probe.
 
-### `game_world_entity` — the live in-world row (`module/src/world.rs:20`)
+Never `.iter()` this table or the other spatial tables; see [danger zones](./danger-zones.md) §1.7.
+`game_entity_motion` and `game_creature_spline` carry the same grid and cell keys.
+`game_gameobject`'s grid key has three columns, without `instance_id`.
 
-Public. One row per player *currently in the world* and per spawned creature. Created at login,
-deleted at disconnect or on transfer-out. It is both the visibility source and the descriptor source
-for `SMSG_UPDATE_OBJECT`.
-
-```rust
-#[table(
-    accessor = game_world_entity,
-    public,
-    index(accessor = by_map,   btree(columns = [map_id])),
-    index(accessor = by_grid,  btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    index(accessor = by_owner, btree(columns = [owner_identity]))
-)]
-pub struct WorldEntity { /* ~50 columns; see the source */ }
-```
-
-Hunter pets keep a separate durable identity in `game_hunter_pet`. A materialized pet is an ordinary
-owned `game_world_entity`, classified by `game_live_pet_kind`; summoned demons use the same live
-creature behavior but have no Hunter identity or care state. `game_hunter_pet_protocol` is the
-bounded owner-facing gateway projection. Taming retires the current wild entity and arms its
-authored `game_creature_spawn` for a later respawn, so the spawn point is not transferred into or
-deleted with the pet identity.
-
-Column groups: identity/control (`guid`, `owner_identity`, `account_id`), spatial (`map_id`,
-`instance_id`, `x/y/z/orientation`, `grid_x`, `grid_y`, `last_move_ms`), the object block
-(`type_mask`, `entry`, `scale_x`), the unit block (health/power/level/faction/display/mount/flags/attack
-time/dynamic flags), the player block (appearance bytes, flags, xp, money, the five base stats,
-armor), the current `target_guid`, and the creature-movement cursor.
-
-`mount_display_id` carries `UNIT_FIELD_MOUNTDISPLAYID` for **both** mounted mechanics, and the module
+`mount_display_id` carries `UNIT_FIELD_MOUNTDISPLAYID` for both mounted mechanics, and the Module
 decides which one owns it:
 
-- **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display and
-  sets `UNIT_FLAG_TAXI_FLIGHT` in the existing `unit_flags` word; landing clears both. The gateway
-  relays that pair in one OBJECT_FIELD_TYPE-free partial VALUES mask, so self and observers see one
-  coherent flight presentation. Route progress is never stored in `game_creature_spline`; it belongs
-  to the separate active-flight row.
-- **Land mount** owns the field the rest of the time. Here the field is a *projection*, not a state
-  machine: the `A_MOUNTED` aura row is the mounted state, and `mount::recompute_mount` re-derives both
-  `mount_display_id` and `run_speed_mult_bp` from the target's current aura set. Every aura removal
-  path converges on that one recompute, so cancel, expiry, dispel, unlearn and each explicit dismount
-  trigger land on the same end state. A land mount never sets `UNIT_FLAG_TAXI_FLIGHT`, and the gateway
-  relays it through a standalone single-field VALUES builder. Both mount entry points refuse a player
-  in flight, so land-mount cleanup can never clear a taxi presentation.
+- **Taxi flight** owns the field for the whole flight. Activation writes the faction mount display
+  and sets `UNIT_FLAG_TAXI_FLIGHT` in `unit_flags`; landing clears both. The pair goes out in one
+  partial VALUES mask without `OBJECT_FIELD_TYPE`. Route progress belongs to the active-flight row,
+  never to `game_creature_spline`.
+- **Land mount** owns it the rest of the time, as a projection. The `A_MOUNTED` aura row is the
+  mounted state, and `mount::recompute_mount` derives `mount_display_id` and `run_speed_mult_bp`
+  from the current aura set. Every aura removal path ends in that one recompute. A land mount never
+  sets `UNIT_FLAG_TAXI_FLIGHT`, and both mount entry points refuse a Character in flight.
 
-`run_speed_mult_bp` is the same kind of projection while a land mount is active: it holds the exact
-effective multiplier from the shared move-speed fold (16000 for a nominal 60% mount), and the existing
-subscription diff turns a change into `SMSG_FORCE_RUN_SPEED_CHANGE`.
+`run_speed_mult_bp` holds the effective multiplier from the shared move-speed fold while a land
+mount is active (16000 for a nominal 60% mount). A change becomes `SMSG_FORCE_RUN_SPEED_CHANGE`.
 
-Three indexes, each earning its keep:
-- `by_grid` is the AOI range scan. Note it is **four** columns — `instance_id` is in the key, because
-  an instance is its own spatial partition.
-- `by_owner` exists because `entity_by_owner` is the auth prologue of ~77 player reducers and was a
-  full table scan per transaction before it.
-- `by_map` is the coarse map filter.
+Hunter pets keep a durable identity in `game_hunter_pet`. A materialized pet is an ordinary owned
+`game_world_entity`, classified by `game_live_pet_kind`; summoned demons have no Hunter identity or
+care state. Taming retires the wild entity and arms its authored `game_creature_spawn` for a later
+respawn, so the spawn point never moves into the pet identity.
 
-**Never `.iter()` this table** (nor `game_creature_spawn`, `game_gameobject`,
-`game_dynamic_object`). Use `helpers::entities_near` / `helpers::in_same_partition`. A whole-table
-scan on a sharded realm silently returns a subset rather than erroring, and every feature built on
-"I can see the whole world" quietly goes wrong. Enforced by
-`module/src/tripwires.rs::partition_discipline_tripwire` against a whitelist that only ever shrinks.
+### `game_character` (`module/src/character.rs`)
 
-Six sibling tables carry the **identical** `(map_id, instance_id, grid_x, grid_y)` key so they can
-ride the same AOI box: `game_entity_motion`, `game_creature_spline`, `game_combat_event_live`,
-`game_spell_cast_event_live`, `game_spell_impact_event_live`, `game_emote_event_live`.
-`game_roll_event` keeps the same key, but nothing writes it: `/roll` is a Group Broadcast.
-`game_gameobject`'s grid key is only three columns (no `instance_id`).
+Public. It exists whether or not the Character is online, so an offline Character costs no live
+world machinery. `owner_identity` is `Identity::ZERO` until `establish_session` binds it.
 
-### `game_character` — the durable character (`module/src/character.rs:7`)
+### Accounts and Sessions (`module/src/auth.rs`, `module/src/account_ownership.rs`)
 
-Public + RLS. Exists whether or not the player is online; distinct from `game_world_entity` so an
-offline character costs no live-world machinery. Carries appearance, position, level/xp, money,
-rested-xp pool, hearthstone home, played-time accounting, and the persisted health/power snapshot.
-`owner_identity` is `Identity::ZERO` until bound at `establish_session`.
+All private. `game_account` holds the SRP6 salt and verifier, never a password, and the Account's
+Alpha Test Tools authority. New Accounts copy `game_alpha_test_tools_enrollment`, which starts
+enabled; changing enrollment never changes an existing Account. `game_session` holds the SRP6
+session key K. A row is valid for one hour from its logon (`expires_at`): world authentication
+refuses an expired row like an absent one, and `reap_sessions` deletes expired rows every five
+minutes. `game_operator` is a singleton holding the one Operator identity, captured by
+`claim_operator`.
 
-### `game_account` / `game_alpha_test_tools_enrollment` / `game_session` / `game_operator` (`module/src/auth.rs`)
-
-All four are **private**. `game_account` holds SRP6 salt and verifier, never a password. It also
-holds the Account's Alpha Test Tools authority. Existing Accounts receive that authority through an
-end-appended default. New Accounts copy `game_alpha_test_tools_enrollment`, which starts enabled;
-changing enrollment never changes an existing Account.
-`game_session` holds the SRP6 session key **K**, which is what makes gateways stateless: the logon
-flow writes it, and any world gateway can read it to complete the handshake. A row is valid for
-one hour from its logon (`expires_at`): the handshake refuses an expired row like an absent one,
-and `reap_sessions` deletes expired rows every five minutes. `game_operator` is a singleton
-holding the one trusted operator identity, captured (not derived) by `claim_operator`.
-
-On a realm-core deployment these live on realm-core, and the world shards' copies are downgraded to
-a **write-through cache that is never read for auth**: a world shard's own `game_account`/
-`game_session` rows are overwritten on every logon but never consulted for the SRP6 challenge, the
-session write, or the handshake's K lookup — realm-core is the only handle those ever use. If
-realm-core is configured and unreachable, the gateway fails closed (refuses logons) rather than
-falling back to the cache.
-
-The same boundary applies to Alpha Test Tools. For each dot-Say command, the Gateway reads the
-current Account value from Realm-core, then conveys it to the Character's Home Shard in one Durable
-Request. The Module makes the final Gate with that value and the Character's GM level. No
-Character-side authority projection exists.
-
-`auth.rs` also carries a `ensure_shadow_account` path: an instance or continent shard has no real
-account row, so a transferred character gets an index-entry row with empty salt and verifier. It can
-never satisfy an SRP proof; it exists only to carry the identity binding.
-
-### `game_account_claim` / `game_account_fence` / `game_account_character_owner` (`module/src/account_ownership.rs`)
-
-All three tables are private. The Account Claim and Account Fence are keyed by the Realm-core Account
-id. The Account Claim stores its Character guid, generation, request nonce, expiration and closed
-state. The Account Fence also stores the Account name, since a World Shard's local Account id can
-differ from Realm-core's id. Closed rows remain so an old request cannot lower a generation or
-reopen a completed claim. The Gateway lease schedule closes expired claims. Releasing, replacing or
-closing a claim ends its Character's Channel Memberships (`module/src/channel.rs`).
-The Account Character Owner table is keyed by Character guid and stores the exact Realm Account id
-and name. It permits a documented shadow Account to carry a transferred Character without making
-the shard-local Account id authoritative. Conflicting real Account names still refuse admission.
-These rows remain across logout, Transfer and Character deletion. Character guids are globally
-unique and never reused, so retained rows are ownership tombstones rather than live Character state.
-
-The Account Character Owner is an additive table, so it needs no column default. First admission
-validates ownership before fencing and removing prior live Characters of that Account on each World
-Shard. An upgraded Shard can backfill the exact Character named by its current Account Fence; older
-multi-Character ownership cannot be reconstructed from shard-local Account ids. A shadow Character
-with neither retained ownership nor an exact prior fence continues to refuse admission. There is no
-automatic repair command. Repair requires independently established Realm ownership and a separate
-review of the Operator data migration; it must never infer ownership from a numeric shadow Account
-id. Gateway and Module request arguments carry a `SessionActor`; queued
-`GwMove` entries carry the same value. Operator requests for Characters without a World Session
-supply no token, and cannot act as a Character with an active Account Claim or Account Fence.
-Each retained-owner or real-Account cleanup reads at most 4,097 rows and refuses when an Account
-already has more than 4,096. It never truncates cleanup. Raising the ceiling or compacting retained
-rows requires a separately reviewed Operator data migration.
-
-Stop serving World Sessions on every Gateway before publishing. Install the matching Module on
-Realm-core and every configured World Shard and Instance Pool, then restart only matching Gateways.
-Existing live Characters have no initial fence. First admission removes those legacy live copies only
-after their ownership checks pass. This schema and reducer ABI change requires human review under
-`danger-zones.md`.
-
-External Headless Client adapters must send the new `SessionActor` shape too. Cleanup for a running
-fixture Character carries the intended World Session's token. Null ownership deliberately refuses
-an active owner. Stop or log out that World Session first, or retain its token for the cleanup; do
-not refresh a stale cleanup token to target a replacement owner. Operator requests for a Character
-whose ownership has closed or expired can use null ownership.
+`game_account_character_owner` is keyed by Character guid and stores the exact Account id and name.
+Its rows remain across logout and Character deletion. Character guids are never reused, so retained
+rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
+already has more than 4,096; it never truncates. `game_account_claim` and `game_account_fence` are
+legacy Gateway rows. Operator reducers that act for a Character take a `SessionActor`; a null
+ownership refuses a Character with an active Account Claim or Account Fence.
 
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
-`game_chat_event_live` is the public native event row for one say, yell, `/e` or creature line on the
-speaker's own Shard. The Gateway scopes it to listeners in range when it relays it. Only
-`apply_send_chat` (a Character) and `apply_send_chat_to` (EventAI) write it. A Character's line
-passes the language Gate first.
+`game_chat_event_live` is the event row for one say, yell, `/e` or creature line. The chat handler
+selects listeners in range. Only `apply_send_chat` (a Character) and `apply_send_chat_to` (EventAI)
+write it, and a Character's line passes the language Gate first.
 
-`game_realm_chat_event` (private, `[event]`) is one Realm Chat Line: a party, raid, raid leader,
-raid warning, guild, officer, channel or whisper line, committed on Realm-core with its whole
-recipient list, its Chat Kind, language, chat tag and an `ignorable` flag. A whisper writes several
-rows: the line, the sender's echo, and an Auto-Reply or "is ignoring you" line when one applies.
-`realm_chat::emit` is its only writer. An addon-language line keeps its payload untrimmed.
+`game_realm_chat_event` (private event) is one Realm Chat Line: party, raid, raid leader, raid
+warning, guild, officer, channel or whisper, with its whole recipient list, Chat Kind, language,
+chat tag and an `ignorable` flag. A whisper writes several rows: the line, the sender's echo, and
+an Auto-Reply or "is ignoring you" line when one applies. `realm_chat::emit` is its only writer. An
+addon-language line keeps its payload untrimmed.
 
-`game_character_away` (private, `module/src/away.rs`) holds the Auto-Reply of a Character with an
-Away Status, keyed by Character guid on its Home Shard. The `PLAYER_FLAGS` bit on the live entity is
-what observers see; both change in one transaction. Login clears it, and it travels with Transfer.
+`game_character_away` (`module/src/away.rs`) holds the Auto-Reply of a Character with an Away
+Status. The `PLAYER_FLAGS` bit on the live entity is what observers see; both change in one
+transaction, and login clears them.
 
-Four private tables on Realm-core hold the Chat Channels. `game_chat_channel` is one channel, keyed
-by team and lowercase name, with the creator's spelling, owner, password and flags.
-`game_chat_channel_member` is one Channel Membership; its `id` is join order. `game_chat_channel_ban`
-holds bans. `game_chat_channel_notice_event` (`[event]`) is one Channel Notice with its recipients.
-`realm_channel_op` is the one reducer for every channel op, with an op byte. The last member leaving
-deletes the channel with its password and bans.
+`game_chat_channel` is one Chat Channel, keyed by team and lowercase name, with the creator's
+spelling, owner, password and flags. `game_chat_channel_member` is one Channel Membership; its `id`
+is join order. `game_chat_channel_ban` holds bans, and `game_chat_channel_notice_event` is one
+Channel Notice with its recipients. `realm_channel_op` runs every channel op from an op byte. The
+last member to leave deletes the channel with its password and bans.
 
-`game_character_contact` (public) holds friend and ignore rows on the owner's Home Shard and travels
-with Transfer. The Gateway reads it through its owner-keyed `ContactIndex`.
+`game_character_contact` (public) holds friend and ignore rows.
 
-Retired and kept only because dropping a table is a destructive migration: `game_channel_member` and
-`game_channel_event` held the old shard-local channels, and `game_whisper_event` held whispers
-before they became Realm Chat Lines. All three are in `module/src/chat.rs`. Nothing writes or
-subscribes them.
+`game_channel_member`, `game_channel_event` and `game_whisper_event` in `module/src/chat.rs` are
+retired. They stay because dropping a table is a destructive migration. Nothing writes them.
 
-### `game_map_region` / `game_region_assignment` (`module/src/region.rs:44,:67`)
+### Mail (`module/src/mail.rs`, `mail_timer.rs`, `mail_text.rs`)
 
-Both private, and **unused since #471** removed the region tier from the gateway (2026-08-08) —
-nothing subscribes to or routes on them; they stay in the schema because dropping a table is a
-destructive migration. A region is an **inclusive cell rectangle** keyed `(map_id << 32) | region_id`, and
-region 0 is reserved for "the rest of the map". An assignment names a **database**, carries a
-monotonic `epoch`, and is authoritative on realm-core only. `shard` is the one column in the schema
-that a module file outside `region.rs`/`load.rs` may not touch — the build fails if it does.
+`mail::insert_letter` is the only writer of `game_mail`, and a source scan in `mail.rs` fails on
+any other insert. The END-appended header columns carry what the 1.12 inbox reads: `sender_kind`
+(the vanilla `MailMessageType`: 0 Character, 2 Auction, 3 Creature, 4 Gameobject), `sender_entry`
+(the auction house id, or the creature or gameobject entry), `check_flags` (the `MailCheckMask`
+bits except READ, which stays `was_read`), `mail_template_id` and `deliver_micros` (when the
+recipient can first see the Mail). Every default is a real value: a legacy row is a Character mail
+with no stored flags, visible since creation.
 
-### `game_transfer_out` / `game_transfer_in` (`module/src/transfer/mod.rs`)
+`check_flags` also holds server-only bits above the five vanilla ones
+(`lyracore_shared::mail::CLIENT_CHECK_MASK`), and the codec never sends them. 0x20 is
+`CHECK_FLAG_LETTER_GRANTED`, so the next free server-only bit is 0x40. `item_text_id` on
+`game_mail` is the attached Plain Letter's text id; its default 0 means an attachment with no text.
+Expiry is not a column: `lyracore_shared::mail::expires_at_secs` derives it from creation, delivery
+and the cash on delivery price.
 
-Both private. The two halves of a cross-database character move. While either row exists the
-character is **in transit**, and four chokepoints refuse to act on it. The escrow row on disk is the
-recovery authority; the transfer id is the character guid, so recovery needs nothing from gateway
-RAM. A session-less destination import also writes the source Module identity, Transfer Intent id,
-controller generation, and creation time onto its fence. Its release reducer leaves a blank or
-differently identified newer fence untouched when an old source intent retries after the Character
-has crossed onward.
+`game_mail_timer` holds each Mail's one Mail Timer, unique by `mail_id`. `insert_letter` arms it at
+the delivery instant of an undelivered Mail and at the expiry of every other Mail. At expiry it
+returns a Character's Mail that still carries an item, in place, and deletes every other Mail with
+its copper. `game_mail_arrival` is the Mail Arrival event, reaped by the event GC.
 
-### Mail (`module/src/mail.rs`)
+`game_item_text` is a Letter Copy's durable text, keyed by its mail id narrowed to u32.
+`mail_text::apply_copy_text` sets the COPIED bit and files the row in one reducer, so a Mail and
+its item text always agree. The row outlives the Mail. Its END-appended `letters` counts the Plain
+Letters that can carry it: each copy adds one, and `mail_text::drop_letter_text` takes one away
+when a Mail is deleted with the letter attached or when a Character is deleted. The row goes at 0.
+The default `u32::MAX` marks a row filed before the count existed, and such a row is never
+deleted. The count can be too high, never too low. A letter destroyed or sold from the bags drops
+nothing. `game_item_instance.item_text_id` is 0 for every item that is not a copied letter, and
+every item snapshot (mail, trade, auction) keeps it.
 
-`game_mail` is the public row for one Mail, on Realm-core or on a single-database realm's one
-database. `mail::insert_letter` is its only writer, and a source scan in `mail.rs` fails on any other
-insert. The END-appended header columns carry what the 1.12 inbox reads: `sender_kind` (the vanilla
-`MailMessageType` code, 0 Character, 2 Auction, 3 Creature, 4 Gameobject), `sender_entry` (the
-auction house id or the creature or gameobject entry), `check_flags` (the `MailCheckMask` bits except
-READ, which stays `was_read`), `mail_template_id`, and `deliver_micros` (when the recipient can first
-see the Mail). Every default is a real value: a legacy row is a Character mail with no stored flags,
-visible since creation. `check_flags` also holds server-only bits above the five vanilla ones
-(`lyracore_shared::mail::CLIENT_CHECK_MASK`), and the codec never sends them: 0x20 is
-`CHECK_FLAG_LETTER_GRANTED`, so the next server-only bit is 0x40. The END-appended `item_text_id`
-on `game_mail` and `game_mail_escrow` is the attached Plain Letter's text id, so a Letter Copy stays
-readable after it is mailed. Its default 0 is a real value: an attachment with no text. Expiry is
-not a column. `lyracore_shared::mail::expires_at_secs` derives it from creation, delivery and the
-cash on delivery price. Private `game_mail_escrow` and
-`game_mail_delivery` carry value across the Shard Boundary; see `architecture.md` §6.3b. The
-END-appended `game_mail_escrow.delivery_delay_secs` is the Delivery Delay a send fence resolved, so
-a re-driven commit keeps it. Its default 0 is a real value: 0 for a take fence, a COD payment and a
-fence filed before the column existed. A Reward Letter stores the quest's delay there too. The
-END-appended `sender_kind`, `sender_entry` and `mail_template_id` hold a Reward Letter's quest giver
-and Mail Template. Their default 0 is a real value: a Character's letter. `game_mail_escrow` is in
-the character transfer manifest with its escrow id kept, so a held letter moves with its Character.
+`game_mail_escrow` and `game_mail_delivery` hold legacy cross-Shard Mail value. World Session mail
+uses no Escrow. A Reward Letter for a Character without a native connection still files one
+through `mail_escrow::file_reward` (`module/src/mail_reward.rs`).
 
-Private `game_mail_timer` (`module/src/mail_timer.rs`) holds each Mail's one Mail Timer, unique by
-`mail_id`. `insert_letter` arms it at the delivery instant of a Mail that is not delivered yet, and
-at the expiry of every other Mail. At expiry the timer runs Mail Expiry: it returns a Character's
-Mail that still carries an item, in place, and deletes every other Mail with its copper. Private
-`game_mail_arrival` is the Mail Arrival event: one row each time a Mail becomes visible to its
-recipient, reaped by the event GC.
+### Auctions (`module/src/auction.rs`)
 
-Private `game_item_text` (`module/src/mail_text.rs`) is a Letter Copy's durable text, keyed by its
-mail id narrowed to u32. `mail_text::apply_copy_text` sets `game_mail.check_flags`' COPIED bit and
-files the row in the same reducer, so a made-permanent Mail and its item text always agree. The row
-outlives the Mail that made it. Its END-appended `letters` counts the Plain Letters that can carry
-it: each copy adds one before the Home Shard grants, and `mail_text::drop_letter_text` takes one
-away when a Mail is deleted with the letter attached, or when a Character is deleted on the database
-that holds the text. The row goes at 0. The default is `u32::MAX`, which marks a row filed before
-the count existed; such a row is never deleted. The count can be too high, never too low. A Transfer
-runs the Character's delete sweeps on its source, but its letters travel, so only the Character
-deletion reducers drop letter text (`mail_text::drop_character_letters`). A letter destroyed or sold
-from the bags drops nothing. On a sharded realm a Character deletion destroys its letters on the
-Home Shard, away from the text on Realm-core, and drops nothing either. That text stays.
-`game_item_instance` carries the matching `item_text_id` END-appended column (0 for every item that
-is not a copied letter), and every item snapshot (mail, trade, auction) keeps it.
+`game_auction_house` is the public `AuctionHouse.dbc` catalogue. It resolves an auctioneer's house
+and economic policy through its imported faction. In `game_auction`, the item columns are the
+complete item-instance snapshot while no inventory row exists, and the house and rate columns keep
+the policy from listing time. `game_auction_operation_receipt` makes a repeated sell request
+idempotent and keeps the snapshot for expiry. `game_auction_expiry` is a private one-shot schedule
+at the listing's original deadline; it returns an unbid item or settles a winning bid, then does
+nothing when replayed. Native requests create no `game_auction_hold`, `game_auction_bid_hold` or
+`game_auction_bid_decision` rows; those are legacy Gateway rows. Deletion is refused while a
+Character owns Auction value.
 
-### Auction listing state (`module/src/auction.rs`)
+Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Auction Mail:
+`MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject
+(`{item_entry}:{random_property_id}:{action}`) that the client turns into its own text. Private
+`game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired, new-bid
+or removed notice, inserted in the same transaction as its mail and reaped by the event GC.
 
-`game_auction_house` is the public `AuctionHouse.dbc` catalogue used to resolve an auctioneer's
-house and economic policy through its imported faction. `game_auction` is the public active market;
-its item columns are the complete item-instance snapshot while no inventory row exists, and its
-house and rate columns preserve the listing-time policy. Private `game_auction_hold` is the
-source-shard value fence, and private `game_auction_operation_receipt` makes listing retries
-idempotent after that Hold is deleted. `game_auction`, `game_auction_hold` and
-`game_auction_operation_receipt` END-append `item_text_id`, so a listed Plain Letter keeps its text.
-When realm-core refuses a held listing, it records a payload-matching `auction_id == 0` receipt and
-mails the held item and deposit back to the seller in one transaction. Only then does
-`gw_auction_release_listing_hold` delete the source Hold; a Hold with an active receipt is never
-released.
-Private `game_auction_bid_hold` fences a bidder's complete offer and retains the terminal source
-outcome, normalized accepted price, and any purse-overflow refund awaiting relay; private
-`game_auction_bid_decision` is realm-core's serialized, replay-safe decision and exact-once
-settlement/refund-mail receipt. Both carry an END-appended `operation` column
-(`lyracore_shared::auction::hold_operation`): 0 is a bid, and every row from before the column
-reads as one; 1 is a Cancellation, whose Hold fences the seller's Auction Cut in `offer`. A
-Cancelled decision (outcome 7) deletes the Auction and its expiry, mails the item back to the
-seller, and mails the displaced bid back to its bidder, in one transaction. The Gateway finds a
-Character's listing Holds, unfinished bid Holds, listing receipts and Auctions through an
-in-memory index kept from the cache's row callbacks (`gateway/src/stdb/auction_holds.rs`), and
-finishes every Hold when the Character next opens the auction house.
-`game_auction_expiry` is a private one-shot schedule at the listing's original deadline. These
-callbacks return an unbid item or settle a winning bid with exact item and proceeds mail, then no-op
-when replayed. These tables are additive. `game_auction_hold` and `game_auction_bid_hold` are in the
-character transfer manifest with their operation ids kept, because a refund gives the value back on
-the Shard that holds the Hold, so an unfinished Hold arrives with its Character and finishes there.
-A Transfer keeps every listing Hold its payload does not carry: the destination's own Hold on an
-import, and the source's Hold under a blob from the build before `game_auction_hold` travelled.
-Such a Hold finishes when its seller next opens the auction house on that Shard.
-The other auction tables stay out of the manifest.
-Deletion is refused while a character owns Auction value.
+### Guilds (`module/src/guild/`)
 
-Every mail a bid, buyout, expiry, Cancellation or refused listing sends is an Auction Mail: `MailSender::AuctionHouse(house)`, `checked = COPIED`, and a machine subject (`{item_entry}:{random_property_id}:{action}`) the client turns into its own text. Private `game_auction_notice` is the matching live packet: one row per outbid, won, sold, expired, new-bid or removed notice, inserted in the same transaction as its mail and reaped ~1 s later by the shared event GC (`docs/architecture.md` §5.3 names its relay).
+`game_guild` is one Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at
+founding, the MOTD, the info text and the emblem. `game_guild_rank` holds its five to ten Guild
+Ranks with their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in
+at most one Guild; each row keeps a name snapshot. `game_guild_event` is an event table where
+`recipient_guid == 0` goes to every online member and a nonzero value addresses one Character.
+`game_guild_invite` is one pending offer per target Character, reaped on `INVITE_TTL_MICROS`.
+`game_guild_petition` is one open Petition, at most one per owner, tied to its Guild Charter item
+guid. `game_guild_petition_signature` is keyed by `petition_signature_key(petition_id, slot)` for
+slots 0 to 8. Turn-in deletes both and founds the Guild in the same transaction. The typed
+`GuildOp` gets each new variant at the end, because BSATN encodes a variant by its position.
 
-### Guild state (`module/src/guild/mod.rs`)
+PLAYER_GUILDID and PLAYER_GUILDRANK are not stored. The Module projects them from
+`game_guild_member`. Native Charter and emblem purchases create no `game_guild_fee_hold` or
+`game_guild_fee_decision` row; those are legacy Gateway rows, and a pending Fee Hold makes
+`delete_character` refuse with `CHAR_HAS_GUILD_FEE_HOLD`.
 
-Eight private tables on Realm-core hold every guild fact; the ninth, the Fee Hold below, holds
-copper on the payer's Home Shard. `game_guild` is one
-Guild: its name, a unique lower-case `name_key`, the leader, the team fixed at founding, the MOTD,
-the info text and the emblem. `game_guild_rank` holds the five to ten Guild Ranks of each Guild with
-their Rank Rights. `game_guild_member` is keyed by Character guid, so a Character is in at most one
-Guild. Each member row keeps a name snapshot, so Guild Events and by-name ops need no Character row.
-`game_guild_event` is an `[event]` table: `recipient_guid == 0` goes to every online member,
-a nonzero value addresses one Character, and the row carries its final strings.
-`game_guild_invite` (`module/src/guild/membership.rs`) is one pending offer per target Character,
-keyed by the target's guid; it is reaped on `INVITE_TTL_MICROS`, like `game_group_invite`.
-`game_guild_petition` (`module/src/guild/petition.rs`) is one open Petition: the proposed Guild's
-name, its owner (at most one Petition each), the owner's team and the Guild Charter item guid that
-stands for it. `game_guild_petition_signature` holds its Signatures, keyed by
-`petition_signature_key(petition_id, slot)` for slots 0 to 8, so the Gateway reads a Petition's
-Signatures by key. Turn-in deletes both and founds the Guild in the same transaction.
-`realm_guild_op` runs every guild op; its typed `GuildOp` gets one variant per op, appended at the
-end because BSATN encodes a variant by its position.
-Realm-core holds no Character rows, so no delete sweep reaches these tables. The Gateway's
-character-gone reconciliation sends `ForgetDeletedCharacter` for each member, Petition owner and
-signer that no World Shard holds, and the Module removes that Character's invites, membership,
-Petition and Signatures. A deleted Guild Leader's Guild passes to the highest Guild Rank, earliest
-join first, and disbands when nobody is left.
-PLAYER_GUILDID and PLAYER_GUILDRANK are not stored anywhere. The Gateway projects them from
-`game_guild_member`. The Gateway also projects a Guild Charter's Petition id into its
-ITEM_FIELD_ENCHANTMENT; no Shard stamps the item.
+### Riding (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 
-A guild operation that costs copper pays through a Fee Hold (`module/src/guild/fee.rs`).
-Private `game_guild_fee_hold` lives on the payer's Home Shard, keyed by the payer, so a Character
-has at most one. It holds the copper and every input of the decision, travels with its Character on
-Transfer, and makes `delete_character` refuse with `CHAR_HAS_GUILD_FEE_HOLD`. Private
-`game_guild_fee_decision` on Realm-core is the one decision per operation id, accepted or refused,
-and is never reaped. The Gateway drives `gw_guild_fee_hold`, `realm_guild_fee_decide` and
-`gw_guild_fee_finish` in that order. The decide and the finish are idempotent on the operation id;
-the Gateway mints a new id for each hold and never replays one, and the finish deletes the Hold
-last. A Guild Charter purchase creates the Charter in the hold, opens its Petition in the decision,
-and on a refusal destroys the Charter and refunds the copper only while the payer still holds it. A
-refund that does not fit in the purse follows the auction rule: the purse takes what fits and the
-rest goes out as Mail Escrow in the finish's own transaction.
+Riding is an ordinary skill line, 762. A Character's learned rank is a normal `game_player_skill`
+row on it. `game_skill_ability` joins a mount spell to line 762 with the `min_skill` threshold for
+vanilla's 75 (Apprentice) and 150 (Journeyman) tiers, plus race and class masks. The cast Gate
+walks the Character's learned lines and probes `by_skill_line`, so it never scans the whole ability
+catalogue. It fails closed: a mount whose skill data was never imported cannot be cast.
 
-### Riding data (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
-
-Riding is an ordinary skill line, not a new concept. `game_skill_line` carries line **762** (`Riding`),
-and a character's learned rank is a normal `game_player_skill` row on that line. `game_skill_ability`
-joins a mount spell to line 762 with the `min_skill` threshold that holds vanilla's 75 (Apprentice) and
-150 (Journeyman) tiers, plus the race and class masks that keep one race's riding tradition from
-satisfying another's mount. The cast gate walks the character's own learned lines and probes
-`by_skill_line`, so it never scans the full ability catalogue. It fails closed: a mount whose skill
-data was never imported is uncastable rather than free.
-
-`game_trainer_spell.learn_skill_line` now names three kinds of offering rather than two: a profession,
-a weapon line, or riding. `learn_skill_cap` carries the tier the purchase grants. A riding offering's
-`spell_id` is a marker with no `Spell.dbc` row, so the gateway confirms the purchase without echoing it
-as a learned spell. The trainer NPC declares itself with `trainer_type::MOUNTS`.
+`game_trainer_spell.learn_skill_line` names a profession, a weapon line or riding, and
+`learn_skill_cap` carries the tier the purchase grants. A riding offering's `spell_id` is a marker
+with no `Spell.dbc` row, so the purchase confirmation does not echo it as a learned spell. The
+trainer NPC declares itself with `trainer_type::MOUNTS`.
 
 ### Proc data (`module/src/spell/tables.rs`)
 
-A **Proc** is an aura that fires off a combat event. Its rules live in three places, and the split is
-the point: two of them are static data the importer writes, the third is a per-aura snapshot.
+A Proc is an aura that fires off a combat event. Its rules live in three places: two are static
+data the importer writes, the third is a per-aura snapshot.
 
-`game_spell` carries what `Spell.dbc` knows, verbatim: `proc_flags` (the vanilla `procFlags`
-combat-event bitmask — the engine names only the bits it fires and there is no translation table),
-`proc_chance` (a whole percent) and `proc_charges` (0 = unlimited).
+`game_spell` carries what `Spell.dbc` knows: `proc_flags` (the vanilla `procFlags` bitmask, with
+no translation table), `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
-`game_spell_proc_event` is the classic-db overlay for everything `Spell.dbc` has no column for:
-`ppm_rate`, `icd_ms`, `proc_ex` (the normal-hit / critical-hit rule), the `school_mask` /
-`family_name` / `family_flags` filter on which spells may trigger the Proc, plus a `proc_flags`
-override and a `custom_chance`. Keyed by spell id, module-private, and **absent for most spells** —
-an absent row means "the header's values". Loaded by the `spellmeta` dump family, whose clear stops
-at the reserved synthetic id floor so the seeded Proc fixtures keep their own overlay rows.
+`game_spell_proc_event` is the classic-db overlay for what `Spell.dbc` has no column for: `ppm_rate`,
+`icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and
+`family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is
+keyed by spell id, private, and absent for most spells; an absent row means "use the header's
+values". The `spellmeta` dump family loads it, and its clear stops at the reserved synthetic id
+floor so the seeded Proc fixtures keep their overlay rows.
 
-`game_aura` carries the FROZEN profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
+`game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
-`proc_ready_micros`. `spell::proc::freeze_profile` folds the header and the overlay together once,
-at apply, so the proc pass reads one row and re-joins nothing on the hot path. The overlay wins where
-both carry a value; charges only ever come from the header. The last two columns are the mutable
-pair — a fire spends a charge and stamps the next cooldown deadline — and everything before them is
-re-frozen on a refresh, which also refills charges and deliberately leaves a running cooldown alone.
-
-The overlay is the reason `debug_repair_after_publish` re-freezes proc profiles: an aura that was
-already on a unit when the columns landed reads as "never procs", and a permanent self-buff never
+`proc_ready_micros`. `spell::proc::freeze_profile` folds header and overlay together once, at
+apply, so the proc pass reads one row. The overlay wins where both carry a value; charges come only
+from the header. `proc_charges` and `proc_ready_micros` are mutable: a fire spends a charge and
+stamps the next cooldown deadline. A refresh freezes the other columns again and refills charges,
+and leaves a running cooldown alone. That is why `debug_repair_after_publish` freezes Proc profiles again: an
+aura applied before the columns existed reads as "never procs", and a permanent self-buff never
 refreshes on its own.
 
 ### `game_item_enchantment` (`module/src/items/properties.rs`)
 
 One row per enchantment effect. `kind` is the Stat Kind: an append-only code for the effect's
-contribution, independent of the client encoding. The importer retains an unmapped effect as kind 0,
+contribution, independent of the client encoding. The importer keeps an unmapped effect as kind 0,
 which contributes nothing. Amounts are flat points, except crit, hit, dodge, parry and block, which
-use basis points, and regeneration, which uses points per five seconds. Spell power retains a school
+use basis points, and regeneration, which uses points per five seconds. Spell power keeps a school
 mask.
 
 | Code | Contribution |
@@ -572,85 +354,55 @@ mask.
 | 24 | Parry |
 | 25 | Block |
 
-Each enchantment effect has key `(u64(enchant_id) << 8) | effect_index`. Indices reserve 64 positions
-per client enchantment slot. A referenced spell's three subeffects each reserve eight positions
-for expanded stats or schools. The index is `slot * 64 + subeffect * 8 + expansion`, from 0 through
-191. Direct effects use subeffect zero and expansion zero. `spell_id` retains the source spell
-reference even when the Stat Kind is unknown.
+Each enchantment effect has key `(u64(enchant_id) << 8) | effect_index`. Indices reserve 64
+positions per client enchantment slot, and a referenced spell's three subeffects each reserve eight
+positions for expanded stats or schools. The index is `slot * 64 + subeffect * 8 + expansion`, from
+0 through 191. Direct effects use subeffect zero and expansion zero. `spell_id` keeps the source
+spell reference even when the Stat Kind is unknown.
 
-Enchantment IDs 7745 and 7748 are authored compatibility entries, with +3 Strength and +3 Stamina.
-They preserve existing stored item meanings. They are not rows from the build 5875 client
-catalogue. The importer refuses a client catalogue that collides with either ID.
-The Gateway sends the client enchantment ID with the same Stat Kind and amount (7745 as 823, 7748 as
-724). The Module keeps the stored ID.
+Enchantment IDs 7745 and 7748 are authored compatibility entries, +3 Strength and +3 Stamina. They
+keep existing stored item meanings and are not rows from the build 5875 catalogue. The importer
+refuses a client catalogue that collides with either ID. The client receives 7745 as 823 and 7748
+as 724, with the same Stat Kind and amount (`lyracore_shared::item_property`); the Module keeps the
+stored ID.
 
 ### `game_vmap_indoor_cell` (`module/src/vmap.rs`)
 
-A module-private, derived per-cell marker keyed `(generation_id, cell_key)`: this cell of this vmap
-generation holds at least one indoor WMO triangle. Written once inside `verify_vmap_generation`, which
-already decodes every staged chunk, and deleted with the geometry it came from. It has **no gateway
-binding** and is never subscribed; it exists only so the movement heartbeat can ask "am I indoors?"
-with one indexed find and pay a ray cast only in a cell that could answer yes.
+A private, derived per-cell marker keyed `(generation_id, cell_key)`: this cell of this vmap
+generation holds at least one indoor WMO triangle. `verify_vmap_generation` writes it once, since
+it already decodes every staged chunk, and it is deleted with the geometry it came from. It exists
+so the movement heartbeat can ask "am I indoors?" with one indexed find, and pay for a ray cast only
+in a cell that could answer yes.
 
-**A missing row means outdoors.** That is the fail-open contract the whole indoor rule rests on: vmap
-disabled, no active generation, no marker row, or no containing WMO group all read as outdoors. A
-generation verified before this table existed carries no rows, so indoor behavior stays inactive there
-until the generation is verified again or the vmap data is imported again.
-
----
+**A missing row means outdoors.** The indoor rule rests on that fail-open contract: vmap disabled,
+no active generation, no marker row or no containing WMO group all read as outdoors. A generation
+verified before this table existed has no rows, so indoor behaviour stays off there until the
+generation is verified or imported again.
 
 ## 4. Row-level security
 
-**The module declares no `#[client_visibility_filter]` filters.** Recount at any time:
+The Module declares no `#[client_visibility_filter]`. Recount at any time:
 
 ```bash
 rg -n '#\[client_visibility_filter' module/src --glob '*.rs'
 ```
 
-No attributes match. This document used to list sixteen owner-scoped filters, all of the
-shape `SELECT * FROM <table> WHERE <identity column> = :sender`. Commit `7fda35a` (2026-08-11)
-deleted every one of them, in the same change that deleted per-player client connections. An RLS
-filter only ever applied to a client-identity subscription, and no client-identity subscription is
-left: the coordinator connection authenticates as the owner and bypasses RLS by design.
+An RLS filter applies only to a subscription made under a client identity. The Native Host
+connects in process as the Shard owner, which bypasses RLS. The Module decides what each client
+sees through AOI Grants and recipient selection; see [`architecture.md`](./architecture.md).
 
-Visibility is therefore entirely gateway-side. The gateway reads every table through the owner token
-and decides what each player sees with its own recipient-keyed lookups, audience predicates and
-area-of-interest tracker. See [`architecture.md`](./architecture.md) §5.2, §5.3 and §5.4.
+Two constraints bind any filter added later:
 
-Two constraints survive the removal and bind any filter added later.
+1. **RLS cannot express spatial scoping.** `:sender` is a static identity, so a filter cannot join
+   on the caller's current position.
+2. **Offline validation covers identifiers, not shapes.** `lyracore preflight` parses every
+   `Filter::Sql` and fails on an unknown table or column. It cannot check the query shape:
+   SpacetimeDB keeps this SQL as raw text during extraction, so a filter the node's RLS engine
+   rejects fails `subscribe()` on its connection. A new filter shape needs live verification.
 
-1. **RLS cannot express spatial scoping.** `:sender` is a static identity, so a filter cannot join on
-   the caller's *current* position. Interest management stays gateway-managed.
-2. **Offline validation covers identifiers, not shapes.** Step 3 of `lyracore preflight` parses every
-   `Filter::Sql` and checks its tables and columns against the generated bindings, and it fails the
-   preflight on an unknown identifier. It cannot check the query *shape*: SpacetimeDB keeps this SQL
-   as raw text during extraction, so a filter the node's RLS engine rejects fails `subscribe()` on
-   the connection that carries it. A new filter shape is a live-verification item; a renamed column
-   is caught offline.
+## 5. Scheduled tables
 
----
-
-## 5. Two subscription rules the schema exists to serve
-
-- **No static catalogue duplicated per connection — moot since #483.** `game_item_template` alone
-  is 17,720 rows × 32 columns; measured pre-#483, 20 per-player connections went 283 MB → 1,236 MB
-  with it and 283 MB → 503 MB without. `gateway/src/stdb/subscriptions.rs:3362` (pre-#483) carried
-  the ban, the numbers, and a test that failed if one was re-added. The concern this rule guarded
-  against — one cache copy per player connection — no longer exists: per-player connections are
-  deleted, so every catalogue read already goes through the single coordinator cache, once per
-  database, with nothing left to duplicate it.
-- **The sharded-only tables are subscribed conditionally.** A subscription to a table the deployed
-  module does not have **fails to apply**, which fails the whole gateway — so a gateway restarted
-  before its module was republished must not ask for `game_character_shard`, the realm-core
-  group tables, the loot-roll tables or the guid-range registry (`coordinator_queries` in
-  `gateway/src/stdb/connection.rs`).
-
----
-
-## 6. Scheduled tables
-
-**31 scheduled tables** drive every periodic and deferred effect in the game. Nothing on a gateway
-timer decides gameplay. Recount and re-list them with:
+Scheduled reducers drive every periodic and deferred effect in the game. List them with:
 
 ```bash
 rg -n 'scheduled\(' module/src --glob '*.rs'
@@ -658,116 +410,85 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 
 | Scheduled table | Reducer | Cadence | Where |
 |---|---|---|---|
-| `game_motion_publish_schedule` | `publish_motion` | 50 ms (20 Hz) | `motion.rs:102` |
-| `game_melee_schedule` | `tick_melee` | 100 ms | `combat/engage.rs:462` |
-| `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs:81` |
-| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs:56` |
-| `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed lazily by boarding | `transport/mod.rs` |
-| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, so ~4 s) | `creatures/tick/mod.rs:178` |
-| `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs:632` |
+| `game_motion_publish_schedule` | `publish_motion` | 50 ms (20 Hz) | `motion.rs` |
+| `game_melee_schedule` | `tick_melee` | 100 ms | `combat/engage.rs` |
+| `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
+| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
+| `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
+| `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |
+| `game_ground_area_schedule` | `tick_ground_areas` | 500 ms | `spell/tables.rs` |
 | `game_native_admission_tick` | `native_admission_tick` | 1 s while the Login Queue holds waiters | `native/admission.rs` |
-| `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs:576` |
-| `game_breath_schedule` | `tick_breath` | 1 s | `breath.rs:32` |
-| `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs:24` |
-| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily by `begin_transfer` | `transfer/mod.rs:250` |
-| `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs:68` |
-| `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone/mod.rs:77` |
+| `game_aura_schedule` | `tick_auras` | 1 s | `spell/tables.rs` |
+| `game_breath_schedule` | `tick_breath` | 1 s | `breath.rs` |
+| `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs` |
+| `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily | `transfer/mod.rs` |
+| `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs` |
+| `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone/mod.rs` |
 | `game_native_member_stats` | `tick_native_member_stats` | 5 s per grouped native connection | `native/member_stats.rs` |
-| `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs:18` |
-| `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs:71` |
-| `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed lazily by a logon connection | `native/logon.rs` |
-| `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs:312` |
-| `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed lazily by `establish_session` | `auth.rs:127` |
-| `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs:153` |
-| `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs:643` |
-| `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs:689` |
-| `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs:474` |
-| `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs:162` |
-| `game_instance_removal` | `expire_instance_removal` | one-shot 60 s after an Instance Removal starts | `instance.rs:334` |
-| `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs:13` |
-| `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs:17` |
-| `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs:51` |
-| `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs:295` |
-| `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs:309` |
+| `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs` |
+| `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs` |
+| `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed by a logon connection | `native/logon.rs` |
+| `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs` |
+| `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed by `establish_session` | `auth.rs` |
+| `game_weather_schedule` | `tick_weather` | 10 min | `weather.rs` |
+| `game_pending_cast` | `fire_pending_cast` | one-shot at cast completion | `spell/tables.rs` |
+| `game_pending_spell_impact` | `fire_spell_impact` | one-shot at projectile landing | `spell/tables.rs` |
+| `game_ranged_impact_schedule` | `ranged_impact` | one-shot at shot landing | `combat/engage.rs` |
+| `game_auction_expiry` | `expire_auction` | one-shot at listing expiry | `auction.rs` |
+| `game_instance_removal` | `expire_instance_removal` | one-shot 60 s after an Instance Removal starts | `instance.rs` |
+| `game_mail_timer` | `fire_mail_timer` | one-shot at a Mail's delivery, then at its expiry | `mail_timer.rs` |
+| `game_creature_ai_summon_expiry` | `expire_eventai_summon` | one-shot at summon lifetime end | `creatures/eventai/mobility.rs` |
+| `game_creature_ai_forced_despawn` | `fire_eventai_forced_despawn` | one-shot at the authored despawn time | `creatures/eventai/mobility.rs` |
+| `game_creature_ai_relay_continuation` | `resume_relay_run` | one-shot at the authored relay delay | `creatures/eventai/relay.rs` |
+| `game_creature_ai_relay_arrival` | `resume_relay_arrival` | one-shot on movement completion | `creatures/eventai/relay.rs` |
 
-The interval rows are inserted by `init` (`seed_scheduler_arming`, `module/src/seed.rs`), except the
-transfer, mail-escrow, session and native logon reapers, the native admission and member-stat
-ticks, and the Transport carry schedules, which their own entry points arm lazily and idempotently.
-Scheduled reducers self-gate on `ctx.sender() == ctx.database_identity()` so they cannot be driven
-externally.
+`init` inserts the interval rows (`seed_scheduler_arming` in `module/src/seed.rs`). The transfer,
+mail-escrow, session and native logon reapers, the native admission and member-stat ticks and the
+Transport carry schedules are armed by their own entry points, lazily and idempotently. Scheduled
+reducers check `ctx.sender() == ctx.database_identity()`, so nothing outside can drive them.
 
-⚠ Re-arming after a schema change is a real operational step: a republish can leave a schedule row
-stale, because `init` does not re-run on an auto-migrating publish. `debug_repair_after_publish`
-re-arms the motion, creature-tick, aura, ground-area, weather, gateway-lease, instance-reaper and
-meeting stone reminder schedules, restores a missing Auction expiry, re-tags legacy auction mail as Auction Mail once, arms
-a Mail Timer for each Mail that has none, and re-seeds every fixture family `init` seeds. It does not
-repair every scheduled table: the event reaper and melee schedules are outside this reducer.
-**Nothing runs it for you.** The operator calls it by hand on every shard after every publish:
-
-```bash
-spacetime call -s <server> <database> debug_repair_after_publish
-```
-
-Folding this into `lyracore publish` is tracked as issue 41 in the `lyracore-cli` repository. Until
-it lands, a skipped call presents as a mid-session hang rather than a loud error.
+`init` does not run again on an auto-migrating publish, so a schedule row can go stale.
+`debug_repair_after_publish` re-arms the interval schedules except the event reaper and melee
+schedules. Call it after every publish; see
+[After every publish](./danger-zones.md#after-every-publish).
 
 Packages get a periodic hook without a table of their own: `game_tick_pass!` runs at the end of
-every `tick_creatures` pass, after all core passes, and is expected to self-quantize for a slower
-cadence.
+every `tick_creatures` pass, after all core passes, and must quantize itself for a slower cadence.
 
----
+## 6. Descriptor field indices
 
-## 7. Descriptor field indices
+The UpdateMask encoder needs each client-visible column's `uint32` field index for build 5875.
+The indices are hand-authored constants in `crates/lyracore-protocol/src/codec/update_mask.rs`,
+module `idx`. Each one is the literal `set_int(N, ..)` or `set_bytes(N, ..)` argument from a
+`wow_world_messages` setter, and byte-equivalence tests compare our output with gtker's for every
+index gtker exposes. The few gtker has no reference for, such as `PLAYER_QUEST_LOG_1_1 = 198`,
+carry their derivation in a comment. They agree across mangos-zero, cmangos and vMaNGOS and were
+verified on a live 5875 client.
 
-The generic UpdateMask encoder needs, per client-visible column, its `uint32` field index for build
-5875.
+The encoder is hand-written because gtker 0.3 keeps its mask serializer crate-private and exposes
+only slot 0 of each indexed descriptor array: auras (48 slots), quest-log counters (20 slots × 3)
+and multi-field item descriptors all hit that wall. One shared encoder owns every field index, and
+`crates/lyracore-protocol/src/codec/values.rs` builds the outbound VALUES blocks with it. The two
+rules that crash the client, partial VALUES without `OBJECT_FIELD_TYPE` and the faction-standing
+reputation index, are in [danger zones](./danger-zones.md) §1.
 
-> **Correction.** This document previously claimed the index map was *generated* into a shared-crate
-> file. It is not, and never was. The indices are **hand-authored constants** in
-> `gateway/src/codec/update_mask.rs`, module `idx` — each one the literal `set_int(N, ..)` /
-> `set_bytes(N, ..)` argument from a `wow_world_messages` setter, with byte-equivalence tests
-> cross-checking our serializer output against gtker's for every index gtker exposes. The handful
-> gtker has no reference for (`PLAYER_QUEST_LOG_1_1 = 198` and friends) carry their derivation in a
-> comment, agree byte-for-byte across mangos-zero / cmangos / vMaNGOS, and were verified on a live
-> 5875 client. That is the discipline the "never typed from memory" rule was really asking for.
+## 7. The seeded fixture
 
-The encoder itself is hand-rolled because gtker 0.3 keeps its mask serializer crate-private and
-exposes only slot 0 of each indexed descriptor array — auras (48 slots), quest-log counters (20
-slots × 3), and multi-field item descriptors all hit that wall. One shared encoder owns every field
-index; it is wired into the outbound path through `gateway/src/codec/values.rs`.
+`init` (`module/src/seed.rs`) seeds the realm row, start positions, race and class base info, the
+config rows, the scheduled rows and the static fixtures the tests depend on, all in one
+transaction, so a partial seed never persists.
 
-Two hard-won rules live with it and are restated in `danger-zones.md` §1:
+- `game_realm.address` is seeded to `127.0.0.1:8085`. `./lyracore dev up` sets it for the local
+  Realm, and `--lan` sets the private address. A deployment records and sets the advertised
+  address itself; see [the native operations guide](./native-operations.md).
+- auto_inc sequences sit behind imported explicit ids, so fixture rows use fixed reserved ids
+  (509xxxx) with a delete first. [Danger zones](./danger-zones.md) §2 lists the reserved ranges.
+- The taxi fixture reserves the 5090000+ storage namespace for two nodes, one directed route, three
+  ordered points and a nearby `GOSSIP|TAXI` flight master. Its wire ids 255 and 256 fit the vanilla
+  taxi mask and have their own unique index. They support headless protocol tests. An unmodified
+  client has no map entries for them, so visual flights use imported nodes. The DBC pass always
+  restores the catalogue rows; the map-0 world import restores and verifies the NPC after it
+  replaces spatial content.
 
-- A partial `UNIT_FIELD_*` VALUES update must route through the `dirty_reset` path so it **never**
-  carries `OBJECT_FIELD_TYPE`. Re-sending TYPE crashes the 5875 client at null+0x110.
-- `SMSG_SET_FACTION_STANDING` carries the Faction.dbc **reputation index**, not the faction id.
-  Sending the id indexes past the client's 64-slot array → ERROR #132.
-
----
-
-## 8. The seeded fixture
-
-`init` (`module/src/seed.rs:23`) seeds the realm row, start positions, race/class base info, the
-config rows, the scheduled rows, and the static fixtures the test harness depends on, **all in one
-transaction** — a partial seed never persists.
-
-Three things to know about it:
-
-- `game_realm.address` is seeded to `127.0.0.1:8085`. An external client will log in and then fail to
-  reach the world server. There is no config knob for it today; change it in `seed.rs` and republish,
-  or `UPDATE game_realm SET address=...` before launch. This is a known hardening gap for any
-  non-localhost deployment — fix it before exposing the gateway beyond loopback.
-- **auto_inc sequences sit behind ETL-imported explicit ids.** The world import writes rows with
-  explicit ids without advancing the sequence, so a later `id: 0` insert allocates a colliding id —
-  reducers panic and roll back the whole transaction, SQL inserts fail silently. Fixture rows must
-  use fixed reserved ids (509xxxx) with delete-first. `danger-zones.md` §2 has the full list of
-  reserved ranges.
-- The taxi harness reserves the 5090000+ storage namespace for two nodes, one directed route, three
-  ordered points, and a nearby `GOSSIP|TAXI` flight master. Its wire ids 255 and 256 fit the vanilla
-  taxi mask and are unique-indexed independently of storage. They support headless protocol tests;
-  an unmodified client has no matching synthetic map entries, so visual real-client flights must use
-  imported nodes. The DBC pass always restores the catalogue rows; the map-0 world import restores
-  and verifies the NPC after replacing spatial content.
-
-Real world content — 2,200+ spawns, 420 quests, the item/spell/faction catalogues — is **not**
-seeded. It comes from the importer; see [`data-ingestion.md`](./data-ingestion.md).
+Real world content is not seeded. It comes from the importer; see
+[`data-ingestion.md`](./data-ingestion.md).

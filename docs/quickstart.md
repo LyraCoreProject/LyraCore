@@ -43,7 +43,7 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 | **Native Host Rust toolchain** | **1.97.1** | `native-host/rust-toolchain.toml` pins it. Native startup builds the Host with `cargo +1.97.1`, which needs rustup. If the toolchain is missing, `dev up` installs it through rustup. |
 | **python3** | any current | Native startup runs `native-host/prepare-host.py` to prepare and build the Host. |
 | **openssl** command | OpenSSL 3 or newer | Native startup creates and checks its persistent signing keys with this command. LibreSSL is not supported. |
-| **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required** — publish still succeeds without it — but the module is the server's authoritative game logic, running every reducer on every shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
+| **wasm-opt** (`install.sh` offers a user-local install; otherwise Ubuntu/Debian package `binaryen`, macOS `brew install binaryen`) | any current, *optional* | `spacetime publish` runs it to optimise the module WASM. It is **not required**, and publish still succeeds without it, but the module is the server's authoritative game logic, running every reducer in the Shard, so skipping it means shipping that logic unoptimised, silently, on every future publish too. Without it you'll see `Could not find wasm-opt to optimise the module` mid-publish; `lyracore doctor` reports it as an optional `⚠` rather than a blocking `✗`. |
 
 ### Ubuntu 24.04
 
@@ -110,7 +110,7 @@ for you, once, as a single marked line.
   extract yourself, it is maintainer-run for the alpha, and it is not a prerequisite for logging in.)
 - **a spacetimedb.com account.** `spacetime login` is *optional*: if you already use SpacetimeDB,
   `dev up` reuses that identity; if you do not, it mints one from your own local node instead
-  ([§3](#3-start-the-stack)). Nothing in this guide signs you up for anything.
+  ([§3](#3-start-the-realm)). Nothing in this guide signs you up for anything.
 
 ---
 
@@ -168,6 +168,13 @@ walks up from your current directory for the checkout containing `.lyracore-cli-
 
 `./lyracore` keeps working verbatim, and is the form used for the rest of this document: it is what
 CI runs, and what to use if you skipped the installer or declined the `PATH` line.
+
+The CLI's source and its command reference live in the
+[`LyraCoreProject/lyracore-cli`](https://github.com/LyraCoreProject/lyracore-cli) repository.
+[`docs/commands.md`](https://github.com/LyraCoreProject/lyracore-cli/blob/main/docs/commands.md)
+there lists every command, flag and safety rule. To bump the CLI, commit a new SHA to
+`.lyracore-cli-rev`. [`agents/cross-repo-cli.md`](./agents/cross-repo-cli.md) gives the steps for a
+change that spans both repositories.
 
 A healthy `doctor` looks like this:
 
@@ -262,22 +269,6 @@ Notes that will save you a round trip:
 - Any name works, not just `TEST`: `./lyracore account create ALICE` creates a fresh account (with no
   characters — make one on the client's character-creation screen).
 
-### Alpha Test Tools enrollment
-
-New Accounts receive Alpha Test Tools by default. These commands inspect or change that setting and
-grant or revoke Alpha Test Tools for an existing Account:
-
-```bash
-./lyracore account alpha-test-tools enrollment lyracore-realm
-./lyracore account alpha-test-tools enrollment lyracore-realm false
-./lyracore account alpha-test-tools grant lyracore-realm TEST
-./lyracore account alpha-test-tools revoke lyracore-realm TEST
-```
-
-Use `lyracore` instead of `lyracore-realm` after `dev up --single`. The commands use the coordinator
-credential created or selected by `dev up`. They refuse a missing Realm-core target, invalid action,
-or missing Account name before changing state.
-
 ### Optional: prove it over the wire before touching a client
 
 ```bash
@@ -321,34 +312,17 @@ LAN one below.
 
 ## Getting the real world
 
-What you just logged into is a **fixture**: a few demo creatures, one questgiver, a gather node or
-two, and a flight master with one short directed test route. It exists so that every layer — spawn,
-combat, quest, loot, movement, and taxi catalogue lookup — has something to act on without anybody
-needing a world database. The synthetic taxi ids fit the vanilla wire mask for headless tests, but
-the unmodified client has no matching map art for invented nodes. Use the locally imported
-`TaxiNodes.dbc` catalogue for visual client flight testing. It is not a zone.
+What you just logged into is a fixture: a few demo creatures, one questgiver, a gather node or two,
+and a flight master with one short test route. It gives every system something to act on without
+a world database. The fixture's taxi nodes have no map art in an unmodified client, so test
+flights visually with the imported `TaxiNodes.dbc` catalogue. It is not a zone.
 
-Opening the fixture discovers its source. Once its destination is known, direct activation charges
-the imported fare and selects the source node's race-appropriate Horde or Alliance mount display in
-one authoritative transaction. A duplicate request cannot create a second active flight or charge
-the purse twice. The Module queues the success reply before it arms authoritative scheduled
-movement. Supported direct routes then advance to an exact durable landing; routes with delays or
-nonzero point flags are refused until those semantics are implemented.
-
-The real thing is the Alliance early game: the Human Elwynn/Westfall/Redridge corridor, Dun Morogh
-and Loch Modan, Teldrassil and Darkshore, plus Deadmines. Each World Shard receives its bounded
-continent slices, terrain and navigation. The Instance Pool receives map 36 without a duplicate
-open-world pass. **That data is not in this repository and never will be.** It is reconstructed on
-your machine, from two sources that are yours and not ours to hand out:
-
-- **cmangos' [`classic-db`](https://github.com/cmangos/classic-db)** — a community-maintained vanilla
-  world database, licensed GPL-3.0. Its *content* describes Blizzard's copyrighted game world
-  (creature stats, quest text, spawn coordinates); cmangos offers it as non-commercial fair-use demo
-  content. `lyracore import` pulls it from cmangos' own public repository, at a commit this repo
-  pins, straight to your disk. We do not host it, redistribute it, or ship anything built from it.
-- **your own 1.12.1 client.** Spells, talents, areas, factions, terrain and model geometry are read
-  out of the `Data/` directory of the client you already have. There is no substitute and we do not
-  supply one.
+The real thing is the Alliance early game: the Human Elwynn, Westfall and Redridge corridor, Dun
+Morogh and Loch Modan, Teldrassil and Darkshore, plus Deadmines. **That data is not in this
+repository and never will be.** You rebuild it on your machine from cmangos'
+[`classic-db`](https://github.com/cmangos/classic-db) world database (GPL-3.0, pulled from cmangos
+at a pinned commit) and from your own 1.12.1 client's `Data/` directory.
+[ADR 0001](./adr/0001-ship-tools-not-data.md) records why.
 
 One command, and it asks before it does anything:
 
@@ -356,41 +330,31 @@ One command, and it asks before it does anything:
 ./lyracore import --client-data /path/to/WoW-1.12.1/Data
 ```
 
-It prints the notice above in full and waits for you to type `yes`. Then it pulls `classic-db`
+It prints the licensing notice in full and waits for you to type `yes`. Then it pulls `classic-db`
 (checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
 the curated class-spell trainer offerings on `lyracore`. Its `alliance-single` profile includes
-both continent corridors, Deadmines on map 36 and Deeprun Tram on map 369. Pass `--accept` to answer the consent question in advance for a
-scripted run, and leave `--client-data` off to be prompted for the path.
+both continent corridors, Deadmines on map 36 and Deeprun Tram on map 369. Pass `--accept` to
+answer the consent question in advance for a scripted run, and leave `--client-data` off to be
+prompted for the path.
 
-**What to expect.** The pull is a few hundred megabytes of git history. Each ETL is the long
-part: **tens of minutes**, most of it in the terrain and navigation passes, which rasterize each
-bounded slice cell by cell. The native import selects the combined content profile in one Shard. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf
-corridor checks, caster-spell completeness, and distinct Deadmines checks. A failed stage stops later
-work and names the destination and mode. Fix the cause and rerun: each owned family clears and
-reloads, so a rerun repairs a partial family. This is not multi-process atomicity. The stack must be
-up (`./lyracore dev up`) because the ETL writes through the running node.
+**What to expect.** The pull is a few hundred megabytes of git history. The ETL takes tens of
+minutes, most of it in the terrain and navigation passes, which rasterize each bounded slice cell
+by cell. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf corridor
+checks, caster-spell completeness and distinct Deadmines checks. A failed stage stops later work
+and names the destination and mode. Fix the cause and rerun: each owned family clears and reloads,
+so a rerun repairs a partial family. This is not multi-process atomicity. The Realm must be up
+(`./lyracore dev up`), because the ETL writes through the running node.
 
 **It is optional, and it is one-way-ish.** Everything in §§1–5 works without it, and the wire smoke
-tests run against the fixture. The import clears and reloads whole content families, so running it
-points that database at the imported world instead of the fixture; publishing to a fresh database
-gives you the fixture back.
+tests run against the fixture. The import clears and reloads whole content families, so the Shard
+then holds the imported world instead of the fixture; publishing to a fresh database gives you the
+fixture back.
 
-**The line we do not cross:** we ship the tools, you fetch the data, and no database produced by
-this pipeline is ever distributed or hosted by this project. What you do with the one on your disk
-is your call and your responsibility. [`docs/data-ingestion.md`](./data-ingestion.md) is the full
-statement, and `importer/scripts/` holds the scripts `lyracore import` drives if you would rather
-run a stage at a time.
+`./lyracore import vmaps` imports the matching collision geometry. It does not enable exact rays.
+`debug_set_vmap_enabled true` stays an explicit Operator decision after the checks in
+[`docs/operations/vmap-rollout.md`](./operations/vmap-rollout.md).
 
-Exact model/WMO rays are a separate step. `./lyracore import vmaps` imports matching profile
-geometry on each populated World Shard and skips the Instance Pool. It does not enable exact rays.
-`debug_set_vmap_enabled true` remains an explicit Operator decision after the checks in
-[`docs/verification/vmap-rollout.md`](./verification/vmap-rollout.md).
-
-The direct importer can dry-run the bounded Map 36 entry and exit route with
-`--vmap <client Data/ dir> --world-profile instances`. This is an archive-derived geometry check.
-It reports source identities, floor support, height changes, headroom and collision for each retained
-route sample. It does not stage data or enable collision without `--apply`, and `--apply` refuses
-unsuitable static geometry. This dry run does not prove ordinary Core movement along the route.
+To run one importer stage at a time, see [`data-ingestion.md`](./data-ingestion.md).
 
 ---
 
@@ -464,15 +428,13 @@ order, backups). None of that is what `lyracore dev up` gives you.
 
 ```bash
 ./lyracore dev status                # what is running, where, and is the database actually published
-./lyracore dev logs                  # both components' logs
-./lyracore dev logs spacetime        # Native Host output
+./lyracore dev logs                  # the Native Host log
 ./lyracore dev down                  # stop what this CLI started
 ./lyracore dev down && ./lyracore dev up   # restart (rebuild + republish; nothing is wiped)
 ./lyracore import                    # replace the seed fixture with the real world (see above)
 ./lyracore config                    # show the remembered client-data path (unset by default)
 ./lyracore config set client-data PATH   # remember one, so `import` stops asking
 ./lyracore character gm NAME true    # flip GM commands on for a character (false to revoke)
-./lyracore account alpha-test-tools enrollment lyracore-realm   # inspect automatic enrollment
 ./lyracore update                    # pull the latest LyraCore and restart the stack (see below)
 ```
 
@@ -552,26 +514,14 @@ still require a code edit. Package Deltas and Runtime Scripts use `packages appl
 publish Rust Packages; it is a separate workflow from watching Rust source.
 
 Each replacement writes the old and new WASM to the local commit log, about 66 MB in total with
-the current 33 MB development artifact. During Development reload, the Native Host rotates a log
-segment after a write reaches 256 MiB and takes a snapshot. A segment can exceed that size by one
-transaction. Once two snapshots are complete and their transactions are durable, it verifies
-both snapshots and removes older snapshots and unneeded log segments.
-Accounts, Characters, items and the installed Module stay in the retained state. Cleanup keeps
-enough history to recover from either retained snapshot; it does not reset the Realm. Each snapshot
-has its own object files, so in-place file damage cannot spread to the other through a hard link.
-On filesystems such as ext4, these separate copies require more disk space and writes. On Linux,
-filesystems with copy-on-write cloning can share storage until a file changes. On macOS, the Host
-writes full copies even on APFS.
-
-This is a recovery window, not a fixed disk quota. Large transactions, snapshot work and cleanup
-errors can leave more history on disk. The Host logs cleanup failures and keeps the recovery files.
-It leaves incomplete and invalid snapshot directories in place, including copies left by a failed
-snapshot. Before changing the SpacetimeDB pin, test recovery with the new Host on a disposable copy
-of the stopped Realm's data directory. After cleanup, the Host needs a retained snapshot because
-the log no longer contains the first transaction.
-Normal Hosts keep their existing history policy. The build cache is separate, and Wasmtime manages
-its compiled-code disk cache separately. Do not delete individual commit-log files from
-`.lyracore/native-data/` to reclaim space from a Realm you intend to keep.
+the current 33 MB development artifact. During Development reload the Native Host keeps a recovery
+window of two verified snapshots and removes older history; [the architecture](./architecture.md#development-reload)
+describes the rules. Accounts, Characters, items and the installed Module stay in the retained
+state. This is not a fixed disk quota: large transactions, snapshot work and cleanup errors can
+leave more history on disk, and the Host logs cleanup failures and keeps the recovery files. Before
+you change the SpacetimeDB pin, test recovery with the new Host on a disposable copy of the stopped
+Realm's data directory. Normal Hosts keep their existing history policy. Do not delete individual
+commit-log files from `.lyracore/native-data/` to reclaim space from a Realm you intend to keep.
 
 Native startup requires OpenSSL 3 or newer. The CLI keeps local signing keys in the private
 `.lyracore/native-jwt/` directory and reuses them after a restart. If a key is damaged or the pair
@@ -710,9 +660,9 @@ Module. It requires a running Realm and its retained Operator credential.
 
 ### `account create` says there is no coordinator credential
 
-Run `./lyracore dev up` first. Account creation checks for the credential before reading a password.
-It does not mint a replacement identity. For native Realms, the retained credential is
-`.lyracore/native-owner-token`.
+Run `./lyracore dev up` first. Account creation checks for the retained Operator credential,
+`.lyracore/native-owner-token`, before it reads a password. It does not mint a replacement
+identity.
 
 ### `dev up` says `operator already claimed`
 

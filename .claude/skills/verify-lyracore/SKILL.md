@@ -15,6 +15,8 @@ protocol handling in one Shard. Use three sources of evidence:
 Read the action and expected result from the task. A successful client exit or screenshot alone
 does not prove that action succeeded.
 
+When a change needs a real-client check for a feature, read [checks.md](checks.md).
+
 ## Choose the target
 
 For local work, record `./lyracore dev status` and `./lyracore packages list` before startup. Native
@@ -40,7 +42,7 @@ flock -o ~/.cache/lyracore-build.lock ./lyracore dev up
 
 Ready means the Native Host is running, both native listeners are present, and the Shard is
 published. Inspect actual socket ownership as well. Native logs come from `./lyracore dev logs
-spacetime`; there is no Gateway log.
+spacetime`.
 
 Provision a dedicated Account through `./lyracore account create NAME --password-stdin`. Creating
 an existing Account resets its password. Use a new name unless that reset is intended. The seeded

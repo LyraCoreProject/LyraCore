@@ -23,7 +23,6 @@ __pycache__/
 .scratch/
 
 /docs/research/
-/docs/verification/*-research.md
 
 /.claude/worktrees/
 

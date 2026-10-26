@@ -1,13 +1,14 @@
 # Operate a native Realm
 
-A native Realm runs one Native Host and one Shard. The Host owns the HTTP, logon and world
-listeners. The Module owns Accounts, gameplay, AOI and packet construction. There is no Gateway
-service to restart and no Realm-core or map-routing configuration.
+This runbook updates a deployed Realm. A Realm runs one Native Host and one Shard. The Host owns
+the HTTP, logon and world listeners. The Module owns Accounts, gameplay, AOI and packet
+construction.
 
-These steps apply to an existing native deployment. Migrating a legacy Realm requires a separate
-reviewed data migration. See [danger zones](danger-zones.md) before changing a schema or importing
-content. Local `./lyracore dev up` creates an isolated native data directory; it is not a production
-service manager.
+These steps apply to an existing native deployment. A multi-Shard Realm needs a separate reviewed
+data migration first; see [Multi-Shard Realms](migrating-to-native-host.md#multi-shard-realms). Read
+[danger zones](danger-zones.md) before you change a schema or import content. Local
+`./lyracore dev up` creates an isolated native data directory; it is not a production service
+manager.
 
 ## Establish the target
 
@@ -100,9 +101,10 @@ URI. The wrapper accepts no clear-publish path. Keep the successful publication 
 published Module hash.
 
 Read the change's migration requirements before reopening clients. For the AOI index migration,
-call `debug_backfill_cell_ids` with the same publisher and node. If schedules need repair, call
-`debug_repair_after_publish` with that identity. Do not call `claim_operator` to replace an owner
-on an existing Realm, install another GUID range, or rerun world imports as an update shortcut.
+call `debug_backfill_cell_ids` with the same publisher and node. Call `debug_repair_after_publish`
+with that identity; [After every publish](danger-zones.md#after-every-publish) says what it
+repairs. Do not call `claim_operator` to replace an owner on an existing Realm, install another
+GUID range, or rerun world imports as an update shortcut.
 
 If Host code changed, install the tested Native Host executable and restart only its identified
 service. Preserve the data directory, keys, publisher identity, Shard and listener configuration.

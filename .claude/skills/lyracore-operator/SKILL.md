@@ -5,7 +5,7 @@ description: Operate a LyraCore Realm through targeted updates and read-only dia
 
 # LyraCore operator
 
-Treat `docs/danger-zones.md` as authoritative. For either branch, first read
+Treat `docs/danger-zones.md` as authoritative for traps and migrations. For either branch, first read
 [`references/production-contract.md`](references/production-contract.md) completely; it defines the
 independent production authority, target, topology, redaction, and health proof.
 

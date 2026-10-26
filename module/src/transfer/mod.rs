@@ -1,3 +1,5 @@
+//! Before changing the Transfer ledger, fence or reducers, read docs/character-transfer.md.
+
 mod transport;
 #[cfg(test)]
 pub(crate) use transport::{

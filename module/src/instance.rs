@@ -1,4 +1,4 @@
-//! Before changing Instance allocation or pool routing, read docs/instance-lifecycle.md.
+//! Before changing Instance leases, population or removal, read docs/instance-lifecycle.md.
 
 use std::collections::{HashMap, HashSet};
 

@@ -2,7 +2,7 @@
 
 The **Package Delta** artifact and the claim conflict tracer.
 
-A Package Delta is the durable record of what one Package changes in the spell tables. It names
+A Package Delta is the durable record of what one Package changes in the base data tables. It names
 the Package, the source it was generated from, and one claim per row: the table, the typed
 primary key, the operation, and the columns the Package sets there. A base import replaces whole
 data families, so a Package's row edits have to be a replayable artifact rather than a one-shot
@@ -78,15 +78,14 @@ shape can state: a Package Delta claims typed rows, never a script blob. See
 
 Two tables are SPATIAL: `game_creature_spawn` and `game_gameobject`. Their claims carry the map
 in the primary key rather than in a column, and `PrimaryKey::map_id` reads it. A spatial claim
-reaches only the Shards whose World Import Scope owns that map; the importer applies that filter
-with the scope it already builds for the base import, so there is one routing concept and this
-crate only has to state which map a row sits on. Every other table is a global catalogue every
-Shard loads whole.
+applies only when the World Import Scope of the import owns that map; the importer filters with the
+scope it already builds for the base import, so this crate only has to state which map a row sits
+on. Every other table is a global catalogue that an import loads whole.
 
 A spawn's durable guid is derived from the key, never authored: `game_creature_spawn` packs its
 creature template and spawn identifier into one guid, `game_gameobject` its spawn identifier
 alone. The map is not part of either guid, which is why it is identity for routing and not a
-claimable column: a Package cannot move a placed row onto a map another Shard owns.
+claimable column: a Package cannot move a placed row onto a map outside the import scope.
 
 Most tables permit insert and partial update. Six are update-only, because their primary key
 names something no Package may invent: a creature template (`game_creature_cast`,
@@ -98,22 +97,10 @@ at parse time, regardless of identifier.
 # Identifier policy
 
 An inserted row must sit in its family's Package identifier band, which no client and no import
-can reach: for spells, `PACKAGE_SPELL_ID_FLOOR`..=`PACKAGE_SPELL_ID_CEIL`; for items,
-`PACKAGE_ITEM_ID_FLOOR`..=`PACKAGE_ITEM_ID_CEIL`; for quests,
-`PACKAGE_QUEST_ID_FLOOR`..=`PACKAGE_QUEST_ID_CEIL`; for loot rows,
-`PACKAGE_LOOT_ID_FLOOR`..=`PACKAGE_LOOT_ID_CEIL`; for `game_creature_spell` rows,
-`PACKAGE_CAST_ID_FLOOR`..=`PACKAGE_CAST_ID_CEIL`; for `game_trainer_spell` rows,
-`PACKAGE_TRAINER_ID_FLOOR`..=`PACKAGE_TRAINER_ID_CEIL`; for the insertable gossip rows,
-`PACKAGE_GOSSIP_ID_FLOOR`..=`PACKAGE_GOSSIP_ID_CEIL`; for the insertable globals rows,
-`PACKAGE_GLOBALS_ID_FLOOR`..=`PACKAGE_GLOBALS_ID_CEIL`; for `game_spell_learn` rows,
-`PACKAGE_SPELLMETA_ID_FLOOR`..=`PACKAGE_SPELLMETA_ID_CEIL`; for the creature template and
-spawn rows, `PACKAGE_CREATURE_ID_FLOOR`..=`PACKAGE_CREATURE_ID_CEIL`; for the gameobject
-template, trap and spawn rows,
-`PACKAGE_GAMEOBJECT_ID_FLOOR`..=`PACKAGE_GAMEOBJECT_ID_CEIL`; for the broadcast text,
-summon placement and quest event requirement rows,
-`PACKAGE_CREATURE_AI_ID_FLOOR`..=`PACKAGE_CREATURE_AI_ID_CEIL`. `game_spell_chain` and
-`game_spell_proc_event` key on a spell identifier rather than one of their own, so an insert
-there takes the Package spell band. Updates can tune imported rows, but every operation refuses
+can reach. `ids.rs` holds each band as `PACKAGE_<FAMILY>_ID_FLOOR`..=`PACKAGE_<FAMILY>_ID_CEIL`, and
+`docs/package-api.md` lists them with the column each band checks. `game_spell_chain` and
+`game_spell_proc_event` key on a spell identifier rather than one of their own, so an insert there
+takes the Package spell band. Updates can tune imported rows, but every operation refuses
 fixture-reserved identifiers. See `ids` for the bands and their formulas.
 
 # The other artifact

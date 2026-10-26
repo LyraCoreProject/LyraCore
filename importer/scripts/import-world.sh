@@ -258,7 +258,7 @@ sql_check_abort() {
   echo "        A failed query is not the same as zero rows, and reporting it as one is how a single" >&2
   echo "        dead connection turns into ~50 fake \"table is empty\" FAILs (#440) — refusing instead" >&2
   echo "        of reporting any of the assertions below. Check the node is up and '$DB' is published" >&2
-  echo "        there (docs/danger-zones.md §3); set SPACETIME_SERVER=<url> if your node isn't on the" >&2
+  echo "        there (docs/native-operations.md); set SPACETIME_SERVER=<url> if your node isn't on the" >&2
   echo "        default loopback address." >&2
   exit 1
 }

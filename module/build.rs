@@ -1,3 +1,5 @@
+// Before changing what this script generates, read docs/module-build.md.
+
 use std::fs;
 use std::path::{Path, PathBuf};
 

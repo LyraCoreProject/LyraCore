@@ -1,5 +1,3 @@
-//! Before changing leg search or its callers, read docs/architecture.md#navigation-legs.
-
 use crate::spatial::MAP_COORD_MAX;
 use crate::terrain::{interpolate, CELL_SIZE};
 use crate::vmap::{TriClass, VmapTri};
