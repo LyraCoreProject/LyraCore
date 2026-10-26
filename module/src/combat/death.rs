@@ -590,7 +590,8 @@ pub(crate) fn apply_hit(
 
     if weapon {
         if let Some(a) = &attacker {
-            if is_rage_user(a) {
+            // vmangos rewards dealt rage for white swings only, not for a queued strike.
+            if hit.spell_id == 0 && is_rage_user(a) {
                 if let Some(mut fresh) = entities.guid().find(attacker_guid) {
                     fresh.power = (fresh.power + rage_from_damage(dmg, true)).min(fresh.max_power);
                     fresh.update(ctx);
