@@ -119,6 +119,17 @@ the imported spells. Stand near idle, patrolling and wandering Creatures.
   a stealthed, a neutral, a boss and a totem Creature do. The server turns only hostile Creatures
   and leaves aggro and stealth detection unchanged.
 
+## Energy regeneration
+
+Tests: `energy_regen.rs`. No `check.py` scenario.
+
+Setup. A Rogue of level 20 or higher who knows Adrenaline Rush. Spell 13750 must exist in the
+imported spells.
+
+- Spend energy to 0 out of combat and again in combat. The bar rises by 20 every 2 seconds by
+  stopwatch in both.
+- Under Adrenaline Rush each tick adds 40 for 15 seconds, then returns to 20.
+
 ## Duel
 
 Tests: `duel_killing_blow.rs`. Scenario: `check_duels`.

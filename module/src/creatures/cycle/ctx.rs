@@ -711,7 +711,14 @@ impl RegenSink for CtxWorld<'_> {
                     e.guid,
                     crate::items::EquipStat::ManaPerFive,
                 );
-                crate::combat::regen_entity_power(&e, u.in_combat, self.regen_window, mana_per_five)
+                let regen_rate = crate::spell::power_regen_rate(self.ctx, e.guid, e.power_type());
+                crate::combat::regen_entity_power(
+                    &e,
+                    u.in_combat,
+                    self.regen_window,
+                    mana_per_five,
+                    regen_rate,
+                )
             })
     }
     fn restore(&mut self, guid: u64, health: Option<u32>, power: Option<u32>) {
@@ -1134,6 +1141,7 @@ impl CreatureWorld for CtxWorld<'_> {
     }
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)> {
         vec![
+            ("energy*", crate::combat::regenerate_energy(self.ctx) as u64),
             ("decay*", tick::pass_decay(self.ctx) as u64),
             ("respawn*", tick::pass_respawn(self.ctx) as u64),
             (

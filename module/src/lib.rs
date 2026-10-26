@@ -407,6 +407,7 @@ pub use tables::{
     game_encounter_equip, game_encounter_hp_watch, game_encounter_spawn, game_encounter_state,
     EncounterEquip, EncounterHpWatch, EncounterSpawn, EncounterState,
 };
+pub use tables::{game_energy_clock, EnergyClock};
 pub use tables::{
     game_entity_motion, game_movement_violation, game_teleport_event, game_world_entity,
     game_world_state, game_world_state_name, EntityMotion, MovementViolation, TeleportEvent,

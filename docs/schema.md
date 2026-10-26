@@ -55,7 +55,7 @@ grep -rEc '^#\[(spacetimedb::)?table\(' module/src --include='*.rs' | grep -v ':
 | World entity and movement | `world.rs`, `motion.rs` |
 | Terrain, nav and exact vmap | `terrain.rs`, `nav.rs`, `vmap.rs` |
 | Chat, social and addon bridge | `chat.rs`, `channel.rs`, `realm_chat.rs`, `away.rs`, `bridge.rs` |
-| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `threat.rs`, `duel.rs` |
+| Combat, threat and duel | `combat/engage.rs`, `combat/death.rs`, `combat/energy.rs`, `threat.rs`, `duel.rs` |
 | Spell and aura | `spell/tables.rs`, `spell/stacking.rs`, `spell/cast/resolve.rs` |
 | Quest | `quest.rs` |
 | Item, trade and mail | `items/tables.rs`, `items/properties.rs`, `trade.rs`, `mail.rs`, `mail_catalogue.rs`, `mail_escrow.rs`, `mail_timer.rs`, `mail_text.rs` |

@@ -41,6 +41,7 @@ pub use crate::combat::{
     game_combat_event, game_combat_event_live, game_melee_attack, game_melee_schedule,
     game_ranged_impact_schedule, CombatEvent, MeleeAttack, MeleeSchedule, RangedImpactSchedule,
 };
+pub use crate::combat::{game_energy_clock, EnergyClock};
 pub use crate::combo::{game_combo_point, ComboPoint};
 pub use crate::config::{
     game_area, game_area_trigger, game_char_base_info, game_config, game_race_info, game_realm,

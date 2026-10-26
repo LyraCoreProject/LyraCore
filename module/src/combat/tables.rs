@@ -283,7 +283,9 @@ pub(crate) fn rage_from_damage(damage: u32, dealt: bool) -> u32 {
     damage * if dealt { 8 } else { 3 }
 }
 
-const ENERGY_TICK: u32 = 40;
+// Vanilla credits 20 energy every 2 s, in and out of combat (cmangos `Player::Regenerate`).
+const ENERGY_TICK_MS: u64 = 2_000;
+const ENERGY_PER_TICK: u32 = 20;
 
 const RAGE_DECAY_PER_TICK: u32 = 50;
 
@@ -315,6 +317,7 @@ pub(crate) fn regen_power(
             in_combat,
             mana_paused,
             mana_flat_tick: 0,
+            regen_rate: 1.0,
         },
     )
 }
@@ -323,6 +326,11 @@ struct PowerRegenTick {
     in_combat: bool,
     mana_paused: bool,
     mana_flat_tick: i32,
+    regen_rate: f64,
+}
+
+fn scale_regen(base: u32, regen_rate: f64) -> u32 {
+    (f64::from(base) * regen_rate) as u32
 }
 
 fn regen_power_with_flat(
@@ -344,16 +352,15 @@ fn regen_power_with_flat(
             if tick.mana_paused {
                 0
             } else {
-                mana_regen_per_tick(spirit, level)
+                scale_regen(mana_regen_per_tick(spirit, level), tick.regen_rate)
             },
             tick.mana_flat_tick,
         ),
-        pt::ENERGY => current.saturating_add(ENERGY_TICK).min(max),
         pt::RAGE => {
             if tick.in_combat {
                 current
             } else {
-                current.saturating_sub(RAGE_DECAY_PER_TICK)
+                current.saturating_sub(scale_regen(RAGE_DECAY_PER_TICK, tick.regen_rate))
             }
         }
         _ => current,
@@ -413,6 +420,7 @@ pub(crate) fn regen_entity_power(
     in_combat: bool,
     window: RegenWindow,
     mana_per_five: i32,
+    regen_rate: f64,
 ) -> u32 {
     let power_type = (e.unit_bytes_0 >> 24) as u8;
     let mana_paused = window.now_ms < e.mana_regen_paused_until_ms;
@@ -426,6 +434,7 @@ pub(crate) fn regen_entity_power(
             in_combat,
             mana_paused,
             mana_flat_tick: per_five_in_window(mana_per_five, window),
+            regen_rate,
         },
     )
 }
@@ -442,6 +451,18 @@ pub(crate) fn regen_entity_health(
         e.level,
         per_five_in_window(health_per_five, window),
     )
+}
+
+// Energy ticks fall on a fixed 2 s grid, so a late or early firing neither drops nor repeats one.
+pub(crate) fn energy_ticks_between(credited_through_ms: u64, now_ms: u64) -> u64 {
+    (now_ms / ENERGY_TICK_MS).saturating_sub(credited_through_ms / ENERGY_TICK_MS)
+}
+
+pub(crate) fn regen_energy(current: u32, max: u32, ticks: u64, regen_rate: f64) -> u32 {
+    let gained = ticks.saturating_mul(u64::from(scale_regen(ENERGY_PER_TICK, regen_rate)));
+    u64::from(current)
+        .saturating_add(gained)
+        .min(u64::from(max)) as u32
 }
 
 #[cfg(any(test, feature = "debug_reducers"))]
@@ -1017,15 +1038,15 @@ mod tests {
             5_000,
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(4_999, 4_000), 0),
+            regen_entity_power(&mage, false, RegenWindow::new(4_999, 4_000), 0, 1.0),
             100
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(5_000, 4_000), 0),
+            regen_entity_power(&mage, false, RegenWindow::new(5_000, 4_000), 0, 1.0),
             100 + 26
         );
         assert_eq!(
-            regen_entity_power(&mage, true, RegenWindow::new(6_000, 4_000), 0),
+            regen_entity_power(&mage, true, RegenWindow::new(6_000, 4_000), 0, 1.0),
             100 + 26
         );
 
@@ -1040,11 +1061,11 @@ mod tests {
             0,
         );
         assert_eq!(
-            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0),
+            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 1.0),
             1000 - 50
         );
         assert_eq!(
-            regen_entity_power(&warrior, true, RegenWindow::new(0, 4_000), 0),
+            regen_entity_power(&warrior, true, RegenWindow::new(0, 4_000), 0, 1.0),
             1000
         );
     }
@@ -1073,9 +1094,9 @@ mod tests {
             0,
         );
         let window = RegenWindow::new(8_000, 4_000);
-        assert_eq!(regen_entity_power(&mage, false, window, 10), 134);
+        assert_eq!(regen_entity_power(&mage, false, window, 10, 1.0), 134);
         assert_eq!(regen_entity_health(&mage, 15, window), 163);
-        assert_eq!(regen_entity_power(&mage, false, window, -40), 100);
+        assert_eq!(regen_entity_power(&mage, false, window, -40, 1.0), 100);
         assert_eq!(regen_entity_health(&mage, -100, window), 100);
 
         let low_rate_total: i32 = (4_000..=20_000)
@@ -1100,7 +1121,7 @@ mod tests {
             10_000,
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 10),
+            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 10, 1.0),
             108
         );
     }
@@ -1151,15 +1172,8 @@ mod tests {
         assert!(regen_power(pt::MANA, 0, 500, 0, 1, OUT_OF_COMBAT, FSR_CLEAR) > 0);
         assert_eq!(
             regen_power(pt::ENERGY, 20, 100, 0, 10, IN_COMBAT, FSR_CLEAR),
-            60
-        );
-        assert_eq!(
-            regen_power(pt::ENERGY, 20, 100, 999, 10, OUT_OF_COMBAT, FSR_CLEAR),
-            60
-        );
-        assert_eq!(
-            regen_power(pt::ENERGY, 95, 100, 0, 10, IN_COMBAT, FSR_CLEAR),
-            100
+            20,
+            "energy has its own 2 s pass"
         );
         assert_eq!(
             regen_power(pt::RAGE, 1000, 1000, 0, 10, OUT_OF_COMBAT, FSR_CLEAR),
@@ -1180,6 +1194,65 @@ mod tests {
         assert_eq!(
             regen_power(pt::MANA, 0, 0, 40, 10, OUT_OF_COMBAT, FSR_CLEAR),
             0
+        );
+    }
+
+    #[test]
+    fn energy_ticks_count_each_two_second_boundary_once() {
+        assert_eq!(energy_ticks_between(10_000, 11_999), 0);
+        assert_eq!(energy_ticks_between(10_000, 12_000), 1);
+        assert_eq!(energy_ticks_between(11_999, 12_001), 1);
+        assert_eq!(
+            energy_ticks_between(10_500, 14_600),
+            2,
+            "a late firing keeps both ticks"
+        );
+        assert_eq!(
+            energy_ticks_between(12_000, 12_400),
+            0,
+            "an early firing adds none"
+        );
+    }
+
+    #[test]
+    fn energy_regen_is_twenty_per_tick_and_adrenaline_rush_doubles_it() {
+        assert_eq!(regen_energy(0, 100, 1, 1.0), 20);
+        assert_eq!(regen_energy(0, 100, 2, 1.0), 40);
+        assert_eq!(regen_energy(0, 100, 1, 2.0), 40);
+        assert_eq!(regen_energy(90, 100, 1, 1.0), 100);
+        assert_eq!(regen_energy(0, 100, u64::MAX, 2.0), 100);
+    }
+
+    #[test]
+    fn power_regen_percent_scales_spirit_mana_and_rage_decay() {
+        use lyracore_shared::packing::{power_type, unit_bytes_0};
+        let mage = entity_for_regen(
+            unit_bytes_0(1, 8, 0, power_type::MANA),
+            100,
+            1000,
+            100,
+            1000,
+            40,
+            10,
+            0,
+        );
+        assert_eq!(
+            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 0, 2.0),
+            100 + 52
+        );
+        let warrior = entity_for_regen(
+            unit_bytes_0(1, 1, 0, power_type::RAGE),
+            1,
+            1,
+            1000,
+            1000,
+            0,
+            10,
+            0,
+        );
+        assert_eq!(
+            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 2.0),
+            1000 - 100
         );
     }
 

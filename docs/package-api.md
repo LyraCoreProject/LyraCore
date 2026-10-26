@@ -31,7 +31,8 @@ lint tells a Package author when core moved under them; it stops nothing at run 
 
 `crate::actor::EffectKind` defines the known effect codes shared by the Module, protocol crate and
 Importer. Convert a row's `kind` byte with `EffectKind::try_from`; handle unknown authored codes
-explicitly. The Actor byte constants keep their values.
+explicitly. The Actor byte constants keep their values. Core appends kinds without a version bump,
+so a `match` on `EffectKind` needs a wildcard arm.
 
 ## The surface
 
