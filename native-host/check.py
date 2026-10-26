@@ -4126,6 +4126,7 @@ def check_quest_items(host):
     split_slot = next(slot for slot in range(23, 39) if slot not in used)
     client.send(0x10e, bytes([255, jerky_slot, 255, split_slot, 2]))
     split = client.collect()
+    assert host.rows(f'SELECT stack_count FROM game_item_instance WHERE owner_guid = {guid} AND slot = {split_slot}') == [[2]]
     client.send(0x10d, bytes([split_slot, jerky_slot]))
     merged = client.collect()
     assert host.rows(f'SELECT slot, stack_count FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052') == [[jerky_slot, 4]]
