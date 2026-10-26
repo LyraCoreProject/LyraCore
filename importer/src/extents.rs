@@ -9,7 +9,11 @@ struct Extents {
     anchor: (f64, f64, f64),
 }
 
-fn compute_extents(dump: &str, map: i64, bbox: Option<(f64, f64, f64, f64)>) -> Option<Extents> {
+fn compute_extents(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    map: i64,
+    bbox: Option<(f64, f64, f64, f64)>,
+) -> Option<Extents> {
     let mut count = 0u64;
     let mut min = (f64::INFINITY, f64::INFINITY, f64::INFINITY);
     let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
@@ -49,7 +53,10 @@ fn compute_extents(dump: &str, map: i64, bbox: Option<(f64, f64, f64, f64)>) -> 
     })
 }
 
-fn start_positions_on_map(dump: &str, map: i64) -> Vec<(u32, u32, u32, f64, f64, f64)> {
+fn start_positions_on_map(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    map: i64,
+) -> Vec<(u32, u32, u32, f64, f64, f64)> {
     parse_table(dump, "playercreateinfo")
         .iter()
         .filter_map(|r| {

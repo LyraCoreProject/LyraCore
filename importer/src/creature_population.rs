@@ -45,27 +45,31 @@ struct Group {
     is_pool: bool,
 }
 
-fn number<T: std::str::FromStr>(row: &[String], column: usize, table: &str) -> Result<T> {
+fn number<T: std::str::FromStr>(
+    row: &crate::world_source::Row,
+    column: &str,
+    table: &str,
+) -> Result<T> {
     field(row, column)
         .parse()
         .map_err(|_| anyhow::anyhow!("{table}: invalid column {column} in row {row:?}"))
 }
 
-fn source_groups(dump: &str) -> Result<BTreeMap<u64, Group>> {
+fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeMap<u64, Group>> {
     let mut groups = BTreeMap::new();
     for row in parse_complete_table(dump, "spawn_group")? {
-        if number::<u32>(&row, 2, "spawn_group")? != 0 {
+        if number::<u32>(&row, "Type", "spawn_group")? != 0 {
             continue;
         }
-        let id: u64 = number(&row, 0, "spawn_group")?;
+        let id: u64 = number(&row, "Id", "spawn_group")?;
         if groups
             .insert(
                 id,
                 Group {
-                    max_count: number(&row, 3, "spawn_group")?,
-                    condition: number(&row, 4, "spawn_group")?,
-                    expression: number(&row, 5, "spawn_group")?,
-                    flags: number(&row, 6, "spawn_group")?,
+                    max_count: number(&row, "MaxCount", "spawn_group")?,
+                    condition: number(&row, "WorldState", "spawn_group")?,
+                    expression: number(&row, "WorldStateExpression", "spawn_group")?,
+                    flags: number(&row, "Flags", "spawn_group")?,
                     entries: Vec::new(),
                     is_pool: false,
                 },
@@ -76,14 +80,14 @@ fn source_groups(dump: &str) -> Result<BTreeMap<u64, Group>> {
         }
     }
     for row in parse_complete_table(dump, "spawn_group_entry")? {
-        let id = number(&row, 0, "spawn_group_entry")?;
+        let id = number(&row, "Id", "spawn_group_entry")?;
         let Some(group) = groups.get_mut(&id) else {
             continue;
         };
-        let entry: u32 = number(&row, 1, "spawn_group_entry")?;
-        let min: u32 = number(&row, 2, "spawn_group_entry")?;
-        let max: u32 = number(&row, 3, "spawn_group_entry")?;
-        let chance: u32 = number(&row, 4, "spawn_group_entry")?;
+        let entry: u32 = number(&row, "Entry", "spawn_group_entry")?;
+        let min: u32 = number(&row, "MinCount", "spawn_group_entry")?;
+        let max: u32 = number(&row, "MaxCount", "spawn_group_entry")?;
+        let chance: u32 = number(&row, "Chance", "spawn_group_entry")?;
         if entry == 0 || chance > 100 || (max > 0 && min > max) {
             bail!("invalid spawn_group_entry for group {id}, entry {entry}");
         }
@@ -111,7 +115,7 @@ struct Pool {
     children: Vec<(u64, u32)>,
 }
 
-fn chance_bp(row: &[String], column: usize, table: &str) -> Result<u32> {
+fn chance_bp(row: &crate::world_source::Row, column: &str, table: &str) -> Result<u32> {
     let chance: f64 = number(row, column, table)?;
     if !chance.is_finite() || !(0.0..=100.0).contains(&chance) {
         bail!("{table}: invalid chance {chance}");
@@ -161,19 +165,19 @@ fn flatten_pool(
 }
 
 fn add_legacy_pools(
-    dump: &str,
+    dump: &(impl crate::dump::TableRows + ?Sized),
     groups: &mut BTreeMap<u64, Group>,
     memberships: &mut BTreeMap<u64, (u64, u32)>,
     events: &mut BTreeMap<u64, BTreeSet<i32>>,
 ) -> Result<()> {
     let mut pools = BTreeMap::new();
     for row in parse_complete_table(dump, "pool_template")? {
-        let id = number(&row, 0, "pool_template")?;
+        let id = number(&row, "entry", "pool_template")?;
         if pools
             .insert(
                 id,
                 Pool {
-                    limit: number(&row, 1, "pool_template")?,
+                    limit: number(&row, "max_limit", "pool_template")?,
                     members: BTreeMap::new(),
                     children: Vec::new(),
                 },
@@ -198,9 +202,17 @@ fn add_legacy_pools(
     let mut seen = BTreeSet::new();
     for table in ["pool_creature", "pool_creature_template"] {
         for row in parse_complete_table(dump, table)? {
-            let source = number(&row, 0, table)?;
-            let id = number(&row, 1, table)?;
-            let chance = chance_bp(&row, 2, table)?;
+            let source = number(
+                &row,
+                if table == "pool_creature" {
+                    "guid"
+                } else {
+                    "id"
+                },
+                table,
+            )?;
+            let id = number(&row, "pool_entry", table)?;
+            let chance = chance_bp(&row, "chance", table)?;
             let pool = pools
                 .get_mut(&id)
                 .with_context(|| format!("{table}: missing pool_template {id}"))?;
@@ -220,9 +232,9 @@ fn add_legacy_pools(
     }
     let mut parents = BTreeMap::new();
     for row in parse_complete_table(dump, "pool_pool")? {
-        let child = number(&row, 0, "pool_pool")?;
-        let parent = number(&row, 1, "pool_pool")?;
-        let chance = chance_bp(&row, 2, "pool_pool")?;
+        let child = number(&row, "pool_id", "pool_pool")?;
+        let parent = number(&row, "mother_pool", "pool_pool")?;
+        let chance = chance_bp(&row, "chance", "pool_pool")?;
         if parents.insert(child, parent).is_some() {
             bail!("pool {child} has several parents");
         }
@@ -244,7 +256,7 @@ fn add_legacy_pools(
     let mut object_pools = BTreeSet::new();
     for table in ["pool_gameobject", "pool_gameobject_template"] {
         for row in parse_complete_table(dump, table)? {
-            let mut id = number(&row, 1, table)?;
+            let mut id = number(&row, "pool_entry", table)?;
             let mut chain = BTreeSet::new();
             while let Some(parent) = parents.get(&id) {
                 if !chain.insert(id) {
@@ -308,16 +320,19 @@ fn add_legacy_pools(
     Ok(())
 }
 
-pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<PopulationPlan> {
+pub(crate) fn collect(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    scope: &WorldImportScope,
+) -> Result<PopulationPlan> {
     let mut groups = source_groups(dump)?;
     let mut memberships = BTreeMap::new();
     for row in parse_complete_table(dump, "spawn_group_spawn")? {
-        let id = number(&row, 0, "spawn_group_spawn")?;
+        let id = number(&row, "Id", "spawn_group_spawn")?;
         if !groups.contains_key(&id) {
             continue;
         }
-        let guid: u64 = number(&row, 1, "spawn_group_spawn")?;
-        let chance: u32 = number(&row, 3, "spawn_group_spawn")?;
+        let guid: u64 = number(&row, "Guid", "spawn_group_spawn")?;
+        let chance: u32 = number(&row, "Chance", "spawn_group_spawn")?;
         if chance > 100 {
             bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
         }
@@ -327,8 +342,8 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
     }
     let mut choices: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
     for row in parse_complete_table(dump, "creature_spawn_entry")? {
-        let guid = number(&row, 0, "creature_spawn_entry")?;
-        let entry = number(&row, 1, "creature_spawn_entry")?;
+        let guid = number(&row, "guid", "creature_spawn_entry")?;
+        let entry = number(&row, "entry", "creature_spawn_entry")?;
         if entry == 0 {
             bail!("creature_spawn_entry {guid}: entry zero");
         }
@@ -336,8 +351,8 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
     }
     let mut events: BTreeMap<u64, BTreeSet<i32>> = BTreeMap::new();
     for row in parse_complete_table(dump, "game_event_creature")? {
-        let guid = number(&row, 0, "game_event_creature")?;
-        let event = number(&row, 1, "game_event_creature")?;
+        let guid = number(&row, "guid", "game_event_creature")?;
+        let event = number(&row, "event", "game_event_creature")?;
         if event == 0 {
             bail!("game_event_creature {guid}: event zero");
         }
@@ -346,7 +361,7 @@ pub(crate) fn collect(dump: &str, scope: &WorldImportScope) -> Result<Population
     add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
     let templates: BTreeSet<u32> = parse_complete_table(dump, "creature_template")?
         .iter()
-        .map(|row| number(row, 0, "creature_template"))
+        .map(|row| number(row, "Entry", "creature_template"))
         .collect::<Result<_>>()?;
     let mut plan = PopulationPlan {
         spawns: Vec::new(),

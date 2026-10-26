@@ -71,7 +71,7 @@ struct DoorTemplate {
     size: f32,
 }
 
-fn door_templates(dump: &str) -> Vec<DoorTemplate> {
+fn door_templates(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<DoorTemplate> {
     parse_table(dump, "gameobject_template")
         .iter()
         .filter_map(|row| {

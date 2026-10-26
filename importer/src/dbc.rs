@@ -125,7 +125,7 @@ pub fn run(data_dir: &str, taxi_mounts: Option<&str>, apply: bool, shard: &Shard
 
 pub(crate) fn run_from_dump(
     data_dir: &str,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     apply: bool,
     shard: &Shard,
 ) -> Result<()> {
@@ -145,7 +145,10 @@ pub(crate) fn run_from_dump(
     Ok(())
 }
 
-pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<Vec<String>> {
+pub(crate) fn catalogue_statements(
+    data_dir: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("dbc: opened MPQ chain from {}", dir.display());
@@ -744,7 +747,10 @@ struct TaxiCatalogueSql {
     warnings: Vec<String>,
 }
 
-fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
+fn taxi_mount_displays(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    display_ids: &HashSet<u32>,
+) -> Result<HashMap<u32, u32>> {
     let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");
@@ -755,9 +761,9 @@ fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap
             .parse()
             .context("taxi mount dump has an invalid creature entry")?;
         let mut display = 0;
-        for index in crate::dump::ct::MODEL_ID1..crate::dump::ct::MODEL_ID1 + 4 {
+        for index in ["ModelId1", "ModelId2", "ModelId3", "ModelId4"] {
             let model: u32 = row
-                .get(index)
+                .raw(index)
                 .with_context(|| {
                     format!("taxi mount creature {entry} is missing model column {index}")
                 })?
@@ -783,7 +789,7 @@ fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
     path_nodes: &DbcTaxiPathNode,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     display_ids: &HashSet<u32>,
 ) -> Result<TaxiCatalogueSql> {
     use lyracore_shared::constants::taxi_fixture as fixture;

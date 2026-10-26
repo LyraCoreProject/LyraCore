@@ -9,27 +9,30 @@ use crate::dump::{field, gmo, parse_table};
 
 pub(super) type Conditions = BTreeMap<u32, Condition>;
 
-pub(super) fn read(dump: &str) -> Conditions {
+pub(super) fn read(dump: &(impl crate::dump::TableRows + ?Sized)) -> Conditions {
     let mut conditions = BTreeMap::new();
     for row in parse_table(dump, "conditions") {
-        let Ok(id) = field(&row, 0).parse::<u32>() else {
-            eprintln!("gossip condition: invalid source id {}", field(&row, 0));
+        let Ok(id) = field(&row, "condition_entry").parse::<u32>() else {
+            eprintln!(
+                "gossip condition: invalid source id {}",
+                field(&row, "condition_entry")
+            );
             continue;
         };
         if id == 0 {
             continue;
         }
         let parsed = (|| {
-            let kind = field(&row, 1).parse().ok()?;
-            let value1 = field(&row, 2).parse().ok()?;
-            let value2 = field(&row, 3).parse().ok()?;
-            let (value3, value4, flags) = if row.len() >= 7 {
+            let kind = field(&row, "type").parse().ok()?;
+            let value1 = field(&row, "value1").parse().ok()?;
+            let value2 = field(&row, "value2").parse().ok()?;
+            let (value3, value4, flags) = if row.has("flags") {
                 (
-                    field(&row, 4).parse().ok()?,
-                    field(&row, 5).parse().ok()?,
-                    field(&row, 6).parse().ok()?,
+                    field(&row, "value3").parse().ok()?,
+                    field(&row, "value4").parse().ok()?,
+                    field(&row, "flags").parse().ok()?,
                 )
-            } else if row.len() == 4 || row.len() == 5 {
+            } else if !row.has("value3") {
                 (0, 0, 0)
             } else {
                 return None;
@@ -71,7 +74,7 @@ pub(super) fn sql_rows(conditions: &Conditions) -> Vec<String> {
         .collect()
 }
 
-pub(super) fn resolve(row: &[String], conditions: &Conditions) -> (u32, u32, u32) {
+pub(super) fn resolve(row: &crate::world_source::Row, conditions: &Conditions) -> (u32, u32, u32) {
     let facts = CharacterFacts {
         race: 1,
         class: 1,
@@ -84,13 +87,10 @@ pub(super) fn resolve(row: &[String], conditions: &Conditions) -> (u32, u32, u32
             field(row, gmo::ID),
         )
     };
-    // Check the 15-column layout first; its column 11 is box_money, not an inline condition.
-    let reference_column = if row.len() >= gmo::NCOLS_15_CONDITION_FK {
-        Some(gmo::CONDITION_ID_15)
-    } else if row.len() >= gmo::NCOLS_WITH_INLINE_COND {
-        None
-    } else if row.len() >= gmo::NCOLS_WITH_CONDITION_FK {
+    let reference_column = if row.has(gmo::CONDITION_ID) {
         Some(gmo::CONDITION_ID)
+    } else if row.has(gmo::INLINE_COND_TYPE) {
+        None
     } else {
         return (gossip_condition::NONE, 0, 0);
     };

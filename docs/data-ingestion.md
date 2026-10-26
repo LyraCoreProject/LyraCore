@@ -17,6 +17,43 @@ into the gitignored `.import/`.
 Exact collision geometry has its own live-acceptance contract in
 [`vmap-rollout.md`](./operations/vmap-rollout.md). Importing it never turns on collision.
 
+## Transitional World Source readers
+
+The vmangos port keeps `--source classic-db` as the default. The classic-db reader takes column
+names and types from `CREATE TABLE`, checks its column contract before planning, and never executes
+the source SQL. The SQLite reader opens the file read-only, disables trusted schemas, refuses views
+and virtual tables, and checks requested field types. Both readers return the same named row type.
+The full classic-db importer requires the tables listed in `importer/src/classic_columns.rs`.
+Small source-reader tests can use individual tables through `WorldSource`.
+
+`--source vmangos` currently supports the globals census. It refuses import until the family ports
+are ready. Generate the comparison with both local sources and your client:
+
+```sh
+cargo run -p lyracore-importer -- \
+  --source vmangos --dump .import/vmangos/mangos.sqlite \
+  --census .import/classic-db-full.sql --family globals --dbc /path/to/client/Data \
+  > .claude/tickets/vmangos-port/census/globals.md
+```
+
+The report projects Module counts from selected source rows and lists added and removed natural
+keys. It compares the globals count floors from `import-manifest.sh`. Starter extras exclude client
+outfits and repeated item keys. These are import-plan measurements, not observations of a Realm.
+The existing EventAI Compatibility Manifest remains classic-db-only until S6c.
+
+`importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
+greatest eligible patch or build per primary key. Ranges include both endpoints; patch-minimum-only
+tables have no upper bound. `skill_line_ability` requires build 5875. `forbidden_items` includes the
+boundary in both directions. WOW_PATCH condition type 24 supports equality, at-least and at-most,
+and refuses values outside patches 0 through 10 or comparison codes 0 through 2. Family ports use
+the selected forbidden-item rows to remove vendor and loot entries; condition translation is S3g.
+
+The forbidden-item rules follow [ObjectMgr.cpp at vmangos commit
+464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L10789).
+WOW_PATCH follows [Conditions.cpp at the same commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Conditions.cpp#L316).
+The Rust implementation is independent. Tests cover selection boundaries, composite keys, duplicate
+revisions, invalid ranges, each WOW_PATCH comparison and the read-only SQLite boundary.
+
 ## Full source import
 
 `--world-profile` selects the World Import Scope. `lyracore import` uses `alliance-single` on

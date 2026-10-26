@@ -10,8 +10,8 @@ use crate::dump::{field, got, push_insert, sql_text};
 const MO_TRANSPORT: u32 = 15;
 
 mod tr {
-    pub const ENTRY: usize = 0;
-    pub const PERIOD: usize = 2;
+    pub const ENTRY: &str = "entry";
+    pub const PERIOD: &str = "period";
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,9 +25,9 @@ pub(crate) struct TransportCatalogueSql {
 pub(crate) fn catalogue_sql(
     paths: &TaxiPath,
     points: &TaxiPathNode,
-    dump: &str,
+    dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<TransportCatalogueSql> {
-    let templates: HashMap<u32, Vec<String>> =
+    let templates: HashMap<u32, crate::world_source::Row> =
         crate::dump::parse_complete_table(dump, "gameobject_template")?
             .into_iter()
             .filter_map(|row| Some((field(&row, got::ENTRY).parse().ok()?, row)))
@@ -52,7 +52,7 @@ pub(crate) fn catalogue_sql(
             ));
             continue;
         };
-        let number = |column: usize| -> Result<u32> {
+        let number = |column: &str| -> Result<u32> {
             field(template, column)
                 .parse()
                 .with_context(|| format!("transport {entry} template column {column} is invalid"))
