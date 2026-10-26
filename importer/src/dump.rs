@@ -178,12 +178,6 @@ pub(crate) mod pci {
     pub const AMOUNT: usize = 3;
 }
 
-pub(crate) mod gz {
-    pub const ID: usize = 0;
-    pub const GHOST_ZONE: usize = 1;
-    pub const FACTION: usize = 2;
-}
-
 pub(crate) mod at {
     pub const ID: usize = 0;
     pub const NAME: usize = 1;
@@ -473,6 +467,28 @@ fn parse_table_inserts(dump: &str, table: &str) -> (Vec<Vec<String>>, bool) {
         search = i;
     }
     (rows, complete)
+}
+
+pub(crate) fn column_index(dump: &str, table: &str, column: &str) -> Result<usize> {
+    let marker = format!("CREATE TABLE `{table}` (");
+    let start = dump
+        .find(&marker)
+        .with_context(|| format!("{table}: missing CREATE TABLE"))?
+        + marker.len();
+    let end = dump[start..]
+        .find("\n)")
+        .context("unterminated CREATE TABLE")?
+        + start;
+    dump[start..end]
+        .lines()
+        .filter_map(|line| {
+            line.trim()
+                .strip_prefix('`')?
+                .split_once('`')
+                .map(|(name, _)| name)
+        })
+        .position(|name| name == column)
+        .with_context(|| format!("{table}.{column}: missing column"))
 }
 
 pub(crate) fn field(row: &[String], idx: usize) -> &str {

@@ -7,7 +7,7 @@ use lyracore_package_delta::{
 };
 
 use crate::dump::{
-    ai, at, bt, cls, clt, cm, cmt, ct, cts, dse, field, gm, gmo, go, got, gz, insert_row_count, it,
+    ai, at, bt, cls, clt, cm, cmt, ct, cts, dse, field, gm, gmo, go, got, insert_row_count, it,
     lvl, mlt, npct, nt, nv, parse_complete_table, parse_table, pc, pca, pci, pcs, push_insert, qr,
     qt, read_dump, sc, sha256_hex, sls, spe, sql_text,
 };
@@ -289,14 +289,33 @@ fn build_start_position_sql(dump: &str) -> Vec<String> {
     stmts
 }
 
-fn build_graveyard_zone_sql(dump: &str) -> Vec<String> {
-    let rows: Vec<String> = parse_table(dump, "game_graveyard_zone")
+fn build_graveyard_zone_sql(dump: &str) -> Result<Vec<String>> {
+    let source_rows = parse_table(dump, "game_graveyard_zone");
+    let columns = if source_rows.is_empty() {
+        [0; 4]
+    } else {
+        [
+            crate::dump::column_index(dump, "game_graveyard_zone", "id")?,
+            crate::dump::column_index(dump, "game_graveyard_zone", "ghost_loc")?,
+            crate::dump::column_index(dump, "game_graveyard_zone", "faction")?,
+            crate::dump::column_index(dump, "game_graveyard_zone", "link_kind")?,
+        ]
+    };
+    for row in &source_rows {
+        let link_kind: u32 = field(row, columns[3])
+            .parse()
+            .context("game_graveyard_zone.link_kind: expected an unsigned integer")?;
+        if link_kind != 0 {
+            bail!("game_graveyard_zone.link_kind: unsupported value {link_kind}");
+        }
+    }
+    let rows: Vec<String> = source_rows
         .iter()
         .enumerate()
         .filter_map(|(i, r)| {
-            let safe_loc_id: u32 = field(r, gz::ID).parse().ok()?;
-            let zone_id: u32 = field(r, gz::GHOST_ZONE).parse().ok()?;
-            let faction: u32 = field(r, gz::FACTION).parse().ok()?;
+            let safe_loc_id: u32 = field(r, columns[0]).parse().ok()?;
+            let zone_id: u32 = field(r, columns[1]).parse().ok()?;
+            let faction: u32 = field(r, columns[2]).parse().ok()?;
             Some(format!(
                 "({},{safe_loc_id},{zone_id},{faction})",
                 i as u64 + 1
@@ -311,7 +330,7 @@ fn build_graveyard_zone_sql(dump: &str) -> Vec<String> {
         &rows,
     );
     eprintln!("graveyard zones: {} rows", rows.len());
-    stmts
+    Ok(stmts)
 }
 
 fn build_areatrigger_teleport_sql(dump: &str) -> (Vec<String>, usize) {
@@ -3350,7 +3369,7 @@ fn push_global_statements(
     if family_active(args, "globals") {
         let stats_sql = build_stats_sql(dump);
         let start_pos_sql = build_start_position_sql(dump);
-        let graveyard_sql = build_graveyard_zone_sql(dump);
+        let graveyard_sql = build_graveyard_zone_sql(dump)?;
         let createinfo_spell_sql = build_createinfo_spell_sql(dump);
         let createinfo_action_sql = build_createinfo_action_sql(dump);
         let createinfo_item_sql = build_createinfo_item_sql(dump, args.dbc.as_deref())?;
@@ -3830,8 +3849,8 @@ mod tests {
     #[test]
     fn build_graveyard_zone_sql_parses_id_ghost_zone_and_faction() {
         let dump =
-            "x INSERT INTO `game_graveyard_zone` VALUES (105,12,469),(106,12,469),(80,40,469); y";
-        let stmts = build_graveyard_zone_sql(dump);
+            "CREATE TABLE `game_graveyard_zone` (\n`id` int,\n`ghost_loc` int,\n`link_kind` int,\n`faction` int\n); INSERT INTO `game_graveyard_zone` VALUES (105,12,0,469),(106,12,0,67),(80,40,0,0); y";
+        let stmts = build_graveyard_zone_sql(dump).unwrap();
         assert_eq!(
             stmts[0],
             "DELETE FROM game_graveyard_zone WHERE row_id >= 0"
@@ -3841,8 +3860,35 @@ mod tests {
             .find(|s| s.starts_with("INSERT INTO game_graveyard_zone "))
             .unwrap();
         assert!(insert.contains("(1,105,12,469)"), "{insert}");
-        assert!(insert.contains("(2,106,12,469)"), "{insert}");
-        assert!(insert.contains("(3,80,40,469)"), "{insert}");
+        assert!(insert.contains("(2,106,12,67)"), "{insert}");
+        assert!(insert.contains("(3,80,40,0)"), "{insert}");
+    }
+
+    #[test]
+    fn graveyard_faction_follows_its_name_after_column_reordering() {
+        let dump = "CREATE TABLE `game_graveyard_zone` (\n`faction` int,\n`id` int,\n`ghost_loc` int,\n`link_kind` int\n); INSERT INTO `game_graveyard_zone` VALUES (67,105,12,0);";
+        let statements = build_graveyard_zone_sql(dump).unwrap();
+        assert!(statements[1].contains("(1,105,12,67)"));
+        let error = build_graveyard_zone_sql(&dump.replace("`faction`", "`other`")).unwrap_err();
+        assert!(error.to_string().contains("game_graveyard_zone.faction"));
+    }
+
+    #[test]
+    fn graveyard_map_links_fail_instead_of_treating_a_map_as_a_zone() {
+        let schema = "CREATE TABLE `game_graveyard_zone` (\n`link_kind` int,\n`faction` int,\n`id` int,\n`ghost_loc` int\n);";
+        for kind in [1, 2] {
+            let dump =
+                format!("{schema} INSERT INTO `game_graveyard_zone` VALUES ({kind},0,105,1);");
+            let error = build_graveyard_zone_sql(&dump).unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                format!("game_graveyard_zone.link_kind: unsupported value {kind}")
+            );
+        }
+        assert!(build_graveyard_zone_sql(&format!(
+            "{schema} INSERT INTO `game_graveyard_zone` VALUES (0,0,105,12);"
+        ))
+        .is_ok());
     }
 
     #[test]
@@ -7344,8 +7390,8 @@ mod tests {
 
     #[test]
     fn build_graveyard_zone_sql_drops_unparseable_rows_and_leaves_a_gap_in_row_id() {
-        let dump = "x INSERT INTO `game_graveyard_zone` VALUES (105,12,469),(106,'zone',469),(80,40,469); y";
-        let stmts = build_graveyard_zone_sql(dump);
+        let dump = "CREATE TABLE `game_graveyard_zone` (\n`id` int,\n`ghost_loc` int,\n`link_kind` int,\n`faction` int\n); INSERT INTO `game_graveyard_zone` VALUES (105,12,0,469),(106,'zone',0,469),(80,40,0,469); y";
+        let stmts = build_graveyard_zone_sql(dump).unwrap();
         let insert = stmts
             .iter()
             .find(|s| s.starts_with("INSERT INTO game_graveyard_zone "))
@@ -7364,7 +7410,7 @@ mod tests {
 
     #[test]
     fn build_graveyard_zone_sql_empty_dump_yields_delete_only_no_insert() {
-        let stmts = build_graveyard_zone_sql("");
+        let stmts = build_graveyard_zone_sql("").unwrap();
         assert_eq!(
             stmts,
             vec!["DELETE FROM game_graveyard_zone WHERE row_id >= 0".to_string()],
