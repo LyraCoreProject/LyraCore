@@ -1570,6 +1570,328 @@ mod gc_reap_tripwire {
 }
 
 #[cfg(test)]
+pub(crate) mod grid_cell_tripwire {
+    use crate::test_scan::{line_of, on_comment_line};
+
+    const WINDOW: usize = 400;
+
+    fn is_field_declaration(code: &str, idx: usize) -> bool {
+        let line_start = code[..idx].rfind('\n').map(|i| i + 1).unwrap_or(0);
+        let line_end = code[idx..]
+            .find('\n')
+            .map(|i| idx + i)
+            .unwrap_or(code.len());
+        let line = code[line_start..line_end].trim();
+        line.starts_with("pub grid_x") || line.starts_with("grid_x: i32")
+    }
+
+    fn is_field_position(code: &str, idx: usize) -> bool {
+        let bytes = code.as_bytes();
+        let mut i = idx;
+        while i > 0 {
+            let c = bytes[i - 1];
+            if c == b' ' || c == b'\t' || c == b'\n' || c == b'\r' {
+                i -= 1;
+                continue;
+            }
+            return c == b'{' || c == b',';
+        }
+        false
+    }
+
+    fn resolve_self_type(code: &str, idx: usize) -> Option<&str> {
+        let impl_pos = code[..idx].rfind("impl")?;
+        let after = code[impl_pos + "impl".len()..].trim_start();
+        let bytes = after.as_bytes();
+        let mut i = 0usize;
+        if bytes.first() == Some(&b'<') {
+            let mut depth = 0i32;
+            while i < bytes.len() {
+                match bytes[i] {
+                    b'<' => depth += 1,
+                    b'>' => {
+                        depth -= 1;
+                        i += 1;
+                        if depth == 0 {
+                            break;
+                        }
+                        continue;
+                    }
+                    _ => {}
+                }
+                i += 1;
+            }
+        }
+        let rest = after[i..].trim_start();
+        fn ident_at(s: &str) -> Option<&str> {
+            let end = s
+                .find(|c: char| !(c.is_ascii_alphanumeric() || c == '_'))
+                .unwrap_or(s.len());
+            if end == 0 {
+                None
+            } else {
+                Some(&s[..end])
+            }
+        }
+        if let Some(for_pos) = rest.find(" for ") {
+            return ident_at(rest[for_pos + " for ".len()..].trim_start());
+        }
+        ident_at(rest)
+    }
+
+    fn enclosing_struct_literal_type(code: &str, idx: usize) -> Option<&str> {
+        let bytes = code.as_bytes();
+        let mut depth = 0i32;
+        let mut i = idx;
+        while i > 0 {
+            i -= 1;
+            match bytes[i] {
+                b'}' => depth += 1,
+                b'{' => {
+                    if depth > 0 {
+                        depth -= 1;
+                        continue;
+                    }
+                    let mut end = i;
+                    while end > 0 && bytes[end - 1].is_ascii_whitespace() {
+                        end -= 1;
+                    }
+                    let mut start = end;
+                    while start > 0 {
+                        let c = bytes[start - 1];
+                        if c.is_ascii_alphanumeric() || c == b'_' {
+                            start -= 1;
+                        } else {
+                            break;
+                        }
+                    }
+                    if start == end {
+                        return None;
+                    }
+                    let ident = &code[start..end];
+                    if ident == "Self" {
+                        return resolve_self_type(code, i);
+                    }
+                    return ident
+                        .chars()
+                        .next()
+                        .filter(|c| c.is_ascii_uppercase())
+                        .map(|_| ident);
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    fn struct_has_cell_field(code: &str, type_name: &str) -> bool {
+        let needle = format!("struct {type_name}");
+        let mut search_from = 0usize;
+        while let Some(rel) = code[search_from..].find(&needle) {
+            let start = search_from + rel;
+            let after = start + needle.len();
+            let boundary_ok = code[after..]
+                .chars()
+                .next()
+                .map(|c| !(c.is_alphanumeric() || c == '_'))
+                .unwrap_or(true);
+            if boundary_ok {
+                if let Some(rel_brace) = code[after..].find('{') {
+                    let body_start = after + rel_brace;
+                    let mut depth = 0i32;
+                    let mut body_end = None;
+                    for (i, c) in code[body_start..].char_indices() {
+                        match c {
+                            '{' => depth += 1,
+                            '}' => {
+                                depth -= 1;
+                                if depth == 0 {
+                                    body_end = Some(body_start + i);
+                                    break;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                    if let Some(end) = body_end {
+                        if code[body_start..=end].contains("pub cell: i64") {
+                            return true;
+                        }
+                    }
+                }
+            }
+            search_from = start + needle.len();
+        }
+        false
+    }
+
+    fn grid_x_writes_missing_cell(code: &str) -> Vec<usize> {
+        let field_init = format!("{}{}", "grid_x", ": ");
+        let assign = format!("{}{}", ".grid_x", " = ");
+        let shorthand = format!("{}{}", "grid_x", ",");
+        let cell_token = "cell";
+
+        let mut violations = Vec::new();
+        for needle in [field_init.as_str(), assign.as_str(), shorthand.as_str()] {
+            for (idx, _) in code.match_indices(needle) {
+                if on_comment_line(code, idx) || is_field_declaration(code, idx) {
+                    continue;
+                }
+                if needle == shorthand.as_str() {
+                    if !is_field_position(code, idx) {
+                        continue;
+                    }
+                    let Some(type_name) = enclosing_struct_literal_type(code, idx) else {
+                        continue;
+                    };
+                    if !struct_has_cell_field(code, type_name) {
+                        continue;
+                    }
+                }
+                let mut end = (idx + WINDOW).min(code.len());
+                while !code.is_char_boundary(end) {
+                    end += 1;
+                }
+                if !code[idx..end].contains(cell_token) {
+                    violations.push(line_of(code, idx));
+                }
+            }
+        }
+        violations
+    }
+
+    #[test]
+    fn every_package_grid_x_write_also_writes_the_packed_cell() {
+        let packages = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("module/ has a parent (the repo root)")
+            .join("packages");
+        let mut violations = Vec::new();
+        for file in super::character_owned_tripwire::scanned_files() {
+            if !file.starts_with(&packages) {
+                continue;
+            }
+            let display = file.display().to_string();
+            let code = std::fs::read_to_string(&file)
+                .unwrap_or_else(|e| panic!("cannot read {display}: {e}"));
+            for line in grid_x_writes_missing_cell(&code) {
+                violations.push(format!("{display}:{line}"));
+            }
+        }
+
+        assert!(
+            violations.is_empty(),
+            "Invariant: a grid-coordinate write also writes the packed `cell`.\n\
+             a `grid_x` write with no `cell` write beside it:\n  {}\n\n\
+             `cell` packs `(grid_x, grid_y)` into the one indexed value the AOI subscription probes \
+             by equality — it is what makes the box query index-served instead of a full partition \
+             scan. It is a plain column, so nothing updates it for you: write it in the SAME \
+             statement run that writes `grid_x`/`grid_y`, via \
+             `lyracore_shared::spatial::grid_cell_id(grid_x, grid_y)` (or `cell_id_at(x, y)` when \
+             you have the world position rather than the cell). A row whose `cell` disagrees with \
+             its grid columns is not merely slow — it is addressed to the WRONG CELL, so it is \
+             invisible to the players standing on it.",
+            violations.join("\n  ")
+        );
+    }
+
+    #[test]
+    fn the_scan_rejects_a_grid_write_with_no_cell_beside_it() {
+        let bad = "fn f(e: &mut E) {\n    e.grid_x = gx;\n    e.grid_y = gy;\n}\n";
+        let needle = format!("{}{}", ".grid_x", " = ");
+        let idx = bad.find(&needle).expect("fixture must contain the shape");
+        let end = (idx + WINDOW).min(bad.len());
+        assert!(
+            !bad[idx..end].contains("cell"),
+            "the fixture is supposed to be a VIOLATION"
+        );
+        let good = "fn f(e: &mut E) {\n    e.grid_x = gx;\n    e.grid_y = gy;\n    \
+                    e.cell = spatial::grid_cell_id(gx, gy);\n}\n";
+        let idx = good.find(&needle).unwrap();
+        let end = (idx + WINDOW).min(good.len());
+        assert!(
+            good[idx..end].contains("cell"),
+            "the accompanied form must PASS"
+        );
+    }
+
+    #[test]
+    fn the_scan_catches_a_broken_shorthand_initializer() {
+        let cell_bearing_struct =
+            "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+
+        let bad = format!(
+            "{cell_bearing_struct}fn f() -> E {{\n    E {{\n        grid_x,\n        grid_y,\n    }}\n}}\n"
+        );
+        assert_eq!(
+            grid_x_writes_missing_cell(&bad).len(),
+            1,
+            "a shorthand `grid_x,` field with no `cell` field beside it must be a VIOLATION"
+        );
+
+        let good = format!(
+            "{cell_bearing_struct}fn f() -> E {{\n    E {{\n        grid_x,\n        grid_y,\n        cell,\n    }}\n}}\n"
+        );
+        assert!(
+            grid_x_writes_missing_cell(&good).is_empty(),
+            "a shorthand initializer that also sets `cell` must PASS"
+        );
+
+        let read = "fn f() {\n    let cell = grid_cell_id(grid_x, grid_y);\n}\n";
+        assert!(
+            grid_x_writes_missing_cell(read).is_empty(),
+            "`grid_x,` as a function-call ARGUMENT (a read) must not be mistaken for a write"
+        );
+
+        let no_cell_struct = "struct NoCell {\n    pub grid_x: i32,\n    pub grid_y: i32,\n}\n";
+        let no_cell_use = format!(
+            "{no_cell_struct}fn f() -> NoCell {{\n    NoCell {{\n        grid_x,\n        grid_y,\n    }}\n}}\n"
+        );
+        assert!(
+            grid_x_writes_missing_cell(&no_cell_use).is_empty(),
+            "a type with no `cell` column must not be flagged for lacking one"
+        );
+    }
+
+    #[test]
+    fn the_scan_catches_a_broken_self_shorthand_initializer() {
+        let bad = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n\
+                   impl E {\n    fn f() -> Self {\n        Self {\n            grid_x,\n            grid_y,\n        }\n    }\n}\n";
+        assert_eq!(
+            grid_x_writes_missing_cell(bad).len(),
+            1,
+            "a broken `Self {{ .. }}` shorthand initializer must be a VIOLATION"
+        );
+
+        let good = "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n\
+                    impl E {\n    fn f() -> Self {\n        Self {\n            grid_x,\n            grid_y,\n            cell,\n        }\n    }\n}\n";
+        assert!(
+            grid_x_writes_missing_cell(good).is_empty(),
+            "a `Self {{ .. }}` shorthand initializer that also sets `cell` must PASS"
+        );
+    }
+
+    #[test]
+    fn the_scan_catches_a_broken_compact_one_line_shorthand() {
+        let cell_bearing_struct =
+            "struct E {\n    pub grid_x: i32,\n    pub grid_y: i32,\n    pub cell: i64,\n}\n";
+
+        let bad = format!("{cell_bearing_struct}fn f() -> E {{ E {{ grid_x, grid_y }} }}\n");
+        assert_eq!(
+            grid_x_writes_missing_cell(&bad).len(),
+            1,
+            "a broken compact one-line shorthand initializer must be a VIOLATION"
+        );
+
+        let good = format!("{cell_bearing_struct}fn f() -> E {{ E {{ grid_x, grid_y, cell }} }}\n");
+        assert!(
+            grid_x_writes_missing_cell(&good).is_empty(),
+            "a compact one-line shorthand initializer that also sets `cell` must PASS"
+        );
+    }
+}
+
+#[cfg(test)]
 pub(crate) mod grid_address_writes {
     use std::collections::BTreeSet;
 
