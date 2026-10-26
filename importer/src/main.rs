@@ -452,8 +452,23 @@ where
         {
             bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals, without --apply");
         }
-    } else if a.source == world_source::SourceKind::Vmangos {
-        bail!("vmangos family imports are not ported yet; use --source vmangos with --census <classic.sql> --family globals");
+    } else if a.source == world_source::SourceKind::Vmangos
+        && (a.dump.is_none()
+            || a.family.as_deref() != Some("globals")
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.go_models.is_some()
+            || a.spells
+            || a.talents
+            || a.print_extents)
+    {
+        bail!("vmangos currently supports --dump <sqlite> --family globals");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -492,6 +507,7 @@ impl Args {
 
     fn world_import_args(&self) -> Result<world_import::WorldImportArgs> {
         Ok(world_import::WorldImportArgs {
+            source: self.source,
             dbc: self.dbc.clone(),
             family: self.family.clone(),
             world_profile: self.world_profile,

@@ -27,8 +27,9 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos` currently supports the globals census. It refuses import until the family ports
-are ready. Generate the comparison with both local sources and your client:
+`--source vmangos --family globals` imports globals from the selected SQLite rows. Other families
+are still being ported. Both world profiles use the same globals catalogue. Generate the comparison
+with both local sources and your client:
 
 ```sh
 cargo run -p lyracore-importer -- \
@@ -37,10 +38,17 @@ cargo run -p lyracore-importer -- \
   > .claude/tickets/vmangos-port/census/globals.md
 ```
 
-The report projects Module counts from selected source rows and lists added and removed natural
-keys. It compares the globals count floors from `import-manifest.sh`. Starter extras exclude client
+The report checks Module counts against the production globals plan and lists added and removed
+natural keys. It compares the globals count floors from `import-manifest.sh`. Starter extras exclude client
 outfits and repeated item keys. These are import-plan measurements, not observations of a Realm.
 The existing EventAI Compatibility Manifest remains classic-db-only until S6c.
+
+The vmangos globals Compatibility Manifest reports portal conditions that the Module cannot apply.
+Those portals remain in the catalogue at current parity. The Module resolves graveyards from area
+links first, then zone links when no area candidate meets its faction and destination checks. This
+follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
+464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L7512-L7524).
+The existing dungeon entrance and static fallbacks remain after the imported links.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
