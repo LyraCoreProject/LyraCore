@@ -876,7 +876,9 @@ fn build_gossip_sql(dump: &str, creature_entries: &std::collections::HashSet<u64
     let mut npc_text_rows: Vec<String> = Vec::new();
     let mut npc_text_slot_rows: Vec<String> = Vec::new();
     let mut slot_row_id: u64 = 1;
-    for &text_id in &needed_text_ids {
+    let mut needed_text_ids: Vec<_> = needed_text_ids.into_iter().collect();
+    needed_text_ids.sort_unstable();
+    for text_id in needed_text_ids {
         let Some(text) = npc_texts.get(&text_id) else {
             continue;
         };
@@ -4596,7 +4598,24 @@ mod tests {
             etl.profile_option_rows[1],
             "(2,6688,0,1,'Second option',1,12,7,501,0)"
         );
-        assert_eq!(etl.npc_text_rows.len(), 4);
+        assert_eq!(
+            etl.npc_text_rows,
+            [
+                "(5001,'One')",
+                "(5002,'Two')",
+                "(5003,'Three')",
+                "(5004,'Four')"
+            ]
+        );
+        assert_eq!(
+            etl.npc_text_slot_rows,
+            [
+                "(1,5001,0,'One','',1)",
+                "(2,5002,0,'Two','',1)",
+                "(3,5003,0,'Three','',1)",
+                "(4,5004,0,'Four','',1)",
+            ]
+        );
     }
 
     #[test]
