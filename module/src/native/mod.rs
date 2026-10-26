@@ -692,3 +692,102 @@ fn actor(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, String> 
     crate::taxi::reject_action_while_in_flight(ctx, guid)?;
     Ok(entity)
 }
+
+#[cfg(test)]
+mod tests {
+    use spacetimedb::sats::bsatn;
+    use spacetimedb::ConnectionId;
+
+    use super::{NativeAoi, NativeAudience, NativeCipher, NativePacket, NativeRecipient};
+
+    include!(concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/../native-host/src/delivery_rows.rs"
+    ));
+
+    const CONNECTION: ConnectionId = ConnectionId::from_u128(7);
+
+    fn packet(
+        id: u64,
+        audience: NativeAudience,
+        opcode: Option<u16>,
+        body: Vec<u8>,
+    ) -> NativePacket {
+        NativePacket {
+            id,
+            audience,
+            opcode,
+            body,
+            close_after: false,
+            not_before_micros: 0,
+            authentication_complete: false,
+        }
+    }
+
+    #[test]
+    fn cipher_row_matches_the_host_fixture() {
+        let cipher = NativeCipher {
+            connection_id: CONNECTION,
+            username: "AB".into(),
+            session_key: vec![1, 2],
+            client_seed: 9,
+            client_proof: vec![3],
+        };
+        assert_eq!(bsatn::to_vec(&cipher).unwrap(), CIPHER);
+    }
+
+    #[test]
+    fn packet_rows_match_the_host_fixture() {
+        let recipient = || NativeRecipient {
+            connection_id: CONNECTION,
+            layer: 2,
+            entity_guid: 8,
+        };
+        let rows = [
+            (
+                NativePacket {
+                    close_after: true,
+                    not_before_micros: 6,
+                    ..packet(
+                        1,
+                        NativeAudience::Connection(CONNECTION),
+                        Some(0x1dd),
+                        vec![42],
+                    )
+                },
+                CONNECTION_PACKET,
+            ),
+            (
+                NativePacket {
+                    authentication_complete: true,
+                    ..packet(
+                        2,
+                        NativeAudience::Aoi(NativeAoi {
+                            layer: 1,
+                            entity_guid: 8,
+                            exclude_connection: Some(CONNECTION),
+                        }),
+                        Some(0xb5),
+                        vec![43, 44],
+                    )
+                },
+                AOI_PACKET,
+            ),
+            (
+                packet(3, NativeAudience::Grant(recipient()), None, Vec::new()),
+                GRANT_PACKET,
+            ),
+            (
+                packet(4, NativeAudience::Revoke(recipient()), Some(0xaa), vec![8]),
+                REVOKE_PACKET,
+            ),
+            (
+                packet(5, NativeAudience::Clear(CONNECTION), None, Vec::new()),
+                CLEAR_PACKET,
+            ),
+        ];
+        for (row, fixture) in rows {
+            assert_eq!(bsatn::to_vec(&row).unwrap(), fixture, "packet {}", row.id);
+        }
+    }
+}
