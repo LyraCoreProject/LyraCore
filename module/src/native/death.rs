@@ -7,7 +7,7 @@ use lyracore_protocol::{
 };
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
     game_corpse,
     spell::{game_resurrect_request, game_self_resurrect_option, ResurrectRequest},
@@ -19,8 +19,8 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let character = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    let character = super::actor(ctx, guid)?;
     let result = match message {
         ClientOpcodeMessage::CMSG_REPOP_REQUEST => crate::world::do_repop(ctx, guid),
         ClientOpcodeMessage::MSG_CORPSE_QUERY => {
@@ -33,12 +33,12 @@ pub(super) fn receive(
                 .map(|corpse| (corpse.map_id, corpse.x, corpse.y, corpse.z));
             let response =
                 codec::build_corpse_query_response(location).map_err(|error| error.to_string())?;
-            return super::send(
+            return Ok(super::send(
                 ctx,
                 connection,
                 ServerOpcodeMessage::MSG_CORPSE_QUERY(Box::new(response)),
                 false,
-            );
+            )?);
         }
         ClientOpcodeMessage::CMSG_RECLAIM_CORPSE(_) => {
             crate::corpse::apply_reclaim_corpse(ctx, character)
@@ -57,13 +57,12 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_SELF_RES => crate::spell::do_self_resurrect(ctx, guid),
         ClientOpcodeMessage::CMSG_SPIRIT_HEALER_ACTIVATE(request) => {
-            crate::ghost::spirit_healer_gate(ctx, guid, request.guid.guid())
-                .map_err(super::rollback_silent)?;
+            crate::ghost::spirit_healer_gate(ctx, guid, request.guid.guid())?;
             crate::world::do_spirit_healer_res(ctx, guid)
         }
         _ => return Err("not a native death request".into()),
     };
-    result.map_err(super::rollback_silent)
+    Ok(result?)
 }
 
 pub(super) fn confirm_spirit_healer(

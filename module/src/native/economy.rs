@@ -5,10 +5,12 @@ use lyracore_protocol::{
 use lyracore_shared::constants::npc_flags;
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::items::{
     game_character_buyback, game_item_instance, game_item_random_property, game_item_template,
     game_npc_vendor, BuybackEntry,
 };
+use crate::Refusal;
 
 fn interaction(
     ctx: &ReducerContext,
@@ -34,7 +36,7 @@ pub(super) fn vendor(
     connection: ConnectionId,
     guid: u64,
     npc: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let npc = interaction(ctx, guid, npc, npc_flags::VENDOR)?;
     let mut stock: Vec<_> = ctx
         .db
@@ -71,14 +73,14 @@ pub(super) fn bank(
     connection: ConnectionId,
     guid: u64,
     npc: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     interaction(ctx, guid, npc, npc_flags::BANKER)?;
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_SHOW_BANK(codec::build_show_bank(npc)),
         false,
-    )
+    )?)
 }
 
 fn buyback(ctx: &ReducerContext, guid: u64) -> Vec<BuybackEntry> {
@@ -179,22 +181,23 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     match message {
         ClientOpcodeMessage::CMSG_LIST_INVENTORY(c) => {
-            vendor(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(vendor(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_BANKER_ACTIVATE(c) => {
-            bank(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(bank(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_BUY_ITEM(c) => {
             let vendor = c.vendor.guid();
             super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| {
                     crate::items::apply_buy_item(ctx, guid, vendor, c.item, u32::from(c.amount))
                 })
                 .map_err(|reason| {
-                    super::rollback_reply(
+                    Rollback::reply(
                         ServerOpcodeMessage::SMSG_BUY_FAILED(Box::new(codec::build_buy_failed(
                             vendor, c.item, &reason,
                         ))),
@@ -205,6 +208,7 @@ pub(super) fn receive(
         ClientOpcodeMessage::CMSG_SELL_ITEM(c) => {
             let previous = buyback(ctx, guid).len();
             let result = super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| owned_slot(ctx, guid, c.item.guid()))
                 .and_then(|slot| {
                     crate::items::apply_item_sell_count(
@@ -216,7 +220,7 @@ pub(super) fn receive(
                     )
                 });
             result.map_err(|reason| {
-                super::rollback_reply(
+                Rollback::reply(
                     ServerOpcodeMessage::SMSG_SELL_ITEM(Box::new(codec::build_sell_item_refusal(
                         c.vendor.guid(),
                         c.item.guid(),
@@ -225,7 +229,13 @@ pub(super) fn receive(
                     reason,
                 )
             })?;
-            send_buyback(ctx, connection, guid, &buyback(ctx, guid), previous)
+            Ok(send_buyback(
+                ctx,
+                connection,
+                guid,
+                &buyback(ctx, guid),
+                previous,
+            )?)
         }
         ClientOpcodeMessage::CMSG_BUYBACK_ITEM(c) => {
             let previous = buyback(ctx, guid).len();
@@ -233,15 +243,19 @@ pub(super) fn receive(
             if !(69..81).contains(&slot) {
                 return Ok(());
             }
-            super::actor(ctx, guid)
-                .and_then(|_| {
-                    crate::items::apply_buyback_item(ctx, guid, c.guid.guid(), (slot - 69) as u8)
-                })
-                .map_err(super::rollback_silent)?;
-            send_buyback(ctx, connection, guid, &buyback(ctx, guid), previous)
+            super::actor(ctx, guid)?;
+            crate::items::apply_buyback_item(ctx, guid, c.guid.guid(), (slot - 69) as u8)?;
+            Ok(send_buyback(
+                ctx,
+                connection,
+                guid,
+                &buyback(ctx, guid),
+                previous,
+            )?)
         }
         ClientOpcodeMessage::CMSG_REPAIR_ITEM(c) => {
             let result = super::actor(ctx, guid)
+                .map_err(String::from)
                 .and_then(|_| {
                     if c.item.guid() == 0 {
                         Ok(u8::MAX)
@@ -251,7 +265,7 @@ pub(super) fn receive(
                 })
                 .and_then(|slot| crate::items::apply_player_repair(ctx, guid, c.npc.guid(), slot));
             result.map_err(|reason| {
-                super::rollback_reply(
+                Rollback::reply(
                     ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
                         codec::build_gm_system_message(reason.clone()),
                     )),
@@ -260,7 +274,7 @@ pub(super) fn receive(
             })
         }
         ClientOpcodeMessage::CMSG_BUY_BANK_SLOT(c) => {
-            let result = super::actor(ctx, guid).and_then(|_| {
+            let result = super::actor(ctx, guid).map_err(String::from).and_then(|_| {
                 crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
                     ctx,
                     guid,
@@ -272,8 +286,8 @@ pub(super) fn receive(
                     result.as_ref().map(|_| ()).map_err(String::as_str),
                 ));
             match result {
-                Ok(()) => super::send(ctx, connection, reply, false),
-                Err(reason) => Err(super::rollback_reply(reply, reason)),
+                Ok(()) => Ok(super::send(ctx, connection, reply, false)?),
+                Err(reason) => Err(Rollback::reply(reply, reason)),
             }
         }
         ClientOpcodeMessage::CMSG_AUTOBANK_ITEM(c) => {
@@ -286,14 +300,15 @@ pub(super) fn receive(
     }
 }
 
-fn auto_bank(ctx: &ReducerContext, guid: u64, bag: u8, slot: u8) -> Result<(), String> {
+fn auto_bank(ctx: &ReducerContext, guid: u64, bag: u8, slot: u8) -> Result<(), Rollback> {
     let result = super::actor(ctx, guid)
+        .map_err(String::from)
         .and_then(|_| {
             codec::inventory_slot(bag, slot).ok_or_else(|| "invalid inventory slot".into())
         })
         .and_then(|slot| crate::items::apply_auto_bank_item(ctx, guid, slot));
     result.map_err(|reason| {
-        super::rollback_reply(
+        Rollback::reply(
             ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(Box::new(
                 codec::build_inventory_change_failure(),
             )),

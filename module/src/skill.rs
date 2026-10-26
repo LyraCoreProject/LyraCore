@@ -712,6 +712,7 @@ pub fn debug_learn_profession_from_trainer(
     })
     .ok_or_else(|| "no live trainer near learner".to_string())?;
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[cfg(feature = "debug_reducers")]
@@ -744,6 +745,7 @@ pub fn debug_learn_weapon_from_trainer(
     })
     .ok_or_else(|| "no live trainer near learner".to_string())?;
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 pub(crate) const LEARN_APPRENTICE_RIDING_SPELL_ID: u32 = 50132;
@@ -792,6 +794,7 @@ pub fn debug_learn_riding_from_trainer(
     })
     .ok_or_else(|| "no live trainer near learner".to_string())?;
     crate::trainer::apply_trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 pub(crate) fn class_starting_weapon_skill_lines(class: u8) -> &'static [u32] {

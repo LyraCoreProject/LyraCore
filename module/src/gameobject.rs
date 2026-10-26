@@ -7,6 +7,7 @@ use crate::game_gameobject_loot;
 use crate::game_player_skill;
 use crate::game_world_entity;
 use crate::nav::game_nav_chunk;
+use crate::spell::{CastGateRefusal, CastRefusalReason};
 use crate::terrain::game_terrain_chunk;
 
 pub mod go_type {
@@ -420,6 +421,41 @@ pub(crate) fn usable_go(
     caster_guid: u64,
     go_guid: u64,
 ) -> Result<(GameObject, GameObjectTemplate), crate::actor::ActionRefusal> {
+    reachable_go(ctx, caster_guid, go_guid).map_err(Into::into)
+}
+
+enum ReachRefusal {
+    OtherMap,
+    OtherInstance,
+    OutOfRange,
+    Refused(crate::actor::ActionRefusal),
+}
+
+impl From<ReachRefusal> for crate::actor::ActionRefusal {
+    fn from(refusal: ReachRefusal) -> Self {
+        use crate::actor::{ActionRefusal, ActionRefusalKind};
+        match refusal {
+            ReachRefusal::OtherMap => ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "gameobject on another map",
+            ),
+            ReachRefusal::OtherInstance => ActionRefusal::new(
+                ActionRefusalKind::OtherPartition,
+                "gameobject in another instance",
+            ),
+            ReachRefusal::OutOfRange => {
+                ActionRefusal::new(ActionRefusalKind::OutOfRange, "gameobject out of range")
+            }
+            ReachRefusal::Refused(refusal) => refusal,
+        }
+    }
+}
+
+fn reachable_go(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    go_guid: u64,
+) -> Result<(GameObject, GameObjectTemplate), ReachRefusal> {
     use crate::actor::{ActionRefusal, ActionRefusalKind};
 
     let go = ctx
@@ -428,28 +464,26 @@ pub(crate) fn usable_go(
         .guid()
         .find(go_guid)
         .ok_or_else(|| {
-            ActionRefusal::new(ActionRefusalKind::MissingTarget, "no such gameobject")
+            ReachRefusal::Refused(ActionRefusal::new(
+                ActionRefusalKind::MissingTarget,
+                "no such gameobject",
+            ))
         })?;
-    let player = crate::helpers::live_entity(ctx, caster_guid)
-        .map_err(|_| ActionRefusal::new(ActionRefusalKind::MissingActor, "user not in world"))?;
+    let player = crate::helpers::live_entity(ctx, caster_guid).map_err(|_| {
+        ReachRefusal::Refused(ActionRefusal::new(
+            ActionRefusalKind::MissingActor,
+            "user not in world",
+        ))
+    })?;
     if player.map_id != go.map_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "gameobject on another map",
-        ));
+        return Err(ReachRefusal::OtherMap);
     }
     if player.instance_id != go.instance_id {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OtherPartition,
-            "gameobject in another instance",
-        ));
+        return Err(ReachRefusal::OtherInstance);
     }
     let (dx, dy, dz) = (go.x - player.x, go.y - player.y, go.z - player.z);
     if dx * dx + dy * dy + dz * dz > USE_RANGE_SQ {
-        return Err(ActionRefusal::new(
-            ActionRefusalKind::OutOfRange,
-            "gameobject out of range",
-        ));
+        return Err(ReachRefusal::OutOfRange);
     }
     let tmpl = ctx
         .db
@@ -457,10 +491,10 @@ pub(crate) fn usable_go(
         .entry()
         .find(go.template_entry)
         .ok_or_else(|| {
-            ActionRefusal::new(
+            ReachRefusal::Refused(ActionRefusal::new(
                 ActionRefusalKind::MissingTarget,
                 format!("no gameobject template {}", go.template_entry),
-            )
+            ))
         })?;
     Ok((go, tmpl))
 }
@@ -469,10 +503,16 @@ pub(crate) fn apply_pick_lock(
     ctx: &ReducerContext,
     caster_guid: u64,
     go_guid: u64,
-) -> Result<(), String> {
-    let (_go, tmpl) = usable_go(ctx, caster_guid, go_guid).map_err(String::from)?;
+) -> Result<(), CastGateRefusal> {
+    let (_go, tmpl) = reachable_go(ctx, caster_guid, go_guid).map_err(|refusal| {
+        let reason = match refusal {
+            ReachRefusal::OtherMap | ReachRefusal::OutOfRange => CastRefusalReason::OutOfRange,
+            ReachRefusal::OtherInstance | ReachRefusal::Refused(_) => CastRefusalReason::Unreported,
+        };
+        CastGateRefusal::other(reason, crate::actor::ActionRefusal::from(refusal).detail)
+    })?;
     if tmpl.lock_id == 0 {
-        return Err("it is not locked".to_string());
+        return Err("it is not locked".to_string().into());
     }
     if ctx
         .db
@@ -511,7 +551,7 @@ pub(crate) fn apply_pick_lock(
         }
     }
     if !satisfied {
-        return Err("your Lockpicking is too low".to_string());
+        return Err("your Lockpicking is too low".to_string().into());
     }
     ctx.db
         .game_gameobject_unlocked()
@@ -522,7 +562,6 @@ pub(crate) fn apply_pick_lock(
     Ok(())
 }
 
-#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn request_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -532,6 +571,7 @@ pub(crate) fn request_use_gameobject(
     use_resolved_gameobject(ctx, caster_guid, go, tmpl).map_err(Into::into)
 }
 
+#[cfg_attr(not(has_packages), allow(dead_code))]
 pub(crate) fn apply_use_gameobject(
     ctx: &ReducerContext,
     caster_guid: u64,
@@ -779,7 +819,7 @@ pub fn debug_pick_lock_entry(
         .iter()
         .find(|g| g.template_entry == go_entry)
         .ok_or_else(|| format!("no spawned gameobject of entry {go_entry}"))?;
-    apply_pick_lock(ctx, character_guid, go.guid)
+    Ok(apply_pick_lock(ctx, character_guid, go.guid)?)
 }
 
 #[reducer]

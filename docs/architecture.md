@@ -38,11 +38,12 @@ World entry registers the Character as an AOI viewer after self CREATE and befor
 Sessionless Characters stay AOI subjects but allocate no viewer Grants, so Companion populations
 create no delivery subscriptions for Characters without native connections.
 
-An expected request failure returns a `native_reply:` envelope, a JSON list of Module-encoded
-packets. The list is empty for a silent Refusal. The failed transaction rolls back. The Host parses
-the list and submits its packets to `native_world_reply` on the same connection, which emits the
-Refusal through the ordered output stream. The Host does not classify gameplay errors. Any other
-failure closes the connection.
+A request handler returns a Rollback when the request does not commit. `native_world_receive`
+writes a Refusal rollback as a `native_reply:` envelope, a JSON list of Module-encoded packets. The
+list is empty for a silent Refusal. The failed transaction rolls back. The Host parses the list and
+submits its packets to `native_world_reply` on the same connection, which emits the Refusal through
+the ordered output stream. The Host does not classify gameplay errors. A failure rollback returns
+plain text, and the Host closes the connection.
 
 ### Host, listeners and admission
 

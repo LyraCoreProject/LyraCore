@@ -9,7 +9,7 @@ use lyracore_protocol::{
 use lyracore_shared::chat::{broadcast_chat, chat_kind, chat_tag_for, language, ChatRefusal};
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::{game_native_player, NativeWorldConnection};
+use super::{game_native_player, NativeWorldConnection, Rollback};
 use crate::{
     aoi::game_aoi_viewer,
     away::game_character_away,
@@ -48,12 +48,11 @@ pub(super) fn receive(
     connection: NativeWorldConnection,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::acting_entity_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
     let id = connection.connection_id;
     if let Some(notice) = super::chat_flood::judge(ctx, connection, &actor, &message) {
-        return super::send(ctx, id, notice, false);
+        return Ok(super::send(ctx, id, notice, false)?);
     }
     let needs_ground_actor = match &message {
         ClientOpcodeMessage::CMSG_MESSAGECHAT(chat) => matches!(
@@ -85,7 +84,7 @@ pub(super) fn receive(
                 }
                 return crate::gm::apply_gm_command(ctx, actor, false, chat.message).map_err(
                     |cause| {
-                        super::rollback_reply(
+                        Rollback::reply(
                             ServerOpcodeMessage::SMSG_MESSAGECHAT(Box::new(
                                 codec::build_gm_system_message(cause.clone()),
                             )),
@@ -95,8 +94,7 @@ pub(super) fn receive(
                 );
             }
             if matches!(kind, chat_kind::AFK | chat_kind::DND) {
-                return crate::away::apply_set_away(ctx, actor, kind, chat.message)
-                    .map_err(super::rollback_silent);
+                return Ok(crate::away::apply_set_away(ctx, actor, kind, chat.message)?);
             }
             if let CMSG_MESSAGECHAT_ChatType::Whisper { target_player } = chat.chat_type {
                 return whisper(
@@ -159,8 +157,7 @@ pub(super) fn receive(
                     emote.text_emote.as_int(),
                     emote.emote,
                     emote.target.guid(),
-                )
-                .map_err(super::rollback_silent)?;
+                )?;
             }
         }
         ClientOpcodeMessage::CMSG_CHAT_IGNORED(ignored) => {
@@ -192,7 +189,7 @@ fn refused(
     kind: u8,
     channel: String,
     refusal: ChatRefusal,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let response = match refusal {
         ChatRefusal::UnknownLanguage => {
             ServerOpcodeMessage::SMSG_NOTIFICATION(Box::new(SMSG_NOTIFICATION {
@@ -221,7 +218,7 @@ fn refused(
         }
         _ => return Ok(()),
     };
-    super::send(ctx, connection, response, false)
+    Ok(super::send(ctx, connection, response, false)?)
 }
 
 pub(super) fn ignores(ctx: &ReducerContext, listener: u64, speaker: u64) -> bool {
@@ -240,18 +237,18 @@ fn whisper(
     language: u32,
     message: String,
     target_name: String,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let target = crate::helpers::character_by_name(ctx, &target_name)
         .filter(|target| super::is_player(ctx, target.guid));
     let Some(target) = target else {
-        return super::send(
+        return Ok(super::send(
             ctx,
             connection,
             ServerOpcodeMessage::SMSG_CHAT_PLAYER_NOT_FOUND(Box::new(SMSG_CHAT_PLAYER_NOT_FOUND {
                 name: target_name,
             })),
             false,
-        );
+        )?);
     };
     let away = ctx
         .db

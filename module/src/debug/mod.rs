@@ -178,17 +178,17 @@ pub fn debug_age_corpse(
 
 #[reducer]
 pub fn debug_repop(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::repop(ctx, character_guid)
+    Ok(crate::actor::repop(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_spirit_healer_res(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::spirit_res(ctx, character_guid)
+    Ok(crate::actor::spirit_res(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_self_resurrect(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::actor::self_resurrect(ctx, character_guid)
+    Ok(crate::actor::self_resurrect(ctx, character_guid)?)
 }
 
 #[reducer]
@@ -197,7 +197,11 @@ pub fn debug_resurrect_response(
     character_guid: u64,
     accept: bool,
 ) -> Result<(), String> {
-    crate::spell::do_resurrect_response(ctx, character_guid, accept)
+    Ok(crate::spell::do_resurrect_response(
+        ctx,
+        character_guid,
+        accept,
+    )?)
 }
 
 #[reducer]
@@ -827,7 +831,7 @@ pub fn debug_begin_cast(
     target_guid: u64,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, caster_guid)?;
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         caster_guid,
         spell_id,
@@ -835,7 +839,7 @@ pub fn debug_begin_cast(
         target_guid,
         false,
         None,
-    )
+    )?)
 }
 
 #[reducer]
@@ -854,7 +858,7 @@ pub fn debug_cast_spell_at(
     } else {
         target_guid
     };
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         caster_guid,
         spell_id,
@@ -862,7 +866,7 @@ pub fn debug_cast_spell_at(
         target,
         false,
         Some((x, y, z)),
-    )
+    )?)
 }
 
 #[reducer]
@@ -1119,7 +1123,11 @@ pub fn debug_push_quest(
     character_guid: u64,
     quest_entry: u32,
 ) -> Result<(), String> {
-    crate::quest::apply_push_quest_to_party(ctx, character_guid, quest_entry)
+    Ok(crate::quest::apply_push_quest_to_party(
+        ctx,
+        character_guid,
+        quest_entry,
+    )?)
 }
 
 #[reducer]
@@ -1239,17 +1247,17 @@ pub fn debug_skin_nearest(ctx: &ReducerContext, character_guid: u64) -> Result<(
     })
     .ok_or_else(|| "no skinnable beast corpse near".to_string())?
     .guid;
-    crate::loot::skin_corpse(ctx, character_guid, corpse_guid)
+    Ok(crate::loot::skin_corpse(ctx, character_guid, corpse_guid)?)
 }
 
 #[reducer]
 pub fn debug_fish(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
-    crate::loot::apply_fish(ctx, character_guid)
+    Ok(crate::loot::apply_fish(ctx, character_guid)?)
 }
 
 #[reducer]
 pub fn debug_disenchant(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    crate::loot::apply_disenchant(ctx, character_guid, slot)
+    Ok(crate::loot::apply_disenchant(ctx, character_guid, slot)?)
 }
 
 #[reducer]
@@ -1259,7 +1267,12 @@ pub fn debug_enchant_item(
     target_slot: u8,
     enchant_id: u32,
 ) -> Result<(), String> {
-    crate::loot::apply_enchant_item(ctx, character_guid, target_slot, enchant_id)
+    Ok(crate::loot::apply_enchant_item(
+        ctx,
+        character_guid,
+        target_slot,
+        enchant_id,
+    )?)
 }
 
 #[reducer]
@@ -1275,7 +1288,12 @@ pub fn debug_ranged_attack_nearest(
     })
     .ok_or_else(|| "no live creature near attacker".to_string())?
     .guid;
-    crate::actor::ranged_attack(ctx, attacker_guid, target_guid, spell_id)
+    Ok(crate::actor::ranged_attack(
+        ctx,
+        attacker_guid,
+        target_guid,
+        spell_id,
+    )?)
 }
 
 #[reducer]
@@ -1449,6 +1467,7 @@ pub fn debug_buy_trainer_spell(
         .find(|e| e.entry == trainer_entry && !e.is_player())
         .ok_or_else(|| format!("no spawned trainer with entry {trainer_entry}"))?;
     crate::actor::trainer_buy(ctx, character_guid, trainer.guid, spell_id)
+        .map_err(|refusal| refusal.as_tag().into())
 }
 
 #[reducer]
@@ -1458,7 +1477,10 @@ pub fn debug_learn_talent(
     talent_id: u32,
 ) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;
-    crate::talent::do_learn_talent(ctx, character_guid, e.owner_identity, talent_id).map(|_| ())
+    Ok(
+        crate::talent::do_learn_talent(ctx, character_guid, e.owner_identity, talent_id)
+            .map(|_| ())?,
+    )
 }
 
 #[reducer]
@@ -1570,7 +1592,7 @@ pub fn debug_cast_spell(
     } else {
         target_guid
     };
-    crate::spell::begin_cast(
+    Ok(crate::spell::begin_cast(
         ctx,
         character_guid,
         spell_id,
@@ -1578,7 +1600,7 @@ pub fn debug_cast_spell(
         target,
         false,
         None,
-    )
+    )?)
 }
 
 #[reducer]

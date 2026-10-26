@@ -8,8 +8,10 @@ use lyracore_protocol::{
 use lyracore_shared::trainer::TrainerRefusal;
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::{
     skill::game_player_skill, spell::spellbook::game_player_spell, trainer::game_trainer_spell,
+    Refusal,
 };
 
 pub(super) fn list(
@@ -17,7 +19,7 @@ pub(super) fn list(
     connection: ConnectionId,
     guid: u64,
     trainer: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let character = super::actor(ctx, guid)?;
     let trainer = crate::trainer::validate_trainer_interaction(ctx, &character, trainer)?;
     let learned: std::collections::HashSet<_> = ctx
@@ -54,7 +56,7 @@ pub(super) fn list(
         })
         .collect();
     spells.sort_by_key(|row| row.spell_id);
-    super::send(
+    Ok(super::send(
         ctx,
         connection,
         ServerOpcodeMessage::SMSG_TRAINER_LIST(Box::new(codec::build_trainer_list(
@@ -63,7 +65,7 @@ pub(super) fn list(
             "I can teach you a thing or two.",
         ))),
         false,
-    )
+    )?)
 }
 
 pub(super) fn receive(
@@ -71,57 +73,61 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     match message {
         ClientOpcodeMessage::CMSG_LEARN_TALENT(c) => {
-            let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
-            crate::talent::do_learn_talent(ctx, guid, actor.owner_identity, c.talent.as_int())
-                .map_err(super::rollback_silent)?;
+            let actor = super::actor(ctx, guid)?;
+            crate::talent::do_learn_talent(ctx, guid, actor.owner_identity, c.talent.as_int())?;
             Ok(())
         }
         ClientOpcodeMessage::CMSG_TRAINER_LIST(c) => {
-            list(ctx, connection, guid, c.guid.guid()).map_err(super::rollback_silent)
+            Ok(list(ctx, connection, guid, c.guid.guid())?)
         }
         ClientOpcodeMessage::CMSG_TRAINER_BUY_SPELL(c) => {
-            super::actor(ctx, guid)
-                .and_then(|_| crate::trainer::apply_trainer_buy(ctx, guid, c.guid.guid(), c.id))
-                .map_err(|reason| {
-                    let failure = match TrainerRefusal::parse_tag(&reason) {
-                        Some(TrainerRefusal::NotEnoughMoney) => {
-                            TrainingFailureReason::NotEnoughMoney
-                        }
-                        Some(TrainerRefusal::LevelTooLow | TrainerRefusal::PreviousRankMissing) => {
-                            TrainingFailureReason::NotEnoughSkill
-                        }
-                        _ => TrainingFailureReason::Unavailable,
-                    };
-                    super::rollback_reply(
-                        ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(Box::new(
-                            codec::build_trainer_buy_failed(c.guid.guid(), c.id, failure),
-                        )),
-                        reason,
-                    )
-                })?;
-            super::send(
+            let buy_failed = |reason, cause: &str| {
+                Rollback::reply(
+                    ServerOpcodeMessage::SMSG_TRAINER_BUY_FAILED(Box::new(
+                        codec::build_trainer_buy_failed(c.guid.guid(), c.id, reason),
+                    )),
+                    cause,
+                )
+            };
+            super::actor(ctx, guid).map_err(|refusal| {
+                buy_failed(TrainingFailureReason::Unavailable, &refusal.to_string())
+            })?;
+            crate::trainer::apply_trainer_buy(ctx, guid, c.guid.guid(), c.id)
+                .map_err(|refusal| buy_failed(failure_reason(refusal), refusal.as_tag()))?;
+            Ok(super::send(
                 ctx,
                 connection,
                 ServerOpcodeMessage::SMSG_TRAINER_BUY_SUCCEEDED(Box::new(
                     codec::build_trainer_buy_succeeded(c.guid.guid(), c.id),
                 )),
                 false,
-            )
+            )?)
         }
         ClientOpcodeMessage::CMSG_SET_ACTION_BUTTON(c) => {
-            let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
-            crate::action_bar::apply_set_action_button(
+            let actor = super::actor(ctx, guid)?;
+            Ok(crate::action_bar::apply_set_action_button(
                 ctx,
                 actor,
                 c.button,
                 u32::from(c.action) | (u32::from(c.misc) << 16),
                 c.action_type,
-            )
-            .map_err(super::rollback_silent)
+            )?)
         }
         _ => Err("invalid trainer opcode".into()),
+    }
+}
+
+fn failure_reason(refusal: TrainerRefusal) -> TrainingFailureReason {
+    match refusal {
+        TrainerRefusal::NotEnoughMoney => TrainingFailureReason::NotEnoughMoney,
+        TrainerRefusal::LevelTooLow | TrainerRefusal::PreviousRankMissing => {
+            TrainingFailureReason::NotEnoughSkill
+        }
+        TrainerRefusal::Unavailable | TrainerRefusal::NotOffered | TrainerRefusal::AlreadyKnown => {
+            TrainingFailureReason::Unavailable
+        }
     }
 }

@@ -33,6 +33,7 @@ mod progression;
 mod query;
 mod quest;
 mod reputation;
+mod rollback;
 mod social;
 mod spell;
 mod taxi;
@@ -123,7 +124,8 @@ use lyracore_protocol::messages::vanilla::{
 };
 use spacetimedb::{reducer, table, ConnectionId, ReducerContext, SpacetimeType, Table};
 
-use crate::{game_account, game_character, game_session};
+use crate::{game_account, game_character, game_session, Refusal};
+use rollback::Rollback;
 
 #[derive(SpacetimeType)]
 pub enum NativeWorldState {
@@ -283,27 +285,6 @@ fn clear_audience(ctx: &ReducerContext, connection_id: ConnectionId) {
     });
 }
 
-fn rollback_reply(message: ServerOpcodeMessage, cause: String) -> String {
-    match lyracore_protocol::world::encode(message) {
-        Ok(packet) => rollback_packets(vec![packet], cause),
-        Err(error) => error.to_string(),
-    }
-}
-
-fn rollback_silent(cause: String) -> String {
-    rollback_packets(Vec::new(), cause)
-}
-
-fn rollback_packets(packets: Vec<lyracore_protocol::world::Packet>, cause: String) -> String {
-    spacetimedb::log::debug!("native request refused: {cause}");
-    let packets = packets
-        .into_iter()
-        .map(|packet| format!("[{}, {:?}]", packet.opcode, packet.body))
-        .collect::<Vec<_>>()
-        .join(",");
-    format!("native_reply:[{packets}]")
-}
-
 #[derive(SpacetimeType)]
 pub struct NativeReply {
     pub opcode: u16,
@@ -366,6 +347,10 @@ pub fn native_world_receive(
     opcode: u32,
     body: Vec<u8>,
 ) -> Result<(), String> {
+    receive(ctx, opcode, body).map_err(Rollback::into_reducer_error)
+}
+
+fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollback> {
     let connection_id = connection_id(ctx)?;
     let connection = ctx
         .db
@@ -426,19 +411,19 @@ pub fn native_world_receive(
         }
     }
     match connection.state {
-        NativeWorldState::AwaitingProof => authenticate(ctx, connection, opcode, &body),
+        NativeWorldState::AwaitingProof => Ok(authenticate(ctx, connection, opcode, &body)?),
         NativeWorldState::Queued { .. } => {
             let message = lyracore_protocol::world::decode(opcode, &body)
                 .map_err(|error| error.to_string())?;
             if let ClientOpcodeMessage::CMSG_PING(ping) = message {
-                send(
+                Ok(send(
                     ctx,
                     connection_id,
                     ServerOpcodeMessage::SMSG_PONG(SMSG_PONG {
                         sequence_id: ping.sequence_id,
                     }),
                     false,
-                )
+                )?)
             } else {
                 Err("World Session is waiting in the Login Queue".into())
             }
@@ -481,7 +466,7 @@ pub fn native_world_receive(
                 ),
                 _ => return Ok(()),
             };
-            send(ctx, connection_id, reply, false)
+            Ok(send(ctx, connection_id, reply, false)?)
         }
         NativeWorldState::InWorld(NativeActive { character_guid, .. }) => {
             world::receive(ctx, connection, character_guid, opcode, &body)
@@ -677,7 +662,7 @@ pub(crate) fn close(ctx: &ReducerContext) {
     }
 }
 
-fn actor(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, String> {
+fn actor(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, Refusal> {
     if ctx
         .db
         .game_native_player()
@@ -687,10 +672,18 @@ fn actor(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, String> 
     {
         return Err("Character is teleporting".into());
     }
-    let entity =
-        crate::helpers::acting_entity_by_guid(ctx, guid).ok_or("Character is not available")?;
+    let entity = available_entity(ctx, guid)?;
     crate::taxi::reject_action_while_in_flight(ctx, guid)?;
     Ok(entity)
+}
+
+fn available_entity(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntity, Refusal> {
+    crate::helpers::acting_entity_by_guid(ctx, guid)
+        .ok_or_else(|| "Character is not available".into())
+}
+
+fn available_character(ctx: &ReducerContext, guid: u64) -> Result<crate::Character, Refusal> {
+    crate::helpers::character_by_guid(ctx, guid).ok_or_else(|| "Character is not available".into())
 }
 
 #[cfg(test)]

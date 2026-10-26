@@ -12,7 +12,10 @@ use lyracore_shared::spell::taxonomy::{
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
+use super::Rollback;
 use crate::combat::game_melee_attack;
+use crate::spell::{CastGateRefusal, CastRefusalReason};
+use crate::Refusal;
 use crate::{game_item_instance, game_item_template, game_spell, game_spell_effect};
 
 const CAST_RESULT: u16 = 0x0130;
@@ -30,22 +33,50 @@ fn packet(message: ServerOpcodeMessage) -> Result<Packet, String> {
     lyracore_protocol::world::encode(message).map_err(|error| error.to_string())
 }
 
-fn failure(spell: u32, reason: &str) -> Packet {
+fn failure(spell: u32, reason: CastRefusalReason) -> Packet {
     Packet {
         opcode: CAST_RESULT,
-        body: codec::build_cast_result_failed(spell, codec::cast_failure_reason_for(reason)),
+        body: codec::build_cast_result_failed(spell, cast_result(reason)),
     }
 }
 
-fn known(ctx: &ReducerContext, guid: u64, spell: u32) -> Result<(), String> {
+fn cast_result(reason: CastRefusalReason) -> u8 {
+    use codec::cast_failure as code;
+    use CastRefusalReason as R;
+    match reason {
+        R::Unreported => code::DONT_REPORT,
+        R::NoPower => code::NO_POWER,
+        R::NotReady => code::NOT_READY,
+        R::OutOfRange => code::OUT_OF_RANGE,
+        R::TooClose => code::TOO_CLOSE,
+        R::NotInFront => code::UNIT_NOT_INFRONT,
+        R::NoLineOfSight => code::LINE_OF_SIGHT,
+        R::NoAmmo => code::NO_AMMO,
+        R::WrongStance => code::NOT_SHAPESHIFT,
+        R::NotBehind => code::NOT_BEHIND,
+        R::NotStealthed => code::ONLY_STEALTHED,
+        R::SchoolLocked => code::INTERRUPTED,
+        R::ReactWindowClosed => code::CASTER_AURASTATE,
+        R::Stunned => code::STUNNED,
+        R::LevelTooLow => code::LEVEL_REQUIREMENT,
+        R::CasterDead | R::TargetDead => code::TARGETS_DEAD,
+        R::BadTargets => code::BAD_TARGETS,
+        R::MountWhileDead => code::CASTER_DEAD,
+        R::MountInCombat => code::AFFECTING_COMBAT,
+        R::MountIndoors => code::ONLY_OUTDOORS,
+        R::MountInDeepWater => code::ONLY_ABOVEWATER,
+    }
+}
+
+fn known(ctx: &ReducerContext, guid: u64, spell: u32) -> Result<(), Refusal> {
     if crate::spell::knows_spell(ctx, guid, spell) {
         Ok(())
     } else {
-        Err(format!("spell {spell} is not in the caster's spellbook"))
+        Err(format!("spell {spell} is not in the caster's spellbook").into())
     }
 }
 
-fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Result<u8, String> {
+fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Result<u8, Refusal> {
     let Some(ItemTarget::Item { item }) = request.targets.target_flags.get_item() else {
         return Err("cast requires an owned item target".into());
     };
@@ -63,9 +94,13 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     request: &CMSG_CAST_SPELL,
-) -> Result<(), String> {
-    let caster = super::actor(ctx, guid)
-        .map_err(|cause| super::rollback_packets(vec![failure(request.spell, &cause)], cause))?;
+) -> Result<(), Rollback> {
+    let caster = super::actor(ctx, guid).map_err(|refusal| {
+        Rollback::replies(
+            vec![failure(request.spell, CastRefusalReason::Unreported)],
+            refusal,
+        )
+    })?;
     let spell = request.spell;
     let header = ctx.db.game_spell().spell_id().find(spell);
     let effects: Vec<_> = ctx
@@ -134,46 +169,53 @@ pub(super) fn receive(
             super::send_raw(ctx, connection, packet.opcode, packet.body.clone(), false);
         }
     }
-    let result = known(ctx, guid, spell).and_then(|_| match route {
-        Route::Ranged => crate::actor::ranged_attack(ctx, guid, target, spell),
-        Route::Enchant(enchantment) => crate::professions::apply_enchant_item(
-            ctx,
-            guid,
-            item_slot(ctx, guid, request)?,
-            enchantment,
-        ),
-        Route::Disenchant => {
-            crate::professions::apply_disenchant(ctx, guid, item_slot(ctx, guid, request)?)
-        }
-        Route::Fish => crate::professions::apply_fish(ctx, guid),
-        Route::OpenLock => {
-            let object = match request.targets.target_flags.get_gameobject() {
-                Some(GoTarget::Gameobject { gameobject }) => gameobject.guid(),
-                Some(GoTarget::ObjectUnk { object_unk }) => object_unk.guid(),
-                None => return Err("pick_lock: no GameObject target in cast".into()),
-            };
-            crate::gameobject::apply_pick_lock(ctx, guid, object)
-        }
-        Route::Ordinary => {
-            if matches!(
-                request.targets.target_flags.get_item(),
-                Some(ItemTarget::Item { .. })
-            ) {
-                crate::creatures::apply_item_target_spell(
-                    ctx,
-                    guid,
-                    spell,
-                    item_slot(ctx, guid, request)?,
-                )
-            } else if let Some((x, y, z)) = dest {
-                crate::spell::apply_cast_spell_at(ctx, &caster, spell, target, x, y, z)
-            } else {
-                crate::spell::do_cast_spell(ctx, caster, spell, target)
+    let result = (|| -> Result<(), CastGateRefusal> {
+        known(ctx, guid, spell)?;
+        match route {
+            Route::Ranged => crate::actor::ranged_attack(ctx, guid, target, spell),
+            Route::Enchant(enchantment) => Ok(crate::professions::apply_enchant_item(
+                ctx,
+                guid,
+                item_slot(ctx, guid, request)?,
+                enchantment,
+            )?),
+            Route::Disenchant => Ok(crate::professions::apply_disenchant(
+                ctx,
+                guid,
+                item_slot(ctx, guid, request)?,
+            )?),
+            Route::Fish => Ok(crate::professions::apply_fish(ctx, guid)?),
+            Route::OpenLock => {
+                let object = match request.targets.target_flags.get_gameobject() {
+                    Some(GoTarget::Gameobject { gameobject }) => gameobject.guid(),
+                    Some(GoTarget::ObjectUnk { object_unk }) => object_unk.guid(),
+                    None => {
+                        return Err("pick_lock: no GameObject target in cast".to_string().into())
+                    }
+                };
+                crate::gameobject::apply_pick_lock(ctx, guid, object)
+            }
+            Route::Ordinary => {
+                if matches!(
+                    request.targets.target_flags.get_item(),
+                    Some(ItemTarget::Item { .. })
+                ) {
+                    Ok(crate::creatures::apply_item_target_spell(
+                        ctx,
+                        guid,
+                        spell,
+                        item_slot(ctx, guid, request)?,
+                    )?)
+                } else if let Some((x, y, z)) = dest {
+                    crate::spell::apply_cast_spell_at(ctx, &caster, spell, target, x, y, z)
+                } else {
+                    crate::spell::do_cast_spell(ctx, caster, spell, target)
+                }
             }
         }
-    });
-    if let Err(cause) = result {
-        let response = failure(spell, &cause);
+    })();
+    if let Err(refusal) = result {
+        let response = failure(spell, refusal.reason);
         if matches!(route, Route::Ranged) {
             // Ranged Gates precede all writes; a refused retarget still cancels the old repeat loop.
             cancel_repeat(ctx, guid);
@@ -181,7 +223,7 @@ pub(super) fn receive(
             return Ok(());
         }
         prelude.push(response);
-        return Err(super::rollback_packets(prelude, cause));
+        return Err(Rollback::replies(prelude, refusal));
     }
     match route {
         Route::Ordinary => {}
@@ -238,5 +280,48 @@ pub(super) fn cancel_repeat(ctx: &ReducerContext, guid: u64) {
         .is_some_and(|row| row.ranged_spell_id != 0)
     {
         crate::combat::stop_attack_for(ctx, guid);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_cast_refusal_reason_reports_its_1_12_1_cast_result() {
+        use CastRefusalReason as R;
+        for (reason, code) in [
+            (R::Unreported, 0x17),
+            (R::NoPower, 0x4D),
+            (R::NotReady, 0x3C),
+            (R::OutOfRange, 0x59),
+            (R::TooClose, 0x76),
+            (R::NotInFront, 0x7C),
+            (R::NoLineOfSight, 0x2A),
+            (R::NoAmmo, 0x24),
+            (R::WrongStance, 0x3D),
+            (R::NotBehind, 0x33),
+            (R::NotStealthed, 0x57),
+            (R::SchoolLocked, 0x23),
+            (R::ReactWindowClosed, 0x12),
+            (R::Stunned, 0x64),
+            (R::LevelTooLow, 0x29),
+            (R::CasterDead, 0x65),
+            (R::TargetDead, 0x65),
+            (R::BadTargets, 0x0A),
+            (R::MountWhileDead, 0x13),
+            (R::MountInCombat, 0x00),
+            (R::MountIndoors, 0x55),
+            (R::MountInDeepWater, 0x50),
+        ] {
+            assert_eq!(cast_result(reason), code, "{reason:?}");
+        }
+    }
+
+    #[test]
+    fn a_refused_cast_sends_its_reason_in_smsg_cast_result() {
+        let packet = failure(133, CastRefusalReason::NoPower);
+        assert_eq!(packet.opcode, 0x0130);
+        assert_eq!(packet.body, vec![133, 0, 0, 0, 0x02, 0x4D]);
     }
 }

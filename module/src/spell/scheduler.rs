@@ -60,7 +60,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
             scheduled_id: sched.scheduled_id,
             outcome: match result {
                 Ok(()) => CastFinish::Resolved,
-                Err(refusal) => CastFinish::Refused(refusal),
+                Err(refusal) => CastFinish::Refused(refusal.into()),
             },
         },
     );
@@ -113,9 +113,9 @@ pub(crate) fn do_cast_spell(
     caster: crate::WorldEntity,
     spell_id: u32,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::spell::CastGateRefusal> {
     if !knows_spell(ctx, caster.guid, spell_id) {
-        return Err(format!("spell {spell_id} is not in the caster's spellbook"));
+        return Err(format!("spell {spell_id} is not in the caster's spellbook").into());
     }
     let target = if target_guid == 0 {
         caster.guid
@@ -141,14 +141,12 @@ pub(crate) fn apply_cast_spell_at(
     x: f32,
     y: f32,
     z: f32,
-) -> Result<(), String> {
+) -> Result<(), crate::spell::CastGateRefusal> {
     if !knows_spell(ctx, caster.guid, spell_id) {
-        return Err(format!("spell {spell_id} is not in the caster's spellbook"));
+        return Err(format!("spell {spell_id} is not in the caster's spellbook").into());
     }
     if !(x.is_finite() && y.is_finite() && z.is_finite()) {
-        return Err(format!(
-            "cast_spell_at: non-finite ground point ({x},{y},{z})"
-        ));
+        return Err(format!("cast_spell_at: non-finite ground point ({x},{y},{z})").into());
     }
     let target = if target_guid == 0 {
         caster.guid
@@ -170,7 +168,7 @@ pub(crate) fn do_resurrect_response(
     ctx: &ReducerContext,
     target_guid: u64,
     accept: bool,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let requests = ctx.db.game_resurrect_request();
     let req = requests
         .target_guid()
@@ -194,7 +192,7 @@ pub(crate) fn do_resurrect_response(
 pub(crate) fn do_cancel_cast(
     ctx: &ReducerContext,
     caster: crate::WorldEntity,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     interrupt_cast(ctx, caster.guid);
     break_channel(ctx, caster.guid);
     if caster.next_swing_spell != 0 {
@@ -209,20 +207,16 @@ pub(crate) fn do_cancel_aura(
     ctx: &ReducerContext,
     player_guid: u64,
     spell_id: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if crate::ghost::is_ghost_spell(spell_id) {
-        return Err("ghost effects end on resurrection".to_string());
+        return Err("ghost effects end on resurrection".into());
     }
     if let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) {
         if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
-            return Err(format!(
-                "spell {spell_id} is passive and cannot be cancelled"
-            ));
+            return Err(format!("spell {spell_id} is passive and cannot be cancelled").into());
         }
         if spell.is_negative {
-            return Err(format!(
-                "spell {spell_id} is a debuff and cannot be cancelled"
-            ));
+            return Err(format!("spell {spell_id} is a debuff and cannot be cancelled").into());
         }
     }
     let auras = ctx.db.game_aura();
@@ -244,7 +238,7 @@ pub(crate) fn do_cancel_aura(
         })
         .collect();
     if to_remove.is_empty() {
-        return Err(format!("no cancelable aura {spell_id} on the caller"));
+        return Err(format!("no cancelable aura {spell_id} on the caller").into());
     }
     let mut revitalize = false;
     let mut resheet = false;

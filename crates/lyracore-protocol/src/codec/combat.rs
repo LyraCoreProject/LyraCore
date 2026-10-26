@@ -111,78 +111,36 @@ pub fn build_cast_result_failed(spell_id: u32, reason: u8) -> Vec<u8> {
     v
 }
 
+/// 1.12.1 SpellCastResult values that a refused cast reports to its caster.
+pub mod cast_failure {
+    pub const AFFECTING_COMBAT: u8 = 0x00;
+    pub const BAD_TARGETS: u8 = 0x0A;
+    pub const CASTER_AURASTATE: u8 = 0x12;
+    pub const CASTER_DEAD: u8 = 0x13;
+    pub const DONT_REPORT: u8 = 0x17;
+    pub const INTERRUPTED: u8 = 0x23;
+    pub const NO_AMMO: u8 = 0x24;
+    pub const LEVEL_REQUIREMENT: u8 = 0x29;
+    pub const LINE_OF_SIGHT: u8 = 0x2A;
+    pub const NOT_BEHIND: u8 = 0x33;
+    pub const NOT_READY: u8 = 0x3C;
+    pub const NOT_SHAPESHIFT: u8 = 0x3D;
+    pub const NO_POWER: u8 = 0x4D;
+    pub const ONLY_ABOVEWATER: u8 = 0x50;
+    pub const ONLY_OUTDOORS: u8 = 0x55;
+    pub const ONLY_STEALTHED: u8 = 0x57;
+    pub const OUT_OF_RANGE: u8 = 0x59;
+    pub const STUNNED: u8 = 0x64;
+    pub const TARGETS_DEAD: u8 = 0x65;
+    pub const TOO_CLOSE: u8 = 0x76;
+    pub const UNIT_NOT_INFRONT: u8 = 0x7C;
+}
+
 pub fn cast_failure_reason_for_code(code: u8) -> Option<u8> {
     const CAST_FAIL_NO_POWER: u8 = 1;
     match code {
-        CAST_FAIL_NO_POWER => Some(0x4D),
+        CAST_FAIL_NO_POWER => Some(cast_failure::NO_POWER),
         _ => None,
-    }
-}
-
-pub fn cast_failure_reason_for(es: &str) -> u8 {
-    const NO_POWER: u8 = 0x4D;
-    const NOT_READY: u8 = 0x3C;
-    const OUT_OF_RANGE: u8 = 0x59;
-    const TOO_CLOSE: u8 = 0x76;
-    const UNIT_NOT_INFRONT: u8 = 0x7C;
-    const LINE_OF_SIGHT: u8 = 0x2A;
-    const NO_AMMO: u8 = 0x24;
-    const NOT_SHAPESHIFT: u8 = 0x3D;
-    const NOT_BEHIND: u8 = 0x33;
-    const ONLY_STEALTHED: u8 = 0x57;
-    const INTERRUPTED: u8 = 0x23;
-    const CASTER_AURASTATE: u8 = 0x12;
-    const STUNNED: u8 = 0x64;
-    const LEVEL_REQUIREMENT: u8 = 0x29;
-    const TARGETS_DEAD: u8 = 0x65;
-    const BAD_TARGETS: u8 = 0x0A;
-    const DONT_REPORT: u8 = 0x17;
-    const AFFECTING_COMBAT: u8 = 0x00;
-    const CASTER_DEAD: u8 = 0x13;
-    const ONLY_ABOVEWATER: u8 = 0x50;
-    const ONLY_OUTDOORS: u8 = 0x55;
-    if es.contains("not enough power") {
-        NO_POWER
-    } else if es.contains("cannot mount while dead") {
-        CASTER_DEAD
-    } else if es.contains("cannot mount while in combat") {
-        AFFECTING_COMBAT
-    } else if es.contains("cannot mount indoors") {
-        ONLY_OUTDOORS
-    } else if es.contains("cannot mount in deep water") {
-        ONLY_ABOVEWATER
-    } else if es.contains("cooldown") {
-        NOT_READY
-    } else if es.contains("out of range") || es.contains("another map") {
-        OUT_OF_RANGE
-    } else if es.contains("too close") {
-        TOO_CLOSE
-    } else if es.contains("in front") {
-        UNIT_NOT_INFRONT
-    } else if es.contains("line of sight") {
-        LINE_OF_SIGHT
-    } else if es.contains("no ammo") {
-        NO_AMMO
-    } else if es.contains("current stance") {
-        NOT_SHAPESHIFT
-    } else if es.contains("BEHIND the target") {
-        NOT_BEHIND
-    } else if es.contains("requires stealth") {
-        ONLY_STEALTHED
-    } else if es.contains("locked (interrupted)") {
-        INTERRUPTED
-    } else if es.contains("Overpower window") || es.contains("Revenge window") {
-        CASTER_AURASTATE
-    } else if es.contains("cannot act (stun") {
-        STUNNED
-    } else if es.contains("requires level") {
-        LEVEL_REQUIREMENT
-    } else if es.contains("is dead") {
-        TARGETS_DEAD
-    } else if es.contains("cannot be cast on this unit") || es.contains("only target") {
-        BAD_TARGETS
-    } else {
-        DONT_REPORT
     }
 }
 
@@ -537,35 +495,6 @@ mod tests {
             want.extend_from_slice(&coordinate.to_le_bytes());
         }
         assert_eq!(bytes, want);
-    }
-
-    #[test]
-    fn ground_destination_refusals_map_to_bad_targets_out_of_range_and_line_of_sight() {
-        assert_eq!(
-            cast_failure_reason_for("spell can only target a ground point"),
-            0x0A
-        );
-        assert_eq!(
-            cast_failure_reason_for("ground point out of range (40.0 yd > 30 + 4.7 yd leeway)"),
-            0x59
-        );
-        assert_eq!(
-            cast_failure_reason_for("ground point is not in line of sight"),
-            0x2A
-        );
-    }
-
-    #[test]
-    fn mount_refusals_map_to_the_vanilla_cast_failures() {
-        // module/src/mount.rs `check_mount_cast` wording; gtker vanilla CastFailureReason values.
-        for (refusal, reason) in [
-            ("you cannot mount while dead", 0x13),
-            ("you cannot mount while in combat", 0x00),
-            ("you cannot mount indoors", 0x55),
-            ("you cannot mount in deep water", 0x50),
-        ] {
-            assert_eq!(cast_failure_reason_for(refusal), reason, "{refusal}");
-        }
     }
 
     #[test]

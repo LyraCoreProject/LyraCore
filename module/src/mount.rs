@@ -5,7 +5,9 @@ use crate::game_player_skill;
 use crate::game_skill_ability;
 use crate::game_spell_effect;
 use crate::game_world_entity;
-use crate::spell::{SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED};
+use crate::spell::{
+    CastGateRefusal, CastRefusalReason, SpellEffect, A_MOD_SPEED, A_MOUNTED, SPEED_MOUNTED,
+};
 use crate::WorldEntity;
 
 pub(crate) fn mount_aura_moves_mount(eff_kind: u8, eff_p0: i32) -> bool {
@@ -145,24 +147,36 @@ pub(crate) fn check_mount_cast(
     caster: &WorldEntity,
     effects: &[SpellEffect],
     spell_id: u32,
-) -> Result<(), String> {
+) -> Result<(), CastGateRefusal> {
     if !effects.iter().any(|e| e.kind == A_MOUNTED) || !caster.is_player() {
         return Ok(());
     }
     if !trained_for_spell(ctx, caster.guid, spell_id, caster.race(), caster.class()) {
-        return Err(format!("spell {spell_id} requires riding training"));
+        return Err(format!("spell {spell_id} requires riding training").into());
     }
     if caster.dead || caster.player_flags & lyracore_shared::constants::player_flags::GHOST != 0 {
-        return Err("you cannot mount while dead".to_string());
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::MountWhileDead,
+            "you cannot mount while dead",
+        ));
     }
     if crate::combat::is_engaged(ctx, caster.guid) {
-        return Err("you cannot mount while in combat".to_string());
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::MountInCombat,
+            "you cannot mount while in combat",
+        ));
     }
     if !mount_cast_allowed_here(ctx, caster.map_id, caster.x, caster.y, caster.z) {
-        return Err("you cannot mount indoors".to_string());
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::MountIndoors,
+            "you cannot mount indoors",
+        ));
     }
     if is_submerged_here(ctx, caster) {
-        return Err("you cannot mount in deep water".to_string());
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::MountInDeepWater,
+            "you cannot mount in deep water",
+        ));
     }
     Ok(())
 }

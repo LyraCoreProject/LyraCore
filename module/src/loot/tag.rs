@@ -736,13 +736,17 @@ fn verify_corpse_loot_gates(
         party_corpse,
         &[LOOT_TAG_FIXTURE_CHARACTER_A, LOOT_TAG_FIXTURE_CHARACTER_B],
     );
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, party_corpse)?;
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, party_corpse)
+        .map_err(|refusal| refusal.as_tag().to_string())?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_B, party_corpse)
+        .map_err(|refusal| refusal.as_tag().to_string())?;
     for refusal in [
-        crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
+        crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
+            .map_err(|refusal| refusal.as_tag().to_string()),
         crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse, 0),
         crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
-        crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse),
+        crate::professions::skin_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_E, party_corpse)
+            .map_err(String::from),
     ] {
         expect_loot_tag_refusal(refusal)?;
     }
@@ -784,7 +788,8 @@ fn verify_corpse_loot_gates(
         random_property_id: 0,
     });
     record_corpse_eligibility(ctx, solo_corpse, &[LOOT_TAG_FIXTURE_CHARACTER_A]);
-    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
+    crate::loot::open_creature_corpse(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)
+        .map_err(|refusal| refusal.as_tag().to_string())?;
     crate::items::apply_take_loot(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse, 0)?;
     crate::loot::apply_loot_money(ctx, LOOT_TAG_FIXTURE_CHARACTER_A, solo_corpse)?;
     insert_fixture_skinning(ctx, LOOT_TAG_FIXTURE_CHARACTER_A);

@@ -97,23 +97,58 @@ pub fn realm_channel_op(
     let admission = request_actor
         .ownership
         .map_or((0, 0), |token| (token.account_id, token.generation));
-    apply_op(ctx, actor_guid, admission, op, request)
+    let op = match op {
+        channel_op::JOIN => ChannelOp::Join,
+        channel_op::LEAVE => ChannelOp::Leave,
+        channel_op::PASSWORD => ChannelOp::Password,
+        channel_op::SET_OWNER => ChannelOp::SetOwner,
+        channel_op::MODERATOR => ChannelOp::Moderator,
+        channel_op::UNMODERATOR => ChannelOp::Unmoderator,
+        channel_op::MUTE => ChannelOp::Mute,
+        channel_op::UNMUTE => ChannelOp::Unmute,
+        channel_op::KICK => ChannelOp::Kick,
+        channel_op::BAN => ChannelOp::Ban,
+        channel_op::UNBAN => ChannelOp::Unban,
+        channel_op::INVITE => ChannelOp::Invite,
+        channel_op::ANNOUNCEMENTS => ChannelOp::Announcements,
+        channel_op::MODERATE => ChannelOp::Moderate,
+        other => return Err(format!("unknown channel op {other}")),
+    };
+    apply_op(ctx, actor_guid, admission, op, request).map_err(|refusal| refusal.as_tag().into())
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum ChannelOp {
+    Join,
+    Leave,
+    Password,
+    SetOwner,
+    Moderator,
+    Unmoderator,
+    Mute,
+    Unmute,
+    Kick,
+    Ban,
+    Unban,
+    Invite,
+    Announcements,
+    Moderate,
 }
 
 pub(crate) fn apply_op(
     ctx: &ReducerContext,
     actor_guid: u64,
     admission: (u64, u64),
-    op: u8,
+    op: ChannelOp,
     request: ChannelRequest,
-) -> Result<(), String> {
+) -> Result<(), ChannelRefusal> {
     let team = team_for_race(request.speaker.race);
-    let outcome = match op {
-        channel_op::JOIN => join(ctx, team, actor_guid, admission, &request),
-        channel_op::LEAVE => leave(ctx, team, actor_guid, &request.channel_name),
-        channel_op::PASSWORD => set_password(ctx, team, actor_guid, &request),
-        channel_op::SET_OWNER => set_owner(ctx, team, actor_guid, &request),
-        channel_op::MODERATOR => set_mode_flag(
+    match op {
+        ChannelOp::Join => join(ctx, team, actor_guid, admission, &request),
+        ChannelOp::Leave => leave(ctx, team, actor_guid, &request.channel_name),
+        ChannelOp::Password => set_password(ctx, team, actor_guid, &request),
+        ChannelOp::SetOwner => set_owner(ctx, team, actor_guid, &request),
+        ChannelOp::Moderator => set_mode_flag(
             ctx,
             team,
             actor_guid,
@@ -121,7 +156,7 @@ pub(crate) fn apply_op(
             member_flag::MODERATOR,
             true,
         ),
-        channel_op::UNMODERATOR => set_mode_flag(
+        ChannelOp::Unmoderator => set_mode_flag(
             ctx,
             team,
             actor_guid,
@@ -129,24 +164,22 @@ pub(crate) fn apply_op(
             member_flag::MODERATOR,
             false,
         ),
-        channel_op::MUTE => {
-            set_mode_flag(ctx, team, actor_guid, &request, member_flag::MUTED, true)
-        }
-        channel_op::UNMUTE => {
+        ChannelOp::Mute => set_mode_flag(ctx, team, actor_guid, &request, member_flag::MUTED, true),
+        ChannelOp::Unmute => {
             set_mode_flag(ctx, team, actor_guid, &request, member_flag::MUTED, false)
         }
-        channel_op::KICK => kick_or_ban(ctx, team, actor_guid, &request, false),
-        channel_op::BAN => kick_or_ban(ctx, team, actor_guid, &request, true),
-        channel_op::UNBAN => unban(ctx, team, actor_guid, &request),
-        channel_op::INVITE => invite(ctx, team, actor_guid, &request),
-        channel_op::ANNOUNCEMENTS => toggle(ctx, team, actor_guid, &request, Toggle::Announcements),
-        channel_op::MODERATE => toggle(ctx, team, actor_guid, &request, Toggle::Moderate),
-        other => return Err(format!("unknown channel op {other}")),
-    };
-    outcome.map_err(|refusal| {
-        let tag = refusal.as_tag();
-        spacetimedb::log::info!("channel op {op} refused {tag}: actor {actor_guid}");
-        tag.to_string()
+        ChannelOp::Kick => kick_or_ban(ctx, team, actor_guid, &request, false),
+        ChannelOp::Ban => kick_or_ban(ctx, team, actor_guid, &request, true),
+        ChannelOp::Unban => unban(ctx, team, actor_guid, &request),
+        ChannelOp::Invite => invite(ctx, team, actor_guid, &request),
+        ChannelOp::Announcements => toggle(ctx, team, actor_guid, &request, Toggle::Announcements),
+        ChannelOp::Moderate => toggle(ctx, team, actor_guid, &request, Toggle::Moderate),
+    }
+    .inspect_err(|refusal| {
+        spacetimedb::log::info!(
+            "channel op {op:?} refused {}: actor {actor_guid}",
+            refusal.as_tag()
+        );
     })
 }
 

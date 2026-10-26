@@ -8,11 +8,12 @@ use lyracore_protocol::{
 use lyracore_shared::{faction::same_team, mail as rules};
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
     game_gameobject, game_gameobject_template, game_item_instance, game_item_template,
-    mail::{self as core, game_mail},
+    mail::{self as core, game_mail, MailRefusal},
     mail_text::game_item_text,
+    Refusal,
 };
 
 pub(super) fn receive(
@@ -20,17 +21,17 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = super::actor(ctx, guid).map_err(super::rollback_silent)?;
+) -> Result<(), Rollback> {
+    let actor = super::actor(ctx, guid)?;
     let mailbox = |target| at_mailbox(ctx, &actor, target);
-    let run = |result: Result<(), String>, reply: &dyn Fn(bool) -> SMSG_SEND_MAIL_RESULT| {
-        result.map_err(|cause| super::rollback_reply(response(reply(false)), cause))?;
-        Ok::<_, String>(response(reply(true)))
+    let run = |result: Result<(), Refusal>, reply: &dyn Fn(bool) -> SMSG_SEND_MAIL_RESULT| {
+        result.map_err(|cause| Rollback::reply(response(reply(false)), cause))?;
+        Ok::<_, Rollback>(response(reply(true)))
     };
     use ClientOpcodeMessage as C;
     let packet = match message {
         C::CMSG_GET_MAIL_LIST(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid())?;
             let mails = ctx
                 .db
                 .game_mail()
@@ -56,9 +57,8 @@ pub(super) fn receive(
             )),
         ),
         C::CMSG_MAIL_MARK_AS_READ(request) => {
-            mailbox(request.mailbox.guid())
-                .and_then(|()| core::apply_mark_read(ctx, guid, request.mail_id.into()))
-                .map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid())?;
+            core::apply_mark_read(ctx, guid, request.mail_id.into())?;
             return Ok(());
         }
         C::CMSG_MAIL_DELETE(request) => run(
@@ -83,28 +83,29 @@ pub(super) fn receive(
         )?,
         C::CMSG_MAIL_TAKE_ITEM(request) => {
             let taken = mailbox(request.mailbox.guid())
+                .map_err(MailRefusal::from)
                 .and_then(|()| {
                     let mail = core::delivered_mail(ctx, request.mail_id.into())
                         .ok_or_else(|| rules::NOT_YOUR_MAIL.to_string())?;
                     core::apply_take_item(ctx, guid, mail.id)?;
                     Ok((mail.item_entry, mail.item_stack_count))
                 })
-                .map_err(|cause| {
-                    let refusal = if cause.contains(rules::INVENTORY_FULL) {
-                        codec::MailTakeItemError::BagsFull
-                    } else if cause.contains(rules::COD_NOT_AFFORDABLE)
-                        || cause.contains(rules::NOT_ENOUGH_MONEY)
-                    {
-                        codec::MailTakeItemError::NotEnoughMoney
-                    } else {
-                        codec::MailTakeItemError::Other
+                .map_err(|refusal| {
+                    let error = match refusal {
+                        MailRefusal::InventoryFull => codec::MailTakeItemError::BagsFull,
+                        MailRefusal::CodNotAffordable | MailRefusal::NotEnoughMoney => {
+                            codec::MailTakeItemError::NotEnoughMoney
+                        }
+                        MailRefusal::ItemIsSoulbound
+                        | MailRefusal::NotYourItem
+                        | MailRefusal::Refused(_) => codec::MailTakeItemError::Other,
                     };
-                    super::rollback_reply(
+                    Rollback::reply(
                         response(codec::build_mail_take_item_result(
                             request.mail_id,
-                            Err(refusal),
+                            Err(error),
                         )),
-                        cause,
+                        refusal,
                     )
                 })?;
             response(codec::build_mail_take_item_result(
@@ -113,30 +114,33 @@ pub(super) fn receive(
             ))
         }
         C::CMSG_SEND_MAIL(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid())?;
             send_letter(ctx, guid, *request).map_err(|refusal| {
-                super::rollback_reply(
+                Rollback::reply(
                     response(codec::build_mail_send_result(refusal)),
-                    "mail send refused".into(),
+                    "mail send refused",
                 )
             })?;
             response(codec::build_mail_send_result(MailResult::Ok))
         }
         C::CMSG_MAIL_CREATE_TEXT_ITEM(request) => {
-            mailbox(request.mailbox.guid()).map_err(super::rollback_silent)?;
+            mailbox(request.mailbox.guid())?;
             crate::mail_text::apply_copy_letter(ctx, guid, request.mail_id.into()).map_err(
-                |cause| {
-                    let refusal = if cause.contains(rules::INVENTORY_FULL) {
-                        codec::MailMadePermanentError::BagsFull
-                    } else {
-                        codec::MailMadePermanentError::Other
+                |refusal| {
+                    let error = match refusal {
+                        MailRefusal::InventoryFull => codec::MailMadePermanentError::BagsFull,
+                        MailRefusal::NotEnoughMoney
+                        | MailRefusal::CodNotAffordable
+                        | MailRefusal::ItemIsSoulbound
+                        | MailRefusal::NotYourItem
+                        | MailRefusal::Refused(_) => codec::MailMadePermanentError::Other,
                     };
-                    super::rollback_reply(
+                    Rollback::reply(
                         response(codec::build_mail_made_permanent_result(
                             request.mail_id,
-                            Err(refusal),
+                            Err(error),
                         )),
-                        cause,
+                        refusal,
                     )
                 },
             )?;
@@ -147,7 +151,7 @@ pub(super) fn receive(
         }
         _ => return Err("opcode is not a mail request".into()),
     };
-    super::send(ctx, connection, packet, false)
+    Ok(super::send(ctx, connection, packet, false)?)
 }
 
 fn response(packet: SMSG_SEND_MAIL_RESULT) -> ServerOpcodeMessage {
@@ -158,7 +162,7 @@ fn at_mailbox(
     ctx: &ReducerContext,
     actor: &crate::WorldEntity,
     mailbox_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), Refusal> {
     let in_range = ctx
         .db
         .game_gameobject()
@@ -181,7 +185,7 @@ fn at_mailbox(
     if in_range {
         Ok(())
     } else {
-        Err(rules::not_at_mailbox(mailbox_guid))
+        Err(rules::not_at_mailbox(mailbox_guid).into())
     }
 }
 
@@ -232,14 +236,11 @@ fn send_letter(
         request.item.guid(),
         sender.account_id != 0 && sender.account_id == recipient.account_id,
     )
-    .map_err(|cause| {
-        if cause.contains(rules::NOT_ENOUGH_MONEY) {
-            MailResult::ErrNotEnoughMoney
-        } else if cause.contains(rules::ITEM_IS_SOULBOUND) {
-            MailResult::ErrCantSendWrappedCod
-        } else if cause.contains(rules::NOT_YOUR_ITEM) {
-            MailResult::ErrMailAttachmentInvalid
-        } else {
+    .map_err(|refusal| match refusal {
+        MailRefusal::NotEnoughMoney => MailResult::ErrNotEnoughMoney,
+        MailRefusal::ItemIsSoulbound => MailResult::ErrCantSendWrappedCod,
+        MailRefusal::NotYourItem => MailResult::ErrMailAttachmentInvalid,
+        MailRefusal::InventoryFull | MailRefusal::CodNotAffordable | MailRefusal::Refused(_) => {
             MailResult::ErrInternalError
         }
     })

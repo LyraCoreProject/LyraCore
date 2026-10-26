@@ -750,13 +750,13 @@ pub(crate) fn is_in_flight(ctx: &ReducerContext, character_guid: u64) -> bool {
 pub(crate) fn reject_action_while_in_flight(
     ctx: &ReducerContext,
     character_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     action_gate(is_in_flight(ctx, character_guid))
 }
 
-fn action_gate(active_flight: bool) -> Result<(), String> {
+fn action_gate(active_flight: bool) -> Result<(), crate::Refusal> {
     if active_flight {
-        Err("PLAYER_IN_TAXI_FLIGHT".to_string())
+        Err("PLAYER_IN_TAXI_FLIGHT".into())
     } else {
         Ok(())
     }
@@ -1663,7 +1663,7 @@ mod tests {
 
     #[test]
     fn action_and_movement_policy_is_executable() {
-        assert_eq!(action_gate(true), Err("PLAYER_IN_TAXI_FLIGHT".to_string()));
+        assert_eq!(action_gate(true), Err("PLAYER_IN_TAXI_FLIGHT".into()));
         assert_eq!(action_gate(false), Ok(()));
     }
 

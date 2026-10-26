@@ -3,15 +3,15 @@ use lyracore_protocol::{
     messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
 };
 use lyracore_shared::{
-    channel::{channel_op, notice, ChannelRefusal},
+    channel::{notice, ChannelRefusal},
     chat::chat_tag_for,
     faction::team_for_race,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::game_native_player;
+use super::{game_native_player, Rollback};
 use crate::{
-    channel::{ChannelRequest, ChatChannelNoticeEvent},
+    channel::{ChannelOp, ChannelRequest, ChatChannelNoticeEvent},
     realm_chat::SpeakerFacts,
 };
 
@@ -20,84 +20,83 @@ pub(super) fn receive(
     connection: ConnectionId,
     guid: u64,
     message: ClientOpcodeMessage,
-) -> Result<(), String> {
-    let actor = crate::helpers::acting_entity_by_guid(ctx, guid)
-        .ok_or_else(|| super::rollback_silent("Character is not available".into()))?;
+) -> Result<(), Rollback> {
+    let actor = super::available_entity(ctx, guid)?;
     let (op, channel_name, password, target_name) = match message {
         ClientOpcodeMessage::CMSG_JOIN_CHANNEL(c) => {
-            (channel_op::JOIN, c.channel_name, c.channel_password, None)
+            (ChannelOp::Join, c.channel_name, c.channel_password, None)
         }
         ClientOpcodeMessage::CMSG_LEAVE_CHANNEL(c) => {
-            (channel_op::LEAVE, c.channel_name, String::new(), None)
+            (ChannelOp::Leave, c.channel_name, String::new(), None)
         }
         ClientOpcodeMessage::CMSG_CHANNEL_PASSWORD(c) => (
-            channel_op::PASSWORD,
+            ChannelOp::Password,
             c.channel_name,
             c.channel_password,
             None,
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_SET_OWNER(c) => (
-            channel_op::SET_OWNER,
+            ChannelOp::SetOwner,
             c.channel_name,
             String::new(),
             Some(c.new_owner),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_MODERATOR(c) => (
-            channel_op::MODERATOR,
+            ChannelOp::Moderator,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_UNMODERATOR(c) => (
-            channel_op::UNMODERATOR,
+            ChannelOp::Unmoderator,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_MUTE(c) => (
-            channel_op::MUTE,
+            ChannelOp::Mute,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_UNMUTE(c) => (
-            channel_op::UNMUTE,
+            ChannelOp::Unmute,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_KICK(c) => (
-            channel_op::KICK,
+            ChannelOp::Kick,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_BAN(c) => (
-            channel_op::BAN,
+            ChannelOp::Ban,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_UNBAN(c) => (
-            channel_op::UNBAN,
+            ChannelOp::Unban,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_INVITE(c) => (
-            channel_op::INVITE,
+            ChannelOp::Invite,
             c.channel_name,
             String::new(),
             Some(c.player_name),
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_ANNOUNCEMENTS(c) => (
-            channel_op::ANNOUNCEMENTS,
+            ChannelOp::Announcements,
             c.channel_name,
             String::new(),
             None,
         ),
         ClientOpcodeMessage::CMSG_CHANNEL_MODERATE(c) => {
-            (channel_op::MODERATE, c.channel_name, String::new(), None)
+            (ChannelOp::Moderate, c.channel_name, String::new(), None)
         }
         ClientOpcodeMessage::CMSG_CHANNEL_LIST(c) => {
             return roster(ctx, connection, &actor, c.channel_name, false)
@@ -107,7 +106,7 @@ pub(super) fn receive(
         }
         _ => return Err("opcode is not a Chat Channel request".into()),
     };
-    if matches!(op, channel_op::JOIN | channel_op::LEAVE) && channel_name.is_empty() {
+    if matches!(op, ChannelOp::Join | ChannelOp::Leave) && channel_name.is_empty() {
         return Ok(());
     }
     let targeted = target_name.is_some();
@@ -130,23 +129,20 @@ pub(super) fn receive(
         target_guid,
         target_race,
         target_name: target_name.clone(),
-        target_ignores_actor: op == channel_op::INVITE
+        target_ignores_actor: op == ChannelOp::Invite
             && super::chat::ignores(ctx, target_guid, guid),
         speaker: SpeakerFacts {
             race: actor.race(),
             chat_tag: chat_tag_for(actor.player_flags),
         },
     };
-    crate::channel::apply_op(ctx, guid, (player.account_id, 0), op, request).map_err(|cause| {
-        match ChannelRefusal::parse_tag(&cause) {
-            Some(refusal) => refusal_reply(
-                refusal,
-                channel_name,
-                if targeted { target_guid } else { guid },
-                target_name,
-            ),
-            None => super::rollback_silent(cause),
-        }
+    crate::channel::apply_op(ctx, guid, (player.account_id, 0), op, request).map_err(|refusal| {
+        refusal_reply(
+            refusal,
+            channel_name,
+            if targeted { target_guid } else { guid },
+            target_name,
+        )
     })
 }
 
@@ -155,7 +151,7 @@ fn refusal_reply(
     channel_name: String,
     subject_guid: u64,
     text: String,
-) -> String {
+) -> Rollback {
     let (opcode, body) = codec::notify(&ChannelNoticeView {
         notice: refusal.notice(),
         channel_name,
@@ -163,9 +159,9 @@ fn refusal_reply(
         text,
         ..Default::default()
     });
-    super::rollback_packets(
+    Rollback::replies(
         vec![lyracore_protocol::world::Packet { opcode, body }],
-        refusal.as_tag().into(),
+        refusal.as_tag(),
     )
 }
 
@@ -175,7 +171,7 @@ fn roster(
     actor: &crate::WorldEntity,
     channel_name: String,
     owner_only: bool,
-) -> Result<(), String> {
+) -> Result<(), Rollback> {
     let (channel, _) =
         crate::channel::membership(ctx, team_for_race(actor.race()), &channel_name, actor.guid)
             .map_err(|refusal| {
@@ -201,7 +197,7 @@ fn roster(
             .into_iter()
             .map(|member| (member.character_guid, member.member_flags))
             .collect::<Vec<_>>();
-        super::send(
+        Ok(super::send(
             ctx,
             connection,
             ServerOpcodeMessage::SMSG_CHANNEL_LIST(Box::new(codec::build_channel_list(
@@ -210,7 +206,7 @@ fn roster(
                 &members,
             ))),
             false,
-        )
+        )?)
     }
 }
 

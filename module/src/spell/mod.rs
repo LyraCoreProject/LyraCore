@@ -2,8 +2,8 @@ pub(crate) mod cast;
 mod outcome;
 mod presentation;
 pub(crate) use outcome::{
-    cast_readiness, pending_cast, request_cast, CastFinish, CastHandle, CastRefusal,
-    CastRefusalKind, CastStart,
+    cast_readiness, pending_cast, request_cast, CastFinish, CastGateRefusal, CastHandle,
+    CastRefusal, CastRefusalKind, CastRefusalReason, CastStart,
 };
 pub(crate) use presentation::recompute_display;
 mod control;

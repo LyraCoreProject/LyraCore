@@ -1,6 +1,6 @@
 use spacetimedb::ReducerContext;
 
-use crate::spell::{Spell, SpellEffect, P_ENTRY};
+use crate::spell::{CastGateRefusal, CastRefusalReason, Spell, SpellEffect, P_ENTRY};
 use crate::{
     game_creature_template, game_gameobject, game_gameobject_template, GameObject, WorldEntity,
 };
@@ -10,9 +10,9 @@ pub(crate) fn check_hostile_summon(
     caster: &WorldEntity,
     spell: &Spell,
     effect: &SpellEffect,
-) -> Result<GameObject, String> {
+) -> Result<GameObject, CastGateRefusal> {
     if effect.p0_kind != P_ENTRY || effect.p0 <= 0 || effect.p1 <= 0 || spell.duration_ms == 0 {
-        return Err("invalid hostile summon definition".to_string());
+        return Err("invalid hostile summon definition".to_string().into());
     }
     if ctx
         .db
@@ -21,7 +21,7 @@ pub(crate) fn check_hostile_summon(
         .find(effect.p0 as u32)
         .is_none()
     {
-        return Err(format!("summon template {} is missing", effect.p0));
+        return Err(format!("summon template {} is missing", effect.p0).into());
     }
     let radius = spell.range_yd.min(100) as f32;
     let (gx0, gx1, gy0, gy1) =
@@ -61,9 +61,12 @@ pub(crate) fn check_hostile_summon(
             }
         }
     }
-    nearest
-        .map(|(_, focus)| focus)
-        .ok_or_else(|| "required summoning circle is out of range".to_string())
+    nearest.map(|(_, focus)| focus).ok_or_else(|| {
+        CastGateRefusal::other(
+            CastRefusalReason::OutOfRange,
+            "required summoning circle is out of range",
+        )
+    })
 }
 
 pub(crate) fn summon_hostile(

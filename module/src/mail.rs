@@ -4,7 +4,59 @@ use spacetimedb::{reducer, table, ReducerContext, Table, Timestamp};
 use crate::game_item_instance;
 use crate::game_item_template;
 
-use crate::items::ItemSnapshot;
+use crate::items::{ItemSnapshot, StoreRefusal};
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum MailRefusal {
+    InventoryFull,
+    NotEnoughMoney,
+    CodNotAffordable,
+    ItemIsSoulbound,
+    NotYourItem,
+    Refused(crate::Refusal),
+}
+
+impl From<String> for MailRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+impl From<crate::Refusal> for MailRefusal {
+    fn from(refusal: crate::Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<StoreRefusal> for MailRefusal {
+    fn from(refusal: StoreRefusal) -> Self {
+        match refusal {
+            StoreRefusal::InventoryFull => Self::InventoryFull,
+            StoreRefusal::Refused(refusal) => Self::Refused(refusal),
+        }
+    }
+}
+
+impl std::fmt::Display for MailRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use lyracore_shared::mail as text;
+        match self {
+            Self::InventoryFull => text::INVENTORY_FULL.fmt(f),
+            Self::NotEnoughMoney => text::NOT_ENOUGH_MONEY.fmt(f),
+            Self::CodNotAffordable => text::COD_NOT_AFFORDABLE.fmt(f),
+            Self::ItemIsSoulbound => text::ITEM_IS_SOULBOUND.fmt(f),
+            Self::NotYourItem => text::NOT_YOUR_ITEM.fmt(f),
+            Self::Refused(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
+impl From<MailRefusal> for String {
+    fn from(refusal: MailRefusal) -> Self {
+        refusal.to_string()
+    }
+}
+
 #[table(accessor = game_mail, public, index(accessor = by_recipient, btree(columns = [recipient_guid])))]
 pub struct Mail {
     #[primary_key]
@@ -91,7 +143,7 @@ pub(crate) fn detach_item(
     ctx: &ReducerContext,
     sender_guid: u64,
     item_guid: u64,
-) -> Result<ItemSnapshot, String> {
+) -> Result<ItemSnapshot, MailRefusal> {
     let items = ctx.db.game_item_instance();
     let owned = items.guid().find(item_guid);
     match plan_attach(
@@ -100,8 +152,8 @@ pub(crate) fn detach_item(
         sender_guid,
     ) {
         Attach::Nothing => return Ok(ItemSnapshot::default()),
-        Attach::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_ITEM.to_string()),
-        Attach::Soulbound => return Err(lyracore_shared::mail::ITEM_IS_SOULBOUND.to_string()),
+        Attach::NotYours => return Err(MailRefusal::NotYourItem),
+        Attach::Soulbound => return Err(MailRefusal::ItemIsSoulbound),
         Attach::Detach => {}
     }
     let inst = owned.expect("Detach is only reachable with a row");
@@ -113,9 +165,9 @@ pub(crate) fn grant_snapshot(
     ctx: &ReducerContext,
     payee_guid: u64,
     snapshot: &ItemSnapshot,
-) -> Result<(), String> {
+) -> Result<(), MailRefusal> {
     if snapshot.is_empty() {
-        return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string());
+        return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string().into());
     }
     let payee = crate::helpers::acting_entity_by_guid(ctx, payee_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
@@ -125,7 +177,14 @@ pub(crate) fn grant_snapshot(
         .entry()
         .find(snapshot.entry)
         .ok_or_else(|| format!("mail: no template for attached item {}", snapshot.entry))?;
-    crate::items::store_instance_state(ctx, payee_guid, payee.owner_identity, &tmpl, None, snapshot)
+    Ok(crate::items::store_instance_state(
+        ctx,
+        payee_guid,
+        payee.owner_identity,
+        &tmpl,
+        None,
+        snapshot,
+    )?)
 }
 #[derive(Clone, PartialEq, Eq, Debug)]
 pub(crate) struct Letter {
@@ -291,12 +350,12 @@ pub(crate) fn debit_purse(
     ctx: &ReducerContext,
     payer_guid: u64,
     copper: u32,
-    unaffordable: &str,
-) -> Result<(), String> {
+    unaffordable: MailRefusal,
+) -> Result<(), MailRefusal> {
     let mut payer = crate::helpers::acting_entity_by_guid(ctx, payer_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_IN_WORLD.to_string())?;
     if payer.money < copper {
-        return Err(unaffordable.to_string());
+        return Err(unaffordable);
     }
     payer.money -= copper;
     payer.update(ctx);
@@ -313,13 +372,13 @@ pub(crate) fn apply_send(
     cod: u32,
     item_guid: u64,
     same_account: bool,
-) -> Result<(), String> {
+) -> Result<(), MailRefusal> {
     let item = detach_item(ctx, sender_guid, item_guid)?;
     debit_purse(
         ctx,
         sender_guid,
         lyracore_shared::mail::total_cost(money),
-        lyracore_shared::mail::NOT_ENOUGH_MONEY,
+        MailRefusal::NotEnoughMoney,
     )?;
     let delay_secs = delivery_delay_secs(!item.is_empty(), same_account);
     insert_letter(
@@ -396,10 +455,10 @@ pub(crate) fn apply_take_money(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let money = match plan_take_money(mail_money(ctx, mail_id), recipient_guid) {
-        TakeMoney::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
-        TakeMoney::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string()),
+        TakeMoney::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.into()),
+        TakeMoney::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.into()),
         TakeMoney::Take(money) => money,
     };
     let mut taker = crate::helpers::acting_entity_by_guid(ctx, recipient_guid)
@@ -413,14 +472,16 @@ pub(crate) fn apply_take_item(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
-) -> Result<(), String> {
+) -> Result<(), MailRefusal> {
     let row = delivered_mail(ctx, mail_id);
     match plan_take_item(
         row.as_ref().map(|m| (m.recipient_guid, m.item_entry)),
         recipient_guid,
     ) {
-        TakeItem::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
-        TakeItem::NothingToTake => return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string()),
+        TakeItem::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string().into()),
+        TakeItem::NothingToTake => {
+            return Err(lyracore_shared::mail::NOTHING_TO_TAKE.to_string().into())
+        }
         TakeItem::Take => {}
     }
     let row = row.expect("Take is only reachable with a row");
@@ -431,12 +492,7 @@ pub(crate) fn apply_take_item(
         row.recipient_guid,
     );
     if let Some(s) = &settlement {
-        debit_purse(
-            ctx,
-            s.payer_guid,
-            s.copper,
-            lyracore_shared::mail::COD_NOT_AFFORDABLE,
-        )?;
+        debit_purse(ctx, s.payer_guid, s.copper, MailRefusal::CodNotAffordable)?;
     }
     grant_snapshot(ctx, recipient_guid, &row.snapshot())?;
     clear_mail_item(ctx, mail_id);
@@ -462,7 +518,7 @@ pub(crate) fn apply_mark_read(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let row = delivered_mail(ctx, mail_id)
         .filter(|m| m.recipient_guid == recipient_guid)
         .ok_or_else(|| lyracore_shared::mail::NOT_YOUR_MAIL.to_string())?;
@@ -492,10 +548,10 @@ pub(crate) fn apply_delete(
     ctx: &ReducerContext,
     recipient_guid: u64,
     mail_id: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     match plan_delete(delivered_mail(ctx, mail_id).as_ref(), recipient_guid) {
-        DeletePlan::NotYours => Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
-        DeletePlan::CodPriced => Err(lyracore_shared::mail::COD_MAIL_UNDELETABLE.to_string()),
+        DeletePlan::NotYours => Err(lyracore_shared::mail::NOT_YOUR_MAIL.into()),
+        DeletePlan::CodPriced => Err(lyracore_shared::mail::COD_MAIL_UNDELETABLE.into()),
         DeletePlan::Delete => {
             delete_mail(ctx, mail_id);
             Ok(())
@@ -527,16 +583,14 @@ pub(crate) fn apply_return(
     recipient_guid: u64,
     mail_id: u64,
     same_account: bool,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let row = delivered_mail(ctx, mail_id);
     match plan_return(row.as_ref(), recipient_guid) {
-        ReturnPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.to_string()),
+        ReturnPlan::NotYours => return Err(lyracore_shared::mail::NOT_YOUR_MAIL.into()),
         ReturnPlan::NoCharacterSender => {
-            return Err(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO.to_string())
+            return Err(lyracore_shared::mail::NO_SENDER_TO_RETURN_TO.into())
         }
-        ReturnPlan::AlreadyReturned => {
-            return Err(lyracore_shared::mail::ALREADY_RETURNED.to_string())
-        }
+        ReturnPlan::AlreadyReturned => return Err(lyracore_shared::mail::ALREADY_RETURNED.into()),
         ReturnPlan::Return => {}
     }
     let row = row.expect("Return is only reachable with a row");
@@ -581,7 +635,7 @@ pub fn realm_mail_mark_read(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_mark_read(ctx, recipient_guid, mail_id)
+    Ok(apply_mark_read(ctx, recipient_guid, mail_id)?)
 }
 #[reducer]
 #[allow(clippy::too_many_arguments)]
@@ -609,6 +663,7 @@ pub fn realm_mail_send(
         item_guid,
         same_account,
     )
+    .map_err(String::from)
 }
 #[reducer]
 pub fn realm_mail_take_item(
@@ -618,7 +673,7 @@ pub fn realm_mail_take_item(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_take_item(ctx, recipient_guid, mail_id)
+    apply_take_item(ctx, recipient_guid, mail_id).map_err(String::from)
 }
 #[reducer]
 pub fn realm_mail_take_money(
@@ -628,7 +683,7 @@ pub fn realm_mail_take_money(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_take_money(ctx, recipient_guid, mail_id)
+    Ok(apply_take_money(ctx, recipient_guid, mail_id)?)
 }
 #[reducer]
 pub fn realm_mail_delete(
@@ -638,7 +693,7 @@ pub fn realm_mail_delete(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_delete(ctx, recipient_guid, mail_id)
+    Ok(apply_delete(ctx, recipient_guid, mail_id)?)
 }
 #[reducer]
 pub fn realm_mail_return(
@@ -649,7 +704,7 @@ pub fn realm_mail_return(
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     let recipient_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
-    apply_return(ctx, recipient_guid, mail_id, same_account)
+    Ok(apply_return(ctx, recipient_guid, mail_id, same_account)?)
 }
 
 #[cfg(test)]

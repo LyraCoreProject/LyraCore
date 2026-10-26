@@ -2,21 +2,25 @@ use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
 use lyracore_shared::pet::{pet_guid_for, PET_NAME_INVALID};
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
-use super::{game_native_player, NativeAoi};
+use super::{game_native_player, NativeAoi, Rollback};
 use crate::{
     aoi::{game_aoi_grant, WORLD_ENTITY},
-    creatures::{game_hunter_pet_protocol, HunterPetProtocol},
+    creatures::{game_hunter_pet_protocol, HunterPetProtocol, PetRenameRefusal},
     game_creature_cast, game_world_entity,
 };
 
-pub(super) fn rename(ctx: &ReducerContext, owner: u64, pet: u64, name: &str) -> Result<(), String> {
-    super::actor(ctx, owner).map_err(super::rollback_silent)?;
-    crate::creatures::rename_hunter_pet(ctx, owner, pet, name).map_err(|cause| {
-        if cause == PET_NAME_INVALID {
-            super::rollback_reply(ServerOpcodeMessage::SMSG_PET_NAME_INVALID, cause)
-        } else {
-            super::rollback_silent(cause)
+pub(super) fn rename(
+    ctx: &ReducerContext,
+    owner: u64,
+    pet: u64,
+    name: &str,
+) -> Result<(), Rollback> {
+    super::actor(ctx, owner)?;
+    crate::creatures::rename_hunter_pet(ctx, owner, pet, name).map_err(|refusal| match refusal {
+        PetRenameRefusal::InvalidName => {
+            Rollback::reply(ServerOpcodeMessage::SMSG_PET_NAME_INVALID, PET_NAME_INVALID)
         }
+        PetRenameRefusal::Refused(refusal) => refusal.into(),
     })
 }
 

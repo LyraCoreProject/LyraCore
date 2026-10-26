@@ -342,9 +342,9 @@ pub(crate) fn cast_vote_on(
     slot: u8,
     voter_guid: u64,
     vote: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if !matches!(vote, vote_kind::PASS | vote_kind::NEED | vote_kind::GREED) {
-        return Err(refused(LootRefusal::RollUnavailable, "invalid vote"));
+        return Err(refused(LootRefusal::RollUnavailable, "invalid vote").into());
     }
     let roll = ctx
         .db
@@ -360,7 +360,7 @@ pub(crate) fn cast_vote_on(
         .find(|v| v.voter_guid == voter_guid)
         .ok_or_else(|| refused(LootRefusal::RollUnavailable, "voter is not on this roll"))?;
     if my_vote.voted {
-        return Err(refused(LootRefusal::RollUnavailable, "already voted"));
+        return Err(refused(LootRefusal::RollUnavailable, "already voted").into());
     }
     my_vote.voted = true;
     my_vote.vote = vote;
@@ -608,7 +608,7 @@ pub(crate) fn apply_master_give(
     corpse_guid: u64,
     loot_slot: u8,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let loot = ctx.db.game_corpse_loot();
     let row = loot
         .by_corpse()
@@ -619,7 +619,8 @@ pub(crate) fn apply_master_give(
         return Err(refused(
             LootRefusal::NotMasterLooter,
             "Actor does not hold the master-looter right on that row",
-        ));
+        )
+        .into());
     }
     let is_eligible = ctx
         .db
@@ -631,7 +632,8 @@ pub(crate) fn apply_master_give(
         return Err(refused(
             LootRefusal::LootTagIneligible,
             &format!("master-give target {target_guid} is not eligible"),
-        ));
+        )
+        .into());
     }
     crate::helpers::live_entity(ctx, target_guid).map_err(|_| {
         refused(

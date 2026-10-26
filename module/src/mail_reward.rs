@@ -54,7 +54,7 @@ pub(crate) fn file_reward_letter(
     character_guid: u64,
     giver_guid: u64,
     quest_entry: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let Some(reward) = ctx
         .db
         .game_quest_reward_mail()

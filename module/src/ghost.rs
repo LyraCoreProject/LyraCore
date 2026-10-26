@@ -11,14 +11,14 @@ pub(crate) fn spirit_healer_gate(
     ctx: &ReducerContext,
     ghost_guid: u64,
     healer_guid: u64,
-) -> Result<(WorldEntity, WorldEntity), String> {
+) -> Result<(WorldEntity, WorldEntity), crate::Refusal> {
     let entities = ctx.db.game_world_entity();
     let ghost = entities
         .guid()
         .find(ghost_guid)
         .ok_or_else(|| "caller not in world".to_string())?;
     if !ghost.dead || ghost.player_flags & player_flags::GHOST == 0 {
-        return Err("caller is not a ghost".to_string());
+        return Err("caller is not a ghost".into());
     }
     let healer = entities
         .guid()
@@ -31,10 +31,10 @@ pub(crate) fn spirit_healer_gate(
         })
         .ok_or_else(|| "target is not a Spirit Healer".to_string())?;
     if !crate::helpers::in_same_partition(&healer, ghost.map_id, ghost.instance_id) {
-        return Err("Spirit Healer on another map".to_string());
+        return Err("Spirit Healer on another map".into());
     }
     if crate::helpers::dist_sq(&ghost, &healer) > SPIRIT_HEALER_RANGE_SQ {
-        return Err("Spirit Healer out of range".to_string());
+        return Err("Spirit Healer out of range".into());
     }
     Ok((ghost, healer))
 }

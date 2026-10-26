@@ -19,15 +19,6 @@ pub enum TrainerRefusal {
 }
 
 impl TrainerRefusal {
-    pub const ALL: [Self; 6] = [
-        Self::Unavailable,
-        Self::NotOffered,
-        Self::AlreadyKnown,
-        Self::LevelTooLow,
-        Self::PreviousRankMissing,
-        Self::NotEnoughMoney,
-    ];
-
     pub fn as_tag(self) -> &'static str {
         match self {
             Self::Unavailable => "trainer:unavailable",
@@ -37,12 +28,6 @@ impl TrainerRefusal {
             Self::PreviousRankMissing => "trainer:previous_rank_missing",
             Self::NotEnoughMoney => "trainer:not_enough_money",
         }
-    }
-
-    pub fn parse_tag(tag: &str) -> Option<Self> {
-        Self::ALL
-            .into_iter()
-            .find(|refusal| refusal.as_tag() == tag)
     }
 }
 
@@ -55,18 +40,6 @@ mod tests {
     use super::*;
 
     const CLASSES: [u8; 9] = [1, 2, 3, 4, 5, 7, 8, 9, 11];
-
-    #[test]
-    fn every_refusal_tag_round_trips() {
-        for refusal in TrainerRefusal::ALL {
-            assert_eq!(TrainerRefusal::parse_tag(refusal.as_tag()), Some(refusal));
-        }
-        assert_eq!(TrainerRefusal::parse_tag("trainer:"), None);
-        assert_eq!(
-            TrainerRefusal::parse_tag("gw_trainer_buy reducer timed out after 10s"),
-            None
-        );
-    }
 
     #[test]
     fn a_class_trainer_serves_its_own_class_and_refuses_every_other() {

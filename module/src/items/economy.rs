@@ -290,7 +290,7 @@ pub(crate) fn apply_buyback_item(
     player_guid: u64,
     vendor_guid: u64,
     slot_idx: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let (mut player, _vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -315,7 +315,8 @@ pub(crate) fn apply_buyback_item(
         return Err(format!(
             "not enough money: have {}, need {}",
             player.money, entry.price
-        ));
+        )
+        .into());
     }
     let owner_identity = player.owner_identity;
     player.money -= entry.price;

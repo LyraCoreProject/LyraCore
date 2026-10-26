@@ -215,7 +215,7 @@ pub(crate) fn apply_item_target_spell(
     actor_guid: u64,
     spell_id: u32,
     slot: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if !ctx
         .db
         .game_spell_effect()
@@ -223,9 +223,9 @@ pub(crate) fn apply_item_target_spell(
         .filter(&spell_id)
         .any(|effect| effect.kind == crate::spell::E_FEED_PET)
     {
-        return Err("spell does not support an item target".to_string());
+        return Err("spell does not support an item target".into());
     }
-    feed_item(ctx, actor_guid, slot)
+    Ok(feed_item(ctx, actor_guid, slot)?)
 }
 
 fn feed_item(ctx: &ReducerContext, actor_guid: u64, slot: u8) -> Result<(), String> {

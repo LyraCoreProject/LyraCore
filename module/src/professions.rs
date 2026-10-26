@@ -68,7 +68,7 @@ pub(crate) fn skin_corpse(
     ctx: &ReducerContext,
     looter_guid: u64,
     corpse_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let entities = ctx.db.game_world_entity();
     let looter = entities
         .guid()
@@ -103,7 +103,7 @@ pub(crate) fn skin_corpse(
         corpse.level,
     )?;
     if !crate::loot::corpse_is_looted(ctx, corpse_guid, corpse.money) {
-        return Err("corpse still has loot".to_string());
+        return Err("corpse still has loot".into());
     }
 
     let skin_loot_id = ctx
@@ -145,11 +145,11 @@ pub(crate) fn pick_caught_fish(winner: Option<u32>, pool_idx: usize) -> u32 {
     winner.unwrap_or_else(|| FISH_POOL[pool_idx % FISH_POOL.len()])
 }
 
-pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+pub(crate) fn apply_fish(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
     let player =
         crate::helpers::live_entity(ctx, guid).map_err(|_| "fisher not in world".to_string())?;
     if player.dead {
-        return Err("dead players cannot fish".to_string());
+        return Err("dead players cannot fish".into());
     }
     crate::skill::learn_profession(
         ctx,
@@ -199,18 +199,20 @@ fn require_gear(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
     Ok(())
 }
 
-pub(crate) fn apply_disenchant(ctx: &ReducerContext, guid: u64, slot: u8) -> Result<(), String> {
+pub(crate) fn apply_disenchant(
+    ctx: &ReducerContext,
+    guid: u64,
+    slot: u8,
+) -> Result<(), crate::Refusal> {
     let player =
         crate::helpers::live_entity(ctx, guid).map_err(|_| "enchanter not in world".to_string())?;
     if player.dead {
-        return Err("dead players cannot disenchant".to_string());
+        return Err("dead players cannot disenchant".into());
     }
     let inst = crate::items::item_in_slot(ctx, guid, slot)
         .ok_or_else(|| format!("no item in slot {slot}"))?;
     if crate::trade::item_is_offered(ctx, guid, inst.guid) {
-        return Err(crate::items::refused(
-            lyracore_shared::item::ItemRefusal::NotRightNow,
-        ));
+        return Err(crate::items::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
     }
     require_gear(ctx, inst.entry)?;
     crate::skill::learn_profession(
@@ -236,14 +238,14 @@ pub(crate) fn apply_enchant_item(
     guid: u64,
     target_slot: u8,
     enchant_id: u32,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let player =
         crate::helpers::live_entity(ctx, guid).map_err(|_| "enchanter not in world".to_string())?;
     if player.dead {
-        return Err("dead players cannot enchant".to_string());
+        return Err("dead players cannot enchant".into());
     }
     if !crate::items::is_known_enchant(ctx, enchant_id) {
-        return Err(format!("unknown enchant {enchant_id}"));
+        return Err(format!("unknown enchant {enchant_id}").into());
     }
     let mut inst = crate::items::item_in_slot(ctx, guid, target_slot)
         .ok_or_else(|| format!("no item in slot {target_slot}"))?;

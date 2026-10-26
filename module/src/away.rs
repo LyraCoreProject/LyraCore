@@ -65,9 +65,9 @@ pub(crate) fn apply_set_away(
     mut entity: crate::WorldEntity,
     kind: u8,
     message: String,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if kind != chat_kind::AFK && kind != chat_kind::DND {
-        return Err(format!("away kind {kind} is neither AFK nor DND"));
+        return Err(format!("away kind {kind} is neither AFK nor DND").into());
     }
     let change = next_away(entity.player_flags, kind, &message);
     let character_guid = entity.guid;

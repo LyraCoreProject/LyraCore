@@ -1091,21 +1091,21 @@ pub(crate) fn apply_inspect(
     ctx: &ReducerContext,
     inspector: crate::WorldEntity,
     target_guid: u64,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     let target = crate::helpers::live_entity(ctx, target_guid)
         .map_err(|_| "no such inspect target".to_string())?;
     let dist_sq = crate::helpers::dist_sq(&inspector, &target);
     let friendly = ctx.db.game_faction_template().count() == 0
         || crate::faction::is_friendly(ctx, inspector.faction_template, target.faction_template);
-    can_inspect(
+    Ok(can_inspect(
         target.is_player(),
         target.map_id == inspector.map_id && target.instance_id == inspector.instance_id,
         dist_sq,
         friendly,
-    )
+    )?)
 }
 
-pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
     use lyracore_shared::constants::{player_flags, unit_vis_flags};
     let entities = ctx.db.game_world_entity();
     let mut player = entities
@@ -1200,9 +1200,9 @@ pub(crate) fn apply_set_sheathed(
     ctx: &ReducerContext,
     mut actor: WorldEntity,
     state: u8,
-) -> Result<(), String> {
+) -> Result<(), crate::Refusal> {
     if !sheath_state::is_valid(state) {
-        return Err(format!("invalid sheath state {state}"));
+        return Err(format!("invalid sheath state {state}").into());
     }
     let packed = sheath_state::packed_with(actor.unit_bytes_2, state);
     if packed == actor.unit_bytes_2 {
@@ -1266,7 +1266,7 @@ fn resurrection_sickness_micros(level: u32) -> Option<i64> {
     (level >= 11).then(|| i64::from(level.min(20) - 10) * MINUTE_MICROS)
 }
 
-pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
+pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Refusal> {
     use lyracore_shared::constants::player_flags;
     let entities = ctx.db.game_world_entity();
     let mut player = entities
@@ -1274,7 +1274,7 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
         .find(guid)
         .ok_or_else(|| "caller not in world".to_string())?;
     if !player.dead || player.player_flags & player_flags::GHOST == 0 {
-        return Err("caller is not a ghost".to_string());
+        return Err("caller is not a ghost".into());
     }
     let (health, power) = spirit_res_vitals(player.max_health, player.max_power);
     let player_level = player.level;

@@ -306,31 +306,14 @@ pub fn acceptance(
 }
 
 impl AcceptanceRefusal {
-    const LEVEL_PREFIX: &'static str = "requires level ";
-
     pub fn text(self, min_level: u32) -> String {
         match self {
-            Self::Level => format!("{}{min_level}", Self::LEVEL_PREFIX),
+            Self::Level => format!("requires level {min_level}"),
             Self::Race => "quest not available to your race".to_string(),
             Self::Class => "quest not available to your class".to_string(),
             Self::Prerequisite => "must complete the prerequisite quest first".to_string(),
             Self::AlreadyTaken => "already on or completed that quest".to_string(),
         }
-    }
-
-    /// The inverse of [`Self::text`].
-    pub fn parse(text: &str) -> Option<Self> {
-        if text.starts_with(Self::LEVEL_PREFIX) {
-            return Some(Self::Level);
-        }
-        [
-            Self::Race,
-            Self::Class,
-            Self::Prerequisite,
-            Self::AlreadyTaken,
-        ]
-        .into_iter()
-        .find(|refusal| refusal.text(0) == text)
     }
 }
 
@@ -349,20 +332,6 @@ pub fn base_reward_xp(explicit_xp: u32, reward_money_max_level: u32, quest_level
 #[cfg(test)]
 mod rule_tests {
     use super::*;
-
-    #[test]
-    fn acceptance_refusal_text_parses_back() {
-        for refusal in [
-            AcceptanceRefusal::Level,
-            AcceptanceRefusal::Race,
-            AcceptanceRefusal::Class,
-            AcceptanceRefusal::Prerequisite,
-            AcceptanceRefusal::AlreadyTaken,
-        ] {
-            assert_eq!(AcceptanceRefusal::parse(&refusal.text(12)), Some(refusal));
-        }
-        assert_eq!(AcceptanceRefusal::parse(QUEST_LOG_FULL_TEXT), None);
-    }
 
     #[test]
     fn completion_reads_each_objective_kind_from_its_authority() {
