@@ -81,9 +81,10 @@ Report the smoke result.
    already exists in the new code, tell the user and skip it.
 7. Port the hunk by its behaviour, not by its text, in new commits. Use the doc's patterns:
    - Request handlers go in `module/src/native/<area>.rs`.
-   - A Refusal returns `Err(super::rollback_silent(cause))` or `Err(super::rollback_reply(message, cause))`.
-     Gate helpers return a plain `String` and the handler maps it with `.map_err(super::rollback_silent)`.
-     Any other `Err` that leaves the handler ends the World Session with a Transport Loss.
+   - A handler returns `Result<(), Rollback>`. A core Gate returns a typed Refusal: `crate::Refusal`
+     when the reply does not depend on the reason, or its Protocol Family's enum, which the handler
+     maps to reply packets with an exhaustive `match`. A plain `String` error ends the World Session
+     with a Transport Loss.
    - A Relay is called from the Module code that writes the Relay row, and is re-exported in
      `native/mod.rs`.
    - Codecs go in `crates/lyracore-protocol`.

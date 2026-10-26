@@ -39,12 +39,11 @@ Files: `module/src/spell/cast/resolve.rs`, `module/src/spell/outcome.rs`.
 
 - An effect-specific Gate runs in `resolve_cast_at_typed` after `check_cast_gates` and before the
   cost is charged, so a Refusal leaves power and cooldown untouched.
-- A Gate returns a `CastRefusal`. Add a `CastRefusalKind` only when a caller must tell the new
-  Refusal apart.
-- The native cast handler picks the client's `SpellCastResult` from the Refusal message
-  through `cast_failure_reason_for` in `crates/lyracore-protocol/src/codec/combat.rs`.
-  Reuse an existing phrase such as
-  "out of range" or "line of sight", or add an arm there with a test.
+- A Gate returns a `CastGateRefusal` with a `CastRefusalReason` (`module/src/spell/outcome.rs`).
+  Add a `CastRefusalKind` only when a Package caller must tell the new Refusal apart.
+- `cast_result` in `module/src/native/cast.rs` maps each `CastRefusalReason` to the client's
+  `SpellCastResult`. Reuse an existing reason such as `OutOfRange` or `NoLineOfSight`, or add a
+  variant, its arm in `cast_result` and a row in that file's table test.
 
 ## 5. Apply the effect
 
