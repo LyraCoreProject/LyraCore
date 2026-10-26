@@ -95,6 +95,7 @@ effect_kinds! {
     A_PROC_DAMAGE => AuraProcDamage = 0xB4,
     A_SELF_RESURRECT => AuraSelfResurrect = 0xB5,
     A_TRANSFORM => AuraTransform = 0xB6,
+    A_MOD_POWER_REGEN_PCT => AuraModPowerRegenPct = 0xB7,
     A_FLAG => AuraFlag = 0xBE,
 }
 
@@ -199,6 +200,7 @@ mod tests {
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);
         assert_eq!(A_MOD_COMBAT, 0xA3);
+        assert_eq!(A_MOD_POWER_REGEN_PCT, 0xB7);
         assert_eq!(A_FLAG, 0xBE);
         for k in [
             E_DAMAGE, E_HEAL, E_ENERGIZE, E_DISPEL, E_TRIGGER, E_SCRIPTED,

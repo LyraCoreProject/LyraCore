@@ -695,6 +695,7 @@ pub(crate) fn apply_effect(
         | EffectKind::AuraProcDamage
         | EffectKind::AuraSelfResurrect
         | EffectKind::AuraTransform
+        | EffectKind::AuraModPowerRegenPct
         | EffectKind::AuraFlag => apply_aura_effect(
             ctx,
             e,

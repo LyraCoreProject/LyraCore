@@ -58,11 +58,11 @@ pub(crate) use math::{
     damaged_value, detect_range_mod, dispel_category_matches, distance_3d, drain_shields,
     effect_amount, energized_value, form_recast_toggles_off, healed_value, healing_power,
     is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed, level_gate_blocks,
-    projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage, resistance_bonus,
-    school_index, school_locked, seal_amount, seal_amount_and_spell, should_arm_spell_retaliation,
-    speed_bonus, spell_crit_bp, spell_miss_chance_bp, spell_power, stance_allows,
-    stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct, stat_bonus,
-    stat_pct_bonus,
+    power_regen_pct, projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage,
+    resistance_bonus, school_index, school_locked, seal_amount, seal_amount_and_spell,
+    should_arm_spell_retaliation, speed_bonus, spell_crit_bp, spell_miss_chance_bp, spell_power,
+    stance_allows, stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct,
+    stat_bonus, stat_pct_bonus,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use scheduler::arm_ground_area_tick;
@@ -102,8 +102,8 @@ pub use tables::{
 
 pub(crate) use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_COMBAT_HEALTH_REGEN_PCT, A_CONTROL, A_DISARM, A_FLAG, A_IMMUNITY, A_MOD_COMBAT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT,
-    A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
+    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED,
+    A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
     A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL, A_SELF_RESURRECT,
     A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, BEAST_TYPE, COMBAT_ATTACK_POWER,
     COMBAT_BLOCK, COMBAT_CRIT, COMBAT_DEFENSE, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,

@@ -19,26 +19,26 @@ use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
     A_ABSORB, A_COMBAT_HEALTH_REGEN_PCT, A_CONTROL, A_DISARM, A_FLAG, A_IMMUNITY, A_MOD_COMBAT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALTH_POWER, A_MOD_RESISTANCE, A_MOD_SPEED,
-    A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL,
-    A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER, A_RETALIATE, A_SEAL, A_SELF_RESURRECT,
-    A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM, COMBAT_ATTACK_POWER, COMBAT_CRIT,
-    COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT, COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO,
-    E_BLINK, E_CHARGE, E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT,
-    E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
-    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
-    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
-    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT,
-    E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG,
-    P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER,
-    P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID,
-    SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM,
-    SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER,
-    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
-    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
-    SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT,
-    STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF,
-    T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT,
+    A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE,
+    A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
+    A_RETALIATE, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM,
+    COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
+    COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE,
+    E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE,
+    E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
+    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
+    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE,
+    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY,
+    P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND,
+    P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS,
+    SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION,
+    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
+    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
+    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
+    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
@@ -398,6 +398,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
 
         ModRegen => A_PERIODIC_HEAL,
         ModPowerRegen => A_PERIODIC_ENERGIZE,
+        ModPowerRegenPercent => A_MOD_POWER_REGEN_PCT,
 
         ModDisarm => A_DISARM,
         Mounted => A_MOUNTED,
@@ -421,7 +422,6 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | FarSight
         | WaterBreathing
         | ModHealthRegenPercent
-        | ModPowerRegenPercent
         | PreventsFleeing
         | ModUnattackable
         | InterruptRegen
@@ -503,7 +503,7 @@ fn resolve_aura_params(kind: u8, aura: AuraMod, misc: u32) -> (i32, u8) {
         }
         A_MOUNTED => (misc as i32, P_DISPLAY_ID),
         A_TRANSFORM => (misc as i32, P_ENTRY),
-        A_PERIODIC_ENERGIZE => ((misc & 0xFF) as i32, P_POWER_TYPE),
+        A_PERIODIC_ENERGIZE | A_MOD_POWER_REGEN_PCT => ((misc & 0xFF) as i32, P_POWER_TYPE),
         A_CONTROL => {
             let mech = match aura {
                 ModStun => M_STUN,
@@ -1483,6 +1483,7 @@ fn kind_name(kind: u8) -> &'static str {
         A_PROC_TRIGGER => "A_PROC_TRIGGER",
         A_PROC_DAMAGE => "A_PROC_DAMAGE",
         A_SELF_RESURRECT => "A_SELF_RESURRECT",
+        A_MOD_POWER_REGEN_PCT => "A_MOD_POWER_REGEN_PCT",
         _ => "?",
     }
 }
@@ -2032,6 +2033,22 @@ mod tests {
             (30, 3, 30, 30_000, 0)
         );
         assert_ne!(header.cast_flags & SPELL_ATTR_STEALTH_SAFE, 0);
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    fn actual_adrenaline_rush_doubles_energy_regeneration() {
+        let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
+        let (rows, _, _) = build_spell_rows(Path::new(&dir), &[13750], &[]).unwrap();
+        let effects = rows
+            .effects
+            .iter()
+            .filter(|effect| effect.spell_id == 13750)
+            .map(|e| (e.kind, e.base_points, e.p0, e.p0_kind))
+            .collect::<Vec<_>>();
+        assert_eq!(effects, [(A_MOD_POWER_REGEN_PCT, 100, 3, P_POWER_TYPE)]);
+        let header = rows.headers.iter().find(|s| s.spell_id == 13750).unwrap();
+        assert_eq!((header.duration_ms, header.cooldown_ms), (15_000, 300_000));
     }
 
     fn imported_spell_fixture(
@@ -2933,6 +2950,10 @@ mod tests {
         assert_eq!(aura_mod_to_kind(ModRegen), A_PERIODIC_HEAL);
         assert_eq!(aura_mod_to_kind(ModPowerRegen), A_PERIODIC_ENERGIZE);
         assert_eq!(aura_mod_to_kind(PeriodicEnergize), A_PERIODIC_ENERGIZE);
+        assert_eq!(
+            aura_mod_to_kind(ModPowerRegenPercent),
+            A_MOD_POWER_REGEN_PCT
+        );
         assert_eq!(aura_mod_to_kind(ModStat), A_MOD_STAT);
         assert_eq!(aura_mod_to_kind(ModResistance), A_MOD_RESISTANCE);
         assert_eq!(aura_mod_to_kind(SchoolAbsorb), A_ABSORB);
@@ -3151,6 +3172,14 @@ mod tests {
         assert_eq!(
             resolve_aura_params(A_PERIODIC_ENERGIZE, AuraMod::PeriodicEnergize, 0),
             (0, P_POWER_TYPE)
+        );
+    }
+
+    #[test]
+    fn power_regen_percent_decodes_power_type_from_misc() {
+        assert_eq!(
+            resolve_aura_params(A_MOD_POWER_REGEN_PCT, AuraMod::ModPowerRegenPercent, 3),
+            (3, P_POWER_TYPE)
         );
     }
 
