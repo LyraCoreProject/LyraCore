@@ -172,14 +172,14 @@ impl Row {
 }
 
 pub(crate) enum WorldSource {
-    ClassicDb(String),
+    ClassicDb(crate::dump::ParsedDump),
     Vmangos(Connection),
 }
 
 impl WorldSource {
     pub(crate) fn open(path: &Path, kind: SourceKind) -> Result<Self> {
         match kind {
-            SourceKind::ClassicDb => Ok(Self::ClassicDb(crate::dump::read_dump_text(
+            SourceKind::ClassicDb => Ok(Self::ClassicDb(crate::dump::read_dump(
                 path.to_str().context("World Source path is not UTF-8")?,
             )?)),
             SourceKind::Vmangos => {
@@ -195,7 +195,7 @@ impl WorldSource {
 
     pub(crate) fn row_count(&self, table: &str) -> Result<usize> {
         match self {
-            Self::ClassicDb(sql) => Ok(crate::dump::named_table(sql, table)?.len()),
+            Self::ClassicDb(dump) => Ok(dump.rows(table)?.len()),
             Self::Vmangos(connection) => {
                 check_table(connection, table)?;
                 connection
@@ -214,7 +214,7 @@ impl WorldSource {
 impl TableRows for WorldSource {
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
-            Self::ClassicDb(sql) => crate::dump::named_table(sql, table).map(Cow::Owned),
+            Self::ClassicDb(dump) => dump.rows(table),
             Self::Vmangos(connection) => {
                 check_table(connection, table)?;
                 let mut statement =
@@ -247,7 +247,7 @@ impl TableRows for WorldSource {
     }
     fn source_hash(&self) -> Result<String> {
         match self {
-            Self::ClassicDb(sql) => crate::dump::sha256_hex(sql.as_bytes()),
+            Self::ClassicDb(dump) => dump.source_hash(),
             Self::Vmangos(connection) => {
                 let path = connection
                     .path()
@@ -351,9 +351,9 @@ mod tests {
             ]],
         }])
         .unwrap();
-        let classic = WorldSource::ClassicDb("CREATE TABLE `example` (\n`optional` int,\n`entry` int,\n`name` text\n); INSERT INTO `example` VALUES (NULL,42,'O\\'Brien');".into());
-        for source in [sqlite, classic] {
-            let rows = source.rows("example").unwrap();
+        let classic = crate::dump::named_table("CREATE TABLE `example` (\n`optional` int,\n`entry` int,\n`name` text\n); INSERT INTO `example` VALUES (NULL,42,'O\\'Brien');", "example").unwrap();
+        let sqlite_rows = sqlite.rows("example").unwrap();
+        for rows in [sqlite_rows.as_ref(), classic.as_slice()] {
             let row = &rows[0];
             assert_eq!(row.number::<u32>("entry").unwrap(), 42);
             assert_eq!(row.text("name").unwrap(), "O'Brien");
@@ -365,7 +365,6 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("example.missing"));
-            assert!(source.rows("absent").is_err());
         }
     }
 

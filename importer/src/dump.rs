@@ -250,24 +250,6 @@ pub(crate) mod qt {
     pub const OBJECTIVES: &str = "Objectives";
     pub const OFFER_REWARD_TEXT: &str = "OfferRewardText";
     pub const REQUEST_ITEMS_TEXT: &str = "RequestItemsText";
-    #[cfg(test)]
-    pub const REQ_ITEM_ID1: &str = "ReqItemId1";
-    #[cfg(test)]
-    pub const REQ_ITEM_COUNT1: &str = "ReqItemCount1";
-    #[cfg(test)]
-    pub const REQ_CREATURE_OR_GO_ID1: &str = "ReqCreatureOrGOId1";
-    #[cfg(test)]
-    pub const REQ_CREATURE_OR_GO_COUNT1: &str = "ReqCreatureOrGOCount1";
-    #[cfg(test)]
-    pub const REQ_SPELL_CAST1: &str = "ReqSpellCast1";
-    #[cfg(test)]
-    pub const REW_CHOICE_ITEM_ID1: &str = "RewChoiceItemId1";
-    #[cfg(test)]
-    pub const REW_CHOICE_ITEM_COUNT1: &str = "RewChoiceItemCount1";
-    #[cfg(test)]
-    pub const REW_ITEM_ID1: &str = "RewItemId1";
-    #[cfg(test)]
-    pub const REW_ITEM_COUNT1: &str = "RewItemCount1";
     pub const REW_REP_FACTION1: &str = "RewRepFaction1";
     pub const REW_REP_VALUE1: &str = "RewRepValue1";
     pub const REW_OR_REQ_MONEY: &str = "RewOrReqMoney";
@@ -413,8 +395,27 @@ fn numeric_column(kind: &str) -> bool {
         || kind.starts_with("decimal")
 }
 
+fn source_cell(
+    table: &str,
+    name: &str,
+    number: bool,
+    value: String,
+) -> Result<crate::world_source::Cell> {
+    use crate::world_source::Cell;
+    if value.trim() == "NULL" {
+        Ok(Cell::Null)
+    } else if number {
+        if !value.trim().parse::<f64>().is_ok_and(f64::is_finite) {
+            bail!("{table}.{name}: invalid numeric value");
+        }
+        Ok(Cell::Number(value.into()))
+    } else {
+        Ok(Cell::Text(value.into()))
+    }
+}
+
 pub(crate) fn named_table(dump: &str, table: &str) -> Result<Vec<crate::world_source::Row>> {
-    use crate::world_source::{Cell, TableBuilder};
+    use crate::world_source::TableBuilder;
     let columns = named_columns(dump, table)?;
     let mut output = TableBuilder::new(table, columns.iter().map(|(name, _)| name.clone()));
     let complete = visit_inserts(dump, &format!("INSERT INTO `{table}` VALUES "), |values| {
@@ -428,19 +429,7 @@ pub(crate) fn named_table(dump: &str, table: &str) -> Result<Vec<crate::world_so
         let cells = columns
             .iter()
             .zip(values)
-            .map(|((name, kind), value)| {
-                let cell = if value.trim() == "NULL" {
-                    Cell::Null
-                } else if numeric_column(kind) {
-                    if !value.trim().parse::<f64>().is_ok_and(f64::is_finite) {
-                        bail!("{table}.{name}: invalid numeric value");
-                    }
-                    Cell::Number(value.into())
-                } else {
-                    Cell::Text(value.into())
-                };
-                Ok(cell)
-            })
+            .map(|((name, kind), value)| source_cell(table, name, numeric_column(kind), value))
             .collect::<Result<Vec<_>>>()?;
         output.push(cells)
     })?;
@@ -465,16 +454,7 @@ impl ParsedDump {
     pub(crate) fn parse(text: String) -> Result<Self> {
         let mut tables = std::collections::BTreeMap::new();
         for &(table, columns) in crate::classic_columns::TABLES {
-            let declarations = named_columns(&text, table)?;
-            for &(column, number) in columns {
-                let (_, kind) = declarations
-                    .iter()
-                    .find(|(name, _)| name == column)
-                    .with_context(|| format!("{table}.{column}: missing column"))?;
-                if numeric_column(kind) != number {
-                    bail!("{table}.{column}: source column type changed");
-                }
-            }
+            check_columns(&text, table, columns)?;
             let rows = named_table(&text, table)?;
             tables.insert(table.to_string(), rows);
         }
@@ -483,6 +463,20 @@ impl ParsedDump {
             tables,
         })
     }
+}
+
+fn check_columns(text: &str, table: &str, columns: &[(&str, bool)]) -> Result<()> {
+    let declarations = named_columns(text, table)?;
+    for &(column, number) in columns {
+        let (_, kind) = declarations
+            .iter()
+            .find(|(name, _)| name == column)
+            .with_context(|| format!("{table}.{column}: missing column"))?;
+        if numeric_column(kind) != number {
+            bail!("{table}.{column}: source column type changed");
+        }
+    }
+    Ok(())
 }
 
 impl TableRows for ParsedDump {
@@ -498,14 +492,6 @@ impl TableRows for ParsedDump {
 }
 
 pub(crate) fn parse_table<'a>(
-    dump: &'a (impl TableRows + ?Sized),
-    table: &str,
-) -> Cow<'a, [crate::world_source::Row]> {
-    dump.rows(table)
-        .expect("the source table contract was checked before mapping")
-}
-
-pub(crate) fn parse_complete_table<'a>(
     dump: &'a (impl TableRows + ?Sized),
     table: &str,
 ) -> Result<Cow<'a, [crate::world_source::Row]>> {
@@ -589,9 +575,8 @@ fn visit_inserts(
     Ok(complete)
 }
 
-pub(crate) fn field<'a>(row: &'a crate::world_source::Row, column: &str) -> &'a str {
+pub(crate) fn field<'a>(row: &'a crate::world_source::Row, column: &str) -> Result<&'a str> {
     row.raw(column)
-        .expect("the classic-db column contract was checked before mapping")
 }
 
 pub(crate) fn sql_str(s: &str) -> String {
@@ -686,11 +671,12 @@ pub(crate) fn push_insert(stmts: &mut Vec<String>, table: &str, cols: &str, rows
 impl TableRows for str {
     fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>> {
         use crate::world_source::{Cell, TableBuilder};
-        if self.contains(&format!("CREATE TABLE `{table}` (")) {
-            return named_table(self, table).map(Cow::Owned);
-        }
         let contract = crate::classic_columns::columns(table)
             .with_context(|| format!("{table}: no fixture column contract"))?;
+        if self.contains(&format!("CREATE TABLE `{table}` (")) {
+            check_columns(self, table, contract)?;
+            return named_table(self, table).map(Cow::Owned);
+        }
         let marker = format!("INSERT INTO `{table}`");
         let Some(start) = self.find(&marker) else {
             return Ok(Cow::Owned(Vec::new()));
@@ -740,13 +726,7 @@ impl TableRows for str {
                     .iter()
                     .position(|(column, _)| column == name)
                     .with_context(|| format!("{table}.{name}: unknown fixture column"))?;
-                cells[index] = if value == "NULL" {
-                    Cell::Null
-                } else if contract[index].1 {
-                    Cell::Number(value.into())
-                } else {
-                    Cell::Text(value.into())
-                };
+                cells[index] = source_cell(table, name, contract[index].1, value)?;
             }
             output.push(cells)?;
         }
@@ -841,6 +821,25 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn fixture_and_production_readers_refuse_the_same_numeric_text() {
+        for value in ["'bad'", "'NaN'", "'inf'"] {
+            let insert = format!("INSERT INTO `areatrigger_involvedrelation` VALUES (1,{value});");
+            let declared = format!(
+                "CREATE TABLE `areatrigger_involvedrelation` (\n`id` int,\n`quest` int\n);{insert}"
+            );
+            for error in [
+                insert.rows("areatrigger_involvedrelation").unwrap_err(),
+                declared.rows("areatrigger_involvedrelation").unwrap_err(),
+                ParsedDump::parse(declared).unwrap_err(),
+            ] {
+                assert!(error
+                    .to_string()
+                    .contains("areatrigger_involvedrelation.quest: invalid numeric value"));
+            }
+        }
+    }
+
+    #[test]
     fn parsed_dump_borrows_tables_and_refuses_names_outside_the_contract() {
         let mut sql = String::new();
         for &(table, columns) in crate::classic_columns::TABLES {
@@ -895,13 +894,13 @@ pub(crate) mod tests {
     #[test]
     fn parses_quoted_names_with_commas_and_escapes() {
         let dump = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A, the Bold','Sub\\'s',5),(2,'B',NULL,7); y";
-        let rows = parse_table(dump, "creature_template");
+        let rows = parse_table(dump, "creature_template").unwrap();
         assert_eq!(rows.len(), 2);
-        assert_eq!(field(&rows[0], "Entry"), "1");
-        assert_eq!(field(&rows[0], "Name"), "A, the Bold");
-        assert_eq!(field(&rows[0], "SubName"), "Sub's");
-        assert_eq!(field(&rows[0], "MinLevel"), "5");
-        assert_eq!(field(&rows[1], "SubName"), "NULL");
+        assert_eq!(field(&rows[0], "Entry").unwrap(), "1");
+        assert_eq!(field(&rows[0], "Name").unwrap(), "A, the Bold");
+        assert_eq!(field(&rows[0], "SubName").unwrap(), "Sub's");
+        assert_eq!(field(&rows[0], "MinLevel").unwrap(), "5");
+        assert_eq!(field(&rows[1], "SubName").unwrap(), "NULL");
     }
 
     #[test]
@@ -1021,29 +1020,31 @@ pub(crate) mod tests {
     fn parse_table_returns_no_rows_for_a_table_the_dump_never_mentions() {
         let dump = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A',NULL,5); y";
         assert!(
-            parse_table(dump, "spell_chain").is_empty(),
+            parse_table(dump, "spell_chain").unwrap().is_empty(),
             "an absent table must yield zero rows, not a panic"
         );
-        assert!(parse_table("", "creature_template").is_empty());
-        assert!(parse_table("-- comment only, no INSERTs\n", "creature").is_empty());
+        assert!(parse_table("", "creature_template").unwrap().is_empty());
+        assert!(parse_table("-- comment only, no INSERTs\n", "creature")
+            .unwrap()
+            .is_empty());
     }
 
     #[test]
     fn parse_table_name_match_is_exact_not_a_prefix_of_a_longer_table() {
         let templates = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A',NULL,5); y";
         assert!(
-            parse_table(templates, "creature").is_empty(),
+            parse_table(templates, "creature").unwrap().is_empty(),
             "`creature` must NOT match `creature_template` rows"
         );
         let spawns =
             "x INSERT INTO `creature` (`guid`, `id`, `map`, `spawnMask`) VALUES (7,299,0,1.0); y";
         assert!(
-            parse_table(spawns, "creature_template").is_empty(),
+            parse_table(spawns, "creature_template").unwrap().is_empty(),
             "`creature_template` must NOT match `creature` rows"
         );
         let both = format!("{templates}\n{spawns}");
-        assert_eq!(parse_table(&both, "creature_template").len(), 1);
-        assert_eq!(parse_table(&both, "creature").len(), 1);
+        assert_eq!(parse_table(&both, "creature_template").unwrap().len(), 1);
+        assert_eq!(parse_table(&both, "creature").unwrap().len(), 1);
     }
 
     #[test]

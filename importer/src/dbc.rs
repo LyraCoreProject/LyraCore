@@ -751,13 +751,13 @@ fn taxi_mount_displays(
     dump: &(impl crate::dump::TableRows + ?Sized),
     display_ids: &HashSet<u32>,
 ) -> Result<HashMap<u32, u32>> {
-    let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
+    let rows = crate::dump::parse_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");
     }
     let mut mounts = HashMap::with_capacity(rows.len());
     for row in rows.iter() {
-        let entry: u32 = crate::dump::field(row, crate::dump::ct::ENTRY)
+        let entry: u32 = crate::dump::field(row, crate::dump::ct::ENTRY)?
             .parse()
             .context("taxi mount dump has an invalid creature entry")?;
         let mut display = 0;

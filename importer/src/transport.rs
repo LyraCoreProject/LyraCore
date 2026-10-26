@@ -27,23 +27,32 @@ pub(crate) fn catalogue_sql(
     points: &TaxiPathNode,
     dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<TransportCatalogueSql> {
-    let template_rows = crate::dump::parse_complete_table(dump, "gameobject_template")?;
+    let template_rows = crate::dump::parse_table(dump, "gameobject_template")?;
     let templates: HashMap<u32, &crate::world_source::Row> = template_rows
         .iter()
-        .filter_map(|row| Some((field(row, got::ENTRY).parse().ok()?, row)))
-        .collect();
+        .map(|row| -> anyhow::Result<_> {
+            Ok(Some((
+                match field(row, got::ENTRY)?.parse().ok() {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+                row,
+            )))
+        })
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()?;
     let path_ids: HashSet<u32> = paths.rows().iter().map(|row| row.id.id).collect();
-    let transports = crate::dump::parse_complete_table(dump, "transports")?;
+    let transports = crate::dump::parse_table(dump, "transports")?;
     if transports.is_empty() {
         bail!("transport dump has no transports rows");
     }
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
     for transport in transports.iter() {
-        let entry: u32 = field(transport, tr::ENTRY)
+        let entry: u32 = field(transport, tr::ENTRY)?
             .parse()
             .context("transports has an invalid entry")?;
-        let period_ms: u32 = field(transport, tr::PERIOD)
+        let period_ms: u32 = field(transport, tr::PERIOD)?
             .parse()
             .with_context(|| format!("transport {entry} has an invalid period"))?;
         let Some(template) = templates.get(&entry) else {
@@ -53,7 +62,7 @@ pub(crate) fn catalogue_sql(
             continue;
         };
         let number = |column: &str| -> Result<u32> {
-            field(template, column)
+            field(template, column)?
                 .parse()
                 .with_context(|| format!("transport {entry} template column {column} is invalid"))
         };
@@ -87,12 +96,12 @@ pub(crate) fn catalogue_sql(
             continue;
         }
         let map_id = nodes[0].map.id;
-        let size: f32 = field(template, got::SIZE)
+        let size: f32 = field(template, got::SIZE)?
             .parse()
             .with_context(|| format!("transport {entry} has an invalid size"))?;
         rows.push(format!(
             "({entry},{},{},{size},{},{path_id},{speed},{accel},{period_ms},{map_id})",
-            sql_text(field(template, got::NAME)),
+            sql_text(field(template, got::NAME)?),
             number(got::DISPLAY_ID)?,
             number(got::FLAGS)?,
         ));

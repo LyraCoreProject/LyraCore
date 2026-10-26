@@ -146,10 +146,7 @@ fn floor(name: &str) -> Result<usize> {
 pub(crate) fn run(classic: &Path, vmangos: &Path, client: &str, commit: &str) -> Result<String> {
     let sqlite_digest = crate::dump::sha256_hex(&std::fs::read(vmangos)?)?;
     let classic = WorldSource::open(classic, SourceKind::ClassicDb)?;
-    let classic_digest = match &classic {
-        WorldSource::ClassicDb(sql) => crate::dump::sha256_hex(sql.as_bytes())?,
-        _ => unreachable!(),
-    };
+    let classic_digest = classic.source_hash()?;
     let vmangos = WorldSource::open(vmangos, SourceKind::Vmangos)?;
     let mut chain = crate::dbc::open_chain(Path::new(client))?;
     let outfits = crate::dbc::outfit_item_set(&mut chain)?

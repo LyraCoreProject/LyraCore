@@ -175,6 +175,7 @@ def compare_lock(accepted, actual, accept_lock=False):
     try:
         comparison = api_json(f"compare/{accepted['commit']}...{actual['commit']}")
     except HTTPError as error:
+        error.close()
         if not accept_lock or error.code != 404:
             raise
         return "previous lock unreachable"
