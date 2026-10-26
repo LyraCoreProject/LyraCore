@@ -3508,21 +3508,26 @@ fn family_stamps(
     stamps
 }
 
-fn run_full_world_catalogues(
+// The Module refuses EventAI relay definitions that name a spell missing from game_spell.
+fn run_client_catalogues(
     dump: &str,
     args: &WorldImportArgs,
     spells: &spell::SpellArgs,
 ) -> Result<()> {
+    if args.family.is_some() {
+        return Ok(());
+    }
     if args
         .world_profile
         .is_some_and(WorldImportProfile::imports_all_templates)
-        && args.family.is_none()
     {
         let data_dir = args
             .dbc
             .as_deref()
             .context("a complete world import requires --dbc <client Data directory>")?;
         dbc::run_from_dump(data_dir, dump, args.apply, &args.shard)?;
+    }
+    if let Some(data_dir) = args.dbc.as_deref() {
         spell::run_spells(data_dir, spells)?;
     }
     Ok(())
@@ -3562,7 +3567,7 @@ pub(crate) fn run(
 
     let plan = build_dump_plan(&dump, args, &display_scales, &profession_tier_values)?;
 
-    run_full_world_catalogues(&dump, args, spells)?;
+    run_client_catalogues(&dump, args, spells)?;
 
     if !args.apply {
         if let Some(manifest) = &plan.eventai_manifest {

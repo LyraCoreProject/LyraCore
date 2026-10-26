@@ -160,6 +160,10 @@ check "the standalone DBC catalogue receives the full taxi mount dump" \
     grep -q -- '--dbc .*--taxi-mounts .import/classic-db-full.sql --apply' "$stub_log"
 check "the dump ETL receives the canonical profile name" \
     grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
+check "the dump ETL reads the client spell catalogue before world AI" \
+    grep -q -- 'lyracore-importer .*--dump .*--dbc .*--world-profile alliance-single' "$stub_log"
+plain_spell_passes="$(count_matches "$stub_log" '^lyracore-importer .*--spells --apply$')"
+check "the profile skips the duplicate standalone spell catalogue pass" test "$plain_spell_passes" -eq 0
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
     bash -c '! grep "lyracore-importer .*--world-profile alliance-single" "$0" | grep -qE -- "--map|--box|--include-map|--include-creatures"' "$stub_log"
 unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -vc -- '--server http://127.0.0.1:3000' || true)"
