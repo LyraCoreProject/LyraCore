@@ -51,7 +51,7 @@ entry in both files.
 
 **V** [Verification](CORE_TERMS.md#verification)
 
-**W** [Whereabouts](#retired-terms) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms)
+**W** [Whereabouts](#retired-terms) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms) · [World Source](#realm-topology)
 
 **Z** [Zone Weather](#world-clock-and-weather)
 
@@ -62,6 +62,10 @@ entry in both files.
 Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 [Development reload](CORE_TERMS.md#development-reload), [Realm](CORE_TERMS.md#realm),
 [Shard](CORE_TERMS.md#shard), [Module](CORE_TERMS.md#module), [Operator](CORE_TERMS.md#operator).
+
+**World Source**:
+The external world database an Operator supplies to an import. It owns the source identifiers and
+content revisions; the Operator's client supplies the remaining client data.
 
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
