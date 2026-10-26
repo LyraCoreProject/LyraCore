@@ -297,7 +297,6 @@ fn run_spell_effects(
                     ..Default::default()
                 }
             } else {
-                // Combo finishers use the explicit enemy even for self-targeted effects.
                 apply_effect(
                     ctx,
                     e,

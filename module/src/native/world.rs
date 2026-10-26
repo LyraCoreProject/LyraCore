@@ -187,6 +187,7 @@ pub(super) fn enter_character(
     }
     super::economy::replay_buyback(ctx, connection.connection_id, guid)?;
     super::progression::replay_exploration(ctx, connection.connection_id, guid);
+    super::combat::replay_combo_points(ctx, connection.connection_id, guid);
     super::death::replay(ctx, guid);
     super::instance::replay(ctx, guid);
     super::petition::replay(ctx, guid, connection.connection_id);

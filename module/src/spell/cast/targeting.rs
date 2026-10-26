@@ -268,7 +268,7 @@ pub(crate) fn aura_apply(
         points
     };
     let duration_ms = if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        let combo = crate::combo::combo_points(ctx, caster_guid, cast_target_guid);
+        let combo = crate::combo::held_points(ctx, caster_guid);
         crate::combo::finisher_duration_ms(hdr.duration_ms, combo)
     } else {
         hdr.duration_ms
@@ -481,7 +481,7 @@ pub(crate) fn aura_apply(
 
     // Spend combo points after reading duration and successfully placing the aura.
     if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        crate::combo::spend_combo(ctx, caster_guid, cast_target_guid);
+        crate::combo::spend_combo(ctx, caster_guid);
     }
 
     if hdr.is_negative {
@@ -892,7 +892,7 @@ fn apply_damage_effect(
             } else {
                 EffectHit::none()
             };
-            crate::combo::spend_combo(ctx, caster_guid, target_guid);
+            crate::combo::spend_combo(ctx, caster_guid);
             hit
         }
         _ => EffectHit::none(),

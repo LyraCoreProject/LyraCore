@@ -4298,6 +4298,45 @@ def check_casting(host):
     client.collect()
 
 
+def check_combo_points(host):
+    rogue = host.enter_world('Rogue', cls=4, at=(0, 0, 0, 0))
+    observer = host.enter_world('Observer', at=(0, 10, 0, 0))
+    guid = rogue.guid
+    host.call('debug_learn_spell', [guid, 133])
+    host.restore('game_spell', 'spell_id = 133', 'gcd_ms')
+    host.restore('game_spell_effect', 'spell_id = 133', 'kind')
+    host.sql('UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 133')
+    host.sql('UPDATE game_spell_effect SET kind = 12 WHERE spell_id = 133')  # E_ADD_COMBO.
+    first = spawn(host, guid, 51000, 5)
+    second = spawn(host, guid, 51000, 6)
+    rogue.collect()
+    observer.collect()
+
+    def shown(packets=()):
+        """Polls the rogue until a combo VALUES update arrives; returns (target, points)."""
+        seen = list(packets)
+        def combo():
+            seen.extend(rogue.collect())
+            fields = values(seen, guid)
+            return fields if 1222 in fields else None
+        fields = host.wait_until(combo, 'no PLAYER_FIELD_BYTES update reached the rogue')
+        return fields[714] | fields[715] << 32, fields[1222] >> 8 & 0xff
+
+    for points in (1, 2):
+        rogue.send(0x12e, cast(133, first))
+        assert shown() == (first, points)
+    assert host.rows(f'SELECT target_guid, points FROM game_combo_point WHERE owner_guid = {guid}') == [[first, 2]]
+    assert 1222 not in values(observer.collect(), guid)
+    rogue.send(0x12e, cast(133, second))
+    assert shown() == (second, 1)
+    assert host.rows(f'SELECT target_guid, points FROM game_combo_point WHERE owner_guid = {guid}') == [[second, 1]]
+    host.call('debug_set_health', [second, 0])
+    assert shown() == (0, 0)
+    assert not host.rows(f'SELECT id FROM game_combo_point WHERE owner_guid = {guid}')
+    host.call('debug_set_health', [first, 0])
+    observer.collect()
+
+
 def check_progression(host):
     client, peer = native_and_peer(host, at=(0, 0, 0, 0))
     guid, peer_guid = client.guid, peer.guid
@@ -4601,7 +4640,7 @@ SHARED = named(
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
     check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_addon, check_chat,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,
-    check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation,
+    check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation, check_combo_points,
 ) | {'admission': admission.run}
 
 # Each of these checks gets its own Host, built from these options.
