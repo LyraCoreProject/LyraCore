@@ -219,16 +219,6 @@ echo "[world] real talent trees (TalentTab.dbc + Talent.dbc → game_talent)"
 run_checked_step "talents into $DB" "loaded [0-9]+ tabs|error|abort" 2 \
   ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
   --dbc "$DBC" --talents --apply || exit 1
-case "$WORLD_PROFILE" in
-  full-*) echo "[world] spell catalogue loaded before world AI definitions" ;;
-  *)
-    echo "[world] full Spell.dbc import (every non-zero row)"
-    # Spell IDs at or above 50000 are reserved for synthetic fixtures.
-    run_checked_step "full spell catalogue into $DB" "imported [0-9]|WARNING|error|abort" 3 \
-      ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
-      --dbc "$DBC" --spells --apply || exit 1
-    ;;
-esac
 # An unexported DB shell variable does not reach the child without env.
 echo "[world] curated spell-import (functional 1-20 trainer offerings + castable ranks) → $DB"
 run_checked_step "curated class spells into $DB" "imported [0-9]|error" 1 \

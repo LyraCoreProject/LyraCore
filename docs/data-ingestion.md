@@ -37,8 +37,10 @@ cargo run -p lyracore-importer -- \
 
 This prints the plan. Add `--apply --server <local-node> --db <database>` to load it. Full profiles
 load the client reference catalogues from the same dump and client inputs, including taxi mount
-models. They do not require a separate `--taxi-mounts` argument. The script also loads spells,
-talents, terrain and navigation:
+models. They do not require a separate `--taxi-mounts` argument. A complete import with `--dbc`
+loads the full Spell catalogue before world content on every profile, because the Module refuses
+EventAI relay definitions that name a missing spell. The script also loads talents, terrain and
+navigation:
 
 ```sh
 WORLD_PROFILE=full-world DUMP=.import/classic-db-full.sql DBC=/path/to/client/Data \
