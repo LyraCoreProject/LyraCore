@@ -1,5 +1,6 @@
+use crate::dbc;
+use crate::dump::{field, parse_table, push_insert, sql_text};
 use crate::spell_dbc::{read_spells, Spell};
-use crate::{dbc, field, parse_table, push_insert, sql_text};
 use anyhow::{bail, Context, Result};
 use lyracore_shared::item_property as kind;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
@@ -307,12 +308,12 @@ fn decimal_weight(value: &str) -> Result<u32> {
 }
 
 pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
-    field(row, crate::it::RANDOM_PROPERTY)
+    field(row, crate::dump::it::RANDOM_PROPERTY)
         .parse::<u32>()
         .with_context(|| {
             format!(
                 "item {} has an invalid Property Pool ID",
-                field(row, crate::it::ENTRY)
+                field(row, crate::dump::it::ENTRY)
             )
         })
 }

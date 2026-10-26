@@ -6,8 +6,9 @@ use wow_dbc::vanilla_tables::game_object_display_info::{
 };
 use wow_dbc::Indexable;
 
+use crate::dump::{field, got, parse_table};
 use crate::nav::Tri;
-use crate::{field, got, parse_table, GO_BUTTON, GO_DOOR};
+use crate::world_import::{GO_BUTTON, GO_DOOR};
 
 // Shuffle Y-up placement coordinates to Z-up world axes before rotation and scale.
 fn shuffle(v: [f32; 3]) -> [f32; 3] {
@@ -76,7 +77,7 @@ fn door_templates(dump: &str) -> Vec<DoorTemplate> {
         .filter_map(|row| {
             let entry: u64 = field(row, got::ENTRY).parse().ok()?;
             let raw_type: u32 = field(row, got::TYPE).parse().ok()?;
-            let stored_type = crate::classify_go_type(entry, raw_type)?;
+            let stored_type = crate::world_import::classify_go_type(entry, raw_type)?;
             (stored_type == GO_DOOR || stored_type == GO_BUTTON).then(|| DoorTemplate {
                 entry,
                 display_id: field(row, got::DISPLAY_ID).parse().unwrap_or(0),
@@ -88,13 +89,16 @@ fn door_templates(dump: &str) -> Vec<DoorTemplate> {
 
 const BATCH_BYTES: usize = 28_000;
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    let data_dir = Path::new(args.go_models.as_ref().expect("caller checked"));
-    let dump_path = args
-        .dump
-        .as_ref()
+pub(crate) fn run(
+    data_dir: &str,
+    dump_path: Option<&str>,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
+    let data_dir = Path::new(data_dir);
+    let dump_path = dump_path
         .context("--go-models needs --dump too (gameobject_template is the template source)")?;
-    let dump = crate::read_dump(dump_path)?;
+    let dump = crate::dump::read_dump(dump_path)?;
     let templates = door_templates(&dump);
     if templates.is_empty() {
         println!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
@@ -154,7 +158,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         templates.len()
     );
 
-    if !args.apply {
+    if !apply {
         println!(
             "-- DRY RUN: would import {} game_go_model row(s)",
             rows.len()
@@ -185,7 +189,7 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
         } else {
             "import_go_models_append"
         };
-        crate::call_reducer(args, reducer, batch)?;
+        shard.call_reducer(reducer, batch)?;
     }
     println!(
         "go-models: applied {} row(s) across {} batch(es).",

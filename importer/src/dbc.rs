@@ -29,7 +29,8 @@ use wow_dbc::{DbcTable, Indexable};
 use wow_mpq::PatchChain;
 use wow_world_base::vanilla::LockType;
 
-use crate::{push_insert, sql_text, Args};
+use crate::dump::{push_insert, sql_text};
+use crate::shard::Shard;
 
 pub(crate) fn open_chain(data_dir: &Path) -> Result<PatchChain> {
     let mut chain = PatchChain::new();
@@ -115,17 +116,22 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
     })
 }
 
-pub fn run(data_dir: &str, args: &Args) -> Result<()> {
-    let mount_dump = crate::read_dump(args.taxi_mounts.as_deref().context(
+pub fn run(data_dir: &str, taxi_mounts: Option<&str>, apply: bool, shard: &Shard) -> Result<()> {
+    let mount_dump = crate::dump::read_dump(taxi_mounts.context(
         "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays and transports",
     )?)?;
-    run_from_dump(data_dir, args, &mount_dump)
+    run_from_dump(data_dir, &mount_dump, apply, shard)
 }
 
-pub(crate) fn run_from_dump(data_dir: &str, args: &Args, mount_dump: &str) -> Result<()> {
+pub(crate) fn run_from_dump(
+    data_dir: &str,
+    mount_dump: &str,
+    apply: bool,
+    shard: &Shard,
+) -> Result<()> {
     let statements = catalogue_statements(data_dir, mount_dump)?;
-    if args.apply {
-        crate::run_sql_statements(args, &statements, "dbc")?;
+    if apply {
+        shard.run_sql_statements(&statements, "dbc")?;
         eprintln!(
             "dbc: loaded client catalogues ({} SQL statements)",
             statements.len()
@@ -460,7 +466,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     }
     let n = rows.len();
     let mut stmts = vec!["DELETE FROM game_start_item WHERE id >= 0 AND id < 1000000".to_string()];
-    crate::push_insert(
+    push_insert(
         &mut stmts,
         "game_start_item",
         "id,race_class,item_entry",
@@ -739,17 +745,17 @@ struct TaxiCatalogueSql {
 }
 
 fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
-    let rows = crate::parse_complete_table(dump, "creature_template")?;
+    let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");
     }
     let mut mounts = HashMap::with_capacity(rows.len());
     for row in rows {
-        let entry: u32 = crate::field(&row, crate::ct::ENTRY)
+        let entry: u32 = crate::dump::field(&row, crate::dump::ct::ENTRY)
             .parse()
             .context("taxi mount dump has an invalid creature entry")?;
         let mut display = 0;
-        for index in crate::ct::MODEL_ID1..crate::ct::MODEL_ID1 + 4 {
+        for index in crate::dump::ct::MODEL_ID1..crate::dump::ct::MODEL_ID1 + 4 {
             let model: u32 = row
                 .get(index)
                 .with_context(|| {
@@ -2490,19 +2496,29 @@ mod tests {
         let map = resolve_profession_tier_values(&availability, &tiers);
 
         assert_eq!(map.len(), PROFESSION_SKILL_LINES.len());
-        for &(line, entries) in crate::PROFESSION_LEARN {
+        for &(line, entries) in crate::world_import::PROFESSION_LEARN {
             let caps = map
                 .get(&line)
                 .unwrap_or_else(|| panic!("no resolved tier caps for line {line}"));
             for &(_, tier_index, _) in entries {
                 assert_eq!(
                     caps[tier_index as usize] as u32,
-                    crate::LEGACY_TIER_CAPS[tier_index as usize],
+                    crate::world_import::LEGACY_TIER_CAPS[tier_index as usize],
                     "line {line} tier {tier_index}"
                 );
             }
         }
-        crate::assert_profession_tier_parity(&map)
+        crate::world_import::assert_profession_tier_parity(&map)
             .expect("fixture data must satisfy the parity guard");
+    }
+
+    #[test]
+    fn standalone_dbc_requires_mount_templates_before_opening_inputs() {
+        let shard = Shard {
+            server: "local".into(),
+            db: "lyracore".into(),
+        };
+        let error = run("/nonexistent/client/Data", None, false, &shard).unwrap_err();
+        assert!(error.to_string().contains("--taxi-mounts"));
     }
 }

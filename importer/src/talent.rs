@@ -7,7 +7,8 @@ use wow_dbc::vanilla_tables::talent_tab::TalentTab as DbcTalentTab;
 use wow_dbc::DbcTable;
 
 use crate::dbc::{open_chain, read_table};
-use crate::{push_insert, run_sql_statements, sql_text, Args};
+use crate::dump::{push_insert, sql_text};
+use crate::shard::Shard;
 
 fn map_talent_tabs(tabs: &DbcTalentTab) -> (Vec<String>, usize) {
     let rows: Vec<String> = tabs
@@ -103,7 +104,7 @@ fn print_coverage(cov: &Coverage) {
     }
 }
 
-pub fn run_talents(data_dir: &str, args: &Args) -> Result<()> {
+pub fn run_talents(data_dir: &str, apply: bool, shard: &Shard) -> Result<()> {
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("talents: opened MPQ chain from {}", dir.display());
@@ -134,8 +135,8 @@ pub fn run_talents(data_dir: &str, args: &Args) -> Result<()> {
     let mut stmts = tab_stmts;
     stmts.extend(talent_stmts);
 
-    if args.apply {
-        run_sql_statements(args, &stmts, "talents")?;
+    if apply {
+        shard.run_sql_statements(&stmts, "talents")?;
         eprintln!(
             "talents: loaded {} tabs + {} talents into game_talent_tab/game_talent.",
             cov.tabs, cov.talents

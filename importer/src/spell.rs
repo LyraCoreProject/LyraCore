@@ -10,9 +10,11 @@ use wow_dbc::{DbcTable, Indexable};
 use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
+use crate::dump::push_insert;
 use crate::package_delta;
+use crate::shard::Shard;
 use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
-use crate::{push_insert, run_sql_statements, stamp_family, Args};
+use crate::world_import_scope::WorldImportScope;
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
@@ -1550,7 +1552,17 @@ pub fn run_spell_snapshot(data_dir: &str, path: &str) -> Result<()> {
     Ok(())
 }
 
-pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
+pub(crate) struct SpellArgs {
+    pub(crate) only: Vec<u32>,
+    pub(crate) trainers: Vec<(u32, Vec<u32>)>,
+    pub(crate) source_sha: String,
+    pub(crate) packages: Option<String>,
+    pub(crate) scope: WorldImportScope,
+    pub(crate) apply: bool,
+    pub(crate) shard: Shard,
+}
+
+pub fn run_spells(data_dir: &str, args: &SpellArgs) -> Result<()> {
     let (stmts, cov, samples) = build_spell_sql(Path::new(data_dir), &args.only, &args.trainers)?;
 
     if !args.only.is_empty() && cov.spells != args.only.len() {
@@ -1562,7 +1574,7 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     if args.apply {
-        run_sql_statements(args, &stmts, "spells")?;
+        args.shard.run_sql_statements(&stmts, "spells")?;
         eprintln!(
             "spells: imported {} spells, {} effects ({:.1}% real kinds, {:.1}% E_SCRIPTED){}.",
             cov.spells,
@@ -1583,7 +1595,8 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
                 " [additive allowlist]"
             },
         );
-        stamp_family(args, "spell", &args.source_sha, "", cov.spells as u64)
+        args.shard
+            .stamp_family("spell", &args.source_sha, "", cov.spells as u64)
             .context("stamp_import_meta(spell)")?;
     } else if !args.only.is_empty() {
         println!(
@@ -1625,7 +1638,7 @@ pub fn run_spells(data_dir: &str, args: &Args) -> Result<()> {
     }
 
     match &args.packages {
-        Some(root) => package_delta::reapply(args, "spell", root)?,
+        Some(root) => package_delta::reapply(&args.scope, args.apply, &args.shard, "spell", root)?,
         None => package_delta::warn_not_reapplied("spell"),
     }
 

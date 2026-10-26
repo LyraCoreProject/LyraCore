@@ -7,8 +7,8 @@ use lyracore_package_delta::{
     artifact_kind, trace, ArtifactKind, ClaimTrace, Operation, PackageDelta,
 };
 
+use crate::shard::Shard;
 use crate::world_import_scope::WorldImportScope;
-use crate::{call_reducer_args, Args};
 
 const GENERATED_DIR: &str = "data/.generated";
 
@@ -20,10 +20,15 @@ struct Artifact {
     delta: PackageDelta,
 }
 
-pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
-    let scope = args.world_import_scope()?;
+pub(crate) fn reapply(
+    scope: &WorldImportScope,
+    apply: bool,
+    shard: &Shard,
+    family: &str,
+    root: &str,
+) -> Result<()> {
     let for_family = artifacts_for_family(read_enabled(Path::new(root))?, family)?;
-    let (artifacts, routed_away) = routed_to_this_shard(&scope, for_family)?;
+    let (artifacts, routed_away) = routed_to_this_shard(scope, for_family)?;
     let deltas: Vec<PackageDelta> = artifacts.iter().map(|a| a.delta.clone()).collect();
     let traced = trace(&deltas);
 
@@ -40,7 +45,7 @@ pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
         );
     }
 
-    if !args.apply {
+    if !apply {
         eprintln!(
             "{family}: Package Delta check only — re-run with --apply to reapply these claims."
         );
@@ -51,7 +56,8 @@ pub(crate) fn reapply(args: &Args, family: &str, root: &str) -> Result<()> {
         serde_json::to_string(family).context("encode Package Delta family String argument")?;
     let packed_argument = serde_json::to_string(&pack(&deltas))
         .context("encode Package Delta plan String argument")?;
-    call_reducer_args(args, APPLY_REDUCER, &[&family_argument, &packed_argument])
+    shard
+        .call_reducer_args(APPLY_REDUCER, &[&family_argument, &packed_argument])
         .with_context(|| format!("{APPLY_REDUCER}({family})"))?;
     eprintln!(
         "{family}: reapplied {} enabled Package Delta(s) over {} row(s).",

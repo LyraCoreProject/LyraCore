@@ -9,6 +9,7 @@ use wow_dbc::DbcTable;
 use wow_mpq::PatchChain;
 
 use crate::nav::{Mesh, Placement, Tri};
+use crate::shard::Shard;
 
 // Apply local roll, local pitch, then calibrated world yaw.
 pub(crate) fn apply_full(
@@ -320,34 +321,12 @@ fn sql_column_rows<'a>(
     rows
 }
 
-fn sql_query(args: &crate::Args, query: &str) -> Result<String> {
-    let out = crate::spacetime()
-        .args([
-            "sql",
-            "--format",
-            "json",
-            "-s",
-            &args.server,
-            &args.db,
-            query,
-        ])
-        .output()
-        .with_context(|| format!("run vmap SQL query: {query}"))?;
-    if !out.status.success() {
-        bail!(
-            "vmap SQL query failed: {}",
-            String::from_utf8_lossy(&out.stderr)
-        );
-    }
-    Ok(String::from_utf8_lossy(&out.stdout).into_owned())
-}
-
 fn accepted_chunk_ids(
-    args: &crate::Args,
+    shard: &Shard,
     generation_id: u64,
 ) -> Result<std::collections::HashSet<(u64, u32)>> {
-    let output = sql_query(
-        args,
+    let output = shard.query_json(
+        "vmap",
         &format!(
             "SELECT key, shard_ordinal FROM game_vmap_generation_receipt WHERE generation_id = {generation_id}"
         ),
@@ -365,9 +344,9 @@ fn accepted_chunk_ids(
     Ok(accepted)
 }
 
-fn active_generation_status(args: &crate::Args, map_id: u32) -> Result<()> {
-    let output = sql_query(
-        args,
+fn active_generation_status(shard: &Shard, map_id: u32) -> Result<()> {
+    let output = shard.query_json(
+        "vmap",
         &format!(
             "SELECT id, map_id, state, expected_chunks, accepted_chunks, expected_bytes, manifest_digest, source_identity, selection_identity FROM game_vmap_generation WHERE map_id = {map_id} AND state = 2"
         ),
@@ -379,9 +358,10 @@ fn active_generation_status(args: &crate::Args, map_id: u32) -> Result<()> {
     Ok(())
 }
 
-fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
+fn preflight_map_ownership(shard: &Shard, map_id: u32) -> Result<()> {
     let query = |table: &str| -> Result<String> {
-        sql_query(args, &format!("SELECT map_id FROM {table}"))
+        shard
+            .query_json("vmap", &format!("SELECT map_id FROM {table}"))
             .with_context(|| format!("query {table} map ownership"))
     };
     let terrain = query("game_terrain_chunk")?;
@@ -389,22 +369,23 @@ fn preflight_map_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
     if sql_has_map(&terrain, map_id)? && sql_has_map(&nav, map_id)? {
         Ok(())
     } else {
-        bail!("target database {} does not own complete spatial map {map_id} (terrain and nav ownership are both required)", args.db)
+        bail!("target database {} does not own complete spatial map {map_id} (terrain and nav ownership are both required)", shard.db)
     }
 }
 
-fn preflight_instance_ownership(args: &crate::Args, map_id: u32) -> Result<()> {
-    let output = sql_query(
-        args,
-        "SELECT id, hosts_instances FROM game_config WHERE id = 0",
-    )
-    .context("query Instance Pool ownership")?;
+fn preflight_instance_ownership(shard: &Shard, map_id: u32) -> Result<()> {
+    let output = shard
+        .query_json(
+            "vmap",
+            "SELECT id, hosts_instances FROM game_config WHERE id = 0",
+        )
+        .context("query Instance Pool ownership")?;
     if sql_owns_instance_pool(&output)? {
         Ok(())
     } else {
         bail!(
             "target Shard {} does not own Instance Pool populations for map {map_id}",
-            args.db
+            shard.db
         )
     }
 }
@@ -416,14 +397,23 @@ fn sql_owns_instance_pool(output: &str) -> Result<bool> {
     Ok(rows.len() == 1 && rows[0][0].as_u64() == Some(0) && rows[0][1].as_bool() == Some(true))
 }
 
-pub(crate) fn run(args: &crate::Args) -> Result<()> {
-    if args.vmap_status {
-        if args.vmap.is_none() {
-            return active_generation_status(args, args.map as u32);
+pub(crate) struct VmapArgs {
+    pub(crate) data_dir: Option<String>,
+    pub(crate) status: bool,
+    pub(crate) map: i64,
+    pub(crate) scope: crate::world_import_scope::WorldImportScope,
+    pub(crate) apply: bool,
+    pub(crate) shard: Shard,
+}
+
+pub(crate) fn run(args: &VmapArgs) -> Result<()> {
+    if args.status {
+        if args.data_dir.is_none() {
+            return active_generation_status(&args.shard, args.map as u32);
         }
         bail!("--vmap-status is a standalone status command; omit --vmap");
     }
-    let scope = args.world_import_scope()?;
+    let scope = &args.scope;
     if scope.bounded_slices.is_empty() && scope.instance_vmap_slices.is_empty() {
         println!(
             "vmap: scope {} has no bounded or instance vmap slices; no vmap generation to import",
@@ -440,10 +430,10 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
     }
     for &map_id in slices_by_map.keys() {
         let map_id = u32::try_from(map_id).context("bounded slice map id is outside u32")?;
-        preflight_map_ownership(args, map_id)
+        preflight_map_ownership(&args.shard, map_id)
             .with_context(|| format!("vmap scope {} map {map_id}", scope.name()))?;
     }
-    let data_dir = Path::new(args.vmap.as_ref().expect("caller checked"));
+    let data_dir = Path::new(args.data_dir.as_ref().expect("caller checked"));
     let mut chain = crate::collision::open_geometry_chain(data_dir)?;
     let source_identity = format!("client-data-path:{}", data_dir.display());
     let mut plans = Vec::with_capacity(slices_by_map.len() + scope.instance_vmap_slices.len());
@@ -574,9 +564,9 @@ pub(crate) fn run(args: &crate::Args) -> Result<()> {
                     route.violations.join(" | ")
                 );
             }
-            preflight_instance_ownership(args, plan.map_id)?;
+            preflight_instance_ownership(&args.shard, plan.map_id)?;
         }
-        apply_plan(args, plan)?;
+        apply_plan(&args.shard, plan)?;
     }
     println!("vmap: applied.");
     Ok(())
@@ -1351,13 +1341,12 @@ fn placement_key(placement: &Placement) -> String {
     )
 }
 
-fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
+fn apply_plan(shard: &Shard, plan: &VmapPlan) -> Result<()> {
     let generation_id = plan.generation_id.to_string();
     let map_id = plan.map_id.to_string();
     let expected_chunks = plan.shard_rows.to_string();
     let expected_bytes = plan.total_bytes.to_string();
-    crate::call_reducer_args(
-        args,
+    shard.call_reducer_args(
         "stage_vmap_generation",
         &[
             &generation_id,
@@ -1369,7 +1358,7 @@ fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
             &plan.selection_identity,
         ],
     )?;
-    let accepted = accepted_chunk_ids(args, plan.generation_id)?;
+    let accepted = accepted_chunk_ids(shard, plan.generation_id)?;
     let mut batches = 0usize;
     let mut skipped = 0usize;
     let mut current = String::new();
@@ -1386,8 +1375,7 @@ fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
             let hex: String = blob.iter().map(|b| format!("{b:02x}")).collect();
             let row = format!("{ordinal},{map_id},{cell_x},{cell_y},{hex}");
             if !current.is_empty() && current.len() + row.len() + 1 > BATCH_BYTES {
-                crate::call_reducer_args(
-                    args,
+                shard.call_reducer_args(
                     "append_vmap_generation_chunks",
                     &[&generation_id, &current],
                 )?;
@@ -1403,15 +1391,11 @@ fn apply_plan(args: &crate::Args, plan: &VmapPlan) -> Result<()> {
         })?;
     }
     if !current.is_empty() {
-        crate::call_reducer_args(
-            args,
-            "append_vmap_generation_chunks",
-            &[&generation_id, &current],
-        )?;
+        shard.call_reducer_args("append_vmap_generation_chunks", &[&generation_id, &current])?;
         batches += 1;
     }
-    crate::call_reducer_args(args, "verify_vmap_generation", &[&generation_id])?;
-    crate::call_reducer_args(args, "activate_vmap_generation", &[&generation_id])?;
+    shard.call_reducer_args("verify_vmap_generation", &[&generation_id])?;
+    shard.call_reducer_args("activate_vmap_generation", &[&generation_id])?;
     println!("vmap: activated generation {generation_id} after {batches} batch(es), skipping {skipped} already-accepted shard row(s)");
     Ok(())
 }
@@ -1441,9 +1425,9 @@ struct GenerationInfo {
 const VERIFIED: u64 = 1;
 const ACTIVE: u64 = 2;
 
-fn generation_info(args: &crate::Args, generation_id: u64) -> Result<GenerationInfo> {
-    let output = sql_query(
-        args,
+fn generation_info(shard: &Shard, generation_id: u64) -> Result<GenerationInfo> {
+    let output = shard.query_json(
+        "vmap",
         &format!("SELECT map_id, state FROM game_vmap_generation WHERE id = {generation_id}"),
     )?;
     let value: serde_json::Value =
@@ -1457,9 +1441,9 @@ fn generation_info(args: &crate::Args, generation_id: u64) -> Result<GenerationI
     Ok(GenerationInfo { map_id, state })
 }
 
-fn generation_cells(args: &crate::Args, generation_id: u64) -> Result<Vec<(u16, u16)>> {
-    let output = sql_query(
-        args,
+fn generation_cells(shard: &Shard, generation_id: u64) -> Result<Vec<(u16, u16)>> {
+    let output = shard.query_json(
+        "vmap",
         &format!(
             "SELECT cell_x, cell_y FROM game_vmap_generation_chunk WHERE generation_id = {generation_id}"
         ),
@@ -1476,11 +1460,11 @@ fn generation_cells(args: &crate::Args, generation_id: u64) -> Result<Vec<(u16, 
 }
 
 fn covered_cells(
-    args: &crate::Args,
+    shard: &Shard,
     generation_id: u64,
 ) -> Result<std::collections::HashSet<(u16, u16)>> {
-    let output = sql_query(
-        args,
+    let output = shard.query_json(
+        "vmap",
         &format!(
             "SELECT cell_x, cell_y FROM game_vmap_nav_coverage WHERE generation_id = {generation_id}"
         ),
@@ -1527,18 +1511,18 @@ fn coverage_batches(cells: &[(u16, u16)]) -> Vec<String> {
     batches
 }
 
-pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()> {
-    let generation = generation_info(args, generation_id)?;
-    preflight_map_ownership(args, generation.map_id)?;
+pub(crate) fn run_coverage(generation_id: u64, apply: bool, shard: &Shard) -> Result<()> {
+    let generation = generation_info(shard, generation_id)?;
+    preflight_map_ownership(shard, generation.map_id)?;
     if !matches!(generation.state, VERIFIED | ACTIVE) {
         bail!("vmap generation {generation_id} is not verified or active (state {}) — coverage preparation refused", generation.state);
     }
 
-    let all_cells = generation_cells(args, generation_id)?;
+    let all_cells = generation_cells(shard, generation_id)?;
     if all_cells.is_empty() {
         bail!("vmap generation {generation_id} has no staged chunks to derive coverage from");
     }
-    let already = covered_cells(args, generation_id)?;
+    let already = covered_cells(shard, generation_id)?;
     let pending = pending_cells(&all_cells, &already);
     let batches = coverage_batches(&pending);
 
@@ -1550,26 +1534,21 @@ pub(crate) fn run_coverage(args: &crate::Args, generation_id: u64) -> Result<()>
         pending.len(),
         batches.len()
     );
-    if !args.apply {
+    if !apply {
         println!("-- DRY RUN: would call prepare_vmap_nav_coverage ({} batch(es)) + finalize_vmap_nav_coverage", batches.len());
         return Ok(());
     }
 
     for batch in &batches {
-        crate::call_reducer_args(
-            args,
+        shard.call_reducer_args(
             "prepare_vmap_nav_coverage",
             &[&generation_id.to_string(), batch],
         )?;
     }
-    crate::call_reducer_args(
-        args,
-        "finalize_vmap_nav_coverage",
-        &[&generation_id.to_string()],
-    )?;
+    shard.call_reducer_args("finalize_vmap_nav_coverage", &[&generation_id.to_string()])?;
 
-    let manifest = sql_query(
-        args,
+    let manifest = shard.query_json(
+        "vmap",
         &format!(
             "SELECT generation_id, map_id, cell_count, digest, complete FROM game_vmap_nav_coverage_manifest WHERE generation_id = {generation_id}"
         ),
