@@ -3,7 +3,7 @@ use lyracore_shared::guild::{
     event_kind, fee_kind, name_key, validate_guild_name, GuildRefusal, CHARTER_COST_COPPER,
     EMBLEM_COST_COPPER, GUILD_CHARTER_ENTRY,
 };
-use spacetimedb::{reducer, table, ReducerContext, SpacetimeType, Table};
+use spacetimedb::{table, ReducerContext, SpacetimeType, Table};
 
 use super::petition::game_guild_petition;
 use super::{game_guild, member, petition, push_event};
@@ -148,8 +148,9 @@ pub(crate) fn purchase(
     apply().map_err(FeeError::into_text)
 }
 
-#[reducer]
-pub fn gw_guild_fee_purchase(
+#[cfg(feature = "debug_reducers")]
+#[spacetimedb::reducer]
+pub fn debug_guild_fee_purchase(
     ctx: &ReducerContext,
     request_actor: crate::account_ownership::SessionActor,
     request: GuildFeeRequest,

@@ -1178,7 +1178,7 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 
 **Account Character Owner**: retired. A World Shard's record of the Realm Account that owned a transferred Character. _Avoid_ in new text.
 
-**Account Claim**: retired. Realm-core's time-limited ownership of an Account by one World Session. _Avoid_ in new text.
+**Account Claim**: retired. Realm-core's time-limited ownership of an Account by one World Session. Only the playerbots test suite still opens one. _Avoid_ in new text.
 
 **Account Fence**: retired. A World Shard's copy of an Account Claim generation. _Avoid_ in new text.
 

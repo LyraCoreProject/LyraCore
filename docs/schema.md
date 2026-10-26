@@ -176,9 +176,10 @@ minutes. `game_operator` is a singleton holding the one Operator identity, captu
 `game_account_character_owner` is keyed by Character guid and stores the exact Account id and name.
 Its rows remain across logout and Character deletion. Character guids are never reused, so retained
 rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
-already has more than 4,096; it never truncates. `game_account_claim` and `game_account_fence` are
-legacy Gateway rows. Operator reducers that act for a Character take a `SessionActor`; a null
-ownership refuses a Character with an active Account Claim or Account Fence.
+already has more than 4,096; it never truncates. `game_account_fence` is a retired
+Gateway table, and nothing writes it. The playerbots test suite still opens Account Claims in
+`game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
+ownership refuses a Character with an active Account Claim.
 
 ### Chat (`module/src/chat.rs`, `module/src/realm_chat.rs`, `module/src/channel.rs`)
 
@@ -275,9 +276,8 @@ slots 0 to 8. Turn-in deletes both and founds the Guild in the same transaction.
 `GuildOp` gets each new variant at the end, because BSATN encodes a variant by its position.
 
 PLAYER_GUILDID and PLAYER_GUILDRANK are not stored. The Module projects them from
-`game_guild_member`. Native Charter and emblem purchases create no `game_guild_fee_hold` or
-`game_guild_fee_decision` row; those are legacy Gateway rows, and a pending Fee Hold makes
-`delete_character` refuse with `CHAR_HAS_GUILD_FEE_HOLD`.
+`game_guild_member`. `game_guild_fee_hold` and
+`game_guild_fee_decision` are retired Gateway tables, and nothing writes them.
 
 ### Riding (`module/src/skill.rs`, `module/src/skilldata.rs`, `module/src/trainer.rs`)
 
@@ -422,11 +422,11 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_breath_schedule` | `tick_breath` | 1 s | `breath.rs` |
 | `game_event_reaper_schedule` | `reap_movement_events` | 1 s (`EVENT_TTL_MICROS`) | `gc.rs` |
 | `game_transfer_reaper_schedule` | `reap_transfers` | 5 s, armed lazily | `transfer/mod.rs` |
-| `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | 5 s, armed lazily | `mail_escrow.rs` |
+| `game_mail_escrow_reaper_schedule` | `reap_mail_escrows` | not armed; a leftover row deletes itself | `mail_escrow.rs` |
 | `game_meeting_stone_reminder_schedule` | `remind_queued_parties` | 5 s; a queued Party hears `IN_PROGRESS` every 5 min | `meeting_stone/mod.rs` |
 | `game_native_member_stats` | `tick_native_member_stats` | 5 s per grouped native connection | `native/member_stats.rs` |
 | `game_pet_care_schedule` | `tick_pet_care` | 7.5 s | `creatures/pet_care.rs` |
-| `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s | `gw.rs` |
+| `game_gateway_lease_reaper_schedule` | `reap_gateway_leases` | 15 s; closes expired Account Claims | `gw.rs` |
 | `game_native_logon_reaper` | `native_reap_logon_addresses` | 60 s, armed by a logon connection | `native/logon.rs` |
 | `game_instance_reaper_schedule` | `reap_instances` | 60 s | `instance.rs` |
 | `game_session_reaper_schedule` | `reap_sessions` | 5 min, armed by `establish_session` | `auth.rs` |

@@ -173,7 +173,7 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
     let owner = actor(OWNER);
     let request = charter_request(&npc, "Night Watch");
 
-    shard.assert_call("gw_guild_fee_purchase", &[&owner, &request]);
+    shard.assert_call("debug_guild_fee_purchase", &[&owner, &request]);
     assert_eq!(purse(&shard), 500);
     let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
     let petitions = shard.query_rows("SELECT * FROM game_guild_petition");
@@ -304,7 +304,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
 
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&owner, &request],
         "guild:not_enough_money",
     );
@@ -320,7 +320,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     );
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&owner, &request],
         "guild:name_exists",
     );
@@ -328,7 +328,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     assert_eq!(count(&shard, "game_guild_petition"), 0);
 
     let owner_request = charter_request(&npc, "Day Watch");
-    shard.assert_call("gw_guild_fee_purchase", &[&owner, &owner_request]);
+    shard.assert_call("debug_guild_fee_purchase", &[&owner, &owner_request]);
     let [charter] = <[String; 1]>::try_from(charters(&shard)).expect("one Guild Charter");
     assert_eq!(purse(&shard), 500);
     let signers = signer_actors(&shard, &SIGNERS[..2]);
@@ -353,7 +353,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&owner, &charter_request(&npc, "Rain Watch")],
         "guild:already_has_petition",
     );
@@ -369,7 +369,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     ));
 
     let sun_watch = charter_request(&npc, "Sun Watch");
-    shard.assert_call("gw_guild_fee_purchase", &[&owner, &sun_watch]);
+    shard.assert_call("debug_guild_fee_purchase", &[&owner, &sun_watch]);
     assert_eq!(charters(&shard).len(), 1);
     shard.assert_call("realm_guild_op", &[&owner, &gm_create(OWNER, "Star Watch")]);
     assert_eq!(count(&shard, "game_guild_petition"), 0);
@@ -377,7 +377,7 @@ fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     shard.assert_call("debug_set_money", &[&OWNER.to_string(), "1500"]);
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&owner, &charter_request(&npc, "Rain Watch")],
         "guild:charter_limit",
     );

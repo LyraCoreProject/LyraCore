@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
+use spacetimedb::{table, Identity, ReducerContext, Table};
 
 use crate::game_corpse_loot;
 use crate::game_group;
@@ -321,7 +321,7 @@ fn start_roll(
 }
 
 #[cfg(feature = "debug_reducers")]
-#[reducer]
+#[spacetimedb::reducer]
 pub fn debug_stage_loot_roll_fixture(ctx: &ReducerContext) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
     start_roll(

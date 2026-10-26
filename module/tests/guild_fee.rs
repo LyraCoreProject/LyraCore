@@ -71,7 +71,7 @@ fn the_guild_leader_pays_ten_gold_and_every_refusal_keeps_the_copper() {
 
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&payer, &request],
         "guild:not_in_guild",
     );
@@ -82,14 +82,14 @@ fn the_guild_leader_pays_ten_gold_and_every_refusal_keeps_the_copper() {
     shard.assert_call("realm_guild_op", &[&payer, &founding]);
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&payer, &request],
         "guild:npc_refused",
     );
     assert_eq!(purse(&shard), 150_000);
     make_tabard_designer(&shard, &vendor);
 
-    shard.assert_call("gw_guild_fee_purchase", &[&payer, &request]);
+    shard.assert_call("debug_guild_fee_purchase", &[&payer, &request]);
     assert_eq!(purse(&shard), 50_000);
     let guild = &shard.query_rows("SELECT * FROM game_guild")[0];
     let emblem: Vec<&str> = [
@@ -109,7 +109,7 @@ fn the_guild_leader_pays_ten_gold_and_every_refusal_keeps_the_copper() {
 
     refused(
         &shard,
-        "gw_guild_fee_purchase",
+        "debug_guild_fee_purchase",
         &[&payer, &request],
         "guild:not_enough_money",
     );
