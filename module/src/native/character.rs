@@ -3,6 +3,7 @@ use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, CMSG_CH
 use spacetimedb::ReducerContext;
 
 use super::Rollback;
+use crate::auth::CreateCharacterRefusal;
 use crate::guild::game_guild;
 
 pub(super) fn create(
@@ -26,20 +27,27 @@ pub(super) fn create(
         request.class.as_int(),
         appearance,
     )
-    .map_err(|cause| {
-        let outcome = match cause.as_str() {
-            "NAME_IN_USE" => codec::CharCreateOutcome::NameInUse,
-            "SERVER_LIMIT" => codec::CharCreateOutcome::ServerLimit,
-            _ => codec::CharCreateOutcome::Failed,
-        };
+    .map_err(|refusal| {
         Rollback::reply(
-            ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(outcome)),
-            cause,
+            ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(
+                create_outcome(&refusal),
+            )),
+            refusal,
         )
     })?;
     Ok(ServerOpcodeMessage::SMSG_CHAR_CREATE(
         codec::build_char_create_response(codec::CharCreateOutcome::Success),
     ))
+}
+
+fn create_outcome(refusal: &CreateCharacterRefusal) -> codec::CharCreateOutcome {
+    match refusal {
+        CreateCharacterRefusal::NameInUse => codec::CharCreateOutcome::NameInUse,
+        CreateCharacterRefusal::AccountFull => codec::CharCreateOutcome::ServerLimit,
+        CreateCharacterRefusal::InvalidRaceClass | CreateCharacterRefusal::Refused(_) => {
+            codec::CharCreateOutcome::Failed
+        }
+    }
 }
 
 pub(super) fn delete(
@@ -71,4 +79,23 @@ pub(super) fn delete(
     Ok(ServerOpcodeMessage::SMSG_CHAR_DELETE(
         codec::build_char_delete_response(codec::CharDeleteOutcome::Success),
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn every_create_character_refusal_reports_its_smsg_char_create_result() {
+        use CreateCharacterRefusal as R;
+        for (refusal, code) in [
+            (R::NameInUse, 0x31),
+            (R::AccountFull, 0x34),
+            (R::InvalidRaceClass, 0x2F),
+            (R::Refused("GUID_RANGE_EXHAUSTED".into()), 0x2F),
+        ] {
+            let reply = codec::build_char_create_response(create_outcome(&refusal));
+            assert_eq!(reply.result.as_int(), code, "{refusal}");
+        }
+    }
 }

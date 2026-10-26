@@ -497,7 +497,7 @@ pub fn debug_sell_item(
     vendor_guid: u64,
     slot: u8,
 ) -> Result<(), String> {
-    crate::actor::sell_item(ctx, character_guid, vendor_guid, slot)
+    crate::actor::sell_item(ctx, character_guid, vendor_guid, slot).map_err(String::from)
 }
 
 #[reducer]
@@ -754,6 +754,7 @@ pub fn debug_buy_item(
     count: u32,
 ) -> Result<(), String> {
     crate::actor::buy_item(ctx, character_guid, vendor_guid, item_entry, count)
+        .map_err(String::from)
 }
 
 #[reducer]
@@ -762,11 +763,7 @@ pub fn debug_buy_bank_slot(
     character_guid: u64,
     banker_guid: u64,
 ) -> Result<(), String> {
-    crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
-        ctx,
-        character_guid,
-        banker_guid,
-    ))
+    crate::items::apply_buy_bank_slot(ctx, character_guid, banker_guid).map_err(String::from)
 }
 
 #[reducer]

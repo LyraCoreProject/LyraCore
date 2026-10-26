@@ -330,18 +330,7 @@ pub fn build_cant_carry_more_of_this() -> SMSG_INVENTORY_CHANGE_FAILURE {
     }
 }
 
-pub fn build_buy_failed(vendor_guid: u64, item_entry: u32, err: &str) -> SMSG_BUY_FAILED {
-    let result = if err.contains("not enough money") {
-        BuyResult::NotEnoughMoney
-    } else if err.contains("out of range") || err.contains("another map") {
-        BuyResult::DistanceTooFar
-    } else if err.contains("inventory full") {
-        BuyResult::CantCarryMore
-    } else if err.contains("sold out") || err.contains("no stock") {
-        BuyResult::ItemSoldOut
-    } else {
-        BuyResult::CantFindItem
-    };
+pub fn build_buy_failed(vendor_guid: u64, item_entry: u32, result: BuyResult) -> SMSG_BUY_FAILED {
     SMSG_BUY_FAILED {
         guid: Guid::new(vendor_guid),
         item: item_entry,
@@ -358,16 +347,6 @@ pub fn build_sell_item_refusal(
         guid: Guid::new(vendor_guid),
         item: Guid::new(item_guid),
         result,
-    }
-}
-
-pub fn sell_refusal_result(err: &str) -> SellItemResult {
-    if err.contains("vendor") || err.contains("dead players") {
-        SellItemResult::CantFindVendor
-    } else if err.contains("no item in slot") {
-        SellItemResult::CantFindItem
-    } else {
-        SellItemResult::CantSellItem
     }
 }
 
@@ -395,22 +374,6 @@ pub fn build_show_bank(banker_guid: u64) -> SMSG_SHOW_BANK {
 
 pub fn build_buy_bank_slot_result(result: BuyBankSlotResult) -> SMSG_BUY_BANK_SLOT_RESULT {
     SMSG_BUY_BANK_SLOT_RESULT { result }
-}
-
-pub fn parse_buy_bank_slot_result(err: &str) -> BuyBankSlotResult {
-    err.strip_prefix('[')
-        .and_then(|rest| rest.split(']').next())
-        .and_then(|code| code.parse::<u32>().ok())
-        .and_then(|code| BuyBankSlotResult::from_int(code).ok())
-        .unwrap_or(BuyBankSlotResult::NotBanker)
-}
-
-pub fn build_buy_bank_slot_reply(outcome: Result<(), &str>) -> SMSG_BUY_BANK_SLOT_RESULT {
-    let result = match outcome {
-        Ok(()) => BuyBankSlotResult::Ok,
-        Err(e) => parse_buy_bank_slot_result(e),
-    };
-    build_buy_bank_slot_result(result)
 }
 
 pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
@@ -554,23 +517,6 @@ mod tests {
                 0x02, // CantSellItem
             ]
         );
-    }
-
-    #[test]
-    fn sale_refusals_map_to_the_vendor_item_or_sellable_errors() {
-        for (text, expected) in [
-            ("no such vendor", SellItemResult::CantFindVendor),
-            ("target is not a vendor", SellItemResult::CantFindVendor),
-            ("vendor out of range", SellItemResult::CantFindVendor),
-            ("vendor on another map", SellItemResult::CantFindVendor),
-            ("dead players cannot sell", SellItemResult::CantFindVendor),
-            ("no item in slot 40", SellItemResult::CantFindItem),
-            ("cannot sell an equipped item", SellItemResult::CantSellItem),
-            ("cannot sell a banked item", SellItemResult::CantSellItem),
-            ("item has no sell value", SellItemResult::CantSellItem),
-        ] {
-            assert_eq!(sell_refusal_result(text), expected, "{text}");
-        }
     }
 
     #[test]

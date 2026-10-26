@@ -379,7 +379,7 @@ pub fn gw_buy_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::buy_item(ctx, actor_guid, vendor_guid, item_entry, count)
+    crate::actor::buy_item(ctx, actor_guid, vendor_guid, item_entry, count).map_err(String::from)
 }
 
 #[reducer]
@@ -392,7 +392,7 @@ pub fn gw_sell_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::actor::sell_item(ctx, actor_guid, vendor_guid, slot)
+    crate::actor::sell_item(ctx, actor_guid, vendor_guid, slot).map_err(String::from)
 }
 
 #[reducer]
@@ -1023,11 +1023,7 @@ pub fn gw_buy_bank_slot(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
-    crate::items::buy_bank_slot_result(crate::items::apply_buy_bank_slot(
-        ctx,
-        actor_guid,
-        banker_guid,
-    ))
+    crate::items::apply_buy_bank_slot(ctx, actor_guid, banker_guid).map_err(String::from)
 }
 
 #[reducer]

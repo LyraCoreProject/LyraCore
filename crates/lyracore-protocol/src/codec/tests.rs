@@ -3305,25 +3305,6 @@ fn taxi_move_writes_absolute_catmull_rom_points_byte_for_byte() {
 }
 
 #[test]
-fn buy_failed_maps_module_err_strings_to_the_closest_buy_result() {
-    let cases: [(&str, BuyResult); 7] = [
-        ("not enough money to buy this", BuyResult::NotEnoughMoney),
-        ("target is out of range", BuyResult::DistanceTooFar),
-        ("vendor is on another map", BuyResult::DistanceTooFar),
-        ("inventory full", BuyResult::CantCarryMore),
-        ("item sold out", BuyResult::ItemSoldOut),
-        ("no stock remaining", BuyResult::ItemSoldOut),
-        ("vendor does not sell that item", BuyResult::CantFindItem),
-    ];
-    for (err, expected) in cases {
-        let msg = build_buy_failed(42, 25, err);
-        assert_eq!(msg.result, expected, "err {err:?} must map to {expected:?}");
-        assert_eq!(msg.guid.guid(), 42);
-        assert_eq!(msg.item, 25);
-    }
-}
-
-#[test]
 fn bank_result_constants_match_gtker_buy_bank_slot_result() {
     use lyracore_shared::bank::result;
     assert_eq!(
@@ -3339,33 +3320,6 @@ fn bank_result_constants_match_gtker_buy_bank_slot_result() {
         result::NOT_BANKER as u32
     );
     assert_eq!(BuyBankSlotResult::Ok.as_int(), result::OK as u32);
-}
-
-#[test]
-fn buy_bank_slot_result_parses_the_leading_bracketed_code_not_the_prose() {
-    let cases: [(&str, BuyBankSlotResult); 5] = [
-        (
-            "[0] no bank bag slots left to buy",
-            BuyBankSlotResult::FailedTooMany,
-        ),
-        (
-            "[1] not enough money (need 1000)",
-            BuyBankSlotResult::InsufficientFunds,
-        ),
-        ("[2] target is not a banker", BuyBankSlotResult::NotBanker),
-        (
-            "insufficient funds but no bracket tag",
-            BuyBankSlotResult::NotBanker,
-        ),
-        ("[9] unknown future code", BuyBankSlotResult::NotBanker),
-    ];
-    for (err, expected) in cases {
-        assert_eq!(
-            parse_buy_bank_slot_result(err),
-            expected,
-            "err {err:?} must map to {expected:?}"
-        );
-    }
 }
 
 #[test]

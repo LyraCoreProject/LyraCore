@@ -5,7 +5,7 @@ use crate::game_world_entity;
 use crate::WorldEntity;
 
 use super::inventory::is_carried_slot;
-use super::ops::store_item;
+use super::ops::{store_item, StoreRefusal};
 use super::rules::{buy_cost, equip_slot, repair_cost, sell_value};
 use super::tables::{
     game_character_buyback, game_item_instance, game_item_template, item_in_slot, BuybackEntry,
@@ -15,7 +15,51 @@ use super::tables::{
 // Squared yards.
 const VENDOR_RANGE_SQ: f32 = 100.0;
 
-// The protocol's buy-failure mapping matches substrings in these Refusal messages.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum NpcGate {
+    CharacterAbsent,
+    CharacterDead,
+    NpcAbsent,
+    WrongService,
+    NpcDead,
+    OtherMap,
+    OutOfRange,
+    Unfriendly,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct NpcRefusal {
+    pub(crate) gate: NpcGate,
+    message: String,
+}
+
+impl NpcRefusal {
+    pub(crate) fn new(gate: NpcGate, message: impl Into<String>) -> Self {
+        Self {
+            gate,
+            message: message.into(),
+        }
+    }
+}
+
+impl std::fmt::Display for NpcRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        self.message.fmt(f)
+    }
+}
+
+impl From<NpcRefusal> for String {
+    fn from(refusal: NpcRefusal) -> Self {
+        refusal.message
+    }
+}
+
+impl From<NpcRefusal> for crate::Refusal {
+    fn from(refusal: NpcRefusal) -> Self {
+        refusal.message.into()
+    }
+}
+
 pub(crate) fn npc_interaction_gate(
     ctx: &ReducerContext,
     player_guid: u64,
@@ -24,33 +68,45 @@ pub(crate) fn npc_interaction_gate(
     noun: &str,
     flag_err: &str,
     dead_verb: &str,
-) -> Result<(WorldEntity, WorldEntity), String> {
+) -> Result<(WorldEntity, WorldEntity), NpcRefusal> {
     let entities = ctx.db.game_world_entity();
     let player = entities
         .guid()
         .find(player_guid)
-        .ok_or_else(|| "user not in world".to_string())?;
+        .ok_or_else(|| NpcRefusal::new(NpcGate::CharacterAbsent, "user not in world"))?;
     if player.dead {
-        return Err(format!("dead players cannot {dead_verb}"));
+        return Err(NpcRefusal::new(
+            NpcGate::CharacterDead,
+            format!("dead players cannot {dead_verb}"),
+        ));
     }
     let npc = entities
         .guid()
         .find(npc_guid)
-        .ok_or_else(|| format!("no such {noun}"))?;
+        .ok_or_else(|| NpcRefusal::new(NpcGate::NpcAbsent, format!("no such {noun}")))?;
     if npc.is_player() || npc.npc_flags & required_flag == 0 {
-        return Err(flag_err.to_string());
+        return Err(NpcRefusal::new(NpcGate::WrongService, flag_err));
     }
     if npc.dead || npc.health == 0 {
-        return Err(format!("{noun} is dead"));
+        return Err(NpcRefusal::new(NpcGate::NpcDead, format!("{noun} is dead")));
     }
     if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
-        return Err(format!("{noun} on another map"));
+        return Err(NpcRefusal::new(
+            NpcGate::OtherMap,
+            format!("{noun} on another map"),
+        ));
     }
     if crate::helpers::dist_sq(&player, &npc) > VENDOR_RANGE_SQ {
-        return Err(format!("{noun} out of range"));
+        return Err(NpcRefusal::new(
+            NpcGate::OutOfRange,
+            format!("{noun} out of range"),
+        ));
     }
     if crate::reputation::npc_refuses_interaction(ctx, &npc, &player) {
-        return Err(format!("{noun} refuses interaction"));
+        return Err(NpcRefusal::new(
+            NpcGate::Unfriendly,
+            format!("{noun} refuses interaction"),
+        ));
     }
     Ok((player, npc))
 }
@@ -135,26 +191,35 @@ pub(crate) fn flagged_npc_in_reach(
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub(crate) enum BuyBankSlotOutcome {
-    Bought { price: u32, owned: u8 },
+pub(crate) enum BankSlotRefusal {
     AlreadyMaxed,
     CannotAfford { price: u32 },
-    NotBanker(String),
+    Banker(NpcRefusal),
 }
 
-pub(crate) fn buy_bank_slot_result(outcome: BuyBankSlotOutcome) -> Result<(), String> {
-    use lyracore_shared::bank::result;
-    match outcome {
-        BuyBankSlotOutcome::Bought { .. } => Ok(()),
-        BuyBankSlotOutcome::AlreadyMaxed => Err(format!(
-            "[{}] no bank bag slots left to buy",
-            result::FAILED_TOO_MANY
-        )),
-        BuyBankSlotOutcome::CannotAfford { price } => Err(format!(
-            "[{}] not enough money (need {price})",
-            result::INSUFFICIENT_FUNDS
-        )),
-        BuyBankSlotOutcome::NotBanker(why) => Err(format!("[{}] {why}", result::NOT_BANKER)),
+// Gateway Verbs return this text, led by the SMSG_BUY_BANK_SLOT_RESULT code.
+impl std::fmt::Display for BankSlotRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        use lyracore_shared::bank::result;
+        match self {
+            Self::AlreadyMaxed => write!(
+                f,
+                "[{}] no bank bag slots left to buy",
+                result::FAILED_TOO_MANY
+            ),
+            Self::CannotAfford { price } => write!(
+                f,
+                "[{}] not enough money (need {price})",
+                result::INSUFFICIENT_FUNDS
+            ),
+            Self::Banker(refusal) => write!(f, "[{}] {refusal}", result::NOT_BANKER),
+        }
+    }
+}
+
+impl From<BankSlotRefusal> for String {
+    fn from(refusal: BankSlotRefusal) -> Self {
+        refusal.to_string()
     }
 }
 
@@ -162,8 +227,8 @@ pub(crate) fn apply_buy_bank_slot(
     ctx: &ReducerContext,
     player_guid: u64,
     banker_guid: u64,
-) -> BuyBankSlotOutcome {
-    let mut player = match npc_interaction_gate(
+) -> Result<(), BankSlotRefusal> {
+    let (mut player, _banker) = npc_interaction_gate(
         ctx,
         player_guid,
         banker_guid,
@@ -171,23 +236,19 @@ pub(crate) fn apply_buy_bank_slot(
         "banker",
         "target is not a banker",
         "use the bank",
-    ) {
-        Ok((player, _banker)) => player,
-        Err(why) => return BuyBankSlotOutcome::NotBanker(why),
-    };
-    let Some(price) = lyracore_shared::bank::next_bank_slot_price(player.bank_bag_slots) else {
-        return BuyBankSlotOutcome::AlreadyMaxed;
-    };
+    )
+    .map_err(BankSlotRefusal::Banker)?;
+    let price = lyracore_shared::bank::next_bank_slot_price(player.bank_bag_slots)
+        .ok_or(BankSlotRefusal::AlreadyMaxed)?;
     if player.money < price {
-        return BuyBankSlotOutcome::CannotAfford { price };
+        return Err(BankSlotRefusal::CannotAfford { price });
     }
     player.money -= price;
     player.bank_bag_slots += 1;
-    let owned = player.bank_bag_slots;
     player.player_bytes_2 =
-        lyracore_shared::packing::with_bank_bag_slots(player.player_bytes_2, owned);
+        lyracore_shared::packing::with_bank_bag_slots(player.player_bytes_2, player.bank_bag_slots);
     player.update(ctx);
-    BuyBankSlotOutcome::Bought { price, owned }
+    Ok(())
 }
 
 pub(crate) fn vendor_sells(ctx: &ReducerContext, vendor_entry: u32, item_entry: u32) -> bool {
@@ -207,12 +268,53 @@ pub(crate) fn buyback_newest_first(mut ids: Vec<u64>) -> Vec<u64> {
     ids
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum SellRefusal {
+    Vendor(NpcRefusal),
+    NoItemInSlot(u8),
+    Refused(crate::Refusal),
+}
+
+impl From<String> for SellRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+impl From<crate::Refusal> for SellRefusal {
+    fn from(refusal: crate::Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<NpcRefusal> for SellRefusal {
+    fn from(refusal: NpcRefusal) -> Self {
+        Self::Vendor(refusal)
+    }
+}
+
+impl std::fmt::Display for SellRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vendor(refusal) => refusal.fmt(f),
+            Self::NoItemInSlot(slot) => write!(f, "no item in slot {slot}"),
+            Self::Refused(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
+impl From<SellRefusal> for String {
+    fn from(refusal: SellRefusal) -> Self {
+        refusal.to_string()
+    }
+}
+
 pub(crate) fn apply_item_sell(
     ctx: &ReducerContext,
     player_guid: u64,
     vendor_guid: u64,
     slot: u8,
-) -> Result<(), String> {
+) -> Result<(), SellRefusal> {
     apply_item_sell_count(ctx, player_guid, vendor_guid, slot, 0)
 }
 
@@ -222,7 +324,7 @@ pub(crate) fn apply_item_sell_count(
     vendor_guid: u64,
     slot: u8,
     count: u32,
-) -> Result<(), String> {
+) -> Result<(), SellRefusal> {
     let (mut player, _vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -232,22 +334,19 @@ pub(crate) fn apply_item_sell_count(
         "target is not a vendor",
         "sell",
     )?;
-    let mut inst =
-        item_in_slot(ctx, player_guid, slot).ok_or_else(|| format!("no item in slot {slot}"))?;
+    let mut inst = item_in_slot(ctx, player_guid, slot).ok_or(SellRefusal::NoItemInSlot(slot))?;
     let count = if count == 0 { inst.stack_count } else { count };
     if count > inst.stack_count {
-        return Err("invalid sell count".into());
+        return Err("invalid sell count".to_string().into());
     }
     if crate::trade::item_is_offered(ctx, player_guid, inst.guid) {
-        return Err(super::refused(
-            lyracore_shared::item::ItemRefusal::NotRightNow,
-        ));
+        return Err(super::refused(lyracore_shared::item::ItemRefusal::NotRightNow).into());
     }
     if inst.slot <= equip_slot::END {
-        return Err("cannot sell an equipped item".to_string());
+        return Err("cannot sell an equipped item".to_string().into());
     }
     if !is_carried_slot(inst.slot) {
-        return Err("cannot sell a banked item".to_string());
+        return Err("cannot sell a banked item".to_string().into());
     }
     let tmpl = ctx
         .db
@@ -256,7 +355,7 @@ pub(crate) fn apply_item_sell_count(
         .find(inst.entry)
         .ok_or_else(|| format!("no template for item entry {}", inst.entry))?;
     if tmpl.sell_price == 0 {
-        return Err("item has no sell value".to_string());
+        return Err("item has no sell value".to_string().into());
     }
     let earned = sell_value(tmpl.sell_price, count);
     player.money = player.money.saturating_add(earned);
@@ -340,13 +439,67 @@ pub(crate) fn apply_buyback_item(
     Ok(())
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum BuyRefusal {
+    Vendor(NpcRefusal),
+    NotEnoughMoney { have: u32, need: u32 },
+    InventoryFull,
+    Refused(crate::Refusal),
+}
+
+impl From<String> for BuyRefusal {
+    fn from(cause: String) -> Self {
+        Self::Refused(cause.into())
+    }
+}
+
+impl From<crate::Refusal> for BuyRefusal {
+    fn from(refusal: crate::Refusal) -> Self {
+        Self::Refused(refusal)
+    }
+}
+
+impl From<NpcRefusal> for BuyRefusal {
+    fn from(refusal: NpcRefusal) -> Self {
+        Self::Vendor(refusal)
+    }
+}
+
+impl From<StoreRefusal> for BuyRefusal {
+    fn from(refusal: StoreRefusal) -> Self {
+        match refusal {
+            StoreRefusal::InventoryFull => Self::InventoryFull,
+            StoreRefusal::Refused(refusal) => Self::Refused(refusal),
+        }
+    }
+}
+
+impl std::fmt::Display for BuyRefusal {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::Vendor(refusal) => refusal.fmt(f),
+            Self::NotEnoughMoney { have, need } => {
+                write!(f, "not enough money: have {have}, need {need}")
+            }
+            Self::InventoryFull => lyracore_shared::mail::INVENTORY_FULL.fmt(f),
+            Self::Refused(refusal) => refusal.fmt(f),
+        }
+    }
+}
+
+impl From<BuyRefusal> for String {
+    fn from(refusal: BuyRefusal) -> Self {
+        refusal.to_string()
+    }
+}
+
 pub(crate) fn apply_buy_item(
     ctx: &ReducerContext,
     player_guid: u64,
     vendor_guid: u64,
     item_entry: u32,
     count: u32,
-) -> Result<(), String> {
+) -> Result<(), BuyRefusal> {
     let (mut player, vendor) = npc_interaction_gate(
         ctx,
         player_guid,
@@ -357,10 +510,10 @@ pub(crate) fn apply_buy_item(
         "buy",
     )?;
     if count == 0 {
-        return Err("invalid count".to_string());
+        return Err("invalid count".to_string().into());
     }
     if !vendor_sells(ctx, vendor.entry, item_entry) {
-        return Err("vendor does not sell that item".to_string());
+        return Err("vendor does not sell that item".to_string().into());
     }
     let tmpl = ctx
         .db
@@ -369,7 +522,7 @@ pub(crate) fn apply_buy_item(
         .find(item_entry)
         .ok_or_else(|| format!("no such item {item_entry}"))?;
     if tmpl.buy_price == 0 {
-        return Err("item cannot be bought".to_string());
+        return Err("item cannot be bought".to_string().into());
     }
     let cost = {
         let base = buy_cost(tmpl.buy_price, count);
@@ -377,16 +530,24 @@ pub(crate) fn apply_buy_item(
         base - base.saturating_mul(pct) / 100
     };
     if player.money < cost {
-        return Err(format!(
-            "not enough money: have {}, need {}",
-            player.money, cost
-        ));
+        return Err(BuyRefusal::NotEnoughMoney {
+            have: player.money,
+            need: cost,
+        });
     }
     // Propagate storage failure so the reducer rolls back the debit.
     player.money = player.money.saturating_sub(cost);
     let owner_identity = player.owner_identity;
     player.update(ctx);
-    store_item(ctx, player_guid, owner_identity, &tmpl, count, false, None)
+    Ok(store_item(
+        ctx,
+        player_guid,
+        owner_identity,
+        &tmpl,
+        count,
+        false,
+        None,
+    )?)
 }
 
 #[cfg_attr(not(feature = "debug_reducers"), allow(dead_code))]
@@ -476,8 +637,8 @@ pub(crate) fn apply_player_repair(
 #[cfg(test)]
 mod tests {
     use super::{
-        buy_bank_slot_result, buyback_newest_first, buyback_ring_full, flagged_npc_in_reach,
-        BuyBankSlotOutcome, VENDOR_RANGE_SQ,
+        buyback_newest_first, buyback_ring_full, flagged_npc_in_reach, BankSlotRefusal, NpcGate,
+        NpcRefusal, VENDOR_RANGE_SQ,
     };
     use lyracore_shared::constants::npc_flags::{BANKER, VENDOR};
 
@@ -496,31 +657,24 @@ mod tests {
     }
 
     #[test]
-    fn every_purchase_outcome_carries_its_own_wire_code() {
-        use lyracore_shared::bank::result;
-        assert!(buy_bank_slot_result(BuyBankSlotOutcome::Bought {
-            price: 1_000,
-            owned: 1
-        })
-        .is_ok());
-        let maxed = buy_bank_slot_result(BuyBankSlotOutcome::AlreadyMaxed).unwrap_err();
-        assert!(
-            maxed.starts_with(&format!("[{}]", result::FAILED_TOO_MANY)),
-            "{maxed}"
-        );
-        let broke =
-            buy_bank_slot_result(BuyBankSlotOutcome::CannotAfford { price: 10_000 }).unwrap_err();
-        assert!(
-            broke.starts_with(&format!("[{}]", result::INSUFFICIENT_FUNDS)),
-            "{broke}"
-        );
-        let nope =
-            buy_bank_slot_result(BuyBankSlotOutcome::NotBanker("banker out of range".into()))
-                .unwrap_err();
-        assert!(
-            nope.starts_with(&format!("[{}]", result::NOT_BANKER)),
-            "{nope}"
-        );
+    fn bank_slot_refusal_text_leads_with_the_buy_bank_slot_result_code() {
+        let out_of_range = NpcRefusal::new(NpcGate::OutOfRange, "banker out of range");
+        for (refusal, text) in [
+            (
+                BankSlotRefusal::AlreadyMaxed,
+                "[0] no bank bag slots left to buy",
+            ),
+            (
+                BankSlotRefusal::CannotAfford { price: 10_000 },
+                "[1] not enough money (need 10000)",
+            ),
+            (
+                BankSlotRefusal::Banker(out_of_range),
+                "[2] banker out of range",
+            ),
+        ] {
+            assert_eq!(String::from(refusal), text);
+        }
     }
 
     #[test]
