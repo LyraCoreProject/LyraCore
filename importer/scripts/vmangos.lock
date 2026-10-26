@@ -1,0 +1,9 @@
+{
+  "commit": "464179081673cfd240f7ffe7f0daf96bca0b5a70",
+  "format_version": 1,
+  "migrations": {
+    "highest_id": "20260913120518",
+    "row_count": 1141
+  },
+  "repository": "vmangos/core"
+}

@@ -31,6 +31,12 @@ Profile that checks consumed column names and types and approved behavior values
 are reported, not used as an admission rule. Import provenance records the actual commit read.
 The existing EventAI Source Profile keeps its classic-db contract until that gate is replaced.
 
+Milestone 1 implements fetch in `importer/scripts/pull-vmangos.py`, using Python's standard library
+for the later CLI's script-based fetch step. `vmangos.lock` beside it records the accepted commit
+and migration fingerprint. Fetch verifies the GitHub digest and records the actual snapshot in
+`.import/vmangos/current.json`; it does not evaluate the Source Profile. `--source vmangos` currently
+permits the globals census and refuses family import until the later slices are ready.
+
 vmangos supplies world content, the server spell catalogue and its replacements for client DBC
 tables. The Operator's client supplies the other tables and geometry. A table must have one
 source; missing columns stop its port. The spell Base Snapshot uses the same selected vmangos

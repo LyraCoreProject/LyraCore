@@ -130,4 +130,3 @@ The existing EventAI Compatibility Manifest is classic-db-only. A vmangos Source
 The globals projection uses every column read by today's globals import, with `ghost_zone` and `spell` mapped to their classic-db counterparts. No missing consumed column was found.
 
 Selected vmangos portals have 16 nonzero `required_condition` values. Today's Module portal catalogue has no condition field. The census counts these portals at current import parity and records the condition as unsupported. The source has 16 WOW_PATCH conditions; their values pass the shared selection module's bounds checks. S3g must translate conditions before gameplay can use them.
-
