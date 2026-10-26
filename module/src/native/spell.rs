@@ -11,10 +11,6 @@ enum EventAudience {
     Peers,
 }
 
-fn is_creature_guid(guid: u64) -> bool {
-    matches!(guid >> 48, 0xf130 | 0xf140)
-}
-
 fn message(value: ServerOpcodeMessage) -> Packet {
     lyracore_protocol::world::encode(value).expect("bounded spell event fits a world frame")
 }
@@ -96,27 +92,14 @@ fn cast_event_messages(row: &SpellCastEvent) -> Vec<(EventAudience, Packet)> {
         _ => return out,
     };
     if kind == SpellCastEventKind::Interrupt {
-        // Character SPELL_FAILURE is caster-private so bystanders keep their own cast state.
-        let failure_audience = if is_creature_guid(row.caster_guid) {
-            EventAudience::Everyone
-        } else {
-            EventAudience::Source
-        };
+        // vmangos Spell::cancel order: unit teardown for everyone, then the caster's failed result.
         out.push((
-            failure_audience,
-            message(ServerOpcodeMessage::SMSG_SPELL_FAILURE(Box::new(
-                codec::build_spell_failure(row.caster_guid, row.spell_id),
+            EventAudience::Everyone,
+            message(ServerOpcodeMessage::SMSG_SPELL_FAILED_OTHER(Box::new(
+                codec::build_spell_failed_other(row.caster_guid, row.spell_id),
             ))),
         ));
-        if failure_audience == EventAudience::Source {
-            out.push((
-                EventAudience::Peers,
-                message(ServerOpcodeMessage::SMSG_SPELL_FAILED_OTHER(Box::new(
-                    codec::build_spell_failed_other(row.caster_guid, row.spell_id),
-                ))),
-            ));
-        }
-        // Teardown must precede the failed cast result to clear both cast and melee-spell state.
+        // Only a failed SMSG_CAST_RESULT releases the client's in-flight cast and its cast bar.
         if let Some(reason) = codec::cast_failure_reason_for_code(row.failure_reason) {
             out.push((
                 EventAudience::Source,

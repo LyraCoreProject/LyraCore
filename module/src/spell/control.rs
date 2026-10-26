@@ -359,6 +359,7 @@ fn interrupt_cast_with_outcome(
             ctx,
             SpellCastEvent {
                 is_interrupted: true,
+                failure_reason: CAST_FAIL_INTERRUPTED,
                 ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Interrupt)
             },
         );

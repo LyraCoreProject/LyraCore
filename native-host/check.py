@@ -4263,14 +4263,41 @@ def check_casting(host):
     assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
     assert not any(opcode == 0x132 for opcode, _ in started)
     assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in client.collect())
+    failed_other = (0x2a6, struct.pack('<QI', peer_guid, 133))
+    interrupted = [failed_other, (0x130, struct.pack('<IBB', 133, 2, 0x23))]
     peer.send(0x12f, struct.pack('<I', 133))
-    assert any(opcode == 0x133 for opcode, _ in peer.collect())
+    cancelled = peer.collect()
+    assert [packet for packet in cancelled if packet[0] in (0x130, 0x133, 0x2a6)] == interrupted, cancelled
     observed = client.collect()
-    assert any(opcode == 0x2a6 for opcode, _ in observed)
-    assert not any(opcode == 0x133 for opcode, _ in observed)
+    assert failed_other in observed
+    assert not any(opcode in (0x130, 0x133) for opcode, _ in observed)
     time.sleep(1.6)
     assert not any(opcode == 0x132 for opcode, _ in peer.collect())
     assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
+    client.collect()
+    peer.send(0x12e, cast(133, spell_target))
+    assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in peer.collect())
+    client.collect()
+    x, y, z, orientation, timestamp = host.rows(f'SELECT x,y,z,orientation,last_move_ms FROM game_world_entity WHERE guid = {peer_guid}')[0]
+    peer.send(0xee, struct.pack('<IIffffI', 1, (timestamp + 500) & 0xffffffff, x + 2, y, z, orientation, 0))
+    moved = peer.collect()
+    assert [packet for packet in moved if packet[0] in (0x130, 0x133, 0x2a6)] == interrupted, moved
+    assert failed_other in client.collect()
+    assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
+    peer.send(0xee, struct.pack('<IIffffI', 0, (timestamp + 1000) & 0xffffffff, x, y, z, orientation, 0))
+    peer.collect()
+    client.collect()
+    host.sql('UPDATE game_spell SET cost = 10 WHERE spell_id = 133')
+    host.sql(f'UPDATE game_world_entity SET power = 10 WHERE guid = {peer_guid}')
+    peer.send(0x12e, cast(133, spell_target))
+    started = peer.collect()
+    assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
+    host.sql(f'UPDATE game_world_entity SET power = 0 WHERE guid = {peer_guid}')
+    time.sleep(1.6)
+    refused = peer.collect()
+    assert [packet for packet in refused if packet[0] in (0x130, 0x132, 0x133, 0x2a6)] == interrupted, refused
+    assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
+    host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 133')
     client.collect()
     for _ in range(10):
         peer.send(0x12e, cast(133, spell_target))
