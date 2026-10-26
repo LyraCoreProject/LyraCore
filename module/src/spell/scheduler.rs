@@ -412,7 +412,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
                 let effective = new_health.saturating_sub(cur);
                 crate::threat::add_heal_threat(ctx, a.caster_guid, a.target_guid, effective);
             }
-            A_PERIODIC_ENERGIZE => {
+            A_PERIODIC_ENERGIZE if energizes_pool(a.eff_p0_kind, a.eff_p0, target.power_type()) => {
                 let cur = pending_power
                     .get(&a.target_guid)
                     .copied()
@@ -703,6 +703,23 @@ pub(crate) fn classify_ground_tick(
         GroundTickStatus::Reap
     } else {
         GroundTickStatus::Wait
+    }
+}
+
+fn energizes_pool(eff_p0_kind: u8, eff_p0: i32, power_type: u8) -> bool {
+    eff_p0_kind != P_POWER_TYPE || eff_p0 == i32::from(power_type)
+}
+
+#[cfg(test)]
+mod energize_tests {
+    use super::*;
+    use lyracore_shared::packing::power_type::{MANA, RAGE};
+
+    #[test]
+    fn mana_regen_skips_a_rage_pool() {
+        assert!(energizes_pool(P_POWER_TYPE, i32::from(MANA), MANA));
+        assert!(!energizes_pool(P_POWER_TYPE, i32::from(MANA), RAGE));
+        assert!(energizes_pool(P_PCT_MAX_POWER, 0, RAGE));
     }
 }
 

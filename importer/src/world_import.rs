@@ -1612,26 +1612,6 @@ fn build_items_and_loot(
         }
     }
 
-    const USE_SPELL_OVERRIDE: &[(u64, u32)] = &[
-        (118, 50110),
-        (1251, 50111),
-        (4360, 50096),
-        (2455, 50113),
-        (159, 50114),
-        (5350, 50114),
-        (4540, 50115),
-        (117, 50115),
-        (2681, 50115),
-        (2680, 50116),
-        (858, 50117),
-        (2581, 50118),
-    ];
-    let use_spell_override = |entry: u64| -> Option<u32> {
-        USE_SPELL_OVERRIDE
-            .iter()
-            .find_map(|&(item, spell)| (item == entry).then_some(spell))
-    };
-
     let mut item_rows: Vec<String> = Vec::new();
     let mut emitted: HashSet<u64> = HashSet::new();
     let mut resist_nonzero_count: u64 = 0;
@@ -1699,16 +1679,11 @@ fn build_items_and_loot(
         let bag_family: u32 = field(&row, it::BAG_FAMILY).parse().unwrap_or(0);
         let buy_count: u32 = field(&row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
         let food_type: u8 = field(&row, it::FOOD_TYPE).parse().unwrap_or(0);
-        let (sp1, spt1): (u32, u8) = match use_spell_override(entry) {
-            Some(spell_id) => (spell_id, 0),
-            None => (
-                field(&row, it::SPELLID_1).parse().unwrap_or(0),
-                field(&row, it::SPELLTRIGGER_1).parse().unwrap_or(0),
-            ),
-        };
         item_rows.push(format!(
             "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property})",
             sheath = field(&row, it::SHEATH).parse::<u8>().unwrap_or(0),
+            sp1 = field(&row, it::SPELLID_1).parse::<u32>().unwrap_or(0),
+            spt1 = field(&row, it::SPELLTRIGGER_1).parse::<u8>().unwrap_or(0),
             sp2 = field(&row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
             spt2 = field(&row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
             cslots = field(&row, it::CONTAINER_SLOTS).parse::<u8>().unwrap_or(0),

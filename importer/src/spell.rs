@@ -93,6 +93,8 @@ fn is_aura_effect(effect_id: i32) -> bool {
 
 const EFFECT_DISPEL_MECHANIC: i32 = 108;
 const MECHANIC_MOUNT: u32 = 21;
+const MECHANIC_BANDAGE: u32 = 16;
+const RECENTLY_BANDAGED: u32 = 11196;
 
 fn dismount_effect_kind(effect_id: i32, misc: u32) -> Option<u8> {
     if effect_id == EFFECT_DISPEL_MECHANIC && misc == MECHANIC_MOUNT {
@@ -187,6 +189,16 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
         kind: A_SEAL,
         base_points: 20,
         ..blank_effect(spell_id, used_index)
+    })
+}
+
+// Bandage spells omit their Recently Bandaged debuff from the DBC row.
+fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<SpellEffectRow> {
+    (s.mechanic == MECHANIC_BANDAGE).then(|| SpellEffectRow {
+        kind: E_TRIGGER,
+        target,
+        trigger_spell: RECENTLY_BANDAGED,
+        ..blank_effect(s.id, used_index)
     })
 }
 
@@ -385,6 +397,7 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
 
         ModRegen => A_PERIODIC_HEAL,
+        ModPowerRegen => A_PERIODIC_ENERGIZE,
 
         ModDisarm => A_DISARM,
         Mounted => A_MOUNTED,
@@ -407,7 +420,6 @@ fn aura_mod_to_kind(aura: AuraMod) -> u8 {
         | ModLanguage
         | FarSight
         | WaterBreathing
-        | ModPowerRegen
         | ModHealthRegenPercent
         | ModPowerRegenPercent
         | PreventsFleeing
@@ -979,6 +991,7 @@ fn push_spell_effect_rows(
     let spell_id = s.id;
     let name = header.name.as_str();
     let mut used_slots = [false; 4];
+    let mut healed_target = T_SELF;
     #[allow(clippy::needless_range_loop)]
     for i in 0..3 {
         let effect_id = s.effect[i];
@@ -1007,6 +1020,9 @@ fn push_spell_effect_rows(
             None => (kind, p0, p0_kind),
         };
         let target = resolve_effect_target(s, i, kind, header);
+        if kind == A_PERIODIC_HEAL {
+            healed_target = target;
+        }
         let (kind, period_ms, base_points, target, p0, p0_kind) =
             if name == "Evocation" && effect_index == 0 {
                 (
@@ -1088,7 +1104,9 @@ fn push_spell_effect_rows(
     }
 
     let synth_slot = used_slots.iter().position(|&u| !u).unwrap_or(3) as u8;
-    if let Some(synth) = synthetic_seal_effect(spell_id, name, synth_slot) {
+    let synth = synthetic_seal_effect(spell_id, name, synth_slot)
+        .or_else(|| recently_bandaged_effect(s, healed_target, synth_slot));
+    if let Some(synth) = synth {
         cov.effects += 1;
         cov.real += 1;
         *cov.by_kind.entry(synth.kind).or_default() += 1;
@@ -1186,8 +1204,11 @@ fn resolve_effect_kind(
     let die_sides = s.effect_die_sides[i];
     let per_level = s.effect_real_points_per_level[i];
     let period_ms = s.effect_amplitude[i];
-    // Vanilla ModRegen ticks every five seconds even when amplitude is zero.
-    let period_ms = if kind == A_PERIODIC_HEAL && aura == AuraMod::ModRegen {
+    // Vanilla ModRegen and ModPowerRegen tick every five seconds even when amplitude is zero.
+    let period_ms = if matches!(
+        (kind, aura),
+        (A_PERIODIC_HEAL, AuraMod::ModRegen) | (A_PERIODIC_ENERGIZE, AuraMod::ModPowerRegen)
+    ) {
         5000
     } else {
         period_ms
@@ -2464,6 +2485,51 @@ mod tests {
     }
 
     #[test]
+    fn drink_restores_mana_every_five_seconds() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 430,
+            name: "Drink".into(),
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [AuraMod::ModPowerRegen as u32, 0, 0],
+            implicit_target_a: [1, 0, 0],
+            ..Default::default()
+        }];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let drink = first_effect(&rows, 430);
+        assert_eq!(
+            (drink.kind, drink.period_ms, drink.p0, drink.p0_kind),
+            (A_PERIODIC_ENERGIZE, 5000, 0, P_POWER_TYPE)
+        );
+    }
+
+    #[test]
+    fn bandage_applies_recently_bandaged_to_the_unit_it_heals() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![Spell {
+            id: 746,
+            name: "First Aid".into(),
+            mechanic: 16,
+            effect: [EFFECT_APPLY_AURA, 0, 0],
+            effect_aura: [AuraMod::PeriodicHeal as u32, 0, 0],
+            implicit_target_a: [21, 0, 0],
+            ..Default::default()
+        }];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let trigger = rows
+            .effects
+            .iter()
+            .find(|effect| effect.spell_id == 746 && effect.effect_index == 1)
+            .unwrap();
+        assert_eq!(
+            (trigger.kind, trigger.trigger_spell, trigger.target),
+            (E_TRIGGER, 11196, T_TARGET_ALLY)
+        );
+    }
+
+    #[test]
     fn every_soulstone_aura_rank_names_its_self_resurrect_spell() {
         let mut dbc = fixture_tables();
         dbc.spells = SOULSTONE_RANKS
@@ -2865,6 +2931,7 @@ mod tests {
         assert_eq!(aura_mod_to_kind(PeriodicDamage), A_PERIODIC_DAMAGE);
         assert_eq!(aura_mod_to_kind(PeriodicHeal), A_PERIODIC_HEAL);
         assert_eq!(aura_mod_to_kind(ModRegen), A_PERIODIC_HEAL);
+        assert_eq!(aura_mod_to_kind(ModPowerRegen), A_PERIODIC_ENERGIZE);
         assert_eq!(aura_mod_to_kind(PeriodicEnergize), A_PERIODIC_ENERGIZE);
         assert_eq!(aura_mod_to_kind(ModStat), A_MOD_STAT);
         assert_eq!(aura_mod_to_kind(ModResistance), A_MOD_RESISTANCE);
