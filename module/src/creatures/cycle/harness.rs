@@ -2465,11 +2465,9 @@ impl IdleSink for Scenario {
         if (dest.x, dest.y) != (from.at.x, from.at.y) {
             c.orientation = (dest.y - from.at.y).atan2(dest.x - from.at.x);
         }
-        c.leg_ends_ms = if leg.hold_until_landed {
-            now_ms + leg.dur_ms
-        } else {
-            0
-        };
+        if leg.hold_until_landed {
+            c.leg_ends_ms = now_ms + leg.dur_ms;
+        }
     }
 }
 
@@ -2827,7 +2825,6 @@ impl PursuitSink for Scenario {
                     victim_movement_flags,
                     victim_is_player: self.players.borrow().iter().any(|p| p.guid == f.victim),
                     last_move_ms: c.last_move_ms,
-                    leg_ends_ms: c.leg_ends_ms,
                     routing: self.is_routing(f.attacker),
                     leg: legs.iter().find(|l| l.guid == f.attacker).cloned(),
                 })
@@ -2877,6 +2874,9 @@ impl PursuitSink for Scenario {
             return 0.0;
         }
         self.hold_ranges.borrow().get(&guid).copied().unwrap_or(0.0)
+    }
+    fn casting(&self, guid: u64) -> bool {
+        self.eventai_is_casting(guid)
     }
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
         let Some(c) = self.place(guid, at, None, Some(orientation)) else {
@@ -4409,23 +4409,6 @@ fn a_creature_walks_back_out_of_a_player_standing_inside_it() {
 }
 
 #[test]
-fn a_creature_walking_back_out_of_a_player_is_not_stopped_on_the_way() {
-    let mut w = wolf_with_a_player_inside_it();
-    let tick = w.tick(false, catch_all());
-    run_cycle(&mut w, tick);
-
-    w.advance_clock(200_000);
-    let tick = w.tick(false, catch_all());
-    run_cycle(&mut w, tick);
-    assert_eq!(
-        w.effects().len(),
-        1,
-        "the player is still inside reach, but halting the step back to face them leaves the mob \
-         where it was"
-    );
-}
-
-#[test]
 fn a_creature_that_moved_within_two_seconds_holds_its_ground() {
     let mut w = wolf_with_a_player_inside_it().tweak(WOLF, |c| {
         c.last_move_ms = (SETTLED / 1000) as u32 - 1_999;
@@ -4451,9 +4434,12 @@ fn a_creature_that_walked_back_out_of_a_player_turns_to_face_them_again() {
     run_cycle(&mut w, tick);
     let effects = w.effects();
     assert!(
-        effects.len() == 2 && effects[1].facing && effects[1].facing_angle == 0.0,
-        "the client walks the mob back facing away from the player; once it lands it must turn \
-         back to them: {effects:?}"
+        effects.len() == 2
+            && effects[1].facing
+            && effects[1].facing_angle == 0.0
+            && near(effects[1].dest, p(0.3 - CONTACT_YD, 0.0, 10.0), 1e-4),
+        "the walk back lands within one firing, and the client shows the mob facing away from the \
+         player; the next firing must turn it back to them: {effects:?}"
     );
 }
 
@@ -4476,23 +4462,29 @@ fn a_creature_that_only_turned_still_walks_back_out_of_a_player() {
 }
 
 #[test]
-fn a_pulled_wanderer_stops_its_chase_leg_when_the_player_reappears_beside_it() {
-    let mut w = wolf_fighting(p(20.3, 0.0, 10.0))
-        .kiting(HUNTER, p(20.3, 0.0, 10.0))
-        .mid_leg(WOLF, (SETTLED / 1000) as u32 + 10_000)
-        .attacking(WOLF, HUNTER);
+fn a_creature_pulled_mid_patrol_does_not_walk_on_through_the_player() {
+    let mut w = wolf_with_a_player_inside_it()
+        .flying(WOLF, p(0.0, 0.0, 10.0), p(10.0, 0.0, 10.0), SETTLED, 4_000)
+        .mid_leg(WOLF, (SETTLED / 1000) as u32 + 4_000);
     let tick = w.tick(false, catch_all());
     run_cycle(&mut w, tick);
 
-    w.advance_clock(500_000);
-    w = w.kiting(HUNTER, p(0.3, 0.0, 10.0)).stopped(HUNTER);
-    let tick = w.tick(false, catch_all());
-    run_cycle(&mut w, tick);
     let effects = w.effects();
     assert!(
-        effects.len() == 2 && effects[1].facing && effects[1].dur_ms == 0,
-        "a chase leg running away from a player who blinked back is no back-off, even when the \
-         wander leg it replaced was held: {effects:?}"
+        effects.len() == 1 && effects[0].facing && effects[0].dur_ms == 0,
+        "the held patrol leg it was walking when pulled must stop at the player: {effects:?}"
+    );
+}
+
+#[test]
+fn a_casting_creature_does_not_walk_back_out_of_a_player() {
+    let mut w = wolf_with_a_player_inside_it().mid_cast(WOLF);
+    let tick = w.tick(false, catch_all());
+    run_cycle(&mut w, tick);
+
+    assert!(
+        w.effects().iter().all(|e| e.start == e.dest),
+        "a cast roots its caster; cmangos does not step a casting chaser"
     );
 }
 

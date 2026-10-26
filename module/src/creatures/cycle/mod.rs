@@ -351,7 +351,6 @@ pub(crate) struct Pursuit {
     pub victim_movement_flags: u32,
     pub victim_is_player: bool,
     pub last_move_ms: u32,
-    pub leg_ends_ms: u32,
     pub routing: bool,
     pub leg: Option<LegInFlight>,
 }
@@ -367,6 +366,7 @@ pub(crate) trait PursuitSink {
     }
     fn target_not_reachable(&mut self, _guid: u64) {}
     fn caster_hold_range(&self, guid: u64) -> f32;
+    fn casting(&self, guid: u64) -> bool;
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32);
 }
 
@@ -1058,7 +1058,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            if !backing_off(&c, tick.now_ms) && !back_off(w, tick, &c, gap_sq) {
+            if !back_off(w, tick, &c, gap_sq) {
                 stand_and_face(w, tick, &c);
             }
             continue;
@@ -1114,12 +1114,19 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
 }
 
 // cmangos ChaseMovementGenerator::Backpedal, measured with our contact and overlap distances.
-fn back_off<W: IdleSink>(w: &mut W, tick: &TickContext, c: &Pursuit, gap_sq: f32) -> bool {
+// The next firing's stand_and_face stops a walk back still in flight, about one firing long.
+fn back_off<W: IdleSink + PursuitSink>(
+    w: &mut W,
+    tick: &TickContext,
+    c: &Pursuit,
+    gap_sq: f32,
+) -> bool {
     let still_ms = tick.now_ms.wrapping_sub(c.last_move_ms);
     if !c.victim_is_player
         || c.leg.is_some()
         || still_ms < BACK_OFF_AFTER_STILL_MS
         || gap_sq >= OVERLAP_YD * OVERLAP_YD
+        || w.casting(c.guid)
     {
         return false;
     }
@@ -1140,16 +1147,11 @@ fn back_off<W: IdleSink>(w: &mut W, tick: &TickContext, c: &Pursuit, gap_sq: f32
             z_fallback: c.at.z,
             dur_ms,
             gait: Gait::Walk,
-            hold_until_landed: true,
+            hold_until_landed: false,
         },
         tick.now_ms,
     );
     true
-}
-
-// Chase legs are not held, so a held leg in flight during a chase is a back-off.
-fn backing_off(c: &Pursuit, now_ms: u32) -> bool {
-    c.leg.is_some() && leg_in_flight(now_ms, c.leg_ends_ms)
 }
 
 fn ranged_hold_point(pursuit: &Pursuit, distance: f32, angle: f32) -> Point {

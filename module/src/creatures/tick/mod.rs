@@ -457,11 +457,9 @@ pub(crate) fn emit_creature_leg(
         e.orientation = (to.1 - e.y).atan2(to.0 - e.x);
     }
     e.last_move_ms = now_ms;
-    e.leg_ends_ms = if set_leg_ends {
-        now_ms + duration_ms
-    } else {
-        0
-    };
+    if set_leg_ends {
+        e.leg_ends_ms = now_ms + duration_ms;
+    }
     e.update(ctx);
 }
 

@@ -898,7 +898,6 @@ impl PursuitSink for CtxWorld<'_> {
                     ),
                     victim_is_player: victim.is_player(),
                     last_move_ms: c.last_move_ms,
-                    leg_ends_ms: c.leg_ends_ms,
                     routing: tick::creature_is_routing(self.ctx, &c),
                     leg: splines.guid().find(c.guid).map(|s| as_leg(s, false)),
                 })
@@ -931,6 +930,9 @@ impl PursuitSink for CtxWorld<'_> {
             .guid()
             .find(guid)
             .map_or(0.0, |c| caster_hold_range_yd(self.ctx, c.entry))
+    }
+    fn casting(&self, guid: u64) -> bool {
+        crate::spell::is_non_melee_spell_casting(self.ctx, guid)
     }
     fn face(&mut self, guid: u64, at: Point, orientation: f32, spline_id: u32) {
         let Some(e) = self.place(guid, at, None, Some(orientation)) else {
