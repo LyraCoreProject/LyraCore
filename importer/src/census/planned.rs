@@ -90,6 +90,10 @@ fn key_columns(table: &str) -> Result<&'static [&'static str]> {
         | "game_gameobject_trap"
         | "game_meeting_stone"
         | "game_transport" => &["entry"],
+        "game_gossip_menu" | "game_gossip_option" => &["entry"],
+        "game_npc_text" | "game_npc_text_slot" => &["text_id"],
+        "game_gossip_menu_profile" | "game_gossip_menu_profile_option" => &["menu_id"],
+        "game_gossip_condition" => &["condition_id"],
         "game_go_model" => &["entry"],
         "game_gameobject" => &["template_entry"],
         "game_item_template" => &["entry"],
@@ -247,6 +251,26 @@ pub(super) fn run(
 
 fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<()> {
     writeln!(output, "\n## Differences\n")?;
+    if family == "gossip" {
+        for table in [
+            "broadcast_text",
+            "npc_text",
+            "gossip_menu",
+            "gossip_menu_option",
+            "conditions",
+        ] {
+            writeln!(
+                output,
+                "- `{table}`: {} selected source rows.",
+                vmangos.rows(table)?.len()
+            )?;
+        }
+        writeln!(output, "- Creature greetings and options follow selected creature menu links. Scoped entries use selected spawn choices and forced entries; S6 adds EventAI dependency closure.
+- vmangos imports every menu as an addressable profile. Classic-db keeps its four relay profiles. Source script menu targets use this catalogue; script execution is due in S6.
+- Text and weighted-slot differences follow source broadcast references and unconditional greetings. Dynamic greeting conditions remain unsupported, so a conditional-only menu uses the Module's default greeting. Gendered strings, literal NULL text and Unicode are preserved.
+- Questgiver placeholder options are omitted, as in classic-db. Creature options apply source NPC flag masks and menu-zero fallback. Profile options cannot store those masks. Unsupported actions and payment/input gates cannot be clicked. Navigation, POIs, confirmations and source script delivery remain unsupported.
+- Condition rows cover the full source table. The importer maps supported source meanings into LyraCore kinds, resolves patch conditions at patch 10 and marks other source kinds unavailable. Unknown conditions stay unavailable through NOT and OR. Stored codes stay compatible with the classic-db baseline.")?;
+    }
     if family == "items" {
         for table in [
             "item_template",
@@ -330,6 +354,10 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
 }
 
 fn floors(output: &mut String, family: &str, before: &Records, after: &Records) -> Result<()> {
+    if family == "gossip" {
+        writeln!(output, "\n## Consumed floors\n\nThe import manifest defines no gossip-specific count floor. Creature-service coverage remains for S4.")?;
+        return Ok(());
+    }
     writeln!(output, "\n## Consumed floors\n\nMinimums come from `importer/scripts/import-manifest.sh`. These are planned rows. Spawn coverage also needs the creatures family, due in S4.\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |")?;
     if family == "items" {
         writeln!(

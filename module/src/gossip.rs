@@ -1,5 +1,5 @@
 use lyracore_shared::constants::{gossip_option, npc_flags, MIN_TALENT_LEVEL};
-use lyracore_shared::gossip::{self, CharacterFacts, Condition, QuestState};
+use lyracore_shared::gossip::{self, CharacterFacts, Condition, ConditionKind, QuestState};
 use spacetimedb::{table, ReducerContext};
 
 use crate::creatures::{
@@ -139,7 +139,7 @@ fn condition_gate(
                 .condition_id()
                 .find(id)
                 .map(|row| Condition {
-                    kind: row.kind,
+                    kind: ConditionKind::from_code(row.kind),
                     values: [row.value1, row.value2, row.value3, row.value4],
                     flags: row.flags,
                 })

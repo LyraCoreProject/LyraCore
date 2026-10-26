@@ -1,5 +1,7 @@
 #[path = "world_import_trainers.rs"]
 mod trainers;
+#[path = "world_import_gossip.rs"]
+mod vmangos_gossip;
 #[path = "world_import_loot.rs"]
 mod vmangos_loot;
 #[path = "world_import_quests.rs"]
@@ -3236,52 +3238,56 @@ fn push_world_content_statements(
     }
 
     if family_active(args, "gossip") {
-        // Entry menus >= 1_000_000 and default option/text row ids >= 50_000 survive reloads.
-        stmts.push("DELETE FROM game_gossip_condition WHERE condition_id > 0".into());
-        push_insert(
-            stmts,
-            "game_gossip_condition",
-            "condition_id,kind,value1,value2,value3,value4,flags",
-            &gossip.condition_rows,
-        );
-        stmts.push("DELETE FROM game_gossip_menu_profile_option WHERE row_id > 0".into());
-        stmts.push("DELETE FROM game_gossip_menu_profile WHERE menu_id > 0".into());
-        stmts.push("DELETE FROM game_gossip_menu WHERE entry > 0 AND entry < 1000000".into());
-        stmts.push("DELETE FROM game_npc_text WHERE text_id > 0 AND text_id < 50000".into());
-        stmts.push("DELETE FROM game_npc_text_slot WHERE id >= 0 AND id < 50000".into());
-        stmts.push("DELETE FROM game_gossip_option WHERE row_id >= 0 AND row_id < 50000".into());
-        push_insert(
-            stmts,
-            "game_gossip_menu",
-            "entry,text_id",
-            &gossip.menu_rows,
-        );
-        push_insert(
-            stmts,
-            "game_npc_text",
-            "text_id,text",
-            &gossip.npc_text_rows,
-        );
-        push_insert(
-            stmts,
-            "game_npc_text_slot",
-            "id,text_id,slot_index,text_male,text_female,probability",
-            &gossip.npc_text_slot_rows,
-        );
-        push_insert(stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
-        push_insert(
-            stmts,
-            "game_gossip_menu_profile",
-            "menu_id,text_id",
-            &gossip.profile_rows,
-        );
-        push_insert(
+        gossip_statements(stmts, gossip);
+    }
+}
+
+fn gossip_statements(stmts: &mut Vec<String>, gossip: &GossipEtl) {
+    // Entry menus >= 1_000_000 and default option/text row ids >= 50_000 survive reloads.
+    stmts.push("DELETE FROM game_gossip_condition WHERE condition_id > 0".into());
+    push_insert(
+        stmts,
+        "game_gossip_condition",
+        "condition_id,kind,value1,value2,value3,value4,flags",
+        &gossip.condition_rows,
+    );
+    stmts.push("DELETE FROM game_gossip_menu_profile_option WHERE row_id > 0".into());
+    stmts.push("DELETE FROM game_gossip_menu_profile WHERE menu_id > 0".into());
+    stmts.push("DELETE FROM game_gossip_menu WHERE entry > 0 AND entry < 1000000".into());
+    stmts.push("DELETE FROM game_npc_text WHERE text_id > 0 AND text_id < 50000".into());
+    stmts.push("DELETE FROM game_npc_text_slot WHERE id >= 0 AND id < 50000".into());
+    stmts.push("DELETE FROM game_gossip_option WHERE row_id >= 0 AND row_id < 50000".into());
+    push_insert(
+        stmts,
+        "game_gossip_menu",
+        "entry,text_id",
+        &gossip.menu_rows,
+    );
+    push_insert(
+        stmts,
+        "game_npc_text",
+        "text_id,text",
+        &gossip.npc_text_rows,
+    );
+    push_insert(
+        stmts,
+        "game_npc_text_slot",
+        "id,text_id,slot_index,text_male,text_female,probability",
+        &gossip.npc_text_slot_rows,
+    );
+    push_insert(stmts, "game_gossip_option", "row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2", &gossip.option_rows);
+    push_insert(
+        stmts,
+        "game_gossip_menu_profile",
+        "menu_id,text_id",
+        &gossip.profile_rows,
+    );
+    push_insert(
             stmts,
             "game_gossip_menu_profile_option",
             "row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2",
             &gossip.profile_option_rows,
         );
-    }
 }
 
 fn push_gameobject_statements(
@@ -3972,6 +3978,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
         Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
         Some("trainers") => trainers::plan(dump, args),
         Some("quests") => vmangos_quests::plan(dump, args),
+        Some("gossip") => vmangos_gossip::plan(dump, args),
         Some("globals") => {
             let stmts = globals_statements(dump, args.dbc.as_deref())?;
             let count = insert_row_count(&stmts);
@@ -3985,7 +3992,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             })
         }
         _ => bail!(
-            "vmangos currently supports --family globals, items, loot, gameobjects, trainers or quests"
+            "vmangos currently supports --family globals, items, loot, gameobjects, trainers, quests or gossip"
         ),
     }
 }

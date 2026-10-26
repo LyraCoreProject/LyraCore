@@ -1,37 +1,74 @@
 use std::collections::BTreeMap;
 
 use lyracore_shared::constants::gossip_condition;
-use lyracore_shared::gossip::{evaluate_reference, CharacterFacts, Condition, QuestState};
+use lyracore_shared::gossip::{
+    evaluate_reference, CharacterFacts, Condition, ConditionKind, QuestState,
+};
 
-use crate::dump::{field, gmo, parse_table};
+use crate::dump::{gmo, parse_table};
+use crate::world_source::SourceKind;
 
 pub(super) type Conditions = BTreeMap<u32, Condition>;
+
+// The two readers share these source meanings; runtime evaluation uses only owned kinds.
+fn source_kind(kind: i32) -> ConditionKind {
+    match kind {
+        -3 => ConditionKind::Not,
+        -2 => ConditionKind::Any,
+        -1 => ConditionKind::All,
+        0 => ConditionKind::Always,
+        6 => ConditionKind::Team,
+        8 => ConditionKind::QuestRewarded,
+        9 => ConditionKind::QuestTaken,
+        14 => ConditionKind::RaceClass,
+        15 => ConditionKind::Level,
+        22 => ConditionKind::QuestAbsent,
+        other => ConditionKind::Unsupported(other),
+    }
+}
 
 pub(super) fn read(dump: &(impl crate::dump::TableRows + ?Sized)) -> anyhow::Result<Conditions> {
     let mut conditions = BTreeMap::new();
     for row in parse_table(dump, "conditions")?.iter() {
-        let Ok(id) = field(row, "condition_entry")?.parse::<u32>() else {
-            eprintln!(
-                "gossip condition: invalid source id {}",
-                field(row, "condition_entry")?
-            );
-            continue;
-        };
+        let id = row.number::<u32>("condition_entry")?;
         if id == 0 {
             continue;
         }
-        let condition = Condition {
-            kind: row.number("type")?,
-            values: [
-                row.number("value1")?,
-                row.number("value2")?,
-                row.number("value3")?,
-                row.number("value4")?,
-            ],
+        let source_type = row.number::<i32>("type")?;
+        let kind = source_kind(source_type);
+        let unsupported = dump.kind() == SourceKind::Vmangos
+            && matches!(kind, ConditionKind::Unsupported(_))
+            && source_type != 24;
+        let mut values = [0; 4];
+        for (slot, value) in values.iter_mut().enumerate() {
+            let column = format!("value{}", slot + 1);
+            if unsupported {
+                row.number::<i64>(&column)?;
+            } else {
+                *value = row.number(&column)?;
+            }
+        }
+        let mut condition = Condition {
+            kind: if unsupported {
+                ConditionKind::Unsupported(i32::MIN)
+            } else {
+                kind
+            },
+            values,
             flags: row.number("flags")?,
         };
+        if dump.kind() == SourceKind::Vmangos
+            && source_type == 24
+            && condition.values[2..] == [0, 0]
+        {
+            let enabled =
+                crate::source_selection::wow_patch(condition.values[0], condition.values[1])?;
+            condition.kind = ConditionKind::Always;
+            condition.values = [0; 4];
+            condition.flags ^= u8::from(!enabled);
+        }
         let unavailable = Condition {
-            kind: i32::MIN,
+            kind: ConditionKind::Unsupported(i32::MIN),
             values: [0; 4],
             flags: 0,
         };
@@ -52,7 +89,7 @@ pub(super) fn sql_rows(conditions: &Conditions) -> Vec<String> {
                 values: [a, b, c, d],
                 flags,
             } = condition;
-            format!("({id},{kind},{a},{b},{c},{d},{flags})")
+            format!("({id},{},{a},{b},{c},{d},{flags})", kind.code())
         })
         .collect()
 }
@@ -66,15 +103,15 @@ pub(super) fn resolve(
         class: 1,
         level: 1,
     };
-    let menu_id = field(row, gmo::MENU_ID)?;
-    let option_id = field(row, gmo::ID)?;
+    let menu_id = row.numeric_text(gmo::MENU_ID)?;
+    let option_id = row.numeric_text(gmo::ID)?;
     let diagnostic = |reason: &str| {
         eprintln!(
             "gossip menu {} option {}: {reason}; unavailable",
             menu_id, option_id,
         )
     };
-    let Ok(id) = field(row, gmo::CONDITION_ID)?.parse::<u32>() else {
+    let Ok(id) = row.numeric_text(gmo::CONDITION_ID)?.parse::<u32>() else {
         diagnostic("invalid condition reference");
         return Ok((gossip_condition::NEVER, 0, 0));
     };
@@ -102,7 +139,7 @@ mod tests {
         assert_eq!(
             rows[&501],
             Condition {
-                kind: -2,
+                kind: ConditionKind::Any,
                 values: [502, 503, 504, 505],
                 flags: 1
             }

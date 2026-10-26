@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items|loot|gameobjects|trainers|quests` imports the selected SQLite rows for those families.
+`--source vmangos --family globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -124,6 +124,28 @@ endpoints; patch-minimum-only and build-minimum-only tables have no upper bound.
 boundary in both directions. WOW_PATCH condition type 24 supports equality, at-least and at-most,
 and refuses values outside patches 0 through 10 or comparison codes 0 through 2. Family ports use
 the selected forbidden-item rows to remove vendor and loot entries; condition translation is S3g.
+
+The gossip reader resolves interleaved NPC text slots through `broadcast_text`, keeping gendered
+strings and probabilities. It imports all source menus as profiles instead of the classic-db four-menu
+relay list. At the pin, 13 script-command-84 targets exist in that catalogue. The command's meaning is
+specified in [ScriptCommands.h at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Maps/ScriptCommands.h#L316).
+Importing these profiles does not import the scripts that select them. That work remains for S6.
+Creature options use source NPC flag masks and menu-zero fallback, following
+[Player::PrepareGossipMenu at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Player.cpp#L11972-L12021).
+Profile options cannot express those masks. Spawn-specific greetings and multiple unconditional
+greetings are reported as well. Dynamic greeting choices, navigation, confirmations,
+POIs, scripts and broadcast metadata are reported in the Compatibility Manifest. Payment and text
+input options are unavailable because the Module cannot enforce those gates.
+
+`lyracore-shared::gossip::ConditionKind` owns the runtime meanings and persistent encoding. Its codes
+retain existing Realm values so classic-db SQL, reducer batches and stored rows stay compatible.
+Only the importer translates source numbers. Both sources map their supported Boolean, quest, level,
+team and race/class predicates into this enum. vmangos patch predicates become constant predicates
+at import time, with inversion preserved. Other vmangos kinds become an unavailable sentinel;
+unsupported classic-db codes remain opaque for byte parity. Unknown flags, missing references and
+unsupported predicates cannot become eligible through inversion or OR. No Module schema changes.
+See [Conditions.h at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Conditions.h#L30-L138)
+when extending the importer mapping, and add a named runtime kind before supporting a new meaning.
 
 The forbidden-item rules follow [ObjectMgr.cpp at vmangos commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L10789).
