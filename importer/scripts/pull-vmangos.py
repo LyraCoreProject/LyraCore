@@ -19,7 +19,9 @@ REPOSITORY = "vmangos/core"
 SQLITE_MEMBER = "sqlite-dump/mangos.sqlite"
 MAX_ARCHIVE_BYTES = 512 * 1024 * 1024
 MAX_SQLITE_BYTES = 2 * 1024 * 1024 * 1024
-DEFAULT_LOCK = Path(__file__).with_name("vmangos.lock")
+SCRIPT_PATH = Path(__file__).resolve()
+DEFAULT_LOCK = SCRIPT_PATH.with_name("vmangos.lock")
+DEFAULT_OUTPUT = SCRIPT_PATH.parents[2] / ".import" / "vmangos"
 
 
 def request(url, accept):
@@ -162,6 +164,21 @@ def write_json(path, value):
             temporary.unlink(missing_ok=True)
 
 
+def compare_lock(accepted, actual):
+    if accepted is None:
+        return "unlocked"
+    if accepted == actual:
+        return "matches"
+    if accepted["commit"] == actual["commit"]:
+        return "migration fingerprint changed"
+    comparison = api_json(f"compare/{accepted['commit']}...{actual['commit']}")
+    status = comparison.get("status")
+    relations = {"ahead": "newer", "behind": "older", "diverged": "diverged"}
+    if status not in relations:
+        raise ValueError(f"GitHub returned an invalid snapshot comparison: {status!r}")
+    return relations[status]
+
+
 def fetch(output, lock_path=DEFAULT_LOCK, accept_lock=False):
     accepted = read_lock(lock_path) if lock_path.exists() else None
     if accepted is None and not accept_lock:
@@ -183,6 +200,7 @@ def fetch(output, lock_path=DEFAULT_LOCK, accept_lock=False):
         extract_sqlite(archive, sqlite)
         migrations = migration_fingerprint(sqlite)
         actual = snapshot_lock(commit, migrations)
+        comparison = compare_lock(accepted, actual)
         sqlite_digest = digest(sqlite)
         destination = output / f"{commit}-{asset['digest'][7:23]}"
         if destination.exists():
@@ -204,6 +222,7 @@ def fetch(output, lock_path=DEFAULT_LOCK, accept_lock=False):
             "sqlite_path": str(destination / "mangos.sqlite"),
             "archive_path": str(destination / asset["name"]),
             "matches_accepted_lock": accepted == actual,
+            "comparison_to_previous_lock": comparison,
             "source_profile_gate": "not evaluated by fetch",
         }
         write_json(output / "current.json", report)
@@ -212,7 +231,7 @@ def fetch(output, lock_path=DEFAULT_LOCK, accept_lock=False):
 
 def main():
     parser = argparse.ArgumentParser(description="Fetch the current vmangos SQLite snapshot without executing source SQL.")
-    parser.add_argument("--output", type=Path, default=Path(".import/vmangos"))
+    parser.add_argument("--output", type=Path, default=DEFAULT_OUTPUT)
     parser.add_argument("--lock", type=Path, default=DEFAULT_LOCK)
     parser.add_argument("--accept-lock", action="store_true",
                         help="replace the accepted commit and migration fingerprint after verification")

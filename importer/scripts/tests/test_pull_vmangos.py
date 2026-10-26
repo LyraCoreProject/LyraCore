@@ -1,4 +1,4 @@
-from contextlib import closing
+from contextlib import chdir, closing
 import hashlib
 import importlib.util
 import io
@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 import sqlite3
 import stat
+import sys
 import tempfile
 import unittest
 from unittest.mock import patch
@@ -49,13 +50,53 @@ class FetchTests(unittest.TestCase):
                 archive.writestr(extra, b"must not be extracted")
         return result.getvalue()
 
-    def network(self, archive=None, commit=COMMIT):
+    def network(self, archive=None, commit=COMMIT, comparison="ahead"):
         payloads = {
             f"{FETCH.API}/releases/tags/db_latest": json.dumps(self.release).encode(),
             f"{FETCH.API}/commits/abcdef0": json.dumps({"sha": commit}).encode(),
             f"{FETCH.API}/releases/assets/99": self.archive if archive is None else archive,
         }
+        if self.lock.exists():
+            accepted = FETCH.read_lock(self.lock)
+            payloads[f"{FETCH.API}/compare/{accepted['commit']}...{commit}"] = json.dumps({"status": comparison}).encode()
         return patch.object(FETCH, "request", side_effect=lambda url, _accept: io.BytesIO(payloads[url]))
+
+    def test_default_output_is_rooted_at_the_checkout_from_another_directory(self):
+        with chdir(self.root), patch.object(sys, "argv", [str(SPEC.origin)]), \
+                patch.object(FETCH, "fetch", return_value={}) as fetch, \
+                patch.object(sys, "stdout", io.StringIO()):
+            self.assertEqual(FETCH.main(), 0)
+        expected = Path(SPEC.origin).resolve().parents[2] / ".import" / "vmangos"
+        fetch.assert_called_once_with(expected, FETCH.DEFAULT_LOCK, False)
+        self.assertFalse((self.root / ".import").exists())
+
+    def test_snapshot_comparison_reports_newer_older_and_diverged_commits(self):
+        accepted = FETCH.snapshot_lock("0" * 40, MIGRATIONS)
+        FETCH.write_json(self.lock, accepted)
+        for status, expected in [("ahead", "newer"), ("behind", "older"), ("diverged", "diverged")]:
+            with self.subTest(status=status), self.network(comparison=status):
+                report = FETCH.fetch(self.output, self.lock)
+            self.assertEqual(report["comparison_to_previous_lock"], expected)
+            self.assertFalse(report["matches_accepted_lock"])
+            self.assertEqual(FETCH.read_lock(self.lock), accepted)
+
+    def test_changed_migrations_at_the_same_commit_do_not_claim_a_direction(self):
+        accepted = FETCH.snapshot_lock(COMMIT, {"highest_id": "20010101000000", "row_count": 1})
+        FETCH.write_json(self.lock, accepted)
+        with self.network():
+            report = FETCH.fetch(self.output, self.lock)
+        self.assertEqual(report["comparison_to_previous_lock"], "migration fingerprint changed")
+        self.assertFalse(report["matches_accepted_lock"])
+
+    def test_an_invalid_comparison_keeps_the_previous_report_and_lock(self):
+        accepted = FETCH.snapshot_lock("0" * 40, MIGRATIONS)
+        FETCH.write_json(self.lock, accepted)
+        FETCH.write_json(self.output / "current.json", {"previous": True})
+        with self.network(comparison="unexpected"), self.assertRaisesRegex(ValueError, "snapshot comparison"):
+            FETCH.fetch(self.output, self.lock, accept_lock=True)
+        self.assertEqual(FETCH.read_lock(self.lock), accepted)
+        self.assertEqual(json.loads((self.output / "current.json").read_text()), {"previous": True})
+        self.assertEqual(list(self.output.iterdir()), [self.output / "current.json"])
 
     def test_fetch_checks_digest_and_records_commit_and_migrations(self):
         with self.network():
@@ -64,6 +105,7 @@ class FetchTests(unittest.TestCase):
         self.assertEqual(result["migrations"], MIGRATIONS)
         self.assertEqual(result["commit"], COMMIT)
         self.assertTrue(result["matches_accepted_lock"])
+        self.assertEqual(result["comparison_to_previous_lock"], "matches")
         self.assertEqual(result["source_profile_gate"], "not evaluated by fetch")
         self.assertEqual(json.loads((self.output / "current.json").read_text()), result)
         self.assertFalse(list(self.output.glob(".fetch-*")))
@@ -76,6 +118,7 @@ class FetchTests(unittest.TestCase):
         with self.network():
             report = FETCH.fetch(self.output, self.lock)
         self.assertFalse(report["matches_accepted_lock"])
+        self.assertEqual(report["comparison_to_previous_lock"], "newer")
         self.assertEqual(FETCH.read_lock(self.lock), old)
         with self.network():
             FETCH.fetch(self.output, self.lock, accept_lock=True)
@@ -90,6 +133,7 @@ class FetchTests(unittest.TestCase):
         with self.network():
             result = FETCH.fetch(self.output, self.lock)
         self.assertTrue(result["matches_accepted_lock"])
+        self.assertEqual(result["comparison_to_previous_lock"], "matches")
         self.assertFalse((Path(result["sqlite_path"]).parent / "unused.txt").exists())
 
     def test_digest_mismatch_keeps_previous_metadata_and_lock(self):

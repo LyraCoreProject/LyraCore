@@ -56,9 +56,11 @@ revisions, invalid ranges, each WOW_PATCH comparison and the read-only SQLite bo
 
 ## Fetching the transitional vmangos snapshot
 
-Run `python3 importer/scripts/pull-vmangos.py` from the checkout. It reads the current `db_latest`
-release through GitHub's API, resolves the commit in the SQLite asset name to a full SHA, downloads
-that asset through the asset API, and checks GitHub's SHA-256 digest before extraction. It reads only
+Run `python3 importer/scripts/pull-vmangos.py`. Its default output path resolves from the script
+location to the checkout's ignored `.import/vmangos/`, regardless of the working directory. It reads
+the current `db_latest` release through GitHub's API, resolves the commit in the SQLite asset name to
+a full SHA, downloads that asset through the asset API, and checks GitHub's SHA-256 digest before
+extraction. It reads only
 `sqlite-dump/mangos.sqlite` from the zip. Other members are ignored, and a duplicate or symlink
 SQLite member fails the fetch. The migrations query opens SQLite read-only with trusted schemas
 disabled.
@@ -74,9 +76,12 @@ same script with `--accept-lock` and review the lock diff.
 
 The archive and SQLite file stay under `.import/vmangos/<commit>-<digest-prefix>/`. The script writes
 `.import/vmangos/current.json` with their paths, the actual commit, migration fingerprint, GitHub
-digest and whether the accepted lock matches. A changed snapshot is reported without updating the
-lock. Fetch does not evaluate the Source Profile or permit apply. S6c must check the actual snapshot's
-column contract and approved values before a later CLI imports it, then record its actual commit.
+digest and whether the accepted lock matches. For a changed commit, GitHub ancestry determines
+whether the snapshot is newer, older or diverged from the previous lock. A changed migration
+fingerprint at the same commit is reported without a direction. The lock stays unchanged unless
+`--accept-lock` is supplied. Fetch does not evaluate the Source Profile or permit apply. S6c must
+check the actual snapshot's column contract and approved values before a later CLI imports it, then
+record its actual commit.
 
 Use the `sqlite_path` and `commit` from `current.json` as the census's `--dump` and `--source-sha`.
 The source switch remains classic-db by default. No downloaded data belongs in a commit or PR.
