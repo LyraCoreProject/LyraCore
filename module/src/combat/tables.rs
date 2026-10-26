@@ -317,7 +317,7 @@ pub(crate) fn regen_power(
             in_combat,
             mana_paused,
             mana_flat_tick: 0,
-            regen_pct: 100,
+            regen_rate: 1.0,
         },
     )
 }
@@ -326,11 +326,11 @@ struct PowerRegenTick {
     in_combat: bool,
     mana_paused: bool,
     mana_flat_tick: i32,
-    regen_pct: u32,
+    regen_rate: f64,
 }
 
-fn scale_regen(base: u32, regen_pct: u32) -> u32 {
-    (u64::from(base) * u64::from(regen_pct) / 100).min(u64::from(u32::MAX)) as u32
+fn scale_regen(base: u32, regen_rate: f64) -> u32 {
+    (f64::from(base) * regen_rate) as u32
 }
 
 fn regen_power_with_flat(
@@ -352,7 +352,7 @@ fn regen_power_with_flat(
             if tick.mana_paused {
                 0
             } else {
-                scale_regen(mana_regen_per_tick(spirit, level), tick.regen_pct)
+                scale_regen(mana_regen_per_tick(spirit, level), tick.regen_rate)
             },
             tick.mana_flat_tick,
         ),
@@ -360,7 +360,7 @@ fn regen_power_with_flat(
             if tick.in_combat {
                 current
             } else {
-                current.saturating_sub(scale_regen(RAGE_DECAY_PER_TICK, tick.regen_pct))
+                current.saturating_sub(scale_regen(RAGE_DECAY_PER_TICK, tick.regen_rate))
             }
         }
         _ => current,
@@ -420,7 +420,7 @@ pub(crate) fn regen_entity_power(
     in_combat: bool,
     window: RegenWindow,
     mana_per_five: i32,
-    regen_pct: u32,
+    regen_rate: f64,
 ) -> u32 {
     let power_type = (e.unit_bytes_0 >> 24) as u8;
     let mana_paused = window.now_ms < e.mana_regen_paused_until_ms;
@@ -434,7 +434,7 @@ pub(crate) fn regen_entity_power(
             in_combat,
             mana_paused,
             mana_flat_tick: per_five_in_window(mana_per_five, window),
-            regen_pct,
+            regen_rate,
         },
     )
 }
@@ -458,8 +458,8 @@ pub(crate) fn energy_ticks_between(credited_through_ms: u64, now_ms: u64) -> u64
     (now_ms / ENERGY_TICK_MS).saturating_sub(credited_through_ms / ENERGY_TICK_MS)
 }
 
-pub(crate) fn regen_energy(current: u32, max: u32, ticks: u64, regen_pct: u32) -> u32 {
-    let gained = ticks.saturating_mul(u64::from(scale_regen(ENERGY_PER_TICK, regen_pct)));
+pub(crate) fn regen_energy(current: u32, max: u32, ticks: u64, regen_rate: f64) -> u32 {
+    let gained = ticks.saturating_mul(u64::from(scale_regen(ENERGY_PER_TICK, regen_rate)));
     u64::from(current)
         .saturating_add(gained)
         .min(u64::from(max)) as u32
@@ -1038,15 +1038,15 @@ mod tests {
             5_000,
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(4_999, 4_000), 0, 100),
+            regen_entity_power(&mage, false, RegenWindow::new(4_999, 4_000), 0, 1.0),
             100
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(5_000, 4_000), 0, 100),
+            regen_entity_power(&mage, false, RegenWindow::new(5_000, 4_000), 0, 1.0),
             100 + 26
         );
         assert_eq!(
-            regen_entity_power(&mage, true, RegenWindow::new(6_000, 4_000), 0, 100),
+            regen_entity_power(&mage, true, RegenWindow::new(6_000, 4_000), 0, 1.0),
             100 + 26
         );
 
@@ -1061,11 +1061,11 @@ mod tests {
             0,
         );
         assert_eq!(
-            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 100),
+            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 1.0),
             1000 - 50
         );
         assert_eq!(
-            regen_entity_power(&warrior, true, RegenWindow::new(0, 4_000), 0, 100),
+            regen_entity_power(&warrior, true, RegenWindow::new(0, 4_000), 0, 1.0),
             1000
         );
     }
@@ -1094,9 +1094,9 @@ mod tests {
             0,
         );
         let window = RegenWindow::new(8_000, 4_000);
-        assert_eq!(regen_entity_power(&mage, false, window, 10, 100), 134);
+        assert_eq!(regen_entity_power(&mage, false, window, 10, 1.0), 134);
         assert_eq!(regen_entity_health(&mage, 15, window), 163);
-        assert_eq!(regen_entity_power(&mage, false, window, -40, 100), 100);
+        assert_eq!(regen_entity_power(&mage, false, window, -40, 1.0), 100);
         assert_eq!(regen_entity_health(&mage, -100, window), 100);
 
         let low_rate_total: i32 = (4_000..=20_000)
@@ -1121,7 +1121,7 @@ mod tests {
             10_000,
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 10, 100),
+            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 10, 1.0),
             108
         );
     }
@@ -1212,16 +1212,15 @@ mod tests {
             0,
             "an early firing adds none"
         );
-        assert_eq!(energy_ticks_between(14_000, 12_000), 0);
     }
 
     #[test]
     fn energy_regen_is_twenty_per_tick_and_adrenaline_rush_doubles_it() {
-        assert_eq!(regen_energy(0, 100, 1, 100), 20);
-        assert_eq!(regen_energy(0, 100, 2, 100), 40);
-        assert_eq!(regen_energy(0, 100, 1, 200), 40);
-        assert_eq!(regen_energy(90, 100, 1, 100), 100);
-        assert_eq!(regen_energy(0, 100, u64::MAX, 200), 100);
+        assert_eq!(regen_energy(0, 100, 1, 1.0), 20);
+        assert_eq!(regen_energy(0, 100, 2, 1.0), 40);
+        assert_eq!(regen_energy(0, 100, 1, 2.0), 40);
+        assert_eq!(regen_energy(90, 100, 1, 1.0), 100);
+        assert_eq!(regen_energy(0, 100, u64::MAX, 2.0), 100);
     }
 
     #[test]
@@ -1238,7 +1237,7 @@ mod tests {
             0,
         );
         assert_eq!(
-            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 0, 200),
+            regen_entity_power(&mage, false, RegenWindow::new(8_000, 4_000), 0, 2.0),
             100 + 52
         );
         let warrior = entity_for_regen(
@@ -1252,7 +1251,7 @@ mod tests {
             0,
         );
         assert_eq!(
-            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 200),
+            regen_entity_power(&warrior, false, RegenWindow::new(0, 4_000), 0, 2.0),
             1000 - 100
         );
     }

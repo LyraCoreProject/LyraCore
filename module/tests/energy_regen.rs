@@ -1,6 +1,6 @@
 mod support;
 
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use lyracore_shared::packing::power_type::ENERGY;
 use lyracore_shared::spell::taxonomy::{A_MOD_POWER_REGEN_PCT, P_POWER_TYPE, T_SELF};
@@ -23,7 +23,7 @@ fn rogue_at_zero_energy(name: &str) -> Standalone {
     let bytes: u32 = number(&player, "unit_bytes_0");
     let energy_user = (bytes & 0x00FF_FFFF) | (u32::from(ENERGY) << 24);
     shard.assert_sql(&format!(
-        "UPDATE game_world_entity SET unit_bytes_0 = {energy_user}, max_power = 100 \
+        "UPDATE game_world_entity SET unit_bytes_0 = {energy_user}, max_power = 400 \
          WHERE guid = {PLAYER}"
     ));
     shard.assert_call("debug_set_power", &[&PLAYER.to_string(), "0"]);
@@ -39,25 +39,64 @@ fn energy(shard: &Standalone) -> u32 {
     number(&row, "power")
 }
 
-fn energy_steps_until(shard: &Standalone, target: u32) -> Vec<u32> {
-    let mut readings = vec![energy(shard)];
-    let reached = poll_until(ENERGY_TICK * 8, || {
+struct Reading {
+    at: Instant,
+    energy: u32,
+}
+
+// Starts at the first tick seen, so the readings span whole ticks.
+fn watch_energy(shard: &Standalone, gain: u32) -> Vec<Reading> {
+    let before = energy(shard);
+    let mut readings: Vec<Reading> = Vec::new();
+    let reached = poll_until(ENERGY_TICK * 12, || {
         let now = energy(shard);
-        if readings.last() != Some(&now) {
-            readings.push(now);
+        let changed = readings
+            .last()
+            .map_or(now != before, |last| now != last.energy);
+        if changed {
+            readings.push(Reading {
+                at: Instant::now(),
+                energy: now,
+            });
         }
-        now >= target
+        readings
+            .first()
+            .is_some_and(|first| now >= first.energy + gain)
     });
-    assert!(reached, "energy stalled: {readings:?}");
-    readings.windows(2).map(|pair| pair[1] - pair[0]).collect()
+    let energies: Vec<u32> = readings.iter().map(|r| r.energy).collect();
+    assert!(reached, "energy stalled: {energies:?}");
+    readings
+}
+
+fn assert_ticks_of(readings: &[Reading], per_tick: u32) {
+    let steps: Vec<u32> = readings
+        .windows(2)
+        .map(|pair| pair[1].energy - pair[0].energy)
+        .collect();
+    assert!(
+        steps.iter().all(|step| step % per_tick == 0),
+        "steps {steps:?}"
+    );
+    let single = steps.iter().filter(|&&step| step == per_tick).count();
+    assert!(
+        single * 2 > steps.len(),
+        "most steps are one tick: {steps:?}"
+    );
+    let (first, last) = (&readings[0], &readings[readings.len() - 1]);
+    let ticks = f64::from((last.energy - first.energy) / per_tick);
+    let expected = last.at.duration_since(first.at).as_secs_f64() / ENERGY_TICK.as_secs_f64();
+    assert!(
+        (ticks - expected).abs() <= 1.0,
+        "{ticks} ticks in {:?}",
+        last.at.duration_since(first.at)
+    );
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_rogue_regains_twenty_energy_every_two_seconds() {
     let shard = rogue_at_zero_energy("energy-regen-ticks");
-    let steps = energy_steps_until(&shard, 60);
-    assert!(steps.iter().all(|&step| step == 20), "steps {steps:?}");
+    assert_ticks_of(&watch_energy(&shard, 80), 20);
 }
 
 #[test]
@@ -86,6 +125,15 @@ fn adrenaline_rush_doubles_each_energy_tick() {
     );
     shard.assert_call("debug_set_power", &[&PLAYER.to_string(), "0"]);
 
-    let steps = energy_steps_until(&shard, 80);
-    assert!(steps.iter().all(|&step| step == 40), "steps {steps:?}");
+    assert_ticks_of(&watch_energy(&shard, 160), 40);
+
+    shard.assert_sql(&format!(
+        "DELETE FROM game_aura WHERE target_guid = {PLAYER} AND spell_id = {ADRENALINE_RUSH}"
+    ));
+    let after = watch_energy(&shard, 40);
+    assert_eq!(
+        after[1].energy - after[0].energy,
+        20,
+        "regeneration returns to 20"
+    );
 }

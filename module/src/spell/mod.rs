@@ -58,7 +58,7 @@ pub(crate) use math::{
     damaged_value, detect_range_mod, dispel_category_matches, distance_3d, drain_shields,
     effect_amount, energized_value, form_recast_toggles_off, healed_value, healing_power,
     is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed, level_gate_blocks,
-    power_regen_pct, projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage,
+    power_regen_rate, projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage,
     resistance_bonus, school_index, school_locked, seal_amount, seal_amount_and_spell,
     should_arm_spell_retaliation, speed_bonus, spell_crit_bp, spell_miss_chance_bp, spell_power,
     stance_allows, stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct,
@@ -66,7 +66,6 @@ pub(crate) use math::{
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use scheduler::arm_ground_area_tick;
-#[cfg(test)]
 pub(crate) use scheduler::is_due_for_expiry;
 pub(crate) use scheduler::{
     apply_cast_spell_at, do_cancel_aura, do_cancel_cast, do_cast_spell, do_resurrect_response,

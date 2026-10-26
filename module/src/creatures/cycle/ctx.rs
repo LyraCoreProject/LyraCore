@@ -711,13 +711,13 @@ impl RegenSink for CtxWorld<'_> {
                     e.guid,
                     crate::items::EquipStat::ManaPerFive,
                 );
-                let regen_pct = crate::spell::power_regen_pct(self.ctx, e.guid, e.power_type());
+                let regen_rate = crate::spell::power_regen_rate(self.ctx, e.guid, e.power_type());
                 crate::combat::regen_entity_power(
                     &e,
                     u.in_combat,
                     self.regen_window,
                     mana_per_five,
-                    regen_pct,
+                    regen_rate,
                 )
             })
     }

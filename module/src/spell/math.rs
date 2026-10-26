@@ -322,21 +322,24 @@ pub(crate) fn combat_health_regen_pct(ctx: &ReducerContext, unit_guid: u64) -> i
     sum_active_auras(ctx, unit_guid, |a| a.eff_kind == A_COMBAT_HEALTH_REGEN_PCT)
 }
 
-pub(crate) fn power_regen_pct(ctx: &ReducerContext, unit_guid: u64, power_type: u8) -> u32 {
-    compound_regen_pct(
+// 1.0 leaves the base regeneration unchanged.
+pub(crate) fn power_regen_rate(ctx: &ReducerContext, unit_guid: u64, power_type: u8) -> f64 {
+    compound_regen_rate(
         auras_on(ctx, unit_guid)
-            .filter(|a| a.eff_kind == A_MOD_POWER_REGEN_PCT && a.eff_p0 == i32::from(power_type))
+            .filter(|a| {
+                a.eff_kind == A_MOD_POWER_REGEN_PCT
+                    && a.eff_p0 == i32::from(power_type)
+                    && !is_due_for_expiry(a.eff_kind, a.expires_at, ctx.timestamp)
+            })
             .map(|a| stacked_amount(&a)),
     )
 }
 
 // Each aura multiplies the rate, as cmangos `GetTotalAuraMultiplierByMiscValue` does.
-fn compound_regen_pct(amounts: impl Iterator<Item = i32>) -> u32 {
-    amounts
-        .fold(100u64, |pct, amount| {
-            pct.saturating_mul((100 + i64::from(amount)).max(0) as u64) / 100
-        })
-        .min(u64::from(u32::MAX)) as u32
+fn compound_regen_rate(amounts: impl Iterator<Item = i32>) -> f64 {
+    amounts.fold(1.0, |rate, amount| {
+        rate * (100.0 + f64::from(amount)).max(0.0) / 100.0
+    })
 }
 
 pub(crate) fn detect_range_mod(ctx: &ReducerContext, unit_guid: u64) -> f32 {
@@ -618,11 +621,15 @@ mod tests {
     }
 
     #[test]
-    fn power_regen_auras_multiply_and_floor_at_zero() {
-        assert_eq!(compound_regen_pct([].into_iter()), 100);
-        assert_eq!(compound_regen_pct([100].into_iter()), 200);
-        assert_eq!(compound_regen_pct([100, 50].into_iter()), 300);
-        assert_eq!(compound_regen_pct([-150].into_iter()), 0);
+    fn power_regen_auras_multiply_in_any_order_and_floor_at_zero() {
+        assert_eq!(compound_regen_rate([].into_iter()), 1.0);
+        assert_eq!(compound_regen_rate([100].into_iter()), 2.0);
+        assert_eq!(compound_regen_rate([100, 50].into_iter()), 3.0);
+        assert_eq!(compound_regen_rate([-150].into_iter()), 0.0);
+        let energy = |amounts: [i32; 3]| (20.0 * compound_regen_rate(amounts.into_iter())) as u32;
+        assert_eq!(energy([-25, -10, 100]), 27);
+        assert_eq!(energy([100, -25, -10]), 27);
+        assert_eq!(energy([-10, 100, -25]), 27);
     }
 
     #[test]
