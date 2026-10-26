@@ -207,7 +207,6 @@ fn kill_creature_with_attribution(
         crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
         disengage(ctx, target_guid);
-        crate::combo::forget(ctx, target_guid);
         crate::WorldEntity::delete(ctx, target_guid);
         crate::creatures::clear_live_pet_kind(ctx, target_guid);
         crate::creatures::distraction::clear(ctx, target_guid);

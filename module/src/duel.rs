@@ -461,6 +461,8 @@ pub(crate) fn complete_duel(
     };
     duels.id().delete(duel_id);
     crate::combat::stop_duel_combat(ctx, duel.initiator_guid, duel.challenged_guid);
+    crate::combo::forget_side(ctx, duel.initiator_guid, duel.challenged_guid);
+    crate::combo::forget_side(ctx, duel.challenged_guid, duel.initiator_guid);
     push_event(
         ctx,
         &duel,

@@ -99,7 +99,7 @@ pub fn build_rest_state_values(guid: u64, player_bytes_2: u32) -> (u16, Vec<u8>)
     build_values_update_raw(guid, &mask)
 }
 
-/// The Module keeps PLAYER_FIELD_BYTES bytes 0, 2 and 3 at zero, so this sends only byte 1.
+/// Replaces all of PLAYER_FIELD_BYTES; the Module never sets its bytes 0, 2 and 3.
 pub fn build_combo_points_values(guid: u64, target_guid: u64, points: u8) -> (u16, Vec<u8>) {
     let mut mask = update_mask::UpdateMaskValues::new();
     mask.set_u64(update_mask::idx::PLAYER_FIELD_COMBO_TARGET, target_guid);

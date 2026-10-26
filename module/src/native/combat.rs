@@ -216,16 +216,25 @@ pub(super) fn replay(
     Ok(())
 }
 
-pub(crate) fn combo_points_changed(ctx: &ReducerContext, owner_guid: u64) {
-    if let Some(owner) = ctx.db.game_native_player().character_guid().find(owner_guid) {
-        let held = crate::combo::held(ctx, owner_guid);
-        send_combo_points(ctx, owner.connection_id, owner_guid, held.as_ref());
+pub(crate) fn combo_points_changed(
+    ctx: &ReducerContext,
+    owner_guid: u64,
+    target_guid: u64,
+    points: u32,
+) {
+    if let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(owner_guid)
+    {
+        send_combo_points(ctx, owner.connection_id, owner_guid, target_guid, points);
     }
 }
 
 pub(super) fn replay_combo_points(ctx: &ReducerContext, connection: ConnectionId, guid: u64) {
     if let Some(held) = crate::combo::held(ctx, guid) {
-        send_combo_points(ctx, connection, guid, Some(&held));
+        send_combo_points(ctx, connection, guid, held.target_guid, held.points);
     }
 }
 
@@ -233,9 +242,9 @@ fn send_combo_points(
     ctx: &ReducerContext,
     connection: ConnectionId,
     guid: u64,
-    held: Option<&crate::combo::ComboPoint>,
+    target_guid: u64,
+    points: u32,
 ) {
-    let (target_guid, points) = held.map_or((0, 0), |r| (r.target_guid, r.points));
     let points = points.min(crate::combo::MAX_COMBO) as u8;
     let (opcode, body) = codec::build_combo_points_values(guid, target_guid, points);
     super::send_raw(ctx, connection, opcode, body, false);

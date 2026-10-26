@@ -752,7 +752,6 @@ pub(crate) fn cascade_delete_character(ctx: &ReducerContext, character_guid: u64
         sweep(ctx, character_guid);
     }
 
-    crate::combo::forget(ctx, character_guid);
     crate::combat::disengage(ctx, character_guid);
     crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     crate::motion::drop_pending(ctx, character_guid);
@@ -1354,7 +1353,6 @@ pub(crate) fn remove_loading_character(ctx: &ReducerContext, guid: u64) {
 
 fn finish_logout(ctx: &ReducerContext, guid: u64, keep_corpse: bool) {
     crate::combat::disengage(ctx, guid);
-    crate::combo::forget(ctx, guid);
     crate::trade::cancel_trade_for(ctx, guid);
     if !keep_corpse {
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(guid));

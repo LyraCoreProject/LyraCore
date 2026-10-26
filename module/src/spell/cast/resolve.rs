@@ -1148,6 +1148,20 @@ fn check_cast_gate_suffix(
         }
     }
 
+    let combo_points = if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
+        Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
+    } else if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
+        Some(crate::combo::held_points(ctx, caster_guid))
+    } else {
+        None
+    };
+    if combo_points == Some(0) {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NoComboPoints,
+            format!("spell {spell_id} needs combo points on target {target_guid}"),
+        ));
+    }
+
     // Creatures have no managed power pool, so only Characters pay spell costs.
     if cost_gate_blocks(caster.is_player(), caster.power, hdr.cost) {
         return Err(CastGateRefusal::new(

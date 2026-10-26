@@ -4306,15 +4306,17 @@ def check_combo_points(host):
     host.restore('game_spell', 'spell_id = 133', 'gcd_ms')
     host.restore('game_spell_effect', 'spell_id = 133', 'kind')
     host.sql('UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 133')
-    host.sql('UPDATE game_spell_effect SET kind = 12 WHERE spell_id = 133')  # E_ADD_COMBO.
     first = spawn(host, guid, 51000, 5)
     second = spawn(host, guid, 51000, 6)
     rogue.collect()
     observer.collect()
+    held = f'SELECT target_guid, points FROM game_combo_point WHERE owner_guid = {guid}'
 
-    def shown(packets=()):
-        """Polls the rogue until a combo VALUES update arrives; returns (target, points)."""
-        seen = list(packets)
+    def effect(kind):
+        host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
+
+    def shown():
+        seen = []
         def combo():
             seen.extend(rogue.collect())
             fields = values(seen, guid)
@@ -4322,17 +4324,30 @@ def check_combo_points(host):
         fields = host.wait_until(combo, 'no PLAYER_FIELD_BYTES update reached the rogue')
         return fields[714] | fields[715] << 32, fields[1222] >> 8 & 0xff
 
+    effect(0x0c)  # E_ADD_COMBO.
     for points in (1, 2):
         rogue.send(0x12e, cast(133, first))
         assert shown() == (first, points)
-    assert host.rows(f'SELECT target_guid, points FROM game_combo_point WHERE owner_guid = {guid}') == [[first, 2]]
+    assert host.rows(held) == [[first, 2]]
     assert 1222 not in values(observer.collect(), guid)
+
+    effect(0x0d)  # E_FINISHER_DAMAGE.
+    rogue.send(0x12e, cast(133, second))
+    refused = []
+    host.wait_until(lambda: refused.extend(rogue.collect()) or any(opcode == 0x130 for opcode, _ in refused),
+                    'the finisher on a target without combo points was not refused')
+    assert (0x130, struct.pack('<IBB', 133, 2, 0x46)) in refused, refused
+    assert host.rows(held) == [[first, 2]]
+    rogue.send(0x12e, cast(133, first))
+    assert shown() == (first, 0)
+    assert not host.rows(held)
+
+    effect(0x0c)
     rogue.send(0x12e, cast(133, second))
     assert shown() == (second, 1)
-    assert host.rows(f'SELECT target_guid, points FROM game_combo_point WHERE owner_guid = {guid}') == [[second, 1]]
     host.call('debug_set_health', [second, 0])
-    assert shown() == (0, 0)
-    assert not host.rows(f'SELECT id FROM game_combo_point WHERE owner_guid = {guid}')
+    assert shown() == (second, 0)
+    assert not host.rows(held)
     host.call('debug_set_health', [first, 0])
     observer.collect()
 

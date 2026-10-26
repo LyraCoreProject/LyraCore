@@ -1,5 +1,7 @@
 use spacetimedb::{table, ReducerContext, Table};
 
+use crate::game_world_entity;
+
 pub const MAX_COMBO: u32 = 5;
 
 #[table(accessor = game_combo_point, public, index(accessor = by_owner, btree(columns = [owner_guid])))]
@@ -25,12 +27,19 @@ pub(crate) fn finisher_duration_ms(base_ms: u32, combo: u32) -> u32 {
 }
 
 pub(crate) fn held(ctx: &ReducerContext, owner_guid: u64) -> Option<ComboPoint> {
-    ctx.db.game_combo_point().by_owner().filter(&owner_guid).next()
+    ctx.db
+        .game_combo_point()
+        .by_owner()
+        .filter(&owner_guid)
+        .next()
 }
 
 pub(crate) fn combo_points(ctx: &ReducerContext, owner_guid: u64, target_guid: u64) -> u32 {
-    held(ctx, owner_guid)
-        .filter(|r| r.target_guid == target_guid)
+    ctx.db
+        .game_combo_point()
+        .by_owner()
+        .filter(&owner_guid)
+        .find(|r| r.target_guid == target_guid)
         .map(|r| r.points)
         .unwrap_or(0)
 }
@@ -39,8 +48,17 @@ pub(crate) fn held_points(ctx: &ReducerContext, owner_guid: u64) -> u32 {
     held(ctx, owner_guid).map(|r| r.points).unwrap_or(0)
 }
 
-/// Combo points sit on one target; a point on another target restarts the count there.
+/// Combo points sit on one live target; a point on another target restarts the count there.
 pub(crate) fn add_combo_point(ctx: &ReducerContext, owner_guid: u64, target_guid: u64) {
+    let live = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(target_guid)
+        .is_some_and(|target| !target.dead);
+    if !live {
+        return;
+    }
     let points = capped_inc(combo_points(ctx, owner_guid, target_guid));
     delete_rows(ctx, owner_guid);
     ctx.db.game_combo_point().insert(ComboPoint {
@@ -49,12 +67,12 @@ pub(crate) fn add_combo_point(ctx: &ReducerContext, owner_guid: u64, target_guid
         target_guid,
         points,
     });
-    crate::native::combo_points_changed(ctx, owner_guid);
+    crate::native::combo_points_changed(ctx, owner_guid, target_guid, points);
 }
 
 pub(crate) fn spend_combo(ctx: &ReducerContext, owner_guid: u64) {
-    if delete_rows(ctx, owner_guid) {
-        crate::native::combo_points_changed(ctx, owner_guid);
+    if let Some(target_guid) = delete_rows(ctx, owner_guid) {
+        crate::native::combo_points_changed(ctx, owner_guid, target_guid, 0);
     }
 }
 
@@ -72,13 +90,29 @@ pub(crate) fn forget(ctx: &ReducerContext, guid: u64) {
     }
 }
 
-fn delete_rows(ctx: &ReducerContext, owner_guid: u64) -> bool {
-    let combos = ctx.db.game_combo_point();
-    let ids: Vec<u64> = combos.by_owner().filter(&owner_guid).map(|r| r.id).collect();
-    for id in &ids {
-        combos.id().delete(id);
+/// Clears `owner_guid`'s points when they sit on `side_guid` or on a unit it owns.
+pub(crate) fn forget_side(ctx: &ReducerContext, owner_guid: u64, side_guid: u64) {
+    let on_side = held(ctx, owner_guid).is_some_and(|r| {
+        r.target_guid == side_guid
+            || ctx
+                .db
+                .game_world_entity()
+                .guid()
+                .find(r.target_guid)
+                .is_some_and(|target| target.owner_guid == side_guid)
+    });
+    if on_side {
+        spend_combo(ctx, owner_guid);
     }
-    !ids.is_empty()
+}
+
+fn delete_rows(ctx: &ReducerContext, owner_guid: u64) -> Option<u64> {
+    let combos = ctx.db.game_combo_point();
+    let rows: Vec<ComboPoint> = combos.by_owner().filter(&owner_guid).collect();
+    for row in &rows {
+        combos.id().delete(row.id);
+    }
+    rows.first().map(|r| r.target_guid)
 }
 
 #[cfg(test)]
