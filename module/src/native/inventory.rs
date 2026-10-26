@@ -80,29 +80,18 @@ fn gain(
             row.random_property_id,
         )),
     )));
-    use crate::quest::{game_character_quest, game_quest_objective};
-    if ctx
-        .db
-        .game_character_quest()
-        .by_character()
-        .filter(row.owner_guid)
-        .any(|quest| {
-            !quest.rewarded
-                && !quest.failed
-                && ctx
-                    .db
-                    .game_quest_objective()
-                    .by_quest()
-                    .filter(quest.quest_entry)
-                    .any(|objective| objective.kind == 1 && objective.target_entry == row.entry)
-        })
-    {
-        packets.push(packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
-            lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
-                required_item_id: row.entry,
-                items_required: count,
-            },
-        )));
+    if super::quest::collects(ctx, row.owner_guid, row.entry) {
+        // The client's toast counts the items in its bags plus this packet's count, so the
+        // packet must arrive before the item's update reaches the bags.
+        packets.insert(
+            0,
+            packet(ServerOpcodeMessage::SMSG_QUESTUPDATE_ADD_ITEM(
+                lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_ADD_ITEM {
+                    required_item_id: row.entry,
+                    items_required: count,
+                },
+            )),
+        );
     }
 }
 
