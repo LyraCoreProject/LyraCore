@@ -435,7 +435,7 @@ where
         if a.source != world_source::SourceKind::Vmangos
             || a.dump.is_none()
             || a.dbc.is_none()
-            || !matches!(a.family.as_deref(), Some("globals" | "items"))
+            || !matches!(a.family.as_deref(), Some("globals" | "items" | "loot"))
             || a.apply
             || a.pack_client.is_some()
             || a.pack_out.is_some()
@@ -450,11 +450,11 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items|loot, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
-            || !matches!(a.family.as_deref(), Some("globals" | "items"))
+            || !matches!(a.family.as_deref(), Some("globals" | "items" | "loot"))
             || a.pack_client.is_some()
             || a.pack_out.is_some()
             || a.terrain.is_some()
@@ -468,7 +468,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos currently supports --dump <sqlite> --family globals|items");
+        bail!("vmangos currently supports --dump <sqlite> --family globals|items|loot");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {

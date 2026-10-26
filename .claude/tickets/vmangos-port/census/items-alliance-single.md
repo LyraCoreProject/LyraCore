@@ -8,7 +8,7 @@ Counts and keys come from production plans for patch 10 and build 5875, without 
 
 | Module table | Classic | vmangos |
 | --- | ---: | ---: |
-| game_creature_loot | 204582 | 245127 |
+| game_creature_loot | 204582 | 245238 |
 | game_item_enchantment | 1685 | 1685 |
 | game_item_property_weight | 27892 | 27686 |
 | game_item_random_property | 2012 | 2012 |
@@ -114,6 +114,42 @@ Production findings, with source keys omitted here. The import prints the full f
       "classification": "unsupported",
       "code": "items.vendor-restock",
       "occurrences": 276
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.condition",
+      "occurrences": 3655,
+      "table": "creature_loot_template"
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.count-range",
+      "occurrences": 4587,
+      "table": "creature_loot_template"
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.reference-repeat",
+      "occurrences": 11,
+      "table": "creature_loot_template"
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.reference-group-selector",
+      "occurrences": 1814,
+      "table": "creature_loot_template"
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.condition",
+      "occurrences": 665,
+      "table": "reference_loot_template"
+    },
+    {
+      "classification": "unsupported",
+      "code": "loot.count-range",
+      "occurrences": 58,
+      "table": "reference_loot_template"
     }
   ],
   "format_version": 1,

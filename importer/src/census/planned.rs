@@ -67,6 +67,10 @@ fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
         "game_item_template" => &["entry"],
         "game_creature_loot" => &["creature_entry"],
+        "game_pickpocket_loot" => &["creature_entry"],
+        "game_skinning_loot" => &["skin_loot_id"],
+        "game_gameobject_loot" => &["loot_id"],
+        "game_fishing_loot" => &["zone_id"],
         "game_npc_vendor" => &["creature_entry"],
         "game_item_property_weight" => &["pool_id"],
         "game_item_random_property" => &["property_id"],
@@ -183,6 +187,26 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         }
         writeln!(output, "- Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.\n- Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.\n- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item removal. The importer keeps one offer per creature and item.\n- Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.\n- Random Properties and enchantment effects use the same client tables in both sources.\n- The unused restores_power flag is false for vmangos. Item on-use spells retain food and drink behavior; classic-db keeps its existing output.\n- Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI dependency closure remains due in S6.")?;
     }
+    if family == "loot" {
+        for table in [
+            "pickpocketing_loot_template",
+            "skinning_loot_template",
+            "gameobject_loot_template",
+            "fishing_loot_template",
+            "reference_loot_template",
+            "item_loot_template",
+            "disenchant_loot_template",
+            "mail_loot_template",
+        ] {
+            writeln!(
+                output,
+                "- `{table}`: patch selection keeps {} of {} source rows.",
+                vmangos.rows(table)?.len(),
+                vmangos.row_count(table)?
+            )?;
+        }
+        writeln!(output, "- Pickpocket differences follow selected creature-to-loot links and source drops. Skinning imports distinct loot ids shared by those creatures.\n- Chest loot follows every selected chest template except the eight authored gather nodes. Fishing imports every selected zone. Both retain source membership after patch selection and reference expansion.\n- vmangos zero-chance group members share the probability left by explicit members. Classic-db keeps its existing omission of direct zero-chance rows for byte parity. Forbidden items are removed before reference weights are expanded, so forbidden children do not take a share of the remaining reference weight. Direct quest-only drops retain the sign as a separate flag where the Module table supports it.\n- Item-container and disenchant tables have no World Source import path in the current Module; they are counted in unsupported findings. Mail loot belongs to quests and is integrated in S3f.\n- Existing import behavior fixes variable item counts at the maximum and expands one reference iteration. The manifest records these limits, source conditions, reference group selectors and multi-group pools, and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.")?;
+    }
     Ok(())
 }
 
@@ -197,6 +221,23 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
             after.get("game_npc_vendor").map_or(0, |x| x.rows)
         )?;
         writeln!(output, "\n`VENDOR_COVERAGE` minimum {} and `SENTINEL_HILL_VENDOR` minimum {} require spawned entities. Their Realm counts cannot be proved by an items-only plan; recheck with the creatures family in S4.", super::floor("VENDOR_COVERAGE")?, super::floor("SENTINEL_HILL_VENDOR")?)?;
+    }
+    if family == "loot" {
+        for (name, table) in [
+            ("PICKPOCKET_LOOT", "game_pickpocket_loot"),
+            ("SKINNING_LOOT", "game_skinning_loot"),
+            ("GAMEOBJECT_CHEST_LOOT", "game_gameobject_loot"),
+            ("FISHING_LOOT", "game_fishing_loot"),
+        ] {
+            writeln!(
+                output,
+                "| {name} | {} | {} | {} |",
+                super::floor(name)?,
+                before.get(table).map_or(0, |x| x.rows),
+                after.get(table).map_or(0, |x| x.rows)
+            )?;
+        }
+        writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.")?;
     }
     Ok(())
 }

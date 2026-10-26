@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items` imports the selected SQLite rows for those families.
+`--source vmangos --family globals|items|loot` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -61,6 +61,16 @@ It reports production plan counts and entry membership. Static WOW_PATCH conditi
 item flags are unsupported and appear in the Compatibility Manifest. The reader projects the
 columns needed for narrow joins and spell checks, retaining the keys and fields needed for the
 same patch/build selection. It never substitutes client spell fields into vmangos rows.
+
+The loot family imports pickpocketing, skinning, chest and fishing tables after patch selection.
+Creature loot stays in items and mail loot stays in quests. Forbidden items are removed before
+reference expansion. vmangos zero-chance group members share the chance left by explicit members,
+as described by `LootGroup::Roll` in [LootMgr.cpp at commit
+464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/LootMgr.cpp#L1092-L1128).
+The classic-db output remains unchanged. Source conditions, variable counts, repeated references,
+reference group selectors, multi-group reference pools, and quest-only skinning or fishing drops
+appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
+import path; the manifest counts them as unsupported.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
