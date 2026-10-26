@@ -27,11 +27,11 @@ pub(crate) fn catalogue_sql(
     points: &TaxiPathNode,
     dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<TransportCatalogueSql> {
-    let templates: HashMap<u32, crate::world_source::Row> =
-        crate::dump::parse_complete_table(dump, "gameobject_template")?
-            .into_iter()
-            .filter_map(|row| Some((field(&row, got::ENTRY).parse().ok()?, row)))
-            .collect();
+    let template_rows = crate::dump::parse_complete_table(dump, "gameobject_template")?;
+    let templates: HashMap<u32, &crate::world_source::Row> = template_rows
+        .iter()
+        .filter_map(|row| Some((field(row, got::ENTRY).parse().ok()?, row)))
+        .collect();
     let path_ids: HashSet<u32> = paths.rows().iter().map(|row| row.id.id).collect();
     let transports = crate::dump::parse_complete_table(dump, "transports")?;
     if transports.is_empty() {
@@ -39,11 +39,11 @@ pub(crate) fn catalogue_sql(
     }
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
-    for transport in transports {
-        let entry: u32 = field(&transport, tr::ENTRY)
+    for transport in transports.iter() {
+        let entry: u32 = field(transport, tr::ENTRY)
             .parse()
             .context("transports has an invalid entry")?;
-        let period_ms: u32 = field(&transport, tr::PERIOD)
+        let period_ms: u32 = field(transport, tr::PERIOD)
             .parse()
             .with_context(|| format!("transport {entry} has an invalid period"))?;
         let Some(template) = templates.get(&entry) else {

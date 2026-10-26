@@ -340,17 +340,17 @@ pub(crate) fn dump_sql(
     let (mut sql, properties, catalogue_row_count) = catalogue_sql(&mut chain)?;
     let mut rows = BTreeMap::new();
     let mut pools = BTreeSet::new();
-    for row in raw {
-        let pool: u32 = field(&row, "entry")
+    for row in raw.iter() {
+        let pool: u32 = field(row, "entry")
             .parse()
             .context("invalid Property Pool ID")?;
-        let property: u32 = field(&row, "ench")
+        let property: u32 = field(row, "ench")
             .parse()
             .context("invalid Random Property ID")?;
         if pool == 0 || !properties.contains(&property) {
             bail!("pool {pool} references missing Random Property {property}");
         }
-        let weight = decimal_weight(field(&row, "chance"))?;
+        let weight = decimal_weight(field(row, "chance"))?;
         let id = (u64::from(pool) << 32) | u64::from(property);
         if rows
             .insert(id, format!("({id},{pool},{property},{weight})"))

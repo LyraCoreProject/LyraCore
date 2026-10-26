@@ -1,9 +1,13 @@
-use std::collections::{BTreeMap, BTreeSet};
+use std::borrow::Cow;
+use std::collections::{BTreeSet, HashMap};
 use std::path::Path;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use rusqlite::types::Value;
 use rusqlite::{Connection, OpenFlags};
+
+use crate::dump::TableRows;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SourceKind {
@@ -26,11 +30,9 @@ impl std::str::FromStr for SourceKind {
 
 #[derive(Clone, Debug)]
 pub(crate) enum Cell {
-    #[cfg(test)]
-    AbsentFixtureColumn,
     Null,
-    Number(String),
-    Text(String),
+    Number(Box<str>),
+    Text(Box<str>),
 }
 
 impl TryFrom<Value> for Cell {
@@ -39,82 +41,132 @@ impl TryFrom<Value> for Cell {
     fn try_from(value: Value) -> Result<Self> {
         Ok(match value {
             Value::Null => Self::Null,
-            Value::Integer(value) => Self::Number(value.to_string()),
-            Value::Real(value) if value.is_finite() => Self::Number(value.to_string()),
-            Value::Text(value) => Self::Text(value),
+            Value::Integer(value) => Self::Number(value.to_string().into()),
+            Value::Real(value) if value.is_finite() => Self::Number(value.to_string().into()),
+            Value::Text(value) => Self::Text(value.into()),
             _ => bail!("unsupported World Source value type"),
         })
     }
 }
 
+#[derive(Debug)]
+struct TableStorage {
+    table: String,
+    indices: HashMap<String, usize>,
+    text: String,
+}
+
+#[derive(Clone, Debug)]
+enum StoredCell {
+    Null,
+    Number(std::ops::Range<u32>),
+    Text(std::ops::Range<u32>),
+}
+
+pub(crate) struct TableBuilder {
+    columns: TableStorage,
+    rows: Vec<Box<[StoredCell]>>,
+}
+
+impl TableBuilder {
+    pub(crate) fn new(table: &str, names: impl IntoIterator<Item = String>) -> Self {
+        Self {
+            columns: TableStorage {
+                table: table.into(),
+                indices: names
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, name)| (name, index))
+                    .collect(),
+                text: String::new(),
+            },
+            rows: Vec::new(),
+        }
+    }
+
+    pub(crate) fn push(&mut self, cells: Vec<Cell>) -> Result<()> {
+        if cells.len() != self.columns.indices.len() {
+            bail!("{}: row does not match its column list", self.columns.table);
+        }
+        let cells = cells
+            .into_iter()
+            .map(|cell| {
+                let (number, value) = match cell {
+                    Cell::Null => return Ok(StoredCell::Null),
+                    Cell::Number(value) => (true, value),
+                    Cell::Text(value) => (false, value),
+                };
+                let start = u32::try_from(self.columns.text.len())?;
+                self.columns.text.push_str(&value);
+                let end = u32::try_from(self.columns.text.len())
+                    .context("source table text exceeds 4 GiB")?;
+                Ok(if number {
+                    StoredCell::Number(start..end)
+                } else {
+                    StoredCell::Text(start..end)
+                })
+            })
+            .collect::<Result<Vec<_>>>()?;
+        self.rows.push(cells.into_boxed_slice());
+        Ok(())
+    }
+
+    pub(crate) fn finish(self) -> Vec<Row> {
+        let columns = Arc::new(self.columns);
+        self.rows
+            .into_iter()
+            .map(|cells| Row {
+                columns: Arc::clone(&columns),
+                cells,
+            })
+            .collect()
+    }
+}
+
 #[derive(Clone, Debug)]
 pub(crate) struct Row {
-    table: String,
-    cells: BTreeMap<String, Cell>,
+    columns: Arc<TableStorage>,
+    cells: Box<[StoredCell]>,
 }
 
 impl Row {
-    pub(crate) fn new(table: &str, cells: BTreeMap<String, Cell>) -> Self {
-        Self {
-            table: table.into(),
-            cells,
-        }
-    }
-
-    pub(crate) fn column_count(&self) -> usize {
-        self.cells.keys().filter(|name| self.has(name)).count()
-    }
-
-    pub(crate) fn has(&self, column: &str) -> bool {
-        #[cfg(test)]
-        if matches!(self.cells.get(column), Some(Cell::AbsentFixtureColumn)) {
-            return false;
-        }
-        self.cells.contains_key(column)
-    }
-
-    fn cell(&self, column: &str) -> Result<&Cell> {
-        self.cells
+    fn cell(&self, column: &str) -> Result<&StoredCell> {
+        self.columns
+            .indices
             .get(column)
-            .with_context(|| format!("{}.{}: missing column", self.table, column))
+            .and_then(|&index| self.cells.get(index))
+            .with_context(|| format!("{}.{}: missing column", self.columns.table, column))
     }
 
-    pub(crate) fn require_type(&self, column: &str, number: bool) -> Result<()> {
-        match self.cell(column)? {
-            Cell::Null => Ok(()),
-            Cell::Number(_) if number => Ok(()),
-            Cell::Text(_) if !number => Ok(()),
-            _ => bail!("{}.{}: source column type changed", self.table, column),
-        }
+    fn value(&self, range: &std::ops::Range<u32>) -> &str {
+        &self.columns.text[range.start as usize..range.end as usize]
     }
 
     pub(crate) fn number<T: std::str::FromStr>(&self, column: &str) -> Result<T> {
         match self.cell(column)? {
-            Cell::Number(value) => value.trim().parse().map_err(|_| {
+            StoredCell::Number(value) => self.value(value).trim().parse().map_err(|_| {
                 anyhow::anyhow!(
                     "{}.{}: invalid {}",
-                    self.table,
+                    self.columns.table,
                     column,
                     std::any::type_name::<T>()
                 )
             }),
-            _ => bail!("{}.{}: expected a number", self.table, column),
+            _ => bail!("{}.{}: expected a number", self.columns.table, column),
         }
     }
 
     pub(crate) fn text(&self, column: &str) -> Result<&str> {
         match self.cell(column)? {
-            Cell::Text(value) => Ok(value),
-            _ => bail!("{}.{}: expected text", self.table, column),
+            StoredCell::Text(value) => Ok(self.value(value)),
+            _ => bail!("{}.{}: expected text", self.columns.table, column),
         }
     }
 
     pub(crate) fn raw(&self, column: &str) -> Result<&str> {
         Ok(match self.cell(column)? {
-            #[cfg(test)]
-            Cell::AbsentFixtureColumn => "",
-            Cell::Null => "NULL",
-            Cell::Number(value) | Cell::Text(value) => value.trim(),
+            StoredCell::Null => "NULL",
+            StoredCell::Number(value) | StoredCell::Text(value) => self.value(value).trim(),
         })
     }
 }
@@ -157,28 +209,25 @@ impl WorldSource {
             }
         }
     }
+}
 
-    pub(crate) fn table(&self, table: &str) -> Result<Vec<Row>> {
+impl TableRows for WorldSource {
+    fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
-            Self::ClassicDb(sql) => crate::dump::named_table(sql, table),
+            Self::ClassicDb(sql) => crate::dump::named_table(sql, table).map(Cow::Owned),
             Self::Vmangos(connection) => {
                 check_table(connection, table)?;
                 let mut statement =
                     connection.prepare(&format!("SELECT * FROM {}", quote_identifier(table)))?;
                 let columns: Vec<String> = statement.column_names().map(str::to_owned).collect();
+                let mut output = TableBuilder::new(table, columns.iter().cloned());
                 let mut rows = statement.query([])?;
-                let mut output = Vec::new();
                 while let Some(row) = rows.next()? {
                     let cells = columns
                         .iter()
-                        .map(|name| {
-                            Ok((
-                                name.clone(),
-                                Cell::try_from(row.get::<_, Value>(name.as_str())?)?,
-                            ))
-                        })
-                        .collect::<Result<BTreeMap<_, _>>>()?;
-                    output.push(Row::new(table, cells));
+                        .map(|name| Cell::try_from(row.get::<_, Value>(name.as_str())?))
+                        .collect::<Result<Vec<_>>>()?;
+                    output.push(cells)?;
                 }
                 let mut metadata =
                     connection.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY pk")?;
@@ -191,7 +240,20 @@ impl WorldSource {
                     .filter_map(|(name, ordinal)| (ordinal > 0).then_some(name))
                     .collect::<Vec<_>>();
                 let columns = columns.into_iter().collect::<BTreeSet<_>>();
-                crate::source_selection::select(table, &columns, &primary_key, output)
+                crate::source_selection::select(table, &columns, &primary_key, output.finish())
+                    .map(Cow::Owned)
+            }
+        }
+    }
+    fn source_hash(&self) -> Result<String> {
+        match self {
+            Self::ClassicDb(sql) => crate::dump::sha256_hex(sql.as_bytes()),
+            Self::Vmangos(connection) => {
+                let path = connection
+                    .path()
+                    .filter(|path| !path.is_empty())
+                    .context("World Source has no file to hash")?;
+                crate::dump::sha256_hex(&std::fs::read(path)?)
             }
         }
     }
@@ -291,7 +353,7 @@ mod tests {
         .unwrap();
         let classic = WorldSource::ClassicDb("CREATE TABLE `example` (\n`optional` int,\n`entry` int,\n`name` text\n); INSERT INTO `example` VALUES (NULL,42,'O\\'Brien');".into());
         for source in [sqlite, classic] {
-            let rows = source.table("example").unwrap();
+            let rows = source.rows("example").unwrap();
             let row = &rows[0];
             assert_eq!(row.number::<u32>("entry").unwrap(), 42);
             assert_eq!(row.text("name").unwrap(), "O'Brien");
@@ -303,7 +365,7 @@ mod tests {
                 .unwrap_err()
                 .to_string()
                 .contains("example.missing"));
-            assert!(source.table("absent").is_err());
+            assert!(source.rows("absent").is_err());
         }
     }
 
@@ -327,7 +389,7 @@ mod tests {
             ],
         }])
         .unwrap();
-        let rows = source.table("item_template").unwrap();
+        let rows = source.rows("item_template").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text("name").unwrap(), "current");
     }
@@ -343,12 +405,12 @@ mod tests {
         drop(connection);
         let source = WorldSource::open(&path, SourceKind::Vmangos).unwrap();
         assert_eq!(
-            source.table("example").unwrap()[0]
+            source.rows("example").unwrap()[0]
                 .number::<u32>("entry")
                 .unwrap(),
             42
         );
-        assert!(source.table("indirect").is_err());
+        assert!(source.rows("indirect").is_err());
         if let WorldSource::Vmangos(connection) = source {
             assert!(connection.execute("DELETE FROM example", []).is_err());
         }
@@ -364,7 +426,7 @@ mod tests {
             rows: &[&[("number", Value::Real(1.5))]],
         }])
         .unwrap();
-        assert!(source.table("example").unwrap()[0]
+        assert!(source.rows("example").unwrap()[0]
             .number::<u32>("number")
             .is_err());
         let source = sqlite_fixture(&[FixtureTable {
@@ -374,7 +436,7 @@ mod tests {
             rows: &[&[("number", Value::Integer(256))]],
         }])
         .unwrap();
-        assert!(source.table("example").unwrap()[0]
+        assert!(source.rows("example").unwrap()[0]
             .number::<u8>("number")
             .is_err());
         assert!(Cell::try_from(Value::Blob(vec![1])).is_err());

@@ -212,7 +212,7 @@ mod tests {
 
     #[test]
     fn door_templates_keeps_only_door_and_button_rows() {
-        let dump = "INSERT INTO `gameobject_template` VALUES \
+        let dump = "INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `faction`, `flags`, `ExtraFlags`, `size`, `data0`, `data1`) VALUES \
             (1,0,10,'Door',0,0,0,1.0,0,0),\
             (2,1,20,'Button',0,0,0,1.0,0,0),\
             (3,3,30,'Chest',0,0,0,1.0,0,0),\
@@ -231,7 +231,7 @@ mod tests {
     #[test]
     fn door_templates_drops_a_row_with_no_classification() {
         let dump =
-            "INSERT INTO `gameobject_template` VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
+            "INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `faction`, `flags`, `ExtraFlags`, `size`, `data0`, `data1`) VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
         assert!(door_templates(dump).is_empty());
     }
 

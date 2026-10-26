@@ -31,7 +31,7 @@ are ready. Generate the comparison with both local sources and your client:
 
 ```sh
 cargo run -p lyracore-importer -- \
-  --source vmangos --dump .import/vmangos/mangos.sqlite \
+  --source vmangos --dump ".import/vmangos/<commit>-<digest-prefix>/mangos.sqlite" \
   --census .import/classic-db-full.sql --family globals --dbc /path/to/client/Data \
   > .claude/tickets/vmangos-port/census/globals.md
 ```
@@ -42,8 +42,8 @@ outfits and repeated item keys. These are import-plan measurements, not observat
 The existing EventAI Compatibility Manifest remains classic-db-only until S6c.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
-greatest eligible patch or build per primary key. Ranges include both endpoints; patch-minimum-only
-tables have no upper bound. `skill_line_ability` requires build 5875. `forbidden_items` includes the
+greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
+endpoints; patch-minimum-only and build-minimum-only tables have no upper bound. `skill_line_ability` requires build 5875. `forbidden_items` includes the
 boundary in both directions. WOW_PATCH condition type 24 supports equality, at-least and at-most,
 and refuses values outside patches 0 through 10 or comparison codes 0 through 2. Family ports use
 the selected forbidden-item rows to remove vendor and loot entries; condition translation is S3g.

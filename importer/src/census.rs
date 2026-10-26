@@ -5,6 +5,7 @@ use std::path::Path;
 use anyhow::{Context, Result};
 use wow_dbc::DbcTable;
 
+use crate::dump::TableRows;
 use crate::world_source::{SourceKind, WorldSource};
 
 type Keys = BTreeSet<Vec<u32>>;
@@ -61,9 +62,9 @@ fn count(
     key: &[&str],
     outfits: &BTreeSet<(u64, i32)>,
 ) -> Result<Count> {
-    let rows = source.table(table)?;
+    let rows = source.rows(table)?;
     let mut keys = Keys::new();
-    for row in &rows {
+    for row in rows.iter() {
         let numeric: &[&str] = match table {
             "player_classlevelstats" => &["basehp", "basemana"],
             "player_levelstats" => &["str", "agi", "sta", "inte", "spi"],
@@ -210,7 +211,7 @@ pub(crate) fn run(classic: &Path, vmangos: &Path, client: &str, commit: &str) ->
     ] {
         let positions = |source: &WorldSource| -> Result<usize> {
             source
-                .table("playercreateinfo")?
+                .rows("playercreateinfo")?
                 .iter()
                 .map(|row| {
                     Ok(usize::from(
@@ -300,12 +301,12 @@ pub(crate) fn run(classic: &Path, vmangos: &Path, client: &str, commit: &str) ->
         )?;
     }
     let conditioned = vmangos
-        .table("areatrigger_teleport")?
+        .rows("areatrigger_teleport")?
         .iter()
         .map(|row| Ok(usize::from(row.number::<u32>("required_condition")? != 0)))
         .sum::<Result<usize>>()?;
     let patch_conditions = vmangos
-        .table("conditions")?
+        .rows("conditions")?
         .iter()
         .map(|row| Ok(usize::from(row.number::<i32>("type")? == 24)))
         .sum::<Result<usize>>()?;

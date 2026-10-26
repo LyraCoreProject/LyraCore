@@ -57,19 +57,19 @@ fn number<T: std::str::FromStr>(
 
 fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeMap<u64, Group>> {
     let mut groups = BTreeMap::new();
-    for row in parse_complete_table(dump, "spawn_group")? {
-        if number::<u32>(&row, "Type", "spawn_group")? != 0 {
+    for row in parse_complete_table(dump, "spawn_group")?.iter() {
+        if number::<u32>(row, "Type", "spawn_group")? != 0 {
             continue;
         }
-        let id: u64 = number(&row, "Id", "spawn_group")?;
+        let id: u64 = number(row, "Id", "spawn_group")?;
         if groups
             .insert(
                 id,
                 Group {
-                    max_count: number(&row, "MaxCount", "spawn_group")?,
-                    condition: number(&row, "WorldState", "spawn_group")?,
-                    expression: number(&row, "WorldStateExpression", "spawn_group")?,
-                    flags: number(&row, "Flags", "spawn_group")?,
+                    max_count: number(row, "MaxCount", "spawn_group")?,
+                    condition: number(row, "WorldState", "spawn_group")?,
+                    expression: number(row, "WorldStateExpression", "spawn_group")?,
+                    flags: number(row, "Flags", "spawn_group")?,
                     entries: Vec::new(),
                     is_pool: false,
                 },
@@ -79,15 +79,15 @@ fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeM
             bail!("duplicate creature spawn group {id}");
         }
     }
-    for row in parse_complete_table(dump, "spawn_group_entry")? {
-        let id = number(&row, "Id", "spawn_group_entry")?;
+    for row in parse_complete_table(dump, "spawn_group_entry")?.iter() {
+        let id = number(row, "Id", "spawn_group_entry")?;
         let Some(group) = groups.get_mut(&id) else {
             continue;
         };
-        let entry: u32 = number(&row, "Entry", "spawn_group_entry")?;
-        let min: u32 = number(&row, "MinCount", "spawn_group_entry")?;
-        let max: u32 = number(&row, "MaxCount", "spawn_group_entry")?;
-        let chance: u32 = number(&row, "Chance", "spawn_group_entry")?;
+        let entry: u32 = number(row, "Entry", "spawn_group_entry")?;
+        let min: u32 = number(row, "MinCount", "spawn_group_entry")?;
+        let max: u32 = number(row, "MaxCount", "spawn_group_entry")?;
+        let chance: u32 = number(row, "Chance", "spawn_group_entry")?;
         if entry == 0 || chance > 100 || (max > 0 && min > max) {
             bail!("invalid spawn_group_entry for group {id}, entry {entry}");
         }
@@ -171,13 +171,13 @@ fn add_legacy_pools(
     events: &mut BTreeMap<u64, BTreeSet<i32>>,
 ) -> Result<()> {
     let mut pools = BTreeMap::new();
-    for row in parse_complete_table(dump, "pool_template")? {
-        let id = number(&row, "entry", "pool_template")?;
+    for row in parse_complete_table(dump, "pool_template")?.iter() {
+        let id = number(row, "entry", "pool_template")?;
         if pools
             .insert(
                 id,
                 Pool {
-                    limit: number(&row, "max_limit", "pool_template")?,
+                    limit: number(row, "max_limit", "pool_template")?,
                     members: BTreeMap::new(),
                     children: Vec::new(),
                 },
@@ -190,7 +190,7 @@ fn add_legacy_pools(
     let creatures = parse_complete_table(dump, "creature")?;
     let mut by_entry = BTreeMap::<u64, Vec<u64>>::new();
     let mut maps = BTreeMap::<u64, i64>::new();
-    for row in &creatures {
+    for row in creatures.iter() {
         let guid = number(row, cr::GUID, "creature")?;
         by_entry
             .entry(number(row, cr::ID, "creature")?)
@@ -201,9 +201,9 @@ fn add_legacy_pools(
     let mut used = BTreeSet::new();
     let mut seen = BTreeSet::new();
     for table in ["pool_creature", "pool_creature_template"] {
-        for row in parse_complete_table(dump, table)? {
+        for row in parse_complete_table(dump, table)?.iter() {
             let source = number(
-                &row,
+                row,
                 if table == "pool_creature" {
                     "guid"
                 } else {
@@ -211,8 +211,8 @@ fn add_legacy_pools(
                 },
                 table,
             )?;
-            let id = number(&row, "pool_entry", table)?;
-            let chance = chance_bp(&row, "chance", table)?;
+            let id = number(row, "pool_entry", table)?;
+            let chance = chance_bp(row, "chance", table)?;
             let pool = pools
                 .get_mut(&id)
                 .with_context(|| format!("{table}: missing pool_template {id}"))?;
@@ -231,10 +231,10 @@ fn add_legacy_pools(
         }
     }
     let mut parents = BTreeMap::new();
-    for row in parse_complete_table(dump, "pool_pool")? {
-        let child = number(&row, "pool_id", "pool_pool")?;
-        let parent = number(&row, "mother_pool", "pool_pool")?;
-        let chance = chance_bp(&row, "chance", "pool_pool")?;
+    for row in parse_complete_table(dump, "pool_pool")?.iter() {
+        let child = number(row, "pool_id", "pool_pool")?;
+        let parent = number(row, "mother_pool", "pool_pool")?;
+        let chance = chance_bp(row, "chance", "pool_pool")?;
         if parents.insert(child, parent).is_some() {
             bail!("pool {child} has several parents");
         }
@@ -255,8 +255,8 @@ fn add_legacy_pools(
     }
     let mut object_pools = BTreeSet::new();
     for table in ["pool_gameobject", "pool_gameobject_template"] {
-        for row in parse_complete_table(dump, table)? {
-            let mut id = number(&row, "pool_entry", table)?;
+        for row in parse_complete_table(dump, table)?.iter() {
+            let mut id = number(row, "pool_entry", table)?;
             let mut chain = BTreeSet::new();
             while let Some(parent) = parents.get(&id) {
                 if !chain.insert(id) {
@@ -326,13 +326,13 @@ pub(crate) fn collect(
 ) -> Result<PopulationPlan> {
     let mut groups = source_groups(dump)?;
     let mut memberships = BTreeMap::new();
-    for row in parse_complete_table(dump, "spawn_group_spawn")? {
-        let id = number(&row, "Id", "spawn_group_spawn")?;
+    for row in parse_complete_table(dump, "spawn_group_spawn")?.iter() {
+        let id = number(row, "Id", "spawn_group_spawn")?;
         if !groups.contains_key(&id) {
             continue;
         }
-        let guid: u64 = number(&row, "Guid", "spawn_group_spawn")?;
-        let chance: u32 = number(&row, "Chance", "spawn_group_spawn")?;
+        let guid: u64 = number(row, "Guid", "spawn_group_spawn")?;
+        let chance: u32 = number(row, "Chance", "spawn_group_spawn")?;
         if chance > 100 {
             bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
         }
@@ -341,18 +341,18 @@ pub(crate) fn collect(
         }
     }
     let mut choices: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
-    for row in parse_complete_table(dump, "creature_spawn_entry")? {
-        let guid = number(&row, "guid", "creature_spawn_entry")?;
-        let entry = number(&row, "entry", "creature_spawn_entry")?;
+    for row in parse_complete_table(dump, "creature_spawn_entry")?.iter() {
+        let guid = number(row, "guid", "creature_spawn_entry")?;
+        let entry = number(row, "entry", "creature_spawn_entry")?;
         if entry == 0 {
             bail!("creature_spawn_entry {guid}: entry zero");
         }
         choices.entry(guid).or_default().insert(entry);
     }
     let mut events: BTreeMap<u64, BTreeSet<i32>> = BTreeMap::new();
-    for row in parse_complete_table(dump, "game_event_creature")? {
-        let guid = number(&row, "guid", "game_event_creature")?;
-        let event = number(&row, "event", "game_event_creature")?;
+    for row in parse_complete_table(dump, "game_event_creature")?.iter() {
+        let guid = number(row, "guid", "game_event_creature")?;
+        let event = number(row, "event", "game_event_creature")?;
         if event == 0 {
             bail!("game_event_creature {guid}: event zero");
         }
@@ -373,16 +373,16 @@ pub(crate) fn collect(
     };
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
-    for row in parse_complete_table(dump, "creature")? {
-        let map: i64 = number(&row, cr::MAP, "creature")?;
-        let x: f64 = number(&row, cr::X, "creature")?;
-        let y: f64 = number(&row, cr::Y, "creature")?;
-        let z: f64 = number(&row, cr::Z, "creature")?;
-        let raw_entry: u64 = number(&row, cr::ID, "creature")?;
+    for row in parse_complete_table(dump, "creature")?.iter() {
+        let map: i64 = number(row, cr::MAP, "creature")?;
+        let x: f64 = number(row, cr::X, "creature")?;
+        let y: f64 = number(row, cr::Y, "creature")?;
+        let z: f64 = number(row, cr::Z, "creature")?;
+        let raw_entry: u64 = number(row, cr::ID, "creature")?;
         if !creature_row_kept_in_scope(scope, map, x, y, z, raw_entry) {
             continue;
         }
-        let guid: u64 = number(&row, cr::GUID, "creature")?;
+        let guid: u64 = number(row, cr::GUID, "creature")?;
         if guid == 0 || guid > 0xff_ffff || !seen_guids.insert(guid) {
             bail!("invalid or duplicate creature source guid {guid}");
         }
@@ -420,7 +420,7 @@ pub(crate) fn collect(
                 );
             }
         }
-        let orientation: f64 = number(&row, cr::O, "creature")?;
+        let orientation: f64 = number(row, cr::O, "creature")?;
         if !orientation.is_finite() {
             bail!("creature {guid}: non-finite orientation");
         }
@@ -431,8 +431,8 @@ pub(crate) fn collect(
             y,
             z,
             orientation,
-            number(&row, cr::MOVEMENT_TYPE, "creature")?,
-            number(&row, cr::SPAWN_TIME_SECS_MIN, "creature")?,
+            number(row, cr::MOVEMENT_TYPE, "creature")?,
+            number(row, cr::SPAWN_TIME_SECS_MIN, "creature")?,
             map,
         ));
         plan.conditional_spawns += usize::from(conditional);
@@ -514,7 +514,7 @@ mod tests {
 
     #[test]
     fn capped_groups_keep_all_positions_and_every_entry_choice() {
-        let dump = "INSERT INTO `creature_template` VALUES (10),(20);
+        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10),(20);
             INSERT INTO `creature` VALUES (1,0,0,0,1,2,3,0,60,60,0,0),(2,0,0,0,4,5,6,0,60,60,0,0);
             INSERT INTO `spawn_group` VALUES (7,'rare',0,1,0,0,0,0);
             INSERT INTO `spawn_group_spawn` VALUES (7,1,0,0),(7,2,0,0);
@@ -555,7 +555,7 @@ mod tests {
 
     #[test]
     fn event_source_keeps_the_sign_of_each_membership() {
-        let dump = "INSERT INTO `creature_template` VALUES (10);
+        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10);
             INSERT INTO `creature` VALUES (1,10,0,0,1,2,3,0,60,60,0,0),(2,10,0,0,4,5,6,0,60,60,0,0);
             INSERT INTO `game_event_creature` VALUES (1,4),(2,-4);";
         let plan = collect(dump, &full_scope()).unwrap();
@@ -567,12 +567,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_population_source() {
         let scope = WorldImportScope::quest_catalogue().unwrap();
-        assert!(collect("INSERT INTO `spawn_group` VALUES (1", &scope).is_err());
+        assert!(collect("INSERT INTO `spawn_group` (`Id`, `Name`) VALUES (1", &scope).is_err());
     }
 
     #[test]
     fn template_and_nested_pools_keep_limits_and_fractional_chances() {
-        let dump = "INSERT INTO `creature_template` VALUES (10),(20);
+        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10),(20);
             INSERT INTO `creature` VALUES (1,10,0,0,1,2,3,0,60,60,0,0),(2,10,0,0,4,5,6,0,60,60,0,0),(3,20,0,0,4,5,6,0,60,60,0,0),(4,20,0,0,4,5,6,0,60,60,0,0);
             INSERT INTO `pool_template` VALUES (1,1,'root'),(2,1,'child'),(3,1,'child');
             INSERT INTO `pool_creature_template` VALUES (10,2,0,''),(20,3,0,'');

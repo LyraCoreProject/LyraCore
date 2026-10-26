@@ -1,3 +1,5 @@
+// See docs/data-ingestion.md for patch/build selection and the pinned reference rules.
+
 use std::collections::{BTreeMap, BTreeSet};
 
 use anyhow::{bail, Result};
@@ -56,6 +58,7 @@ fn selection_columns(table: &str) -> &'static [&'static str] {
         | "spell_group"
         | "spell_elixir"
         | "playercreateinfo_spell" => &["build_min", "build_max"],
+        "taxi_path_transitions" => &["build_min"],
         "forbidden_items" => &["patch", "after_or_before"],
         _ if table.ends_with("_loot_template") => &["patch_min", "patch_max"],
         _ => &[],
@@ -113,7 +116,13 @@ pub(crate) fn select(
             continue;
         }
         if columns.contains("build_min")
-            && !in_range(&row, "build_min", "build_max", CLIENT_BUILD, true)?
+            && !in_range(
+                &row,
+                "build_min",
+                "build_max",
+                CLIENT_BUILD,
+                columns.contains("build_max"),
+            )?
         {
             continue;
         }
@@ -134,7 +143,7 @@ pub(crate) fn select(
             }
             let key = keys
                 .iter()
-                .map(|name| row.raw(name).map(str::to_owned))
+                .map(|name| row.number::<i64>(name))
                 .collect::<Result<Vec<_>>>()?;
             if !seen.insert((key.clone(), version)) {
                 bail!("{table}: duplicate {column} revision {version}");
@@ -187,7 +196,6 @@ fn forbidden_item(row: &Row) -> Result<bool> {
     }
 }
 
-// See docs/data-ingestion.md for patch/build selection and the pinned reference rules.
 pub(crate) fn wow_patch(value: u32, comparison: u32) -> Result<bool> {
     if value > PATCH {
         bail!("WOW_PATCH value {value} is outside 0..=10");
@@ -203,33 +211,33 @@ pub(crate) fn wow_patch(value: u32, comparison: u32) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::world_source::Cell;
+    use crate::world_source::{Cell, TableBuilder};
 
     fn selected(table: &str, key: &[&str], rows: &[&[(&str, i64)]]) -> Result<Vec<Row>> {
-        let columns = rows
+        let columns: BTreeSet<String> = rows
             .iter()
             .flat_map(|row| row.iter())
             .map(|(name, _)| (*name).to_owned())
             .collect();
-        let rows = rows
-            .iter()
-            .map(|values| {
-                Row::new(
-                    table,
-                    values
-                        .iter()
-                        .map(|(name, value)| ((*name).to_owned(), Cell::Number(value.to_string())))
-                        .collect(),
-                )
-            })
-            .collect();
+        let mut output = TableBuilder::new(table, columns.iter().cloned());
+        for values in rows {
+            output.push(
+                columns
+                    .iter()
+                    .map(|name| {
+                        let value = values.iter().find(|(column, _)| column == name).unwrap().1;
+                        Cell::Number(value.to_string().into())
+                    })
+                    .collect(),
+            )?;
+        }
         select(
             table,
             &columns,
             &key.iter()
                 .map(|name| (*name).to_owned())
                 .collect::<Vec<_>>(),
-            rows,
+            output.finish(),
         )
     }
 
@@ -260,6 +268,49 @@ mod tests {
         assert_eq!(rows.len(), 2);
         assert_eq!(rows[0].number::<u32>("patch").unwrap(), 9);
         assert_eq!(rows[1].number::<u32>("patch").unwrap(), 10);
+    }
+
+    #[test]
+    fn versioned_keys_sort_numerically_including_composite_components() {
+        let rows = selected(
+            "game_event_creature_data",
+            &["guid", "id", "patch"],
+            &[
+                &[("guid", 10), ("id", 1), ("patch", 10)],
+                &[("guid", 2), ("id", 10), ("patch", 10)],
+                &[("guid", 100), ("id", 1), ("patch", 10)],
+                &[("guid", 1), ("id", 1), ("patch", 10)],
+                &[("guid", 2), ("id", 2), ("patch", 9)],
+                &[("guid", 2), ("id", 2), ("patch", 10)],
+            ],
+        )
+        .unwrap();
+        let keys: Vec<(u32, u32)> = rows
+            .iter()
+            .map(|row| (row.number("guid").unwrap(), row.number("id").unwrap()))
+            .collect();
+        assert_eq!(keys, [(1, 1), (2, 2), (2, 10), (10, 1), (100, 1)]);
+    }
+
+    #[test]
+    fn taxi_transitions_include_the_minimum_build_without_an_upper_bound() {
+        let rows = selected(
+            "taxi_path_transitions",
+            &[],
+            &[
+                &[("in_path", 1), ("build_min", 5874)],
+                &[("in_path", 2), ("build_min", 5875)],
+                &[("in_path", 3), ("build_min", 5876)],
+            ],
+        )
+        .unwrap();
+        assert_eq!(
+            rows.iter()
+                .map(|row| row.number::<u32>("in_path").unwrap())
+                .collect::<Vec<_>>(),
+            [1, 2]
+        );
+        assert!(selected("taxi_path_transitions", &[], &[&[("in_path", 1)]]).is_err());
     }
 
     #[test]

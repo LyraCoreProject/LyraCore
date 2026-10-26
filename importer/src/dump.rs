@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::Read;
 use std::process::Command;
 
@@ -62,9 +63,6 @@ pub(crate) mod gmo {
     pub const OPTION_TYPE: &str = "option_id";
     pub const ACTION_MENU_ID: &str = "action_menu_id";
     pub const CONDITION_ID: &str = "condition_id";
-    pub const INLINE_COND_TYPE: &str = "condition_type";
-    pub const INLINE_COND_VALUE1: &str = "condition_value1";
-    pub const INLINE_COND_VALUE2: &str = "condition_value2";
 }
 
 pub(crate) mod cts {
@@ -416,58 +414,54 @@ fn numeric_column(kind: &str) -> bool {
 }
 
 pub(crate) fn named_table(dump: &str, table: &str) -> Result<Vec<crate::world_source::Row>> {
-    use crate::world_source::{Cell, Row};
+    use crate::world_source::{Cell, TableBuilder};
     let columns = named_columns(dump, table)?;
-    let (rows, complete) = parse_table_inserts(dump, table);
+    let mut output = TableBuilder::new(table, columns.iter().map(|(name, _)| name.clone()));
+    let complete = visit_inserts(dump, &format!("INSERT INTO `{table}` VALUES "), |values| {
+        if values.len() != columns.len() {
+            bail!(
+                "{table}: tuple has {} values, CREATE TABLE has {} columns",
+                values.len(),
+                columns.len()
+            );
+        }
+        let cells = columns
+            .iter()
+            .zip(values)
+            .map(|((name, kind), value)| {
+                let cell = if value.trim() == "NULL" {
+                    Cell::Null
+                } else if numeric_column(kind) {
+                    if !value.trim().parse::<f64>().is_ok_and(f64::is_finite) {
+                        bail!("{table}.{name}: invalid numeric value");
+                    }
+                    Cell::Number(value.into())
+                } else {
+                    Cell::Text(value.into())
+                };
+                Ok(cell)
+            })
+            .collect::<Result<Vec<_>>>()?;
+        output.push(cells)
+    })?;
     if !complete {
         bail!("unterminated {table} INSERT in dump");
     }
-    rows.into_iter()
-        .map(|values| {
-            if values.len() != columns.len() {
-                bail!(
-                    "{table}: tuple has {} values, CREATE TABLE has {} columns",
-                    values.len(),
-                    columns.len()
-                );
-            }
-            let cells = columns
-                .iter()
-                .zip(values)
-                .map(|((name, kind), value)| {
-                    let cell = if value.trim() == "NULL" {
-                        Cell::Null
-                    } else if numeric_column(kind) {
-                        if !value.trim().parse::<f64>().is_ok_and(f64::is_finite) {
-                            bail!("{table}.{name}: invalid numeric value");
-                        }
-                        Cell::Number(value)
-                    } else {
-                        Cell::Text(value)
-                    };
-                    Ok((name.clone(), cell))
-                })
-                .collect::<Result<_>>()?;
-            Ok(Row::new(table, cells))
-        })
-        .collect()
+    Ok(output.finish())
 }
 
 #[derive(Debug)]
 pub(crate) struct ParsedDump {
-    text: String,
+    source_hash: String,
     tables: std::collections::BTreeMap<String, Vec<crate::world_source::Row>>,
 }
 
 pub(crate) trait TableRows {
-    fn rows(&self, table: &str, complete: bool) -> Result<Vec<crate::world_source::Row>>;
-    fn as_bytes(&self) -> &[u8];
+    fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>>;
+    fn source_hash(&self) -> Result<String>;
 }
 
 impl ParsedDump {
-    pub(crate) fn as_bytes(&self) -> &[u8] {
-        self.text.as_bytes()
-    }
     pub(crate) fn parse(text: String) -> Result<Self> {
         let mut tables = std::collections::BTreeMap::new();
         for &(table, columns) in crate::classic_columns::TABLES {
@@ -482,47 +476,66 @@ impl ParsedDump {
                 }
             }
             let rows = named_table(&text, table)?;
-            for row in &rows {
-                for &(column, number) in columns {
-                    row.require_type(column, number)?;
-                }
-            }
             tables.insert(table.to_string(), rows);
         }
-        Ok(Self { text, tables })
+        Ok(Self {
+            source_hash: sha256_hex(text.as_bytes())?,
+            tables,
+        })
     }
 }
 
 impl TableRows for ParsedDump {
-    fn rows(&self, table: &str, _: bool) -> Result<Vec<crate::world_source::Row>> {
-        Ok(self.tables.get(table).cloned().unwrap_or_default())
+    fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>> {
+        self.tables
+            .get(table)
+            .map(|rows| Cow::Borrowed(rows.as_slice()))
+            .with_context(|| format!("{table}: table is not in the classic-db column contract"))
     }
-    fn as_bytes(&self) -> &[u8] {
-        self.text.as_bytes()
+    fn source_hash(&self) -> Result<String> {
+        Ok(self.source_hash.clone())
     }
 }
 
-pub(crate) fn parse_table(
-    dump: &(impl TableRows + ?Sized),
+pub(crate) fn parse_table<'a>(
+    dump: &'a (impl TableRows + ?Sized),
     table: &str,
-) -> Vec<crate::world_source::Row> {
-    dump.rows(table, false)
-        .expect("ParsedDump checks table shapes before mapping")
+) -> Cow<'a, [crate::world_source::Row]> {
+    dump.rows(table)
+        .expect("the source table contract was checked before mapping")
 }
 
-pub(crate) fn parse_complete_table(
-    dump: &(impl TableRows + ?Sized),
+pub(crate) fn parse_complete_table<'a>(
+    dump: &'a (impl TableRows + ?Sized),
     table: &str,
-) -> Result<Vec<crate::world_source::Row>> {
-    dump.rows(table, true)
+) -> Result<Cow<'a, [crate::world_source::Row]>> {
+    dump.rows(table)
 }
 
+#[cfg(test)]
 fn parse_table_inserts(dump: &str, table: &str) -> (Vec<Vec<String>>, bool) {
-    let needle = format!("INSERT INTO `{table}` VALUES ");
+    parse_inserts(dump, &format!("INSERT INTO `{table}` VALUES "))
+}
+
+#[cfg(test)]
+fn parse_inserts(dump: &str, needle: &str) -> (Vec<Vec<String>>, bool) {
     let mut rows = Vec::new();
+    let complete = visit_inserts(dump, needle, |row| {
+        rows.push(row);
+        Ok(())
+    })
+    .expect("collecting fixture tuples cannot fail");
+    (rows, complete)
+}
+
+fn visit_inserts(
+    dump: &str,
+    needle: &str,
+    mut visit: impl FnMut(Vec<String>) -> Result<()>,
+) -> Result<bool> {
     let mut search = 0;
     let mut complete = true;
-    while let Some(rel) = dump[search..].find(&needle) {
+    while let Some(rel) = dump[search..].find(needle) {
         let mut i = search + rel + needle.len();
         let bytes = dump.as_bytes();
         let mut field = String::new();
@@ -560,7 +573,7 @@ fn parse_table_inserts(dump: &str, table: &str) -> (Vec<Vec<String>>, bool) {
                     }
                     ')' if in_tuple => {
                         tuple.push(std::mem::take(&mut field));
-                        rows.push(std::mem::take(&mut tuple));
+                        visit(std::mem::take(&mut tuple))?;
                         in_tuple = false;
                     }
                     ';' if !in_tuple => break,
@@ -573,7 +586,7 @@ fn parse_table_inserts(dump: &str, table: &str) -> (Vec<Vec<String>>, bool) {
         complete &= i < bytes.len() && !in_tuple && !in_quote;
         search = i;
     }
-    (rows, complete)
+    Ok(complete)
 }
 
 pub(crate) fn field<'a>(row: &'a crate::world_source::Row, column: &str) -> &'a str {
@@ -671,132 +684,86 @@ pub(crate) fn push_insert(stmts: &mut Vec<String>, table: &str, cols: &str, rows
 
 #[cfg(test)]
 impl TableRows for str {
-    fn rows(&self, table: &str, complete: bool) -> Result<Vec<crate::world_source::Row>> {
-        use crate::world_source::{Cell, Row};
+    fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>> {
+        use crate::world_source::{Cell, TableBuilder};
         if self.contains(&format!("CREATE TABLE `{table}` (")) {
-            return named_table(self, table);
+            return named_table(self, table).map(Cow::Owned);
         }
-        let (rows, terminated) = parse_table_inserts(self, table);
-        if complete && !terminated {
+        let contract = crate::classic_columns::columns(table)
+            .with_context(|| format!("{table}: no fixture column contract"))?;
+        let marker = format!("INSERT INTO `{table}`");
+        let Some(start) = self.find(&marker) else {
+            return Ok(Cow::Owned(Vec::new()));
+        };
+        let rest = &self[start + marker.len()..];
+        let (declaration, _) = rest
+            .split_once(" VALUES ")
+            .context("fixture INSERT has no VALUES")?;
+        let names: Vec<&str> = if declaration.trim().is_empty() {
+            contract.iter().map(|(name, _)| *name).collect()
+        } else {
+            declaration
+                .trim()
+                .strip_prefix('(')
+                .and_then(|s| s.strip_suffix(')'))
+                .context("fixture INSERT column list")?
+                .split(',')
+                .map(|name| name.trim().trim_matches('`'))
+                .collect()
+        };
+        let needle = format!("{marker}{declaration} VALUES ");
+        let (rows, terminated) = parse_inserts(self, &needle);
+        if !terminated {
             bail!("unterminated {table} INSERT in dump");
         }
-        rows.into_iter()
-            .map(|values| {
-                let names = fixture_columns(table, values.len());
-                let cells = names
-                    .into_iter()
-                    .enumerate()
-                    .map(|(index, name)| {
-                        let cell = match values.get(index) {
-                            None => Cell::AbsentFixtureColumn,
-                            Some(value) if value == "NULL" => Cell::Null,
-                            Some(value) => Cell::Text(value.clone()),
-                        };
-                        (name, cell)
-                    })
-                    .collect();
-                Ok(Row::new(table, cells))
-            })
-            .collect()
+        let mut output = TableBuilder::new(table, contract.iter().map(|(name, _)| (*name).into()));
+        for values in rows {
+            if values.len() != names.len() {
+                bail!(
+                    "{table}: fixture has {} values, expected {}",
+                    values.len(),
+                    names.len()
+                );
+            }
+            let mut cells = contract
+                .iter()
+                .map(|(_, number)| {
+                    if *number {
+                        Cell::Number("0".into())
+                    } else {
+                        Cell::Text("".into())
+                    }
+                })
+                .collect::<Vec<_>>();
+            for (name, value) in names.iter().zip(values) {
+                let index = contract
+                    .iter()
+                    .position(|(column, _)| column == name)
+                    .with_context(|| format!("{table}.{name}: unknown fixture column"))?;
+                cells[index] = if value == "NULL" {
+                    Cell::Null
+                } else if contract[index].1 {
+                    Cell::Number(value.into())
+                } else {
+                    Cell::Text(value.into())
+                };
+            }
+            output.push(cells)?;
+        }
+        Ok(Cow::Owned(output.finish()))
     }
-    fn as_bytes(&self) -> &[u8] {
-        str::as_bytes(self)
+    fn source_hash(&self) -> Result<String> {
+        sha256_hex(self.as_bytes())
     }
 }
 
 #[cfg(test)]
 impl TableRows for String {
-    fn rows(&self, table: &str, complete: bool) -> Result<Vec<crate::world_source::Row>> {
-        self.as_str().rows(table, complete)
+    fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>> {
+        self.as_str().rows(table)
     }
-    fn as_bytes(&self) -> &[u8] {
-        self.as_str().as_bytes()
-    }
-}
-
-#[cfg(test)]
-fn fixture_columns(table: &str, count: usize) -> Vec<String> {
-    let names = |names: &[&str]| {
-        names
-            .iter()
-            .map(|name| (*name).to_owned())
-            .collect::<Vec<_>>()
-    };
-    match (table, count) {
-        ("npc_text", 17) => std::iter::once("ID".to_string())
-            .chain((0..8).map(|slot| format!("prob{slot}")))
-            .chain((0..8).map(|slot| format!("BroadcastTextID{slot}")))
-            .collect(),
-        ("broadcast_text", 12) => names(&[
-            "Id",
-            "Text",
-            "Text1",
-            "ChatTypeID",
-            "LanguageID",
-            "SoundEntriesID1",
-            "EmoteID1",
-            "EmoteID2",
-            "EmoteID3",
-            "EmoteDelay1",
-            "EmoteDelay2",
-            "EmoteDelay3",
-        ]),
-        ("spell_proc_event", 9) => names(&[
-            "entry",
-            "SchoolMask",
-            "SpellFamilyName",
-            "SpellFamilyMask",
-            "procFlags",
-            "procEx",
-            "ppmRate",
-            "CustomChance",
-            "Cooldown",
-        ]),
-        ("creature_movement_template", 8) => names(&[
-            "Entry",
-            "Point",
-            "PositionX",
-            "PositionY",
-            "PositionZ",
-            "Orientation",
-            "WaitTime",
-            "ScriptId",
-        ]),
-        ("gossip_menu_option", 11) => names(&[
-            "menu_id",
-            "id",
-            "option_icon",
-            "option_text",
-            "option_broadcast_text",
-            "option_id",
-            "npc_option_npcflag",
-            "action_menu_id",
-            "action_poi_id",
-            "action_script_id",
-            "condition_id",
-        ]),
-        ("gossip_menu_option", 14) => names(&[
-            "menu_id",
-            "id",
-            "option_icon",
-            "option_text",
-            "option_broadcast_text",
-            "option_id",
-            "npc_option_npcflag",
-            "action_menu_id",
-            "action_poi_id",
-            "action_script_id",
-            "box_coded",
-            "condition_type",
-            "condition_value1",
-            "condition_value2",
-        ]),
-        ("t", _) => names(&["id", "name"]),
-        _ => crate::classic_columns::columns(table)
-            .unwrap_or(&[])
-            .iter()
-            .map(|(name, _)| (*name).to_string())
-            .collect(),
+    fn source_hash(&self) -> Result<String> {
+        self.as_str().source_hash()
     }
 }
 
@@ -809,8 +776,15 @@ pub(crate) struct FixtureRow {
 #[cfg(test)]
 impl FixtureRow {
     pub(crate) fn new(table: &str) -> Self {
-        let columns = fixture_columns(table, usize::MAX);
-        let values = vec!["0".into(); columns.len()];
+        let contract = crate::classic_columns::columns(table).expect("fixture table");
+        let columns = contract
+            .iter()
+            .map(|(name, _)| (*name).to_string())
+            .collect();
+        let values = contract
+            .iter()
+            .map(|(_, number)| if *number { "0" } else { "''" }.to_string())
+            .collect();
         Self { columns, values }
     }
     pub(crate) fn join(&self, separator: &str) -> String {
@@ -867,6 +841,31 @@ pub(crate) mod tests {
     }
 
     #[test]
+    fn parsed_dump_borrows_tables_and_refuses_names_outside_the_contract() {
+        let mut sql = String::new();
+        for &(table, columns) in crate::classic_columns::TABLES {
+            let columns = columns
+                .iter()
+                .map(|(name, number)| format!("`{name}` {}", if *number { "int" } else { "text" }))
+                .collect::<Vec<_>>()
+                .join(",\n");
+            sql.push_str(&format!("CREATE TABLE `{table}` (\n{columns}\n);\n"));
+        }
+        sql.push_str("INSERT INTO `areatrigger_involvedrelation` VALUES (1,2);");
+        let dump = ParsedDump::parse(sql).unwrap();
+        let first = dump.rows("areatrigger_involvedrelation").unwrap();
+        let second = dump.rows("areatrigger_involvedrelation").unwrap();
+        assert!(matches!(first, Cow::Borrowed(_)));
+        assert!(std::ptr::eq(&first[0], &second[0]));
+        assert!(dump.rows("spell_chain").unwrap().is_empty());
+        assert!(dump
+            .rows("absent")
+            .unwrap_err()
+            .to_string()
+            .contains("absent: table is not in the classic-db column contract"));
+    }
+
+    #[test]
     fn named_reader_refuses_duplicate_columns_bad_values_and_unterminated_rows() {
         assert!(named_table(
             "CREATE TABLE `example` (\n`id` int,\n`id` int\n);",
@@ -885,7 +884,7 @@ pub(crate) mod tests {
 
     #[test]
     fn parses_quoted_names_with_commas_and_escapes() {
-        let dump = "x INSERT INTO `creature_template` VALUES (1,'A, the Bold','Sub\\'s',5),(2,'B',NULL,7); y";
+        let dump = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A, the Bold','Sub\\'s',5),(2,'B',NULL,7); y";
         let rows = parse_table(dump, "creature_template");
         assert_eq!(rows.len(), 2);
         assert_eq!(field(&rows[0], "Entry"), "1");
@@ -974,7 +973,7 @@ pub(crate) mod tests {
     fn read_dump_on_a_gz_path_holding_non_gzip_bytes_errors_at_the_gunzip_step() {
         let f = ScratchFile::new(
             "not-really-gzip.sql.gz",
-            b"INSERT INTO `spell_chain` VALUES (1);",
+            b"INSERT INTO `spell_chain` (`spell_id`) VALUES (1);",
         );
         let err =
             read_dump_text(f.path()).expect_err("non-gzip bytes behind a .gz name must error");
@@ -998,18 +997,19 @@ pub(crate) mod tests {
             text.contains('\u{FFFD}'),
             "the bad byte must become the replacement char, not be dropped: {text:?}"
         );
-        let rows = parse_table(&text, "t");
+        let (rows, complete) = parse_table_inserts(&text, "t");
+        assert!(complete);
         assert_eq!(
             rows.len(),
             1,
             "the row around the bad byte must still parse"
         );
-        assert_eq!(field(&rows[0], "id"), "1");
+        assert_eq!(rows[0][0], "1");
     }
 
     #[test]
     fn parse_table_returns_no_rows_for_a_table_the_dump_never_mentions() {
-        let dump = "x INSERT INTO `creature_template` VALUES (1,'A',NULL,5); y";
+        let dump = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A',NULL,5); y";
         assert!(
             parse_table(dump, "spell_chain").is_empty(),
             "an absent table must yield zero rows, not a panic"
@@ -1020,12 +1020,13 @@ pub(crate) mod tests {
 
     #[test]
     fn parse_table_name_match_is_exact_not_a_prefix_of_a_longer_table() {
-        let templates = "x INSERT INTO `creature_template` VALUES (1,'A',NULL,5); y";
+        let templates = "x INSERT INTO `creature_template` (`Entry`, `Name`, `SubName`, `MinLevel`) VALUES (1,'A',NULL,5); y";
         assert!(
             parse_table(templates, "creature").is_empty(),
             "`creature` must NOT match `creature_template` rows"
         );
-        let spawns = "x INSERT INTO `creature` VALUES (7,299,0,1.0); y";
+        let spawns =
+            "x INSERT INTO `creature` (`guid`, `id`, `map`, `spawnMask`) VALUES (7,299,0,1.0); y";
         assert!(
             parse_table(spawns, "creature_template").is_empty(),
             "`creature_template` must NOT match `creature` rows"
@@ -1036,29 +1037,18 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn parse_table_keeps_complete_tuples_and_drops_an_unterminated_one() {
-        let truncated = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133";
-        let rows = parse_table(truncated, "spell_chain");
-        assert_eq!(
-            rows.len(),
-            1,
-            "the closed tuple survives, the truncated tail is dropped: {rows:?}"
-        );
-        assert_eq!(field(&rows[0], "spell_id"), "133");
-        let no_semicolon = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,2,0)";
-        assert_eq!(parse_table(no_semicolon, "spell_chain").len(), 2);
+    fn incomplete_inserts_fail_instead_of_importing_a_partial_table() {
+        for truncated in [
+            "INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133",
+            "INSERT INTO `spell_chain` VALUES (133,0,133,1,0)",
+        ] {
+            assert!(truncated.rows("spell_chain").is_err());
+        }
     }
 
     #[test]
-    fn parse_table_unterminated_quote_swallows_the_rest_of_the_dump() {
-        let dump = "x INSERT INTO `creature_template` VALUES (1,'Good'),(2,'oops); \
-                    INSERT INTO `creature_template` VALUES (3,'Later'); y";
-        let rows = parse_table(dump, "creature_template");
-        assert_eq!(
-            rows.len(),
-            1,
-            "only the rows before the unbalanced quote import: {rows:?}"
-        );
-        assert_eq!(field(&rows[0], "Name"), "Good");
+    fn an_unterminated_quote_fails_the_table_read() {
+        let dump = "INSERT INTO `creature_template` (`Entry`, `Name`) VALUES (1,'Good'),(2,'oops); INSERT INTO `creature_template` VALUES (3,'Later');";
+        assert!(dump.rows("creature_template").is_err());
     }
 }
