@@ -54,6 +54,33 @@ WOW_PATCH follows [Conditions.cpp at the same commit](https://github.com/vmangos
 The Rust implementation is independent. Tests cover selection boundaries, composite keys, duplicate
 revisions, invalid ranges, each WOW_PATCH comparison and the read-only SQLite boundary.
 
+## Fetching the transitional vmangos snapshot
+
+Run `python3 importer/scripts/pull-vmangos.py` from the checkout. It reads the current `db_latest`
+release through GitHub's API, resolves the commit in the SQLite asset name to a full SHA, downloads
+that asset through the asset API, and checks GitHub's SHA-256 digest before extraction. It reads only
+`sqlite-dump/mangos.sqlite` from the zip. Other members are ignored, and a duplicate or symlink
+SQLite member fails the fetch. The migrations query opens SQLite read-only with trusted schemas
+disabled.
+
+The fetch uses Python's standard library so the later CLI can call one importer-side script without
+requiring `gh`, a git clone, or new HTTP and archive dependencies in the Rust importer. It replaces
+the old fetch step when S7 changes the CLI. The CLI's consent text is also an S7 change.
+
+`importer/scripts/vmangos.lock` records format version 1, the repository, accepted full commit, and
+migration fingerprint. The fingerprint is the highest migration id plus the row count. File hashes
+are download-integrity evidence, not snapshot acceptance. To accept a reviewed snapshot, run the
+same script with `--accept-lock` and review the lock diff.
+
+The archive and SQLite file stay under `.import/vmangos/<commit>-<digest-prefix>/`. The script writes
+`.import/vmangos/current.json` with their paths, the actual commit, migration fingerprint, GitHub
+digest and whether the accepted lock matches. A changed snapshot is reported without updating the
+lock. Fetch does not evaluate the Source Profile or permit apply. S6c must check the actual snapshot's
+column contract and approved values before a later CLI imports it, then record its actual commit.
+
+Use the `sqlite_path` and `commit` from `current.json` as the census's `--dump` and `--source-sha`.
+The source switch remains classic-db by default. No downloaded data belongs in a commit or PR.
+
 ## Full source import
 
 `--world-profile` selects the World Import Scope. `lyracore import` uses `alliance-single` on
