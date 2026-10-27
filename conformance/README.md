@@ -99,4 +99,63 @@ Equivalence Rules.
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
 revision, capture time and the harness comparison. It removes the previous result before starting,
 so a setup failure leaves no old pass. Differences remain in the report and fail the test. No
-packet text enters this result. The scoreboard consumes it in T2c.
+packet text enters this result. The scoreboard consumes it.
+
+## Scoreboard
+
+From the repo root:
+
+```bash
+./conformance/scoreboard
+cargo test -p lyracore-conformance --example scoreboard
+```
+
+The script runs the Rust example `scoreboard`. It reads the Feature Ledger and prints system totals
+and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
+It does not infer a pass from a test declaration or claim overall completion from these columns.
+The ledger's other required rungs remain obligations.
+
+The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
+under `conformance/reports/` with the greatest `recorded_at_unix_ms`. An audit can keep a Markdown
+narrative beside that JSON. No audit report exists yet. To select inputs explicitly:
+
+```bash
+./conformance/scoreboard --tier1 /path/to/tier1.json --audit /path/to/audit.json
+```
+
+Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
+explicit input or malformed report fails the command. A different core commit, harness revision
+or scenario hash shows `stale`. A pass requires every scenario listed by the Behavior. Any harness
+difference, including a counted Deliberate Deviation, prevents a pass. A `*` marks a run made with
+uncommitted changes and does not certify the clean commit. Real-client cells come only from the
+ledger, never from a report.
+
+Counts use unique opcode values. The denominator is every variant of the pinned core
+`ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
+a separate count. System totals count shared claims once. The unavailable count includes request
+patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
+control receipts, tests, comments, imports and explicit empty responses for ignored requests.
+Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
+Neither opcode claims nor these source counts prove conformance. Spell counts arrive in Milestone 3.
+
+### Result schema version 1
+
+The tier 1 runner writes this shape. Audit reports use `tier = "conformance_audit"` and the same
+fields. A later audit producer must put only rule differences in `comparison.differences`, and put
+data differences in a separate `data_differences` array for each scenario. Both arrays contain the
+harness's serialized `Difference` records. Data differences print separately and do not prevent an
+audit pass. Tier 1 cannot classify data differences.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `tier` | `tier1` or `conformance_audit` |
+| `core_commit` | Full core commit SHA measured by the run |
+| `working_tree_dirty` | Whether the run included uncommitted changes |
+| `harness_revision` | Full pinned harness commit SHA |
+| `recorded_at_unix_ms` | Capture time used to choose the latest report |
+| `scenarios` | Result array, with unique scenario ids |
+| `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
+| `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
+| `scenarios[].comparison` | Harness `Comparison` with its counted differences |
+| `scenarios[].data_differences` | Optional audit-only array, empty when omitted |

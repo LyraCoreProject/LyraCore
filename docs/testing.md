@@ -27,11 +27,13 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
+cargo test -p lyracore-conformance --example scoreboard
 cargo test -p lyracore-protocol --example benilla_inventory
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test build_script
 cargo test -p lyracore-module --test native_debug_gate
+cargo test -p lyracore-module --test native_conformance
 cargo test -p lyracore-module --test notification_tables
 cargo test -p lyracore-module --test package_api_lint
 cargo test -p lyracore-package-delta
@@ -176,14 +178,18 @@ The [Feature Ledger](../conformance/README.md) has its own Architecture Test:
 
 ```bash
 cargo test -p lyracore-conformance -- --nocapture
+cargo test -p lyracore-conformance --example scoreboard
 cargo test -p lyracore-protocol --example benilla_inventory
 ```
 
 The first command checks every Behavior file, its dependencies, the harness dependency pin and
 all scenario references through `wire_client::catalogue`. Missing scenarios and mismatched
-Behavior ids fail. The second command checks retained Rust evidence declarations in the inventory.
-Neither command establishes that a Behavior passes its required verification rungs.
-The tier 1 test writes `.lyracore/conformance/tier1.json` for the scoreboard.
+Behavior ids fail. The inventory command checks retained Rust evidence declarations.
+These checks do not establish that a Behavior passes its required verification rungs.
+The tier 1 test writes `.lyracore/conformance/tier1.json`. Run `./conformance/scoreboard` to join it
+with the Feature Ledger and the latest Conformance Audit report. The scoreboard's example tests
+check counts, evidence freshness and failure handling. See the
+[scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
 
 The existing durable CI target discovery includes `native_conformance` automatically.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
