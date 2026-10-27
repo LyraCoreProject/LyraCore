@@ -328,7 +328,8 @@ now):
 
 - **Taxi gaps are fixed after the merge.** The 8 known gaps on `taxi_single_hop` stay unfixed on
   this branch. They become the first Behaviors built through the system, with taxi chains, once
-  this branch and the vmangos port are in `main`.
+  this branch and the vmangos port are in `main`. The orchestrator owns that work end to end and
+  merges its PRs, including into `main`, after tests and review.
 - **A hand-written route fixture is allowed.** Core tests may carry the 28 vertices of taxi path 6
   (and the two nodes) as a small hand-written fixture, so the taxi comparison needs no imported
   data. The public Golden Trace already holds these numbers. No other world data, and nothing
