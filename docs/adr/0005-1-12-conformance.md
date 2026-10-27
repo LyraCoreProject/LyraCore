@@ -81,20 +81,22 @@ using a separate scenario author and independent decoders.
 ## Two verification tiers
 
 Tier 1 runs on every core change in CI, except the taxi comparison until its known gaps are fixed.
-It drives the Module through native reducers and compares emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
-mechanism test must prove that an Operator WebSocket connection can enter the world through a
-feature-gated debug reducer, call `native_world_receive`, and subscribe to `game_native_packet`.
+It drives the Module through native reducers and compares emitted packets with Golden Traces.
+It bypasses WoW TCP, SRP and the header cipher. The initial mechanism test must prove that an
+Operator WebSocket connection can enter the world through a feature-gated debug reducer,
+call `native_world_receive`, and subscribe to `game_native_packet`.
 The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
 CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
 pointer to `conformance/features/taxi/taxi_single_hop.toml`. Its hand-written fixture holds path 6
 with 28 vertices, nodes 2 and 4, and a minimal flight-master template. The eight known gameplay gaps
 remain. Remove the CI skip in the same PR that fixes the last gap. A manual run still fails with
-the full comparator report. Keep no known-differences baseline; the other conformance checks continue to run in durable CI.
+the full comparator report. Keep no known-differences baseline; the other conformance checks
+continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and the content its scenarios require, and the Reference Server, through the same
-wire scenarios.
-Run it before feature batches and at milestones. It writes a dated report and never gates CI.
+wire scenarios. Run it before feature batches and at milestones. It writes a dated report and never
+gates CI.
 
 The harness repository owns scenarios, Fixture Verbs, Golden Traces, general Equivalence Rules,
 the comparator and Reference Server adapter. Core's `conformance/` owns the Feature Ledger,

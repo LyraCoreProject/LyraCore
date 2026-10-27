@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path.home() / '.cache/lyracore-scratch/conformance'
@@ -33,6 +34,66 @@ def git(*args):
 def digest(path):
     with path.open('rb') as source:
         return hashlib.file_digest(source, 'sha256').hexdigest()
+
+
+def check_cargo_config(directory):
+    def contains_replace_with(value):
+        if isinstance(value, dict):
+            return 'replace-with' in value or any(contains_replace_with(v) for v in value.values())
+        return isinstance(value, list) and any(contains_replace_with(v) for v in value)
+
+    for path in directory.glob('config*'):
+        if not path.is_file():
+            continue
+        config = tomllib.loads(path.read_text())
+        if 'source' in config or contains_replace_with(config):
+            raise RuntimeError(f'Cargo source replacement is forbidden: {path}')
+        if 'paths' in config:
+            raise RuntimeError(f'Cargo paths overrides are forbidden: {path}')
+        check_cargo_patch(config)
+
+
+def check_cargo_patch(manifest):
+    for entries in manifest.get('patch', {}).values():
+        if any(name == 'wire-client' or entry.get('package') == 'wire-client'
+               for name, entry in entries.items()):
+            raise RuntimeError('wire-client patch overrides are forbidden')
+
+
+def check_workspace_configs(metadata, cargo_home):
+    manifests = {Path(metadata['workspace_root']) / 'Cargo.toml'}
+    manifests.update(Path(p['manifest_path']) for p in metadata['packages']
+                     if p['id'] in metadata['workspace_members'])
+    directories = {directory / '.cargo' for manifest in manifests for directory in manifest.parents}
+    for manifest in manifests:
+        check_cargo_patch(tomllib.loads(manifest.read_text()))
+    for directory in directories | {cargo_home}:
+        check_cargo_config(directory)
+
+
+def pinned_harness(metadata, revision, cargo_home):
+    check_workspace_configs(metadata, cargo_home)
+    resolved = {node['id'] for node in metadata['resolve']['nodes']}
+    packages = [package for package in metadata['packages']
+                if package['name'] == 'wire-client' and package['id'] in resolved]
+    expected = f'git+https://github.com/LyraCoreProject/wire-harness?rev={revision}#{revision}'
+    if len(packages) != 1 or packages[0]['source'] != expected:
+        raise RuntimeError('wire-client source differs from .wire-harness-rev')
+    manifest = Path(packages[0]['manifest_path']).resolve(strict=True)
+    checkouts = (cargo_home / 'git/checkouts').resolve(strict=True)
+    if not manifest.is_relative_to(checkouts):
+        raise RuntimeError('wire-client manifest is outside Cargo git checkouts')
+    env = {key: value for key, value in os.environ.items()
+           if key not in {'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'}}
+    def checkout_git(*args):
+        return run(['git', *args], cwd=manifest.parent, env=env,
+                   capture_output=True, text=True).stdout.strip()
+    checkout = Path(checkout_git('rev-parse', '--show-toplevel')).resolve(strict=True)
+    if not checkout.is_relative_to(checkouts):
+        raise RuntimeError('wire-client is not in a Cargo git checkout')
+    if checkout_git('rev-parse', 'HEAD') != revision:
+        raise RuntimeError('wire-client checkout HEAD differs from the harness pin')
+    return manifest.parent
 
 
 def wait_port(port, world=False):
@@ -150,7 +211,7 @@ def main():
     if datetime.date.fromisoformat(args.date).isoformat() != args.date:
         parser.error('--date must be YYYY-MM-DD')
     args.host = args.host.resolve(strict=True)
-    if any((args.output / f'{args.date}.{suffix}').exists() for suffix in ['md', 'json']):
+    if any((args.output / f'{args.date}.{suffix}').exists() for suffix in ['md', 'json', 'traces']):
         parser.error('report already exists; choose a new date or archive it first')
     SCRATCH.mkdir(parents=True, exist_ok=True)
     temporary = SCRATCH / 'tmp'
@@ -164,12 +225,13 @@ def main():
     dirty = git('status', '--porcelain', '--untracked-files=normal')
     revision = next(line.split()[1] for line in (ROOT / '.wire-harness-rev').read_text().splitlines()
                     if line.strip() and not line.startswith('#'))
+    for directory in [ROOT, *ROOT.parents]:
+        check_cargo_config(directory / '.cargo')
+    check_cargo_config(Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo')))
     metadata = json.loads(run(['cargo', 'metadata', '--locked', '--format-version', '1'],
                               capture_output=True, text=True).stdout)
-    package = next(package for package in metadata['packages'] if package['name'] == 'wire-client')
-    if not package['source'].endswith('#' + revision):
-        raise RuntimeError('wire-client source differs from .wire-harness-rev')
-    harness = Path(package['manifest_path']).parent
+    cargo_home = Path(os.environ.get('CARGO_HOME', Path.home() / '.cargo'))
+    harness = pinned_harness(metadata, revision, cargo_home)
     run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance', '--example', 'audit'])
     run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml', '--bin', 'vanilla-wire'])
     run(['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',

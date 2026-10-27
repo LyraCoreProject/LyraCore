@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::fmt::Write;
 use std::path::{Path, PathBuf};
 
 use anyhow::{bail, ensure, Context, Result};
@@ -15,7 +14,11 @@ use wire_client::{
 mod evidence;
 #[path = "../support/taxi_route.rs"]
 mod taxi_route;
-use evidence::{Audit, BehaviorAudit, Changes, Report, ScenarioResult, Summary};
+use evidence::{Audit, BehaviorAudit, CandidateCapture, Report, ScenarioResult};
+
+#[cfg(test)]
+#[path = "../support/scratch.rs"]
+mod scratch;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -81,14 +84,16 @@ fn compare_run(
     for entry in catalogue::ENTRIES {
         let golden = catalogue::get(entry.id)?;
         let compare = |adapter: &str| -> Result<_> {
-            let candidate = Trace::parse(&std::fs::read(
-                directory.join(format!("{}-{adapter}.json", entry.id)),
-            )?)?;
+            let bytes = std::fs::read(directory.join(format!("{}-{adapter}.json", entry.id)))?;
+            let candidate = Trace::parse(&bytes)?;
             ensure!(
                 matches!(&candidate.header.origin, Origin::Candidate { adapter: recorded } if recorded == adapter),
                 "wrong candidate origin"
             );
-            compare::compare(&golden, &candidate, &[])
+            Ok((
+                compare::compare(&golden, &candidate, &[])?,
+                Sha256Digest::of(&bytes),
+            ))
         };
         let Origin::Golden { provenance } = &golden.trace().header.origin else {
             bail!("expected Golden Trace");
@@ -97,19 +102,27 @@ fn compare_run(
             provenance == &run.reference,
             "Reference Server provenance differs from the Golden Trace"
         );
+        let (comparison, candidate_sha256) = compare("lyracore")?;
+        let (reference_comparison, reference_sha256) = compare("vmangos")?;
         report.scenarios.push(ScenarioResult {
             id: entry.id.into(),
             behavior: golden.scenario().behavior.clone(),
             scenario_sha256: golden.trace().header.scenario_sha256.clone(),
-            comparison: compare("lyracore")?,
-            reference_comparison: Some(compare("vmangos")?),
+            comparison,
+            reference_comparison: Some(reference_comparison),
+            capture: Some(CandidateCapture {
+                sha256: candidate_sha256,
+                core_commit: report.core_commit.clone(),
+                native_host_sha256: run.native_host_sha256.clone(),
+                module_sha256: run.module_sha256.clone(),
+            }),
+            reference_sha256: Some(reference_sha256),
         });
     }
     let mut behaviors = BTreeMap::new();
     for scenario in &report.scenarios {
         let candidate = report.summary(&scenario.behavior, false);
-        let changes = previous
-            .map(|old| Changes::between(&old.summary(&scenario.behavior, false), &candidate));
+        let changes = previous.and_then(|old| report.changes_since(old, &scenario.behavior));
         behaviors.insert(
             scenario.behavior.clone(),
             BehaviorAudit {
@@ -142,97 +155,6 @@ fn compare_run(
     Ok(report)
 }
 
-fn markdown(report: &Report, date: &str) -> Result<String> {
-    let audit = report.audit.as_ref().context("audit details")?;
-    let mut text = format!("# Conformance Audit, {date}\n\nEvery scenario in the pinned catalogue ran over TCP on a fresh local Native Host and on vmangos. Both candidates were compared with their Golden Traces.\n\nCore `{}`, dirty tree `{}`. Harness `{}`. Capture time `{}` Unix ms.\n\nContent: {}.\n\nNative Host SHA-256 `{}`. Module SHA-256 `{}`.\n\nReference Server `{}`, binary `{}`, archive SHA-256 `{}`, source `{}`, database `{}`. Its provenance matches both Golden Traces.\n\n",
-        report.core_commit, report.working_tree_dirty, report.harness_revision, report.recorded_at_unix_ms,
-        audit.content, String::from(audit.native_host_sha256.clone()), String::from(audit.module_sha256.clone()),
-        audit.reference.server, audit.reference.binary_release, String::from(audit.reference.binary_sha256.clone()),
-        audit.reference.source_commit, audit.reference.database_commit);
-    text.push_str("| Behavior | LyraCore rule / data signatures | LyraCore rule / data records | Reference rule / data signatures | Reference rule / data records |\n| --- | ---: | ---: | ---: | ---: |\n");
-    for (behavior, result) in &audit.behaviors {
-        writeln!(
-            text,
-            "| {behavior} | {} / {} | {} / {} | {} / {} | {} / {} |",
-            result.candidate.rule.signatures.len(),
-            result.candidate.data.signatures.len(),
-            result.candidate.rule.raw_records,
-            result.candidate.data.raw_records,
-            result.reference.rule.signatures.len(),
-            result.reference.data.signatures.len(),
-            result.reference.rule.raw_records,
-            result.reference.data.raw_records
-        )?;
-    }
-    let stable = audit
-        .behaviors
-        .values()
-        .all(|result| result.reference == Summary::default());
-    writeln!(text, "\nReference stability: {}. Data differences do not fail conformance. Taxi gameplay and its durable CI skip are unchanged. No Deliberate Deviation was added.\n",
-        if stable { "both comparisons have zero rule and data records" } else { "the Reference Server differs; this audit cannot establish a stable reference" })?;
-    if let Some(previous) = &audit.previous_report {
-        writeln!(text, "Previous report: `{previous}`. Fixed and regressed sets compare signatures, excluding record multiplicity, packet indices and values.\n")?;
-    } else {
-        text.push_str("This is the first machine-readable Conformance Audit. Fixed and regressed signatures are not established. The earlier T2d and T2g notes used different harness revisions and are not audit baselines.\n\n");
-    }
-    for (behavior, result) in &audit.behaviors {
-        writeln!(text, "## {behavior}\n")?;
-        for (server, summary) in [
-            ("LyraCore", &result.candidate),
-            ("Reference Server", &result.reference),
-        ] {
-            writeln!(text, "{server}: {summary}.\n")?;
-            if summary == &Summary::default() {
-                continue;
-            }
-            text.push_str("| Class | Rule | Checkpoint | Stream | Opcode | Field path | Raw records |\n| --- | --- | --- | --- | --- | --- | ---: |\n");
-            for (class, counts) in [("rule", &summary.rule), ("data", &summary.data)] {
-                for entry in &counts.signatures {
-                    let signature = &entry.signature;
-                    writeln!(
-                        text,
-                        "| {class} | `{}` | `{}` | `{}` | {} | `{}` | {} |",
-                        signature.rule,
-                        signature.checkpoint,
-                        serde_json::to_string(&signature.stream)?,
-                        signature
-                            .opcode
-                            .map(|opcode| format!("0x{opcode:04X}"))
-                            .unwrap_or_else(|| "none".into()),
-                        signature.field_path.join("."),
-                        entry.raw_records
-                    )?;
-                }
-            }
-            text.push('\n');
-        }
-        if let Some(changes) = &result.changes {
-            for (class, changed) in [("rule", &changes.rule), ("data", &changes.data)] {
-                writeln!(
-                    text,
-                    "{class}: {} fixed, {} regressed signatures.\n",
-                    changed.fixed.len(),
-                    changed.regressed.len()
-                )?;
-                for (state, signatures) in
-                    [("fixed", &changed.fixed), ("regressed", &changed.regressed)]
-                {
-                    for signature in signatures {
-                        writeln!(
-                            text,
-                            "- {class} {state}: `{}`",
-                            serde_json::to_string(signature)?
-                        )?;
-                    }
-                }
-                text.push('\n');
-            }
-        }
-    }
-    writeln!(text, "Reproduce with `./conformance/audit --host /path/to/spacetimedb-standalone --date {date}` after preparing the pinned Reference Server. See [the audit command](../README.md#conformance-audit). The command stops both local servers on exit. Candidate traces and credentials stay in scratch; this report and [{date}.json]({date}.json) contain only provenance, counts, signatures and scrubbed difference values. No real-client check was performed.")?;
-    Ok(text)
-}
-
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
@@ -240,12 +162,13 @@ fn main() -> Result<()> {
         [mode, directory, output, date] if mode == "report" => {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"));
             let ledger = FeatureLedger::load(&root.join("features"))?;
-            let previous = evidence::latest_audit(&root.join("reports"), &ledger)?;
+            let previous = evidence::latest_audit(&root.join("reports"))?
+                .filter(|(path, _)| path.file_stem().and_then(|s| s.to_str()) != Some(date));
             let mut report = compare_run(Path::new(directory), &ledger, previous.as_ref().map(|(_, report)| report))?;
             if let Some((path, _)) = &previous {
                 report.audit.as_mut().unwrap().previous_report = Some(path.file_name().context("report filename")?.to_string_lossy().into());
             }
-            report.validate_changes(&root.join("reports"), &ledger)?;
+            report.validate_changes(&root.join("reports"))?;
             let head = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(root).output()?;
             ensure!(head.status.success(), "git rev-parse failed");
             ensure!(evidence::same_core(root.parent().context("core root")?, &report.core_commit,
@@ -255,9 +178,17 @@ fn main() -> Result<()> {
             let json = output.join(format!("{date}.json"));
             let md = output.join(format!("{date}.md"));
             ensure!(!json.exists() && !md.exists(), "report already exists; use a new date or archive the old report");
-            let rendered = markdown(&report, date)?;
+            let rendered = evidence::markdown(&report, date)?;
+            let traces = json.with_extension("traces");
+            ensure!(!traces.exists(), "candidate directory already exists");
+            std::fs::create_dir(&traces)?;
+            for entry in catalogue::ENTRIES {
+                let name = format!("{}-lyracore.json", entry.id);
+                std::fs::copy(Path::new(directory).join(&name), traces.join(name))?;
+            }
             std::fs::write(&json, serde_json::to_vec_pretty(&report)?)?;
             std::fs::write(&md, &rendered)?;
+            Report::load(&json, "conformance_audit", &ledger)?.verify_capture(&json)?;
             println!("{rendered}");
             Ok(())
         }
@@ -268,17 +199,11 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::time::{SystemTime, UNIX_EPOCH};
+    use evidence::Summary;
 
     #[test]
     fn audit_requires_both_candidates_for_every_catalogue_scenario() -> Result<()> {
-        let directory = PathBuf::from(std::env::var_os("HOME").context("HOME")?)
-            .join(".cache/lyracore-scratch/conformance")
-            .join(format!(
-                "audit-test-{}-{}",
-                std::process::id(),
-                SystemTime::now().duration_since(UNIX_EPOCH)?.as_nanos()
-            ));
+        let directory = scratch::Scratch::new("audit-test")?;
         export(&directory)?;
         let ledger = FeatureLedger::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("features"))?;
         let golden = catalogue::get(catalogue::ENTRIES[0].id)?;
@@ -323,7 +248,6 @@ mod tests {
         }
         std::fs::remove_file(directory.join("taxi_single_hop-vmangos.json"))?;
         assert!(compare_run(&directory, &ledger, None).is_err());
-        std::fs::remove_dir_all(directory)?;
         Ok(())
     }
 }

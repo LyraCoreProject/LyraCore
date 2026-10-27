@@ -1173,6 +1173,7 @@ dependencies = [
  "syn 2.0.119",
  "toml",
  "wire-client",
+ "wow_world_base 0.2.0",
  "wow_world_messages",
 ]
 
