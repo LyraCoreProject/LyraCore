@@ -325,7 +325,6 @@ pub fn gw_turn_in_quest(
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     actor(ctx, actor_guid)?;
     crate::actor::turn_in_quest(ctx, actor_guid, giver_guid, quest_entry, reward_index)?;
-    // Only World Sessions drive Reward Letters; a bot turn-in would leave its letter held.
     Ok(crate::mail_reward::file_reward_letter(
         ctx,
         actor_guid,
