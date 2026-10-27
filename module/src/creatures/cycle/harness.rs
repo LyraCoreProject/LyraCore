@@ -1609,7 +1609,7 @@ impl EventAiWorld for Scenario {
             .then(|| self.rout_ends_ms(creature_guid))
     }
 
-    fn eventai_broadcast(&self, id: u32) -> Option<BroadcastLine> {
+    fn eventai_broadcast(&self, id: u32, _speaker_guid: u64) -> Option<BroadcastLine> {
         self.eventai_text
             .borrow()
             .get(&id)

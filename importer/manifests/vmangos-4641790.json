@@ -525,6 +525,24 @@
       },
       "locked_rows": 189
     },
+    "creature_display_info_addon": {
+      "columns": {
+        "integer": [
+          "build",
+          "display_id",
+          "display_id_other_gender",
+          "gender"
+        ]
+      },
+      "locked_rows": 10537,
+      "values": {
+        "gender": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
     "creature_groups": {
       "columns": {
         "integer": [

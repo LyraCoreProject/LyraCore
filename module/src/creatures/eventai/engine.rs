@@ -45,7 +45,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_in_zone_or_area(&self, unit: &EventAiUnit, zone_or_area_id: u32) -> bool;
     fn eventai_combat_action_ready(&self, guid: u64) -> bool;
     fn eventai_rout_ends_ms(&self, creature_guid: u64) -> Option<u32>;
-    fn eventai_broadcast(&self, id: u32) -> Option<BroadcastLine>;
+    fn eventai_broadcast(&self, id: u32, speaker_guid: u64) -> Option<BroadcastLine>;
     fn eventai_summon_location(&self, id: u32) -> Option<SummonLocation>;
     fn eventai_summon_template_exists(&self, entry: u32) -> bool;
     fn eventai_roll(&self) -> u32;
@@ -706,7 +706,7 @@ fn speak<W: EventAiWorld>(
     let (message, chat_type, language, emote, sound) = match picked {
         None => (speech.legacy_text.clone(), chat_type, 0, 0, 0),
         Some(id) => {
-            let Some(line) = world.eventai_broadcast(id) else {
+            let Some(line) = world.eventai_broadcast(id, context.creature_guid) else {
                 return false;
             };
             (
@@ -1275,14 +1275,16 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .map(|fight| fight.rout_ends_ms)
     }
 
-    fn eventai_broadcast(&self, id: u32) -> Option<BroadcastLine> {
+    fn eventai_broadcast(&self, id: u32, speaker_guid: u64) -> Option<BroadcastLine> {
+        let speaker = self.ctx.db.game_world_entity().guid().find(speaker_guid)?;
+        let gender = crate::creatures::catalogue::display_gender(self.ctx, speaker.display_id);
         self.ctx
             .db
             .game_creature_ai_broadcast_text()
             .id()
             .find(id)
             .map(|text| BroadcastLine {
-                text: text.male_text,
+                text: text.text_for_gender(gender).to_owned(),
                 chat_type: text.chat_type,
                 language: text.language_id,
                 emote: text.emote_id_1,

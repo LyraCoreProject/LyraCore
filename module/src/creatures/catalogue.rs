@@ -14,7 +14,7 @@ pub struct CreatureLevelStats {
     pub armor: u32,
 }
 
-#[table(accessor = game_creature_display, public, index(accessor = by_entry, btree(columns = [entry])))]
+#[table(accessor = game_creature_display, public, index(accessor = by_entry, btree(columns = [entry])), index(accessor = by_display, btree(columns = [display_id])))]
 pub struct CreatureDisplay {
     #[primary_key]
     pub id: u64,
@@ -22,6 +22,17 @@ pub struct CreatureDisplay {
     pub display_id: u32,
     pub scale: f32,
     pub weight: u32,
+    #[default(0u8)]
+    pub gender: u8,
+}
+
+pub(crate) fn display_gender(ctx: &ReducerContext, display_id: u32) -> u8 {
+    ctx.db
+        .game_creature_display()
+        .by_display()
+        .filter(display_id)
+        .next()
+        .map_or(0, |display| display.gender)
 }
 
 pub(crate) fn level_stats(
@@ -115,6 +126,7 @@ mod tests {
                 display_id: 100,
                 scale: 0.5,
                 weight: 1,
+                gender: 0,
             },
             CreatureDisplay {
                 id: 2,
@@ -122,6 +134,7 @@ mod tests {
                 display_id: 200,
                 scale: 2.0,
                 weight: 3,
+                gender: 1,
             },
             CreatureDisplay {
                 id: 3,
@@ -129,6 +142,7 @@ mod tests {
                 display_id: 300,
                 scale: 1.0,
                 weight: 0,
+                gender: 2,
             },
         ];
         let outcomes: Vec<_> = (0..4)

@@ -1539,6 +1539,8 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
+            let gender = crate::creatures::catalogue::display_gender(ctx, source.display_id);
+            let message = line.text_for_gender(gender).to_owned();
             crate::native::creature_sound(ctx, guid, line.sound_id, line.chat_type);
             crate::chat::apply_send_chat_to(
                 ctx,
@@ -1546,7 +1548,7 @@ fn apply_leaf_for_pair(
                 target_guid,
                 line.chat_type,
                 line.language_id,
-                line.male_text,
+                message,
             )
         }
         RelayInstruction::Emote(emote) => {
