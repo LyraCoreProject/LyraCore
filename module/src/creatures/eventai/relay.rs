@@ -137,7 +137,7 @@ pub enum RelayFactionRestoration {
 pub struct RelayStandState {
     pub stand_state: u8,
 }
-#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RelayFlagChange {
     pub flags: u32,
     pub operation: RelayFlagOperation,

@@ -51,6 +51,7 @@ pub enum CreaturePresentationInstruction {
     ClearImmuneToPlayersAndCreatures,
     SetNotSelectable,
     SetRajaxxSpawnProtection(ImportVerifiedRajaxxProjection),
+    ModifyNpcFlags(super::RelayFlagChange),
 }
 
 pub(super) fn import_verified_rajaxx_spawn_protection() -> CreaturePresentationInstruction {

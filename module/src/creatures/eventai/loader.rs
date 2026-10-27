@@ -841,6 +841,24 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 },
             },
         )),
+        ["npc-flags", flags, operation] => {
+            let flags = parse_u32(flags)?;
+            if flags == 0 || flags & !3 != 0 {
+                return Err("NPC flags must name gossip or quests".into());
+            }
+            let operation = match *operation {
+                "add" => super::RelayFlagOperation::Add,
+                "remove" => super::RelayFlagOperation::Remove,
+                "toggle" => super::RelayFlagOperation::Toggle,
+                _ => return Err("unknown NPC-flag operation".into()),
+            };
+            Ok(CreatureInstruction::Presentation(
+                CreaturePresentationInstruction::ModifyNpcFlags(super::RelayFlagChange {
+                    flags,
+                    operation,
+                }),
+            ))
+        }
         ["npc-flags", flags] => Ok(CreatureInstruction::Presentation(
             CreaturePresentationInstruction::SetNpcFlags {
                 flags: match *flags {

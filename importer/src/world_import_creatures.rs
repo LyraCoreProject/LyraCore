@@ -72,10 +72,10 @@ fn extrapolated_stat(start: f32, end: f32, level: u32, last_level: u32, armor: b
     start + (level - 1) as f32 / (last_level - 1) as f32 * (end - start)
 }
 
-fn flags(row: &Row) -> Result<(u32, u32)> {
+fn flags(row: &Row, restored: u32) -> Result<(u32, u32)> {
     let static1: u32 = row.number("static_flags1")?;
     let static2: u32 = row.number("static_flags2")?;
-    let mut unit = 0;
+    let mut unit = (static1 & restored & 0x60) << 3;
     for (source, target) in [
         (0x200, 0x0200_0000),
         (0x1000_0000, 0x8000),
@@ -114,6 +114,7 @@ fn templates(
     client: Option<&str>,
     statements: &mut Vec<String>,
     findings: &mut Findings,
+    immunities: &BTreeMap<u64, u32>,
 ) -> Result<()> {
     let scales = client
         .map(dbc::load_display_scales)
@@ -192,7 +193,8 @@ fn templates(
         }
         let (health, low, high, armor) = stats[0];
         let max_health = stats.last().unwrap().0;
-        let (unit, kind) = flags(row)?;
+        let restored = immunities.get(&entry).copied().unwrap_or(0);
+        let (unit, kind) = flags(row, restored)?;
         let mut display = 0;
         let mut scale = 1.0;
         let mut display_rows = Vec::new();
@@ -267,7 +269,7 @@ fn templates(
         if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
             finding(findings, "creatures.auras", entry);
         }
-        if row.number::<u32>("static_flags1")? & 0x60 != 0 {
+        if row.number::<u32>("static_flags1")? & 0x60 & !restored != 0 {
             finding(findings, "creatures.scripted-immunity", entry);
         }
         if row.number::<u32>("static_flags1")? & !0x51e1_0270 != 0
@@ -467,6 +469,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     let mut findings = Findings::new();
     let entries = vmangos_creature_entries(dump, args)?;
     let mut plan = DumpPlan::default();
+    let mut immunities = BTreeMap::new();
     if args.family.as_deref() == Some("casts") {
         casts(dump, &entries, &mut plan.stmts, &mut findings)?;
     } else {
@@ -474,6 +477,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
         for pool in &population.unsupported_pools {
             finding(&mut findings, "creatures.nested-pool", pool);
         }
+        immunities = eventai::vmangos::restorable_immunities(dump, &entries)?;
         templates(
             dump,
             &entries,
@@ -481,6 +485,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             args.dbc.as_deref(),
             &mut plan.stmts,
             &mut findings,
+            &immunities,
         )?;
         waypoints(dump, &population.spawns, &mut plan.stmts, &mut findings)?;
         population.append_statements(&mut plan.stmts);
@@ -579,6 +584,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     )];
     plan.world_source_manifest = Some(serde_json::to_string_pretty(&serde_json::json!({
         "format_version": 1, "source": "vmangos", "family": family, "patch": 10, "client_build": 5875,
+        "restored_spawn_immunities": immunities,
         "findings": findings.into_iter().map(|(code, keys)| serde_json::json!({"code": code, "classification": "unsupported", "occurrences": keys.len(), "source_ids": keys})).collect::<Vec<_>>()
     }))?);
     Ok(plan)
@@ -630,6 +636,7 @@ mod tests {
             None,
             &mut statements,
             &mut Findings::new(),
+            &BTreeMap::new(),
         )
         .unwrap();
         let mut node = crate::standalone_support::Standalone::start("classic-creature-reimport");
@@ -824,7 +831,7 @@ mod tests {
                 ("rank", "3"),
             ],
         );
-        assert_eq!(flags(&row).unwrap().0, 0x40);
+        assert_eq!(flags(&row, 0).unwrap().0, 0x40);
     }
 
     #[test]
@@ -862,7 +869,7 @@ mod tests {
                 ("rank", "1"),
             ],
         );
-        assert_eq!(flags(&row).unwrap(), (0x0200_9040, 0x7f));
+        assert_eq!(flags(&row, 0).unwrap(), (0x0200_9040, 0x7f));
         let row = numbers(
             "creature_template",
             &[
@@ -871,6 +878,21 @@ mod tests {
                 ("rank", "0"),
             ],
         );
-        assert_eq!(flags(&row).unwrap(), (0, 0));
+        assert_eq!(flags(&row, 0).unwrap(), (0, 0));
+    }
+
+    #[test]
+    fn only_immunity_bits_with_a_proven_clear_are_restored() {
+        let row = numbers(
+            "creature_template",
+            &[
+                ("static_flags1", "96"),
+                ("static_flags2", "0"),
+                ("rank", "0"),
+            ],
+        );
+        assert_eq!(flags(&row, 0).unwrap().0, 0);
+        assert_eq!(flags(&row, 0x20).unwrap().0, 0x100);
+        assert_eq!(flags(&row, 0x40).unwrap().0, 0x200);
     }
 }

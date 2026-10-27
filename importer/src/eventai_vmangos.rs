@@ -199,6 +199,34 @@ pub(crate) fn include_required_templates(
     }
 }
 
+pub(crate) fn restorable_immunities(
+    source: &impl TableRows,
+    entries: &HashSet<u64>,
+) -> Result<BTreeMap<u64, u32>> {
+    let rows = source.columns("creature_template", &["entry", "static_flags1"])?;
+    let mut templates = HashSet::new();
+    let mut candidates = BTreeMap::new();
+    for row in rows.iter() {
+        let entry = row.number::<u64>("entry")?;
+        templates.insert(entry);
+        let flags = row.number::<u32>("static_flags1")? & 0x60;
+        if flags != 0 && entries.contains(&entry) {
+            candidates.insert(entry, flags);
+        }
+    }
+    if candidates.is_empty() {
+        return Ok(BTreeMap::new());
+    }
+    Ok(Source::read(source)?
+        .spawn_immunity_clears(&templates)
+        .into_iter()
+        .filter_map(|(entry, mask)| {
+            let restored = candidates.get(&entry).copied().unwrap_or(0) & mask;
+            (restored != 0).then_some((entry, restored))
+        })
+        .collect())
+}
+
 impl Source {
     pub(crate) fn read(source: &(impl TableRows + ?Sized)) -> Result<Self> {
         let mut events = Vec::new();
@@ -418,6 +446,45 @@ impl Source {
         (plan, manifest)
     }
 
+    fn spawn_immunity_clears(&self, templates: &HashSet<u64>) -> BTreeMap<u64, u32> {
+        let scripts = delayed::Scripts::compile(self);
+        let mut cleared = BTreeMap::new();
+        for event in &self.events {
+            if event.kind != 11
+                || event.chance != 100
+                || event.flags & (2 | 16) != 0
+                || event.inverse_phases & 1 != 0
+                || !self.event_ai_entries.contains(&event.entry)
+                || self
+                    .predicates
+                    .get(&event.condition)
+                    .and_then(Option::as_deref)
+                    != Some("always")
+            {
+                continue;
+            }
+            let Ok((_, compiled)) = self.compile_event(event, templates, &scripts) else {
+                continue;
+            };
+            if !compiled.aborts.is_empty() {
+                continue;
+            }
+            let mut mask = 0;
+            for instruction in &compiled.instructions {
+                match instruction.as_str() {
+                    "unit-flags:clear:immune-to-players" => mask |= 0x20,
+                    "unit-flags:clear:immune-to-creatures" => mask |= 0x40,
+                    "unit-flags:clear:immune-to-players-and-creatures" => mask |= 0x60,
+                    _ => {}
+                }
+            }
+            if mask != 0 {
+                *cleared.entry(u64::from(event.entry)).or_default() |= mask;
+            }
+        }
+        cleared
+    }
+
     fn compile_event(
         &self,
         event: &Event,
@@ -566,6 +633,10 @@ impl Source {
                 (37, 0) => Ok("virtual-main-hand:clear".into()),
                 _ => Err(unsupported()),
             },
+            4 if actor && a == 147 && b != 0 && b & !3 == 0 && d <= 2 => Ok(format!(
+                "npc-flags:{b}:{}",
+                ["toggle", "add", "remove"][d as usize]
+            )),
             4 if actor && a == 46 && matches!(d, 1 | 2) => {
                 let flag = match b {
                     2 => "not-attackable",
@@ -1193,5 +1264,48 @@ mod tests {
         assert!(source
             .compile_command(&targeted, &mut Compiled::default(), &HashSet::new())
             .is_err());
+    }
+
+    #[test]
+    fn static_immunity_needs_a_translated_unconditional_spawn_clear() {
+        let mut source = source();
+        source.scripts.insert(
+            10,
+            vec![
+                step(4, [147, 2, 1, 0]),
+                step(4, [46, 256, 2, 0]),
+                step(44, [0, 0, 0, 0]),
+            ],
+        );
+        source.events = vec![Event {
+            kind: 11,
+            ..event([10, 0, 0])
+        }];
+        let templates = HashSet::from([100]);
+        assert_eq!(
+            source.spawn_immunity_clears(&templates),
+            BTreeMap::from([(100, 0x20)])
+        );
+        for (chance, flags, phases, condition) in [
+            (99, 0, 0, 0),
+            (100, 2, 0, 0),
+            (100, 16, 0, 0),
+            (100, 0, 1, 0),
+            (100, 0, 0, 9),
+        ] {
+            source.events[0].chance = chance;
+            source.events[0].flags = flags;
+            source.events[0].inverse_phases = phases;
+            source.events[0].condition = condition;
+            assert!(source.spawn_immunity_clears(&templates).is_empty());
+        }
+        source.events[0] = Event {
+            kind: 11,
+            ..event([10, 0, 0])
+        };
+        source.scripts.get_mut(&10).unwrap()[0].flags = 8;
+        assert!(source.spawn_immunity_clears(&templates).is_empty());
+        source.scripts.get_mut(&10).unwrap()[0] = step(99, [0; 4]);
+        assert!(source.spawn_immunity_clears(&templates).is_empty());
     }
 }

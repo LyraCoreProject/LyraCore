@@ -108,9 +108,17 @@ and the rank-rate defaults in
 [World.cpp](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/World.cpp#L514).
 The integer Module damage columns round the two derived damage bounds. Display rows retain source
 weights and scales, resolving zero scales through CreatureDisplayInfo. Unit and client creature
-type flags are derived from the source static flags. The PC and NPC immunity bits are omitted
-until Milestone 4 can run the scripts that clear them. The Compatibility Manifest lists every
-affected template as `creatures.scripted-immunity`. Only waypoint movement, type 2, emits paths
+type flags are derived from the source static flags. PC and NPC immunity bits are restored only
+when a fully translated, unconditional spawn command list clears the bit. Random lists, aborting
+commands, phase exclusions and conditional events cannot establish that clear. Other bits stay
+unflagged and the Compatibility Manifest lists the template as `creatures.scripted-immunity`.
+At the pinned source, only Overlord Mok'Morokk (4500) meets that rule, for player immunity.
+The Native creation packet contains the restored bit, followed by a values update clearing it.
+The spawn transaction commits without immunity, so this creates no lasting server-side immunity.
+A real-client frame effect has not been checked. Four templates have any EventAI immunity clear: 1840, 4275, 4500
+and 10992. The other three do not meet the unconditional spawn rule. Full-world still omits at
+least one immunity on 3,407 templates; alliance-single omits one on 1,022 templates.
+Only waypoint movement, type 2, emits paths
 on the vmangos path; classic path selection is unchanged. Trainer, vendor and gossip joins retain their
 existing family ownership.
 
