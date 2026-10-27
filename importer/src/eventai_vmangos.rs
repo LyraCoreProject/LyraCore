@@ -341,15 +341,10 @@ impl Source {
                 }
             }
         }
-        let mut source_maps: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
-        for row in source.columns("creature", &["id", "map"])?.iter() {
-            source_maps
-                .entry(row.number("id")?)
-                .or_default()
-                .insert(row.number("map")?);
-        }
         Ok(Self {
-            source_maps,
+            source_maps: spawn_maps(
+                &source.columns("creature", &["id", "id2", "id3", "id4", "id5", "map"])?,
+            )?,
             events,
             event_ai_entries: source
                 .columns("creature_template", &["entry", "ai_name"])?
@@ -852,6 +847,20 @@ impl Source {
             _ => Err(unsupported()),
         }
     }
+}
+
+fn spawn_maps(rows: &[Row]) -> Result<BTreeMap<u32, BTreeSet<u32>>> {
+    let mut maps: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+    for row in rows {
+        let map = row.number("map")?;
+        for column in ["id", "id2", "id3", "id4", "id5"] {
+            let entry = row.number(column)?;
+            if entry != 0 {
+                maps.entry(entry).or_default().insert(map);
+            }
+        }
+    }
+    Ok(maps)
 }
 
 fn compile_summon(
@@ -1472,6 +1481,33 @@ mod tests {
         source.scripts.get_mut(&10).unwrap()[0] = step(99, [0; 4]);
         assert!(source.spawn_immunity_clears(&templates).is_empty());
     }
+    #[test]
+    fn alternate_spawn_entries_participate_in_encounter_map_checks() {
+        let dump = "CREATE TABLE `creature` (
+`id` int,
+`id2` int,
+`id3` int,
+`id4` int,
+`id5` int,
+`map` int
+);
+INSERT INTO `creature` VALUES (4832,0,0,0,0,48),(10,4832,20,30,40,0);";
+        let mut source = source();
+        source.source_maps =
+            spawn_maps(&crate::dump::named_table(dump, "creature").unwrap()).unwrap();
+        assert_eq!(source.source_maps[&4832], BTreeSet::from([0, 48]));
+        assert!(!source.source_maps.contains_key(&0));
+        for entry in [10, 20, 30, 40] {
+            assert_eq!(source.source_maps[&entry], BTreeSet::from([0]));
+        }
+        assert_eq!(
+            source
+                .encounter_command(4832, &step(37, [10, 3, 0, 0]))
+                .unwrap_err(),
+            "encounter-cross-map:4832:10"
+        );
+    }
+
     #[test]
     fn encounter_fields_and_states_follow_vmangos_instance_scripts() {
         let mut source = source();
