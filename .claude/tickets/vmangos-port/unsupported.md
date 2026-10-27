@@ -68,3 +68,32 @@ Trainer findings count emitted offers after shared-list precedence and profile f
 The import retains source skill lines and marks the older riding behavior unsupported. Missing or
 non-learning source spells would be omitted with findings; neither occurs at this pin. The 16
 portal conditions remain unsupported.
+
+Quest findings count emitted quest templates, except unavailable collect objectives, which count
+objective slots. Counts overlap. Flags count nonzero raw fields; they do not mean every behavior
+of each counted quest is absent. Used mail loot passes validation and adds no loot findings.
+
+| Finding | Full-world | Alliance-single | Current limit |
+| --- | ---: | ---: | --- |
+| `quests.breadcrumb` | 23 | 9 | Breadcrumb prerequisites are not represented. |
+| `quests.complete-script` | 252 | 96 | Completion script execution awaits S6. |
+| `quests.condition` | 76 | 35 | Quest acceptance has no imported condition reference. |
+| `quests.event-credit` | 176 | 53 | The completion gate is imported; source event delivery awaits S6. |
+| `quests.exclusive-group` | 427 | 151 | Exclusive quest groups are not represented. |
+| `quests.explicit-zero-xp` | 725 | 228 | The Module treats zero as a fallback request and can grant XP. |
+| `quests.extra-reputation-rewards` | 37 | 6 | Only the first two reputation reward slots are stored. |
+| `quests.flags` | 3048 | 1034 | Raw QuestFlags and SpecialFlags beyond repeatable/event are not carried. |
+| `quests.maximum-level` | 89 | 22 | Maximum acceptance levels below 60 are not represented. |
+| `quests.maximum-reputation` | 38 | 22 | Maximum reputation gates are not represented. |
+| `quests.money-requirement` | 69 | 15 | Negative reward money does not charge the quest cost. |
+| `quests.negative-prerequisite` | 44 | 16 | Negative prerequisite semantics are not represented. |
+| `quests.reputation-requirement` | 264 | 16 | Minimum reputation gates are not represented. |
+| `quests.reputation-spillover-mask` | 723 | 338 | Per-quest reputation spillover masks are not represented. |
+| `quests.reward-cast` | 202 | 72 | Only a single-effect learn wrapper produces a reward spell. |
+| `quests.skill-requirement` | 143 | 51 | Required skill/rank gates are not represented. |
+| `quests.start-script` | 103 | 39 | Acceptance script execution awaits S6. |
+| `quests.start-spell` | 4 | 2 | Acceptance spell casts are not represented. |
+| `quests.unavailable-collect-objective` | 937 | 415 | Objectives for items absent from the current catalogue availability set are omitted. |
+
+The 16 portal conditions remain unsupported. Source event gates keep quests pending while their
+script delivery is still being ported.

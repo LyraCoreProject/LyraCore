@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items|loot|gameobjects|trainers` imports the selected SQLite rows for those families.
+`--source vmangos --family globals|items|loot|gameobjects|trainers|quests` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -99,6 +99,24 @@ The vmangos import adds no synthetic profession offers. Its manifest compares th
 targets with the classic-db `PROFESSION_LEARN` list and reports source skill prerequisites and
 multiple learn targets that the current Module cannot represent. Classic-db keeps its existing
 trainer output.
+
+The quests family selects quest patches and relation ranges. Full profiles share the full quest
+catalogue; other canonical profiles share the existing starter and instance catalogue. Giver
+relations use the selected profile's enabled creature choices and GameObjects. Source exploration
+or event flags add an event-credit requirement unless an area-trigger objective already supplies
+the gate. This follows [QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
+Source script delivery and EventAI dependency closure remain part of S6.
+
+Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sender zero retains the
+Module's quest-ender sender rule. Used mail loot must be one unconditional item at 100% chance.
+Quest learn rewards use single-effect wrappers from the selected vmangos spell table. `RewXP`
+supplies explicit rewards, following [Quest::XPValue at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.cpp#L180-L201).
+The Module treats zero XP as a fallback request, so explicit zero-XP quests remain unsupported.
+
+The Compatibility Manifest also reports unavailable collect objectives, non-goober GameObject
+targets, extra prerequisites, scripts, flags, reward casts and reputation fields that the Module
+does not carry. Classic-db retains its current SQL and reducer output, including empty strings
+for nullable quest text.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both

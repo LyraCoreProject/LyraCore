@@ -15,6 +15,7 @@ struct TableCount {
     per_entry: BTreeMap<String, usize>,
     per_map: BTreeMap<u32, usize>,
     skill_offers: usize,
+    quest_bands: [usize; 3],
 }
 type Records = BTreeMap<String, TableCount>;
 
@@ -59,6 +60,13 @@ fn records(statements: &[String]) -> Result<Records> {
                     {
                         count.skill_offers += 1;
                     }
+                    if table == "game_quest_template" {
+                        let level = fields["quest_level"].parse::<u32>()?;
+                        count.quest_bands[0] += usize::from((6..=10).contains(&level));
+                        count.quest_bands[1] += usize::from((10..=20).contains(&level));
+                        count.quest_bands[2] +=
+                            usize::from(fields["next_quest_id"].parse::<u32>()? != 0);
+                    }
                     for key in keys(&[fields], key_columns(table)?)? {
                         *count.per_entry.entry(key.clone()).or_default() += 1;
                         count.keys.insert(key);
@@ -86,6 +94,18 @@ fn key_columns(table: &str) -> Result<&'static [&'static str]> {
         "game_gameobject" => &["template_entry"],
         "game_item_template" => &["entry"],
         "game_trainer_spell" => &["trainer_entry"],
+        "game_quest_template" => &["entry"],
+        "game_quest_text"
+        | "game_quest_objective"
+        | "game_quest_cast_objective"
+        | "game_quest_reward_item"
+        | "game_quest_reward_spell"
+        | "game_quest_reward_choice"
+        | "game_quest_reward_mail"
+        | "game_quest_event_requirement" => &["quest_entry"],
+        "game_creature_quest" => &["creature_entry", "quest_entry"],
+        "game_gameobject_quest" => &["go_entry", "quest_entry"],
+        "game_mail_loot" => &["mail_template_id"],
         "game_creature_loot" => &["creature_entry"],
         "game_pickpocket_loot" => &["creature_entry"],
         "game_skinning_loot" => &["skin_loot_id"],
@@ -265,6 +285,25 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         }
         writeln!(output, "- Pickpocket differences follow selected creature-to-loot links and source drops. Skinning imports distinct loot ids shared by those creatures.\n- Chest loot follows every selected chest template except the eight authored gather nodes. Fishing imports every selected zone. Both retain source membership after patch selection and reference expansion.\n- vmangos zero-chance group members share the probability left by explicit members. Classic-db keeps its existing omission of direct zero-chance rows for byte parity. Forbidden items are removed before reference weights are expanded, so forbidden children do not take a share of the remaining reference weight. Direct quest-only drops retain the sign as a separate flag where the Module table supports it.\n- Item-container and disenchant tables have no World Source import path in the current Module; they are counted in unsupported findings. Mail loot belongs to quests and is integrated in S3f.\n- Reference group-zero entries roll independently, group selectors select only the named group, and maxcount repeats each reference. Largest-remainder allocation keeps grouped shares within the reference chance. The manifest retains variable counts, runtime conditions and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.")?;
     }
+    if family == "quests" {
+        for table in [
+            "quest_template",
+            "creature_questrelation",
+            "creature_involvedrelation",
+            "gameobject_questrelation",
+            "gameobject_involvedrelation",
+            "areatrigger_involvedrelation",
+            "mail_loot_template",
+        ] {
+            writeln!(
+                output,
+                "- `{table}`: selection keeps {} of {} source rows.",
+                vmangos.rows(table)?.len(),
+                vmangos.row_count(table)?
+            )?;
+        }
+        writeln!(output, "- Quest templates and text follow selected giver relations in the profile's shared quest catalogue. Full profiles use the full catalogue; other canonical profiles share the starter and instance catalogue. Relations emitted into a Realm use local enabled spawn choices. S6 still owns EventAI dependency closure.\n- Objective differences follow selected quest targets and items available from the catalogue's creature loot, chests and vendors. Forbidden items are removed. Unavailable collect targets and non-goober GameObject targets remain omitted and are counted in the manifest. Cast and area-trigger objectives follow their selected relations.\n- Fixed and choice reward differences follow selected quest rows. Learn rewards use a single-effect learn wrapper from selected source spells. Other reward casts are unsupported.\n- Mail differences follow quest-template mail IDs, delays and money. vmangos reads no classic-db quest-end script table. Used mail loot must be one unconditional item with 100% chance and no reference.\n- Event requirements come from source exploration/event flags, except quests whose area-trigger objective already supplies that completion gate. Source script/event delivery remains for S6; the manifest reports those requirements. Classic-db derives its event requirements from the current EventAI plan.\n- vmangos supplies explicit `RewXP`. The Module cannot distinguish zero XP from its fallback calculation; the manifest counts that limit, along with unrepresented prerequisites, scripts, flags and extra reputation fields.")?;
+    }
     if family == "trainers" {
         for table in ["npc_trainer", "npc_trainer_template"] {
             writeln!(
@@ -318,6 +357,37 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
             )?;
         }
         writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.")?;
+    }
+    if family == "quests" {
+        writeln!(
+            output,
+            "| QUEST_GIVER_RELATIONS | {} | {} | {} |",
+            super::floor("QUEST_GIVER_RELATIONS")?,
+            before
+                .get("game_creature_quest")
+                .map_or(0, |count| count.rows),
+            after
+                .get("game_creature_quest")
+                .map_or(0, |count| count.rows)
+        )?;
+        for (index, name) in ["QUESTS_L6_10", "QUESTS_L10_20", "QUESTS_CHAINED"]
+            .into_iter()
+            .enumerate()
+        {
+            let count = |records: &Records| {
+                records
+                    .get("game_quest_template")
+                    .map_or(0, |count| count.quest_bands[index])
+            };
+            writeln!(
+                output,
+                "| {name} | {} | {} | {} |",
+                super::floor(name)?,
+                count(before),
+                count(after)
+            )?;
+        }
+        writeln!(output, "\n`QUESTGIVER_COVERAGE` minimum {} and `CORRIDOR_QUEST_LEVEL_BAND` minimum {} need spawned creatures at the script's locations; verify them with S4.", super::floor("QUESTGIVER_COVERAGE")?, super::floor("CORRIDOR_QUEST_LEVEL_BAND")?)?;
     }
     if family == "trainers" {
         for (name, skills) in [
