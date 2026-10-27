@@ -214,20 +214,15 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<
     let cls_rows: Vec<String> = parse_table(dump, "player_classlevelstats")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(class) = r.numeric_text(cls::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(level) = r.numeric_text(cls::LEVEL)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let class = r.number::<u32>(cls::CLASS)?;
+            let level = r.number::<u32>(cls::LEVEL)?;
+            Ok(format!(
                 "({},{class},{level},{},{})",
                 packed_class_level_id(class as u8, level as u8),
                 r.numeric_text(cls::BASEHP)?,
                 r.numeric_text(cls::BASEMANA)?,
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
@@ -238,16 +233,10 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<
     let lvl_rows: Vec<String> = parse_table(dump, "player_levelstats")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(race) = r.numeric_text(lvl::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = r.numeric_text(lvl::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(level) = r.numeric_text(lvl::LEVEL)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let race = r.number::<u32>(lvl::RACE)?;
+            let class = r.number::<u32>(lvl::CLASS)?;
+            let level = r.number::<u32>(lvl::LEVEL)?;
+            Ok(format!(
                 "({},{race},{class},{level},{},{},{},{},{})",
                 packed_race_class_level_id(race as u8, class as u8, level as u8),
                 r.numeric_text(lvl::STR)?,
@@ -255,9 +244,8 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<
                 r.numeric_text(lvl::STA)?,
                 r.numeric_text(lvl::INTE)?,
                 r.numeric_text(lvl::SPI)?,
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
@@ -277,13 +265,9 @@ fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Re
     let rows: Vec<String> = parse_table(dump, "playercreateinfo")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(race) = r.numeric_text(pc::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = r.numeric_text(pc::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let race = r.number::<u32>(pc::RACE)?;
+            let class = r.number::<u32>(pc::CLASS)?;
+            Ok(format!(
                 "({},{race},{class},{},{},{},{},{},{},0)",
                 packed_race_class_id(race as u8, class as u8),
                 r.numeric_text(pc::MAP)?,
@@ -292,9 +276,8 @@ fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Re
                 r.numeric_text(pc::Y)?,
                 r.numeric_text(pc::Z)?,
                 r.numeric_text(pc::O)?,
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_start_position WHERE race_class >= 0".to_string()];
     push_insert(
@@ -348,30 +331,17 @@ fn build_areatrigger_teleport_sql(
     let rows: Vec<String> = parse_table(dump, "areatrigger_teleport")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(trigger_id) = r.numeric_text(at::ID)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(target_map) = r.numeric_text(at::TARGET_MAP)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(x) = r.numeric_text(at::TARGET_X)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(y) = r.numeric_text(at::TARGET_Y)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(z) = r.numeric_text(at::TARGET_Z)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(o) = r.numeric_text(at::TARGET_O)?.parse::<f32>() else {
-                return Ok(None);
-            };
+            let trigger_id = r.number::<u32>(at::ID)?;
+            let target_map = r.number::<u32>(at::TARGET_MAP)?;
+            let x = r.number::<f32>(at::TARGET_X)?;
+            let y = r.number::<f32>(at::TARGET_Y)?;
+            let z = r.number::<f32>(at::TARGET_Z)?;
+            let o = r.number::<f32>(at::TARGET_O)?;
             let name = sql_text(r.text(at::NAME)?.trim());
-            Ok(Some(format!(
+            Ok(format!(
                 "({trigger_id},{target_map},{x},{y},{z},{o},{name})"
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let n = rows.len();
     let mut stmts = vec!["DELETE FROM game_areatrigger_teleport WHERE trigger_id >= 0".to_string()];
@@ -400,25 +370,15 @@ fn build_createinfo_spell_sql(
         .iter()
         .enumerate()
         .map(|(i, r)| -> Result<_> {
-            let Ok(race) = r.numeric_text(pcs::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = r.numeric_text(pcs::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(spell) = r
-                .numeric_text(match dump.kind() {
-                    SourceKind::ClassicDb => pcs::SPELL,
-                    SourceKind::Vmangos => "spell",
-                })?
-                .parse::<u32>()
-            else {
-                return Ok(None);
-            };
+            let race = r.number::<u32>(pcs::RACE)?;
+            let class = r.number::<u32>(pcs::CLASS)?;
+            let spell = r.number::<u32>(match dump.kind() {
+                SourceKind::ClassicDb => pcs::SPELL,
+                SourceKind::Vmangos => "spell",
+            })?;
             race_class_pairs.push((race, class));
-            Ok(Some(format!("({},{race},{class},{spell})", i as u64 + 1)))
+            Ok(format!("({},{race},{class},{spell})", i as u64 + 1))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()];
     push_insert(
@@ -443,28 +403,17 @@ fn build_createinfo_action_sql(
         .iter()
         .enumerate()
         .map(|(i, r)| -> Result<_> {
-            let Ok(race) = r.numeric_text(pca::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = r.numeric_text(pca::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(button) = r.numeric_text(pca::BUTTON)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(action) = r.numeric_text(pca::ACTION)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(action_type) = r.numeric_text(pca::TYPE)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let race = r.number::<u32>(pca::RACE)?;
+            let class = r.number::<u32>(pca::CLASS)?;
+            let button = r.number::<u32>(pca::BUTTON)?;
+            let action = r.number::<u32>(pca::ACTION)?;
+            let action_type = r.number::<u32>(pca::TYPE)?;
             race_class_pairs.push((race, class));
-            Ok(Some(format!(
+            Ok(format!(
                 "({},{race},{class},{button},{action},{action_type})",
                 i as u64 + 1
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_action WHERE row_id >= 0".to_string()];
     push_insert(
@@ -501,13 +450,9 @@ fn build_createinfo_item_sql(
     let mut id = CREATEINFO_ITEM_ID_FLOOR;
     let mut rows: Vec<String> = Vec::new();
     for r in parse_table(dump, "playercreateinfo_item")?.iter() {
-        let (Some(race), Some(class), Some(item)) = (
-            r.numeric_text(pci::RACE)?.parse::<u32>().ok(),
-            r.numeric_text(pci::CLASS)?.parse::<u32>().ok(),
-            r.numeric_text(pci::ITEM)?.parse::<i32>().ok(),
-        ) else {
-            continue;
-        };
+        let race = r.number::<u32>(pci::RACE)?;
+        let class = r.number::<u32>(pci::CLASS)?;
+        let item = r.number::<i32>(pci::ITEM)?;
         if item <= 0 {
             continue;
         }
@@ -4237,6 +4182,36 @@ mod tests {
         assert_eq!(
             manifest["findings"][0]["source_ids"],
             serde_json::json!([78])
+        );
+    }
+
+    #[test]
+    fn starter_spells_cannot_disappear_on_numeric_overflow() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::Integer;
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "playercreateinfo_spell",
+            columns: &[
+                ("race", "INTEGER"),
+                ("class", "INTEGER"),
+                ("spell", "INTEGER"),
+                ("build_min", "INTEGER"),
+                ("build_max", "INTEGER"),
+            ],
+            key: &["race", "class", "spell"],
+            rows: &[&[
+                ("race", Integer(1)),
+                ("class", Integer(1)),
+                ("spell", Integer(4_294_967_296)),
+                ("build_min", Integer(1)),
+                ("build_max", Integer(5875)),
+            ]],
+        }])
+        .unwrap();
+        let error = build_createinfo_spell_sql(&source).unwrap_err();
+        assert!(
+            error.to_string().contains("playercreateinfo_spell.spell"),
+            "{error:#}"
         );
     }
 
