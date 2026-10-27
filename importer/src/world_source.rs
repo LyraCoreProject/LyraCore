@@ -9,25 +9,6 @@ use rusqlite::{Connection, OpenFlags};
 
 use crate::dump::TableRows;
 
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub(crate) enum SourceKind {
-    ClassicDb,
-    #[default]
-    Vmangos,
-}
-
-impl std::str::FromStr for SourceKind {
-    type Err = anyhow::Error;
-
-    fn from_str(value: &str) -> Result<Self> {
-        match value {
-            "classic-db" => Ok(Self::ClassicDb),
-            "vmangos" => Ok(Self::Vmangos),
-            _ => bail!("unknown World Source {value:?}; expected classic-db or vmangos"),
-        }
-    }
-}
-
 #[derive(Clone, Debug)]
 pub(crate) enum Cell {
     Null,
@@ -237,10 +218,6 @@ impl<T: TableRows> TableRows for CachedSource<'_, T> {
         Ok(rows)
     }
 
-    fn kind(&self) -> SourceKind {
-        self.source.kind()
-    }
-
     fn source_hash(&self) -> Result<String> {
         self.source.source_hash()
     }
@@ -251,71 +228,35 @@ impl<T: TableRows> TableRows for CachedSource<'_, T> {
 }
 
 pub(crate) enum WorldSource {
-    ClassicDb(crate::dump::ParsedDump),
     #[cfg(test)]
     Vmangos(Connection),
     ProfiledVmangos(Connection, crate::vmangos_profile::SourceProfile),
 }
 
 impl WorldSource {
-    pub(crate) fn open(path: &Path, kind: SourceKind) -> Result<Self> {
-        match kind {
-            SourceKind::ClassicDb => Ok(Self::ClassicDb(crate::dump::read_dump(
-                path.to_str().context("World Source path is not UTF-8")?,
-            )?)),
-            SourceKind::Vmangos => {
-                let connection =
-                    Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
-                        .with_context(|| format!("open World Source {}", path.display()))?;
-                connection.pragma_update(None, "trusted_schema", false)?;
-                connection.pragma_update(None, "query_only", true)?;
-                Ok(Self::ProfiledVmangos(
-                    connection,
-                    crate::vmangos_profile::SourceProfile::load()?,
-                ))
-            }
-        }
+    pub(crate) fn open(path: &Path) -> Result<Self> {
+        let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)
+            .with_context(|| format!("open World Source {}", path.display()))?;
+        connection.pragma_update(None, "trusted_schema", false)?;
+        connection.pragma_update(None, "query_only", true)?;
+        Ok(Self::ProfiledVmangos(
+            connection,
+            crate::vmangos_profile::SourceProfile::load()?,
+        ))
     }
 
-    fn connection(&self) -> Option<&Connection> {
+    fn connection(&self) -> &Connection {
         match self {
-            Self::ClassicDb(_) => None,
             #[cfg(test)]
-            Self::Vmangos(connection) => Some(connection),
-            Self::ProfiledVmangos(connection, _) => Some(connection),
-        }
-    }
-
-    pub(crate) fn row_count(&self, table: &str) -> Result<usize> {
-        match self {
-            Self::ClassicDb(dump) => Ok(dump.rows(table)?.len()),
-            _ => {
-                let connection = self.connection().expect("vmangos source has a connection");
-                check_table(connection, table)?;
-                connection
-                    .query_row(
-                        &format!("SELECT count(*) AS total FROM {}", quote_identifier(table)),
-                        [],
-                        |row| row.get::<_, i64>("total"),
-                    )
-                    .map_err(anyhow::Error::from)
-                    .and_then(|count| usize::try_from(count).map_err(Into::into))
-            }
+            Self::Vmangos(connection) => connection,
+            Self::ProfiledVmangos(connection, _) => connection,
         }
     }
 }
 
 impl TableRows for WorldSource {
-    fn kind(&self) -> SourceKind {
-        match self {
-            Self::ClassicDb(_) => SourceKind::ClassicDb,
-            _ => SourceKind::Vmangos,
-        }
-    }
-
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
-            Self::ClassicDb(dump) => dump.rows(table),
             #[cfg(test)]
             Self::Vmangos(connection) => read_rows(connection, table, None, None).map(Cow::Owned),
             Self::ProfiledVmangos(connection, profile) => {
@@ -325,7 +266,6 @@ impl TableRows for WorldSource {
     }
     fn columns(&self, table: &str, columns: &[&str]) -> Result<Cow<'_, [Row]>> {
         match self {
-            Self::ClassicDb(dump) => dump.rows(table),
             #[cfg(test)]
             Self::Vmangos(connection) => {
                 read_rows(connection, table, Some(columns), None).map(Cow::Owned)
@@ -338,22 +278,18 @@ impl TableRows for WorldSource {
     fn source_profile_report(&self) -> Option<serde_json::Value> {
         match self {
             Self::ProfiledVmangos(_, profile) => Some(profile.report()),
-            _ => None,
+            #[cfg(test)]
+            Self::Vmangos(_) => None,
         }
     }
 
     fn source_hash(&self) -> Result<String> {
-        match self {
-            Self::ClassicDb(dump) => dump.source_hash(),
-            _ => {
-                let connection = self.connection().expect("vmangos source has a connection");
-                let path = connection
-                    .path()
-                    .filter(|path| !path.is_empty())
-                    .context("World Source has no file to hash")?;
-                crate::dump::sha256_hex(&std::fs::read(path)?)
-            }
-        }
+        let path = self
+            .connection()
+            .path()
+            .filter(|path| !path.is_empty())
+            .context("World Source has no file to hash")?;
+        crate::dump::sha256_hex(&std::fs::read(path)?)
     }
 }
 
@@ -543,11 +479,22 @@ pub(crate) fn sqlite_fixture(tables: &[FixtureTable<'_>]) -> Result<WorldSource>
 }
 
 #[cfg(test)]
+pub(crate) fn fixture_sql(schema_and_rows: &str) -> WorldSource {
+    let connection = Connection::open_in_memory().unwrap();
+    connection.execute_batch(schema_and_rows).unwrap();
+    connection
+        .pragma_update(None, "trusted_schema", false)
+        .unwrap();
+    connection.pragma_update(None, "query_only", true).unwrap();
+    WorldSource::Vmangos(connection)
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn both_sources_read_reordered_columns_and_check_requested_types() {
+    fn sqlite_reads_reordered_columns_and_checks_requested_types() {
         let sqlite = sqlite_fixture(&[FixtureTable {
             name: "example",
             columns: &[
@@ -562,21 +509,18 @@ mod tests {
             ]],
         }])
         .unwrap();
-        let classic = crate::dump::named_table("CREATE TABLE `example` (\n`optional` int,\n`entry` int,\n`name` text\n); INSERT INTO `example` VALUES (NULL,42,'O\\'Brien');", "example").unwrap();
         let sqlite_rows = sqlite.rows("example").unwrap();
-        for rows in [sqlite_rows.as_ref(), classic.as_slice()] {
-            let row = &rows[0];
-            assert_eq!(row.number::<u32>("entry").unwrap(), 42);
-            assert_eq!(row.text("name").unwrap(), "O'Brien");
-            assert!(row.number::<u32>("name").is_err());
-            assert!(row.text("entry").is_err());
-            assert!(row.number::<u32>("optional").is_err());
-            assert!(row
-                .number::<u32>("missing")
-                .unwrap_err()
-                .to_string()
-                .contains("example.missing"));
-        }
+        let row = &sqlite_rows[0];
+        assert_eq!(row.number::<u32>("entry").unwrap(), 42);
+        assert_eq!(row.text("name").unwrap(), "O'Brien");
+        assert!(row.number::<u32>("name").is_err());
+        assert!(row.text("entry").is_err());
+        assert!(row.number::<u32>("optional").is_err());
+        assert!(row
+            .number::<u32>("missing")
+            .unwrap_err()
+            .to_string()
+            .contains("example.missing"));
     }
 
     #[test]
@@ -609,7 +553,6 @@ mod tests {
         assert_eq!(cached.rows("creature_template").unwrap().len(), 1);
         assert!(cached.columns("creature_template", &["missing"]).is_err());
         assert!(cached.rows("missing").is_err());
-        assert_eq!(cached.kind(), SourceKind::Vmangos);
     }
 
     #[test]
@@ -668,19 +611,19 @@ mod tests {
     fn sqlite_file_is_read_only_and_does_not_create_a_missing_file() {
         let path = std::env::temp_dir().join(format!("world-source-{}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        assert!(WorldSource::open(&path, SourceKind::Vmangos).is_err());
+        assert!(WorldSource::open(&path).is_err());
         assert!(!path.exists());
         let connection = Connection::open(&path).unwrap();
         connection.execute_batch("CREATE TABLE example (entry INTEGER); INSERT INTO example VALUES (42); CREATE VIEW indirect AS SELECT * FROM example;").unwrap();
         drop(connection);
-        let source = WorldSource::open(&path, SourceKind::Vmangos).unwrap();
+        let source = WorldSource::open(&path).unwrap();
         assert!(source
             .rows("example")
             .unwrap_err()
             .to_string()
             .contains("unapproved source table"));
         assert!(source.rows("indirect").is_err());
-        let connection = source.connection().unwrap();
+        let connection = source.connection();
         assert_eq!(
             connection
                 .query_row("SELECT entry FROM example", [], |row| row

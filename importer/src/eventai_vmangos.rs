@@ -1,4 +1,4 @@
-use super::{encode_definition, pack_definition_batches, EventAiPlan, Subject};
+use super::{encode_definition, pack_definition_batches, EventAiPlan};
 use crate::dump::{sql_text, TableRows};
 use crate::world_source::Row;
 use anyhow::{ensure, Context, Result};
@@ -400,7 +400,7 @@ impl Source {
                 Ok((rule, compiled)) => {
                     used_commands.extend(event.actions);
                     definitions.entry(event.entry).or_default().push(rule);
-                    plan.coverage.emitted_instructions += compiled.instructions.len() as u64;
+                    plan.emitted_instructions += compiled.instructions.len() as u64;
                     used_texts.extend(compiled.texts);
                     summons.extend(compiled.summons);
                     plan.forced_template_entries.extend(compiled.templates);
@@ -431,13 +431,12 @@ impl Source {
             .iter()
             .map(|id| scripts.definitions[id].encode(*id))
             .collect();
-        let catalogue =
-            super::RelaySource::encoded_catalogue_version(&plan.relay_definition_rows).to_string();
+        let catalogue = super::encoded_catalogue_version(&plan.relay_definition_rows).to_string();
         plan.definition_rows = definitions
             .into_iter()
             .map(|(entry, rules)| {
                 encode_definition(
-                    Subject::Entry(entry),
+                    entry,
                     &rules
                         .into_iter()
                         .map(|rule| {
@@ -1500,18 +1499,13 @@ mod tests {
     }
     #[test]
     fn alternate_spawn_entries_participate_in_encounter_map_checks() {
-        let dump = "CREATE TABLE `creature` (
-`id` int,
-`id2` int,
-`id3` int,
-`id4` int,
-`id5` int,
-`map` int
-);
-INSERT INTO `creature` VALUES (4832,0,0,0,0,48),(10,4832,20,30,40,0);";
+        let dump = crate::world_source::fixture_sql("CREATE TABLE creature (
+            guid INTEGER PRIMARY KEY, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER,
+            map INTEGER, patch_min INTEGER DEFAULT 0, patch_max INTEGER DEFAULT 10);
+            INSERT INTO creature (guid,id,id2,id3,id4,id5,map) VALUES
+            (1,4832,0,0,0,0,48),(2,10,4832,20,30,40,0);");
         let mut source = source();
-        source.source_maps =
-            spawn_maps(&crate::dump::named_table(dump, "creature").unwrap()).unwrap();
+        source.source_maps = spawn_maps(&dump.rows("creature").unwrap()).unwrap();
         assert_eq!(source.source_maps[&4832], BTreeSet::from([0, 48]));
         assert!(!source.source_maps.contains_key(&0));
         for entry in [10, 20, 30, 40] {

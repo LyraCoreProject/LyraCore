@@ -5,9 +5,6 @@ use lyracore_package_delta::{packed_spell_effect_id, FieldValue};
 use crate::dump::sql_text;
 
 const SNAPSHOT_VERSION: u32 = 1;
-// Classic dry-run SQL retains its pre-extension column lists for byte parity.
-const LEGACY_HEADER_COLUMNS: usize = 25;
-const LEGACY_EFFECT_COLUMNS: usize = 18;
 
 pub(crate) struct SpellHeaderRow {
     pub(crate) spell_id: u32,
@@ -74,12 +71,8 @@ impl SpellHeaderRow {
         ]
     }
 
-    pub(crate) fn source_sql_values(&self) -> String {
-        sql_tuple(&self.columns())
-    }
-
     pub(crate) fn sql_values(&self) -> String {
-        sql_tuple(&self.columns()[..LEGACY_HEADER_COLUMNS])
+        sql_tuple(&self.columns())
     }
 }
 
@@ -132,16 +125,10 @@ impl SpellEffectRow {
         ]
     }
 
-    pub(crate) fn source_sql_values(&self) -> String {
-        let mut columns = self.columns();
-        columns.insert(0, ("id", FieldValue::U64(self.row_id())));
-        sql_tuple(&columns)
-    }
-
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
-        sql_tuple(&columns[..LEGACY_EFFECT_COLUMNS])
+        sql_tuple(&columns)
     }
 }
 
@@ -315,7 +302,7 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,0,0,0)"),
             "{sql}"
         );
     }

@@ -5,7 +5,6 @@ use anyhow::{bail, Context, Result};
 use crate::dump::{cr, parse_table, sql_str};
 use crate::world_import::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow};
 use crate::world_import_scope::WorldImportScope;
-use crate::world_source::SourceKind;
 
 pub(crate) struct PopulationPlan {
     pub(crate) spawns: Vec<CreatureSpawnRow>,
@@ -56,60 +55,6 @@ fn number<T: std::str::FromStr>(
         .with_context(|| format!("{table}.{column}"))
 }
 
-fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeMap<u64, Group>> {
-    let mut groups = BTreeMap::new();
-    for row in parse_table(dump, "spawn_group")?.iter() {
-        if number::<u32>(row, "Type", "spawn_group")? != 0 {
-            continue;
-        }
-        let id: u64 = number(row, "Id", "spawn_group")?;
-        if groups
-            .insert(
-                id,
-                Group {
-                    max_count: number(row, "MaxCount", "spawn_group")?,
-                    condition: number(row, "WorldState", "spawn_group")?,
-                    expression: number(row, "WorldStateExpression", "spawn_group")?,
-                    flags: number(row, "Flags", "spawn_group")?,
-                    entries: Vec::new(),
-                    is_pool: false,
-                },
-            )
-            .is_some()
-        {
-            bail!("duplicate creature spawn group {id}");
-        }
-    }
-    for row in parse_table(dump, "spawn_group_entry")?.iter() {
-        let id = number(row, "Id", "spawn_group_entry")?;
-        let Some(group) = groups.get_mut(&id) else {
-            continue;
-        };
-        let entry: u32 = number(row, "Entry", "spawn_group_entry")?;
-        let min: u32 = number(row, "MinCount", "spawn_group_entry")?;
-        let max: u32 = number(row, "MaxCount", "spawn_group_entry")?;
-        let chance: u32 = number(row, "Chance", "spawn_group_entry")?;
-        if entry == 0 || chance > 100 || (max > 0 && min > max) {
-            bail!("invalid spawn_group_entry for group {id}, entry {entry}");
-        }
-        if group.entries.iter().any(|candidate| candidate.0 == entry) {
-            bail!("duplicate spawn_group_entry for group {id}, entry {entry}");
-        }
-        if group
-            .entries
-            .iter()
-            .map(|candidate| candidate.3)
-            .sum::<u32>()
-            + chance
-            > 100
-        {
-            bail!("spawn_group_entry chances exceed 100 for group {id}");
-        }
-        group.entries.push((entry, min, max, chance));
-    }
-    Ok(groups)
-}
-
 struct Pool {
     limit: u32,
     members: BTreeMap<u64, u32>,
@@ -128,7 +73,6 @@ fn flatten_pool(
     id: u64,
     pools: &BTreeMap<u64, Pool>,
     visiting: &mut BTreeSet<u64>,
-    allow_dormant: bool,
     dormant: &mut bool,
 ) -> Result<BTreeMap<u64, u32>> {
     let pool = pools
@@ -140,9 +84,6 @@ fn flatten_pool(
     let mut members = pool.members.clone();
     if !pool.children.is_empty() {
         if pool.limit != 1 || !members.is_empty() {
-            if !allow_dormant {
-                bail!("creature pool {id}: unsupported nested limits or direct members");
-            }
             *dormant = true;
         }
         let mut size = None;
@@ -150,15 +91,12 @@ fn flatten_pool(
             let child_pool = pools
                 .get(&child)
                 .with_context(|| format!("missing pool_template {child}"))?;
-            let leaves = flatten_pool(child, pools, visiting, allow_dormant, dormant)?;
+            let leaves = flatten_pool(child, pools, visiting, dormant)?;
             if chance != 0
                 || child_pool.limit != 1
                 || leaves.values().any(|chance| *chance != 0)
                 || size.is_some_and(|size| size != leaves.len())
             {
-                if !allow_dormant {
-                    bail!("creature pool {id}: nested choices are not equal single selections");
-                }
                 *dormant = true;
             }
             size = Some(leaves.len());
@@ -173,7 +111,7 @@ fn flatten_pool(
     Ok(members)
 }
 
-fn add_legacy_pools(
+fn add_pools(
     dump: &(impl crate::dump::TableRows + ?Sized),
     groups: &mut BTreeMap<u64, Group>,
     memberships: &mut BTreeMap<u64, (u64, u32)>,
@@ -282,13 +220,7 @@ fn add_legacy_pools(
             bail!("pool {root} mixes creatures and GameObjects");
         }
         let mut dormant = false;
-        let members = flatten_pool(
-            root,
-            &pools,
-            &mut BTreeSet::new(),
-            dump.kind() == SourceKind::Vmangos,
-            &mut dormant,
-        )?;
+        let members = flatten_pool(root, &pools, &mut BTreeSet::new(), &mut dormant)?;
         if dormant {
             unsupported.push(root);
         }
@@ -356,27 +288,11 @@ pub(crate) fn vmangos_entry_choices(row: &crate::world_source::Row) -> Result<Ve
 fn source_choices(
     dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<BTreeMap<u64, Vec<u32>>> {
-    let vmangos = dump.kind() == SourceKind::Vmangos;
     let mut choices: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
-    if !vmangos {
-        for row in parse_table(dump, "creature_spawn_entry")?.iter() {
-            let guid = number(row, "guid", "creature_spawn_entry")?;
-            let entry = number(row, "entry", "creature_spawn_entry")?;
-            if entry == 0 {
-                bail!("creature_spawn_entry {guid}: entry zero");
-            }
-            choices.entry(guid).or_default().push(entry);
-        }
-        for entries in choices.values_mut() {
-            entries.sort_unstable();
-            entries.dedup();
-        }
-    } else {
-        for row in dump.rows("creature")?.iter() {
-            let entries = vmangos_entry_choices(row)?;
-            if entries.len() > 1 {
-                choices.insert(row.number("guid")?, entries);
-            }
+    for row in dump.rows("creature")?.iter() {
+        let entries = vmangos_entry_choices(row)?;
+        if entries.len() > 1 {
+            choices.insert(row.number("guid")?, entries);
         }
     }
     Ok(choices)
@@ -386,29 +302,8 @@ pub(crate) fn collect(
     dump: &(impl crate::dump::TableRows + ?Sized),
     scope: &WorldImportScope,
 ) -> Result<PopulationPlan> {
-    let vmangos = dump.kind() == SourceKind::Vmangos;
-    let mut groups = if vmangos {
-        BTreeMap::new()
-    } else {
-        source_groups(dump)?
-    };
+    let mut groups = BTreeMap::new();
     let mut memberships = BTreeMap::new();
-    if !vmangos {
-        for row in parse_table(dump, "spawn_group_spawn")?.iter() {
-            let id = number(row, "Id", "spawn_group_spawn")?;
-            if !groups.contains_key(&id) {
-                continue;
-            }
-            let guid: u64 = number(row, "Guid", "spawn_group_spawn")?;
-            let chance: u32 = number(row, "Chance", "spawn_group_spawn")?;
-            if chance > 100 {
-                bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
-            }
-            if memberships.insert(guid, (id, chance * 100)).is_some() {
-                bail!("creature source guid {guid} belongs to several groups");
-            }
-        }
-    }
     let choices = source_choices(dump)?;
     let mut events: BTreeMap<u64, BTreeSet<i32>> = BTreeMap::new();
     for row in parse_table(dump, "game_event_creature")?.iter() {
@@ -419,16 +314,10 @@ pub(crate) fn collect(
         }
         events.entry(guid).or_default().insert(event);
     }
-    let unsupported_pools = add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
+    let unsupported_pools = add_pools(dump, &mut groups, &mut memberships, &mut events)?;
     let templates: BTreeSet<u32> = parse_table(dump, "creature_template")?
         .iter()
-        .map(|row| {
-            number(
-                row,
-                if vmangos { "entry" } else { "Entry" },
-                "creature_template",
-            )
-        })
+        .map(|row| number(row, "entry", "creature_template"))
         .collect::<Result<_>>()?;
     let mut plan = PopulationPlan {
         spawns: Vec::new(),
@@ -442,8 +331,7 @@ pub(crate) fn collect(
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
     for row in parse_table(dump, "creature")?.iter() {
-        if vmangos && (row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0)
-        {
+        if row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0 {
             continue;
         }
         let map: i64 = number(row, cr::MAP, "creature")?;
@@ -452,8 +340,7 @@ pub(crate) fn collect(
         let z: f64 = number(row, cr::Z, "creature")?;
         let raw_entry: u64 = number(row, cr::ID, "creature")?;
         if !(creature_row_kept_in_scope(scope, map, x, y, z, raw_entry)
-            || vmangos
-                && scope.contains_map(map)
+            || scope.contains_map(map)
                 && choices
                     .get(&row.number::<u64>("guid")?)
                     .is_some_and(|entries| {
@@ -513,15 +400,7 @@ pub(crate) fn collect(
             y,
             z,
             orientation,
-            number(
-                row,
-                if vmangos {
-                    "movement_type"
-                } else {
-                    cr::MOVEMENT_TYPE
-                },
-                "creature",
-            )?,
+            number(row, "movement_type", "creature")?,
             number(row, cr::SPAWN_TIME_SECS_MIN, "creature")?,
             map,
         ));
@@ -661,128 +540,5 @@ mod tests {
             plan.definition_rows,
             ["(8589934593,1,4294967295,0,0,'',true)"]
         );
-    }
-
-    #[test]
-    fn rejects_duplicate_entries_and_excess_total_chance_before_emitting_sql() {
-        let scope = WorldImportScope::canonical(crate::WorldImportProfile::FullWorld).unwrap();
-        for (entries, reason) in [
-            ("(1,10,0,0,0),(1,10,0,0,0)", "duplicate spawn_group_entry"),
-            ("(1,10,0,0,60),(1,20,0,0,50)", "chances exceed 100"),
-        ] {
-            let dump = format!("INSERT INTO `spawn_group` VALUES (1,'fixture',0,0,0,0,0,0); INSERT INTO `spawn_group_entry` VALUES {entries};");
-            let error = collect(&dump, &scope).err().unwrap();
-            assert!(error.to_string().contains(reason), "{error}");
-        }
-    }
-
-    #[test]
-    fn capped_groups_keep_all_positions_and_every_entry_choice() {
-        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10),(20);
-            INSERT INTO `creature` VALUES (1,0,0,0,1,2,3,0,60,60,0,0),(2,0,0,0,4,5,6,0,60,60,0,0);
-            INSERT INTO `spawn_group` VALUES (7,'rare',0,1,0,0,0,0);
-            INSERT INTO `spawn_group_spawn` VALUES (7,1,0,0),(7,2,0,0);
-            INSERT INTO `spawn_group_entry` VALUES (7,10,0,1,25),(7,20,0,1,0);";
-        let plan = collect(dump, &full_scope()).unwrap();
-        assert_eq!(plan.spawns.len(), 2);
-        assert_eq!(plan.membership_rows.len(), 2);
-        assert_eq!(plan.referenced_entries, HashSet::from([10, 20]));
-        assert!(plan.definition_rows[0].contains("10,0,1,25;20,0,1,0"));
-    }
-
-    #[test]
-    fn conditional_source_without_sql_entry_choices_remains_inspectable() {
-        let dump = "INSERT INTO `creature` VALUES (11559,0,0,0,1,2,3,0,60,60,0,0);
-            INSERT INTO `spawn_group` VALUES (19980,'emissary',0,0,19998,0,10,0);
-            INSERT INTO `spawn_group_spawn` VALUES (19980,11559,0,0);";
-        let plan = collect(dump, &full_scope()).unwrap();
-        assert_eq!(plan.spawns.len(), 1);
-        assert_eq!(plan.spawns[0].1, 0);
-        assert_eq!(plan.conditional_spawns, 1);
-        assert_eq!(plan.membership_rows.len(), 1);
-    }
-
-    #[test]
-    fn missing_entry_dependency_names_the_source_guid() {
-        let dump = "INSERT INTO `creature` VALUES (123,0,0,0,1,2,3,0,60,60,0,0);";
-        let error = collect(dump, &full_scope()).err().unwrap().to_string();
-        assert!(error.contains("creature 123"), "{error}");
-    }
-
-    #[test]
-    fn missing_template_dependency_names_the_source_guid_and_entry() {
-        let dump = "INSERT INTO `creature` VALUES (123,456,0,0,1,2,3,0,60,60,0,0);";
-        let error = collect(dump, &full_scope()).err().unwrap().to_string();
-        assert!(error.contains("creature 123"), "{error}");
-        assert!(error.contains("missing creature_template 456"), "{error}");
-    }
-
-    #[test]
-    fn event_source_keeps_the_sign_of_each_membership() {
-        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10);
-            INSERT INTO `creature` VALUES (1,10,0,0,1,2,3,0,60,60,0,0),(2,10,0,0,4,5,6,0,60,60,0,0);
-            INSERT INTO `game_event_creature` VALUES (1,4),(2,-4);";
-        let plan = collect(dump, &full_scope()).unwrap();
-        assert_eq!(plan.spawns.len(), 2);
-        assert_eq!(plan.event_spawns, 1);
-        assert!(plan.membership_rows.iter().any(|row| row.contains("'-4'")));
-    }
-
-    #[test]
-    fn rejects_incomplete_population_source() {
-        let scope = WorldImportScope::quest_catalogue().unwrap();
-        assert!(collect("INSERT INTO `spawn_group` (`Id`, `Name`) VALUES (1", &scope).is_err());
-    }
-
-    #[test]
-    fn template_and_nested_pools_keep_limits_and_fractional_chances() {
-        let dump = "INSERT INTO `creature_template` (`Entry`) VALUES (10),(20);
-            INSERT INTO `creature` VALUES (1,10,0,0,1,2,3,0,60,60,0,0),(2,10,0,0,4,5,6,0,60,60,0,0),(3,20,0,0,4,5,6,0,60,60,0,0),(4,20,0,0,4,5,6,0,60,60,0,0);
-            INSERT INTO `pool_template` VALUES (1,1,'root'),(2,1,'child'),(3,1,'child');
-            INSERT INTO `pool_creature_template` VALUES (10,2,0,''),(20,3,0,'');
-            INSERT INTO `pool_pool` VALUES (2,1,0,''),(3,1,0,'');";
-        let plan = collect(dump, &full_scope()).unwrap();
-        assert_eq!(plan.spawns.len(), 4);
-        assert_eq!(plan.definition_rows, ["(8589934593,1,0,0,0,'',true)"]);
-        assert_eq!(plan.membership_rows.len(), 4);
-        let unequal = dump.replace("(3,1,'child')", "(3,2,'child')");
-        assert!(collect(&unequal, &full_scope())
-            .err()
-            .unwrap()
-            .to_string()
-            .contains("nested choices"));
-        let fractional = dump.split("INSERT INTO `pool_template`").next().unwrap().to_owned()
-            + "INSERT INTO `pool_template` VALUES (1,1,'rare'); INSERT INTO `pool_creature` VALUES (1,1,7.5,''),(2,1,0,''); INSERT INTO `game_event_creature` VALUES (1,27);";
-        let plan = collect(&fractional, &full_scope()).unwrap();
-        assert!(plan
-            .membership_rows
-            .iter()
-            .any(|row| row.contains(",750,'27')")));
-        assert!(plan
-            .membership_rows
-            .iter()
-            .all(|row| row.ends_with("'27')")));
-    }
-
-    #[test]
-    #[ignore = "requires pinned LYRACORE_CLASSIC_DB_SQL"]
-    fn pinned_legacy_pools_cover_every_direct_and_template_position() {
-        let dump =
-            crate::dump::read_dump(&std::env::var("LYRACORE_CLASSIC_DB_SQL").unwrap()).unwrap();
-        let plan = collect(&dump, &full_scope()).unwrap();
-        assert_eq!(plan.spawns.len(), 66_310);
-        assert_eq!(
-            plan.definition_rows
-                .iter()
-                .filter(|row| row.ends_with(",true)"))
-                .count(),
-            270
-        );
-        let members = plan
-            .membership_rows
-            .iter()
-            .filter(|row| row.split(',').nth(1).unwrap().parse::<u64>().unwrap() >= (2_u64 << 32))
-            .count();
-        assert_eq!(members, 998);
     }
 }

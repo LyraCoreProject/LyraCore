@@ -3,9 +3,8 @@ use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use anyhow::Result;
 use wow_world_base::vanilla::SpellEffect;
 
-use crate::dump::{push_insert, TableRows};
+use crate::dump::TableRows;
 use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
-use crate::world_source::SourceKind;
 
 use super::{
     build_mail_loot, build_quests, collect_gameobject_spawns, creature_drop_item_set,
@@ -14,11 +13,7 @@ use super::{
 };
 
 pub(super) fn learn_spells(dump: &(impl TableRows + ?Sized)) -> Result<HashMap<u32, u32>> {
-    let (id, effect, trigger) = if dump.kind() == SourceKind::Vmangos {
-        ("entry", "effect", "effectTriggerSpell")
-    } else {
-        ("Id", "Effect", "EffectTriggerSpell")
-    };
+    let (id, effect, trigger) = ("entry", "effect", "effectTriggerSpell");
     let mut columns = vec![id.to_string()];
     for slot in 1..=3 {
         columns.extend([format!("{effect}{slot}"), format!("{trigger}{slot}")]);
@@ -92,7 +87,7 @@ fn event_requirements(
             && row.number::<u32>("SpecialFlags")? & 2 != 0
         {
             let entry: u32 = row.number("entry")?;
-            // Classic gates these quests through scripts despite their empty objective lists.
+            // Preserve the two script-only quest gates; see conformance/unsupported-vmangos.md for 2608.
             if credit_sources.contains(&entry) || matches!(entry, 2460 | 2608) {
                 rows.push(format!("({},{entry})", rows.len() + 1));
             }
@@ -104,26 +99,48 @@ fn event_requirements(
     Ok((rows, without_source))
 }
 
-pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
-    let full = args
-        .world_profile
-        .is_some_and(WorldImportProfile::imports_all_templates);
+struct Catalogue {
+    quests: QuestEtl,
+    obtainable: HashSet<u64>,
+    goober_entries: HashSet<u64>,
+}
+
+fn catalogue_scope(args: &WorldImportArgs) -> Result<WorldImportScope> {
     let mut scope = match args.world_profile {
-        Some(_) if full => WorldImportScope::canonical(WorldImportProfile::FullWorld)?,
+        Some(profile) if profile.imports_all_templates() => {
+            WorldImportScope::canonical(WorldImportProfile::FullWorld)?
+        }
         Some(_) => WorldImportScope::quest_catalogue()?,
         None => args.scope.clone(),
     };
     scope.extend_forced_creatures(&args.include_creatures);
-    let templates = dump.columns("creature_template", &["entry", "loot_id"])?;
-    let mut entries = if full {
-        templates
+    Ok(scope)
+}
+
+fn catalogue_creatures(
+    dump: &impl TableRows,
+    args: &WorldImportArgs,
+    scope: &WorldImportScope,
+) -> Result<HashSet<u64>> {
+    let mut entries = if args
+        .world_profile
+        .is_some_and(WorldImportProfile::imports_all_templates)
+    {
+        dump.columns("creature_template", &["entry"])?
             .iter()
             .map(|row| row.number("entry"))
             .collect::<Result<_>>()?
     } else {
-        placed_creatures(dump, &scope)?
+        placed_creatures(dump, scope)?
     };
     entries.extend(scope.forced_creature_entries.iter().copied());
+    Ok(entries)
+}
+
+fn catalogue(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Catalogue> {
+    let scope = catalogue_scope(args)?;
+    let entries = catalogue_creatures(dump, args, &scope)?;
+    let templates = dump.columns("creature_template", &["entry", "loot_id"])?;
     let loot = templates
         .iter()
         .filter_map(|row| {
@@ -149,19 +166,49 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
         &obtainable,
         Some((&local_creatures, &local_go.used_go)),
     )?;
+    Ok(Catalogue {
+        quests,
+        obtainable,
+        goober_entries: catalogue_go.goober_entries,
+    })
+}
+
+pub(super) fn event_requirement_rows(
+    dump: &impl TableRows,
+    args: &WorldImportArgs,
+    credit_sources: &BTreeSet<u32>,
+) -> Result<Vec<String>> {
+    let scope = catalogue_scope(args)?;
+    let creatures = catalogue_creatures(dump, args, &scope)?;
+    let gameobjects = collect_gameobject_spawns(dump, &scope)?.used_go;
+    let mut entries = HashSet::new();
+    for (table, owners) in [
+        ("creature_questrelation", &creatures),
+        ("creature_involvedrelation", &creatures),
+        ("gameobject_questrelation", &gameobjects),
+        ("gameobject_involvedrelation", &gameobjects),
+    ] {
+        entries.extend(
+            super::quest_relations(dump, table, owners)?
+                .into_iter()
+                .map(|(_, quest)| quest),
+        );
+    }
+    Ok(event_requirements(dump, &entries, credit_sources)?.0)
+}
+
+pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let Catalogue {
+        quests,
+        obtainable,
+        goober_entries,
+    } = catalogue(dump, args)?;
     let (mail, _) = build_mail_loot(dump, &quests.reward_mail_template_ids)?;
     let mut stmts = Vec::new();
     push_quest_statements(&mut stmts, &quests, &mail);
     let (creature_ai, _) = super::vmangos_creature_ai(dump, args)?;
-    let (events, without_source) =
+    let (_, without_source) =
         event_requirements(dump, &quests.entries, &creature_ai.quest_event_entries)?;
-    stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
-    push_insert(
-        &mut stmts,
-        "game_quest_event_requirement",
-        "id,quest_entry",
-        &events,
-    );
     Ok(DumpPlan {
         stmts,
         stamps: vec![("quests", quests.templates.len() as u64)],
@@ -169,7 +216,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             dump,
             &quests,
             &obtainable,
-            &catalogue_go.goober_entries,
+            &goober_entries,
             &without_source,
         )?)?),
         ..Default::default()

@@ -43,7 +43,7 @@ runs before power is charged. Its typed Refusal is `TargetLevelTooLow`; the nati
 client result 0x2b and confirms that refusal leaves power and auras unchanged.
 
 Classic spell SQL keeps its prior bytes. The creature DELETE changes the full import output as
-recorded in [the revised classic baseline](../classic-baseline-m3.md). At the SQL execution boundary, the importer fills
+recorded in [the revised classic baseline](classic-baseline-m3.md). At the SQL execution boundary, the importer fills
 only missing appended fields with their defaults because SpacetimeDB SQL requires all columns.
 The importer and Rust test support call one shared rewriter. Python fixtures derive defaults from
 `crates/lyracore-shared/src/import_sql_defaults.txt`, the same list the Rust rewriter reads.

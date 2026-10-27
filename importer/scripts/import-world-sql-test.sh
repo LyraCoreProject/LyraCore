@@ -30,7 +30,8 @@ checkout="$sandbox/checkout"
 mkdir -p "$checkout/importer/scripts" "$checkout/target/debug"
 cp "$repo_root/importer/scripts/import-world.sh" "$checkout/importer/scripts/import-world.sh"
 cp "$repo_root/importer/scripts/import-manifest.sh" "$checkout/importer/scripts/import-manifest.sh"
-cp "$repo_root/importer/scripts/classic-db.lock" "$checkout/importer/scripts/classic-db.lock"
+cp "$repo_root/importer/scripts/vmangos-source.sh" "$checkout/importer/scripts/vmangos-source.sh"
+touch "$checkout/source.sqlite"
 cp "$repo_root/importer/scripts/import-class-spells.sh" "$checkout/importer/scripts/import-class-spells.sh"
 chmod +x "$checkout/importer/scripts/import-world.sh" "$checkout/importer/scripts/import-class-spells.sh"
 under_test="$checkout/importer/scripts/import-world.sh"
@@ -99,6 +100,8 @@ run_import() {
         env -i \
             HOME="$sandbox/home" \
             PATH="$stubs:/usr/bin:/bin" \
+            DUMP="$checkout/source.sqlite" \
+            SOURCE_SHA="0123456789012345678901234567890123456789" \
             STUB_LOG="$stub_log" \
             STUB_MODE="${STUB_MODE:-succeed}" \
             STUB_ROW_COUNT="${STUB_ROW_COUNT:-20}" \
@@ -157,7 +160,7 @@ check "the profile run reaches the assertion stage" not_contains "$out" '[world]
 check "the profile is displayed with all of its planned maps" \
     contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36 369)'
 check "the standalone DBC catalogue receives the full taxi mount dump" \
-    grep -q -- '--dbc .*--taxi-mounts .import/classic-db-full.sql --apply' "$stub_log"
+    grep -q -- '--dbc .*--taxi-mounts .*source.sqlite --source-sha 0123456789012345678901234567890123456789 --apply' "$stub_log"
 check "the dump ETL receives the canonical profile name" \
     grep -q -- 'lyracore-importer .*--world-profile alliance-single' "$stub_log"
 check "the dump ETL reads the client spell catalogue before world AI" \
@@ -198,7 +201,7 @@ for profile in full-world full-eastern full-kalimdor full-instances; do
     check "$profile does not report its own maps as contamination" not_contains "$out" 'cross-continent contamination'
     check "$profile passes the name to the dump importer" \
         grep -q -- "lyracore-importer .*--dump .*--world-profile $profile " "$stub_log"
-    dump_passes="$(count_matches "$stub_log" '^lyracore-importer .*--dump ' )"
+    dump_passes="$(count_matches "$stub_log" "^lyracore-importer .*--dump .*--world-profile $profile " )"
     check "$profile runs exactly one dump and client catalogue pass" test "$dump_passes" -eq 1
     check "$profile reads client catalogues during that dump pass" \
         grep -q -- "lyracore-importer .*--dump .*--dbc .*--world-profile $profile " "$stub_log"
@@ -250,12 +253,9 @@ done
         bash "$under_test"
 ) >"$out" 2>&1
 code=$?
-check "the run still completes (python3 is an audit, not a gate)" test -n "$(cat "$out")"
-check "it prints the explicit SKIP line" contains "$out" "SKIP: service-coverage audit needs python3"
-check "it never lets a bare 'command not found' leak into the output" \
-    not_contains "$out" "python3: command not found"
-check "the coverage floors are not silently reported as achieved-0 FAILs" \
-    not_contains "$out" "trainer coverage (spawned trainers that teach): got 0"
+check "missing python3 refuses snapshot validation" test "$code" -ne 0
+check "the refusal names the prerequisite" contains "$out" "vmangos source: python3 is required"
+check "the refusal does not leak a command-not-found error" not_contains "$out" "python3: command not found"
 
 echo
 printf '%d passed, %d failed\n' "$passed" "$failed"

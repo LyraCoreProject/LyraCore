@@ -295,8 +295,6 @@ fn patch_constants_and_unsupported_predicates_keep_boolean_gates() {
 #[test]
 fn named_gossip_rows_preserve_slots_literal_text_flags_and_default_options() {
     let args = crate::parse_args_from([
-        "--source",
-        "vmangos",
         "--dump",
         "fixture.sqlite",
         "--family",

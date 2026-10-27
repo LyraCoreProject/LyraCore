@@ -27,10 +27,11 @@ emit a plan. The importer never executes source SQL or scripts.
 combined import, including spells, the reference catalogues and every world family. Full profiles
 share global catalogues; spatial rows follow the selected World Import Scope.
 
-The migration censuses compare production plans, not observations of a Realm. The consumed floors
+The [migration censuses](../conformance/vmangos-port-census/README.md) compare production plans,
+not observations of a Realm. The consumed floors
 and their count-based rationale are in
 [`vmangos-floors.md`](../importer/manifests/vmangos-floors.md). The
-[unsupported behavior ledger](../.claude/tickets/vmangos-port/unsupported.md) records known gaps,
+[unsupported behavior ledger](../conformance/unsupported-vmangos.md) records known gaps,
 including creatures whose behavior lives in vmangos C++ AI or has no source rows.
 
 The vmangos globals Compatibility Manifest reports portal conditions that the Module cannot apply.
@@ -155,8 +156,8 @@ IDs and uses the selected wrapper's spell level when the offer has no required l
 vmangos profession offers come from its skill-step effects. Constant steps 1 through 4 grant
 75 through 300 ranks, following [EffectLearnSkill at the same commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEffects.cpp#L2959-L2975).
 Buying a profession offer grants both its skill cap and its resolved learned spell.
-The import adds no synthetic profession offers. Its manifest reports gaps against the authored
-profession list, source skill prerequisites and multiple learn targets the Module cannot represent.
+The import adds no synthetic profession offers. Its manifest reports source skill prerequisites
+and multiple learn targets the Module cannot represent.
 
 The quests family selects quest patches and relation ranges. Full profiles share the full quest
 catalogue; other canonical profiles share the existing starter and instance catalogue. Giver
@@ -166,7 +167,8 @@ EventAI or script credit source for that quest, and no area-trigger objective al
 Otherwise normal imported objectives determine completion, except previously script-gated quests 2460
 and 2608, which retain their gates even when the scene is unsupported. The Compatibility Manifest lists each
 missing source under `quests.event-credit-without-source`; the event-credit ledger records the
-refused SQL, absent dispatcher or C++ source reference. The source flag meaning follows
+refused SQL, absent dispatcher or C++ source reference. Only the `creature-ai` family replaces
+`game_quest_event_requirement`; importing `quests` leaves that catalogue intact. The source flag meaning follows
 [QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
 
 Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sender zero retains the

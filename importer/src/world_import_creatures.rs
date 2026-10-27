@@ -533,7 +533,6 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
         population.append_statements(&mut plan.stmts);
         let payload = build_packed_spawn_payload(&population.spawns);
         plan.spawn_batches = payload
-            .packed_spawns
             .split(';')
             .filter(|r| !r.is_empty())
             .collect::<Vec<_>>()
@@ -666,66 +665,6 @@ mod tests {
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
         WorldSource::Vmangos(connection)
-    }
-
-    #[test]
-    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-    fn classic_reimport_restores_rank_health_and_melee_damage() {
-        let mut statements = Vec::new();
-        templates(
-            &template_source(),
-            &HashSet::from([5090042]),
-            &HashSet::new(),
-            None,
-            &mut statements,
-            &mut Findings::new(),
-            &BTreeMap::new(),
-        )
-        .unwrap();
-        let mut node = crate::standalone_support::Standalone::start("classic-creature-reimport");
-        node.publish_module();
-        node.assert_call("claim_operator", &[]);
-        node.assert_call("install_guid_range", &["0"]);
-        node.assert_call("debug_seed_scenario_fixtures", &[]);
-        node.assert_call("debug_spawn_player_entity", &["1"]);
-        for statement in &statements {
-            node.assert_sql(statement);
-        }
-        let classic = "INSERT INTO `creature_template` (`Entry`,`Name`,`MinLevel`,`MaxLevel`,`MinLevelHealth`,`MaxLevelHealth`,`MinMeleeDmg`,`MaxMeleeDmg`,`Rank`,`Faction`,`ModelId1`,`Scale`,`MeleeBaseAttackTime`) VALUES (5090042,'Classic fixture',10,10,100,100,20,20,3,35,100,1,2000);";
-        let args = crate::parse_args_from([
-            "--dump",
-            "fixture.sql",
-            "--family",
-            "creatures",
-            "--world-profile",
-            "full-world",
-        ])
-        .unwrap()
-        .world_import_args()
-        .unwrap();
-        for (reimport, health, damage) in [(false, 100, 20), (true, 400, 50)] {
-            if reimport {
-                let plan = build_dump_plan(classic, &args, &None, &None).unwrap();
-                for statement in plan.stmts {
-                    node.assert_sql(&statement);
-                }
-                assert!(node
-                    .query_rows("SELECT id FROM game_creature_level_stats WHERE entry = 5090042")
-                    .is_empty());
-            }
-            node.assert_call("debug_spawn_at_feet", &["1", "5090042", "5"]);
-            let rows =
-                node.query_rows("SELECT guid,health FROM game_world_entity WHERE entry = 5090042");
-            let creature = rows
-                .iter()
-                .find(|row| row["health"] == health.to_string())
-                .unwrap();
-            node.assert_call("debug_compute_swing", &[&creature["guid"], "1"]);
-            let swing = node
-                .query_rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'");
-            assert_eq!(swing[0]["base_min"], damage.to_string());
-            assert_eq!(swing[0]["base_max"], damage.to_string());
-        }
     }
 
     #[test]

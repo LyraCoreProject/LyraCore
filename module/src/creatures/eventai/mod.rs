@@ -75,7 +75,6 @@ pub(crate) use model::{
     WalkingMode,
 };
 pub use movement::{CreatureAiMovementIntent, CreatureAiMovementPathWaypoint};
-use presentation::import_verified_rajaxx_spawn_protection;
 pub(crate) use presentation::{
     CreaturePresentationInstruction, CreaturePresentationMount, FlagOverride,
 };

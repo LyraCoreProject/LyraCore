@@ -202,7 +202,7 @@ fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
 
     let rules: Vec<EventAiRule> = encoded_rules
         .split('~')
-        .map(|encoded| parse_rule_for_subject(encoded, creature_guid))
+        .map(parse_rule)
         .collect::<Result<_, _>>()?;
     if rules
         .windows(2)
@@ -218,12 +218,7 @@ fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     })
 }
 
-#[cfg(test)]
 fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
-    parse_rule_for_subject(encoded, 0)
-}
-
-fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRule, String> {
     let fields: Vec<&str> = encoded.splitn(9, ',').collect();
     if !(8..=9).contains(&fields.len()) {
         return Err(format!(
@@ -260,9 +255,7 @@ fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRu
     };
     let instructions = encoded_instructions
         .split('+')
-        .map(|instruction| {
-            parse_import_verified_instruction(instruction, source_rule_id, creature_guid)
-        })
+        .map(parse_instruction)
         .collect::<Result<Vec<_>, _>>()?;
     if instructions.is_empty() {
         return Err("rule has no instructions".to_string());
@@ -347,25 +340,6 @@ fn parse_execution(encoded: &str) -> Result<ExecutionPolicy, String> {
         check_result: parse_bool(check_result)?,
         predicate: parse_event_predicate(predicate)?,
     }))
-}
-
-fn parse_import_verified_instruction(
-    encoded: &str,
-    source_rule_id: u64,
-    creature_guid: u64,
-) -> Result<CreatureInstruction, String> {
-    const CLASSIC_RAJAXX_RULE_ID: u64 = 1_534_108;
-    const CLASSIC_RAJAXX_CREATURE_GUID: u64 = 17_379_391_219_402_170_660;
-
-    if encoded != "unit-flags:set:rajaxx-spawn-protection" {
-        return parse_instruction(encoded);
-    }
-    if source_rule_id != CLASSIC_RAJAXX_RULE_ID || creature_guid != CLASSIC_RAJAXX_CREATURE_GUID {
-        return Err("Rajaxx client projection is reserved for its pinned source rule".to_string());
-    }
-    Ok(CreatureInstruction::Presentation(
-        super::import_verified_rajaxx_spawn_protection(),
-    ))
 }
 
 fn parse_event(encoded: &str) -> Result<EventCondition, String> {
@@ -1459,35 +1433,6 @@ mod tests {
             })
         ));
         assert!(parse_instruction("unit-flags:set:rajaxx-spawn-protection").is_err());
-        let quarantine_rule =
-            "1534108,aggro,100,1,once,all,ordinary,unit-flags:set:rajaxx-spawn-protection";
-        let quarantine_subject = "guid:17379391219402170660";
-        let material = format!("{quarantine_subject}@{quarantine_rule}");
-        let quarantine = parse_definition(&format!(
-            "{quarantine_subject}@{}@{quarantine_rule}",
-            definition_revision(&material)
-        ))
-        .unwrap();
-        assert!(matches!(
-            quarantine.rules[0].instructions[0],
-            CreatureInstruction::Presentation(
-                CreaturePresentationInstruction::SetRajaxxSpawnProtection(_)
-            )
-        ));
-        let vmangos_subject = "entry:15341";
-        let material = format!("{vmangos_subject}@{quarantine_rule}");
-        assert!(parse_definition(&format!(
-            "{vmangos_subject}@{}@{quarantine_rule}",
-            definition_revision(&material)
-        ))
-        .is_err());
-        let invalid_rule = quarantine_rule.replacen("1534108", "1534109", 1);
-        let material = format!("{quarantine_subject}@{invalid_rule}");
-        assert!(parse_definition(&format!(
-            "{quarantine_subject}@{}@{invalid_rule}",
-            definition_revision(&material)
-        ))
-        .is_err());
         assert!(parse_instruction("unit-field:147:3").is_err());
         assert!(parse_instruction("unit-flags:set:832").is_err());
     }

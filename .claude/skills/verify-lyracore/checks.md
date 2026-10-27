@@ -31,7 +31,7 @@ checks after the source change; automated counts cannot establish client behavio
   Their items, spells, quest rewards or GameObjects now come from vmangos.
 
 Known unsupported encounters are listed in the
-[behavior ledger](../../tickets/vmangos-port/unsupported.md). Do not count an automated import as
+[behavior ledger](../../../conformance/unsupported-vmangos.md). Do not count an automated import as
 completion of any step here.
 
 ## Auction house

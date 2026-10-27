@@ -1,6 +1,6 @@
 use super::*;
 use crate::dump::TableRows;
-use crate::world_source::{Row, SourceKind};
+use crate::world_source::Row;
 
 enum Kind {
     Unsigned,
@@ -245,46 +245,19 @@ pub(crate) fn world_plan(
     source: &impl TableRows,
     data_dir: &str,
 ) -> Result<crate::world_import::DumpPlan> {
-    let vmangos = source.kind() == SourceKind::Vmangos;
     let mut chain = open_chain(Path::new(data_dir))?;
     let mut statements = Vec::new();
     for (sql, _) in [
-        if vmangos {
-            faction(source)?
-        } else {
-            faction_sql(&mut chain)?
-        },
-        if vmangos {
-            faction_template(source)?
-        } else {
-            faction_template_sql(&mut chain)?
-        },
-        if vmangos {
-            area(source)?
-        } else {
-            area_sql(&read_table(&mut chain)?)
-        },
-        if vmangos {
-            area_trigger(source)?
-        } else {
-            area_trigger_sql(&read_table(&mut chain)?)
-        },
-        if vmangos {
-            skill_ability(source)?
-        } else {
-            skill_ability_sql(&read_table(&mut chain)?)
-        },
+        faction(source)?,
+        faction_template(source)?,
+        area(source)?,
+        area_trigger(source)?,
+        skill_ability(source)?,
     ] {
         statements.extend(sql);
     }
-    if vmangos {
-        statements.extend(crate::map_catalogue::statements(source, &read_table(&mut chain)?)?.0);
-    }
-    let nodes = if vmangos {
-        taxi_nodes(source)?
-    } else {
-        read_table(&mut chain)?
-    };
+    statements.extend(crate::map_catalogue::statements(source, &read_table(&mut chain)?)?.0);
+    let nodes = taxi_nodes(source)?;
     let paths = read_table(&mut chain)?;
     let points = read_table(&mut chain)?;
     let displays: CreatureDisplayInfo = read_table(&mut chain)?;
@@ -304,11 +277,7 @@ pub(crate) fn world_plan(
     Ok(crate::world_import::DumpPlan {
         stamps: vec![("dbc", crate::dump::insert_row_count(&statements))],
         stmts: statements,
-        world_source_manifest: if vmangos {
-            Some(serde_json::to_string_pretty(&findings(source)?)?)
-        } else {
-            None
-        },
+        world_source_manifest: Some(serde_json::to_string_pretty(&findings(source)?)?),
         ..Default::default()
     })
 }

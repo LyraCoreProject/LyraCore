@@ -192,8 +192,6 @@ fn item_source() -> WorldSource {
 fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_offers() {
     let source = item_source();
     let args = crate::parse_args_from([
-        "--source",
-        "vmangos",
         "--dump",
         "fixture.sqlite",
         "--family",
