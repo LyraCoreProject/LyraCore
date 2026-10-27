@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "tier": "conformance_audit",
-  "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
+  "core_commit": "71679efe77a06afac429827c1bbf80970e4c5d5c",
   "working_tree_dirty": false,
   "harness_revision": "bc83d81cc1992fd1b522cab38c2ea048b5c6db23",
-  "recorded_at_unix_ms": 1793111634954,
+  "recorded_at_unix_ms": 1793121265143,
   "scenarios": [
     {
       "id": "connection_identity",
@@ -17,12 +17,12 @@
         "differences": []
       },
       "capture": {
-        "sha256": "1db822c427449b1f64904922b1191895d910182d34c1a62536c1a4c7d31a1d2a",
-        "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
-        "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
-        "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b"
+        "sha256": "5ebda6e8fdd5d52a8357919c51b778d6a346f15e02c94be773d23ad21c3fbc3f",
+        "core_commit": "71679efe77a06afac429827c1bbf80970e4c5d5c",
+        "native_host_sha256": "b08d7e00fae7313ff56f95a78b6ca30e11ce883cdd609106f552e18f0c4ce03f",
+        "module_sha256": "8e14d1ca06395aa67bfdb3ede000be625253194200a24b1e67a285ac648e7366"
       },
-      "reference_sha256": "7729bfe0694920ebe17c333c60a01c4bb3ca59065bdbf1b0574c09469d097693"
+      "reference_sha256": "c24ac87a60e858595623884394f92a8fda5738f527defac39abbfb10fd51e7ae"
     },
     {
       "id": "taxi_single_hop",
@@ -1654,7 +1654,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72547
+              "value": 72553
             }
           },
           {
@@ -1732,7 +1732,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72547
+              "value": 72553
             }
           },
           {
@@ -1817,17 +1817,17 @@
         "differences": []
       },
       "capture": {
-        "sha256": "3d231f5e3f7db55244a7bd1498f0116e6150b3232c844f033267018feab31c9a",
-        "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
-        "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
-        "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b"
+        "sha256": "a9af4cf60b0203ec7511b0a3a679764826ff748a5da63ea6e53120015aa972e0",
+        "core_commit": "71679efe77a06afac429827c1bbf80970e4c5d5c",
+        "native_host_sha256": "b08d7e00fae7313ff56f95a78b6ca30e11ce883cdd609106f552e18f0c4ce03f",
+        "module_sha256": "8e14d1ca06395aa67bfdb3ede000be625253194200a24b1e67a285ac648e7366"
       },
-      "reference_sha256": "25db91cedaefc1712a7545a990d2736e128a8976da00e6aca146489360d32726"
+      "reference_sha256": "081254aeb68288318646a204c03509413d0ca0038514e4f4b7320bd441aaba78"
     }
   ],
   "audit": {
-    "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
-    "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b",
+    "native_host_sha256": "b08d7e00fae7313ff56f95a78b6ca30e11ce883cdd609106f552e18f0c4ce03f",
+    "module_sha256": "8e14d1ca06395aa67bfdb3ede000be625253194200a24b1e67a285ac648e7366",
     "content": "Module seed content and the hand-written taxi route fixture, nodes 2 and 4, path 6, 28 vertices and flight master 352; no world import",
     "reference": {
       "server": "vmangos",
