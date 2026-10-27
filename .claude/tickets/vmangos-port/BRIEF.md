@@ -231,7 +231,9 @@ next milestone in the same run.
 
 Do one slice per family. Each moves its family's readers to vmangos behind `--source vmangos`,
 rewrites the family's tests to use vmangos-shaped named fixtures (keep the classic-db tests until
-S8), and updates the family's census.
+S8), and updates the family's census. On the vmangos path, never parse a value with a silent
+default such as `.parse().unwrap_or(0)`. Use the checked `row.number` accessors, which fail with a
+named error. Check parity by the odds and behavior a player would see, not only by row counts.
 
 **S3a. globals.**
 
@@ -380,6 +382,11 @@ importer's `eventai.rs` first, then `research/vmangos-schema.md` §4.
   `module/src/creatures/eventai/loader.rs`), `encounter_binding`, the display templates and the
   fixture-id refusals.
 - Update the Deadmines content the dungeons Package relies on: VanCleef's yells and ally summon.
+- **Event-credit quests** (from the Milestone 2 review). On vmangos, every quest with
+  `SpecialFlags & 2` (176 quests, for example 28/29, 6001/6002 and 2460) needs event credit, and
+  only EventAI or scripts can grant it. S6 must give each one a working credit source, or list it
+  as unsupported with the reason, before S7a flips the default. Also check the Hallow's End emote
+  quests 8353-8360, which lost their requirement.
 
 **Milestone 4 handoff:**
 
