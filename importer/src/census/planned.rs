@@ -92,6 +92,8 @@ fn records(statements: &[String]) -> Result<Records> {
 
 fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
+        "game_creature_ai_broadcast_text" | "game_creature_ai_summon" => &["id"],
+        "game_world_state_name" => &["variable_id"],
         "game_faction" => &["faction_id"],
         "game_faction_template" | "game_area" | "game_area_trigger" | "game_taxi_node" => &["id"],
         "game_skill_ability" => &["spell_id", "skill_line"],
@@ -179,9 +181,18 @@ pub(super) fn run(
     args: &WorldImportArgs,
 ) -> Result<String> {
     let family = args.family.as_deref().context("census family")?;
-    let classic = WorldSource::open(classic, SourceKind::ClassicDb)?;
+    let classic = if family == "creature-ai" {
+        WorldSource::ClassicDb(crate::dump::ParsedDump::parse_script_census(
+            crate::dump::read_dump_text(classic.to_str().context("classic census path")?)?,
+        )?)
+    } else {
+        WorldSource::open(classic, SourceKind::ClassicDb)?
+    };
     let vmangos = WorldSource::open(vmangos, SourceKind::Vmangos)?;
-    let before_plan = census_plan(&classic, args)?;
+    let mut classic_args = args.clone();
+    classic_args.source = SourceKind::ClassicDb;
+    classic_args.eventai_profile = crate::eventai::SOURCE_PROFILE_NAME.into();
+    let before_plan = census_plan(&classic, &classic_args)?;
     let after_plan = census_plan(&vmangos, args)?;
     let mut before = records(&before_plan.stmts)?;
     let mut after = records(&after_plan.stmts)?;
@@ -291,6 +302,9 @@ pub(super) fn run(
             writeln!(output, "\n`{table}` {} → {}; {} removed, {} added. {reason}", old.rows, new.rows, old.keys.difference(&new.keys).count(), new.keys.difference(&old.keys).count())?;
         }
     }
+    if family == "creature-ai" {
+        super::eventai::append(&mut output, &classic, &vmangos, &before_plan, &after_plan)?;
+    }
     explain(&mut output, family, &vmangos)?;
     floors(&mut output, family, &before, &after)?;
     if family == "creatures" {
@@ -298,15 +312,21 @@ pub(super) fn run(
     }
     if let Some(manifest) = after_plan.world_source_manifest {
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest)?;
-        if let Some(findings) = manifest["findings"].as_array_mut() {
-            for finding in findings {
-                if let Some(object) = finding.as_object_mut() {
-                    object.remove("source_keys");
-                    object.remove("source_ids");
+        super::eventai::summarize_scripts(&mut manifest);
+        if let Some(object) = manifest.as_object_mut() {
+            object.remove("summon_commands");
+        }
+        for group in ["findings", "limitations"] {
+            if let Some(findings) = manifest[group].as_array_mut() {
+                for finding in findings {
+                    if let Some(object) = finding.as_object_mut() {
+                        object.remove("source_keys");
+                        object.remove("source_ids");
+                    }
                 }
             }
         }
-        writeln!(output, "\n## Compatibility Manifest\n\nProduction findings, with source keys omitted here. The import prints the full findings. The approved-value Source Profile gate is due in S6c.\n\n```json\n{}\n```", serde_json::to_string_pretty(&manifest)?)?;
+        writeln!(output, "\n## Compatibility Manifest\n\nProduction findings, with source keys omitted here. The import prints the full findings. The vmangos Source Profile checks columns and approved values before planning; counts do not gate the import.\n\n```json\n{}\n```", serde_json::to_string_pretty(&manifest)?)?;
     }
     Ok(output)
 }
@@ -388,6 +408,9 @@ fn records_of_service(
 
 fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<()> {
     writeln!(output, "\n## Differences\n")?;
+    if family == "creature-ai" {
+        writeln!(output, "- The sources have different event populations and numbering. vmangos supplies entry rules for EventAI templates; classic-db also supplies spawn-GUID rules. Profile scope and accepted template dependencies determine subjects.\n- A vmangos event carries up to three ordered command lists. Unsupported commands, targets, conditions or dependencies drop the complete rule. The source and emitted counts therefore measure different things.\n- Only generic scripts reachable from accepted EventAI roots become relays. The other six delayed-script families have no current classic importer dispatcher; quest-end mail already uses the vmangos quest columns.\n- Broadcast membership follows accepted talk and flee instructions. Plain summons retain their explicit locations or use the actor position. Summon flags, limits, scripts and unsupported lifetime modes remain refused; accepted lifetime differences are reported. World-state names remain unsupported. Event-credit requirements for vmangos quests belong to the quests family; classic-db derives them from accepted AI instructions.")?;
+    }
     if family == "dbc" {
         writeln!(output, "- All six eligible tables use source rows selected for build 5875, with area_template unversioned. Every consumed column has a source equivalent. The field-level changes are in dbc-diff.md.\n- AreaTrigger adds 17 IDs and changes geometry on 34 matched IDs. TaxiNodes changes 13 matched IDs. The other catalogues retain their client IDs; source skill abilities use source row IDs instead of generated ordinals.\n- Trigger cooldowns, conditions and scripts remain unsupported. Separate client tables still supply taxi routes, path geometry and display validation. Map stays entirely on Map.dbc.")?;
     }
@@ -419,7 +442,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
 - Creature health, melee damage and armor come from selected class-level stats and template multipliers. Rank rates default to one in vmangos. Imported level rows prevent the Module from adding its classic rank multipliers. Client display scales resolve zero template scales; source weights select a display on each spawn.
 - The cast family joins creature spell-list links to eight slots. Its first spell supplies the cast row, with later spells using the existing rotation model. Slot target, chance, timing and script detail remain unsupported.
 - `audit-creature-ids.py` reports source GUID counts in each reserved band. The broad curated interval uses a different key space from spawn GUIDs.
-- Source behavior reference: `Creature.cpp`, `CreatureDefines.h` and `World.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`. EventAI dependency closure remains due in S6.")?;
+- Source behavior reference: `Creature.cpp`, `CreatureDefines.h` and `World.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`. EventAI template dependencies now participate in profile scope.")?;
     }
     if family == "gossip" {
         for table in [
@@ -435,8 +458,8 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
                 vmangos.rows(table)?.len()
             )?;
         }
-        writeln!(output, "- Creature greetings and options follow selected creature menu links. Scoped entries use selected spawn choices and forced entries; S6 adds EventAI dependency closure.
-- vmangos imports every menu as an addressable profile. Classic-db keeps its four relay profiles. Source script menu targets use this catalogue; script execution is due in S6.
+        writeln!(output, "- Creature greetings and options follow selected creature menu links. Scoped entries use selected spawn choices and forced entries; EventAI template dependencies also participate in profile scope.
+- vmangos imports every menu as an addressable profile. Classic-db keeps its four relay profiles. Source script menu targets use this catalogue; untranslated script dispatch remains unsupported.
 - Text and weighted-slot differences follow source broadcast references and unconditional greetings. The last unconditional greeting wins. Dynamic greeting conditions remain unsupported, so a conditional-only menu uses the source default 0xffffff. Gendered strings, literal NULL text and Unicode are preserved.
 - Questgiver placeholder options are omitted, as in classic-db. Creature options apply source NPC flag masks and menu-zero fallback. Profile options cannot store those masks. Gossip submenus use the addressable profiles and evaluate their option conditions. Talent reset requires a class trainer of the Character's class. Unsupported actions and payment/input gates cannot be clicked. POIs, confirmations and source script delivery remain unsupported.
 - Condition rows cover the full source table. The importer maps supported source meanings into LyraCore kinds, resolves patch conditions at patch 10 and marks other source kinds unavailable. Unknown conditions stay unavailable through NOT and OR. Stored codes stay compatible with the classic-db baseline.")?;
@@ -457,7 +480,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
                 vmangos.row_count(table)?
             )?;
         }
-        writeln!(output, "- Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.\n- Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.\n- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item and static-condition removal. The importer keeps one offer per creature and item.\n- Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.\n- Random Properties and enchantment effects use the same client tables in both sources.\n- The unused restores_power flag is false for vmangos. Item on-use spells retain food and drink behavior; classic-db keeps its existing output.\n- Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI dependency closure remains due in S6.")?;
+        writeln!(output, "- Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.\n- Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.\n- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item and static-condition removal. The importer keeps one offer per creature and item.\n- Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.\n- Random Properties and enchantment effects use the same client tables in both sources.\n- The unused restores_power flag is false for vmangos. Item on-use spells retain food and drink behavior; classic-db keeps its existing output.\n- Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI template dependencies now participate in profile scope.")?;
     }
     if family == "loot" {
         for table in [
@@ -496,7 +519,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
                 vmangos.row_count(table)?
             )?;
         }
-        writeln!(output, "- Quest templates and text follow selected giver relations in the profile's shared quest catalogue. Full profiles use the full catalogue; other canonical profiles share the starter and instance catalogue. Relations emitted into a Realm use local enabled spawn choices. S6 still owns EventAI dependency closure.\n- Objective differences follow selected quest targets and items available from the catalogue's creature loot, chests and vendors. Forbidden items are removed. Unavailable collect targets and non-goober GameObject targets remain omitted and are counted in the manifest. Cast and area-trigger objectives follow their selected relations.\n- Fixed and choice reward differences follow selected quest rows. Learn rewards use a single-effect learn wrapper from selected source spells. Other reward casts are unsupported.\n- Mail differences follow quest-template mail IDs, delays and money. vmangos reads no classic-db quest-end script table. Used mail loot must be one unconditional item with 100% chance and no reference.\n- Event requirements come from source exploration/event flags, except quests whose area-trigger objective already supplies that completion gate. Source script/event delivery remains for S6; the manifest reports those requirements. Classic-db derives its event requirements from the current EventAI plan.\n- vmangos supplies explicit `RewXP`. The Module cannot distinguish zero XP from its fallback calculation; the manifest counts that limit, along with unrepresented prerequisites, scripts, flags and extra reputation fields.")?;
+        writeln!(output, "- Quest templates and text follow selected giver relations in the profile's shared quest catalogue. Full profiles use the full catalogue; other canonical profiles share the starter and instance catalogue. Relations emitted into a Realm use local enabled spawn choices. EventAI template dependencies participate in profile scope.\n- Objective differences follow selected quest targets and items available from the catalogue's creature loot, chests and vendors. Forbidden items are removed. Unavailable collect targets and non-goober GameObject targets remain omitted and are counted in the manifest. Cast and area-trigger objectives follow their selected relations.\n- Fixed and choice reward differences follow selected quest rows. Learn rewards use a single-effect learn wrapper from selected source spells. Other reward casts are unsupported.\n- Mail differences follow quest-template mail IDs, delays and money. vmangos reads no classic-db quest-end script table. Used mail loot must be one unconditional item with 100% chance and no reference.\n- Event requirements come from source exploration/event flags, except quests whose area-trigger objective already supplies that completion gate. Unsupported source script/event delivery remains in the compatibility audit; the manifest reports those requirements. Classic-db derives its event requirements from the current EventAI plan.\n- vmangos supplies explicit `RewXP`. The Module cannot distinguish zero XP from its fallback calculation; the manifest counts that limit, along with unrepresented prerequisites, scripts, flags and extra reputation fields.")?;
     }
     if family == "trainers" {
         for table in ["npc_trainer", "npc_trainer_template"] {
@@ -507,7 +530,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
                 vmangos.row_count(table)?
             )?;
         }
-        writeln!(output, "- Offer differences follow the selected creature catalogue and direct/shared trainer lists. Shared offers join through `trainer_id` and take precedence for duplicate spell IDs. Only templates with the trainer flag receive offers.\n- vmangos imports the source teach-spell wrappers and its constant skill-step effects. It does not synthesize the classic-db profession list. The manifest's profession audit compares offered skill targets with `PROFESSION_LEARN`. Each skill step raises the cap by 75 ranks.\n- A zero source required level falls back to the selected wrapper's spell level. Source skill/rank requirements and multiple learn targets are reported as unsupported because the current Module cannot carry them in a trainer offer.\n- Scoped profiles use selected creature entries; EventAI dependency closure remains due in S6.")?;
+        writeln!(output, "- Offer differences follow the selected creature catalogue and direct/shared trainer lists. Shared offers join through `trainer_id` and take precedence for duplicate spell IDs. Only templates with the trainer flag receive offers.\n- vmangos imports the source teach-spell wrappers and its constant skill-step effects. It does not synthesize the classic-db profession list. The manifest's profession audit compares offered skill targets with `PROFESSION_LEARN`. Each skill step raises the cap by 75 ranks.\n- A zero source required level falls back to the selected wrapper's spell level. Source skill/rank requirements and multiple learn targets are reported as unsupported because the current Module cannot carry them in a trainer offer.\n- Scoped profiles use selected creature entries; EventAI template dependencies now participate in profile scope.")?;
     }
     if family == "gameobjects" {
         for table in ["gameobject_template", "gameobject", "transports"] {
@@ -524,6 +547,10 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
 }
 
 fn floors(output: &mut String, family: &str, before: &Records, after: &Records) -> Result<()> {
+    if family == "creature-ai" {
+        writeln!(output, "\n## Consumed floors\n\n`importer/scripts/import-manifest.sh` defines no EventAI or relay count floor. Creature, quest and dungeon checks need their other Import Families and a populated Realm.")?;
+        return Ok(());
+    }
     if family == "dbc" {
         writeln!(output, "\n## Consumed floors\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |")?;
         for (floor, table) in [
@@ -564,10 +591,10 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
         return Ok(());
     }
     if family == "gossip" {
-        writeln!(output, "\n## Consumed floors\n\nThe import manifest defines no gossip-specific count floor. Creature-service coverage remains for S4.")?;
+        writeln!(output, "\n## Consumed floors\n\nThe import manifest defines no gossip-specific count floor. The creatures census reports creature-service coverage.")?;
         return Ok(());
     }
-    writeln!(output, "\n## Consumed floors\n\nMinimums come from `importer/scripts/import-manifest.sh`. These are planned rows. Spawn coverage also needs the creatures family, due in S4.\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |")?;
+    writeln!(output, "\n## Consumed floors\n\nMinimums come from `importer/scripts/import-manifest.sh`. These are planned rows. Spawn coverage also needs the creatures family.\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |")?;
     if family == "items" {
         writeln!(
             output,
@@ -576,7 +603,7 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
             before.get("game_npc_vendor").map_or(0, |x| x.rows),
             after.get("game_npc_vendor").map_or(0, |x| x.rows)
         )?;
-        writeln!(output, "\n`VENDOR_COVERAGE` minimum {} and `SENTINEL_HILL_VENDOR` minimum {} require spawned entities. Their Realm counts cannot be proved by an items-only plan; recheck with the creatures family in S4.", super::floor("VENDOR_COVERAGE")?, super::floor("SENTINEL_HILL_VENDOR")?)?;
+        writeln!(output, "\n`VENDOR_COVERAGE` minimum {} and `SENTINEL_HILL_VENDOR` minimum {} require spawned entities. Their Realm counts cannot be proved by an items-only plan; recheck with the creatures family.", super::floor("VENDOR_COVERAGE")?, super::floor("SENTINEL_HILL_VENDOR")?)?;
     }
     if family == "loot" {
         for (name, table) in [
@@ -593,7 +620,7 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
                 after.get(table).map_or(0, |x| x.rows)
             )?;
         }
-        writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.")?;
+        writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them on the imported Realm.")?;
     }
     if family == "quests" {
         writeln!(
@@ -624,7 +651,7 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
                 count(after)
             )?;
         }
-        writeln!(output, "\n`QUESTGIVER_COVERAGE` minimum {} and `CORRIDOR_QUEST_LEVEL_BAND` minimum {} need spawned creatures at the script's locations; verify them with S4.", super::floor("QUESTGIVER_COVERAGE")?, super::floor("CORRIDOR_QUEST_LEVEL_BAND")?)?;
+        writeln!(output, "\n`QUESTGIVER_COVERAGE` minimum {} and `CORRIDOR_QUEST_LEVEL_BAND` minimum {} need spawned creatures at the script's locations; verify them on the imported Realm.", super::floor("QUESTGIVER_COVERAGE")?, super::floor("CORRIDOR_QUEST_LEVEL_BAND")?)?;
     }
     if family == "trainers" {
         for (name, skills) in [
@@ -648,7 +675,7 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
                 count(after)
             )?;
         }
-        writeln!(output, "\n`CLASS_TRAINERS` minimum {} and `TRAINER_COVERAGE` minimum {} need spawned creatures and remain for S4. The profession floor counts every skill-grant offer, including riding.", super::floor("CLASS_TRAINERS")?, super::floor("TRAINER_COVERAGE")?)?;
+        writeln!(output, "\n`CLASS_TRAINERS` minimum {} and `TRAINER_COVERAGE` minimum {} need spawned creatures. The profession floor counts every skill-grant offer, including riding.", super::floor("CLASS_TRAINERS")?, super::floor("TRAINER_COVERAGE")?)?;
     }
     if family == "gameobjects" {
         let gather = |records: &Records| {

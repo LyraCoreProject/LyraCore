@@ -8,6 +8,7 @@ use wow_dbc::DbcTable;
 use crate::dump::TableRows;
 use crate::world_source::{SourceKind, WorldSource};
 
+mod eventai;
 mod planned;
 
 type Keys = BTreeSet<Vec<u32>>;

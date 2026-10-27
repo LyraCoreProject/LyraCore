@@ -512,8 +512,33 @@ pub(crate) trait TableRows {
 
 impl ParsedDump {
     pub(crate) fn parse(text: String) -> Result<Self> {
+        Self::parse_tables(text, crate::classic_columns::TABLES.iter().copied())
+    }
+
+    pub(crate) fn parse_script_census(text: String) -> Result<Self> {
+        const COLUMNS: &[(&str, bool)] = &[("id", true), ("command", true)];
+        let extra = [
+            "dbscripts_on_quest_start",
+            "dbscripts_on_gossip",
+            "dbscripts_on_event",
+            "dbscripts_on_creature_movement",
+            "dbscripts_on_go_use",
+        ];
+        Self::parse_tables(
+            text,
+            crate::classic_columns::TABLES
+                .iter()
+                .copied()
+                .chain(extra.into_iter().map(|table| (table, COLUMNS))),
+        )
+    }
+
+    fn parse_tables(
+        text: String,
+        contract: impl IntoIterator<Item = (&'static str, &'static [(&'static str, bool)])>,
+    ) -> Result<Self> {
         let mut tables = std::collections::BTreeMap::new();
-        for &(table, columns) in crate::classic_columns::TABLES {
+        for (table, columns) in contract {
             check_columns(&text, table, columns)?;
             let rows = named_table(&text, table)?;
             tables.insert(table.to_string(), rows);
@@ -911,7 +936,23 @@ pub(crate) mod tests {
             sql.push_str(&format!("CREATE TABLE `{table}` (\n{columns}\n);\n"));
         }
         sql.push_str("INSERT INTO `areatrigger_involvedrelation` VALUES (1,2);");
-        let dump = ParsedDump::parse(sql).unwrap();
+        for table in [
+            "dbscripts_on_quest_start",
+            "dbscripts_on_gossip",
+            "dbscripts_on_event",
+            "dbscripts_on_creature_movement",
+            "dbscripts_on_go_use",
+        ] {
+            sql.push_str(&format!(
+                "CREATE TABLE `{table}` (\n`command` int,\n`id` int\n);\nINSERT INTO `{table}` VALUES (7,99);\n"
+            ));
+        }
+        let dump = ParsedDump::parse(sql.clone()).unwrap();
+        assert!(dump.rows("dbscripts_on_quest_start").is_err());
+        let census = ParsedDump::parse_script_census(sql).unwrap();
+        let scripts = census.rows("dbscripts_on_quest_start").unwrap();
+        assert_eq!(scripts[0].number::<u32>("id").unwrap(), 99);
+        assert_eq!(scripts[0].number::<u32>("command").unwrap(), 7);
         let first = dump.rows("areatrigger_involvedrelation").unwrap();
         let second = dump.rows("areatrigger_involvedrelation").unwrap();
         assert!(matches!(first, Cow::Borrowed(_)));
