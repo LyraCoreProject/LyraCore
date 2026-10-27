@@ -623,6 +623,14 @@ The classic reader has no general quest-start, quest-end, gossip, event, movemen
 script dispatcher to port. Its quest-end mail behavior already uses the vmangos quest reward
 columns; other commands in those tables remain unsupported.
 
+Creature speech chooses the text for the current display's gender, using
+`creature_display_info_addon` at the selected build. Female and unspecified genders use nonempty
+female text, otherwise male text, as in `ObjectMgr::GetBroadcastText` at the pinned revision.
+EventAI and delayed speech share that rule. The display catalogue appends a zero-default gender
+column; classic-db output stays unchanged. Missing model metadata and the source's separate
+50% alternate-gender model choice remain Compatibility Manifest findings.
+
+
 
 The vmangos encounter bindings use the pinned instance script fields. Kelris uses field 10,
 Tomb of Seven uses 3, Alzzin uses 11, and Avatar uses 8. Razorfen ward keepers use field 1,

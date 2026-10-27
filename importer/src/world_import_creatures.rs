@@ -107,6 +107,38 @@ fn flags(row: &Row, restored: u32) -> Result<(u32, u32)> {
     Ok((unit, kind))
 }
 
+fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32)>> {
+    let models = dump.columns(
+        "creature_display_info_addon",
+        &[
+            "display_id",
+            "gender",
+            "display_id_other_gender",
+            "bounding_radius",
+        ],
+    )?;
+    models
+        .iter()
+        .map(|row| {
+            let gender: u8 = row.number("gender")?;
+            anyhow::ensure!(gender <= 2, "creature model has invalid gender {gender}");
+            let radius: f32 = row.number("bounding_radius")?;
+            anyhow::ensure!(
+                radius.is_finite() && radius >= 0.0,
+                "creature model has invalid radius {radius}"
+            );
+            Ok((
+                row.number::<u32>("display_id")?,
+                (
+                    gender,
+                    row.number::<u32>("display_id_other_gender")?,
+                    radius,
+                ),
+            ))
+        })
+        .collect()
+}
+
 fn templates(
     dump: &impl TableRows,
     entries: &HashSet<u64>,
@@ -120,6 +152,7 @@ fn templates(
         .map(dbc::load_display_scales)
         .transpose()?
         .unwrap_or_default();
+    let models = model_attributes(dump)?;
     let base_rows = dump.rows("creature_classlevelstats")?;
     let base = base_rows
         .iter()
@@ -233,7 +266,16 @@ fn templates(
             };
             weight_sum += u64::from(weight);
             let id = (entry << 3) | slot;
-            display_rows.push(format!("({id},{entry},{model},{model_scale},{weight})"));
+            let (gender, alternate, radius) = models.get(&model).copied().unwrap_or((0, 0, 0.389));
+            if !models.contains_key(&model) {
+                finding(findings, "creatures.missing-model-gender", entry);
+            }
+            if alternate != 0 {
+                finding(findings, "creatures.alternate-gender-model", entry);
+            }
+            display_rows.push(format!(
+                "({id},{entry},{model},{model_scale},{weight},{gender},{radius})"
+            ));
         }
         anyhow::ensure!(
             total == 0 || weight_sum == u64::from(total),
@@ -293,7 +335,7 @@ fn templates(
     for (table, key, columns, rows) in [
         ("game_creature_template", "entry", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", templates),
         ("game_creature_level_stats", "id", "id,entry,level,health,damage_min,damage_max,armor", levels),
-        ("game_creature_display", "id", "id,entry,display_id,scale,weight", displays),
+        ("game_creature_display", "id", "id,entry,display_id,scale,weight,gender,bounding_radius", displays),
     ] {
         statements.push(format!("DELETE FROM {table} WHERE {key} > 0"));
         push_insert(statements, table, columns, &rows);
@@ -620,6 +662,7 @@ mod tests {
             INSERT INTO creature_template (entry,patch,unit_class,level_min,level_max,health_multiplier,damage_multiplier,armor_multiplier,display_id1,faction,rank,base_attack_time) VALUES (5090042,10,1,10,10,1,1,1,100,35,3,2000);
             CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
             CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
+            CREATE TABLE creature_display_info_addon (display_id INTEGER, build INTEGER, gender INTEGER, display_id_other_gender INTEGER, bounding_radius REAL DEFAULT 0.389, PRIMARY KEY(display_id,build));
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
         WorldSource::Vmangos(connection)
@@ -894,5 +937,30 @@ mod tests {
         assert_eq!(flags(&row, 0).unwrap().0, 0);
         assert_eq!(flags(&row, 0x20).unwrap().0, 0x100);
         assert_eq!(flags(&row, 0x40).unwrap().0, 0x200);
+    }
+    #[test]
+    fn selected_model_gender_follows_the_display_and_build() {
+        let source = template_source();
+        let WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("INSERT INTO creature_display_info_addon VALUES (100,4222,0,0,0.5),(100,5875,1,0,0.75),(100,6000,2,0,1.0);").unwrap();
+        let mut statements = Vec::new();
+        templates(
+            &source,
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut Findings::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap();
+        let display = statements
+            .iter()
+            .find(|s| s.starts_with("INSERT INTO game_creature_display "))
+            .unwrap();
+        assert!(display.contains("(id,entry,display_id,scale,weight,gender,bounding_radius)"));
+        assert!(display.ends_with(",5090042,100,1,1,1,0.75)"));
     }
 }

@@ -39,7 +39,8 @@ pub(crate) fn required_columns(table: &str) -> &'static [&'static str] {
         | "creature_charm_spells"
         | "petcreateinfo_spell" => &["patch_min", "patch_max"],
         "areatrigger_tavern" | "game_event_quest" => &["patch_min"],
-        "spell_template"
+        "creature_display_info_addon"
+        | "spell_template"
         | "faction"
         | "faction_template"
         | "areatrigger_template"
