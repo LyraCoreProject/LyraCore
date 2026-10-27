@@ -49,7 +49,7 @@ pub use mobility::{CreatureAiForcedDespawn, CreatureAiSummonExpiry, CreatureAiSu
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use mobility::{mark_summon_origin_for_debug, remove_guardians};
-pub(crate) use mobility::{place_temporary_summon, summon_life_seq};
+pub(crate) use mobility::{place_guardian, place_temporary_summon, summon_life_seq};
 pub(crate) use model::{
     normalized_revision, ActionResult, AiEventKind, AuraStackCondition, BroadcastLine,
     CallForHelpInstruction, CastInstruction, CommandLists, CreatureEntryCondition,

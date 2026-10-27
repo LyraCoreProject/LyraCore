@@ -25,7 +25,7 @@ entry in both files.
 
 **F** [Fake](CORE_TERMS.md#fake) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#bots) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Home Shard](#retired-terms) · [Host Operation](#runtime-scripts)
 
@@ -579,6 +579,11 @@ retain this identity until the cast finishes or an explicit cancellation removes
 The import family that loads the EventAI catalogue: event rows, broadcast texts, and summon
 locations. No table in it names a map, so its Claims apply whatever the World Import Scope, exactly
 as the family's own base import writes it.
+
+**Guardian**:
+A spell-summoned creature owned by another unit. It uses its template level and its owner's
+faction, attacks hostile units, and has its own lifetime. Its timer continues during combat.
+An NPC-owned Guardian can keep fighting after its owner dies.
 
 **Engagement**:
 One creature's fight, from the aggro that starts it until the creature is freed, however that

@@ -629,6 +629,13 @@ pub(crate) fn apply_effect(
         }
     };
     match kind {
+        EffectKind::SummonGuardians => {
+            if let Err(error) = crate::creatures::guardian::summon(ctx, caster_guid, hdr, e, points)
+            {
+                spacetimedb::log::warn!("guardian summon refused: {error}");
+            }
+            EffectHit::none()
+        }
         EffectKind::SummonHostile => {
             if let Err(error) = crate::creatures::summon_hostile(ctx, caster_guid, hdr, e) {
                 spacetimedb::log::warn!("hostile summon refused: {error}");

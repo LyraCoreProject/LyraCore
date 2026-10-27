@@ -3,6 +3,7 @@ pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
 mod eventai;
+pub(crate) mod guardian;
 mod hostile_summon;
 mod hunter_pet;
 mod pet;

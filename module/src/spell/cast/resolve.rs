@@ -981,6 +981,13 @@ fn check_cast_gate_suffix(
         crate::creatures::check_hostile_summon(ctx, caster, hdr, effect)?;
     }
 
+    for effect in effects
+        .iter()
+        .filter(|effect| effect.kind == E_SUMMON_GUARDIANS)
+    {
+        crate::creatures::guardian::check(ctx, caster, effect)?;
+    }
+
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
         return Err(CastGateRefusal::other(
             CastRefusalReason::LevelTooLow,

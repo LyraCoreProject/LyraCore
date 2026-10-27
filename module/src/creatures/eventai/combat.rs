@@ -600,7 +600,7 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return EventAiDefinition::empty(creature_guid);
     };
-    if !super::runs_eventai(&creature) {
+    if !super::runs_eventai(ctx, &creature) {
         return EventAiDefinition::empty(creature_guid);
     }
     let definitions = ctx.db.game_creature_ai_definition();
