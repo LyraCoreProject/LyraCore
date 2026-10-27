@@ -19,7 +19,7 @@ pub(crate) use crate::items::{grant_item, remove_items};
 pub(crate) use crate::loot::tag::clear as clear_loot_tag;
 pub(crate) use crate::nav::record_change as record_navigation_change;
 pub(crate) use crate::spell::{
-    cast_triggered, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
+    cast_triggered, forget_spell, learn_spell, start_creature_spell, CreatureSpellCasterAdmission,
     CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
 };
 pub(crate) use crate::xp::grant_xp;

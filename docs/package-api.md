@@ -354,8 +354,8 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `emit_move_spline(ctx, guid, start, destination, duration_ms, run, spline_id, map_id, instance_id, grid)` | emits a straight creature movement segment with the existing ten-argument fixture contract |
 
 The root also re-exports Core setup steps such as `grant_item`, `remove_items`, `grant_xp`,
-`learn_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and `SessionActor`;
-`module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
+`learn_spell`, `forget_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and
+`SessionActor`; `module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
 `actor::movement::inputs(ctx, map_id).imported_revision`.
 
 Name this root only from a Package file whose first non-blank line is
