@@ -323,6 +323,54 @@ divergences); the scoreboard output.
 
 ### Milestone 3: the first audit
 
+**What Milestone 2 settled** (added 2026-10-27 after its review and re-check; these are decisions
+now):
+
+- **Taxi gaps are fixed after the merge.** The 8 known gaps on `taxi_single_hop` stay unfixed on
+  this branch. They become the first Behaviors built through the system, with taxi chains, once
+  this branch and the vmangos port are in `main`.
+- **A hand-written route fixture is allowed.** Core tests may carry the 28 vertices of taxi path 6
+  (and the two nodes) as a small hand-written fixture, so the taxi comparison needs no imported
+  data. The public Golden Trace already holds these numbers. No other world data, and nothing
+  larger. The durable CI skip of the taxi comparison stays until its gaps are fixed; remove it in
+  the same PR that fixes the last gap.
+- **One way to declare data differences, in the harness.** Data-dependent fields are declared in
+  the scenario (`[[rules.data_fields]]`), owned by the scenario author and covered by
+  `scenario_sha256`. The comparator emits a record for each, tagged as data, so decision 11's
+  "listed separately" holds. The core ledger's `data_fields` are removed; the scoreboard and audit
+  take classification from the comparator's tags only.
+- **Group records by signature.** The scoreboard and audit count differences grouped by (rule,
+  checkpoint, stream, opcode, field path), and also show raw record counts. Fixed/regressed
+  tracking uses signatures.
+- **Known gaps can't excuse anything.** They stay descriptive and never change classification or
+  pass/fail.
+
+**Slices.** H3-0 and C3-1 run in parallel; C3-2 follows both.
+
+- **H3-0 (harness).**
+  - Data fields emit tagged data records instead of passing silently.
+  - Enable serde_json `float_roundtrip` in `wire-client` itself, with a precision test.
+  - `passenger_zone_flags_delivery` applies only to VALUES updates (`kind == 0`).
+  - `validate` refuses a single-sample identity or clock rule whose reason doesn't say what is
+    unchecked.
+  - Weather: when `weather_type` is 0, `grade` and `sound` must be 0.
+  - Document how alignment treats two unmapped GUIDs in swapped order.
+  - Reduce alignment cost (memoize scores or pre-filter by key) with a benchmark test on 1,000
+    packets.
+  - Tag `v0.2.0-conformance.5`.
+- **C3-1 (core).** Work that doesn't need the new tag:
+  - A3b, A3c and A3d below.
+  - The taxi route fixture (decision above); the taxi tier 1 test uses it instead of
+    `LYRACORE_TEST_TAXI_SQL`.
+  - The pin Architecture Test also checks `source` and `rev` for every crate that declares
+    `wire-client`.
+  - ADR 0005: tier 1 wording (the taxi comparison is skipped in CI until its gaps are fixed).
+- **C3-2 (core, after H3-0's tag and C3-1).**
+  - Bump the pin to `.5`. Drop the core `float_roundtrip` feature. Remove the ledger
+    `data_fields`; classification comes from comparator tags.
+  - Signature grouping in the scoreboard.
+  - A3a: the audit, run once, report committed.
+
 - **A3a (core).** The audit command or script: runs every scenario against both servers over the
   wire, writes `conformance/reports/<date>.md` with rule divergences, data divergences, fixed and
   regressed since the last report. Run it once and commit the report.
