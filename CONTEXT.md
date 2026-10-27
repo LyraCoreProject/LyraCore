@@ -51,7 +51,7 @@ entry in both files.
 
 **V** [Verification](CORE_TERMS.md#verification)
 
-**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms) · [World Source](#realm-topology)
+**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Editor](#requests-and-delivery) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms) · [World Source](#realm-topology)
 
 **Z** [Zone Weather](#world-clock-and-weather)
 
@@ -183,6 +183,12 @@ pool owns. The Operator Content API changes only an Authored Spawn.
 **Operator Spawn Range**:
 The creature and gameobject spawn identifiers the Operator Content API allocates. No import and no
 Package spawn uses it. `docs/operator-content-api.md` gives the band.
+
+**World Editor**:
+Meld, built from the commit in `.lyracore-editor-rev` and started by `lyracore editor` on the local
+Realm. It reads spawns from the Realm and saves spawn edits through the Operator Content API.
+`docs/world-editor.md` gives the workflow.
+_Avoid_: map editor, Meld integration
 
 ### Accounts, characters and sessions
 
