@@ -1,6 +1,6 @@
 # Milestone 2 loot odds verification
 
-Odds are calculated from the emitted Module rows using independent group-zero rolls and the Module's cumulative basis-point bands. Before uses the original Milestone 2 importer and its retained loot SQL; after uses the repaired production plans. Percentages mean at least one drop, except expected-count rows. These are exact distribution calculations, not random simulations.
+Odds are calculated from the emitted Module rows using independent group-zero rolls and the Module's cumulative basis-point bands. Before uses the original Milestone 2 importer and its retained loot SQL; after uses the repaired production plans. Percentages mean at least one drop, except expected-count rows. These are distribution calculations with uniform basis-point rolls, not random simulations. Total item counts include quest-only drops and assume the Character can take them. Item templates and random properties must be available.
 
 | Loot entry | Item | Before | After |
 | --- | --- | ---: | ---: |
