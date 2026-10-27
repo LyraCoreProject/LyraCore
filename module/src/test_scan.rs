@@ -28,7 +28,7 @@ pub(crate) fn raw_table_reads(
     let code = lyracore_test_support::source_scan::code_only(content);
     let content = code.as_str();
     let mut out = Vec::new();
-    let mut handles: Vec<(String, &'static str)> = Vec::new();
+    let mut handles = Vec::new();
     for accessor in accessors {
         let call = format!("{accessor}()");
         for (idx, _) in content.match_indices(&call) {
@@ -52,13 +52,29 @@ pub(crate) fn raw_table_reads(
             if !name.chars().all(|c| c.is_alphanumeric() || c == '_') {
                 continue;
             }
-            if !handles.iter().any(|(n, _)| n == name) {
-                handles.push((name.to_string(), *accessor));
-            }
+            let start = idx + bind.len();
+            let mut depth = 0;
+            let end = content[start..]
+                .char_indices()
+                .find_map(|(offset, character)| match character {
+                    '{' => {
+                        depth += 1;
+                        None
+                    }
+                    '}' if depth == 0 => Some(start + offset),
+                    '}' => {
+                        depth -= 1;
+                        None
+                    }
+                    _ => None,
+                })
+                .unwrap_or(content.len());
+            handles.push((name.to_string(), *accessor, start, end));
         }
     }
-    for (name, accessor) in &handles {
-        for (idx, _) in content.match_indices(name.as_str()) {
+    for (name, accessor, start, end) in &handles {
+        for (relative, _) in content[*start..*end].match_indices(name.as_str()) {
+            let idx = start + relative;
             if !is_standalone_ident(content, idx, name) {
                 continue;
             }
@@ -128,6 +144,26 @@ mod tests {
             content[byte_idx..].starts_with(".iter()")
         });
         assert_eq!(found, [(5, "game_world_entity")]);
+    }
+
+    #[test]
+    fn table_handles_only_apply_inside_their_binding_scope() {
+        let source = "fn first() {
+let rows = ctx.db.game_world_entity();
+rows.insert(entity);
+}
+fn second() {
+let rows = ctx.db.package_rows();
+rows.insert(state);
+}
+fn third() {
+let rows = ctx.db.game_world_entity();
+rows.insert(entity);
+}";
+        let found = raw_table_reads(source, &["game_world_entity"], |content, offset| {
+            content[offset..].starts_with(".insert(")
+        });
+        assert_eq!(found, [(3, "game_world_entity"), (11, "game_world_entity")]);
     }
 
     #[test]
