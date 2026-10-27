@@ -32,9 +32,9 @@ pub(crate) use folds::{
     effective_crit_bp, effective_move_speed, effective_strength, effective_swing_time,
     equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo,
     interrupt_form_bound_queued_strike, interrupt_queued_strike_of, queued_strike_damage,
-    react_window_active, retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing,
-    roll_swing_with_range, seal_holy_on_swing, swing_range_ctx, weapon_strike_damage, wear_weapon,
-    ReactKind,
+    ranged_projectile, react_window_active, retaliate_on_hit, roll_money, roll_ranged_swing,
+    roll_strike_outcome, roll_swing, roll_swing_with_range, seal_holy_on_swing, spend_ranged_ammo,
+    swing_range_ctx, weapon_strike_spell_damage, wear_weapon, ReactKind, WeaponStrike,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::{
@@ -44,6 +44,7 @@ pub(crate) use folds::{
 
 pub(crate) use energy::regenerate_energy;
 pub use energy::{game_energy_clock, EnergyClock};
+pub(crate) use swing::launch_ranged_strike;
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,

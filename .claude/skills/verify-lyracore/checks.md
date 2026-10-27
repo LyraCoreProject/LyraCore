@@ -119,6 +119,20 @@ the imported spells. Stand near idle, patrolling and wandering Creatures.
   a stealthed, a neutral, a boss and a totem Creature do. The server turns only hostile Creatures
   and leaves aggro and stealth detection unchanged.
 
+## Weapon Strike
+
+Tests: `weapon_strike.rs`. No `check.py` scenario.
+
+Setup. A Rogue with a stack of throwing knives in the ranged slot and a dagger in the main hand,
+next to a target dummy or a low-level Creature. Spells 2764 Throw and 1752 Sinister Strike must
+exist in the imported spells.
+
+- Throw shows a half-second cast bar, and the knife flies to the target. The hit lands as the
+  knife arrives, and the damage is close to the knife's tooltip damage.
+- Each Throw takes one knife off the stack. The last knife still hits, and then Throw greys out.
+- Sinister Strike hits for the dagger's damage plus its bonus, not for a few points. A dodged or
+  parried strike shows Dodge or Parry, and awards no combo point.
+
 ## Energy regeneration
 
 Tests: `energy_regen.rs`. No `check.py` scenario.

@@ -123,6 +123,10 @@ pub(crate) fn resolve_cast_at_typed(
         .find(caster_guid)
         .map(|c| c.is_player())
         .unwrap_or(false);
+    // Spend after the effects so the last thrown weapon still strikes with its own damage.
+    if caster_is_player && is_ranged_weapon_strike(&hdr, &effects) {
+        crate::combat::spend_ranged_ammo(ctx, caster_guid);
+    }
     if caster_is_player && cast_hits_enemy {
         crate::spell::effects::arm_spell_retaliation(ctx, caster_guid, target_guid);
     }
@@ -252,15 +256,21 @@ fn run_spell_effects(
     let mut total_absorbed: u32 = 0;
     let mut total_energized: u32 = 0;
     let mut energized_power_type: u8 = 0;
-    let mut primary_missed = false;
+    let mut primary_avoided = crate::combat::HIT_NORMAL;
     let mut any_crit = false;
     let mut item_grants = 0;
     let mut item_refused = false;
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
-    let rolls_hit = effects
-        .iter()
-        .any(|e| matches!(e.kind, E_DAMAGE | E_WEAPON_STRIKE));
-    let mut missed_targets: std::collections::HashMap<u64, bool> = std::collections::HashMap::new();
+    let table = if effects.iter().any(|e| e.kind == E_WEAPON_STRIKE) {
+        HitTable::Weapon {
+            ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
+        }
+    } else {
+        HitTable::Spell
+    };
+    let weapon_strike = matches!(table, HitTable::Weapon { .. });
+    let rolls_hit = weapon_strike || effects.iter().any(|e| e.kind == E_DAMAGE);
+    let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
     for e in effects {
         let points = effect_amount(
             e.base_points,
@@ -275,13 +285,17 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
-            if rolls_hit
-                && t != caster_guid
-                && *missed_targets
+            let roll = if rolls_hit && t != caster_guid {
+                *target_rolls
                     .entry(t)
-                    .or_insert_with(|| super::targeting::spell_misses(ctx, level, t))
-            {
-                primary_missed |= t == target_guid;
+                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table))
+            } else {
+                crate::combat::HIT_NORMAL
+            };
+            if is_avoided(roll) {
+                if t == target_guid {
+                    primary_avoided = roll;
+                }
                 continue;
             }
             let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
@@ -327,6 +341,7 @@ fn run_spell_effects(
                     points,
                     dest,
                     triggered,
+                    roll == crate::combat::HIT_CRIT,
                 )
             };
             match hit.item {
@@ -386,7 +401,7 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: cast_miss(primary_missed, hdr.school_mask),
+            miss_info: cast_miss(primary_avoided, weapon_strike, hdr.school_mask),
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
@@ -396,12 +411,54 @@ fn run_spell_effects(
     );
 }
 
-fn cast_miss(missed: bool, school_mask: u8) -> u8 {
+#[derive(Clone, Copy)]
+enum HitTable {
+    Spell,
+    Weapon { ranged: bool },
+}
+
+fn hit_roll(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    level: u8,
+    target_guid: u64,
+    table: HitTable,
+) -> u8 {
+    let HitTable::Weapon { ranged } = table else {
+        return if super::targeting::spell_misses(ctx, level, target_guid) {
+            crate::combat::HIT_MISS
+        } else {
+            crate::combat::HIT_NORMAL
+        };
+    };
+    let entities = ctx.db.game_world_entity();
+    match (
+        entities.guid().find(caster_guid),
+        entities.guid().find(target_guid),
+    ) {
+        (Some(caster), Some(target)) => {
+            crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged)
+        }
+        _ => crate::combat::HIT_NORMAL,
+    }
+}
+
+fn is_avoided(roll: u8) -> bool {
+    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
+    matches!(roll, HIT_MISS | HIT_DODGE | HIT_PARRY)
+}
+
+fn cast_miss(roll: u8, weapon_strike: bool, school_mask: u8) -> u8 {
+    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
     const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
-    match (missed, school_mask) {
-        (false, _) => crate::spell::CAST_MISS_NONE,
-        (true, 0 | SCHOOL_MASK_PHYSICAL) => crate::spell::CAST_MISS_MISS,
-        (true, _) => crate::spell::CAST_MISS_RESIST,
+    match roll {
+        HIT_DODGE => crate::spell::CAST_MISS_DODGE,
+        HIT_PARRY => crate::spell::CAST_MISS_PARRY,
+        HIT_MISS if weapon_strike || matches!(school_mask, 0 | SCHOOL_MASK_PHYSICAL) => {
+            crate::spell::CAST_MISS_MISS
+        }
+        HIT_MISS => crate::spell::CAST_MISS_RESIST,
+        _ => crate::spell::CAST_MISS_NONE,
     }
 }
 
@@ -1167,6 +1224,10 @@ fn check_cast_gate_suffix(
         }
     }
 
+    if caster.is_player() && is_ranged_weapon_strike(hdr, effects) {
+        check_ranged_weapon(ctx, caster_guid, spell_id)?;
+    }
+
     // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
     let combo_points = if !caster.is_player() {
         None
@@ -1194,6 +1255,34 @@ fn check_cast_gate_suffix(
     }
 
     Ok(())
+}
+
+fn is_ranged_weapon_strike(hdr: &Spell, effects: &[SpellEffect]) -> bool {
+    hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0
+        && effects.iter().any(|e| e.kind == E_WEAPON_STRIKE)
+}
+
+fn check_ranged_weapon(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+) -> Result<(), CastGateRefusal> {
+    use crate::items::weapon_subclass as ws;
+    match crate::combat::equipped_ranged_weapon(ctx, caster_guid) {
+        None | Some((_, _, _, ws::WAND)) => Err(CastGateRefusal::other(
+            CastRefusalReason::Unreported,
+            format!("spell {spell_id} needs a ranged weapon (caster {caster_guid})"),
+        )),
+        Some((_, _, _, ws::BOW | ws::GUN | ws::CROSSBOW))
+            if crate::combat::find_ammo(ctx, caster_guid).is_none() =>
+        {
+            Err(CastGateRefusal::other(
+                CastRefusalReason::NoAmmo,
+                format!("spell {spell_id} needs ammo (caster {caster_guid})"),
+            ))
+        }
+        Some(_) => Ok(()),
+    }
 }
 
 fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool {
@@ -1594,10 +1683,29 @@ mod cast_miss_tests {
     #[test]
     fn a_failed_hit_roll_misses_a_physical_spell_and_resists_a_magic_one() {
         // School masks: 0 none, 1 physical, 4 fire, 32 shadow.
-        assert_eq!(cast_miss(false, 4), crate::spell::CAST_MISS_NONE);
-        assert_eq!(cast_miss(true, 0), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(true, 1), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(true, 4), crate::spell::CAST_MISS_RESIST);
-        assert_eq!(cast_miss(true, 32), crate::spell::CAST_MISS_RESIST);
+        use crate::combat::{HIT_CRIT, HIT_MISS, HIT_NORMAL};
+        assert_eq!(
+            cast_miss(HIT_NORMAL, false, 4),
+            crate::spell::CAST_MISS_NONE
+        );
+        assert_eq!(cast_miss(HIT_CRIT, true, 1), crate::spell::CAST_MISS_NONE);
+        assert_eq!(cast_miss(HIT_MISS, false, 0), crate::spell::CAST_MISS_MISS);
+        assert_eq!(cast_miss(HIT_MISS, false, 1), crate::spell::CAST_MISS_MISS);
+        assert_eq!(
+            cast_miss(HIT_MISS, false, 4),
+            crate::spell::CAST_MISS_RESIST
+        );
+        assert_eq!(
+            cast_miss(HIT_MISS, false, 32),
+            crate::spell::CAST_MISS_RESIST
+        );
+    }
+
+    #[test]
+    fn a_weapon_spell_reports_its_physical_avoidance_whatever_its_school() {
+        use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
+        assert_eq!(cast_miss(HIT_MISS, true, 2), crate::spell::CAST_MISS_MISS);
+        assert_eq!(cast_miss(HIT_DODGE, true, 1), crate::spell::CAST_MISS_DODGE);
+        assert_eq!(cast_miss(HIT_PARRY, true, 1), crate::spell::CAST_MISS_PARRY);
     }
 }

@@ -600,7 +600,7 @@ fn fire_ranged_shot(
 
     let ammo_display_id: u32 = if launcher {
         match find_ammo(ctx, attacker_guid) {
-            Some(mut a) => {
+            Some(a) => {
                 let disp = ctx
                     .db
                     .game_item_template()
@@ -608,12 +608,7 @@ fn fire_ranged_shot(
                     .find(a.entry)
                     .map(|t| t.display_id)
                     .unwrap_or(0);
-                a.stack_count -= 1;
-                if a.stack_count == 0 {
-                    crate::ItemInstance::delete(ctx, a.guid);
-                } else {
-                    a.update(ctx);
-                }
+                super::folds::spend_one(ctx, a);
                 disp
             }
             None => {
@@ -659,27 +654,77 @@ fn fire_ranged_shot(
             ..CombatEvent::signal_at(ctx, attacker, target_guid)
         },
     );
-    if dmg > 0 {
-        let land_at = ctx
-            .timestamp
-            .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
-            .unwrap_or(ctx.timestamp);
-        ctx.db
-            .game_ranged_impact_schedule()
-            .insert(RangedImpactSchedule {
-                scheduled_id: 0,
-                scheduled_at: ScheduleAt::Time(land_at),
-                attacker_guid,
-                target_guid,
-                damage: dmg,
-                ranged_spell_id,
-                is_crit: hit_info == HIT_CRIT,
-            });
-    }
+    schedule_ranged_impact(
+        ctx,
+        attacker_guid,
+        target_guid,
+        dmg,
+        ranged_spell_id,
+        hit_info == HIT_CRIT,
+        travel_ms,
+    );
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_swing_ms = now_ms;
         crate::combat::MeleeAttack::update(ctx, fresh);
     }
+}
+
+pub(crate) fn launch_ranged_strike(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    rolled: u32,
+    spell_id: u32,
+    is_crit: bool,
+) {
+    let (dmg, _absorbed) = fold_incoming_damage(ctx, attacker.guid, target.guid, rolled);
+    let (dx, dy, dz) = (
+        target.x - attacker.x,
+        target.y - attacker.y,
+        target.z - attacker.z,
+    );
+    let travel_ms = crate::spell::projectile_travel_ms(
+        (dx * dx + dy * dy + dz * dz).sqrt(),
+        AUTO_SHOT_PROJECTILE_SPEED,
+    );
+    schedule_ranged_impact(
+        ctx,
+        attacker.guid,
+        target.guid,
+        dmg,
+        spell_id,
+        is_crit,
+        travel_ms,
+    );
+}
+
+fn schedule_ranged_impact(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    damage: u32,
+    ranged_spell_id: u32,
+    is_crit: bool,
+    travel_ms: u32,
+) {
+    if damage == 0 {
+        return;
+    }
+    let land_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
+        .unwrap_or(ctx.timestamp);
+    ctx.db
+        .game_ranged_impact_schedule()
+        .insert(RangedImpactSchedule {
+            scheduled_id: 0,
+            scheduled_at: ScheduleAt::Time(land_at),
+            attacker_guid,
+            target_guid,
+            damage,
+            ranged_spell_id,
+            is_crit,
+        });
 }
 
 #[reducer]

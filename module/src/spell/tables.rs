@@ -309,6 +309,8 @@ pub const CAST_MISS_NONE: u8 = 0;
 pub const CAST_MISS_MISS: u8 = 1;
 /// Vanilla reports a magic spell's failed hit roll as a full resist.
 pub const CAST_MISS_RESIST: u8 = 2;
+pub const CAST_MISS_DODGE: u8 = 3;
+pub const CAST_MISS_PARRY: u8 = 4;
 
 impl SpellImpactEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {
