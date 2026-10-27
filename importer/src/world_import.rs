@@ -4051,7 +4051,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             })
         }
         _ => bail!(
-            "vmangos currently supports --family creatures, casts, globals, items, loot, gameobjects, trainers, quests or gossip"
+            "vmangos currently supports --family creatures, casts, creature-ai, dbc, globals, items, loot, gameobjects, trainers, quests, gossip, spell or spellmeta"
         ),
     }
 }
@@ -8451,5 +8451,40 @@ mod tests {
             stmts,
             vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()]
         );
+    }
+    #[test]
+    fn vmangos_family_help_names_every_supported_family() {
+        let source = crate::world_source::sqlite_fixture(&[]).unwrap();
+        let mut args = import_args([
+            "--dump",
+            "unused",
+            "--source",
+            "vmangos",
+            "--family",
+            "creature-ai",
+        ])
+        .unwrap();
+        args.family = None;
+        let error = build_vmangos_plan(&source, &args)
+            .err()
+            .unwrap()
+            .to_string();
+        for family in [
+            "creatures",
+            "casts",
+            "creature-ai",
+            "dbc",
+            "globals",
+            "items",
+            "loot",
+            "gameobjects",
+            "trainers",
+            "quests",
+            "gossip",
+            "spell",
+            "spellmeta",
+        ] {
+            assert!(error.contains(family), "{error} omits {family}");
+        }
     }
 }
