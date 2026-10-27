@@ -9,7 +9,7 @@ Counts and keys come from production plans for patch 10 and build 5875, without 
 | Module table | Classic | vmangos |
 | --- | ---: | ---: |
 | game_fishing_loot | 1198 | 2484 |
-| game_gameobject_loot | 4792 | 13834 |
+| game_gameobject_loot | 4792 | 13851 |
 | game_pickpocket_loot | 6910 | 6911 |
 | game_skinning_loot | 2799 | 2968 |
 
@@ -47,19 +47,19 @@ Removed (11): 100001, 100008, 10077, 14750, 14887, 2565, 2831, 3854, 5982, 8437,
 
 ## Differences
 
-- `pickpocketing_loot_template`: patch selection keeps 6901 of 6901 source rows.
-- `skinning_loot_template`: patch selection keeps 2968 of 2977 source rows.
-- `gameobject_loot_template`: patch selection keeps 13839 of 13850 source rows.
-- `fishing_loot_template`: patch selection keeps 2484 of 2484 source rows.
-- `reference_loot_template`: patch selection keeps 9976 of 10231 source rows.
-- `item_loot_template`: patch selection keeps 2662 of 2677 source rows.
-- `disenchant_loot_template`: patch selection keeps 81 of 81 source rows.
-- `mail_loot_template`: patch selection keeps 72 of 72 source rows.
+- `pickpocketing_loot_template`: patch and static-condition selection keeps 6901 of 6901 source rows.
+- `skinning_loot_template`: patch and static-condition selection keeps 2968 of 2977 source rows.
+- `gameobject_loot_template`: patch and static-condition selection keeps 13839 of 13850 source rows.
+- `fishing_loot_template`: patch and static-condition selection keeps 2484 of 2484 source rows.
+- `reference_loot_template`: patch and static-condition selection keeps 9973 of 10231 source rows.
+- `item_loot_template`: patch and static-condition selection keeps 2662 of 2677 source rows.
+- `disenchant_loot_template`: patch and static-condition selection keeps 79 of 81 source rows.
+- `mail_loot_template`: patch and static-condition selection keeps 72 of 72 source rows.
 - Pickpocket differences follow selected creature-to-loot links and source drops. Skinning imports distinct loot ids shared by those creatures.
 - Chest loot follows every selected chest template except the eight authored gather nodes. Fishing imports every selected zone. Both retain source membership after patch selection and reference expansion.
 - vmangos zero-chance group members share the probability left by explicit members. Classic-db keeps its existing omission of direct zero-chance rows for byte parity. Forbidden items are removed before reference weights are expanded, so forbidden children do not take a share of the remaining reference weight. Direct quest-only drops retain the sign as a separate flag where the Module table supports it.
 - Item-container and disenchant tables have no World Source import path in the current Module; they are counted in unsupported findings. Mail loot belongs to quests and is integrated in S3f.
-- Existing import behavior fixes variable item counts at the maximum and expands one reference iteration. The manifest records these limits, source conditions, reference group selectors and multi-group pools, and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.
+- Reference group-zero entries roll independently, group selectors select only the named group, and maxcount repeats each reference. Largest-remainder allocation keeps grouped shares within the reference chance. The manifest retains variable counts, runtime conditions and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.
 
 ## Consumed floors
 
@@ -69,7 +69,7 @@ Minimums come from `importer/scripts/import-manifest.sh`. These are planned rows
 | --- | ---: | ---: | ---: |
 | PICKPOCKET_LOOT | 1 | 6910 | 6911 |
 | SKINNING_LOOT | 1 | 2799 | 2968 |
-| GAMEOBJECT_CHEST_LOOT | 1 | 4792 | 13834 |
+| GAMEOBJECT_CHEST_LOOT | 1 | 4792 | 13851 |
 | FISHING_LOOT | 1 | 1198 | 2484 |
 
 `CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.
@@ -86,7 +86,7 @@ Production findings, with source keys omitted here. The import prints the full f
     {
       "classification": "unsupported",
       "code": "loot.condition",
-      "occurrences": 3655,
+      "occurrences": 3585,
       "table": "creature_loot_template"
     },
     {
@@ -97,20 +97,8 @@ Production findings, with source keys omitted here. The import prints the full f
     },
     {
       "classification": "unsupported",
-      "code": "loot.reference-repeat",
-      "occurrences": 11,
-      "table": "creature_loot_template"
-    },
-    {
-      "classification": "unsupported",
-      "code": "loot.reference-group-selector",
-      "occurrences": 1814,
-      "table": "creature_loot_template"
-    },
-    {
-      "classification": "unsupported",
       "code": "loot.condition",
-      "occurrences": 665,
+      "occurrences": 170,
       "table": "reference_loot_template"
     },
     {
@@ -157,18 +145,6 @@ Production findings, with source keys omitted here. The import prints the full f
     },
     {
       "classification": "unsupported",
-      "code": "loot.reference-repeat",
-      "occurrences": 3,
-      "table": "gameobject_loot_template"
-    },
-    {
-      "classification": "unsupported",
-      "code": "loot.reference-group-selector",
-      "occurrences": 2,
-      "table": "gameobject_loot_template"
-    },
-    {
-      "classification": "unsupported",
       "code": "loot.condition",
       "occurrences": 287,
       "table": "fishing_loot_template"
@@ -193,32 +169,20 @@ Production findings, with source keys omitted here. The import prints the full f
     },
     {
       "classification": "unsupported",
-      "code": "loot.reference-group-selector",
-      "occurrences": 29,
-      "table": "item_loot_template"
-    },
-    {
-      "classification": "unsupported",
       "code": "loot.unconsumed-table",
       "occurrences": 2662,
       "table": "item_loot_template"
     },
     {
       "classification": "unsupported",
-      "code": "loot.condition",
-      "occurrences": 2,
-      "table": "disenchant_loot_template"
-    },
-    {
-      "classification": "unsupported",
       "code": "loot.count-range",
-      "occurrences": 49,
+      "occurrences": 48,
       "table": "disenchant_loot_template"
     },
     {
       "classification": "unsupported",
       "code": "loot.unconsumed-table",
-      "occurrences": 81,
+      "occurrences": 79,
       "table": "disenchant_loot_template"
     }
   ],

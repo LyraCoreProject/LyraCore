@@ -65,21 +65,19 @@ Removed (0): none.
 
 ## Differences
 
-- `item_template`: patch selection keeps 17707 of 20034 source rows.
-- `creature_template`: patch selection keeps 10381 of 15217 source rows.
-- `item_enchantment_template`: patch selection keeps 27686 of 30602 source rows.
-- `creature_loot_template`: patch selection keeps 227235 of 232486 source rows.
-- `reference_loot_template`: patch selection keeps 9976 of 10231 source rows.
-- `forbidden_items`: patch selection keeps 114 of 4084 source rows.
+- `item_template`: patch and static-condition selection keeps 17707 of 20034 source rows.
+- `creature_template`: patch and static-condition selection keeps 10381 of 15217 source rows.
+- `item_enchantment_template`: patch and static-condition selection keeps 27686 of 30602 source rows.
+- `creature_loot_template`: patch and static-condition selection keeps 227234 of 232486 source rows.
+- `reference_loot_template`: patch and static-condition selection keeps 9973 of 10231 source rows.
+- `forbidden_items`: patch and static-condition selection keeps 114 of 4084 source rows.
 - Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.
 - Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.
-- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item removal. The importer keeps one offer per creature and item.
+- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item and static-condition removal. The importer keeps one offer per creature and item.
 - Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.
 - Random Properties and enchantment effects use the same client tables in both sources.
-- The vmangos drink flag follows on-use mana-regeneration auras in its selected spell table; classic-db keeps its existing name heuristic.
+- The unused restores_power flag is false for vmangos. Item on-use spells retain food and drink behavior; classic-db keeps its existing output.
 - Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI dependency closure remains due in S6.
-
-Drink audit on the selected vmangos catalogue: 40 name matches, 32 aura matches, 16 name-only matches removed and 8 aura-only matches added.
 
 ## Consumed floors
 
@@ -118,7 +116,7 @@ Production findings, with source keys omitted here. The import prints the full f
     {
       "classification": "unsupported",
       "code": "loot.condition",
-      "occurrences": 3655,
+      "occurrences": 3585,
       "table": "creature_loot_template"
     },
     {
@@ -129,20 +127,8 @@ Production findings, with source keys omitted here. The import prints the full f
     },
     {
       "classification": "unsupported",
-      "code": "loot.reference-repeat",
-      "occurrences": 11,
-      "table": "creature_loot_template"
-    },
-    {
-      "classification": "unsupported",
-      "code": "loot.reference-group-selector",
-      "occurrences": 1814,
-      "table": "creature_loot_template"
-    },
-    {
-      "classification": "unsupported",
       "code": "loot.condition",
-      "occurrences": 665,
+      "occurrences": 170,
       "table": "reference_loot_template"
     },
     {

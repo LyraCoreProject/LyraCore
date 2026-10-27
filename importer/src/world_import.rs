@@ -1,3 +1,6 @@
+#[path = "world_import_loot.rs"]
+mod vmangos_loot;
+
 use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
@@ -1035,58 +1038,17 @@ struct QuestEtl {
 
 type ReferenceLoot = std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>;
 
-fn equal_loot_chances(
-    rows: &[crate::world_source::Row],
-    forbidden: &std::collections::HashSet<u64>,
-) -> Result<HashMap<(u64, u32), f64>> {
-    let mut groups: HashMap<(u64, u32), (f64, u32)> = HashMap::new();
-    for row in rows {
-        let group = row.number::<u32>("groupid")?;
-        if group == 0
-            || row.number::<i64>("mincountOrRef")? < 0
-            || forbidden.contains(&row.number::<u64>("item")?)
-        {
-            continue;
-        }
-        let chance = row.number::<f64>("ChanceOrQuestChance")?.abs();
-        let total = groups.entry((row.number("entry")?, group)).or_default();
-        total.0 += chance;
-        total.1 += u32::from(chance == 0.0);
-    }
-    Ok(groups
-        .into_iter()
-        .filter(|(_, (_, count))| *count != 0)
-        .map(|(key, (chance, count))| (key, (100.0 - chance).max(0.0) / f64::from(count)))
-        .collect())
-}
-
 fn parse_ref_pools(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<ReferenceLoot> {
-    let forbidden = forbidden_items(dump)?;
+    if dump.kind() == SourceKind::Vmangos {
+        return Ok(Default::default());
+    }
     let mut refs: ReferenceLoot = std::collections::HashMap::new();
-    let rows = parse_table(dump, "reference_loot_template")?;
-    let equal = if dump.kind() == SourceKind::Vmangos {
-        equal_loot_chances(&rows, &forbidden)?
-    } else {
-        HashMap::new()
-    };
-    for row in rows.iter() {
+    for row in parse_table(dump, "reference_loot_template")?.iter() {
         let g: u64 = row.number(clt::ENTRY)?;
         let item: u64 = row.number(clt::ITEM)?;
-        let mut chance: f64 = row.number(clt::CHANCE)?;
+        let chance: f64 = row.number(clt::CHANCE)?;
         let mincount_or_ref: i64 = row.number(clt::MINCOUNT_OR_REF)?;
         let cnt: u32 = row.number(clt::MAXCOUNT)?;
-        if mincount_or_ref >= 0 && forbidden.contains(&item) {
-            continue;
-        }
-        if dump.kind() == SourceKind::Vmangos && chance == 0.0 {
-            if mincount_or_ref < 0 {
-                continue;
-            }
-            chance = equal
-                .get(&(g, row.number("groupid")?))
-                .copied()
-                .unwrap_or(0.0);
-        }
         refs.entry(g)
             .or_default()
             .push((item, chance, mincount_or_ref, cnt));
@@ -1109,7 +1071,7 @@ fn resolve_ref_pool(
     let mut out = Vec::new();
     for &(item, chance, mincount_or_ref, maxcount) in rows {
         if mincount_or_ref < 0 {
-            // Classic-db reference chance zero means always; nonzero gates normalized child weights.
+            // Reference chance zero means always; otherwise it gates the normalized child weights.
             let children = resolve_ref_pool(mincount_or_ref.unsigned_abs(), refs, visited);
             let gate = chance.abs();
             if gate > 0.0 {
@@ -1136,18 +1098,14 @@ fn parse_loot_family(
     table: &str,
     refs: &ReferenceLoot,
 ) -> Result<std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>>> {
+    if dump.kind() == SourceKind::Vmangos {
+        return vmangos_loot::parse(dump, table);
+    }
     use std::collections::HashMap;
-    let forbidden = forbidden_items(dump)?;
     // Loot chances use basis points, preserving odds below one percent.
     let bp = |pct: f64| (pct * 100.0).round() as i64;
     let mut drops_by_entry: HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> = HashMap::new();
-    let rows = parse_table(dump, table)?;
-    let equal = if dump.kind() == SourceKind::Vmangos {
-        equal_loot_chances(&rows, &forbidden)?
-    } else {
-        HashMap::new()
-    };
-    for row in rows.iter() {
+    for row in parse_table(dump, table)?.iter() {
         let entry: u64 = row.number(clt::ENTRY)?;
         let item: u64 = row.number(clt::ITEM)?;
         let raw_chance: f64 = row.number(clt::CHANCE)?;
@@ -1155,12 +1113,8 @@ fn parse_loot_family(
         let ref_or_min: i64 = row.number(clt::MINCOUNT_OR_REF)?;
         let maxcount: u32 = row.number(clt::MAXCOUNT)?;
         let quest_only = raw_chance < 0.0;
-        let chance = if raw_chance == 0.0 && ref_or_min >= 0 {
-            equal.get(&(entry, groupid)).copied().unwrap_or(0.0)
-        } else {
-            raw_chance.abs()
-        };
-        if chance == 0.0 || (ref_or_min >= 0 && forbidden.contains(&item)) {
+        let chance = raw_chance.abs();
+        if chance == 0.0 {
             continue;
         }
         let drops = drops_by_entry.entry(entry).or_default();
@@ -3868,10 +3822,7 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
         let rows = dump.rows(table)?;
         let mut conditions = 0;
         let mut count_ranges = 0;
-        let mut repeats = 0;
-        let mut group_references = 0;
         let mut quest_only = 0;
-        let mut reference_groups: HashMap<u64, std::collections::BTreeSet<u32>> = HashMap::new();
         for row in rows.iter() {
             let minimum = row.number::<i64>("mincountOrRef")?;
             if minimum >= 0 && forbidden.contains(&row.number::<u64>("item")?) {
@@ -3880,15 +3831,6 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
             conditions += usize::from(row.number::<u32>("condition_id")? != 0);
             let maximum = row.number::<u32>("maxcount")?;
             count_ranges += usize::from(minimum >= 0 && minimum as u64 != u64::from(maximum));
-            repeats += usize::from(minimum < 0 && maximum > 1);
-            let group = row.number::<u32>("groupid")?;
-            group_references += usize::from(minimum < 0 && group != 0);
-            if table == "reference_loot_template" {
-                reference_groups
-                    .entry(row.number("entry")?)
-                    .or_default()
-                    .insert(group);
-            }
             if matches!(table, "skinning_loot_template" | "fishing_loot_template") {
                 quest_only += usize::from(row.number::<f64>("ChanceOrQuestChance")? < 0.0);
             }
@@ -3896,15 +3838,6 @@ fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_jso
         for (code, occurrences) in [
             ("loot.condition", conditions),
             ("loot.count-range", count_ranges),
-            ("loot.reference-repeat", repeats),
-            ("loot.reference-group-selector", group_references),
-            (
-                "loot.reference-groups",
-                reference_groups
-                    .values()
-                    .filter(|groups| groups.len() > 1)
-                    .count(),
-            ),
             ("loot.quest-only", quest_only),
         ] {
             if occurrences != 0 {

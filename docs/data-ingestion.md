@@ -67,8 +67,10 @@ Creature loot stays in items and mail loot stays in quests. Forbidden items are 
 reference expansion. vmangos zero-chance group members share the chance left by explicit members,
 as described by `LootGroup::Roll` in [LootMgr.cpp at commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/LootMgr.cpp#L1092-L1128).
-The classic-db output remains unchanged. Source conditions, variable counts, repeated references,
-reference group selectors, multi-group reference pools, and quest-only skinning or fishing drops
+Group-zero reference children roll independently. Each reference processes its selected group or
+whole template `maxcount` times, with separate groups for each roll. Largest-remainder allocation
+keeps each group's basis-point total equal to its intended share.
+The classic-db output remains unchanged. Runtime conditions, variable counts and quest-only skinning or fishing drops
 appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
 
