@@ -704,3 +704,28 @@ fn checked_phase_increments_refuse_overflow_and_clamp_only_at_zero() {
         assert_eq!(scenario.eventai_creature_state(CREATURE).phase, expected);
     }
 }
+
+#[test]
+fn script_map_condition_checks_the_creature_without_an_invoker() {
+    for (map, expected) in [(509, true), (0, false)] {
+        let mut definition = command_list_definition(false, vec![]);
+        definition.rules[0].event = EventCondition::OnEvade;
+        definition.rules[0].execution = ExecutionPolicy::ScriptEvent(ScriptEventPolicy {
+            not_casting: false,
+            check_result: false,
+            predicate: EventPredicate::Map(509),
+        });
+        let mut scenario = world().eventai_native_definition(definition);
+        scenario
+            .creatures
+            .borrow_mut()
+            .get_mut(&CREATURE)
+            .unwrap()
+            .map_id = map;
+        evaluate(
+            &mut scenario,
+            EventAiRequest::Edge(EventContext::empty(EventKind::OnEvade, CREATURE, 1_000)),
+        );
+        assert_eq!(!scenario.eventai_emotes().is_empty(), expected);
+    }
+}

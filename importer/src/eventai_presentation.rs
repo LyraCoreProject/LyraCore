@@ -10,8 +10,8 @@ pub(super) const ACTION_REMOVE_UNIT_FLAG: u32 = 19;
 pub(super) const ACTION_UPDATE_TEMPLATE: u32 = 36;
 pub(super) const ACTION_MOUNT_TO_ENTRY_OR_MODEL: u32 = 43;
 
-const RAJAXX_RULE_ID: u64 = 1_534_108;
-const RAJAXX_SOURCE_GUID: i32 = -155_940;
+const CLASSIC_RAJAXX_RULE_ID: u64 = 1_534_108;
+const CLASSIC_RAJAXX_SOURCE_GUID: i32 = -155_940;
 
 const DISPLAY_TEMPLATE_ENTRIES: &[u32] = &[
     5_357, 5_358, 5_359, 5_360, 5_361, 9_621, 10_296, 11_284, 13_279, 13_738, 13_739, 13_740,
@@ -128,7 +128,7 @@ fn map_set_unit_flags(
         }
         [ACTION_SET_UNIT_FLAG, 0x0200_0000, 0, 0] => ("unit-flags:set:not-selectable", vec![]),
         [ACTION_SET_UNIT_FLAG, 0x0000_0340, 0, 0]
-            if rule_id == RAJAXX_RULE_ID && subject == RAJAXX_SOURCE_GUID =>
+            if rule_id == CLASSIC_RAJAXX_RULE_ID && subject == CLASSIC_RAJAXX_SOURCE_GUID =>
         {
             (
                 "unit-flags:set:rajaxx-spawn-protection",

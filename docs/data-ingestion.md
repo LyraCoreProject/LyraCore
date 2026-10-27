@@ -580,13 +580,16 @@ The Module can keep up to three ordered command lists in a rule. Random selectio
 whole list. A failed command with abort-on-failure skips the rest of its list; other lists still
 run. A check-result rule reopens after an aborted list, keeping effects already applied. The
 not-casting policy checks the creature before it spends the opportunity. Event predicates use
-the invoker, or the current opponent when there is no invoker.
+the invoker, or the current opponent when there is no invoker. Map predicates check the creature
+itself, including spawn and evade events without an invoker.
 
 These policies follow `CreatureEventAI::ProcessEvent`, `ProcessAction` and
 `Map::ScriptCommandStartDirect` in vmangos at
 [`4641790`](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game).
 The Rust implementation stores LyraCore policies, not source flag numbers. New persisted enum
 variants follow the existing variants, so stored classic rules retain their discriminants.
+SpacetimeDB classifies appended variants as a client-breaking schema change. A normal publish
+acknowledges its pre-publish plan without deleting data; subscriptions then reconnect.
 
 The published rule stores fieldless selection and execution enums. Command-list boundaries and
 script event policies live in `game_creature_ai_script_policy`, keyed by definition revision and
@@ -619,6 +622,33 @@ The manifest counts commands in all seven delayed-script tables and names each u
 The classic reader has no general quest-start, quest-end, gossip, event, movement or gameobject
 script dispatcher to port. Its quest-end mail behavior already uses the vmangos quest reward
 columns; other commands in those tables remain unsupported.
+
+
+The vmangos encounter bindings use the pinned instance script fields. Kelris uses field 10,
+Tomb of Seven uses 3, Alzzin uses 11, and Avatar uses 8. Razorfen ward keepers use field 1,
+Shadowfang bosses use 2/3/4, Wailing Caverns uses 0/1/2/3/5, Ohgan uses 5, and Rajaxx uses 2.
+Bindings carry reset, begin, fail and complete signals. Source state 0 means reset to the Module's
+not-started state. Alzzin also supports the wall-breaking special signal.
+The pinned Tomb rows use field 4, which belongs to Lyceum; those rows remain unsupported. Ohgan's
+special state does not send Mandokir downstairs in this source, so it cannot use the classic signal.
+Anacondra's special state remains unsupported. A binding does not
+install an encounter Package handler.
+
+These fields and effects were checked in the
+[vmangos instance scripts at the pin](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/scripts).
+The importer accepts a binding when the creature has a selected spawn on the bound map.
+Additional appearances on other maps do not change the binding. His encounter notification is eligible only in a map-509
+instance. His map-1 spawn line, map-509 spawn faction and evade yell use source map predicates.
+The classic Rajaxx client
+projection remains restricted to its original rule and spawn GUID; vmangos entry rules cannot
+request it. Display-template dependencies come from each accepted command rather than the classic
+allowlist. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
+
+The condition reader follows `Conditions.h` at the pinned source: 33 is map, 15 is level,
+6 is team, and 9 is quest-taken. State 0 accepts active quests and state 1 requires incomplete
+objectives. Level and quest state 2 remain unsupported.
+Static conditions use 0 (always), 24 (patch), -1 (and), -2 (or), and -3 (not); these numbers also
+match that header. Flagged runtime conditions remain unsupported.
 
 
 ### The vmangos Source Profile

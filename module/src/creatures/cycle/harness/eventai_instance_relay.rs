@@ -88,6 +88,91 @@ fn named_encounter_notification_crosses_the_world_seam_only_on_its_bound_map() {
 }
 
 #[test]
+fn a_wipe_notifies_each_wailing_caverns_lord_to_reset_for_the_next_attempt() {
+    for binding in [
+        EncounterBinding::WailingCavernsPythas,
+        EncounterBinding::WailingCavernsAnacondra,
+        EncounterBinding::WailingCavernsSerpentis,
+    ] {
+        let notification = NotifyEncounterInstruction {
+            binding,
+            signal: EncounterSignal::Reset,
+        };
+        let mut definition = definition(CreatureInstruction::NotifyEncounter(notification));
+        definition.rules[0].event = EventCondition::OnEvade;
+        let mut world = Scenario::new(1_000_000)
+            .creature(
+                CREATURE,
+                Point {
+                    x: 0.0,
+                    y: 0.0,
+                    z: 0.0,
+                },
+            )
+            .entry(CREATURE, ENTRY)
+            .in_instance(CREATURE, 9)
+            .tweak(CREATURE, |creature| creature.map_id = 43)
+            .eventai_native_definition(definition);
+        evaluate(
+            &mut world,
+            EventAiRequest::Edge(EventContext::empty(EventKind::OnEvade, CREATURE, 1_000)),
+        );
+        assert_eq!(
+            world.eventai_encounter_notifications.borrow().as_slice(),
+            &[(CREATURE, notification)]
+        );
+    }
+}
+
+#[test]
+fn rajaxx_combat_and_death_notify_only_his_ahnqiraj_instance() {
+    for (map, instance, expected) in [(509, 9, 1), (1, 0, 0)] {
+        for (condition, event, signal) in [
+            (
+                EventCondition::OnAggro,
+                EventKind::OnAggro,
+                EncounterSignal::Begin,
+            ),
+            (
+                EventCondition::OnDeath(DeathCondition {
+                    predicate: EventPredicate::Always,
+                }),
+                EventKind::OnDeath,
+                EncounterSignal::Complete,
+            ),
+        ] {
+            let notification = NotifyEncounterInstruction {
+                binding: EncounterBinding::RuinsOfAhnQirajRajaxx,
+                signal,
+            };
+            let mut definition = definition(CreatureInstruction::NotifyEncounter(notification));
+            definition.rules[0].event = condition;
+            let mut world = Scenario::new(1_000_000)
+                .creature(
+                    CREATURE,
+                    Point {
+                        x: 0.0,
+                        y: 0.0,
+                        z: 0.0,
+                    },
+                )
+                .entry(CREATURE, ENTRY)
+                .in_instance(CREATURE, instance)
+                .tweak(CREATURE, |creature| creature.map_id = map)
+                .eventai_native_definition(definition);
+            evaluate(
+                &mut world,
+                EventAiRequest::Edge(EventContext::empty(event, CREATURE, 1_000)),
+            );
+            assert_eq!(
+                world.eventai_encounter_notifications.borrow().len(),
+                expected
+            );
+        }
+    }
+}
+
+#[test]
 fn random_relay_selection_keeps_the_invocations_linked_random_state() {
     let instruction = CreatureInstruction::StartRelay(StartRelayInstruction {
         relay_ids: vec![9_989, 9_990, 9_991],
