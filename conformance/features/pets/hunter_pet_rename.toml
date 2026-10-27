@@ -1,0 +1,29 @@
+schema_version = 1
+id = "hunter_pet_rename"
+system = "pets"
+scope = "A Hunter renames its own eligible pet once. The name persists and reaches the client name cache; invalid and reserved names leave it unchanged."
+requests = ["0x0177", "0x0052"]
+replies = ["0x0178", "0x0053", "0x00A9"]
+dependencies = []
+required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = ["The Character owns a live Hunter pet with its rename still available."]
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/PetHandler.cpp"
+symbol = "WorldSession::HandlePetRename"
+
+[real_client]
+status = "unverified"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "existing_live_pet_recovers_rename_eligibility_without_losing_other_flags"
+rung = "durable_module"

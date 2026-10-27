@@ -26,6 +26,8 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 ```bash
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+cargo test -p lyracore-conformance -- --nocapture
+cargo test -p lyracore-protocol --example benilla_inventory
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test build_script
@@ -167,6 +169,18 @@ mkdir -p "$TMPDIR"
 cargo test -p lyracore-module --test native_debug_gate
 cargo test -p lyracore-module --test native_conformance -- --ignored
 ```
+
+The [Feature Ledger](../conformance/README.md) has its own Architecture Test:
+
+```bash
+cargo test -p lyracore-conformance -- --nocapture
+cargo test -p lyracore-protocol --example benilla_inventory
+```
+
+The first command checks every Behavior file and its dependencies. Scenario ids are cross-checked
+when the pinned harness supplies a catalogue. Milestone 1's pin has none, so the test prints that
+skip. The second command checks retained Rust evidence declarations in the inventory. Neither
+command establishes that a Behavior passes its required verification rungs.
 
 The existing durable CI target discovery includes `native_conformance` automatically.
 `native_debug_gate` checks that the debug module remains behind the `debug_reducers` feature and

@@ -1,0 +1,29 @@
+schema_version = 1
+id = "gossip_conditions"
+system = "gossip"
+scope = "Gossip menu options depend on the Character's current conditions. Selecting an offered option produces its configured result."
+requests = ["0x017B", "0x017C"]
+replies = ["0x017D", "0x017E"]
+dependencies = []
+required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = ["Gossip options and their referenced conditions are imported."]
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Objects/Player.cpp"
+symbol = "Player::PrepareGossipMenu"
+
+[real_client]
+status = "unverified"
+
+[[tests]]
+path = "module/tests/gossip_conditions.rs"
+function = "imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/gossip_conditions.rs"
+function = "a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook"
+rung = "durable_module"

@@ -107,7 +107,18 @@ The durable `native_conformance` test enters a Character, sends `CMSG_PING` thro
 `SMSG_PONG` directly with gtker. It also checks the non-Operator refusal. The decoder is a single
 function for replacement with the harness library in Milestone 2. This proves the mechanism, not
 agreement with a Golden Trace. Run it with the command in [testing](../testing.md#conformance).
-C1c will record the ledger schema and its scenario-reference checks.
+
+C1c adds schema version 1 and a shared loader in `lyracore-conformance`. TOML keeps the ledger
+readable without a generator and gives each Behavior its own file for parallel work. The loader
+checks field types, ids and file paths, source references, required rungs, dependency cycles and
+human verification records. The [schema reference](../../conformance/README.md) states the fields.
+
+The nine original inventory entries now live in `conformance/features/`. The inventory reads that
+same loader and still checks retained Rust test declarations without running them. Entries contain
+no handwritten support status. Their initial scenario lists are empty; source evidence does not
+stand in for recordings. The Architecture Test validates references when a pinned harness catalogue
+is present and prints a clear skip for the current pre-catalogue pin. The assumed catalogue path
+and shape remain in one test function for Milestone 2 integration.
 
 The harness scenario format is pending the parallel harness milestone. The existing pin stays
 unchanged in Milestone 1. Milestone 2 updates its prerelease tag and full SHA and adds the tier 1
