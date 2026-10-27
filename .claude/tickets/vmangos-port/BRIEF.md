@@ -390,6 +390,12 @@ importer's `eventai.rs` first, then `research/vmangos-schema.md` §4.
   `module/src/creatures/eventai/loader.rs`), `encounter_binding`, the display templates and the
   fixture-id refusals.
 - Update the Deadmines content the dungeons Package relies on: VanCleef's yells and ally summon.
+- **Event-credit quest rule** (decided by the orchestrator on 2026-10-27 under decision 6, after the
+  Milestone 4 review). The vmangos quests family adds an event requirement only when the import
+  emits a working credit source for that quest: a translated EventAI or script command. Otherwise
+  the quest completes by its normal objectives, as it does on classic, and is listed in
+  `unsupported.md` with where vmangos grants the credit (SQL that was refused, a script with no
+  dispatcher, or C++). No quest that classic can complete may become impossible to complete.
 - **Event-credit quests** (from the Milestone 2 review). On vmangos, every quest with
   `SpecialFlags & 2` (176 quests, for example 28/29, 6001/6002 and 2460) needs event credit, and
   only EventAI or scripts can grant it. S6 must give each one a working credit source, or list it
