@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "tier": "conformance_audit",
-  "core_commit": "899d5330360505435bc67ec53f3dcc7ec999ed66",
+  "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
   "working_tree_dirty": false,
   "harness_revision": "bc83d81cc1992fd1b522cab38c2ea048b5c6db23",
-  "recorded_at_unix_ms": 1793108506798,
+  "recorded_at_unix_ms": 1793111634954,
   "scenarios": [
     {
       "id": "connection_identity",
@@ -15,7 +15,14 @@
       },
       "reference_comparison": {
         "differences": []
-      }
+      },
+      "capture": {
+        "sha256": "1db822c427449b1f64904922b1191895d910182d34c1a62536c1a4c7d31a1d2a",
+        "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
+        "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
+        "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b"
+      },
+      "reference_sha256": "7729bfe0694920ebe17c333c60a01c4bb3ca59065bdbf1b0574c09469d097693"
     },
     {
       "id": "taxi_single_hop",
@@ -1647,7 +1654,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72553
+              "value": 72547
             }
           },
           {
@@ -1725,7 +1732,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72553
+              "value": 72547
             }
           },
           {
@@ -1808,12 +1815,19 @@
       },
       "reference_comparison": {
         "differences": []
-      }
+      },
+      "capture": {
+        "sha256": "3d231f5e3f7db55244a7bd1498f0116e6150b3232c844f033267018feab31c9a",
+        "core_commit": "d3db3e93e539eea15d77ade9efe0e77f180710e2",
+        "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
+        "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b"
+      },
+      "reference_sha256": "25db91cedaefc1712a7545a990d2736e128a8976da00e6aca146489360d32726"
     }
   ],
   "audit": {
     "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
-    "module_sha256": "0e097c9d1aba339e3738d0810274daab4099212cd790409f9755dc24433f82ed",
+    "module_sha256": "f7728684c230352629dbf1c03b6f71c1b2a1cc5ee9fc835f42e3b876ab10831b",
     "content": "Module seed content and the hand-written taxi route fixture, nodes 2 and 4, path 6, 28 vertices and flight master 352; no world import",
     "reference": {
       "server": "vmangos",

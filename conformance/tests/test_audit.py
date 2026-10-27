@@ -108,5 +108,71 @@ class CleanupAuthentication(unittest.TestCase):
                 self.assertEqual(run.call_count, calls)
 
 
+class CargoPin(unittest.TestCase):
+    def setUp(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(prefix='audit-pin-', dir=audit.SCRATCH)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.workspace = self.root / 'workspace'
+        self.member = self.workspace / 'member'
+        self.home = self.root / 'cargo-home'
+        self.checkout = self.home / 'git/checkouts/harness/revision'
+        self.member.mkdir(parents=True)
+        self.checkout.mkdir(parents=True)
+        for path in [self.workspace, self.member, self.checkout]:
+            (path / 'Cargo.toml').write_text('')
+        self.git('init', '--quiet')
+        self.git('add', '.')
+        self.git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '-m', 'fixture')
+        self.revision = self.git('rev-parse', 'HEAD')
+        self.metadata = dict(workspace_root=str(self.workspace), workspace_members=['member'],
+            resolve=dict(nodes=[dict(id='harness')]), packages=[
+                dict(id='member', name='member', manifest_path=str(self.member / 'Cargo.toml')),
+                dict(id='harness', name='wire-client', manifest_path=str(self.checkout / 'Cargo.toml'),
+                     source=f'git+https://github.com/LyraCoreProject/wire-harness?rev={self.revision}#{self.revision}')])
+
+    def git(self, *args):
+        env = {key: value for key, value in audit.os.environ.items()
+               if key not in {'GIT_DIR', 'GIT_INDEX_FILE', 'GIT_WORK_TREE'}}
+        env.update(GIT_AUTHOR_NAME='Fixture', GIT_COMMITTER_NAME='Fixture',
+                   GIT_AUTHOR_EMAIL='fixture@example.invalid', GIT_COMMITTER_EMAIL='fixture@example.invalid')
+        return audit.run(['git', *args], cwd=self.checkout, env=env, capture_output=True, text=True).stdout.strip()
+
+    def check(self):
+        return audit.pinned_harness(self.metadata, self.revision, self.home)
+
+    def test_every_config_location_refuses_sources_and_replace_with(self):
+        self.assertEqual(self.check(), self.checkout)
+        for directory in [self.root / '.cargo', self.workspace / '.cargo', self.member / '.cargo', self.home]:
+            directory.mkdir(exist_ok=True)
+            for filename in ['config', 'config.toml', 'config.backup']:
+                path = directory / filename
+                for contents in ["[source.vend]\ndirectory = 'vendor'\n",
+                                 "[source.pinned]\nreplace-with = 'vend'\n",
+                                 "[build]\nreplace-with = 'vend'\n", "paths = ['fork']\n"]:
+                    with self.subTest(path=path, contents=contents):
+                        path.write_text(contents)
+                        with self.assertRaisesRegex(RuntimeError, 'forbidden'):
+                            self.check()
+                path.unlink()
+
+    def test_pinned_metadata_cannot_hide_another_checkout_head(self):
+        self.git('-c', 'commit.gpgsign=false', 'commit', '--quiet', '--allow-empty', '-m', 'changed')
+        with self.assertRaisesRegex(RuntimeError, 'HEAD differs'):
+            self.check()
+
+    def test_pinned_metadata_cannot_hide_a_directory_source_or_symlink(self):
+        manifest = self.root / 'vendored.toml'
+        manifest.write_text('')
+        link = self.checkout / 'symlink.toml'
+        link.symlink_to(manifest)
+        for path in [manifest, link]:
+            with self.subTest(path=path):
+                self.metadata['packages'][1]['manifest_path'] = str(path)
+                with self.assertRaisesRegex(RuntimeError, 'outside Cargo git checkouts'):
+                    self.check()
+
+
 if __name__ == '__main__':
     unittest.main()

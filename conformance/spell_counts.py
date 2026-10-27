@@ -18,7 +18,25 @@ CLASSES = {
     9: ('Warlock', (354, 355, 593)),
     11: ('Druid', (134, 573, 574)),
 }
-AURA_EFFECTS = {6, 27, 35, 65, 119, 128, 129}
+AURA_EFFECTS = {6, 27, 35, 119}
+SCRIPT_NAMES = {
+    'Holy Light', 'Flash of Light', 'Life Tap', 'Charge', 'Blink', 'Seal of Righteousness',
+    'Retaliation', 'Battle Stance', 'Defensive Stance', 'Berserker Stance', 'Bear Form',
+    'Dire Bear Form', 'Cat Form', 'Judgement', 'Sinister Strike', 'Backstab', 'Gouge', 'Garrote',
+    'Resurrection', 'Redemption', 'Rebirth', 'Ancestral Spirit', 'Pick Pocket',
+    'Create Healthstone', 'Create Healthstone (Minor)', 'Create Healthstone (Lesser)',
+    'Create Healthstone (Greater)', 'Create Healthstone (Major)', 'Soulstone Resurrection',
+}
+
+
+def effect_supported(name, effect, aura, target_a, target_b, misc, effects, auras):
+    if effect == 108 and misc == 21:
+        return True
+    if effect in AURA_EFFECTS or aura != 0:
+        mapped = aura in auras
+    else:
+        mapped = effect in effects or (effect == 5 and 9 in (target_a, target_b))
+    return mapped or name in SCRIPT_NAMES or (name == 'Stealth' and aura == 16)
 
 
 def latest(connection, table, key, columns):
@@ -31,20 +49,21 @@ def latest(connection, table, key, columns):
 
 
 def counts(connection, supported_effects, supported_auras):
-    columns = ['entry'] + [f'{field}{slot}' for slot in (1, 2, 3)
-                            for field in ('effect', 'effectApplyAuraName', 'effectTriggerSpell')]
+    columns = ['entry', 'name'] + [f'{field}{slot}' for slot in (1, 2, 3)
+                            for field in ('effect', 'effectApplyAuraName', 'effectTriggerSpell',
+                                          'effectImplicitTargetA', 'effectImplicitTargetB', 'effectMiscValue')]
     spells = {}
-    for entry, *slots in latest(connection, 'spell_template', 'entry', columns):
+    for entry, name, *slots in latest(connection, 'spell_template', 'entry', columns):
         if entry in spells:
             raise ValueError(f'duplicate current spell {entry}')
-        spells[entry] = [tuple(slots[i:i + 3]) for i in range(0, 9, 3)]
+        spells[entry] = (name, [tuple(slots[i:i + 6]) for i in range(0, 18, 6)])
 
     def learned(spell, visiting=frozenset()):
         if spell in visiting:
             raise ValueError(f'cyclic teaching spell {spell}')
         if spell not in spells:
             raise ValueError(f'missing build-{BUILD} spell {spell}')
-        targets = [trigger for effect, _, trigger in spells[spell] if effect == 36]
+        targets = [trigger for effect, _, trigger, *_ in spells[spell][1] if effect == 36]
         if targets:
             return set().union(*(learned(target, visiting | {spell}) for target in targets))
         return {spell}
@@ -79,10 +98,11 @@ def counts(connection, supported_effects, supported_auras):
                 trainable[class_id].update(learned(spell))
 
     def supported(spell):
-        slots = [(effect, aura) for effect, aura, _ in spells[spell] if effect != 0]
-        return bool(slots) and all(effect in supported_effects and
-                                   (effect not in AURA_EFFECTS or aura in supported_auras)
-                                   for effect, aura in slots)
+        name, slots = spells[spell]
+        slots = [slot for slot in slots if slot[0] != 0]
+        return bool(slots) and all(effect_supported(name, effect, aura, a, b, misc,
+                                                   supported_effects, supported_auras)
+                                   for effect, aura, _, a, b, misc in slots)
 
     return [{'class': name, 'trainable': len(trainable[class_id]),
              'supported': sum(supported(spell) for spell in trainable[class_id])}

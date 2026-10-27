@@ -92,6 +92,11 @@ checks remain unverified and their scenario lists are empty.
 and ledger tests use it only as a dev-dependency. The `harness_pin` Architecture Test checks
 that both consumers inherit the same revision as `dev smoke`, and that every workspace member
 keeps `wire-client` out of normal and build dependencies, including renamed and target-specific uses.
+It also requires exactly one resolved package with the pinned git source and commit. Workspace
+manifests cannot patch `wire-client`. Every `config*` file in workspace ancestors' `.cargo/`
+directories and `$CARGO_HOME` must be free of `paths`, `[source.*]` and `replace-with` overrides.
+The resolved `manifest_path` must remain inside `$CARGO_HOME/git/checkouts/` after resolving
+symlinks, and its checkout's `HEAD` must equal the pin. The audit applies these checks too.
 
 Every scenario reference must exist in that catalogue and name the Behavior that lists it.
 A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
@@ -215,20 +220,41 @@ duplicate results and malformed reports fail before freshness checks.
 | `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
 | `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
 | `scenarios[].comparison` | Complete tagged comparison of LyraCore with the Golden Trace |
-| `scenarios[].reference_comparison` | Audit-only comparison of vmangos with that same Golden Trace |
+| `scenarios[].reference_comparison` | Audit-only reference-stability comparison of vmangos with that same Golden Trace |
+| `scenarios[].reference_sha256` | SHA-256 of the Reference Server candidate, retained only in scratch |
+| `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |
 | `audit` | Audit-only server provenance and per-Behavior summaries |
 
 `audit` records the Native Host and Module binary hashes, content fixture description, and vmangos
 binary release, archive hash, source commit and database commit. Its `behaviors` map holds each
 Behavior's `candidate` and `reference` summaries. Each summary has `rule` and `data` groups with
 `raw_records` and a `signatures` array of `{signature, raw_records}`. The scoreboard recomputes
-both summaries from the comparator tags and rejects any disagreement in classification, signature
-membership or count.
+the LyraCore comparison by replaying its scrubbed candidates in `<date>.traces/` against the
+pinned catalogue. Every stored LyraCore difference must equal the recomputed record, including its
+tag and values. Reference Server candidates remain in scratch; core retains their SHA-256 and
+reference-stability comparison only.
+Data tags also require a matching scenario data-field declaration, and checkpoints must exist.
+The comparator's empty checkpoint denotes an unmatched rule declaration, not a scenario step.
+The scoreboard then checks the summaries and verifies that Markdown equals its JSON rendering.
+The `committed_audit_report_replays` test loads the newest committed report and runs validation,
+change validation and candidate replay in the Rust workflow's unit-test job. This checks report
+integrity, not whether every audited Behavior conforms.
+
+Each LyraCore candidate's bytes must match `capture.sha256`, and its core commit and binary hashes
+must match the audit run. At the pinned harness revision, the candidate header has no slot for
+those three provenance values; it records only the adapter and scenario metadata. The report
+binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is corroborated by
+the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
+its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
 
 `audit.previous_report` is the preceding JSON filename, or null on the first audit. Each Behavior's
-`changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no earlier
-audit exists. Multiplicity and values cannot fix or regress a signature. The scoreboard checks
-these sets against the named earlier report. Earlier T2d/T2g narrative notes are not audit baselines.
+`changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no
+earlier audit exists or the harness revision or any scenario hash for that Behavior differs. In the
+latter case the report says comparison is not possible. Multiplicity and values cannot fix or
+regress a signature. The scoreboard checks these sets against the named earlier report. It also
+replays that earlier report's LyraCore candidates when its harness revision matches the current pin.
+Older reports receive structure checks; the newest report receives current ledger checks, so a
+Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
 
 ## Conformance Audit
 
@@ -257,37 +283,55 @@ catalogue's content without importing world data. New scenarios may need more co
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
 pins and provenance, starts its compose services, and resets only the catalogue Characters on the
-disposable Reference Server. Every scenario produces both a LyraCore and vmangos candidate. Both
+disposable Reference Server. Every scenario produces both a LyraCore and vmangos candidate in scratch. Both
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
 
-The command writes `conformance/reports/<date>.md` and `<date>.json`, refusing existing files.
-`--output DIRECTORY` selects another report destination. Rule differences are audit findings and do
-not make the command fail; missing captures, infrastructure errors and invalid evidence do. A failed
-run cannot write a partial success report. No scenario is skipped, including taxi. Real-client
-fields, Equivalence Rules and Deliberate Deviations are untouched.
+The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`, refusing
+existing outputs. The trace directory contains only LyraCore candidates. Reference Server
+candidates stay in the audit's scratch directory and are deleted with it at exit; the report keeps
+their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report destination. To replace the single
+baseline, capture with the same date into scratch and replace all three outputs together. A report
+with that same filename is not used as its own previous report. Rule differences are audit findings
+and do not make the command fail; missing captures, infrastructure errors and invalid evidence do. A
+failed run cannot write a partial success report. No scenario is skipped, including taxi.
+Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The runner stops both servers on exit, including capture failures and normal interrupts. Credentials,
-traces and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted
-when the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+The runner stops both servers on exit, including capture failures and normal interrupts. Credentials
+and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted when
+the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
-counts, signatures and scrubbed difference values. Commit the implementation before capturing a
-report for current evidence, then commit only the report pair. Dirty captures remain unverified.
+counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain
+numbers and text digests, with the same scrubbed field types as Golden Traces. Never commit a
+Reference Server candidate; Golden Traces belong in the harness. Commit the implementation before
+capturing a report for current evidence, then commit only the report and its candidates. Dirty
+captures remain unverified.
 
 ## Opcode coverage
 
 `tests/opcode_coverage.rs` checks every variant of the pinned `ClientOpcodeMessage` against ledger
 request claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. Out-of-scope entries map a
-variant name to a nonempty reason. That list is currently empty. The initial allowlist has 285
-variants. Adding a Behavior or a scope decision requires removing its opcodes from the allowlist
-in the same change. Unknown names, duplicate allowances and overlapping categories fail.
+variant name to a table with `reason` and an optional `source`. That list is currently empty. The
+initial allowlist has 285 variants. Adding a Behavior or a scope decision requires removing its
+opcodes from the allowlist in the same change. Unknown names, duplicate allowances and overlapping
+categories fail.
 
-The Architecture Test compares the current allowlist with every earlier committed version reachable
-from `HEAD`. Membership may only shrink, even if an edit removes one opcode and adds another, or
-restores a previously removed allowance. The first committed version establishes the starting set.
-A shallow checkout fails with an instruction to fetch full history; Rust CI uses `fetch-depth: 0`.
-The scanner uses `cargo metadata --locked`, which can download missing workspace dependency
-sources on a fresh checkout. It never changes the dependency lockfile.
+The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
+set as constants. Current unclaimed membership must be a subset of that initial set. An
+out-of-scope addition requires `source` to name an existing `docs/adr/*.md` that mentions the opcode
+by name, or `https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit`
+as the pinned Golden Traces.
+
+The test also compares both scope files with earlier versions reachable from `HEAD`. This extra
+history check needs no particular commit SHA. It catches restored allowances, exchanges of one
+opcode for another, and deletion followed by recreation. Scope files keep their canonical paths;
+renames cannot reset the embedded initial sets. A shallow checkout fails with an instruction to
+fetch full history; Rust CI uses `fetch-depth: 0`. The scanner uses `cargo metadata --locked`,
+which can download missing workspace dependency sources on a fresh checkout. It never changes
+the dependency lockfile.
+
+`feat/conformance` merges into `main` with a merge commit to retain the intermediate scope history.
+The embedded initial sets still enforce the starting limit after a squash or rebase merge.
 
 ## Trainable spells
 
@@ -295,7 +339,8 @@ The scoreboard finds `mangos.sqlite` below `$HOME/.cache/lyracore-scratch/vmango
 `--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and `query_only`. A missing file
 prints `Trainable spells: no data` with the expected path and leaves the rest of the scoreboard
 usable. Multiple default copies, unreadable files, malformed schemas and dangling teaching-spell
-references fail. No importer crate, importer output or vmangos rows enter this calculation or git.
+references fail. No importer output or vmangos rows enter git; the importer mapping functions are
+checked as source.
 
 For each class, "trainable" is the union of:
 
@@ -312,17 +357,24 @@ For each class, "trainable" is the union of:
 Use the largest `spell_template.build <= 5875` per entry. Resolve teaching spells through each
 `LEARN_SPELL` effect, raw id 36, to its `effectTriggerSpell` before counting. Count each learned id
 once per class, keeping ranks separate. A spell must have at least one nonzero effect. Every
-nonzero effect must have a supported raw kind; each aura-bearing effect also needs a supported
-aura kind, in all three slots.
+nonzero effect must map to a supported kind through the importer rules, in all three slots.
 
-`examples/scoreboard/spells.rs` maps raw kinds to the Module's compiled `EffectKind` taxonomy.
-The raw ids and class skill lines follow vmangos at
-[`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77), in
-`src/game/Spells/SpellDefines.h`, `src/game/Spells/SpellAuraDefines.h` and `src/game/SharedDefines.h`.
-The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`, with item casts in
-`module/src/native/cast.rs`, pet feeding in `module/src/creatures/pet_care.rs`, and self-resurrection in `module/src/spell/self_resurrect.rs`. Aura consumers live in
-`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. Generic dummy and script effects,
-unknown kinds, and kinds with no handling path are unsupported. Maintain these mappings when adding
-a supported kind. This is a kind-coverage count: it does not verify import mappings, parameters,
-targeting, triggered spell dependencies, quests, talents or a spell's complete behavior. Only counts
-are printed; the SQLite records stay local.
+`examples/scoreboard/spells.rs` reproduces the importer's private `instant_effect_to_kind` and
+`aura_mod_to_kind` functions. An AST comparison test fails if either differs from
+`importer/src/spell.rs`. The importer is a binary and exposes no library mapping to call.
+`spell_counts.py` applies the same name-dependent support rules, including the Stealth exception,
+home-target teleport and dismount cases. A test checks the name list against the importer table.
+Raw 5, 29 and 96 are not blanket support for Blink or Charge. Raw 59, 63 and 91 use the importer's
+supported mappings. Unknown kinds stay unsupported unless the importer has a named correction.
+
+Re-derive these mappings after the vmangos port merges: that port changes `importer/src/spell.rs`.
+The cross-check must pass against the merged importer before using these counts.
+
+Class skill lines follow vmangos at
+[`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77),
+`src/game/SharedDefines.h`.
+
+The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`; aura consumers live in
+`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. This is a kind-coverage count. It does
+not verify parameters, targeting, triggered spell dependencies, quests, talents or complete spell
+behavior. Only counts are printed; spell names and SQLite records stay local.

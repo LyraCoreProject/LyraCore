@@ -118,7 +118,7 @@ fn main() -> Result<()> {
             let report = Report::load(&path, "conformance_audit", &ledger)?;
             Some((path, report))
         }
-        None => evidence::latest_audit(&root.join("conformance/reports"), &ledger)?,
+        None => evidence::latest_audit(&root.join("conformance/reports"))?,
     };
     if let Some(report) = &tier1 {
         provenance(&tier1_path, report);
@@ -126,7 +126,9 @@ fn main() -> Result<()> {
         println!("tier1: no result");
     }
     if let Some((path, report)) = &audit {
-        report.validate_changes(path.parent().context("report directory")?, &ledger)?;
+        report.validate("conformance_audit", &ledger)?;
+        report.validate_changes(path.parent().context("report directory")?)?;
+        report.verify_capture(path)?;
         provenance(path, report);
     } else {
         println!("conformance_audit: no report");
@@ -147,6 +149,10 @@ fn main() -> Result<()> {
     if let Some(report) = audit {
         for (behavior, result) in &report.audit.as_ref().context("audit provenance")?.behaviors {
             println!("Reference / {behavior}: {}", result.reference);
+            if report.audit.as_ref().unwrap().previous_report.is_some() && result.changes.is_none()
+            {
+                println!("Changes / {behavior}: comparison is not possible; harness revision or scenario hashes changed");
+            }
             if let Some(changes) = &result.changes {
                 println!("Changes / {behavior}: {} rule fixed, {} rule regressed; {} data fixed, {} data regressed signatures",
                     changes.rule.fixed.len(), changes.rule.regressed.len(), changes.data.fixed.len(), changes.data.regressed.len());
@@ -230,4 +236,15 @@ fn shared_opcode_claims_count_once() {
         requests(&[behavior, behavior]).unwrap(),
         [0x0050, 0x01dc].into()
     );
+}
+
+#[test]
+fn committed_audit_report_replays() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let directory = root.join("reports");
+    let (path, report) = evidence::latest_audit(&directory)?.context("committed audit report")?;
+    report.validate("conformance_audit", &ledger)?;
+    report.validate_changes(&directory)?;
+    report.verify_capture(&path)
 }
