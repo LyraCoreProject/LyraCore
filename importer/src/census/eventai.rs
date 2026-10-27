@@ -74,6 +74,28 @@ pub(super) fn append(
     before: &DumpPlan,
     after: &DumpPlan,
 ) -> Result<()> {
+    if let Some(manifest) = &after.world_source_manifest {
+        let manifest: serde_json::Value = serde_json::from_str(manifest)?;
+        if let Some(commands) = manifest["summon_commands"].as_array() {
+            let supported = commands
+                .iter()
+                .filter(|row| row["supported"] == true)
+                .count();
+            let emitted = commands.iter().filter(|row| row["emitted"] == true).count();
+            writeln!(output, "\n## Summon commands\n\n{supported} of {} command rows translate; {emitted} occur in emitted rules. Step is the zero-based command position within its script. Each row is checked by the production command translator.\n\n| Script | Step | Translates | Emitted | Refusal |\n| ---: | ---: | --- | --- | --- |", commands.len())?;
+            for row in commands {
+                writeln!(
+                    output,
+                    "| {} | {} | {} | {} | {} |",
+                    row["script_id"],
+                    row["step"],
+                    row["supported"],
+                    row["emitted"],
+                    row["reason"].as_str().unwrap_or("")
+                )?;
+            }
+        }
+    }
     let old = Program::read(before)?;
     let new = Program::read(after)?;
     writeln!(output, "\n## EventAI and relay programs\n\nCounts come from the reducer batches. Rules and instructions are nested in their definitions.\n\n| Measure | Classic | vmangos |\n| --- | ---: | ---: |")?;

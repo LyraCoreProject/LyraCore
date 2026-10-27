@@ -392,6 +392,7 @@ impl Source {
         let mut excluded = 0;
         let scripts = delayed::Scripts::compile(self);
         let mut used_relays = BTreeSet::new();
+        let mut used_commands = BTreeSet::new();
         for event in &self.events {
             if !entries.contains(&u64::from(event.entry))
                 || !self.event_ai_entries.contains(&event.entry)
@@ -402,6 +403,7 @@ impl Source {
             }
             match self.compile_event(event, templates, &scripts) {
                 Ok((rule, compiled)) => {
+                    used_commands.extend(event.actions);
                     definitions.entry(event.entry).or_default().push(rule);
                     plan.coverage.emitted_instructions += compiled.instructions.len() as u64;
                     used_texts.extend(compiled.texts);
@@ -457,9 +459,17 @@ impl Source {
             .collect();
         plan.summon_rows = summons.into_values().collect();
         plan.relay_definition_batches = vec![plan.relay_definition_rows.join("\n")];
+        let summon_commands = self.scripts.values().flat_map(|commands| commands.iter().enumerate())
+            .filter(|(_, command)| command.kind == 10)
+            .map(|(step, command)| {
+                let result = self.compile_command(command, &mut Compiled::default(), templates);
+                serde_json::json!({"script_id": command.id, "step": step, "supported": result.is_ok(),
+                    "emitted": result.is_ok() && used_commands.contains(&command.id), "reason": result.err()})
+            }).collect::<Vec<_>>();
         let manifest = serde_json::json!({
             "format_version": 1, "source": "vmangos", "family": "creature-ai",
             "counts": { "source_rules": self.events.len(), "emitted_rules": emitted, "excluded_rules": excluded, "dropped_rules": self.events.len() - emitted - excluded, "definitions": plan.definition_rows.len(), "emitted_instructions": plan.instruction_count(), "relays": plan.relay_definition_rows.len() },
+            "summon_commands": summon_commands,
             "scripts": scripts.manifest(&self.delayed, &used_relays),
             "source_census": { "events": census(self.events.iter().map(|e| e.kind)), "event_flags": census(self.events.iter().map(|e| e.flags)), "commands": census(self.scripts.values().flatten().map(|c| c.kind)), "targets": census(self.scripts.values().flatten().map(|c| c.target)), "command_flags": census(self.scripts.values().flatten().map(|c| c.flags)) },
             "limitations": limitations.into_iter().map(|(code, source_ids)| serde_json::json!({"code":format!("eventai.{code}"),"classification":"unsupported","occurrences":source_ids.len(),"source_ids":source_ids})).collect::<Vec<_>>(),
@@ -1328,6 +1338,26 @@ mod tests {
         assert!(plan.definition_rows.is_empty());
         assert_eq!(manifest["counts"]["dropped_rules"], 1);
     }
+    #[test]
+    fn summon_census_distinguishes_translated_commands_from_emitted_rules() {
+        let mut source = source();
+        let mut summon = step(10, [101, 1000, 0, 0]);
+        summon.ints[3] = 2;
+        source.scripts.insert(10, vec![summon.clone()]);
+        source.events.push(event([10, 0, 0]));
+        let templates = HashSet::from([100, 101]);
+        let (plan, manifest) = source.assemble(&templates, &templates);
+        assert!(plan.definition_rows[0].contains("spawn-at-actor:101:"));
+        assert_eq!(manifest["summon_commands"][0]["supported"], true);
+        assert_eq!(manifest["summon_commands"][0]["emitted"], true);
+        summon.target = 10;
+        source.scripts.insert(10, vec![summon]);
+        let (plan, manifest) = source.assemble(&templates, &templates);
+        assert!(plan.definition_rows.is_empty());
+        assert_eq!(manifest["summon_commands"][0]["supported"], false);
+        assert_eq!(manifest["summon_commands"][0]["reason"], "target:10");
+    }
+
     #[test]
     fn flee_keeps_the_source_emote_in_the_same_command_list() {
         let mut source = source();

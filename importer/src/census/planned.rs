@@ -313,6 +313,9 @@ pub(super) fn run(
     if let Some(manifest) = after_plan.world_source_manifest {
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest)?;
         super::eventai::summarize_scripts(&mut manifest);
+        if let Some(object) = manifest.as_object_mut() {
+            object.remove("summon_commands");
+        }
         for group in ["findings", "limitations"] {
             if let Some(findings) = manifest[group].as_array_mut() {
                 for finding in findings {
