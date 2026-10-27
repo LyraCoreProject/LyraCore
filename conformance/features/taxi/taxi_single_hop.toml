@@ -8,7 +8,7 @@ dependencies = ["connection_identity"]
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["taxi_single_hop"]
 deliberate_deviations = []
-prerequisites = ["Imported taxi nodes 2 and 4, route 6 with all 28 path nodes, resolved mount displays and flight-master template 352", "The scenario's money, known-node and creature Fixture Verbs"]
+prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and minimal flight-master template 352", "The scenario's money, known-node and creature Fixture Verbs"]
 tests = []
 
 [vmangos]
