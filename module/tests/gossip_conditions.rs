@@ -316,6 +316,9 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
 fn authored_services_require_current_capability_before_the_hook() {
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-authored-capability");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {VENDOR}"
+    ));
     shard.assert_sql("UPDATE game_world_entity SET level = 20 WHERE guid = 1");
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET cond_type = 0 WHERE row_id = {OPTION}"
@@ -409,6 +412,22 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         "UPDATE game_creature_template SET trainer_class = 1 WHERE entry = {VENDOR}"
     ));
     select_from(&shard, &npc, OPTION, 0, gossip_option::UNLEARNTALENTS, true);
+    for trainer_type in [1, 2, 3] {
+        shard.assert_sql(&format!(
+            "UPDATE game_creature_template SET trainer_type = {trainer_type} WHERE entry = {VENDOR}"
+        ));
+        select_from(
+            &shard,
+            &npc,
+            OPTION,
+            0,
+            gossip_option::UNLEARNTALENTS,
+            false,
+        );
+    }
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET trainer_type = 0 WHERE entry = {VENDOR}"
+    ));
     shard.assert_sql("UPDATE game_world_entity SET level = 9 WHERE guid = 1");
     select_from(
         &shard,

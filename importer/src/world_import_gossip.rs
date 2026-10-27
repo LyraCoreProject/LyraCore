@@ -7,6 +7,8 @@ use super::*;
 use crate::dump::sql_str;
 use crate::world_source::Row;
 
+const DEFAULT_GREETING: u64 = 0x00ff_ffff;
+
 type Findings = BTreeMap<&'static str, BTreeSet<String>>;
 struct OptionRow {
     key: String,
@@ -152,9 +154,6 @@ fn options(
         {
             finding(findings, "gossip.option-confirmation", &key);
         }
-        if target > 0 {
-            finding(findings, "gossip.option-menu-navigation", &key);
-        }
         if !matches!(action, 1 | 3 | 4 | 5 | 6 | 8 | 9 | 10 | 11 | 16) {
             finding(findings, "gossip.option-action", &key);
             (kind, a, b) = (gossip_condition::NEVER, 0, 0);
@@ -214,10 +213,19 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     }
     let options = options(dump, &broadcast, &conditions, &mut findings)?;
     let mut menus = BTreeMap::new();
-    for row in dump.rows("gossip_menu")?.iter() {
-        let menu = row.number::<u64>("entry")?;
-        let text = row.number::<u64>("text_id")?;
-        menus.entry(menu).or_insert(0);
+    let rows = dump.rows("gossip_menu")?;
+    let mut greetings = rows
+        .iter()
+        .map(|row| {
+            Ok((
+                (row.number::<u64>("entry")?, row.number::<u64>("text_id")?),
+                row,
+            ))
+        })
+        .collect::<Result<Vec<_>>>()?;
+    greetings.sort_by_key(|(key, _)| *key);
+    for ((menu, text), row) in greetings {
+        menus.entry(menu).or_insert(DEFAULT_GREETING);
         if row.number::<u32>("condition_id")? != 0 {
             finding(
                 &mut findings,
@@ -225,17 +233,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
                 format!("{menu}:{text}"),
             );
         } else {
-            menus.entry(menu).and_modify(|held| {
-                if *held == 0 {
-                    *held = text;
-                } else {
-                    finding(
-                        &mut findings,
-                        "gossip.multiple-unconditional-greetings",
-                        menu,
-                    );
-                }
-            });
+            menus.insert(menu, text);
         }
         if row.number::<u32>("script_id")? != 0 {
             finding(
@@ -286,7 +284,6 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             }
         }
     }
-    // Every source menu is addressable by menu navigation or a later Runtime Script.
     for (&menu, &text) in &menus {
         gossip.profile_rows.push(format!("({menu},{text})"));
         if let Some(options) = options.get(&menu) {
@@ -305,7 +302,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     let needed = menus
         .values()
         .copied()
-        .filter(|id| *id != 0)
+        .filter(|id| *id != 0 && *id != DEFAULT_GREETING)
         .collect::<BTreeSet<_>>();
     for id in needed {
         let Some(slots) = texts.get(&id) else {

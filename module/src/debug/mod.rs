@@ -1141,11 +1141,15 @@ pub fn debug_gossip_select(
         ctx,
         character_guid,
         npc_guid,
-        option_id,
-        option_row_id,
-        source_menu_id,
-        selected_action,
+        crate::gossip::Selection {
+            option_id,
+            row_id: option_row_id,
+            menu_id: source_menu_id,
+            root_menu_id: source_menu_id,
+            action: selected_action,
+        },
     )
+    .map(|_| ())
 }
 
 #[reducer]

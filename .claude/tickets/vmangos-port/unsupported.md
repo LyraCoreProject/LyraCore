@@ -108,14 +108,12 @@ overlap and do not count distinct broken interactions.
 | `gossip.broadcast-metadata` | 5720 | Language, chat type, sound and emote metadata are absent from the text tables. |
 | `gossip.condition-flags` | 57 | Only reverse-result flags are represented; swapped targets stay unavailable. |
 | `gossip.condition-kind` | 735 | Unsupported source kinds become an unavailable sentinel. |
-| `gossip.conditional-greeting` | 1280 | The Module cannot select greeting text by current condition state. |
+| `gossip.conditional-greeting` | 1280 | The Module cannot select greeting text by current condition state. It uses the last unconditional greeting, or source default 0xffffff. |
 | `gossip.menu-script` | 8 | Source greeting scripts are not dispatched. |
-| `gossip.multiple-unconditional-greetings` | 5 | The importer selects the first unconditional greeting in primary-key order. |
 | `gossip.option-action` | 14 | Unsupported service actions stay unavailable. |
 | `gossip.option-condition` | 521 | The referenced condition graph contains unavailable predicates, operands or flags. |
 | `gossip.option-confirmation` | 5 | The option table has no confirmation text. |
 | `gossip.option-gender` | 7 | Option labels store one string; male text wins when both genders are present. |
-| `gossip.option-menu-navigation` | 1464 | Positive menu targets are stored, but the native selection path does not navigate them. |
 | `gossip.option-poi` | 351 | Source points of interest are not sent. |
 | `gossip.option-script` | 526 | Source option scripts are not dispatched. |
 | `gossip.profile-npc-flags` | 2548 | Profile options cannot carry the source NPC flag mask. Creature entry options apply it during import. |

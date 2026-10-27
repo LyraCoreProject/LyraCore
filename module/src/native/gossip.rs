@@ -68,6 +68,18 @@ fn hello(
                 .map(|row| row.text_id)
         })
         .unwrap_or(codec::GOSSIP_GREETING_TEXT_ID);
+    send_menu(ctx, connection, guid, &npc, source, source, text)
+}
+
+fn send_menu(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    guid: u64,
+    npc: &crate::WorldEntity,
+    source: u32,
+    root: u32,
+    text: u32,
+) -> Result<(), Refusal> {
     let mut options: Vec<_> = if source == 0 {
         ctx.db
             .game_gossip_option()
@@ -119,8 +131,19 @@ fn hello(
     )
     .into_iter()
     .filter(|option| {
-        crate::gossip::select_gate(ctx, guid, npc.guid, option.row_id, source, option.action)
-            .is_ok()
+        crate::gossip::select_gate(
+            ctx,
+            guid,
+            npc.guid,
+            &crate::gossip::Selection {
+                option_id: 0,
+                row_id: option.row_id,
+                menu_id: source,
+                root_menu_id: root,
+                action: option.action,
+            },
+        )
+        .is_ok()
     })
     .collect();
     let mut player = ctx
@@ -130,6 +153,7 @@ fn hello(
         .find(connection)
         .ok_or("gossip Character is unavailable")?;
     // A filtered list position must retain its meaning until the next menu.
+    player.gossip_root_menu_id = root;
     player.gossip_menu = Some(NativeGossipMenu {
         npc_guid: npc.guid,
         source_menu_id: source,
@@ -181,8 +205,40 @@ fn select(
         return complete(ctx, connection);
     };
     super::actor(ctx, guid)?;
-    crate::world::apply_gossip_select(ctx, guid, npc, index, row_id, source, action)?;
+    let target_menu = crate::world::apply_gossip_select(
+        ctx,
+        guid,
+        npc,
+        crate::gossip::Selection {
+            option_id: index,
+            row_id,
+            menu_id: source,
+            root_menu_id: player.gossip_root_menu_id,
+            action,
+        },
+    )?;
     match action {
+        gossip_option::GOSSIP if target_menu != 0 => {
+            use crate::game_gossip_menu_profile;
+            let menu = ctx
+                .db
+                .game_gossip_menu_profile()
+                .menu_id()
+                .find(target_menu)
+                .ok_or("gossip submenu is unavailable")?;
+            let npc = crate::helpers::acting_entity_by_guid(ctx, npc)
+                .ok_or("gossip creature is unavailable")?;
+            send_menu(
+                ctx,
+                connection,
+                guid,
+                &npc,
+                menu.menu_id,
+                player.gossip_root_menu_id,
+                menu.text_id,
+            )
+            .map_err(|reason| reason.to_string())
+        }
         gossip_option::VENDOR => Ok(super::economy::vendor(ctx, connection, guid, npc)?),
         gossip_option::TRAINER => Ok(super::trainer::list(ctx, connection, guid, npc)?),
         gossip_option::BANKER => Ok(super::economy::bank(ctx, connection, guid, npc)?),

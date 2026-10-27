@@ -132,10 +132,16 @@ specified in [ScriptCommands.h at the pin](https://github.com/vmangos/core/blob/
 Importing these profiles does not import the scripts that select them. That work remains for S6.
 Creature options use source NPC flag masks and menu-zero fallback, following
 [Player::PrepareGossipMenu at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Player.cpp#L11972-L12021).
-Profile options cannot express those masks. Spawn-specific greetings and multiple unconditional
-greetings are reported as well. Dynamic greeting choices, navigation, confirmations,
-POIs, scripts and broadcast metadata are reported in the Compatibility Manifest. Payment and text
+Profile options cannot express those masks. Spawn-specific greetings, dynamic greeting choices,
+confirmations, POIs, scripts and broadcast metadata are reported in the Compatibility Manifest. Payment and text
 input options are unavailable because the Module cannot enforce those gates.
+
+The native gossip handler follows positive submenu targets on gossip actions and evaluates the
+new menu's conditions before it sends options. Talent reset requires a class trainer of the
+Character's class and level 10 or above. Classic-db's inline talent-reset option still works.
+Greeting fallback follows [the pinned source](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Player.cpp#L12330-L12360):
+the last unconditional greeting wins; a menu with none uses `0xffffff`. Conditional greetings
+remain unsupported.
 
 `lyracore-shared::gossip::ConditionKind` owns the runtime meanings and persistent encoding. Its codes
 retain existing Realm values so classic-db SQL, reducer batches and stored rows stay compatible.
@@ -143,7 +149,7 @@ Only the importer translates source numbers. Both sources map their supported Bo
 team and race/class predicates into this enum. vmangos patch predicates become constant predicates
 at import time, with inversion preserved. Other vmangos kinds become an unavailable sentinel;
 unsupported classic-db codes remain opaque for byte parity. Unknown flags, missing references and
-unsupported predicates cannot become eligible through inversion or OR. No Module schema changes.
+unsupported predicates cannot become eligible through inversion or OR. Condition rows keep their schema.
 See [Conditions.h at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Conditions.h#L30-L138)
 when extending the importer mapping, and add a named runtime kind before supporting a new meaning.
 

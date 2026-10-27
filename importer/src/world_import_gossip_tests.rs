@@ -212,6 +212,12 @@ fn source() -> WorldSource {
                     ("script_id", N(0)),
                 ],
                 &[
+                    ("entry", N(900)),
+                    ("text_id", N(69)),
+                    ("condition_id", N(0)),
+                    ("script_id", N(0)),
+                ],
+                &[
                     ("entry", N(901)),
                     ("text_id", N(70)),
                     ("condition_id", N(7)),
@@ -309,7 +315,7 @@ fn named_gossip_rows_preserve_slots_literal_text_flags_and_default_options() {
             .unwrap()
     };
     assert!(insert("game_gossip_menu").ends_with("(100,70)"));
-    assert!(insert("game_gossip_menu_profile").ends_with("(900,70),(901,0)"));
+    assert!(insert("game_gossip_menu_profile").ends_with("(900,70),(901,16777215)"));
     assert!(insert("game_npc_text_slot").ends_with("(1,70,3,'雪''s greeting','NULL',0.75)"));
     assert!(insert("game_gossip_option").ends_with(
         "(1,100,0,0,'123',1,0,7,2,0),(2,100,1,0,'123',1,0,3,0,0),(3,101,0,0,'123',1,0,0,0,0)"
