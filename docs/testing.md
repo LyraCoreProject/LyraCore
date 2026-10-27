@@ -36,6 +36,7 @@ cargo test -p lyracore-package-delta
 cargo test -p lyracore-protocol
 cargo test -p lyracore-shared
 cargo test -p lyracore-test-support
+bash importer/scripts/import-world-sql-test.sh
 bash importer/scripts/import-manifest-smoke.sh
 cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 ```
