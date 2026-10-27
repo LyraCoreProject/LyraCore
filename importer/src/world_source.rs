@@ -59,6 +59,7 @@ struct TableStorage {
 #[derive(Clone, Debug)]
 enum StoredCell {
     Null,
+    Zero,
     Number(std::ops::Range<u32>),
     Text(std::ops::Range<u32>),
 }
@@ -156,6 +157,7 @@ impl Row {
     pub(crate) fn numeric_text(&self, column: &str) -> Result<&str> {
         match self.cell(column)? {
             StoredCell::Number(value) => Ok(self.value(value).trim()),
+            StoredCell::Zero => Ok("0"),
             _ => bail!("{}.{}: expected a number", self.columns.table, column),
         }
     }
@@ -170,6 +172,7 @@ impl Row {
     pub(crate) fn raw(&self, column: &str) -> Result<&str> {
         Ok(match self.cell(column)? {
             StoredCell::Null => "NULL",
+            StoredCell::Zero => "0",
             StoredCell::Number(value) | StoredCell::Text(value) => self.value(value).trim(),
         })
     }
@@ -287,6 +290,7 @@ fn read_rows(connection: &Connection, table: &str, requested: Option<&[&str]>) -
             "patch_max",
             "build_min",
             "build_max",
+            "condition_id",
         ] {
             if available.contains(name) {
                 columns.insert(name.to_owned());
@@ -317,7 +321,33 @@ fn read_rows(connection: &Connection, table: &str, requested: Option<&[&str]>) -
             .collect::<Result<Vec<_>>>()?;
         output.push(cells)?;
     }
-    crate::source_selection::select(table, &columns, &primary_key, output.finish())
+    let selected = crate::source_selection::select(table, &columns, &primary_key, output.finish())?;
+    if !crate::source_selection::condition_is_static(table) || selected.is_empty() {
+        return Ok(selected);
+    }
+    let ids = selected
+        .iter()
+        .map(|row| row.number::<u32>("condition_id"))
+        .collect::<Result<Vec<_>>>()?;
+    if ids.iter().all(|&id| id == 0) {
+        return Ok(selected);
+    }
+    let conditions =
+        crate::source_selection::static_conditions(&read_rows(connection, "conditions", None)?)?;
+    Ok(selected
+        .into_iter()
+        .zip(ids)
+        .filter_map(
+            |(mut row, id)| match conditions.get(&id).copied().flatten() {
+                Some(false) => None,
+                Some(true) => {
+                    row.cells[row.columns.indices["condition_id"]] = StoredCell::Zero;
+                    Some(row)
+                }
+                None => Some(row),
+            },
+        )
+        .collect())
 }
 
 fn check_table(connection: &Connection, table: &str) -> Result<()> {

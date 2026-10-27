@@ -209,6 +209,74 @@ pub(crate) fn wow_patch(value: u32, comparison: u32) -> Result<bool> {
     }
 }
 
+pub(crate) fn condition_is_static(table: &str) -> bool {
+    table.ends_with("_loot_template") || matches!(table, "npc_vendor" | "npc_vendor_template")
+}
+
+pub(crate) fn static_conditions(rows: &[Row]) -> Result<BTreeMap<u32, Option<bool>>> {
+    let conditions = rows
+        .iter()
+        .map(|row| Ok((row.number::<u32>("condition_entry")?, row)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    fn evaluate(
+        id: u32,
+        rows: &BTreeMap<u32, &Row>,
+        path: &mut BTreeSet<u32>,
+    ) -> Result<Option<bool>> {
+        if id == 0 {
+            return Ok(Some(true));
+        }
+        if path.len() >= 64 || !path.insert(id) {
+            return Ok(None);
+        }
+        let result = if let Some(row) = rows.get(&id) {
+            let flags: u32 = row.number("flags")?;
+            let kind: i32 = row.number("type")?;
+            let value1: u32 = row.number("value1")?;
+            let value2: u32 = row.number("value2")?;
+            let value = match kind {
+                0 => Some(true),
+                24 => Some(wow_patch(value1, value2)?),
+                -3 => evaluate(value1, rows, path)?.map(|value| !value),
+                -2 | -1 => {
+                    let mut values =
+                        vec![evaluate(value1, rows, path)?, evaluate(value2, rows, path)?];
+                    for column in ["value3", "value4"] {
+                        let id: u32 = row.number(column)?;
+                        if id != 0 {
+                            values.push(evaluate(id, rows, path)?);
+                        }
+                    }
+                    values
+                        .into_iter()
+                        .collect::<Option<Vec<_>>>()
+                        .map(|values| {
+                            if kind == -1 {
+                                values.into_iter().all(|value| value)
+                            } else {
+                                values.into_iter().any(|value| value)
+                            }
+                        })
+                }
+                _ => None,
+            };
+            if flags & !3 != 0 {
+                None
+            } else {
+                value.map(|value| value ^ (flags & 1 != 0))
+            }
+        } else {
+            None
+        };
+        path.remove(&id);
+        Ok(result)
+    }
+    conditions
+        .keys()
+        .map(|&id| Ok((id, evaluate(id, &conditions, &mut BTreeSet::new())?)))
+        .collect()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

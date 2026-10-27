@@ -52,12 +52,12 @@ follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
 The existing dungeon entrance and static fallbacks remain after the imported links.
 
 The items import joins shared vendor offers through `creature_template.vendor_id` and removes
-selected `forbidden_items` from vendor offers and creature loot. Its drink flag comes from on-use
-mana-regeneration auras in the selected vmangos spell table. Property Pool weights preserve four
+selected `forbidden_items` from vendor offers and creature loot. The unused `restores_power` flag is false for vmangos; food and drink behavior comes from item
+on-use spells. Property Pool weights preserve four
 decimal places with a common integer scale of 10,000. The Module uses relative weights.
 
 Use `--family items --world-profile full-world` or `alliance-single` with the census command above.
-It reports production plan counts and entry membership. Vendor stock timing, offer conditions and
+It reports production plan counts and entry membership. Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor stock timing, runtime offer conditions and
 item flags are unsupported and appear in the Compatibility Manifest. The reader projects the
 columns needed for narrow joins and spell checks, retaining the keys and fields needed for the
 same patch/build selection. It never substitutes client spell fields into vmangos rows.

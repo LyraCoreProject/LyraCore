@@ -181,31 +181,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
                 vmangos.row_count(table)?
             )?;
         }
-        writeln!(output, "- Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.\n- Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.\n- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item removal. The importer keeps one offer per creature and item.\n- Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.\n- Random Properties and enchantment effects use the same client tables in both sources.\n- The vmangos drink flag follows on-use mana-regeneration auras in its selected spell table; classic-db keeps its existing name heuristic.\n- Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI dependency closure remains due in S6.")?;
-        let drinks = crate::world_import::vmangos_drink_spells(vmangos)?;
-        let mut counts = [0; 4];
-        for row in vmangos.rows("item_template")?.iter() {
-            let class = row.number::<u8>("class")?;
-            let old = crate::world_import::is_drink_consumable(
-                class,
-                row.number("subclass")?,
-                row.text("name")?,
-            );
-            let mut current = false;
-            for slot in 1..=5 {
-                current |= class == 0
-                    && row.number::<u32>(&format!("spelltrigger_{slot}"))? == 0
-                    && drinks.contains(&row.number::<u32>(&format!("spellid_{slot}"))?);
-            }
-            for (count, value) in
-                counts
-                    .iter_mut()
-                    .zip([old, current, old && !current, current && !old])
-            {
-                *count += usize::from(value);
-            }
-        }
-        writeln!(output, "\nDrink audit on the selected vmangos catalogue: {} name matches, {} aura matches, {} name-only matches removed and {} aura-only matches added.", counts[0], counts[1], counts[2], counts[3])?;
+        writeln!(output, "- Item template differences are selected catalogue membership; the importer keeps all selected item templates. Items 25, 50, 51 and 52 exist in vmangos and remain diagnostic roots, not selection filters.\n- Creature loot differences include source loot membership, reference expansion and forbidden-item removal. Creature entry keys omit generated loot group ids, which differ between the sources. Creature loot already belongs to the items Import Family.\n- Vendor differences come from direct offers plus shared offers joined through `vendor_id`, after forbidden-item removal. The importer keeps one offer per creature and item.\n- Property Pool differences come from the selected enchantment members. vmangos stores four decimal places, so its weights use a common scale of 10,000; classic-db keeps its scale of 100.\n- Random Properties and enchantment effects use the same client tables in both sources.\n- The unused restores_power flag is false for vmangos. Item on-use spells retain food and drink behavior; classic-db keeps its existing output.\n- Full-world selects all creature templates. Scoped profiles select spawn choices and forced entries; EventAI dependency closure remains due in S6.")?;
     }
     Ok(())
 }

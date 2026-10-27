@@ -185,12 +185,12 @@ pub(crate) fn assert_profession_tier_parity(
     }
     Ok(())
 }
-// Normalize ClassicDB -1 masks only at this import boundary.
-fn normalize_item_mask(source: &str, unrestricted: u32) -> u32 {
-    if source == "-1" {
-        unrestricted
+// -1 means every playable class or race in both World Sources.
+fn normalize_item_mask(source: i64, unrestricted: u32) -> Result<u32> {
+    if source == -1 {
+        Ok(unrestricted)
     } else {
-        source.parse().unwrap_or(0)
+        u32::try_from(source).context("item_template: invalid class or race mask")
     }
 }
 // ClassicDB z2815 uses subclass zero for both food and drink.
@@ -1038,11 +1038,11 @@ type ReferenceLoot = std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>;
 fn parse_ref_pools(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<ReferenceLoot> {
     let mut refs: ReferenceLoot = std::collections::HashMap::new();
     for row in parse_table(dump, "reference_loot_template")?.iter() {
-        let g: u64 = row.numeric_text(clt::ENTRY)?.parse().unwrap_or(0);
-        let item: u64 = row.numeric_text(clt::ITEM)?.parse().unwrap_or(0);
-        let chance: f64 = row.numeric_text(clt::CHANCE)?.parse().unwrap_or(0.0);
-        let mincount_or_ref: i64 = row.numeric_text(clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
-        let cnt: u32 = row.numeric_text(clt::MAXCOUNT)?.parse().unwrap_or(1);
+        let g: u64 = row.number(clt::ENTRY)?;
+        let item: u64 = row.number(clt::ITEM)?;
+        let chance: f64 = row.number(clt::CHANCE)?;
+        let mincount_or_ref: i64 = row.number(clt::MINCOUNT_OR_REF)?;
+        let cnt: u32 = row.number(clt::MAXCOUNT)?;
         refs.entry(g)
             .or_default()
             .push((item, chance, mincount_or_ref, cnt));
@@ -1097,12 +1097,12 @@ fn parse_loot_family(
     let bp = |pct: f64| (pct * 100.0).round() as i64;
     let mut drops_by_entry: HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> = HashMap::new();
     for row in parse_table(dump, table)?.iter() {
-        let entry: u64 = row.numeric_text(clt::ENTRY)?.parse().unwrap_or(0);
-        let item: u64 = row.numeric_text(clt::ITEM)?.parse().unwrap_or(0);
-        let raw_chance: f64 = row.numeric_text(clt::CHANCE)?.parse().unwrap_or(0.0);
-        let groupid: u32 = row.numeric_text(clt::GROUPID)?.parse().unwrap_or(0);
-        let ref_or_min: i64 = row.numeric_text(clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
-        let maxcount: u32 = row.numeric_text(clt::MAXCOUNT)?.parse().unwrap_or(1);
+        let entry: u64 = row.number(clt::ENTRY)?;
+        let item: u64 = row.number(clt::ITEM)?;
+        let raw_chance: f64 = row.number(clt::CHANCE)?;
+        let groupid: u32 = row.number(clt::GROUPID)?;
+        let ref_or_min: i64 = row.number(clt::MINCOUNT_OR_REF)?;
+        let maxcount: u32 = row.number(clt::MAXCOUNT)?;
         let quest_only = raw_chance < 0.0;
         let chance = raw_chance.abs();
         if chance == 0.0 {
@@ -1584,37 +1584,6 @@ fn build_quests(
     })
 }
 
-pub(crate) fn vmangos_drink_spells(
-    dump: &(impl TableRows + ?Sized),
-) -> Result<std::collections::HashSet<u32>> {
-    let mut drinks = std::collections::HashSet::new();
-    let columns = [
-        "entry",
-        "effect1",
-        "effect2",
-        "effect3",
-        "effectApplyAuraName1",
-        "effectApplyAuraName2",
-        "effectApplyAuraName3",
-        "effectMiscValue1",
-        "effectMiscValue2",
-        "effectMiscValue3",
-    ];
-    for row in dump.columns("spell_template", &columns)?.iter() {
-        for effect in 1..=3 {
-            if row.number::<u32>(&format!("effect{effect}"))?
-                == wow_world_base::vanilla::SpellEffect::ApplyAura.as_int()
-                && row.number::<u32>(&format!("effectApplyAuraName{effect}"))?
-                    == wow_world_base::vanilla::AuraMod::ModPowerRegen as u32
-                && row.number::<i32>(&format!("effectMiscValue{effect}"))? == 0
-            {
-                drinks.insert(row.number("entry")?);
-            }
-        }
-    }
-    Ok(drinks)
-}
-
 fn forbidden_items(dump: &(impl TableRows + ?Sized)) -> Result<std::collections::HashSet<u64>> {
     if dump.kind() == SourceKind::ClassicDb {
         return Ok(Default::default());
@@ -1665,16 +1634,16 @@ fn build_items_and_loot(
     let mut vendor_id: u64 = 1;
     let mut nv_seen: HashSet<(u64, u64)> = HashSet::new();
     for row in parse_table(dump, "npc_vendor")?.iter() {
-        let entry: u64 = row.numeric_text(nv::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(nv::ENTRY)?;
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let item: u64 = row.numeric_text(nv::ITEM)?.parse().unwrap_or(0);
+        let item: u64 = row.number(nv::ITEM)?;
         if item == 0 || forbidden.contains(&item) || !nv_seen.insert((entry, item)) {
             continue;
         }
-        let slot: u32 = row.numeric_text(nv::SLOT)?.parse().unwrap_or(0);
-        let max_count: u32 = row.numeric_text(nv::MAXCOUNT)?.parse().unwrap_or(0);
+        let slot: u32 = row.number(nv::SLOT)?;
+        let max_count: u32 = row.number(nv::MAXCOUNT)?;
         item_ids.insert(item);
         vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
         vendor_id += 1;
@@ -1682,10 +1651,10 @@ fn build_items_and_loot(
 
     let mut tmpl_stock: HashMap<u64, Vec<(u64, u32, u32)>> = HashMap::new();
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
-        let t: u64 = row.numeric_text("entry")?.parse().unwrap_or(0);
-        let item: u64 = row.numeric_text("item")?.parse().unwrap_or(0);
-        let max_count: u32 = row.numeric_text("maxcount")?.parse().unwrap_or(0);
-        let slot: u32 = row.numeric_text("slot")?.parse().unwrap_or(0);
+        let t: u64 = row.number("entry")?;
+        let item: u64 = row.number("item")?;
+        let max_count: u32 = row.number("maxcount")?;
+        let slot: u32 = row.number("slot")?;
         if t != 0 && item != 0 && !forbidden.contains(&item) {
             tmpl_stock
                 .entry(t)
@@ -1701,11 +1670,11 @@ fn build_items_and_loot(
         .columns("creature_template", &[creature_entry, vendor_id_column])?
         .iter()
     {
-        let entry: u64 = row.numeric_text(creature_entry)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(creature_entry)?;
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let vt: u64 = row.numeric_text(vendor_id_column)?.parse().unwrap_or(0);
+        let vt: u64 = row.number(vendor_id_column)?;
         let Some(stock) = tmpl_stock.get(&vt).filter(|_| vt != 0) else {
             continue;
         };
@@ -1719,26 +1688,21 @@ fn build_items_and_loot(
         }
     }
 
-    let drink_spells = if dump.kind() == SourceKind::Vmangos {
-        Some(vmangos_drink_spells(dump)?)
-    } else {
-        None
-    };
     let mut item_rows: Vec<String> = Vec::new();
     let mut emitted: HashSet<u64> = HashSet::new();
     let mut resist_nonzero_count: u64 = 0;
     let mut startquest_nonzero_count: u64 = 0;
     for row in parse_table(dump, "item_template")?.iter() {
         let read = |column: &str| it::read(row, dump.kind(), column);
-        let entry: u64 = read(it::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(it::column(dump.kind(), it::ENTRY))?;
         if entry == 0 {
             continue;
         }
         emitted.insert(entry);
         let (mut s_str, mut s_agi, mut s_sta, mut s_int, mut s_spi) = (0i32, 0, 0, 0, 0);
         for i in 0..10 {
-            let st: u8 = read(&format!("stat_type{}", i + 1))?.parse().unwrap_or(0);
-            let sv: i32 = read(&format!("stat_value{}", i + 1))?.parse().unwrap_or(0);
+            let st: u8 = row.number(it::column(dump.kind(), &format!("stat_type{}", i + 1)))?;
+            let sv: i32 = row.number(it::column(dump.kind(), &format!("stat_value{}", i + 1)))?;
             match st {
                 3 => s_agi += sv,
                 4 => s_str += sv,
@@ -1748,61 +1712,63 @@ fn build_items_and_loot(
                 _ => {}
             }
         }
-        let stack: u32 = read(it::STACKABLE)?.parse::<u32>().unwrap_or(1).max(1);
-        let allowed_class = normalize_item_mask(read(it::ALLOWED_CLASS)?, ALL_PLAYABLE_CLASS_MASK);
-        let allowed_race = normalize_item_mask(read(it::ALLOWED_RACE)?, ALL_PLAYABLE_RACE_MASK);
-        let class_v: u8 = read(it::CLASS)?.parse().unwrap_or(0);
-        let subclass_v: u8 = read(it::SUBCLASS)?.parse().unwrap_or(0);
-        let is_drink = match &drink_spells {
-            None => is_drink_consumable(class_v, subclass_v, read(it::NAME)?),
-            Some(spells) => {
-                let mut drink = false;
-                for slot in 1..=5 {
-                    let spell: u32 = row.number(&format!("spellid_{slot}"))?;
-                    let trigger: u32 = row.number(&format!("spelltrigger_{slot}"))?;
-                    drink |= class_v == 0 && trigger == 0 && spells.contains(&spell);
-                }
-                drink
-            }
-        };
-        let holy: i32 = read(it::HOLY_RES)?.parse().unwrap_or(0);
-        let fire: i32 = read(it::FIRE_RES)?.parse().unwrap_or(0);
-        let nature: i32 = read(it::NATURE_RES)?.parse().unwrap_or(0);
-        let frost: i32 = read(it::FROST_RES)?.parse().unwrap_or(0);
-        let shadow: i32 = read(it::SHADOW_RES)?.parse().unwrap_or(0);
-        let arcane: i32 = read(it::ARCANE_RES)?.parse().unwrap_or(0);
+        let stack: u32 = row
+            .number::<u32>(it::column(dump.kind(), it::STACKABLE))?
+            .max(1);
+        let allowed_class = normalize_item_mask(
+            row.number(it::column(dump.kind(), it::ALLOWED_CLASS))?,
+            ALL_PLAYABLE_CLASS_MASK,
+        )?;
+        let allowed_race = normalize_item_mask(
+            row.number(it::column(dump.kind(), it::ALLOWED_RACE))?,
+            ALL_PLAYABLE_RACE_MASK,
+        )?;
+        let class_v: u8 = row.number(it::column(dump.kind(), it::CLASS))?;
+        let subclass_v: u8 = row.number(it::column(dump.kind(), it::SUBCLASS))?;
+        let is_drink = dump.kind() == SourceKind::ClassicDb
+            && is_drink_consumable(class_v, subclass_v, read(it::NAME)?);
+        let holy: i32 = row.number(it::column(dump.kind(), it::HOLY_RES))?;
+        let fire: i32 = row.number(it::column(dump.kind(), it::FIRE_RES))?;
+        let nature: i32 = row.number(it::column(dump.kind(), it::NATURE_RES))?;
+        let frost: i32 = row.number(it::column(dump.kind(), it::FROST_RES))?;
+        let shadow: i32 = row.number(it::column(dump.kind(), it::SHADOW_RES))?;
+        let arcane: i32 = row.number(it::column(dump.kind(), it::ARCANE_RES))?;
         if holy != 0 || fire != 0 || nature != 0 || frost != 0 || shadow != 0 || arcane != 0 {
             resist_nonzero_count += 1;
         }
-        let sp3: u32 = read(it::SPELLID_3)?.parse().unwrap_or(0);
-        let spt3: u8 = read(it::SPELLTRIGGER_3)?.parse().unwrap_or(0);
-        let sp4: u32 = read(it::SPELLID_4)?.parse().unwrap_or(0);
-        let spt4: u8 = read(it::SPELLTRIGGER_4)?.parse().unwrap_or(0);
-        let sp5: u32 = read(it::SPELLID_5)?.parse().unwrap_or(0);
-        let spt5: u8 = read(it::SPELLTRIGGER_5)?.parse().unwrap_or(0);
-        let req_skill: u32 = read(it::REQUIRED_SKILL)?.parse().unwrap_or(0);
-        let req_skill_rank: u32 = read(it::REQUIRED_SKILL_RANK)?.parse().unwrap_or(0);
-        let req_rep_faction: u32 = read(it::REQUIRED_REPUTATION_FACTION)?.parse().unwrap_or(0);
-        let req_rep_rank: u32 = read(it::REQUIRED_REPUTATION_RANK)?.parse().unwrap_or(0);
-        let max_count: u32 = read(it::MAX_COUNT)?.parse().unwrap_or(0);
-        let item_flags: u32 = read(it::FLAGS)?.parse().unwrap_or(0);
-        let page_text: u32 = read(it::PAGE_TEXT)?.parse().unwrap_or(0);
-        let start_quest: u32 = read(it::START_QUEST)?.parse().unwrap_or(0);
+        let sp3: u32 = row.number(it::column(dump.kind(), it::SPELLID_3))?;
+        let spt3: u8 = row.number(it::column(dump.kind(), it::SPELLTRIGGER_3))?;
+        let sp4: u32 = row.number(it::column(dump.kind(), it::SPELLID_4))?;
+        let spt4: u8 = row.number(it::column(dump.kind(), it::SPELLTRIGGER_4))?;
+        let sp5: u32 = row.number(it::column(dump.kind(), it::SPELLID_5))?;
+        let spt5: u8 = row.number(it::column(dump.kind(), it::SPELLTRIGGER_5))?;
+        let req_skill: u32 = row.number(it::column(dump.kind(), it::REQUIRED_SKILL))?;
+        let req_skill_rank: u32 = row.number(it::column(dump.kind(), it::REQUIRED_SKILL_RANK))?;
+        let req_rep_faction: u32 =
+            row.number(it::column(dump.kind(), it::REQUIRED_REPUTATION_FACTION))?;
+        let req_rep_rank: u32 =
+            row.number(it::column(dump.kind(), it::REQUIRED_REPUTATION_RANK))?;
+        let max_count: u32 = row.number(it::column(dump.kind(), it::MAX_COUNT))?;
+        let item_flags: u32 = row.number(it::column(dump.kind(), it::FLAGS))?;
+        let page_text: u32 = row.number(it::column(dump.kind(), it::PAGE_TEXT))?;
+        let start_quest: u32 = row.number(it::column(dump.kind(), it::START_QUEST))?;
         if start_quest != 0 {
             startquest_nonzero_count += 1;
         }
-        let bag_family: u32 = read(it::BAG_FAMILY)?.parse().unwrap_or(0);
-        let buy_count: u32 = read(it::BUY_COUNT)?.parse().unwrap_or(1).max(1);
-        let food_type: u8 = read(it::FOOD_TYPE)?.parse().unwrap_or(0);
+        let bag_family: u32 = row.number(it::column(dump.kind(), it::BAG_FAMILY))?;
+        let buy_count: u32 = row
+            .number::<u32>(it::column(dump.kind(), it::BUY_COUNT))?
+            .max(1);
+        let food_type: u8 = row.number(it::column(dump.kind(), it::FOOD_TYPE))?;
         item_rows.push(format!(
             "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property})",
-            sheath = read(it::SHEATH)?.parse::<u8>().unwrap_or(0),
-            sp1 = read(it::SPELLID_1)?.parse::<u32>().unwrap_or(0),
-            spt1 = read(it::SPELLTRIGGER_1)?.parse::<u8>().unwrap_or(0),
-            sp2 = read(it::SPELLID_2)?.parse::<u32>().unwrap_or(0),
-            spt2 = read(it::SPELLTRIGGER_2)?.parse::<u8>().unwrap_or(0),
-            cslots = read(it::CONTAINER_SLOTS)?.parse::<u8>().unwrap_or(0),
-            bonding = read(it::BONDING)?.parse::<u8>().unwrap_or(0),
+            sheath = row.number::<u8>(it::column(dump.kind(), it::SHEATH))?,
+            sp1 = row.number::<u32>(it::column(dump.kind(), it::SPELLID_1))?,
+            spt1 = row.number::<u8>(it::column(dump.kind(), it::SPELLTRIGGER_1))?,
+            sp2 = row.number::<u32>(it::column(dump.kind(), it::SPELLID_2))?,
+            spt2 = row.number::<u8>(it::column(dump.kind(), it::SPELLTRIGGER_2))?,
+            cslots = row.number::<u8>(it::column(dump.kind(), it::CONTAINER_SLOTS))?,
+            bonding = row.number::<u8>(it::column(dump.kind(), it::BONDING))?,
             class = read(it::CLASS)?,
             subclass = read(it::SUBCLASS)?,
             name = sql_text(read(it::NAME)?),
@@ -4821,8 +4787,14 @@ mod tests {
 
     #[test]
     fn unrestricted_sentinel_expands_to_the_playable_masks() {
-        assert_eq!(normalize_item_mask("-1", ALL_PLAYABLE_CLASS_MASK), 0x5df);
-        assert_eq!(normalize_item_mask("-1", ALL_PLAYABLE_RACE_MASK), 0xff);
+        assert_eq!(
+            normalize_item_mask(-1, ALL_PLAYABLE_CLASS_MASK).unwrap(),
+            0x5df
+        );
+        assert_eq!(
+            normalize_item_mask(-1, ALL_PLAYABLE_RACE_MASK).unwrap(),
+            0xff
+        );
     }
 
     #[test]

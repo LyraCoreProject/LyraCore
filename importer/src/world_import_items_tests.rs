@@ -1,6 +1,7 @@
 use super::*;
 use crate::world_source::{sqlite_fixture, FixtureTable};
 use rusqlite::types::Value::{Integer as N, Real as F, Text};
+use std::collections::HashSet;
 
 fn item_source() -> WorldSource {
     let numeric = "entry patch class subclass display_id quality flags buy_count buy_price sell_price inventory_type allowable_class allowable_race item_level required_level required_skill required_skill_rank required_reputation_faction required_reputation_rank max_count stackable container_slots dmg_min1 dmg_max1 armor holy_res fire_res nature_res frost_res shadow_res arcane_res delay spellid_1 spelltrigger_1 spellid_2 spelltrigger_2 spellid_3 spelltrigger_3 spellid_4 spelltrigger_4 spellid_5 spelltrigger_5 bonding page_text start_quest sheath random_property block max_durability bag_family food_type";
@@ -69,6 +70,7 @@ fn item_source() -> WorldSource {
         ("groupid", "INTEGER"),
         ("mincountOrRef", "INTEGER"),
         ("maxcount", "INTEGER"),
+        ("condition_id", "INTEGER DEFAULT 0"),
         ("patch_min", "INTEGER"),
         ("patch_max", "INTEGER"),
     ];
@@ -205,10 +207,116 @@ fn vmangos_items_select_versions_join_vendor_templates_and_exclude_forbidden_off
     assert_eq!(plan.stamps, [("items", 2)]);
     assert!(sql.contains("'Fixture broth'"));
     assert!(!sql.contains("Old drink"));
-    assert!(sql.contains(",true,500,0,"));
-    assert_eq!(sql.matches(",true,").count(), 1);
+    assert!(sql.contains(",false,500,0,"));
     assert!(sql.contains("(1,100,1001,1,0),(2,100,1000,2,0)"));
     assert!(!sql.contains("INSERT INTO game_creature_loot"));
     assert!(!sql.contains("1002"));
     assert!(plan.reducer_batches(&args).unwrap().is_empty());
+}
+
+fn edit_source(source: &WorldSource, sql: &str) {
+    let WorldSource::Vmangos(connection) = source else {
+        panic!("SQLite fixture")
+    };
+    connection.pragma_update(None, "query_only", false).unwrap();
+    connection.execute_batch(sql).unwrap();
+    connection.pragma_update(None, "query_only", true).unwrap();
+}
+
+#[test]
+fn patch_conditions_remove_unavailable_vendor_offers_and_creature_drops() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "
+        CREATE TABLE conditions (condition_entry INTEGER PRIMARY KEY, type INTEGER,
+            value1 INTEGER, value2 INTEGER, flags INTEGER,
+            value3 INTEGER DEFAULT 0, value4 INTEGER DEFAULT 0);
+        INSERT INTO conditions (condition_entry,type,value1,value2,flags) VALUES
+            (1,24,9,2,0), (2,24,10,0,0), (3,-3,1,0,0),
+            (4,-1,2,3,0), (5,-2,1,2,0), (6,0,0,0,1),
+            (7,-1,1,6,0), (8,9,42,0,0), (9,-2,2,8,0),
+            (10,-3,10,0,0), (11,24,10,0,1), (12,-1,2,3,0), (13,-2,1,6,0);
+        UPDATE conditions SET value4 = 1 WHERE condition_entry = 12;
+        UPDATE conditions SET value3 = 2 WHERE condition_entry = 13;
+        DELETE FROM npc_vendor;
+        DELETE FROM npc_vendor_template;
+        DELETE FROM creature_loot_template;
+        DELETE FROM forbidden_items;
+    ",
+    );
+    for condition in 1..=13 {
+        edit_source(&source, &format!("
+            INSERT INTO npc_vendor VALUES (100,{condition},{},0,0,{condition},0);
+            INSERT INTO creature_loot_template
+                (entry,item,ChanceOrQuestChance,groupid,mincountOrRef,maxcount,condition_id,patch_min,patch_max)
+                VALUES (3,{},100,0,1,1,{condition},0,10);
+        ", 1000 + condition, 1000 + condition));
+    }
+    let (_, loot, vendors) = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap();
+    let items = |rows: &[String]| {
+        rows.iter()
+            .map(|row| {
+                row.trim_matches(['(', ')'])
+                    .split(',')
+                    .nth(2)
+                    .unwrap()
+                    .parse::<u64>()
+                    .unwrap()
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(
+        items(&vendors),
+        [1002, 1003, 1004, 1005, 1008, 1009, 1010, 1013]
+    );
+    assert_eq!(items(&loot), items(&vendors));
+    for row in source.rows("npc_vendor").unwrap().iter() {
+        let item: u32 = row.number("item").unwrap();
+        assert_eq!(
+            row.number::<u32>("condition_id").unwrap(),
+            if item <= 1005 || item == 1013 {
+                0
+            } else {
+                item - 1000
+            }
+        );
+    }
+    let findings = items_findings(&source, &HashSet::from([100])).unwrap();
+    assert_eq!(findings["findings"][0]["occurrences"], 3);
+}
+
+#[test]
+fn malformed_item_and_vendor_numbers_stop_before_emitting_an_offer() {
+    for (sql, column) in [
+        (
+            "UPDATE item_template SET required_level = 'invalid'",
+            "required_level",
+        ),
+        (
+            "UPDATE item_template SET spelltrigger_1 = 999",
+            "spelltrigger_1",
+        ),
+        ("UPDATE npc_vendor SET maxcount = -1", "maxcount"),
+        ("UPDATE creature_loot_template SET groupid = -1", "groupid"),
+    ] {
+        let source = item_source();
+        edit_source(&source, sql);
+        let error = build_items_and_loot(
+            &source,
+            &HashMap::from([(100, 3)]),
+            &HashSet::from([100]),
+            &HashSet::new(),
+            &HashSet::new(),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains(column), "{error}");
+    }
 }

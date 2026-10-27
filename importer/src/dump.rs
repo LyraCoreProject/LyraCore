@@ -211,12 +211,8 @@ pub(crate) mod it {
     pub const BAG_FAMILY: &str = "BagFamily";
     pub const FOOD_TYPE: &str = "FoodType";
 
-    pub(crate) fn read<'a>(
-        row: &'a crate::world_source::Row,
-        kind: crate::world_source::SourceKind,
-        column: &str,
-    ) -> anyhow::Result<&'a str> {
-        let name = if kind == crate::world_source::SourceKind::Vmangos {
+    pub(crate) fn column(kind: crate::world_source::SourceKind, column: &str) -> &str {
+        if kind == crate::world_source::SourceKind::Vmangos {
             match column {
                 DISPLAY_ID => "display_id",
                 QUALITY => "quality",
@@ -245,7 +241,15 @@ pub(crate) mod it {
             }
         } else {
             column
-        };
+        }
+    }
+
+    pub(crate) fn read<'a>(
+        row: &'a crate::world_source::Row,
+        kind: crate::world_source::SourceKind,
+        column: &str,
+    ) -> anyhow::Result<&'a str> {
+        let name = self::column(kind, column);
         if column == NAME {
             row.text(name).map(str::trim)
         } else {
