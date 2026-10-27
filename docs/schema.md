@@ -182,7 +182,7 @@ minutes. `game_operator` is a singleton holding the one Operator identity, captu
 Its rows remain across logout and Character deletion. Character guids are never reused, so retained
 rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
 already has more than 4,096; it never truncates. `game_account_fence` is a retired
-Gateway table, and nothing writes it. The playerbots test suite still opens Account Claims in
+Gateway table, and nothing writes it. Module tests and the native check still open Account Claims in
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
@@ -246,8 +246,8 @@ nothing. `game_item_instance.item_text_id` is 0 for every item that is not a cop
 every item snapshot (mail, trade, auction) keeps it.
 
 `game_mail_escrow` and `game_mail_delivery` hold legacy cross-Shard Mail value. World Session mail
-uses no Escrow. A Reward Letter for a Character without a native connection still files one
-through `mail_escrow::file_reward` (`module/src/mail_reward.rs`).
+uses no Escrow, and a Reward Letter inserts its Mail directly
+(`module/src/mail_reward.rs`).
 
 ### Auctions (`module/src/auction.rs`)
 

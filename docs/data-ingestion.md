@@ -108,7 +108,7 @@ catalogue value.
 Apply constructs and checks that same plan before it returns any work to the caller. A wrong digest,
 loader contract, census, source value, dependency, or classification is a Refusal before any EventAI
 SQL statement or definition reducer call. This is intentional. A profile can remain useful for dry
-run while later compatibility Tickets approve more of the pinned source.
+run while later compatibility tickets approve more of the pinned source.
 
 World Import Scope still controls compatibility claims. Positive subjects must name imported entry
 templates. Negative subjects resolve through an imported spawn guid and become guid subjects.

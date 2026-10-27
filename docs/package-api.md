@@ -15,9 +15,9 @@ hook event keeps its name and its payload fields. A listed operation keeps its n
 order and its Refusal behaviour. A table accessor keeps its name.
 
 **May move with notice.** The surface grows by addition: a new hook event, a new payload field, a new
-operation. A change that breaks a Package bumps this version and is called out in `CHANGELOG.md`. An
-`_Avoid_` rename or a module split may move a path, and the lint below is what makes that visible at
-build time rather than at run time.
+operation. A change that breaks a Package bumps this version, and the pull request that bumps it
+says what broke. An `_Avoid_` rename or a module split may move a path, and the lint below is what
+makes that visible at build time rather than at run time.
 
 **Never promised.** Every `crate::` root not listed here. Row layouts of tables a Package does not
 own. The order core operations run in, beyond the ordering stated below. Anything reached through
@@ -327,7 +327,7 @@ The returned id names that completed relocation. A repeat for the same controlle
 AreaTrigger and destination returns the same id while the Character remains in that destination
 partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
 relocation unchanged. No Transfer Intent or Escrow is created. `area_trigger_route` exposes the
-source center and containment rule for Candidate movement.
+source center and containment rule for candidate movement.
 
 ### Package Config
 
