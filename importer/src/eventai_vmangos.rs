@@ -39,6 +39,7 @@ struct Compiled {
     ends: Vec<u32>,
     aborts: Vec<u32>,
     texts: BTreeSet<u32>,
+    summons: BTreeMap<u32, String>,
     templates: BTreeSet<u64>,
     quests: BTreeSet<u32>,
     limitations: BTreeSet<String>,
@@ -240,6 +241,7 @@ impl Source {
         let mut definitions: BTreeMap<u32, Vec<String>> = BTreeMap::new();
         let mut findings = Findings::new();
         let mut used_texts = BTreeSet::new();
+        let mut summons = BTreeMap::new();
         let mut limitations = Findings::new();
         let mut emitted = 0;
         let mut excluded = 0;
@@ -256,6 +258,7 @@ impl Source {
                     definitions.entry(event.entry).or_default().push(rule);
                     plan.coverage.emitted_instructions += compiled.instructions.len() as u64;
                     used_texts.extend(compiled.texts);
+                    summons.extend(compiled.summons);
                     plan.forced_template_entries.extend(compiled.templates);
                     plan.quest_event_entries.extend(compiled.quests);
                     for limitation in compiled.limitations {
@@ -283,6 +286,7 @@ impl Source {
             .into_iter()
             .map(|id| self.broadcasts[&id].encoded.clone())
             .collect();
+        plan.summon_rows = summons.into_values().collect();
         plan.relay_definition_batches = vec![String::new()];
         let manifest = serde_json::json!({
             "format_version": 1, "source": "vmangos", "family": "creature-ai",
@@ -409,7 +413,17 @@ impl Source {
                     joined(&ids)
                 ))
             }
-            1 if actor && b == 0 && no_extra && c.ints[0] == 0 => Ok(format!("emote:{a}:self")),
+            1 if actor && c.ints[0] == 0 => {
+                let count = 1 + c.longs[1..].iter().take_while(|id| **id != 0).count();
+                if c.longs[..count].iter().any(|id| *id > i32::MAX as u32) {
+                    return Err(unsupported());
+                }
+                Ok(if count == 1 {
+                    format!("emote:{a}:self")
+                } else {
+                    format!("random-emote:{}", joined(&c.longs[..count]))
+                })
+            }
             2 if actor => match (a, b) {
                 (147, 0) => Ok("npc-flags:clear".into()),
                 (147, 3) => Ok("npc-flags:gossip-and-quest".into()),
@@ -442,6 +456,16 @@ impl Source {
             }
             8 if c.target == 0 && c.flags & 7 == 0 && b == 0 && no_extra => {
                 Ok(format!("kill-credit:{a}:selected-character"))
+            }
+            10 if actor
+                && a != 0
+                && no_extra
+                && c.ints[0..2] == [0, 0]
+                && matches!(c.ints[3], 1 | 2 | 4)
+                && !super::fixture_id(a)
+                && templates.contains(&u64::from(a)) =>
+            {
+                compile_summon(c, compiled)
             }
             14 if actor && b == 0 && self.spells.contains(&a) => {
                 Ok(format!("remove-aura:{a}:self"))
@@ -501,6 +525,17 @@ impl Source {
             }),
             47 if actor && a == 0 => {
                 compiled.limitations.insert("flee-fixed-duration".into());
+                if !self
+                    .broadcasts
+                    .get(&1150)
+                    .is_some_and(|text| text.supported)
+                {
+                    return Err("broadcast-dependency".into());
+                }
+                compiled.texts.insert(1150);
+                compiled
+                    .instructions
+                    .push("speak:emote:opponent:1150".into());
                 Ok("flee".into())
             }
             49 if actor && a == 1 => Ok("zone-combat".into()),
@@ -519,6 +554,38 @@ impl Source {
             )),
             _ => Err(unsupported()),
         }
+    }
+}
+
+fn compile_summon(
+    command: &Command,
+    compiled: &mut Compiled,
+) -> std::result::Result<String, String> {
+    let [entry, duration, _, _] = command.longs;
+    let unsupported = || format!("command:{}:parameters", command.kind);
+    let attack = match command.ints[2] {
+        -1 => "self",
+        0 => command.target()?,
+        1 => "opponent",
+        2 => "second-threat",
+        4 => "random-threat",
+        5 => "random-threat-except-highest",
+        7 => "farthest-hostile",
+        _ => return Err(unsupported()),
+    };
+    compiled.templates.insert(u64::from(entry));
+    if command.ints[3] != 2 {
+        compiled.limitations.insert("summon-corpse-lifetime".into());
+    }
+    if command.position[..3] == [0.0; 3] {
+        Ok(format!("spawn-at-actor:{entry}:{attack}:{duration}"))
+    } else {
+        let id = command.order.checked_add(1).ok_or_else(unsupported)?;
+        let [x, y, z, o] = command.position;
+        compiled
+            .summons
+            .insert(id, format!("({id},{x},{y},{z},{o},{duration})"));
+        Ok(format!("summon:{entry}:{id}:{attack}"))
     }
 }
 
@@ -864,5 +931,76 @@ mod tests {
         );
         assert!(plan.definition_rows.is_empty());
         assert_eq!(manifest["counts"]["dropped_rules"], 1);
+    }
+    #[test]
+    fn flee_keeps_the_source_emote_in_the_same_command_list() {
+        let mut source = source();
+        source.broadcasts.insert(
+            1150,
+            Broadcast {
+                encoded: "(1150,'flee','',2,0,0,0,0,0,0,0)".into(),
+                mode: "emote",
+                supported: true,
+            },
+        );
+        source.scripts.insert(10, vec![step(47, [0; 4])]);
+        source.events.push(event([10, 0, 0]));
+        let (plan, _) = source.assemble(&HashSet::from([100]), &HashSet::from([100]));
+        assert!(plan.definition_rows[0].contains("lists:0:2:"));
+        assert!(plan.definition_rows[0].ends_with("speak:emote:opponent:1150+flee"));
+        assert_eq!(plan.broadcast_rows.len(), 1);
+    }
+
+    #[test]
+    fn summons_keep_their_position_attack_target_and_template_dependency() {
+        let mut source = source();
+        let mut summon = step(10, [101, 30000, 0, 0]);
+        summon.ints = [0, 0, 1, 1];
+        source.events.push(event([10, 0, 0]));
+        for (position, instruction) in [
+            ([0.0; 4], "spawn-at-actor:101:opponent:30000"),
+            ([2.0, 3.0, 4.0, 1.0], "summon:101:1:opponent"),
+        ] {
+            summon.position = position;
+            source.scripts.insert(10, vec![summon.clone()]);
+            let (plan, _) = source.assemble(&HashSet::from([100]), &HashSet::from([100, 101]));
+            assert!(plan.definition_rows[0].ends_with(instruction));
+            assert_eq!(plan.forced_template_entries, BTreeSet::from([101]));
+            if position[0] != 0.0 {
+                assert_eq!(plan.summon_rows, ["(1,2,3,4,1,30000)"]);
+            }
+        }
+        summon.position = [0.0; 4];
+        summon.ints[2] = 0;
+        summon.flags = 4;
+        source.scripts.insert(10, vec![summon.clone()]);
+        let (plan, _) = source.assemble(&HashSet::from([100]), &HashSet::from([100, 101]));
+        assert!(plan.definition_rows[0].ends_with("spawn-at-actor:101:self:30000"));
+        summon.longs[2] = 6;
+        source.scripts.insert(10, vec![summon]);
+        let (plan, _) = source.assemble(&HashSet::from([100]), &HashSet::from([100, 101]));
+        assert!(plan.definition_rows.is_empty());
+    }
+
+    #[test]
+    fn random_emotes_keep_only_the_contiguous_source_choices() {
+        let source = source();
+        for (choices, expected) in [
+            ([18, 20, 0, 0], "random-emote:18.20"),
+            ([4, 21, 22, 11], "random-emote:4.21.22.11"),
+            ([4, 0, 22, 11], "emote:4:self"),
+        ] {
+            assert_eq!(
+                source
+                    .compile_command(&step(1, choices), &mut Compiled::default(), &HashSet::new())
+                    .unwrap(),
+                expected
+            );
+        }
+        let mut targeted = step(1, [4, 21, 0, 0]);
+        targeted.ints[0] = 1;
+        assert!(source
+            .compile_command(&targeted, &mut Compiled::default(), &HashSet::new())
+            .is_err());
     }
 }

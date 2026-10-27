@@ -655,8 +655,8 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 .split('.')
                 .map(parse_i32)
                 .collect::<Result<Vec<_>, _>>()?;
-            if emote_ids.len() != 3 {
-                return Err("random-emote needs exactly three source choices".to_string());
+            if !(1..=4).contains(&emote_ids.len()) {
+                return Err("random-emote needs one through four choices".to_string());
             }
             Ok(CreatureInstruction::RandomEmote(RandomEmoteInstruction {
                 emote_ids,
@@ -1523,7 +1523,9 @@ mod tests {
             })
         ));
 
-        assert!(parse_instruction("random-emote:11.18").is_err());
+        assert!(parse_instruction("random-emote:11.18").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21.22").is_err());
         assert!(parse_instruction("set-react-state:3").is_err());
         assert!(parse_instruction("no-effect:missing-text-template:0").is_err());
     }
