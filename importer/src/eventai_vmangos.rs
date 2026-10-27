@@ -1503,8 +1503,8 @@ INSERT INTO `creature` VALUES (4832,0,0,0,0,48),(10,4832,20,30,40,0);";
         assert_eq!(
             source
                 .encounter_command(4832, &step(37, [10, 3, 0, 0]))
-                .unwrap_err(),
-            "encounter-cross-map:4832:10"
+                .unwrap(),
+            "notify-encounter:blackfathom-deeps-kelris:complete"
         );
     }
 
