@@ -37,7 +37,7 @@ fn update_result(
         .nth(1)
         .context("harness SHA")?;
     let mut result = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "tier": "tier1",
         "core_commit": git(&["rev-parse", "HEAD"] )?,
         "working_tree_dirty": !git(&["status", "--porcelain", "--untracked-files=normal"] )?.is_empty(),
@@ -136,7 +136,9 @@ fn connection_identity_matches_its_golden_trace() -> Result<()> {
 #[ignore = "taxi divergence: eight known gaps; run manually with the bundled route fixture"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
     run_scenario("taxi_single_hop", |shard| {
-        super::taxi_route::install(shard);
+        for statement in super::taxi_route::statements() {
+            shard.assert_sql(&statement);
+        }
         Ok(())
     })
 }

@@ -17,7 +17,7 @@ and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
 
-All fields below except `data_fields` and `known_gaps` are required. Use an empty array when no
+All fields below except `known_gaps` are required. Use an empty array when no
 entry exists yet.
 All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
 
@@ -34,7 +34,6 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
 | `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
-| `data_fields` | Optional array of sourced, typed data-dependent fields, empty when omitted |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -68,21 +67,10 @@ source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
-Each `[[data_fields]]` declaration names one exact field location. It requires `scenario`,
-`checkpoint`, `stream`, `opcode`, `field_path`, `value_type`, `reason` and `source`.
-The scenario must belong to this Behavior. `stream` is a table with `kind = "reply"` or
-`kind = "broadcast"` and a stream `id`. `opcode` is a numeric server opcode already claimed in
-`replies`. `field_path` is a nonempty array of field names and decimal list indices, with no
-wildcards. `value_type` is `unsigned`, `signed`, `float` or `text_sha256`.
-`source` holds a pinned `commit`, relative `path` and `symbol`, like `vmangos`.
-`reason` explains why this field depends on world data. Duplicate locations and opening-phase declarations fail.
-
-Only an `exact_field` difference at that location, with both values of the declared type and a
-packet index, can count as data. Missing fields, type or structure changes, packet counts and order,
-timing, identity rules and counted Deliberate Deviations remain rule differences. A declaration
-does not change the harness comparison or excuse tier 1 failures. No current ledger entry declares
-a data-dependent field. The T2d destination-coordinate observation has no comparator record because
-the landing packet is missing.
+The scenario author declares data-dependent fields in the harness scenario's `[[rules.data_fields]]`.
+The scenario hash covers them. The comparator emits tagged records for changed data values and
+keeps presence, shape, identity, ordering and timing failures as rule records. Core never declares
+or reclassifies data fields. Known gaps cannot change a tag or excuse a failure.
 
 ## Migration and source evidence
 
@@ -107,9 +95,9 @@ keeps `wire-client` out of normal and build dependencies, including renamed and 
 
 Every scenario reference must exist in that catalogue and name the Behavior that lists it.
 A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
-checkout is read and no catalogue check can skip. Both consumers enable `serde_json/float_roundtrip`
-for development builds so loading a Golden Trace preserves exact wire-coordinate values. Without
-it, decimal parsing can move a recorded coordinate by one f64 ULP and fail an exact comparison.
+checkout is read and no catalogue check can skip. The pinned harness enables
+`serde_json/float_roundtrip` itself, so loading a Golden Trace preserves exact wire-coordinate
+values. Core needs no feature override.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
 The runner prepares the scenario's Character through debug reducers, then runs the
@@ -127,7 +115,7 @@ filters packets during the scenario or changes its Equivalence Rules.
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
 revision, capture time and the harness comparison. It removes the scenario's previous result before
 setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
-and preserve other scenarios from the same revision. Differences remain in the report and fail the
+and preserve other scenarios from the same revision. Both difference classes remain in the report. Only rule records fail the
 test. No packet text enters this result. The scoreboard consumes it.
 
 ## Taxi data
@@ -138,7 +126,7 @@ requires the Operator, an existing Character and a storage id in `game_taxi_node
 ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
 
 The tier 1 test installs the hand-written fixture in
-`module/tests/conformance/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
+`conformance/support/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
 its 28 vertices, and a minimal synthetic template for the scenario's flight master, entry 352.
 The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
@@ -180,17 +168,18 @@ It does not infer a pass from a test declaration or claim overall completion fro
 The ledger's other required rungs remain obligations.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
-under `conformance/reports/` with the greatest `recorded_at_unix_ms`. An audit can keep a Markdown
-narrative beside that JSON. No audit report exists yet. To select inputs explicitly:
+under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
 
 ```bash
 ./conformance/scoreboard --tier1 /path/to/tier1.json --audit /path/to/audit.json
 ```
 
 Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
-explicit input or malformed report fails the command. A different core commit, harness revision
-or scenario hash shows `stale`. A pass requires every scenario listed by the Behavior. Any harness
-difference, including a counted Deliberate Deviation, prevents a pass. A matching run made with
+explicit input or malformed report fails the command. A changed core, harness revision
+or scenario hash shows `stale`. A descendant core commit that changes only `conformance/reports/`
+remains current, so committing the report does not invalidate its measurement. A pass requires every scenario listed by the Behavior. Any rule
+difference, including a counted Deliberate Deviation, prevents a pass. Rule differences in the Reference Server
+comparison also prevent an audit pass. A matching run made with
 uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
 Real-client cells come only from the ledger, never from a report.
 
@@ -202,30 +191,88 @@ control receipts, tests, comments, imports and explicit empty responses for igno
 Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
 Neither opcode claims nor these source counts prove conformance.
 
-### Result schema version 1
+### Result schema version 2
 
-The tier 1 runner writes this shape. Audit reports use `tier = "conformance_audit"` and the same
-fields. An audit producer partitions the complete harness comparison into `comparison.differences`
-for rule differences and `data_differences` for declared data-dependent fields. Both arrays contain
-the harness's serialized `Difference` records, unchanged. The scoreboard re-derives each record's
-classification from the current ledger's typed, sourced declarations and rejects a report if either
-array disagrees. Unknown Behaviors and unlisted scenarios also fail, including extra result rows.
-This check applies before freshness checks. Data differences print separately and do not prevent a
-clean audit pass. Tier 1 keeps every difference in `comparison.differences` and cannot classify data.
+Both tiers retain the complete harness `Comparison`. Each record requires the comparator's
+`classification` tag, `rule` or `data`. There is no separate `data_differences` array. Version 1
+results lack tags and must be rerun. Summary counts never supply classification.
+
+A signature is `(rule, checkpoint, stream, opcode, field_path)`. Packet indices, reasons and
+values do not belong to it. The scoreboard groups signatures across all scenarios of a Behavior
+and shows distinct signatures and raw records separately for rules and data. Known gaps remain a
+separate descriptive count. Missing or unknown tags, unknown Behaviors, unlisted scenarios,
+duplicate results and malformed reports fail before freshness checks.
 
 | Field | Meaning |
 | --- | --- |
-| `schema_version` | `1` |
+| `schema_version` | `2` |
 | `tier` | `tier1` or `conformance_audit` |
-| `core_commit` | Full core commit SHA measured by the run |
+| `core_commit` | Full core commit measured by the run |
 | `working_tree_dirty` | Whether the run included uncommitted changes |
-| `harness_revision` | Full pinned harness commit SHA |
+| `harness_revision` | Full pinned harness commit |
 | `recorded_at_unix_ms` | Capture time used to choose the latest report |
 | `scenarios` | Result array, with unique scenario ids |
 | `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
 | `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
-| `scenarios[].comparison` | Harness `Comparison` with its counted differences |
-| `scenarios[].data_differences` | Optional audit-only array, empty when omitted |
+| `scenarios[].comparison` | Complete tagged comparison of LyraCore with the Golden Trace |
+| `scenarios[].reference_comparison` | Audit-only comparison of vmangos with that same Golden Trace |
+| `audit` | Audit-only server provenance and per-Behavior summaries |
+
+`audit` records the Native Host and Module binary hashes, content fixture description, and vmangos
+binary release, archive hash, source commit and database commit. Its `behaviors` map holds each
+Behavior's `candidate` and `reference` summaries. Each summary has `rule` and `data` groups with
+`raw_records` and a `signatures` array of `{signature, raw_records}`. The scoreboard recomputes
+both summaries from the comparator tags and rejects any disagreement in classification, signature
+membership or count.
+
+`audit.previous_report` is the preceding JSON filename, or null on the first audit. Each Behavior's
+`changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no earlier
+audit exists. Multiplicity and values cannot fix or regress a signature. The scoreboard checks
+these sets against the named earlier report. Earlier T2d/T2g narrative notes are not audit baselines.
+
+## Conformance Audit
+
+Prepare the pinned Reference Server once with the harness's
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/adapters/vmangos/README.md).
+Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
+Build the Native Host for this checkout as described in [testing](../docs/testing.md#native-protocol-tier).
+Then run:
+
+```bash
+./conformance/audit --host /path/to/spacetimedb-standalone --date 2026-10-27
+./conformance/scoreboard
+```
+
+The Python command manages local processes because it can reuse `native-host/host.py`. The Rust
+`audit` example exports catalogue scenarios, compares candidates through the pinned library, and
+writes the reports. It shares counting and evidence validation with the scoreboard. Neither core
+command reads scenarios or Golden Traces from a harness checkout. Cargo metadata locates the
+pinned checkout only to build `vanilla-wire` and run its server adapters.
+
+The command builds `vanilla-wire`, the audit example and the Module with `debug_reducers`. It starts
+a fresh Native Host on free loopback ports, provisions a disposable Account, and installs the same
+hand-written route fixture as tier 1. It uses normal SRP login and encrypted world TCP sessions;
+fixture world-entry bypasses are not compiled into this Module. The fixture supplies the current
+catalogue's content without importing world data. New scenarios may need more content.
+
+All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
+pins and provenance, starts its compose services, and resets only the catalogue Characters on the
+disposable Reference Server. Every scenario produces both a LyraCore and vmangos candidate. Both
+compare with their embedded Golden Trace; the Reference Server must also retain its recorded
+provenance. Reference rule and data counts remain visible even when LyraCore fails.
+
+The command writes `conformance/reports/<date>.md` and `<date>.json`, refusing existing files.
+`--output DIRECTORY` selects another report destination. Rule differences are audit findings and do
+not make the command fail; missing captures, infrastructure errors and invalid evidence do. A failed
+run cannot write a partial success report. No scenario is skipped, including taxi. Real-client
+fields, Equivalence Rules and Deliberate Deviations are untouched.
+
+The runner stops both servers on exit, including capture failures and normal interrupts. Credentials,
+traces and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted
+when the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
+counts, signatures and scrubbed difference values. Commit the implementation before capturing a
+report for current evidence, then commit only the report pair. Dirty captures remain unverified.
 
 ## Opcode coverage
 

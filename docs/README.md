@@ -12,6 +12,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [danger-zones.md](./danger-zones.md) | Reference, authority | You change a schema, publish, or touch a §1 trap |
 | [architecture.md](./architecture.md) | Reference | You need to know where a responsibility lives |
 | [schema.md](./schema.md) | Reference | You add or change a table |
+| [First Conformance Audit](../conformance/reports/2026-10-27.md) | Verification | You check measured rule and data signatures and reference stability |
 | [T2d taxi comparison](../conformance/reports/2026-10-27-t2d.md) | Verification | You investigate the first taxi conformance differences |
 | [Feature Ledger](../conformance/README.md) | Reference | You add or validate a conformance Behavior and its evidence requirements |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |

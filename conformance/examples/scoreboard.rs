@@ -126,11 +126,34 @@ fn main() -> Result<()> {
         println!("tier1: no result");
     }
     if let Some((path, report)) = &audit {
+        report.validate_changes(path.parent().context("report directory")?, &ledger)?;
         provenance(path, report);
     } else {
         println!("conformance_audit: no report");
     }
     let audit = audit.as_ref().map(|(_, report)| report);
+    let tier1_head = match &tier1 {
+        Some(report) if evidence::same_core(root, &report.core_commit, head)? => {
+            report.core_commit.as_str()
+        }
+        _ => head,
+    };
+    let audit_head = match audit {
+        Some(report) if evidence::same_core(root, &report.core_commit, head)? => {
+            report.core_commit.as_str()
+        }
+        _ => head,
+    };
+    if let Some(report) = audit {
+        for (behavior, result) in &report.audit.as_ref().context("audit provenance")?.behaviors {
+            println!("Reference / {behavior}: {}", result.reference);
+            if let Some(changes) = &result.changes {
+                println!("Changes / {behavior}: {} rule fixed, {} rule regressed; {} data fixed, {} data regressed signatures",
+                    changes.rule.fixed.len(), changes.rule.regressed.len(), changes.data.fixed.len(), changes.data.regressed.len());
+            }
+        }
+    }
+
     let mut systems = BTreeMap::<&str, Vec<&Behavior>>::new();
     for behavior in ledger.behaviors() {
         systems.entry(&behavior.system).or_default().push(behavior);
@@ -148,14 +171,14 @@ fn main() -> Result<()> {
         let claimed = requests(behaviors)?;
         let tier1_pass = behaviors
             .iter()
-            .map(|behavior| state(tier1.as_ref(), behavior, head, revision))
+            .map(|behavior| state(tier1.as_ref(), behavior, tier1_head, revision))
             .collect::<Result<Vec<_>>>()?
             .iter()
             .filter(|state| state.is_match())
             .count();
         let audit_pass = behaviors
             .iter()
-            .map(|behavior| state(audit, behavior, head, revision))
+            .map(|behavior| state(audit, behavior, audit_head, revision))
             .collect::<Result<Vec<_>>>()?
             .iter()
             .filter(|state| state.is_match())
@@ -182,8 +205,8 @@ fn main() -> Result<()> {
             println!(
                 "| {system} / {} | {} | {} | {real_client} | {} | {} | {} |",
                 behavior.id,
-                state(tier1.as_ref(), behavior, head, revision)?,
-                state(audit, behavior, head, revision)?,
+                state(tier1.as_ref(), behavior, tier1_head, revision)?,
+                state(audit, behavior, audit_head, revision)?,
                 claimed.len(),
                 claimed.intersection(&counts.unavailable).count(),
                 behavior.known_gaps.len()
