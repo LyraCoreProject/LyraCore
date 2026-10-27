@@ -46,10 +46,10 @@ pub(crate) use energy::regenerate_energy;
 pub use energy::{game_energy_clock, EnergyClock};
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
-    agility_crit_bp, apply_offhand_penalty, armor_mitigation_pct, attack_outcome, block_chance_bp,
-    crit_bp_with_bonus, crushing_chance_bp, dodge_chance_bp, effective_stat, glancing_chance_bp,
-    is_rage_user, is_translating, melee_attack_power_for, miss_bp_with_bonus, miss_chance_bp,
-    parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
+    agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,
+    block_chance_bp, crit_bp_with_bonus, crushing_chance_bp, dodge_chance_bp, effective_stat,
+    glancing_chance_bp, is_rage_user, is_translating, melee_attack_power_for, miss_bp_with_bonus,
+    miss_chance_bp, parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
     regen_entity_health, regen_entity_health_in_combat, regen_entity_power, resist_mitigation_pct,
     scale_swing_for_rank, swing_time_with_haste, weapon_swing_range_ap, AttackTable, RegenWindow,
     AUTO_SHOT_PROJECTILE_SPEED, COMBAT_BACKSTOP_SQ, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN,

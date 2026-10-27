@@ -155,11 +155,6 @@ pub(crate) fn is_facing(ax: f32, ay: f32, attacker_orientation: f32, tx: f32, ty
     dx * attacker_orientation.cos() + dy * attacker_orientation.sin() > 0.0
 }
 
-#[cfg(test)]
-pub(crate) fn cast_finish_micros(now_micros: i64, cast_time_ms: u32) -> i64 {
-    now_micros + (cast_time_ms as i64) * 1000
-}
-
 pub(crate) fn should_arm_spell_retaliation(
     caster_is_player: bool,
     target_is_player: bool,

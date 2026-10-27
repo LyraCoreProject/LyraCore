@@ -420,7 +420,7 @@ pub(crate) fn weapon_strike_damage(
     let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
     let pre_mit = if crit { total * CRIT_MULT } else { total };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
-    ((pre_mit * (100 - mit_pct) / 100).max(1), crit)
+    (armor_mitigated(pre_mit, mit_pct), crit)
 }
 
 pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
@@ -537,7 +537,7 @@ fn resolve_swing(
         HIT_CRUSHING => base * CRUSH_DAMAGE_PCT / 100,
         _ => base,
     };
-    let dmg = (pre_mit * (100 - mit_pct) / 100).max(1);
+    let dmg = armor_mitigated(pre_mit, mit_pct);
     let blocks = match strike {
         Some(_) => rolls.block < block_bp,
         None => outcome == HIT_BLOCK,
@@ -569,7 +569,7 @@ pub(crate) fn roll_ranged_swing(
     let base = dmin + ctx.random::<u32>() % (dmax.saturating_sub(dmin) + 1);
     let pre_mit = if is_crit { base * CRIT_MULT } else { base };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
-    let dmg = (pre_mit * (100 - mit_pct) / 100).max(1);
+    let dmg = armor_mitigated(pre_mit, mit_pct);
     (dmg, if is_crit { HIT_CRIT } else { HIT_NORMAL })
 }
 
