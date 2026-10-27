@@ -3,9 +3,9 @@
 This list covers the ported Import Families. The family imports and generated censuses report
 these Compatibility Manifest findings. The vmangos Source Profile now checks consumed columns and approved source values. Counts do not gate import.
 
-| Finding | Selected rows | Current limit | Next slice |
+| Finding | Selected rows | Current limit | Status |
 | --- | ---: | --- | --- |
-| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The current classic-db import also omits portal conditions. The globals import retains these rows and reports their trigger ids as unsupported. | S3g translates condition kinds. Portal gameplay support remains unimplemented. |
+| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The current classic-db import also omits portal conditions. The globals import retains these rows and reports their trigger ids as unsupported. | Condition kinds are translated. Portal gameplay support remains unimplemented. |
 
 Verified against vmangos commit `464179081673cfd240f7ffe7f0daf96bca0b5a70`, selected for patch 10,
 and the current `build_areatrigger_teleport_sql` output columns. No source rows are included here.
@@ -222,9 +222,9 @@ meaning is not implemented. The current pin has 30 limits, seven reset delays an
 
 ## EventAI and scripts, Milestone 4
 
-The [full-world census](census/creature-ai.md) and
-[alliance-single census](census/creature-ai-alliance-single.md) report every finding code and count.
-The [approved sets](approved-sets-m4.md) document the gate. Approval classifies source values;
+The [full-world census](vmangos-port-census/creature-ai.md) and
+[alliance-single census](vmangos-port-census/creature-ai-alliance-single.md) report every finding code and count.
+The [approved sets](vmangos-port-census/approved-sets-m4.md) document the gate. Approval classifies source values;
 it does not promise that each command, condition or target can run in the Module.
 
 Full-world emits 4,923 of 6,179 source events. It excludes 310 rows whose template does not use
@@ -286,7 +286,7 @@ source commit. No entry-key substitution is made.
 
 Of 176 full-world event-credit candidates, 2460 has emitted credit, 2608 retains its classic
 event gate without a working grant, and 174 use their normal imported objectives. The
-[event-credit ledger](event-credit-m4.md) lists each outcome and source reference. The 174
+[event-credit ledger](vmangos-port-census/event-credit-m4.md) lists each outcome and source reference. The 174
 fallbacks comprise 11 refused SQL sequences, 61 scripts without dispatch, 39 C++ spell effects,
 60 C++ script references and three unresolved grant sources, 3366, 6847 and 6848.
 

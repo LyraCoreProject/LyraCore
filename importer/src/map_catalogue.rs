@@ -119,11 +119,10 @@ mod tests {
     #[test]
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_CLIENT_DATA"]
     fn source_maps_keep_client_archive_lookup() {
-        use crate::world_source::SourceKind;
         use std::path::Path;
         let client = std::env::var("LYRACORE_CLIENT_DATA").unwrap();
         let sqlite = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
-        let source = WorldSource::open(Path::new(&sqlite), SourceKind::Vmangos).unwrap();
+        let source = WorldSource::open(Path::new(&sqlite)).unwrap();
         let mut dbc = crate::dbc::open_chain(Path::new(&client)).unwrap();
         let maps: Map = crate::dbc::read_table(&mut dbc).unwrap();
         let names = archive_names(&maps).unwrap();

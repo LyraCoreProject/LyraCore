@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, HashSet};
 
 use anyhow::{bail, Context, Result};
 
@@ -103,7 +103,6 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
         .map(|row| Ok((row.number::<u32>("entry")?, row)))
         .collect::<Result<BTreeMap<_, _>>>()?;
     let mut rows = Vec::new();
-    let mut learned_skills = BTreeSet::new();
     let mut findings: BTreeMap<&str, HashSet<(u64, u32)>> = BTreeMap::new();
     for creature in dump
         .columns("creature_template", &["entry", "trainer_id", "npc_flags"])?
@@ -163,9 +162,6 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
                     .or_default()
                     .insert(key);
             }
-            if line != 0 {
-                learned_skills.insert(spell.number::<u32>("effectTriggerSpell1")?);
-            }
             rows.push(format!(
                 "({},{entry},{},{},{level},{line},{cap})",
                 rows.len() + 1,
@@ -176,17 +172,12 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     }
     let mut stmts = Vec::new();
     statements(&mut stmts, &rows);
-    let authored = super::PROFESSION_LEARN
-        .iter()
-        .flat_map(|(_, tiers)| tiers.iter().map(|(spell, _, _)| *spell))
-        .collect::<BTreeSet<_>>();
-    let audit = serde_json::json!({"authored_targets":authored.len(),"offered_skill_targets":learned_skills.len(),"added":learned_skills.difference(&authored).collect::<Vec<_>>(),"not_offered":authored.difference(&learned_skills).collect::<Vec<_>>()});
     let findings = findings.into_iter().map(|(code, keys)| serde_json::json!({"code":code,"classification":"unsupported","occurrences":keys.len()})).collect::<Vec<_>>();
     Ok(DumpPlan {
         stmts,
         stamps: vec![("trainers", rows.len() as u64)],
         world_source_manifest: Some(serde_json::to_string_pretty(
-            &serde_json::json!({"format_version":1,"source":"vmangos","family":"trainers","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings,"profession_audit":audit}),
+            &serde_json::json!({"format_version":1,"source":"vmangos","family":"trainers","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),
         )?),
         ..Default::default()
     })
@@ -327,8 +318,6 @@ mod tests {
         ])
         .unwrap();
         let args = crate::parse_args_from([
-            "--source",
-            "vmangos",
             "--dump",
             "fixture.sqlite",
             "--family",
@@ -344,7 +333,6 @@ mod tests {
         assert_eq!(plan.stmts[1], "INSERT INTO game_trainer_spell (id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap) VALUES (1,100,700,30,10,0,75),(2,100,701,40,15,186,150),(3,101,702,5,20,0,75)");
         let manifest: serde_json::Value =
             serde_json::from_str(plan.world_source_manifest.as_ref().unwrap()).unwrap();
-        assert_eq!(manifest["profession_audit"]["offered_skill_targets"], 1);
         assert!(
             manifest["findings"]
                 .as_array()

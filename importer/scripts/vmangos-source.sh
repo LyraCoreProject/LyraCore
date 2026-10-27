@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
 # The fetch report describes the downloaded snapshot; the lock may name an older one.
+if ! command -v python3 >/dev/null 2>&1; then
+    echo "vmangos source: python3 is required to validate the snapshot" >&2
+    return 1
+fi
 vmangos_source_info="$(python3 - <<'PY'
 import json
 import os

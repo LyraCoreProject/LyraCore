@@ -326,21 +326,6 @@ fn local_givers_use_selected_enabled_spawn_choices_inside_the_profile() {
 }
 
 #[test]
-fn classic_nullable_quest_text_keeps_its_existing_output() {
-    let dump = "INSERT INTO `creature_questrelation` (`id`, `quest`) VALUES (200,100); INSERT INTO `quest_template` (`entry`, `Title`, `Details`, `Objectives`, `OfferRewardText`, `RequestItemsText`) VALUES (100,'Fixture',NULL,'',NULL,NULL);";
-    let quests = build_quests(
-        dump,
-        &HashSet::from([200]),
-        &HashSet::new(),
-        &HashSet::new(),
-        &HashSet::new(),
-        None,
-    )
-    .unwrap();
-    assert_eq!(quests.texts, ["(100,'','','','')"]);
-}
-
-#[test]
 fn emitted_credit_and_classic_script_gates_determine_event_requirements() {
     let quest = |entry, flags| {
         [

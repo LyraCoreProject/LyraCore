@@ -37,7 +37,7 @@ floors because the census below does not measure their scope.
 | QUESTS_L6_10 | 1 | 160 | 181 quests in the level band. |
 | QUESTS_L10_20 | 1 | 340 | 386 quests in the level band. |
 | QUESTS_CHAINED | 1 | 530 | 598 quests with a next quest. |
-| CONTINENT_SPAWNS | 100 | 8,000 | 8,663 spawns on map 0, the queried primary map. |
+| CONTINENT_SPAWNS | 100 | 4,200 | The CLI checks both continents against this floor. Map 0 has 8,663 source spawns and map 1 has 4,664, so the smaller map sets the margin. Runtime population copies are excluded from these counts. |
 | VENDORS | 1 | 3,500 | 4,195 vendor offerings. |
 | CASTER_CAST_ROWS | 1 | 350 | 419 primary cast rows. |
 | ROTATION_ROWS | 20 | 280 | 331 additional spell slots; vmangos puts the first spell in the cast table. |

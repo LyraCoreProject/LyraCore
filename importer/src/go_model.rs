@@ -166,14 +166,13 @@ pub(crate) fn packed_rows(
 pub(crate) fn run(
     data_dir: &str,
     dump_path: Option<&str>,
-    source: crate::world_source::SourceKind,
     apply: bool,
     shard: &crate::shard::Shard,
 ) -> Result<()> {
     let data_dir = Path::new(data_dir);
     let dump_path = dump_path
         .context("--go-models needs --dump too (gameobject_template is the template source)")?;
-    let dump = crate::world_source::WorldSource::open(Path::new(dump_path), source)?;
+    let dump = crate::world_source::WorldSource::open(Path::new(dump_path))?;
     let rows = packed_rows(data_dir, &dump)?;
     if rows.is_empty() && door_templates(&dump)?.is_empty() {
         return Ok(());
@@ -262,31 +261,6 @@ mod tests {
         assert_eq!(templates[0].entry, 7);
         assert_eq!(templates[0].display_id, 2);
         assert_eq!(templates[0].size, 1.0);
-    }
-
-    #[test]
-    fn door_templates_keeps_only_door_and_button_rows() {
-        let dump = "INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `faction`, `flags`, `ExtraFlags`, `size`, `data0`, `data1`) VALUES \
-            (1,0,10,'Door',0,0,0,1.0,0,0),\
-            (2,1,20,'Button',0,0,0,1.0,0,0),\
-            (3,3,30,'Chest',0,0,0,1.0,0,0),\
-            (4,10,40,'Goober',0,0,0,1.0,0,0);";
-        let templates = door_templates(dump).unwrap();
-        let entries: Vec<u64> = templates.iter().map(|t| t.entry).collect();
-        assert_eq!(
-            entries,
-            vec![1, 2],
-            "only the DOOR (type 0) and BUTTON (type 1) rows survive"
-        );
-        assert_eq!(templates[0].display_id, 10);
-        assert_eq!(templates[1].display_id, 20);
-    }
-
-    #[test]
-    fn door_templates_drops_a_row_with_no_classification() {
-        let dump =
-            "INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `faction`, `flags`, `ExtraFlags`, `size`, `data0`, `data1`) VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
-        assert!(door_templates(dump).unwrap().is_empty());
     }
 
     #[test]

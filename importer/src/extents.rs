@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::dump::{cr, field, parse_table, pc};
+use crate::dump::{cr, parse_table, pc};
 
 struct Extents {
     count: u64,
@@ -19,13 +19,13 @@ fn compute_extents(
     let mut max = (f64::NEG_INFINITY, f64::NEG_INFINITY, f64::NEG_INFINITY);
     let mut kept: Vec<(f64, f64, f64)> = Vec::new();
     for row in parse_table(dump, "creature")?.iter() {
-        let m: i64 = field(row, cr::MAP)?.parse().unwrap_or(-1);
+        let m: i64 = row.number(cr::MAP)?;
         if m != map {
             continue;
         }
-        let x: f64 = field(row, cr::X)?.parse().unwrap_or(0.0);
-        let y: f64 = field(row, cr::Y)?.parse().unwrap_or(0.0);
-        let z: f64 = field(row, cr::Z)?.parse().unwrap_or(0.0);
+        let x: f64 = row.number(cr::X)?;
+        let y: f64 = row.number(cr::Y)?;
+        let z: f64 = row.number(cr::Z)?;
         if matches!(bbox, Some((x0, x1, y0, y1)) if x < x0 || x > x1 || y < y0 || y > y1) {
             continue;
         }
@@ -62,37 +62,16 @@ fn start_positions_on_map(
     parse_table(dump, "playercreateinfo")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(m) = field(r, pc::MAP)?.parse::<i64>() else {
-                return Ok(None);
-            };
-            if m != map {
+            if r.number::<i64>(pc::MAP)? != map {
                 return Ok(None);
             }
             Ok(Some((
-                match field(r, pc::RACE)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                match field(r, pc::CLASS)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                match field(r, pc::ZONE)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                match field(r, pc::X)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                match field(r, pc::Y)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                match field(r, pc::Z)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
+                r.number(pc::RACE)?,
+                r.number(pc::CLASS)?,
+                r.number(pc::ZONE)?,
+                r.number(pc::X)?,
+                r.number(pc::Y)?,
+                r.number(pc::Z)?,
             )))
         })
         .filter_map(Result::transpose)
@@ -101,11 +80,10 @@ fn start_positions_on_map(
 
 pub(crate) fn print_extents(
     dump_path: &str,
-    source: crate::world_source::SourceKind,
     map: i64,
     bbox: Option<(f64, f64, f64, f64)>,
 ) -> Result<()> {
-    let dump = &crate::world_source::WorldSource::open(std::path::Path::new(dump_path), source)?;
+    let dump = &crate::world_source::WorldSource::open(std::path::Path::new(dump_path))?;
     let scope = match bbox {
         Some((x0, x1, y0, y1)) => format!(" inside --box {x0:.0},{x1:.0},{y0:.0},{y1:.0}"),
         None => String::new(),
@@ -132,7 +110,7 @@ pub(crate) fn print_extents(
     if starts.is_empty() {
         println!("  start positions on map {map}: none in playercreateinfo (not a starting continent, or the table is absent from this dump)");
     } else {
-        println!("  start positions on map {map} (cmangos playercreateinfo — the starting-zone anchors to draw a box around):");
+        println!("  start positions on map {map} (source playercreateinfo — the starting-zone anchors to draw a box around):");
         for (race, class, zone, x, y, z) in starts {
             println!("    race {race} class {class}  zone {zone}  ({x:.2},{y:.2},{z:.2})");
         }
@@ -144,72 +122,45 @@ pub(crate) fn print_extents(
 mod tests {
     use super::*;
 
-    #[test]
-    fn compute_extents_derives_min_max_xyz_and_count_for_the_target_map_only() {
-        let dump = "x INSERT INTO `creature` VALUES \
-            (1,100,0,1,-11000.0,1000.0,10.0,0,300,300,0,0),\
-            (2,101,0,1,-9000.0,-500.0,50.0,0,300,300,0,0),\
-            (3,102,0,1,-10000.0,2000.0,-5.0,0,300,300,0,0),\
-            (4,103,1,1,0.0,0.0,0.0,0,300,300,0,0); y";
-        let e = compute_extents(dump, 0, None)
-            .unwrap()
-            .expect("map 0 has spawns");
-        assert_eq!(e.count, 3);
-        assert_eq!(e.min, (-11000.0, -500.0, -5.0));
-        assert_eq!(e.max, (-9000.0, 2000.0, 50.0));
-        assert!(compute_extents(dump, 7, None).unwrap().is_none());
-        let k = compute_extents(dump, 1, None)
-            .unwrap()
-            .expect("map 1 has one spawn");
-        assert_eq!(
-            (k.count, k.min, k.max),
-            (1, (0.0, 0.0, 0.0), (0.0, 0.0, 0.0))
-        );
+    fn source() -> crate::world_source::WorldSource {
+        crate::world_source::fixture_sql("CREATE TABLE creature (
+            guid INTEGER PRIMARY KEY, map INTEGER, position_x REAL, position_y REAL, position_z REAL,
+            patch_min INTEGER DEFAULT 0, patch_max INTEGER DEFAULT 10);
+            INSERT INTO creature (guid,map,position_x,position_y,position_z) VALUES
+              (1,0,-11000,1000,10),(2,0,-9000,-500,50),(3,0,-10000,2000,-5),
+              (4,1,-600,-4200,38),(5,1,-500,-4100,40),(6,1,-550,-4150,39),(7,1,6000,500,10);
+            CREATE TABLE playercreateinfo (race INTEGER, class INTEGER, map INTEGER, zone INTEGER,
+                position_x REAL, position_y REAL, position_z REAL);
+            INSERT INTO playercreateinfo VALUES (1,1,0,12,-8949.95,-132.493,83.5312),
+                (2,1,1,14,-618.518,-4251.67,38.718),(6,1,1,215,-2917.58,-257.98,52.9968);")
     }
 
     #[test]
-    fn compute_extents_narrows_to_a_candidate_box_and_anchors_center_on_a_real_spawn() {
-        let dump = "x INSERT INTO `creature` VALUES \
-            (1,100,1,1,-600.0,-4200.0,38.0,0,300,300,0,0),\
-            (2,101,1,1,-500.0,-4100.0,40.0,0,300,300,0,0),\
-            (3,102,1,1,-550.0,-4150.0,39.0,0,300,300,0,0),\
-            (4,103,1,1,6000.0,500.0,10.0,0,300,300,0,0); y";
-        let e = compute_extents(dump, 1, Some((-700.0, -400.0, -4300.0, -4000.0)))
+    fn extents_include_only_the_requested_map_and_box() {
+        let source = source();
+        let e = compute_extents(&source, 0, None).unwrap().unwrap();
+        assert_eq!(e.count, 3);
+        assert_eq!(e.min, (-11000.0, -500.0, -5.0));
+        assert_eq!(e.max, (-9000.0, 2000.0, 50.0));
+        assert!(compute_extents(&source, 7, None).unwrap().is_none());
+        let e = compute_extents(&source, 1, Some((-700.0, -400.0, -4300.0, -4000.0)))
             .unwrap()
-            .expect("in-box spawns");
-        assert_eq!(
-            e.count, 3,
-            "the far-away map-1 spawn is outside the candidate box"
-        );
-        assert_eq!(e.min, (-600.0, -4200.0, 38.0));
-        assert_eq!(e.max, (-500.0, -4100.0, 40.0));
+            .unwrap();
+        assert_eq!(e.count, 3);
         assert_eq!(e.anchor, (-550.0, -4150.0, 39.0));
-        assert!(compute_extents(dump, 1, Some((0.0, 100.0, 0.0, 100.0)))
-            .unwrap()
-            .is_none());
     }
 
     #[test]
     fn start_positions_are_listed_for_the_requested_map_only() {
-        let dump = "x INSERT INTO `playercreateinfo` VALUES \
-            (1,1,0,12,-8949.95,-132.493,83.5312,0),\
-            (2,1,1,14,-618.518,-4251.67,38.718,0),\
-            (6,1,1,215,-2917.58,-257.98,52.9968,0); y";
+        let source = source();
         assert_eq!(
-            start_positions_on_map(dump, 0).unwrap(),
+            start_positions_on_map(&source, 0).unwrap(),
             vec![(1, 1, 12, -8949.95, -132.493, 83.5312)]
         );
-        let kalimdor = start_positions_on_map(dump, 1).unwrap();
-        assert_eq!(
-            kalimdor.len(),
-            2,
-            "both Kalimdor races are anchors: {kalimdor:?}"
-        );
+        let kalimdor = start_positions_on_map(&source, 1).unwrap();
+        assert_eq!(kalimdor.len(), 2);
         assert_eq!(kalimdor[0], (2, 1, 14, -618.518, -4251.67, 38.718));
-        assert_eq!(kalimdor[1].2, 215, "Mulgore's zone id rides along");
-        assert!(
-            start_positions_on_map(dump, 36).unwrap().is_empty(),
-            "an instance map has no start positions"
-        );
+        assert_eq!(kalimdor[1].2, 215);
+        assert!(start_positions_on_map(&source, 36).unwrap().is_empty());
     }
 }

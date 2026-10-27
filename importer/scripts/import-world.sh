@@ -549,7 +549,7 @@ chk36 "Deadmines gameobjects (doors/cannon/chests, map 36) [V]" "$FLOOR_DEADMINE
     "$(n "SELECT guid FROM game_gameobject WHERE map_id = 36" '[0-9]')"
 chk36 "Deadmines bosses spawned (>=6 distinct placed entries) [V]" "$FLOOR_DEADMINES_BOSSES" \
     "$(q_list "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" | sort -u | wc -l)"
-chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Mighty Hammer ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
+chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Reaver ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
     "$(q_list "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" | sort -u | wc -l)"
 
 chk "pickpocket loot rows (game_pickpocket_loot) [V]"   "$FLOOR_PICKPOCKET_LOOT" "$(n "SELECT id FROM game_pickpocket_loot")"

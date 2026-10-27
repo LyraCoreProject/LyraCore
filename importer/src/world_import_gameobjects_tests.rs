@@ -138,8 +138,6 @@ fn gameobject_source() -> WorldSource {
 
 fn gameobject_plan(source: &WorldSource) -> DumpPlan {
     let args = crate::parse_args_from([
-        "--source",
-        "vmangos",
         "--dump",
         "fixture.sqlite",
         "--family",

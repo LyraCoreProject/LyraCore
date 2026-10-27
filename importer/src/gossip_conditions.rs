@@ -6,11 +6,9 @@ use lyracore_shared::gossip::{
 };
 
 use crate::dump::{gmo, parse_table};
-use crate::world_source::SourceKind;
 
 pub(super) type Conditions = BTreeMap<u32, Condition>;
 
-// The two readers share these source meanings; runtime evaluation uses only owned kinds.
 fn source_kind(kind: i32) -> ConditionKind {
     match kind {
         -3 => ConditionKind::Not,
@@ -36,9 +34,7 @@ pub(super) fn read(dump: &(impl crate::dump::TableRows + ?Sized)) -> anyhow::Res
         }
         let source_type = row.number::<i32>("type")?;
         let kind = source_kind(source_type);
-        let unsupported = dump.kind() == SourceKind::Vmangos
-            && matches!(kind, ConditionKind::Unsupported(_))
-            && source_type != 24;
+        let unsupported = matches!(kind, ConditionKind::Unsupported(_)) && source_type != 24;
         let mut values = [0; 4];
         for (slot, value) in values.iter_mut().enumerate() {
             let column = format!("value{}", slot + 1);
@@ -57,10 +53,7 @@ pub(super) fn read(dump: &(impl crate::dump::TableRows + ?Sized)) -> anyhow::Res
             values,
             flags: row.number("flags")?,
         };
-        if dump.kind() == SourceKind::Vmangos
-            && source_type == 24
-            && condition.values[2..] == [0, 0]
-        {
+        if source_type == 24 && condition.values[2..] == [0, 0] {
             let enabled =
                 crate::source_selection::wow_patch(condition.values[0], condition.values[1])?;
             condition.kind = ConditionKind::Always;
@@ -133,9 +126,17 @@ pub(super) fn resolve(
 mod tests {
     use super::*;
 
+    fn conditions(sql: &str) -> crate::world_source::WorldSource {
+        crate::world_source::fixture_sql(&format!(
+            "CREATE TABLE conditions (condition_entry INTEGER, type INTEGER, value1 INTEGER DEFAULT 0,
+                value2 INTEGER DEFAULT 0, value3 INTEGER DEFAULT 0, value4 INTEGER DEFAULT 0,
+                flags INTEGER DEFAULT 0); {sql}"
+        ))
+    }
+
     #[test]
     fn compound_operands_and_reverse_flags_survive_import() {
-        let rows = read("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`, `value3`, `value4`, `flags`) VALUES (501,-2,502,503,504,505,1),(502,15,20,1,0,0,0),(503,6,469,0,0,0,0),(504,14,1,128,0,0,0),(505,8,777,0,0,0,0);").unwrap();
+        let rows = read(&conditions("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`, `value3`, `value4`, `flags`) VALUES (501,-2,502,503,504,505,1),(502,15,20,1,0,0,0),(503,6,469,0,0,0,0),(504,14,1,128,0,0,0),(505,8,777,0,0,0,0);")).unwrap();
         assert_eq!(
             rows[&501],
             Condition {
@@ -150,13 +151,13 @@ mod tests {
 
     #[test]
     fn non_numeric_operands_fail_the_read() {
-        let error = read("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (1,9,777,'bad');").unwrap_err();
+        let error = read(&conditions("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (1,9,777,'bad');")).unwrap_err();
         assert!(error.to_string().contains("conditions.value2"));
     }
 
     #[test]
     fn duplicate_and_unresolvable_source_rows_stay_unavailable() {
-        let rows = read("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (1,99,777,0),(2,0,0,0),(2,0,0,0),(3,-3,1,0),(4,-3,2,0),(5,-3,6,0),(6,-3,5,0);").unwrap();
+        let rows = read(&conditions("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (1,99,777,0),(2,0,0,0),(2,0,0,0),(3,-3,1,0),(4,-3,2,0),(5,-3,6,0),(6,-3,5,0);")).unwrap();
         for id in [1, 2, 3, 4, 5, 6] {
             assert!(evaluate_reference(
                 id,

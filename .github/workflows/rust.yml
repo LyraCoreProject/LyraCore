@@ -79,9 +79,6 @@ jobs:
           BASE_BRANCH: ${{ github.base_ref }}
         run: |
           candidates=("$BRANCH" "$BASE_BRANCH")
-          if [[ "$BRANCH" == vmangos/* ]]; then
-            candidates+=(feat/vmangos-world-data)
-          fi
           for candidate in "${candidates[@]}"; do
             [ -n "$candidate" ] || continue
             if paired=$(git ls-remote --exit-code --heads https://github.com/LyraCoreProject/packages "refs/heads/$candidate"); then

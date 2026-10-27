@@ -282,10 +282,6 @@ fn insert_effect(rows: &mut BTreeMap<u64, String>, enchant_id: u32, effect: Effe
     Ok(())
 }
 
-fn decimal_weight(value: &str) -> Result<u32> {
-    decimal_weight_at_precision(value, 2)
-}
-
 fn decimal_weight_at_precision(value: &str, precision: u32) -> Result<u32> {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
@@ -311,19 +307,15 @@ fn decimal_weight_at_precision(value: &str, precision: u32) -> Result<u32> {
     Ok(weight)
 }
 
-pub(crate) fn template_pool(
-    row: &crate::world_source::Row,
-    source: crate::world_source::SourceKind,
-) -> Result<u32> {
+pub(crate) fn template_pool(row: &crate::world_source::Row) -> Result<u32> {
     let entry = field(row, crate::dump::it::ENTRY)?;
-    crate::dump::it::read(row, source, crate::dump::it::RANDOM_PROPERTY)?
+    crate::dump::it::read(row, crate::dump::it::RANDOM_PROPERTY)?
         .parse::<u32>()
         .with_context(|| format!("item {entry} has an invalid Property Pool ID"))
 }
 
 fn property_weights(
     raw: &[crate::world_source::Row],
-    source: crate::world_source::SourceKind,
     properties: &BTreeSet<u32>,
 ) -> Result<(BTreeMap<u64, String>, BTreeSet<u32>)> {
     let mut rows = BTreeMap::new();
@@ -338,12 +330,7 @@ fn property_weights(
         if pool == 0 || !properties.contains(&property) {
             bail!("pool {pool} references missing Random Property {property}");
         }
-        let weight = match source {
-            crate::world_source::SourceKind::ClassicDb => decimal_weight(field(row, "chance")?)?,
-            crate::world_source::SourceKind::Vmangos => {
-                decimal_weight_at_precision(row.numeric_text("chance")?, 4)?
-            }
-        };
+        let weight = decimal_weight_at_precision(row.numeric_text("chance")?, 4)?;
         let id = (u64::from(pool) << 32) | u64::from(property);
         if rows
             .insert(id, format!("({id},{pool},{property},{weight})"))
@@ -361,14 +348,11 @@ pub(crate) fn dump_sql(
     dbc_dir: Option<&str>,
 ) -> Result<(Vec<String>, u64)> {
     let raw = parse_table(dump, "item_enchantment_template")?;
-    let property_column = match dump.kind() {
-        crate::world_source::SourceKind::ClassicDb => "RandomProperty",
-        crate::world_source::SourceKind::Vmangos => "random_property",
-    };
+    let property_column = "random_property";
     let required: BTreeSet<u32> = dump
         .columns("item_template", &["entry", property_column])?
         .iter()
-        .map(|row| template_pool(row, dump.kind()))
+        .map(template_pool)
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|id| *id != 0)
@@ -381,7 +365,7 @@ pub(crate) fn dump_sql(
     )?;
     let mut chain = dbc::open_chain(std::path::Path::new(dir))?;
     let (mut sql, properties, catalogue_row_count) = catalogue_sql(&mut chain)?;
-    let (rows, pools) = property_weights(&raw, dump.kind(), &properties)?;
+    let (rows, pools) = property_weights(&raw, &properties)?;
     if let Some(pool) = required.difference(&pools).next() {
         bail!("item template references missing Property Pool {pool}");
     }
@@ -408,7 +392,7 @@ mod tests {
     #[test]
     fn vmangos_pool_weights_preserve_four_decimal_places_after_patch_selection() {
         use crate::dump::TableRows;
-        use crate::world_source::{sqlite_fixture, FixtureTable, SourceKind};
+        use crate::world_source::{sqlite_fixture, FixtureTable};
         use rusqlite::types::Value::{Integer as N, Real as F};
         let source = sqlite_fixture(&[FixtureTable {
             name: "item_enchantment_template",
@@ -447,7 +431,6 @@ mod tests {
         .unwrap();
         let (rows, pools) = property_weights(
             &source.rows("item_enchantment_template").unwrap(),
-            SourceKind::Vmangos,
             &BTreeSet::from([2, 3]),
         )
         .unwrap();
@@ -572,7 +555,6 @@ mod tests {
         properties.rows[0].suffix.en_gb = "of the 'Fixture'),(another);".to_owned();
         let (_, _, row_count) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
         assert_eq!(row_count, 6);
-        assert_eq!(dump_sql("", None).unwrap(), (Vec::new(), 0));
     }
 
     #[test]
@@ -637,13 +619,13 @@ mod tests {
     }
 
     #[test]
-    fn decimal_weights_keep_exact_hundredths() {
-        assert_eq!(decimal_weight("0.01").unwrap(), 1);
-        assert_eq!(decimal_weight("99.52").unwrap(), 9952);
-        assert_eq!(decimal_weight("131.01").unwrap(), 13101);
-        assert_eq!(decimal_weight("1.2").unwrap(), 120);
-        for value in ["0", "-1", "NaN", "1.001", "1e2"] {
-            assert!(decimal_weight(value).is_err());
+    fn decimal_weights_keep_four_decimal_places() {
+        assert_eq!(decimal_weight_at_precision("0.01", 4).unwrap(), 100);
+        assert_eq!(decimal_weight_at_precision("99.52", 4).unwrap(), 995200);
+        assert_eq!(decimal_weight_at_precision("131.01", 4).unwrap(), 1310100);
+        assert_eq!(decimal_weight_at_precision("1.2", 4).unwrap(), 12000);
+        for value in ["0", "-1", "NaN", "1.00001", "1e2"] {
+            assert!(decimal_weight_at_precision(value, 4).is_err());
         }
     }
     #[test]
