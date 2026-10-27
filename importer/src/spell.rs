@@ -662,11 +662,11 @@ fn build_spell_rows(
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
-    derive_spell_rows(&open_spell_tables(data_dir)?, only, trainers)
+    derive_spell_rows(&open_spell_tables(data_dir, None)?, only, trainers)
 }
 
 fn derive_spell_rows(
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
@@ -739,7 +739,7 @@ pub(crate) fn read_catalogue(data_dir: &str) -> Result<SpellCatalogue> {
     Ok(SpellCatalogue { ids, proc_effects })
 }
 
-struct SpellDbc {
+struct SpellTables {
     spells: Vec<Spell>,
     cast_times: SpellCastTimes,
     ranges: SpellRange,
@@ -747,11 +747,14 @@ struct SpellDbc {
     radii: SpellRadius,
 }
 
-fn open_spell_tables(data_dir: &Path) -> Result<SpellDbc> {
+fn open_spell_tables(data_dir: &Path, spells: Option<Vec<Spell>>) -> Result<SpellTables> {
     let mut chain = open_chain(data_dir)?;
     eprintln!("spells: opened MPQ chain from {}", data_dir.display());
 
-    let spells = read_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
+    let spells = match spells {
+        Some(spells) => spells,
+        None => read_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?,
+    };
     let cast_times: SpellCastTimes = read_table(&mut chain)?;
     let ranges: SpellRange = read_table(&mut chain)?;
     let durations: SpellDuration = read_table(&mut chain)?;
@@ -765,7 +768,7 @@ fn open_spell_tables(data_dir: &Path) -> Result<SpellDbc> {
         radii.rows().len(),
     );
 
-    Ok(SpellDbc {
+    Ok(SpellTables {
         spells,
         cast_times,
         ranges,
@@ -805,7 +808,7 @@ struct ResolvedEffect {
 
 fn push_spell_header_row(
     s: &Spell,
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     allow: &std::collections::HashSet<u32>,
     acc: &mut SpellAccumulator,
 ) -> SpellHeader {
@@ -976,7 +979,7 @@ fn spell_is_negative(s: &Spell) -> bool {
 fn push_spell_effect_rows(
     s: &Spell,
     header: &SpellHeader,
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     creature_displays: &BTreeMap<u32, u32>,
     allow: &std::collections::HashSet<u32>,
     acc: &mut SpellAccumulator,
@@ -1055,7 +1058,8 @@ fn push_spell_effect_rows(
         } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
-            s.effect_item_type[i]
+            // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
+            s.effect_item_type[i] as i32
         } else {
             power_word_shield_p1_override(spell_id, name, kind, 0i32)
         };
@@ -1148,7 +1152,7 @@ fn resolve_effect_kind(
         }
         (
             k,
-            resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i]),
+            resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i] as i32),
         )
     };
     let kind = if name == "Stealth" && aura != AuraMod::ModStealth {
@@ -1555,7 +1559,53 @@ fn print_coverage(cov: &Coverage) {
 
 pub fn run_spell_snapshot(data_dir: &str, path: &str) -> Result<()> {
     let (rows, cov, _) = build_spell_rows(Path::new(data_dir), &[], &[])?;
-    let json = write_snapshot(&rows);
+    save_snapshot(&rows, &cov, path)
+}
+
+pub(crate) fn run_vmangos_snapshot(source: &str, data_dir: &str, path: &str) -> Result<()> {
+    let source = crate::world_source::WorldSource::open(
+        Path::new(source),
+        crate::world_source::SourceKind::Vmangos,
+    )?;
+    let (spells, manifest) = crate::vmangos_spell::read(&source)?;
+    let (rows, cov, _) = derive_spell_rows(
+        &open_spell_tables(Path::new(data_dir), Some(spells))?,
+        &[],
+        &[],
+    )?;
+    eprintln!(
+        "World Source Compatibility Manifest\n{}",
+        serde_json::to_string_pretty(&manifest)?
+    );
+    save_snapshot(&rows, &cov, path)
+}
+
+pub(crate) fn world_plan(
+    source: &impl crate::dump::TableRows,
+    data_dir: &str,
+) -> Result<crate::world_import::DumpPlan> {
+    let (spells, manifest) = if source.kind() == crate::world_source::SourceKind::Vmangos {
+        let (spells, manifest) = crate::vmangos_spell::read(source)?;
+        (Some(spells), Some(serde_json::to_string_pretty(&manifest)?))
+    } else {
+        (None, None)
+    };
+    let (mut rows, cov, _) =
+        derive_spell_rows(&open_spell_tables(Path::new(data_dir), spells)?, &[], &[])?;
+    let replaced: std::collections::HashSet<_> =
+        rows.fishing.iter().map(SpellEffectRow::row_id).collect();
+    rows.effects
+        .retain(|effect| !replaced.contains(&effect.row_id()));
+    Ok(crate::world_import::DumpPlan {
+        stmts: assemble_spell_sql(&rows, &[], false),
+        stamps: vec![("spell", cov.spells as u64)],
+        world_source_manifest: manifest,
+        ..Default::default()
+    })
+}
+
+fn save_snapshot(rows: &SpellRows, cov: &Coverage, path: &str) -> Result<()> {
+    let json = write_snapshot(rows);
 
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -1813,8 +1863,8 @@ mod tests {
         T::read(&mut std::io::Cursor::new(bytes)).unwrap()
     }
 
-    fn fixture_tables() -> SpellDbc {
-        SpellDbc {
+    fn fixture_tables() -> SpellTables {
+        SpellTables {
             spells: read_spells(&source_spell_fixture()).unwrap(),
             cast_times: authored_table(4, &[&[1, 1500, 0, 1500]]),
             ranges: authored_table(22, &[&[1, 0, 35.0f32.to_bits()]]),
@@ -1824,10 +1874,27 @@ mod tests {
     }
 
     #[test]
+    fn vmangos_catalogue_and_snapshot_derive_the_same_selected_spell() {
+        let (spells, _) = crate::vmangos_spell::read(&crate::vmangos_spell::fixture()).unwrap();
+        let mut tables = fixture_tables();
+        tables.spells = spells;
+        let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&write_snapshot(&rows)).unwrap();
+        assert_eq!(snapshot["game_spell"][0]["name"], "Selected");
+        assert_eq!(snapshot["game_spell"][0]["cast_time_ms"], 1500);
+        assert_eq!(snapshot["game_spell_effect"][0]["base_points"], 20);
+        assert_eq!(snapshot["game_spell_effect"][0]["per_level"], 1.25);
+        let sql = assemble_spell_sql(&rows, &[], false).join("\n");
+        assert!(sql.contains("'Selected'"));
+        assert!(sql.contains("(80,10,123,2)"));
+        assert!(sql.contains(&rows.effects[0].sql_values()));
+    }
+
+    #[test]
     #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
     fn actual_spell_import_keeps_restored_effects_and_curated_rules() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
-        let source = open_spell_tables(Path::new(&dir)).unwrap();
+        let source = open_spell_tables(Path::new(&dir), None).unwrap();
         let new_location_companions = source
             .spells
             .iter()
@@ -3380,7 +3447,7 @@ mod binding_tests {
     fn binding_source_events_import_one_hostile_summon_and_keep_the_focus() {
         for (spell_id, event, entry) in [(7728, 1131, 5676), (8674, 1134, 5677)] {
             let row = source_spell(spell_id, event);
-            let dbc = SpellDbc {
+            let dbc = SpellTables {
                 spells: vec![],
                 cast_times: SpellCastTimes {
                     rows: vec![SpellCastTimesRow {

@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
+`--source vmangos --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -52,6 +52,27 @@ follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
 The existing dungeon entrance and static fallbacks remain after the imported links.
 
 `--source vmangos --dump <sqlite> --dbc <client Data> --dbc-diff` prints a field comparison for Spell and the seven other DBC replacements. It reports every shared field, source-only fields, unmatched client columns, changed row and cell counts, and bounded examples. The command only reads local files. Map remains entirely on Map.dbc while the archive-directory decision is pending.
+
+The `spell` vmangos family reads selected `spell_template` rows for spell headers, effects,
+reagents and creature spell metadata. It keeps the existing effect translation and synthetic
+markers. SpellCastTimes, SpellRange, SpellDuration and SpellRadius remain separate client tables.
+The Base Snapshot uses the same selected spell rows:
+
+```bash
+lyracore-importer --source vmangos --dump .import/mangos.sqlite --dbc "$CLIENT_DATA" \
+  --spell-snapshot .import/base-snapshot.json
+```
+
+Package spell Deltas still apply after the base family import. Datascripts can load the complete
+Snapshot even when a core synthetic effect uses slot 3. The Package API continues to accept slots
+0 through 2; a Datascript that opens a spell with a core-only fourth slot is refused. At the pin,
+this affects the curated Seal of the Crusader marker on spell 21082 in both sources.
+
+Source scripts remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
+as declared in [SpellEntry.h at the pinned vmangos commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEntry.h#L656).
+The Module's existing modifier parameter retains its low 32 bits; the Compatibility Manifest
+lists slots with higher bits. The extra coefficient, custom-flag and minimum-level columns belong
+to S5d.
 
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
 entry choices, paths and spell lists. The creature plan preserves signed event membership and

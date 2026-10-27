@@ -144,7 +144,7 @@ fn sql_tuple(columns: &[(&'static str, FieldValue)]) -> String {
 pub(crate) struct SpellRows {
     pub(crate) headers: Vec<SpellHeaderRow>,
     pub(crate) effects: Vec<SpellEffectRow>,
-    // Fishing markers replace DBC effects at the same key after the bulk insert.
+    // Fishing markers replace source effects at the same key after the bulk insert.
     pub(crate) fishing: Vec<SpellEffectRow>,
     pub(crate) reagents: Vec<String>,
     pub(crate) eventai_metadata: Vec<String>,

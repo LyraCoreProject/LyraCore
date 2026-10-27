@@ -25,6 +25,7 @@ mod talent;
 mod terrain;
 mod transport;
 mod ui_transform;
+mod vmangos_spell;
 mod vmap;
 mod world_import;
 mod world_import_scope;
@@ -303,9 +304,9 @@ where
             "--apply" => a.apply = true,
             "--family" => {
                 let v = it.next().context("--family <name>")?;
-                if !FAMILIES.contains(&v.as_str()) {
+                if !FAMILIES.contains(&v.as_str()) && v != "spell" {
                     bail!(
-                        "--family {v}: unknown family (valid: {})",
+                        "--family {v}: unknown family (valid: {}, spell)",
                         FAMILIES.join(", ")
                     );
                 }
@@ -407,10 +408,25 @@ where
         bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
     }
     if a.spell_snapshot.is_some() {
-        if a.dbc.is_none() || a.dump.is_some() {
+        if a.dbc.is_none() || (a.dump.is_some() && a.source != world_source::SourceKind::Vmangos) {
             bail!("--spell-snapshot needs --dbc <client Data/ dir> and nothing else");
         }
-        if a.spells || a.talents || a.apply {
+        if a.spells
+            || a.talents
+            || a.apply
+            || a.family.is_some()
+            || a.census.is_some()
+            || a.go_models.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.print_extents
+        {
             bail!(
                 "--spell-snapshot writes the Base Snapshot and touches no database; run it on its \
                  own, then run the import separately"
@@ -474,6 +490,7 @@ where
                         | "gossip"
                         | "creatures"
                         | "casts"
+                        | "spell"
                 )
             )
             || a.apply
@@ -490,17 +507,19 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
             || (a.go_models.is_none()
+                && a.spell_snapshot.is_none()
                 && !matches!(
                     a.family.as_deref(),
                     Some(
                         "globals"
                             | "creatures"
                             | "casts"
+                            | "spell"
                             | "items"
                             | "loot"
                             | "gameobjects"
@@ -522,7 +541,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos needs --dump <sqlite> and --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos needs --dump <sqlite> and --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -682,6 +701,14 @@ fn main() -> Result<()> {
         .clone()
         .expect("parse_args guarantees --dump here");
 
+    if let Some(path) = &args.spell_snapshot {
+        return spell::run_vmangos_snapshot(
+            &dump_path,
+            args.dbc.as_deref().context("missing client")?,
+            path,
+        );
+    }
+
     if args.print_extents {
         return extents::print_extents(&dump_path, args.map, args.bbox);
     }
@@ -692,6 +719,28 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vmangos_snapshot_accepts_its_source_and_refuses_mutating_or_competing_modes() {
+        let args = [
+            "--source",
+            "vmangos",
+            "--dump",
+            "source.sqlite",
+            "--dbc",
+            "client",
+            "--spell-snapshot",
+            "out.json",
+        ];
+        assert!(parse_args_from(args).is_ok());
+        for extra in [
+            vec!["--apply"],
+            vec!["--go-models", "client"],
+            vec!["--family", "spell"],
+        ] {
+            assert!(parse_args_from(args.into_iter().chain(extra)).is_err());
+        }
+    }
 
     #[test]
     fn source_defaults_to_classic_and_vmangos_census_cannot_apply() {
