@@ -110,7 +110,12 @@ fn flags(row: &Row, restored: u32) -> Result<(u32, u32)> {
 fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32)>> {
     let models = dump.columns(
         "creature_display_info_addon",
-        &["display_id", "gender", "display_id_other_gender", "bounding_radius"],
+        &[
+            "display_id",
+            "gender",
+            "display_id_other_gender",
+            "bounding_radius",
+        ],
     )?;
     models
         .iter()
@@ -118,10 +123,17 @@ fn model_attributes(dump: &impl TableRows) -> Result<BTreeMap<u32, (u8, u32, f32
             let gender: u8 = row.number("gender")?;
             anyhow::ensure!(gender <= 2, "creature model has invalid gender {gender}");
             let radius: f32 = row.number("bounding_radius")?;
-            anyhow::ensure!(radius.is_finite() && radius >= 0.0, "creature model has invalid radius {radius}");
+            anyhow::ensure!(
+                radius.is_finite() && radius >= 0.0,
+                "creature model has invalid radius {radius}"
+            );
             Ok((
                 row.number::<u32>("display_id")?,
-                (gender, row.number::<u32>("display_id_other_gender")?, radius),
+                (
+                    gender,
+                    row.number::<u32>("display_id_other_gender")?,
+                    radius,
+                ),
             ))
         })
         .collect()
