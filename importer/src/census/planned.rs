@@ -277,6 +277,17 @@ pub(super) fn run(
         writeln!(output, "\nWaypoint points {} → {}; {} creature GUIDs removed, {} added. Source path membership and point counts differ; vmangos uses spawn paths before template paths and emits only movement type 2. Classic path selection is unchanged.",
             old.rows, new.rows, old.keys.difference(&new.keys).count(), new.keys.difference(&old.keys).count())?;
     }
+    if family == "spellmeta" {
+        for (table, reason) in [
+            ("game_spell_chain", "The sources supply different explicit rank families and skill-line rank links; vmangos adds the five Shadow Vulnerability ranks."),
+            ("game_spell_proc_event", "The selected source proc overlays differ in membership; these counts do not count the spell catalogue's own proc fields."),
+            ("game_spell_learn", "The four removed links teach TBC riding spells 33388 or 33391 from class mounts 5784, 13819, 23161 and 23214; they do not belong to build 5875."),
+        ] {
+            let old = &before[table];
+            let new = &after[table];
+            writeln!(output, "\n`{table}` {} → {}; {} removed, {} added. {reason}", old.rows, new.rows, old.keys.difference(&new.keys).count(), new.keys.difference(&old.keys).count())?;
+        }
+    }
     explain(&mut output, family, &vmangos)?;
     floors(&mut output, family, &before, &after)?;
     if family == "creatures" {

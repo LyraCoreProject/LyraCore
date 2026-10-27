@@ -36,6 +36,12 @@ Added (51): 12038, 12281, 12787, 13159, 13165, 13767, 13879, 13960, 14178, 14796
 
 Removed (16): 12284, 12322, 12701, 12702, 12703, 12704, 12999, 13000, 13001, 13002, 14076, 19552, 24658, 27774, 30811, 7131.
 
+`game_spell_chain` 1629 → 1586; 48 removed, 5 added. The sources supply different explicit rank families and skill-line rank links; vmangos adds the five Shadow Vulnerability ranks.
+
+`game_spell_proc_event` 164 → 199; 16 removed, 51 added. The selected source proc overlays differ in membership; these counts do not count the spell catalogue's own proc fields.
+
+`game_spell_learn` 11 → 7; 4 removed, 0 added. The four removed links teach TBC riding spells 33388 or 33391 from class mounts 5784, 13819, 23161 and 23214; they do not belong to build 5875.
+
 ## Differences
 
 - Spell chains, proc overlays and dependent learns use build ranges. Missing explicit rank families are derived from selected skill_line_ability rows. Proc effect selection uses vmangos spell_template. Existing plate and mail dependent learns remain when absent from source rows. Inactive learn visibility and unrepresentable proc masks have manifest findings.
