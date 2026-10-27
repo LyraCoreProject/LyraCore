@@ -87,7 +87,9 @@ data come from the same project.
     player's own `Spell.dbc`.
 11. **Mixing sources.** Never take some columns of one table from vmangos and the rest from a DBC.
     Different tables may come from different sources. If a vmangos table lacks a column LyraCore
-    uses today, stop that slice and report the column, where it's used, and your options. This
+    uses today, stop work on **that table only**: leave it on its current source, finish every other
+    table and slice in the milestone, and report the column, where it's used, and your options in
+    the handoff. Don't end the run early for it. This
     rule covers only vmangos data that is missing. A column that only one source has and LyraCore
     doesn't read (for example `link_kind`) isn't a stop. Neither is a defect in today's classic-db
     reader (see the standing rule in S1).
