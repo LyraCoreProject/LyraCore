@@ -74,6 +74,13 @@ fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scri
         poll_until(POLL_TIMEOUT, || stand_state(first) == Some(3)),
         "a continued failure lost the delayed command"
     );
+    assert_eq!(
+        standalone.query_rows(&format!(
+            "SELECT phase FROM game_creature_ai_state WHERE creature_guid = {first}"
+        ))[0]["phase"],
+        "30",
+        "a refused delayed phase increment changed the phase"
+    );
     assert!(poll_until(POLL_TIMEOUT, || standalone
         .query_rows("SELECT id FROM game_creature_ai_relay_run WHERE relay_id = 90102")
         .is_empty()));

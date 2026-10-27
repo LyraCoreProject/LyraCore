@@ -603,3 +603,12 @@ increase past phase 31 instead of clamping it. The existing phase instruction ke
 The depth, step and scheduled-work limits include translated control instructions and nested
 script choices. These rules follow `ChooseScriptIdToStart`, `ScriptsProcess` and `TerminateScript`
 at the pinned vmangos revision linked above.
+
+The vmangos reader follows START_SCRIPT into `generic_scripts` and emits only the dependency
+closure of accepted EventAI rules. A refused child, cycle or work budget drops its calling rule.
+Delayed creature controls use the same phase, combat, aura and quest-credit operations as EventAI.
+The manifest counts commands in all seven delayed-script tables and names each unsupported script.
+`gameobject_scripts.id` is a spawn guid, as used by `GameObject::Use`, not a template entry.
+The classic reader has no general quest-start, quest-end, gossip, event, movement or gameobject
+script dispatcher to port. Its quest-end mail behavior already uses the vmangos quest reward
+columns; other commands in those tables remain unsupported.
