@@ -5,10 +5,12 @@ use std::sync::OnceLock;
 // Each publisher needs its own copy because the CLI optimizer rewrites its input.
 pub fn module_bytes() -> &'static [u8] {
     static WASM: OnceLock<Vec<u8>> = OnceLock::new();
-    WASM.get_or_init(build_module_bytes)
+    WASM.get_or_init(|| {
+        module_bytes_with_features("debug_reducers,package_test_fixture,conformance_test_fixture")
+    })
 }
 
-fn build_module_bytes() -> Vec<u8> {
+pub fn module_bytes_with_features(features: &str) -> Vec<u8> {
     let wasm = build_artifact(
         "lyracore-module",
         "lyracore_module",
@@ -16,7 +18,9 @@ fn build_module_bytes() -> Vec<u8> {
             "--release",
             "--target",
             "wasm32-unknown-unknown",
-            "--features=debug_reducers,package_test_fixture",
+            "--no-default-features",
+            "--features",
+            features,
         ],
     );
     let bytes = std::fs::read(&wasm).expect("the test Module output is missing");

@@ -1,8 +1,43 @@
-use sha1::{Digest, Sha1};
-use spacetimedb::{reducer, ReducerContext, Table};
+use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, Table};
 
-use super::{game_native_cipher, game_native_world_connection, NativeCipher, NativeWorldState};
+use super::{game_native_world_connection, NativeWorldState};
 use crate::game_account;
+
+#[table(accessor = game_native_conformance_connection)]
+pub struct NativeConformanceConnection {
+    #[primary_key]
+    pub connection_id: ConnectionId,
+    pub account_id: u64,
+    pub owner_identity: Identity,
+}
+
+pub(super) fn account(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    account: &mut crate::Account,
+) -> Result<bool, String> {
+    let Some(fixture) = ctx
+        .db
+        .game_native_conformance_connection()
+        .connection_id()
+        .find(connection_id)
+    else {
+        return Ok(false);
+    };
+    if fixture.account_id != account.id || account.banned {
+        return Err("conformance Account is no longer available".into());
+    }
+    // World entry needs an owner; this copy never changes the Account's login identity.
+    account.identity = Some(fixture.owner_identity);
+    Ok(true)
+}
+
+pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
+    ctx.db
+        .game_native_conformance_connection()
+        .connection_id()
+        .delete(connection_id);
+}
 
 #[reducer]
 pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
@@ -27,24 +62,13 @@ pub fn debug_native_enter_world(ctx: &ReducerContext, character_guid: u64) -> Re
     if account.banned {
         return Err("Account is banned".into());
     }
-    let session_key = vec![0x5a; 40];
-    crate::auth::establish_session(ctx, account.id, session_key.clone(), ctx.sender())?;
-    // Keep the normal per-request proof Gate after bypassing SRP for this fixture.
-    let client_proof = Sha1::new()
-        .chain_update(account.username.as_bytes())
-        .chain_update(0u32.to_le_bytes())
-        .chain_update(0u32.to_le_bytes())
-        .chain_update(connection.server_seed.to_le_bytes())
-        .chain_update(&session_key)
-        .finalize()
-        .to_vec();
-    ctx.db.game_native_cipher().insert(NativeCipher {
-        connection_id,
-        username: account.username,
-        session_key,
-        client_seed: 0,
-        client_proof,
-    });
+    ctx.db
+        .game_native_conformance_connection()
+        .insert(NativeConformanceConnection {
+            connection_id,
+            account_id: account.id,
+            owner_identity: account.identity.unwrap_or(ctx.sender()),
+        });
     super::world::enter_character(
         ctx,
         connection,

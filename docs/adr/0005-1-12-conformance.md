@@ -33,8 +33,10 @@ using a separate scenario author and independent decoders.
    gossip and chat, with its SHA-256 digest. The comparator compares digests. Numbers, ids, flags
    and positions remain unchanged. Never commit an unscrubbed recording or client or world data.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
-   client packets and checkpoints. The harness milestone chooses TOML or RON and records its
-   reason here when that format is available.
+   client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
+   remain readable in diffs and it matches the Feature Ledger's format. Its
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/57e9c7018e60ede69da85b5b285df464e81558de/docs/scenarios.md)
+   rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
     Add a verb only for a scenario that needs it. Both adapters must implement it before use.
@@ -93,22 +95,48 @@ The Module currently requires the Operator and a connection id in
 `game_native_packet` is a private event table. The durable fixture now offers a synchronous Operator WebSocket
 connection in `lyracore-test-support`. It uses SpacetimeDB 2.7.1's JSON protocol. A CLI subscription
 cannot submit reducer calls on its existing connection, and the SDK would require generated
-Module bindings. Each call returns the subscribed inserts from its own transaction; separate
-subscriptions remain the path for observing broadcasts.
+Module bindings. Each call returns its own subscribed inserts. The connection also buffers every
+subscribed `game_native_packet` insert across transactions, including scheduled reducers and other
+callers. `drain_packets` takes the received rows; `wait_for_packets` reads until a batch arrives or
+its timeout expires. Tier 1 must interpret the delivery audiences, including AOI instructions,
+to reconstruct each Character's packet stream.
 
-`debug_native_enter_world` exists only with `debug_reducers`. It requires the Operator and an open
-connection in `AwaitingProof`. It establishes a fixture Session and world proof, then uses normal
-world entry. Later requests still pass the normal Account and Session Gates. The Architecture Test
-`native_debug_gate` checks the feature gate and detects its removal or replacement with a weaker
-condition. No production authentication Gate is bypassed without the feature.
+Connection ids decode directly as `u128`; row text stays as raw JSON for typed decoding by callers.
+This avoids `serde_json`'s `arbitrary_precision` feature, which would change number representation
+and generic deserialization in other workspace crates through Cargo feature unification.
+
+`debug_native_enter_world` exists only with `conformance_test_fixture`, which implies
+`debug_reducers`. `lyracore publish` enables only `debug_reducers`, so it does not export this
+reducer or its private connection table. The durable fixture enables the extra feature explicitly.
+The reducer requires the Operator and an open connection in `AwaitingProof`. It records the
+Account and owner for that connection, then enters the world without writing a Session, Account
+identity or cipher key. Requests on that fixture connection bypass the Session proof Gate but still
+check the Account and its ban state. Closing the connection removes its fixture record. Network
+authentication continues to require the real Session and proof, even in a fixture build.
+
+The Architecture Test `native_debug_gate` checks the separate feature gate and detects its removal
+or replacement with a weaker condition. Its durable test builds with only `debug_reducers` and
+checks that the published Module does not export the fixture reducer.
 
 The durable `native_conformance` test enters a Character, sends `CMSG_PING` through
 `native_world_receive`, reads the private packet event on the same connection and decodes
-`SMSG_PONG` directly with gtker. It also checks the non-Operator refusal. The decoder is a single
-function for replacement with the harness library in Milestone 2. This proves the mechanism, not
-agreement with a Golden Trace. Run it with the command in [testing](../testing.md#conformance).
-C1c will record the ledger schema and its scenario-reference checks.
+`SMSG_PONG` directly with gtker. It also checks the non-Operator refusal, preserved login
+credentials, refusal of the former fixture key and delivery from a later transaction. The decoder
+is a single function for replacement with the harness library in Milestone 2. This proves the
+mechanism, not agreement with a Golden Trace. Run it with the command in [testing](../testing.md#conformance).
 
-The harness scenario format is pending the parallel harness milestone. The existing pin stays
+C1c adds schema version 1 and a shared loader in `lyracore-conformance`. TOML keeps the ledger
+readable without a generator and gives each Behavior its own file for parallel work. The loader
+checks field types, ids and file paths, source references, required rungs, dependency cycles and
+human verification records. The [schema reference](../../conformance/README.md) states the fields.
+
+The nine original inventory entries now live in `conformance/features/`. The inventory reads that
+same loader and still checks retained Rust test declarations without running them. Entries contain
+no handwritten support status. Their initial scenario lists are empty; source evidence does not
+stand in for recordings. The Architecture Test validates references when a pinned harness catalogue
+is present and prints a clear skip for the current pre-catalogue pin. The assumed catalogue path
+and shape remain in one test function for Milestone 2 integration.
+
+The harness has implemented the TOML scenario format from decision 9. The existing pin stays
 unchanged in Milestone 1. Milestone 2 updates its prerelease tag and full SHA and adds the tier 1
 library dependency at that same SHA.

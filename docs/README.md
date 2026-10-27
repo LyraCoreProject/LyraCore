@@ -12,6 +12,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [danger-zones.md](./danger-zones.md) | Reference, authority | You change a schema, publish, or touch a §1 trap |
 | [architecture.md](./architecture.md) | Reference | You need to know where a responsibility lives |
 | [schema.md](./schema.md) | Reference | You add or change a table |
+| [Feature Ledger](../conformance/README.md) | Reference | You add or validate a conformance Behavior and its evidence requirements |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
 | [benilla-compatibility.md](./benilla-compatibility.md) | Reference | You change packet layouts or the opcode inventory |
 | [native-operations.md](./native-operations.md) | Runbook | An Operator updates a deployed Realm |

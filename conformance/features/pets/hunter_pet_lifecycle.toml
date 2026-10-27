@@ -1,0 +1,24 @@
+schema_version = 1
+id = "hunter_pet_lifecycle"
+system = "pets"
+scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Stables and action-bar editing are separate Behaviors."
+requests = ["0x0175"]
+replies = ["0x0179"]
+dependencies = []
+required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = ["A tameable creature, its template and the Hunter's spells are present."]
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/PetHandler.cpp"
+symbol = "WorldSession::HandlePetAction"
+
+[real_client]
+status = "unverified"
+
+[[tests]]
+path = "module/tests/hunter_pet.rs"
+function = "tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state"
+rung = "durable_module"

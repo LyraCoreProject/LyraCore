@@ -10,7 +10,8 @@ description = "Private Standalone fixtures shared by Core and Package integratio
 
 [dependencies]
 rustc_lexer = "0.1.0"
-serde_json = { version = "1", features = ["arbitrary_precision"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = { version = "1", features = ["raw_value"] }
 tungstenite = { version = "0.27", default-features = false, features = ["handshake"] }
 
 [lints]
