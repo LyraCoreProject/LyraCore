@@ -6,9 +6,10 @@ and Relays run in the Module; reusable packet builders live in the protocol crat
 ## 1. State the 1.12.1 behaviour
 
 Write down the raw effect id, its implicit targets, base points, die sides, radius, range, cost,
-cooldown and header attributes from the client's `Spell.dbc`, and what vmangos or cmangos do with
-the effect. This is the **Expected (1.12.1)** part of the issue, and the tests in later steps assert
-these values.
+cooldown and header attributes from the selected vmangos `spell_template` row at build 5875. Resolve
+auxiliary indices through the client tables. Read the vmangos implementation at a named commit
+to establish the effect's behavior; implement it independently. Record this in the issue's
+**Expected (1.12.1)** section, and assert these values in tests.
 
 ## 2. Add the kind to the shared taxonomy
 
@@ -31,7 +32,7 @@ File: `importer/src/spell.rs`.
   aura). If it needs a header
   attribute (Distract keeps stealth), add it in `spell_flag_attributes`.
 - Add a unit test for the mapping, and an ignored test that reads the real spell from
-  `LYRACORE_TEST_DBC` and asserts the values from step 1.
+  `LYRACORE_VMANGOS_SQLITE` with auxiliary tables from `LYRACORE_TEST_DBC`, and asserts step 1.
 
 ## 4. Add the Gates
 

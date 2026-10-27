@@ -64,8 +64,9 @@ Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 [Shard](CORE_TERMS.md#shard), [Module](CORE_TERMS.md#module), [Operator](CORE_TERMS.md#operator).
 
 **World Source**:
-The external world database an Operator supplies to an import. It owns the source identifiers and
-content revisions; the Operator's client supplies the remaining client data.
+The external world database an Operator supplies to an import. vmangos owns the source identifiers,
+content revisions and server spell catalogue. The Operator's client supplies the remaining client
+data and archive names for Map lookup.
 
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
@@ -80,13 +81,13 @@ _Avoid_: import done flag, content ready flag
 **World Import Scope**:
 The authoritative union of Bounded Map Slices, Instance Vmap Slices, whole maps, and forced
 creature dependencies owned by one World Import Profile. Accepted EventAI summons force their
-summoned templates into the scope, to a fixpoint. It decides spatial import membership for dump,
+summoned templates into the scope, to a fixpoint. It decides spatial import membership for World Source,
 terrain, navigation, and vmap modes.
 
 **Source Profile**:
 A named input contract for a World Source. It defines the columns, types and behavior values an
-import accepts. The vmangos contract reports count changes without using them to admit an import.
-The classic-db contract also pins source bytes and counts.
+import accepts. Count changes are reported without deciding admission. The accepted snapshot
+provides the comparison baseline; an admitted import records the actual source commit.
 _Avoid_: EventAI Source Profile
 
 **Compatibility Manifest**:

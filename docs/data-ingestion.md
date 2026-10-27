@@ -4,45 +4,34 @@ This how-to covers the importer: how world content and client data reach a Realm
 pass checks, and what the seeded fixture contains. The everyday path is `./lyracore import`; the
 [quickstart](./quickstart.md#getting-the-real-world) covers it. Use the commands below to run one
 stage at a time or to inspect a dry run. Why the repository ships tools and no data is recorded in
-[ADR 0001](./adr/0001-ship-tools-not-data.md), [ADR 0002](./adr/0002-opt-in-pinned-classic-db-pull.md)
-and [ADR 0003](./adr/0003-parse-world-data-never-execute.md). [Danger zones](./danger-zones.md) §2
+[ADR 0001](./adr/0001-ship-tools-not-data.md),
+[ADR 0003](./adr/0003-parse-world-data-never-execute.md) and
+[ADR 0004](./adr/0004-import-world-data-from-vmangos.md). [Danger zones](./danger-zones.md) §2
 lists the traps a content import can spring.
 
-Content comes from two places. The Operator's own 1.12.1 client supplies the DBC tables, terrain,
-navigation and model geometry, read in memory through `wow-mpq` and `wow_dbc`. cmangos `classic-db`
-supplies the world content: creature templates and spawns, items, gameobjects, loot, quests,
-gossip text, vendors, trainers and level stats. `importer/scripts/pull-classic-db.sh` fetches it
-into the gitignored `.import/`.
+vmangos supplies world content, the server spell catalogue and seven replacements for client DBC
+tables. The Operator's own 1.12.1 client supplies the remaining tables, terrain, navigation and
+model geometry. `importer/scripts/pull-vmangos.py` fetches the SQLite snapshot into the ignored
+`.import/` directory. LyraCore distributes neither source's data.
 
 Exact collision geometry has its own live-acceptance contract in
 [`vmap-rollout.md`](./operations/vmap-rollout.md). Importing it never turns on collision.
 
-## Transitional World Source readers
+## Reading the World Source
 
-The vmangos port keeps `--source classic-db` as the default. The classic-db reader takes column
-names and types from `CREATE TABLE`, checks its column contract before planning, and never executes
-the source SQL. The SQLite reader opens the file read-only, disables trusted schemas, refuses views
-and virtual tables, and checks requested field types. Both readers return the same named row type.
-The full classic-db importer requires the tables listed in `importer/src/classic_columns.rs`.
-`WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
-errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
+The importer opens SQLite read-only, disables trusted schemas, refuses views and virtual tables,
+and reads named columns with checked types. Family builders check the Source Profile before they
+emit a plan. The importer never executes source SQL or scripts.
 
-`--source vmangos --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
-Other families are still being ported. Both world profiles use the same globals and item catalogues.
-Vendor offers and creature loot follow the selected profile. Generate the comparison
-with both local sources and your client:
+`--family` selects one Import Family. Without it, `--dump <sqlite> --dbc <client Data>` builds the
+combined import, including spells, the reference catalogues and every world family. Full profiles
+share global catalogues; spatial rows follow the selected World Import Scope.
 
-```sh
-cargo run -p lyracore-importer -- \
-  --source vmangos --dump ".import/vmangos/<commit>-<digest-prefix>/mangos.sqlite" \
-  --census .import/classic-db-full.sql --family globals --dbc /path/to/client/Data \
-  > .claude/tickets/vmangos-port/census/globals.md
-```
-
-The report checks Module counts against the production globals plan and lists added and removed
-natural keys. It compares the globals count floors from `import-manifest.sh`. Starter extras exclude client
-outfits and repeated item keys. These are import-plan measurements, not observations of a Realm.
-The existing EventAI Compatibility Manifest remains classic-db-only until S6c.
+The migration censuses compare production plans, not observations of a Realm. The consumed floors
+and their count-based rationale are in
+[`vmangos-floors.md`](../importer/manifests/vmangos-floors.md). The
+[unsupported behavior ledger](../.claude/tickets/vmangos-port/unsupported.md) records known gaps,
+including creatures whose behavior lives in vmangos C++ AI or has no source rows.
 
 The vmangos globals Compatibility Manifest reports portal conditions that the Module cannot apply.
 Those portals remain in the catalogue at current parity. The Module resolves graveyards from area
@@ -51,7 +40,9 @@ follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L7512-L7524).
 The existing dungeon entrance and static fallbacks remain after the imported links.
 
-`--source vmangos --dump <sqlite> --dbc <client Data> --dbc-diff` prints a field comparison for Spell and the seven other DBC replacements. It reports every shared field, source-only fields, unmatched client columns, changed row and cell counts, and bounded examples. The command only reads local files. Map remains entirely on Map.dbc while the archive-directory decision is pending.
+`--dump <sqlite> --dbc <client Data> --dbc-diff` compares Spell and the seven other DBC replacements.
+It reports shared fields, source-only fields, unmatched client columns, changed row and cell counts,
+and bounded examples. The command only reads local files.
 
 The `spell` vmangos family reads selected `spell_template` rows for spell headers, effects,
 reagents and creature spell metadata. It keeps the existing effect translation and synthetic
@@ -59,29 +50,30 @@ markers. SpellCastTimes, SpellRange, SpellDuration and SpellRadius remain separa
 The Base Snapshot uses the same selected spell rows:
 
 ```bash
-lyracore-importer --source vmangos --dump .import/mangos.sqlite --dbc "$CLIENT_DATA" \
+lyracore-importer --dump "$DUMP" --dbc "$CLIENT_DATA" \
   --spell-snapshot .import/base-snapshot.json
 ```
 
 Package spell Deltas still apply after the base family import. Datascripts can load the complete
 Snapshot even when a core synthetic effect uses slot 3. The Package API continues to accept slots
 0 through 2; a Datascript that opens a spell with a core-only fourth slot is refused. At the pin,
-this affects the curated Seal of the Crusader marker on spell 21082 in both sources.
+this affects the curated Seal of the Crusader marker on spell 21082.
 
-Source scripts remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
+Spells with `script_name` remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
 as declared in [SpellEntry.h at the pinned vmangos commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEntry.h#L656).
 The Module's existing modifier parameter retains its low 32 bits; the Compatibility Manifest
 lists slots with higher bits. The extra coefficient, custom-flag and minimum-level columns carry
 source spell behavior, as described below.
 
-The `dbc` family replaces six catalogues from complete vmangos rows: faction, faction templates,
-areas, taxi nodes, skill abilities and area triggers. `--family dbc` can also read the classic
-client catalogues for a census. It writes only those six Module tables. TaxiPath and TaxiPathNode
-remain separate client tables, so an existing client taxi-route import is still required. Taxi
-mount entries resolve through selected source creature templates and client CreatureDisplayInfo.
+The `dbc` family replaces seven catalogues: faction, faction templates, areas, maps, taxi nodes,
+skill abilities and area triggers. TaxiPath and TaxiPathNode remain separate client tables.
+Taxi mount entries resolve through selected source creature templates and client CreatureDisplayInfo.
 The import reports trigger cooldowns, conditions and scripts that the Module cannot represent.
-Map stays entirely on Map.dbc because `map_template` lacks `internal_name`, the archive directory
-used to find WDT and ADT files. No Map columns are mixed across sources.
+
+Map has one named source exception. `map_template` supplies every gameplay column; the client's
+`Map.dbc` supplies only `internal_name`, joined by map id, for WDT and ADT archive lookup. A missing
+client row refuses that map. Player limits, reset delays and ghost entrances are stored but do not
+yet control gameplay. Other tables never mix vmangos and client columns.
 
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
 entry choices, paths and spell lists. The creature plan preserves signed event membership and
@@ -112,22 +104,20 @@ type flags are derived from the source static flags. PC and NPC immunity bits ar
 when a fully translated, unconditional spawn command list clears the bit. Random lists, aborting
 commands, phase exclusions and conditional events cannot establish that clear. Other bits stay
 unflagged and the Compatibility Manifest lists the template as `creatures.scripted-immunity`.
-Only waypoint movement, type 2, emits paths
-on the vmangos path; classic path selection is unchanged. Trainer, vendor and gossip joins retain their
+Only waypoint movement, type 2, emits paths. Trainer, vendor and gossip joins retain their
 existing family ownership.
 
 The cast plan joins `creature_template.spell_list_id` to `creature_spells`. It uses the first
 available source spell as the primary cast and the existing rotation model for the remaining
-spells. Slot probability, timing, target, flags and script detail remain unsupported. S6 supplies
-EventAI dependency closure; a complete vmangos world import is still unavailable at this stage.
+spells. Slot probability, timing, target, flags and script detail remain unsupported. Accepted
+EventAI summons and spell references extend the dependency closure.
 
 The items import joins shared vendor offers through `creature_template.vendor_id` and removes
 selected `forbidden_items` from vendor offers and creature loot. The unused `restores_power` flag is false for vmangos; food and drink behavior comes from item
 on-use spells. Property Pool weights preserve four
 decimal places with a common integer scale of 10,000. The Module uses relative weights.
 
-Use `--family items --world-profile full-world` or `alliance-single` with the census command above.
-It reports production plan counts and entry membership. Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor stock timing, runtime offer conditions and
+Static WOW_PATCH conditions remove false offers and clear true conditions. Vendor stock timing, runtime offer conditions and
 item flags are unsupported and appear in the Compatibility Manifest. The reader projects the
 columns needed for narrow joins and spell checks, retaining the keys and fields needed for the
 same patch/build selection. It never substitutes client spell fields into vmangos rows.
@@ -140,7 +130,7 @@ as described by `LootGroup::Roll` in [LootMgr.cpp at commit
 Group-zero reference children roll independently. Each reference processes its selected group or
 whole template `maxcount` times, with separate groups for each roll. Largest-remainder allocation
 keeps each group's basis-point total equal to its intended share.
-The classic-db output remains unchanged. Runtime conditions, variable counts and quest-only skinning or fishing drops
+Runtime conditions, variable counts and quest-only skinning or fishing drops
 appear in the Compatibility Manifest. Item-container and disenchant tables have no current world
 import path; the manifest counts them as unsupported.
 
@@ -153,7 +143,7 @@ remaining spawn flags, animation, visibility, respawn ranges and script names ap
 Compatibility Manifest. The import retains those placements at current parity.
 
 Transports use selected build rows and template versions with the client's TaxiPath and
-TaxiPathNode tables. `--go-models <client/Data> --source vmangos --dump <sqlite>` resolves door and
+TaxiPathNode tables. `--go-models <client/Data> --dump <sqlite>` resolves door and
 button meshes through the same template reader. The gameobjects census includes these two
 companion catalogues, plus planned spawn counts for each consumed map floor.
 
@@ -165,19 +155,17 @@ IDs and uses the selected wrapper's spell level when the offer has no required l
 vmangos profession offers come from its skill-step effects. Constant steps 1 through 4 grant
 75 through 300 ranks, following [EffectLearnSkill at the same commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEffects.cpp#L2959-L2975).
 Buying a profession offer grants both its skill cap and its resolved learned spell.
-The vmangos import adds no synthetic profession offers. Its manifest compares the selected skill
-targets with the classic-db `PROFESSION_LEARN` list and reports source skill prerequisites and
-multiple learn targets that the current Module cannot represent. Classic-db keeps its existing
-trainer output.
+The import adds no synthetic profession offers. Its manifest reports gaps against the authored
+profession list, source skill prerequisites and multiple learn targets the Module cannot represent.
 
 The quests family selects quest patches and relation ranges. Full profiles share the full quest
 catalogue; other canonical profiles share the existing starter and instance catalogue. Giver
 relations use the selected profile's enabled creature choices and GameObjects. Source exploration
 or event flags add an event-credit requirement only when the same scoped import emits a translated
 EventAI or script credit source for that quest, and no area-trigger objective already supplies it.
-Otherwise normal imported objectives determine completion, except classic script-gated quests 2460
+Otherwise normal imported objectives determine completion, except previously script-gated quests 2460
 and 2608, which retain their gates even when the scene is unsupported. The Compatibility Manifest lists each
-missing source under `quests.event-credit-without-source`; the M4 event-credit ledger records the
+missing source under `quests.event-credit-without-source`; the event-credit ledger records the
 refused SQL, absent dispatcher or C++ source reference. The source flag meaning follows
 [QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
 
@@ -189,21 +177,19 @@ The Module treats zero XP as a fallback request, so explicit zero-XP quests rema
 
 The Compatibility Manifest also reports unavailable collect objectives, non-goober GameObject
 targets, extra prerequisites, scripts, flags, reward casts and reputation fields that the Module
-does not carry. Classic-db retains its current SQL and reducer output, including empty strings
-for nullable quest text.
+does not carry.
 
 `importer/src/source_selection.rs` owns patch 10 and build 5875 selection. Versioned tables keep the
 greatest eligible patch or build per primary key, ordered by numeric key. Ranges include both
 endpoints; patch-minimum-only and build-minimum-only tables have no upper bound. `skill_line_ability` requires build 5875. `forbidden_items` includes the
 boundary in both directions. WOW_PATCH condition type 24 supports equality, at-least and at-most,
-and refuses values outside patches 0 through 10 or comparison codes 0 through 2. Family ports use
-the selected forbidden-item rows to remove vendor and loot entries; condition translation is S3g.
+and refuses values outside patches 0 through 10 or comparison codes 0 through 2. The importer uses selected forbidden-item rows to remove vendor and loot entries.
 
 The gossip reader resolves interleaved NPC text slots through `broadcast_text`, keeping gendered
-strings and probabilities. It imports all source menus as profiles instead of the classic-db four-menu
-relay list. At the pin, 13 script-command-84 targets exist in that catalogue. The command's meaning is
+strings and probabilities. It imports all source menus as profiles. At the pin, 13 script-command-84 targets exist in that catalogue. The command's meaning is
 specified in [ScriptCommands.h at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Maps/ScriptCommands.h#L316).
-Importing these profiles does not import the scripts that select them. That work remains for S6.
+Accepted EventAI command lists can select these profiles. Standalone gossip script dispatch remains
+unsupported.
 Creature options use source NPC flag masks and menu-zero fallback, following
 [Player::PrepareGossipMenu at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Player.cpp#L11972-L12021).
 Profile options cannot express those masks. Spawn-specific greetings, dynamic greeting choices,
@@ -212,18 +198,16 @@ input options are unavailable because the Module cannot enforce those gates.
 
 The native gossip handler follows positive submenu targets on gossip actions and evaluates the
 new menu's conditions before it sends options. Talent reset requires a class trainer of the
-Character's class and level 10 or above. Classic-db's inline talent-reset option still works.
+Character's class and level 10 or above.
 Greeting fallback follows [the pinned source](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Player.cpp#L12330-L12360):
 the last unconditional greeting wins; a menu with none uses `0xffffff`. Conditional greetings
 remain unsupported.
 
-`lyracore-shared::gossip::ConditionKind` owns the runtime meanings and persistent encoding. Its codes
-retain existing Realm values so classic-db SQL, reducer batches and stored rows stay compatible.
-Only the importer translates source numbers. Both sources map their supported Boolean, quest, level,
-team and race/class predicates into this enum. vmangos patch predicates become constant predicates
-at import time, with inversion preserved. Other vmangos kinds become an unavailable sentinel;
-unsupported classic-db codes remain opaque for byte parity. Unknown flags, missing references and
-unsupported predicates cannot become eligible through inversion or OR. Condition rows keep their schema.
+`lyracore-shared::gossip::ConditionKind` owns runtime meanings and persistent encoding. Only the
+importer translates source numbers into supported Boolean, quest, level, team and race/class kinds.
+Patch predicates become constants at import time, with inversion preserved. Other kinds become an
+unavailable sentinel. Unknown flags, missing references and unsupported predicates cannot become
+eligible through inversion or OR. Existing condition rows retain their encoding.
 See [Conditions.h at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Conditions.h#L30-L138)
 when extending the importer mapping, and add a named runtime kind before supporting a new meaning.
 
@@ -233,7 +217,7 @@ WOW_PATCH follows [Conditions.cpp at the same commit](https://github.com/vmangos
 The Rust implementation is independent. Tests cover selection boundaries, composite keys, duplicate
 revisions, invalid ranges, each WOW_PATCH comparison and the read-only SQLite boundary.
 
-## Fetching the transitional vmangos snapshot
+## Fetching the vmangos snapshot
 
 Run `python3 importer/scripts/pull-vmangos.py`. Its default output path resolves from the script
 location to the checkout's ignored `.import/vmangos/`, regardless of the working directory. It reads
@@ -244,9 +228,9 @@ extraction. It reads only
 SQLite member fails the fetch. The migrations query opens SQLite read-only with trusted schemas
 disabled.
 
-The fetch uses Python's standard library so the later CLI can call one importer-side script without
-requiring `gh`, a git clone, or new HTTP and archive dependencies in the Rust importer. It replaces
-the old fetch step when S7 changes the CLI. The CLI's consent text is also an S7 change.
+The CLI calls this standard-library Python script after consent. The notice identifies GPL-2.0
+migrations from `vmangos/core` applied on top of base data from `brotalnia/database`, which has no
+license file. The Operator supplies their client data. LyraCore does not redistribute either input.
 
 `importer/scripts/vmangos.lock` records format version 1, the repository, accepted full commit, and
 migration fingerprint. The fingerprint is the highest migration id plus the row count. File hashes
@@ -262,8 +246,14 @@ fingerprint at the same commit is reported without a direction. The lock stays u
 contract and approved values before apply and records the supplied actual commit. If GitHub cannot compare an unreachable accepted commit and returns
 404, `--accept-lock` can replace that lock after the archive and migrations checks pass.
 
-Use the `sqlite_path` and `commit` from `current.json` as the census's `--dump` and `--source-sha`.
-The source switch remains classic-db by default. No downloaded data belongs in a commit or PR.
+Use the actual `sqlite_path` and `commit` from `current.json` as `--dump` and `--source-sha`.
+Do not substitute the accepted lock commit. No downloaded data belongs in a commit or PR.
+
+```bash
+DUMP=$(python3 -c 'import json; print(json.load(open(".import/vmangos/current.json"))["sqlite_path"])')
+SOURCE_SHA=$(python3 -c 'import json; print(json.load(open(".import/vmangos/current.json"))["commit"])')
+export DUMP SOURCE_SHA
+```
 
 ## Full source import
 
@@ -279,7 +269,7 @@ For a complete source import, supply the dump and client data together:
 
 ```sh
 cargo run -p lyracore-importer -- \
-  --dump .import/classic-db-full.sql --dbc /path/to/client/Data \
+  --dump "$DUMP" --source-sha "$SOURCE_SHA" --dbc /path/to/client/Data \
   --world-profile full-world
 ```
 
@@ -291,16 +281,15 @@ EventAI relay definitions that name a missing spell. The script also loads talen
 navigation:
 
 ```sh
-WORLD_PROFILE=full-world DUMP=.import/classic-db-full.sql DBC=/path/to/client/Data \
+WORLD_PROFILE=full-world DBC=/path/to/client/Data \
   DB=local-full-world SPACETIME_SERVER=http://127.0.0.1:3000 \
   bash importer/scripts/import-world.sh
 ```
 
 All authored creature positions are retained, including nonselectable creatures and population
 alternatives. Population metadata retains entry choices, count limits, chances and event links.
-Legacy creature pools retain fractional chances and template-based membership. Equal-sized,
-equal-chance nested pools with single-selection limits flatten to the same initial distribution.
-Other nesting and mixed creature/GameObject pools stop the import before it writes data.
+Creature pools retain supported count limits and chances. Nested or mixed memberships the Module
+cannot express stay inactive with Compatibility Manifest findings.
 The Module selects an initial population from that metadata. Selections last until reimport or
 Instance teardown; source pool rotation after deaths is not yet implemented. Positive game-event
 members and groups with world-state conditions remain dormant until an event system can evaluate
@@ -322,29 +311,13 @@ quest catalogue and their local quest-giver relations.
 
 ## Creature EventAI family
 
-`--family creature-ai` compiles source rows into Module-owned native definitions. On classic-db,
-the Source Profile defaults to `cmangos-classic-z2815` and is committed at
-`importer/manifests/cmangos-classic-z2815.json`. That profile pins:
-
-- CMaNGOS Classic commit `ca0775fe352fb67a0e82dc6051f0563187d569a5` and its 24-column,
-  source-id-ordered EventAI loader contract;
-- classic-db commit `cd0c426a3b2ff56dd518bf009025299468e60fdb` and
-  `Full_DB/ClassicDB_1_12_1_z2815.sql.gz`;
-- SHA-256 `d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6` over the exact
-  decompressed SQL bytes;
-- 10,843 source rules, including 39 negative source-guid rules.
-
-The pull lock uses the same classic-db snapshot and digest. The pull script writes the decompressed
-bytes without adding a delimiter. A later dump with the same z2815 filename is not the same profile
-unless its digest and censuses match.
-
-Run a report without `--apply`:
+`--family creature-ai` compiles source rows into Module-owned native definitions. The Source Profile
+is `vmangos-4641790`; its column and value contracts apply to every family. Run a report without
+`--apply`:
 
 ```sh
 ./target/debug/lyracore-importer \
-  --dump .import/classic-db-full.sql \
-  --family creature-ai \
-  --eventai-profile cmangos-classic-z2815
+  --dump "$DUMP" --source-sha "$SOURCE_SHA" --family creature-ai
 ```
 
 The dry run prints the complete scoped Compatibility Manifest, including every unapproved result.
@@ -353,10 +326,9 @@ action, target, cast-flag, EventAI-flag, and dependency results remain grouped b
 reason. Dependency results retain the path from source rule and instruction slot to the referenced
 catalogue value.
 
-Apply constructs and checks that same plan before it returns any work to the caller. A wrong digest,
-loader contract, census, source value, dependency, or classification is a Refusal before any EventAI
-SQL statement or definition reducer call. This is intentional. A profile can remain useful for dry
-run while later compatibility Tickets approve more of the pinned source.
+Apply checks the same plan before it returns work to the caller. Unapproved source values and
+invalid dependencies refuse the family before its SQL or definition reducer calls. Approved source
+values that the Module cannot express remain explicit unsupported findings.
 
 World Import Scope still controls compatibility claims. Positive subjects must name imported entry
 templates. Negative subjects resolve through an imported spawn guid and become guid subjects.
@@ -364,8 +336,8 @@ Accepted summon dependencies enlarge the scope to a fixpoint. An out-of-scope ru
 such and is not claimed as compatible.
 
 One durable definition row owns one entry or guid subject. It contains source-ordered
-`EventAiRule` values, and each rule contains an ordered `Vec<CreatureInstruction>`. The source parser
-still reads three source action slots. The native definition has no three-instruction limit. Entry
+`EventAiRule` values, and each rule contains an ordered `Vec<CreatureInstruction>`. The reader
+resolves up to three command lists per source event. Native lists can contain more instructions. Entry
 and guid definitions compose by source rule id, with entry order retained for an equal id.
 
 The family replaces native definitions through the operator-only
@@ -379,11 +351,9 @@ Posture, and Rule State before evaluation, then stamps the new revision. Cleanup
 Shard, touch another creature, replay an edge event, or undo a committed one-shot outcome.
 Unchanged definitions keep their revision and Rule State across scheduled Module calls.
 
-The current instruction compiler preserves the speech, emote, cast, phase, flee, call-for-help,
-summon, and Ranged Posture behavior already supported by the Module. Its source mappings follow the
-pinned CMaNGOS declarations and loader:
-[event, action, target, and flag values](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAI.h) and
-[source tuple load behavior](https://github.com/cmangos/mangos-classic/blob/ca0775fe352fb67a0e82dc6051f0563187d569a5/src/game/AI/EventAI/CreatureEventAIMgr.cpp).
+The compiler supports speech, emote, cast, phase, flee, call-for-help, summon and Ranged Posture
+instructions, plus the command-list controls described below. The unsupported ledger records
+refused translations and behavior that vmangos keeps outside its database.
 
 After import, `import-world.sh` verifies that native definition subjects are well formed and unique.
 The Compatibility Manifest remains the authority for source values and dependency paths. Real-client
@@ -391,8 +361,8 @@ Verification should cover one source-backed rule and one creature with no native
 
 ## Client catalogues and Transports
 
-The standalone DBC pass reads all three taxi files through the same in-memory MPQ patch chain as
-the other client tables. It validates every endpoint/path reference and every `(path, node_index)`
+The standalone DBC pass combines vmangos taxi nodes with client TaxiPath and TaxiPathNode through
+the in-memory MPQ patch chain. It validates every endpoint/path reference and every `(path, node_index)`
 ordinal, client id against the vanilla 1..=256 mask range, reserved wire-id collisions, and negative
 delays before issuing SQL. Apply is a recoverable clear-and-reload: points are cleared before paths
 and nodes, then imported rows and the reserved fixture are inserted deterministically. A database
@@ -401,17 +371,16 @@ failure and the next run clears the family again before rebuilding it. No DBC by
 catalogue artifact is written into the repository.
 
 TaxiNodes mount fields name creature-template entries, despite the `wow_dbc` field name
-`mount_creature_display_info`. The standalone DBC pass requires `--taxi-mounts <dump.sql[.gz]>`
-and resolves them through the full dump, not the spatially filtered creature catalogue, so import
+`mount_creature_display_info`. The standalone DBC pass requires `--taxi-mounts <sqlite> --source-sha <actual commit>`
+and resolves them through all selected creature templates, so import
 order does not depend on which mount creatures have spawns in scope. The world import script
 passes its existing `DUMP` input.
 
 For each faction, a zero creature entry selects the other faction's entry before lookup. A missing
 template, a template with no model, or a selected model absent from `CreatureDisplayInfo` produces
 display zero and a warning. The Module then refuses that faction's flight before charging the fare.
-An explicit missing entry does not fall back to the other faction. Empty template input, unfinished
-INSERT statements, duplicate entries and invalid entry or model fields fail before any DBC catalogue
-SQL runs.
+An explicit missing entry does not fall back to the other faction. Invalid source fields fail
+before any DBC catalogue SQL runs.
 
 The catalogue stores the first nonzero model in the template's four model slots. This deterministic
 choice omits the reference's random model and gender selection. The creature-entry lookup and
@@ -429,7 +398,7 @@ them on the Shard with explicit targets:
 
 ```bash
 cargo run -p lyracore-importer -- --server "$SPACETIME_SERVER" --db "$DB" \
-  --dbc "$DBC" --taxi-mounts "$DUMP"
+  --dbc "$DBC" --taxi-mounts "$DUMP" --source-sha "$SOURCE_SHA"
 # Review the dry run, then repeat with --apply during the import maintenance window.
 ```
 
@@ -457,7 +426,7 @@ brings in. So the fixture reuses real vanilla ids and, for a few rows, real name
 - A few quest and NPC display strings used by the test fixtures.
 
 Each row is typed by hand, from facts about the 1.12.1 client and the public game world, not copied
-from a third-party database. Content at the scale of a `classic-db` import, hundreds of creature
+from a third-party database. Content at the scale of a world import, hundreds of creature
 templates, quests or loot rows, exists only where an Operator ran `./lyracore import` against their
 own client and dump.
 
@@ -469,7 +438,7 @@ and the two must not be conflated.
 
 **Reference source.** The Operator supplies build 5875 client archives. The importer reads
 `DBFilesClient/Spell.dbc` in memory through `wow-mpq`. `importer/src/spell_dbc.rs` checks the 173-field,
-692-byte layout and reads the columns shared by spell and item enchantment import. Other DBC tables
+692-byte layout for client comparisons. Server spell and enchantment effects use vmangos rows. Other DBC tables
 still use `wow_dbc`. No client bytes enter the repository.
 
 The Spell layout follows the pinned [SpellEntry definition](https://github.com/cmangos/mangos-classic/blob/8ec338a1704e7dcb1c0213eb7ed58f9231ade40f/src/game/Server/DBCStructure.h).
@@ -510,21 +479,16 @@ correction now addresses source slot 0.
 The authored seal marker and Power Word: Shield's linked Weakened Soul rule remain because their
 Module behavior is not an equivalent DBC effect.
 
-The binding summon correction follows the
-[pinned ClassicDB snapshot](https://github.com/cmangos/classic-db/blob/cd0c426a3b2ff56dd518bf009025299468e60fdb/Full_DB/ClassicDB_1_12_1_z2815.sql.gz).
-Spell 7728 sends event 1131 for creature 5676; spell 8674 sends event 1134 for creature 5677.
-Both require spell focus 83, and their event scripts set a 360000 ms despawn delay.
-[Their EventAI rows](https://github.com/cmangos/classic-db/blob/cd0c426a3b2ff56dd518bf009025299468e60fdb/ACID/acid_classic.sql#L18699-L18705)
-set faction 14 and attack the summoner. The importer maps these source events to `E_SUMMON_HOSTILE`
-and preserves the focus requirement.
+The two authored binding corrections map spell 7728, event 1131 and focus 83 to creature 5676,
+and spell 8674, event 1134 and focus 83 to creature 5677. They emit `E_SUMMON_HOSTILE`, retain the
+focus requirement and use a 360000 ms despawn delay. A changed spell shape does not receive this
+correction.
 
 Every World Import Profile loads the same full Spell catalogue. Publishing the Module alone does not
 correct stored Spell rows; that needs the Spell reimport and the curated class-spell pass.
 
-**Not used, deliberately:** cmangos `spell_group` / `spell_group_stack_rules`. That dataset would
-answer the rule questions directly, but it is GPL-licensed content, and transcribing its group assignments into this repository is the
-copy [ADR 0001](./adr/0001-ship-tools-not-data.md) forbids. Operators who run the importer against their own dump get it locally; the shipped
-starter set does not.
+The shipped aura policy is authored Module behavior. The importer does not load source
+`spell_group` or `spell_group_stack_rules` into it.
 
 **Verified against the client (membership):** every id in all nine families, by spell name and rank
 subtext. Corrections this produced:
@@ -563,10 +527,8 @@ and coefficient -1.
 Package Deltas created before these columns remain valid. New Base Snapshots and Datascript
 clones include them. A negative coefficient uses the Module's existing automatic fallback.
 
-Classic dry-run SQL retains its legacy column lists. The importer supplies the appended defaults
-when it executes that SQL with `--apply`. A direct `spacetime sql` invocation of legacy spell
-INSERTs must supply `custom_flags`, `min_target_level`, `single_target_key` and `bonus_coefficient`
-on their respective tables; SQL INSERT does not use migration defaults.
+Direct SQL INSERTs must supply `custom_flags`, `min_target_level`, `single_target_key` and
+`bonus_coefficient` on their respective tables; SQL INSERT does not use migration defaults.
 
 Rust Packages that construct these row types directly must supply all four appended fields.
 The legacy fixture values are `custom_flags: 0`, `min_target_level: 0`, `single_target_key: 0`
@@ -617,17 +579,15 @@ closure of accepted EventAI rules. A refused child, cycle or work budget drops i
 Delayed creature controls use the same phase, combat, aura and quest-credit operations as EventAI.
 The manifest counts commands in all seven delayed-script tables and names each unsupported script.
 `gameobject_scripts.id` is a spawn guid, as used by `GameObject::Use`, not a template entry.
-The classic reader has no general quest-start, quest-end, gossip, event, movement or gameobject
-script dispatcher to port. Its quest-end mail behavior already uses the vmangos quest reward
-columns; other commands in those tables remain unsupported.
+There is no general quest-start, quest-end, gossip, event, movement or GameObject script dispatcher.
+Quest-end mail uses quest reward columns; other commands in those tables remain unsupported.
 
 Creature speech chooses the text for the current display's gender, using
 `creature_display_info_addon` at the selected build. Female and unspecified genders use nonempty
 female text, otherwise male text, as in `ObjectMgr::GetBroadcastText` at the pinned revision.
 EventAI and delayed speech share that rule. The display catalogue appends a zero-default gender
-column; classic-db output stays unchanged. Missing model metadata and the source's separate
+column. Missing model metadata and the source's separate
 50% alternate-gender model choice remain Compatibility Manifest findings.
-
 
 
 The vmangos encounter bindings use the pinned instance script fields. Kelris uses field 10,
@@ -643,12 +603,9 @@ install an encounter Package handler.
 These fields and effects were checked in the
 [vmangos instance scripts at the pin](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/scripts).
 The importer accepts a binding when the creature has a selected spawn on the bound map.
-Additional appearances on other maps do not change the binding. His encounter notification is eligible only in a map-509
-instance. His map-1 spawn line, map-509 spawn faction and evade yell use source map predicates.
-The classic Rajaxx client
-projection remains restricted to its original rule and spawn GUID; vmangos entry rules cannot
-request it. Display-template dependencies come from each accepted command rather than the classic
-allowlist. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
+Additional appearances on other maps do not change the binding. Rajaxx encounter notifications
+are eligible only in map-509 Instances. His map-1 spawn line, map-509 spawn faction and evade yell
+use source map predicates. Display-template dependencies come from each accepted command. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
 
 The condition reader follows `Conditions.h` at the pinned source: 33 is map, 15 is level,
 6 is team, and 9 is quest-taken. State 0 accepts active quests and state 1 requires incomplete
@@ -656,10 +613,9 @@ objectives. Level and quest state 2 remain unsupported.
 Static conditions use 0 (always), 24 (patch), -1 (and), -2 (or), and -3 (not); these numbers also
 match that header. Flagged runtime conditions remain unsupported.
 
-
 ### The vmangos Source Profile
 
-`--source vmangos` selects `importer/manifests/vmangos-4641790.json`. Its column contract covers
+The importer uses `importer/manifests/vmangos-4641790.json`. Its column contract covers
 consumed columns and the primary keys used for patch and build selection. Types use SQLite's
 declared affinities. Checked row access still rejects incompatible values and numeric overflow.
 Each table is checked before it is read, including empty tables. A missing column holds back reads
@@ -698,7 +654,7 @@ The vmangos importer admits spell 5200 as this effect only while its source shap
 Guardian summon at the caster's position with template levels and no secondary effect or script.
 It checks the summoned template and adds it to scoped imports. VanCleef's force-cast flag on this
 self-cast bypasses no additional Module admission rule; ordinary spell Gates still apply. Other
-force casts remain unsupported. The classic-db spell mapping stays unchanged.
+force casts remain unsupported.
 
 Nearby EventAI and relay speech carries `broadcast_text.sound_id` into `SMSG_PLAY_SOUND`, sent to
 observers of the speaker. Existing broadcast rows receive a zero default. Zone-wide broadcasts
