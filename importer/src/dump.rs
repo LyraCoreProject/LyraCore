@@ -448,6 +448,9 @@ pub(crate) struct ParsedDump {
 pub(crate) trait TableRows {
     fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>>;
     fn source_hash(&self) -> Result<String>;
+    fn kind(&self) -> crate::world_source::SourceKind {
+        crate::world_source::SourceKind::ClassicDb
+    }
 }
 
 impl ParsedDump {

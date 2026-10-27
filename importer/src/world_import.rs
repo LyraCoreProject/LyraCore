@@ -8,11 +8,12 @@ use lyracore_package_delta::{
 
 use crate::dump::{
     ai, at, bt, cls, clt, cm, cmt, ct, cts, dse, field, gm, gmo, go, got, insert_row_count, it,
-    lvl, mlt, npct, nt, nv, parse_table, pc, pca, pci, pcs, push_insert, qr, qt, read_dump, sc,
-    sls, spe, sql_text, TableRows,
+    lvl, mlt, npct, nt, nv, parse_table, pc, pca, pci, pcs, push_insert, qr, qt, sc, sls, spe,
+    sql_text, TableRows,
 };
 use crate::shard::Shard;
 use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
+use crate::world_source::{SourceKind, WorldSource};
 use crate::{
     creature_population, dbc, eventai, gossip_conditions, item_property, package_delta, spell,
 };
@@ -213,20 +214,15 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<
     let cls_rows: Vec<String> = parse_table(dump, "player_classlevelstats")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(class) = field(r, cls::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(level) = field(r, cls::LEVEL)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let class = r.number::<u32>(cls::CLASS)?;
+            let level = r.number::<u32>(cls::LEVEL)?;
+            Ok(format!(
                 "({},{class},{level},{},{})",
                 packed_class_level_id(class as u8, level as u8),
-                field(r, cls::BASEHP)?,
-                field(r, cls::BASEMANA)?,
-            )))
+                r.numeric_text(cls::BASEHP)?,
+                r.numeric_text(cls::BASEMANA)?,
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
@@ -237,26 +233,19 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<
     let lvl_rows: Vec<String> = parse_table(dump, "player_levelstats")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(race) = field(r, lvl::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = field(r, lvl::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(level) = field(r, lvl::LEVEL)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let race = r.number::<u32>(lvl::RACE)?;
+            let class = r.number::<u32>(lvl::CLASS)?;
+            let level = r.number::<u32>(lvl::LEVEL)?;
+            Ok(format!(
                 "({},{race},{class},{level},{},{},{},{},{})",
                 packed_race_class_level_id(race as u8, class as u8, level as u8),
-                field(r, lvl::STR)?,
-                field(r, lvl::AGI)?,
-                field(r, lvl::STA)?,
-                field(r, lvl::INTE)?,
-                field(r, lvl::SPI)?,
-            )))
+                r.numeric_text(lvl::STR)?,
+                r.numeric_text(lvl::AGI)?,
+                r.numeric_text(lvl::STA)?,
+                r.numeric_text(lvl::INTE)?,
+                r.numeric_text(lvl::SPI)?,
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
@@ -276,24 +265,19 @@ fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Re
     let rows: Vec<String> = parse_table(dump, "playercreateinfo")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(race) = field(r, pc::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = field(r, pc::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            Ok(Some(format!(
+            let race = r.number::<u32>(pc::RACE)?;
+            let class = r.number::<u32>(pc::CLASS)?;
+            Ok(format!(
                 "({},{race},{class},{},{},{},{},{},{},0)",
                 packed_race_class_id(race as u8, class as u8),
-                field(r, pc::MAP)?,
-                field(r, pc::ZONE)?,
-                field(r, pc::X)?,
-                field(r, pc::Y)?,
-                field(r, pc::Z)?,
-                field(r, pc::O)?,
-            )))
+                r.numeric_text(pc::MAP)?,
+                r.numeric_text(pc::ZONE)?,
+                r.numeric_text(pc::X)?,
+                r.numeric_text(pc::Y)?,
+                r.numeric_text(pc::Z)?,
+                r.numeric_text(pc::O)?,
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_start_position WHERE race_class >= 0".to_string()];
     push_insert(
@@ -311,12 +295,18 @@ fn build_graveyard_zone_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Re
         .iter()
         .enumerate()
         .map(|(i, row)| -> Result<String> {
-            let link_kind: u32 = row.number("link_kind")?;
-            if link_kind != 0 {
-                bail!("game_graveyard_zone.link_kind: unsupported value {link_kind}");
-            }
+            let zone_column = match dump.kind() {
+                SourceKind::ClassicDb => {
+                    let link_kind: u32 = row.number("link_kind")?;
+                    if link_kind != 0 {
+                        bail!("game_graveyard_zone.link_kind: unsupported value {link_kind}");
+                    }
+                    "ghost_loc"
+                }
+                SourceKind::Vmangos => "ghost_zone",
+            };
             let safe_loc_id: u32 = row.number("id")?;
-            let zone_id: u32 = row.number("ghost_loc")?;
+            let zone_id: u32 = row.number(zone_column)?;
             let faction: u32 = row.number("faction")?;
             Ok(format!(
                 "({},{safe_loc_id},{zone_id},{faction})",
@@ -341,30 +331,17 @@ fn build_areatrigger_teleport_sql(
     let rows: Vec<String> = parse_table(dump, "areatrigger_teleport")?
         .iter()
         .map(|r| -> Result<_> {
-            let Ok(trigger_id) = field(r, at::ID)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(target_map) = field(r, at::TARGET_MAP)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(x) = field(r, at::TARGET_X)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(y) = field(r, at::TARGET_Y)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(z) = field(r, at::TARGET_Z)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let Ok(o) = field(r, at::TARGET_O)?.parse::<f32>() else {
-                return Ok(None);
-            };
-            let name = sql_text(field(r, at::NAME)?);
-            Ok(Some(format!(
+            let trigger_id = r.number::<u32>(at::ID)?;
+            let target_map = r.number::<u32>(at::TARGET_MAP)?;
+            let x = r.number::<f32>(at::TARGET_X)?;
+            let y = r.number::<f32>(at::TARGET_Y)?;
+            let z = r.number::<f32>(at::TARGET_Z)?;
+            let o = r.number::<f32>(at::TARGET_O)?;
+            let name = sql_text(r.text(at::NAME)?.trim());
+            Ok(format!(
                 "({trigger_id},{target_map},{x},{y},{z},{o},{name})"
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let n = rows.len();
     let mut stmts = vec!["DELETE FROM game_areatrigger_teleport WHERE trigger_id >= 0".to_string()];
@@ -393,19 +370,15 @@ fn build_createinfo_spell_sql(
         .iter()
         .enumerate()
         .map(|(i, r)| -> Result<_> {
-            let Ok(race) = field(r, pcs::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = field(r, pcs::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(spell) = field(r, pcs::SPELL)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let race = r.number::<u32>(pcs::RACE)?;
+            let class = r.number::<u32>(pcs::CLASS)?;
+            let spell = r.number::<u32>(match dump.kind() {
+                SourceKind::ClassicDb => pcs::SPELL,
+                SourceKind::Vmangos => "spell",
+            })?;
             race_class_pairs.push((race, class));
-            Ok(Some(format!("({},{race},{class},{spell})", i as u64 + 1)))
+            Ok(format!("({},{race},{class},{spell})", i as u64 + 1))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()];
     push_insert(
@@ -430,28 +403,17 @@ fn build_createinfo_action_sql(
         .iter()
         .enumerate()
         .map(|(i, r)| -> Result<_> {
-            let Ok(race) = field(r, pca::RACE)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(class) = field(r, pca::CLASS)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(button) = field(r, pca::BUTTON)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(action) = field(r, pca::ACTION)?.parse::<u32>() else {
-                return Ok(None);
-            };
-            let Ok(action_type) = field(r, pca::TYPE)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let race = r.number::<u32>(pca::RACE)?;
+            let class = r.number::<u32>(pca::CLASS)?;
+            let button = r.number::<u32>(pca::BUTTON)?;
+            let action = r.number::<u32>(pca::ACTION)?;
+            let action_type = r.number::<u32>(pca::TYPE)?;
             race_class_pairs.push((race, class));
-            Ok(Some(format!(
+            Ok(format!(
                 "({},{race},{class},{button},{action},{action_type})",
                 i as u64 + 1
-            )))
+            ))
         })
-        .filter_map(Result::transpose)
         .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_action WHERE row_id >= 0".to_string()];
     push_insert(
@@ -488,13 +450,9 @@ fn build_createinfo_item_sql(
     let mut id = CREATEINFO_ITEM_ID_FLOOR;
     let mut rows: Vec<String> = Vec::new();
     for r in parse_table(dump, "playercreateinfo_item")?.iter() {
-        let (Some(race), Some(class), Some(item)) = (
-            field(r, pci::RACE)?.parse::<u32>().ok(),
-            field(r, pci::CLASS)?.parse::<u32>().ok(),
-            field(r, pci::ITEM)?.parse::<i32>().ok(),
-        ) else {
-            continue;
-        };
+        let race = r.number::<u32>(pci::RACE)?;
+        let class = r.number::<u32>(pci::CLASS)?;
+        let item = r.number::<i32>(pci::ITEM)?;
         if item <= 0 {
             continue;
         }
@@ -1912,6 +1870,7 @@ pub(crate) fn creature_row_kept_in_scope(
 }
 
 pub(crate) struct WorldImportArgs {
+    pub(crate) source: SourceKind,
     pub(crate) dbc: Option<String>,
     pub(crate) family: Option<String>,
     pub(crate) world_profile: Option<WorldImportProfile>,
@@ -1960,6 +1919,7 @@ fn run_package_stage(args: &WorldImportArgs, family: &str) -> Result<()> {
     Ok(())
 }
 
+#[derive(Default)]
 pub(crate) struct DumpPlan {
     pub(crate) stmts: Vec<String>,
     pub(crate) spawn_batches: Vec<String>,
@@ -1972,6 +1932,7 @@ pub(crate) struct DumpPlan {
     pub(crate) eventai_relay_definition_count: u64,
     pub(crate) eventai_instruction_count: u64,
     pub(crate) eventai_manifest: Option<String>,
+    world_source_manifest: Option<String>,
     pub(crate) stamps: Vec<(&'static str, u64)>,
 }
 
@@ -2225,7 +2186,6 @@ fn build_dump_plan(
 
     let eventai_definition_count = eventai.definition_count();
     let eventai_instruction_count = eventai.instruction_count();
-    let eventai_definition_batches = eventai.definition_batches;
     let eventai_relay_definition_count = eventai.relay_definition_rows.len() as u64;
     let eventai_relay_definition_batches = eventai.relay_definition_batches;
 
@@ -2235,12 +2195,13 @@ fn build_dump_plan(
         go_row_count: go_spawns.go_packed_rows.len(),
         spawn_batches: batches,
         go_batches,
-        eventai_definition_batches,
+        eventai_definition_batches: eventai.definition_batches,
         eventai_relay_definition_batches,
         eventai_definition_count,
         eventai_relay_definition_count,
         eventai_instruction_count,
         eventai_manifest,
+        world_source_manifest: None,
         stamps,
     })
 }
@@ -3454,28 +3415,9 @@ fn push_global_statements(
 ) -> Result<(u64, u64)> {
     let mut globals_row_count = 0u64;
     if family_active(args, "globals") {
-        let stats_sql = build_stats_sql(dump)?;
-        let start_pos_sql = build_start_position_sql(dump)?;
-        let graveyard_sql = build_graveyard_zone_sql(dump)?;
-        let createinfo_spell_sql = build_createinfo_spell_sql(dump)?;
-        let createinfo_action_sql = build_createinfo_action_sql(dump)?;
-        let createinfo_item_sql = build_createinfo_item_sql(dump, args.dbc.as_deref())?;
-        let (areatrigger_teleport_sql, areatrigger_teleport_count) =
-            build_areatrigger_teleport_sql(dump)?;
-        globals_row_count = insert_row_count(&stats_sql)
-            + insert_row_count(&start_pos_sql)
-            + insert_row_count(&graveyard_sql)
-            + insert_row_count(&createinfo_spell_sql)
-            + insert_row_count(&createinfo_action_sql)
-            + insert_row_count(&createinfo_item_sql)
-            + areatrigger_teleport_count as u64;
-        stmts.extend(stats_sql);
-        stmts.extend(start_pos_sql);
-        stmts.extend(graveyard_sql);
-        stmts.extend(createinfo_spell_sql);
-        stmts.extend(createinfo_action_sql);
-        stmts.extend(createinfo_item_sql);
-        stmts.extend(areatrigger_teleport_sql);
+        let globals = globals_statements(dump, args.dbc.as_deref())?;
+        globals_row_count = insert_row_count(&globals);
+        stmts.extend(globals);
     }
 
     let mut spellmeta_row_count = 0u64;
@@ -3616,12 +3558,67 @@ fn run_client_catalogues(
     Ok(())
 }
 
+pub(crate) fn globals_statements(
+    dump: &(impl TableRows + ?Sized),
+    client: Option<&str>,
+) -> Result<Vec<String>> {
+    let mut statements = build_stats_sql(dump)?;
+    statements.extend(build_start_position_sql(dump)?);
+    statements.extend(build_graveyard_zone_sql(dump)?);
+    statements.extend(build_createinfo_spell_sql(dump)?);
+    statements.extend(build_createinfo_action_sql(dump)?);
+    statements.extend(build_createinfo_item_sql(dump, client)?);
+    statements.extend(build_areatrigger_teleport_sql(dump)?.0);
+    Ok(statements)
+}
+
+fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    if args.family.as_deref() != Some("globals") {
+        bail!("vmangos currently supports --family globals");
+    }
+    let stmts = globals_statements(dump, args.dbc.as_deref())?;
+    let count = insert_row_count(&stmts);
+    Ok(DumpPlan {
+        stmts,
+        stamps: vec![("globals", count)],
+        world_source_manifest: Some(serde_json::to_string_pretty(&globals_findings(dump)?)?),
+        ..Default::default()
+    })
+}
+
+pub(crate) fn globals_findings(dump: &impl TableRows) -> Result<serde_json::Value> {
+    let mut conditioned = Vec::new();
+    for row in dump.rows("areatrigger_teleport")?.iter() {
+        if row.number::<u32>("required_condition")? != 0 {
+            conditioned.push(row.number::<u32>("id")?);
+        }
+    }
+    conditioned.sort_unstable();
+    Ok(serde_json::json!({
+        "format_version": 1,
+        "source": "vmangos",
+        "family": "globals",
+        "patch": crate::source_selection::PATCH,
+        "client_build": crate::source_selection::CLIENT_BUILD,
+        "findings": [{
+            "code": "globals.portal-condition",
+            "classification": "unsupported",
+            "occurrences": conditioned.len(),
+            "source_ids": conditioned,
+        }],
+    }))
+}
+
 pub(crate) fn run(
     dump_path: &str,
     args: &WorldImportArgs,
     spells: &spell::SpellArgs,
 ) -> Result<()> {
-    let dump = read_dump(dump_path)?;
+    let dump = WorldSource::open(std::path::Path::new(dump_path), args.source)?;
+    if args.source == SourceKind::Vmangos {
+        let plan = build_vmangos_plan(&dump, args)?;
+        return emit_plan(&dump, args, &plan);
+    }
 
     let display_scales: Option<std::collections::HashMap<u32, f32>> = match &args.dbc {
         Some(dir) => {
@@ -3652,6 +3649,13 @@ pub(crate) fn run(
 
     run_client_catalogues(&dump, args, spells)?;
 
+    emit_plan(&dump, args, &plan)
+}
+
+fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> Result<()> {
+    if let Some(manifest) = &plan.world_source_manifest {
+        eprintln!("World Source Compatibility Manifest\n{manifest}");
+    }
     if !args.apply {
         if let Some(manifest) = &plan.eventai_manifest {
             println!("-- EventAI Compatibility Manifest\n{manifest}\n");
@@ -3738,7 +3742,7 @@ mod tests {
         pub const REW_ITEM_COUNT1: &str = "RewItemCount1";
     }
     use super::*;
-    use crate::dump::cr;
+    use crate::dump::{cr, read_dump};
     use crate::standalone_support;
 
     fn import_args<const N: usize>(argv: [&str; N]) -> Result<WorldImportArgs> {
@@ -3944,6 +3948,288 @@ mod tests {
             .parse()
             .unwrap_or(0);
         assert_eq!(respawn_secs, 0);
+    }
+
+    fn vmangos_globals_fixture() -> WorldSource {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::{Integer as N, Real as F, Text};
+        sqlite_fixture(&[
+            FixtureTable {
+                name: "player_classlevelstats",
+                columns: &[
+                    ("class", "INTEGER"),
+                    ("level", "INTEGER"),
+                    ("basehp", "INTEGER"),
+                    ("basemana", "INTEGER"),
+                ],
+                key: &["class", "level"],
+                rows: &[&[
+                    ("class", N(1)),
+                    ("level", N(1)),
+                    ("basehp", N(20)),
+                    ("basemana", N(0)),
+                ]],
+            },
+            FixtureTable {
+                name: "player_levelstats",
+                columns: &[
+                    ("race", "INTEGER"),
+                    ("class", "INTEGER"),
+                    ("level", "INTEGER"),
+                    ("str", "INTEGER"),
+                    ("agi", "INTEGER"),
+                    ("sta", "INTEGER"),
+                    ("inte", "INTEGER"),
+                    ("spi", "INTEGER"),
+                ],
+                key: &["race", "class", "level"],
+                rows: &[&[
+                    ("race", N(1)),
+                    ("class", N(1)),
+                    ("level", N(1)),
+                    ("str", N(23)),
+                    ("agi", N(20)),
+                    ("sta", N(22)),
+                    ("inte", N(20)),
+                    ("spi", N(20)),
+                ]],
+            },
+            FixtureTable {
+                name: "playercreateinfo",
+                columns: &[
+                    ("race", "INTEGER"),
+                    ("class", "INTEGER"),
+                    ("map", "INTEGER"),
+                    ("zone", "INTEGER"),
+                    ("position_x", "REAL"),
+                    ("position_y", "REAL"),
+                    ("position_z", "REAL"),
+                    ("orientation", "REAL"),
+                ],
+                key: &["race", "class"],
+                rows: &[&[
+                    ("race", N(1)),
+                    ("class", N(1)),
+                    ("map", N(0)),
+                    ("zone", N(12)),
+                    ("position_x", F(1.5)),
+                    ("position_y", F(2.5)),
+                    ("position_z", F(3.5)),
+                    ("orientation", F(0.5)),
+                ]],
+            },
+            FixtureTable {
+                name: "playercreateinfo_spell",
+                columns: &[
+                    ("spell", "INTEGER"),
+                    ("race", "INTEGER"),
+                    ("class", "INTEGER"),
+                    ("build_min", "INTEGER"),
+                    ("build_max", "INTEGER"),
+                ],
+                key: &["race", "class", "spell", "build_min"],
+                rows: &[
+                    &[
+                        ("race", N(1)),
+                        ("class", N(1)),
+                        ("spell", N(78)),
+                        ("build_min", N(5875)),
+                        ("build_max", N(5875)),
+                    ],
+                    &[
+                        ("race", N(1)),
+                        ("class", N(1)),
+                        ("spell", N(99)),
+                        ("build_min", N(1)),
+                        ("build_max", N(5874)),
+                    ],
+                ],
+            },
+            FixtureTable {
+                name: "playercreateinfo_action",
+                columns: &[
+                    ("type", "INTEGER"),
+                    ("race", "INTEGER"),
+                    ("class", "INTEGER"),
+                    ("button", "INTEGER"),
+                    ("action", "INTEGER"),
+                ],
+                key: &["race", "class", "button"],
+                rows: &[&[
+                    ("race", N(1)),
+                    ("class", N(1)),
+                    ("button", N(0)),
+                    ("action", N(78)),
+                    ("type", N(0)),
+                ]],
+            },
+            FixtureTable {
+                name: "playercreateinfo_item",
+                columns: &[
+                    ("race", "INTEGER"),
+                    ("class", "INTEGER"),
+                    ("itemid", "INTEGER"),
+                    ("amount", "INTEGER"),
+                ],
+                key: &["race", "class", "itemid"],
+                rows: &[&[
+                    ("race", N(1)),
+                    ("class", N(1)),
+                    ("itemid", N(25)),
+                    ("amount", N(1)),
+                ]],
+            },
+            FixtureTable {
+                name: "game_graveyard_zone",
+                columns: &[
+                    ("ghost_zone", "INTEGER"),
+                    ("id", "INTEGER"),
+                    ("faction", "INTEGER"),
+                    ("patch_min", "INTEGER"),
+                    ("patch_max", "INTEGER"),
+                ],
+                key: &["id", "ghost_zone"],
+                rows: &[
+                    &[
+                        ("id", N(7)),
+                        ("ghost_zone", N(9)),
+                        ("faction", N(469)),
+                        ("patch_min", N(10)),
+                        ("patch_max", N(10)),
+                    ],
+                    &[
+                        ("id", N(8)),
+                        ("ghost_zone", N(12)),
+                        ("faction", N(0)),
+                        ("patch_min", N(0)),
+                        ("patch_max", N(9)),
+                    ],
+                ],
+            },
+            FixtureTable {
+                name: "areatrigger_teleport",
+                columns: &[
+                    ("name", "TEXT"),
+                    ("id", "INTEGER"),
+                    ("patch", "INTEGER"),
+                    ("target_map", "INTEGER"),
+                    ("target_position_x", "REAL"),
+                    ("target_position_y", "REAL"),
+                    ("target_position_z", "REAL"),
+                    ("target_orientation", "REAL"),
+                    ("required_condition", "INTEGER"),
+                ],
+                key: &["id", "patch"],
+                rows: &[
+                    &[
+                        ("id", N(78)),
+                        ("patch", N(0)),
+                        ("name", Text("Old".into())),
+                        ("target_map", N(0)),
+                        ("target_position_x", F(1.0)),
+                        ("target_position_y", F(2.0)),
+                        ("target_position_z", F(3.0)),
+                        ("target_orientation", F(0.0)),
+                        ("required_condition", N(0)),
+                    ],
+                    &[
+                        ("id", N(78)),
+                        ("patch", N(10)),
+                        ("name", Text("Entry".into())),
+                        ("target_map", N(36)),
+                        ("target_position_x", F(4.0)),
+                        ("target_position_y", F(5.0)),
+                        ("target_position_z", F(6.0)),
+                        ("target_orientation", F(0.5)),
+                        ("required_condition", N(4)),
+                    ],
+                ],
+            },
+        ])
+        .unwrap()
+    }
+
+    #[test]
+    fn vmangos_globals_plan_uses_named_columns_and_selected_versions() {
+        let source = vmangos_globals_fixture();
+        let args = import_args([
+            "--source",
+            "vmangos",
+            "--dump",
+            "fixture.sqlite",
+            "--family",
+            "globals",
+        ])
+        .unwrap();
+        let plan = build_vmangos_plan(&source, &args).unwrap();
+        assert_eq!(plan.stamps, [("globals", 8)]);
+        let sql = plan.stmts.join(";\n");
+        for row in [
+            "(257,1,1,20,0)",
+            "(65793,1,1,1,23,20,22,20,20)",
+            "(257,1,1,0,12,1.5,2.5,3.5,0.5,0)",
+            "(1,1,1,78)",
+            "(1,1,1,0,78,0)",
+            "(1000000,257,25)",
+            "(1,7,9,469)",
+            "(78,36,4,5,6,0.5,'Entry')",
+        ] {
+            assert!(sql.contains(row), "missing {row}: {sql}");
+        }
+        assert!(plan.reducer_batches(&args).unwrap().is_empty());
+        let manifest: serde_json::Value =
+            serde_json::from_str(plan.world_source_manifest.as_deref().unwrap()).unwrap();
+        assert_eq!(
+            manifest["findings"][0]["source_ids"],
+            serde_json::json!([78])
+        );
+    }
+
+    #[test]
+    fn starter_spells_cannot_disappear_on_numeric_overflow() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::Integer;
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "playercreateinfo_spell",
+            columns: &[
+                ("race", "INTEGER"),
+                ("class", "INTEGER"),
+                ("spell", "INTEGER"),
+                ("build_min", "INTEGER"),
+                ("build_max", "INTEGER"),
+            ],
+            key: &["race", "class", "spell"],
+            rows: &[&[
+                ("race", Integer(1)),
+                ("class", Integer(1)),
+                ("spell", Integer(4_294_967_296)),
+                ("build_min", Integer(1)),
+                ("build_max", Integer(5875)),
+            ]],
+        }])
+        .unwrap();
+        let error = build_createinfo_spell_sql(&source).unwrap_err();
+        assert!(
+            error.to_string().contains("playercreateinfo_spell.spell"),
+            "{error:#}"
+        );
+    }
+
+    #[test]
+    fn vmangos_globals_refuse_text_in_a_numeric_cell() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value;
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "playercreateinfo",
+            columns: &[("race", "INTEGER")],
+            key: &[],
+            rows: &[&[("race", Value::Text("bad".into()))]],
+        }])
+        .unwrap();
+        assert!(build_start_position_sql(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("playercreateinfo.race: expected a number"));
     }
 
     #[test]

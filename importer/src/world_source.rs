@@ -143,15 +143,19 @@ impl Row {
     }
 
     pub(crate) fn number<T: std::str::FromStr>(&self, column: &str) -> Result<T> {
+        self.numeric_text(column)?.parse().map_err(|_| {
+            anyhow::anyhow!(
+                "{}.{}: invalid {}",
+                self.columns.table,
+                column,
+                std::any::type_name::<T>()
+            )
+        })
+    }
+
+    pub(crate) fn numeric_text(&self, column: &str) -> Result<&str> {
         match self.cell(column)? {
-            StoredCell::Number(value) => self.value(value).trim().parse().map_err(|_| {
-                anyhow::anyhow!(
-                    "{}.{}: invalid {}",
-                    self.columns.table,
-                    column,
-                    std::any::type_name::<T>()
-                )
-            }),
+            StoredCell::Number(value) => Ok(self.value(value).trim()),
             _ => bail!("{}.{}: expected a number", self.columns.table, column),
         }
     }
@@ -212,6 +216,13 @@ impl WorldSource {
 }
 
 impl TableRows for WorldSource {
+    fn kind(&self) -> SourceKind {
+        match self {
+            Self::ClassicDb(_) => SourceKind::ClassicDb,
+            Self::Vmangos(_) => SourceKind::Vmangos,
+        }
+    }
+
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
             Self::ClassicDb(dump) => dump.rows(table),
