@@ -339,6 +339,7 @@ fn blank_broadcast_text(id: u32) -> CreatureAiBroadcastText {
         emote_id_2: 0,
         emote_delay_3_ms: 0,
         emote_id_3: 0,
+        sound_id: 0,
     }
 }
 

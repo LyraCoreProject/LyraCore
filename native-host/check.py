@@ -11,6 +11,7 @@ import time
 import traceback
 
 import admission
+from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
                       spell_go_misses, spell_id, teleport_ack, values)
 from host import MODULE, Host
@@ -4952,7 +4953,7 @@ SHARED = named(
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
-    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat,
+    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat, check_eventai_speech,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,
     check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation, check_combo_points,
 ) | {'admission': admission.run}

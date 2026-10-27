@@ -3693,6 +3693,7 @@ fn vmangos_creature_entries(
         }
     }
     entries.extend([416, 1860, 1863, 5676, 5677, 12861]);
+    eventai::vmangos::include_required_templates(dump, &mut entries)?;
     Ok(entries)
 }
 
@@ -4002,7 +4003,7 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
         "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into(),
         "DELETE FROM game_creature_ai_summon WHERE id > 0".into(),
     ];
-    push_insert(&mut stmts, "game_creature_ai_broadcast_text", "id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3", &eventai.broadcast_rows);
+    push_insert(&mut stmts, "game_creature_ai_broadcast_text", "id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3,sound_id", &eventai.broadcast_rows);
     push_insert(
         &mut stmts,
         "game_creature_ai_summon",

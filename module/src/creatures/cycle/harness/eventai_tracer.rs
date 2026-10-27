@@ -1094,3 +1094,21 @@ fn a_fresh_engagement_rearms_the_rules_the_last_fight_spent() {
         5_000
     );
 }
+
+#[test]
+fn speech_plays_the_chosen_broadcast_sound_and_keeps_silent_defaults() {
+    let definition = native_definition(
+        EventAiSubject::Entry(ENTRY),
+        vec![aggro_rule(10, vec![say(1), say(2)])],
+    );
+    let mut scenario = world(0)
+        .eventai_native_definition(definition)
+        .eventai_broadcast(1, "First line", 1)
+        .eventai_broadcast(2, "Second line", 1);
+    scenario.eventai_text_sounds.borrow_mut().insert(1, 5780);
+
+    EngageSink::engage(&mut scenario, CREATURE, TARGET, Pull::Noticed);
+
+    assert_eq!(*scenario.eventai_sounds.borrow(), vec![(CREATURE, 5780, 1)]);
+    assert_eq!(scenario.eventai_speech().len(), 2);
+}

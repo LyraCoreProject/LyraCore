@@ -28,14 +28,14 @@ use lyracore_shared::spell::taxonomy::{
     E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE,
     E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
     E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY,
-    P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND,
-    P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS,
-    SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION,
-    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
-    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
+    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
+    SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT,
+    SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
     SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
     STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
     T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
@@ -542,7 +542,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         E_ENERGIZE => ((misc & 0xFF) as i32, P_POWER_TYPE),
         E_DISPEL => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         E_CREATE_ITEM => (item_type, P_ITEM_ENTRY),
-        E_SUMMON_PET => (misc as i32, P_ENTRY),
+        E_SUMMON_PET | E_SUMMON_GUARDIANS => (misc as i32, P_ENTRY),
         E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
         E_SELF_RESURRECT => (misc as i32, P_FLAT_MANA),
         _ => (0, P_NONE),
@@ -1187,7 +1187,9 @@ fn resolve_effect_kind(
         }
         (k, resolve_aura_params(k, aura, s.effect_misc_value[i]))
     } else {
-        let k = if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
+        let k = if i == 0 && s.npc_guardian_entry.is_some() {
+            E_SUMMON_GUARDIANS
+        } else if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
             E_RECALL_HOME
         } else {
             instant_effect_to_kind(effect_id)
@@ -1301,7 +1303,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
         E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE
-        | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
+        | E_SUMMON_GUARDIANS | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
@@ -1506,6 +1508,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_NEXT_SWING => "E_NEXT_SWING",
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
+        E_SUMMON_GUARDIANS => "E_SUMMON_GUARDIANS",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -1925,6 +1928,37 @@ mod tests {
             durations: authored_table(4, &[&[1, 12000, 0, 12000]]),
             radii: authored_table(4, &[&[1, 7.0f32.to_bits()], &[2, 9.0f32.to_bits()]]),
         }
+    }
+
+    #[test]
+    fn vmangos_guardians_use_the_same_effect_in_catalogue_and_snapshot() {
+        let mut tables = fixture_tables();
+        tables.spells = crate::vmangos_spell::read(&crate::vmangos_spell::guardian_fixture())
+            .unwrap()
+            .0;
+        let (rows, _, _) = derive_spell_rows(&tables, &[5200], &[]).unwrap();
+        assert_eq!(rows.effects.len(), 1);
+        let effect = &rows.effects[0];
+        assert_eq!(
+            (
+                effect.kind,
+                effect.base_points,
+                effect.die_sides,
+                effect.target,
+                effect.p0,
+                effect.p0_kind
+            ),
+            (E_SUMMON_GUARDIANS, 2, 1, T_SELF, 636, P_ENTRY)
+        );
+        let snapshot: serde_json::Value = serde_json::from_str(&write_snapshot(&rows)).unwrap();
+        assert_eq!(snapshot["game_spell_effect"][0]["kind"], 39);
+        assert_eq!(snapshot["game_spell_effect"][0]["p0"], 636);
+        tables
+            .spells
+            .iter_mut()
+            .for_each(|spell| spell.npc_guardian_entry = None);
+        let (classic, _, _) = derive_spell_rows(&tables, &[5200], &[]).unwrap();
+        assert_eq!(classic.effects[0].kind, E_SCRIPTED);
     }
 
     #[test]

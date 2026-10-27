@@ -6063,7 +6063,7 @@ fn source_loader_u32(value: &str) -> Option<u32> {
     value.parse::<i64>().ok().map(|value| value as u32)
 }
 
-fn fixture_id(id: u32) -> bool {
+pub(crate) fn fixture_id(id: u32) -> bool {
     (FIXTURE_ID_FIRST..=FIXTURE_ID_LAST).contains(&id)
 }
 

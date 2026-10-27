@@ -74,6 +74,7 @@ pub(crate) trait EventAiWorld {
         language: u8,
         message: String,
     ) -> bool;
+    fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8);
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool;
     fn eventai_start_spell(
         &mut self,
@@ -700,8 +701,8 @@ fn speak<W: EventAiWorld>(
         1 => Some(ids[0]),
         len => Some(ids[linked_choice as usize % len]),
     };
-    let (message, chat_type, language, emote) = match picked {
-        None => (speech.legacy_text.clone(), chat_type, 0, 0),
+    let (message, chat_type, language, emote, sound) = match picked {
+        None => (speech.legacy_text.clone(), chat_type, 0, 0, 0),
         Some(id) => {
             let Some(line) = world.eventai_broadcast(id) else {
                 return false;
@@ -715,9 +716,13 @@ fn speak<W: EventAiWorld>(
                 },
                 line.language,
                 line.emote,
+                line.sound,
             )
         }
     };
+    if sound != 0 {
+        world.eventai_deliver_sound(context.creature_guid, sound, chat_type);
+    }
     if chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER
         && !world
             .eventai_unit(target_guid)
@@ -1267,6 +1272,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 chat_type: text.chat_type,
                 language: text.language_id,
                 emote: text.emote_id_1,
+                sound: text.sound_id,
             })
     }
 
@@ -1478,6 +1484,10 @@ impl EventAiWorld for DatabaseWorld<'_> {
             message,
         )
         .is_ok()
+    }
+
+    fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8) {
+        crate::native::creature_sound(self.ctx, source_guid, sound_id, chat_type);
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {

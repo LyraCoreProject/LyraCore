@@ -647,3 +647,14 @@ The summon expiry table appends `guardian_faction` with a typed `None` default. 
 faction survives EventAI presentation changes and resets. Existing temporary summons
 retain their timer, which restarts while engaged. These rules were derived from `SpellEffects.cpp`,
 `Pet.cpp` and `PetAI.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`.
+
+The vmangos importer admits spell 5200 as this effect only while its source shape remains an NPC
+Guardian summon at the caster's position with template levels and no secondary effect or script.
+It checks the summoned template and adds it to scoped imports. VanCleef's force-cast flag on this
+self-cast bypasses no additional Module admission rule; ordinary spell Gates still apply. Other
+force casts remain unsupported. The classic-db spell mapping stays unchanged.
+
+Nearby EventAI and relay speech carries `broadcast_text.sound_id` into `SMSG_PLAY_SOUND`, sent to
+observers of the speaker. Existing broadcast rows receive a zero default. Zone-wide broadcasts
+with sound remain unsupported. Sound and text behavior follows `DoScriptText` and
+`WorldObject::PlayDirectSound` at the same pinned vmangos revision.

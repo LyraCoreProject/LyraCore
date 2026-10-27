@@ -66,6 +66,7 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             emote_id_2: 0,
             emote_delay_3_ms: 0,
             emote_id_3: 0,
+            sound_id: 0,
         });
         by_entry.entry(entry).or_default().push(EventAiRule {
             source_rule_id: rule_id,

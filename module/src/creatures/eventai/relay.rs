@@ -1539,6 +1539,7 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
+            crate::native::creature_sound(ctx, guid, line.sound_id, line.chat_type);
             crate::chat::apply_send_chat_to(
                 ctx,
                 source,
