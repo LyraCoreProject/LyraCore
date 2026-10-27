@@ -50,6 +50,14 @@ pub struct RelayNearby {
 pub struct RelayTalk {
     pub broadcast_ids: Vec<u32>,
 }
+impl RelayTalk {
+    fn parse(ids: &str) -> Result<Self, String> {
+        Ok(Self {
+            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
+        })
+    }
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub struct RelayTalkOverride {
     pub talk: RelayTalk,
@@ -62,9 +70,7 @@ impl RelayTalkOverride {
             return Err("unsupported script chat type".into());
         }
         Ok(Self {
-            talk: RelayTalk {
-                broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
-            },
+            talk: RelayTalk::parse(ids)?,
             chat_type,
         })
     }
@@ -1016,9 +1022,7 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         ["talk-as", chat_type, ids] => Ok(RelayInstruction::TalkAs(RelayTalkOverride::parse(
             chat_type, ids,
         )?)),
-        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk {
-            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
-        })),
+        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk::parse(ids)?)),
         ["emote", ids] => Ok(RelayInstruction::Emote(RelayEmote {
             emote_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),
