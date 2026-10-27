@@ -193,3 +193,19 @@ needs weapon-enchant and item-on-hit dispatch. These two bits are held under dec
 other defined custom bits have gameplay checks. The catalogue retains the held flags. The
 spell-behavior report lists every bit and the tests. The existing script and high-mask findings
 remain. Automatic negative-coefficient fallbacks retain the Module's prior formulas.
+
+The six replacement catalogues keep the Module's current column projection. Trigger geometry
+comes from vmangos, but these extra behaviors have no Module fields. Both profiles select the
+complete catalogues and report the same counts.
+
+| Finding | Selected rows | Current limit |
+| --- | ---: | --- |
+| `dbc.trigger-cooldown` | 2 | Trigger cooldowns are not represented. |
+| `dbc.trigger-condition` | 0 | A future nonzero source condition will be reported; trigger entry has no condition Gate. |
+| `dbc.trigger-script-id` | 2 | Source trigger script lists await the script system. |
+| `dbc.trigger-script-name` | 53 | Source named trigger scripts are unsupported. |
+
+`map_template` remains on Map.dbc under decision 11. It has no equivalent of `internal_name`,
+which `importer/src/vmap.rs` uses to locate WDT and ADT archives. The maintainer is deciding
+whether gameplay columns may come from vmangos with the archive directory from Map.dbc. Until
+that decision, the complete Map table stays on the client source. No other S5e table is held.

@@ -3980,6 +3980,7 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
 
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
+        Some("dbc") => dbc::replacement_plan(dump, args.dbc.as_deref().context("dbc requires --dbc")?),
         Some("spellmeta") => vmangos_spellmeta::plan(dump),
         Some("spell") => spell::world_plan(dump, args.dbc.as_deref().context("spell requires --dbc")?),
         Some("creatures" | "casts") => vmangos_creatures::plan(dump, args),
@@ -4008,6 +4009,9 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
 }
 
 pub(crate) fn census_plan(source: &WorldSource, args: &WorldImportArgs) -> Result<DumpPlan> {
+    if args.family.as_deref() == Some("dbc") {
+        return dbc::replacement_plan(source, args.dbc.as_deref().context("dbc requires --dbc")?);
+    }
     if args.family.as_deref() == Some("spell") {
         return spell::world_plan(source, args.dbc.as_deref().context("spell requires --dbc")?);
     }
@@ -4061,6 +4065,11 @@ pub(crate) fn run(
     spells: &spell::SpellArgs,
 ) -> Result<()> {
     let dump = WorldSource::open(std::path::Path::new(dump_path), args.source)?;
+    if args.family.as_deref() == Some("dbc") {
+        let plan =
+            dbc::replacement_plan(&dump, args.dbc.as_deref().context("dbc requires --dbc")?)?;
+        return emit_plan(&dump, args, &plan);
+    }
     if args.family.as_deref() == Some("spell") {
         let plan = spell::world_plan(&dump, args.dbc.as_deref().context("spell requires --dbc")?)?;
         return emit_plan(&dump, args, &plan);
