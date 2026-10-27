@@ -245,6 +245,7 @@ pub enum RelayInstruction {
     SetFailurePolicy(RelayFailurePolicy),
     StartChoices(RelayChoices),
     CastWithOptions(super::CastInstruction),
+    CreatureControl(super::relay_control::RelayCreatureControl),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
@@ -442,7 +443,7 @@ pub(crate) fn stage_script_failure_policies_for_debug(
     second: u64,
 ) -> Result<(), String> {
     let specs = [
-        (90_101, "0,0,0,source>source,failure-policy:continue~0,0,1,source>selected,attack-start~500,0,2,source>source,set-stand-state:3"),
+        (90_101, "0,0,0,source>source,failure-policy:continue~0,0,1,source>selected,attack-start~0,0,2,source>source,creature-control:phase:30~0,0,3,source>source,creature-control:phase-inc:3~500,0,4,source>source,set-stand-state:3"),
         (90_102, "0,0,0,source>source,failure-policy:continue~0,0,1,source>source,start-choices:90103.90103~500,0,2,source>source,failure-policy:abort~500,0,3,source>selected,attack-start~2000,0,4,source>source,set-stand-state:4"),
         (90_103, "3000,0,0,source>source,set-stand-state:8"),
     ];
@@ -987,6 +988,9 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
     }
     let fields = encoded.split(':').collect::<Vec<_>>();
     match fields.as_slice() {
+        ["creature-control", rest @ ..] => Ok(RelayInstruction::CreatureControl(
+            super::relay_control::RelayCreatureControl::parse(rest)?,
+        )),
         ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk {
             broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),
@@ -1597,6 +1601,32 @@ fn apply_leaf_for_pair(
             spawn.run_by_default,
         )
         .map(|_| ()),
+        RelayInstruction::CreatureControl(control) => {
+            let source = live_unit_in_run(ctx, run, guid)?;
+            if source.is_player() {
+                return Err("script control source must be a creature".into());
+            }
+            let context = super::EventContext {
+                current_target_guid: (target_guid != 0).then_some(target_guid),
+                invoker_guid: (target_guid != 0).then_some(target_guid),
+                ..super::EventContext::empty(
+                    super::EventKind::OnSpawn,
+                    guid,
+                    ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                )
+            };
+            if super::engine::execute_instruction(
+                &mut super::engine::DatabaseWorld::new(ctx),
+                &context,
+                &control.instruction(),
+                0,
+            ) == super::ActionResult::Applied
+            {
+                Ok(())
+            } else {
+                Err("script creature control was refused".into())
+            }
+        }
         RelayInstruction::CastWithOptions(cast) => {
             let source = live_unit_in_run(ctx, run, guid)?;
             if source.is_player() {

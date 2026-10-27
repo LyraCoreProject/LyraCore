@@ -4,6 +4,7 @@ mod loader;
 mod model;
 mod presentation;
 mod relay;
+mod relay_control;
 mod stored;
 mod tables;
 

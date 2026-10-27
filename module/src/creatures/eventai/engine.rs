@@ -437,7 +437,7 @@ fn flee_with_text<W: EventAiWorld>(
     result
 }
 
-fn execute_instruction<W: EventAiWorld>(
+pub(super) fn execute_instruction<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     instruction: &CreatureInstruction,

@@ -4,6 +4,9 @@ use crate::world_source::Row;
 use anyhow::{ensure, Context, Result};
 use std::collections::{BTreeMap, BTreeSet, HashSet};
 
+#[path = "eventai_vmangos_scripts.rs"]
+mod delayed;
+
 #[derive(Clone)]
 struct Event {
     id: u64,
@@ -33,7 +36,7 @@ pub(super) struct Command {
     condition: u32,
 }
 
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Compiled {
     instructions: Vec<String>,
     ends: Vec<u32>,
@@ -43,12 +46,14 @@ struct Compiled {
     templates: BTreeSet<u64>,
     quests: BTreeSet<u32>,
     limitations: BTreeSet<String>,
+    relays: BTreeSet<u32>,
 }
 
 pub(crate) struct Source {
     events: Vec<Event>,
     event_ai_entries: BTreeSet<u32>,
     scripts: BTreeMap<u32, Vec<Command>>,
+    delayed: BTreeMap<&'static str, BTreeMap<u32, Vec<Command>>>,
     broadcasts: BTreeMap<u32, Broadcast>,
     predicates: BTreeMap<u32, Option<String>>,
     quests: BTreeSet<u32>,
@@ -217,6 +222,10 @@ impl Source {
                 })
                 .collect::<Result<_>>()?,
             scripts: commands(source, "creature_ai_scripts")?,
+            delayed: delayed::TABLES
+                .into_iter()
+                .map(|table| Ok((table, commands(source, table)?)))
+                .collect::<Result<_>>()?,
             broadcasts,
             predicates,
             quests: source
@@ -245,6 +254,8 @@ impl Source {
         let mut limitations = Findings::new();
         let mut emitted = 0;
         let mut excluded = 0;
+        let scripts = delayed::Scripts::compile(self);
+        let mut used_relays = BTreeSet::new();
         for event in &self.events {
             if !entries.contains(&u64::from(event.entry))
                 || !self.event_ai_entries.contains(&event.entry)
@@ -253,7 +264,7 @@ impl Source {
                 excluded += 1;
                 continue;
             }
-            match self.compile_event(event, templates) {
+            match self.compile_event(event, templates, &scripts) {
                 Ok((rule, compiled)) => {
                     definitions.entry(event.entry).or_default().push(rule);
                     plan.coverage.emitted_instructions += compiled.instructions.len() as u64;
@@ -261,6 +272,7 @@ impl Source {
                     summons.extend(compiled.summons);
                     plan.forced_template_entries.extend(compiled.templates);
                     plan.quest_event_entries.extend(compiled.quests);
+                    used_relays.extend(compiled.relays);
                     for limitation in compiled.limitations {
                         limitations
                             .entry(limitation)
@@ -277,9 +289,30 @@ impl Source {
                 }
             }
         }
+        for id in &used_relays {
+            let script = &scripts.definitions[id];
+            used_texts.extend(&script.texts);
+            plan.quest_event_entries.extend(&script.quests);
+        }
+        plan.relay_definition_rows = used_relays
+            .iter()
+            .map(|id| scripts.definitions[id].encode(*id))
+            .collect();
+        let catalogue =
+            super::RelaySource::encoded_catalogue_version(&plan.relay_definition_rows).to_string();
         plan.definition_rows = definitions
             .into_iter()
-            .map(|(entry, rules)| encode_definition(Subject::Entry(entry), &rules))
+            .map(|(entry, rules)| {
+                encode_definition(
+                    Subject::Entry(entry),
+                    &rules
+                        .into_iter()
+                        .map(|rule| {
+                            rule.replace(super::RELAY_CATALOGUE_VERSION_PLACEHOLDER, &catalogue)
+                        })
+                        .collect::<Vec<_>>(),
+                )
+            })
             .collect();
         plan.definition_batches = pack_definition_batches(&plan.definition_rows);
         plan.broadcast_rows = used_texts
@@ -287,10 +320,11 @@ impl Source {
             .map(|id| self.broadcasts[&id].encoded.clone())
             .collect();
         plan.summon_rows = summons.into_values().collect();
-        plan.relay_definition_batches = vec![String::new()];
+        plan.relay_definition_batches = vec![plan.relay_definition_rows.join("\n")];
         let manifest = serde_json::json!({
             "format_version": 1, "source": "vmangos", "family": "creature-ai",
-            "counts": { "source_rules": self.events.len(), "emitted_rules": emitted, "excluded_rules": excluded, "dropped_rules": self.events.len() - emitted - excluded, "definitions": plan.definition_rows.len(), "emitted_instructions": plan.instruction_count(), "relays": 0 },
+            "counts": { "source_rules": self.events.len(), "emitted_rules": emitted, "excluded_rules": excluded, "dropped_rules": self.events.len() - emitted - excluded, "definitions": plan.definition_rows.len(), "emitted_instructions": plan.instruction_count(), "relays": plan.relay_definition_rows.len() },
+            "scripts": scripts.manifest(&self.delayed, &used_relays),
             "source_census": { "events": census(self.events.iter().map(|e| e.kind)), "event_flags": census(self.events.iter().map(|e| e.flags)), "commands": census(self.scripts.values().flatten().map(|c| c.kind)), "targets": census(self.scripts.values().flatten().map(|c| c.target)), "command_flags": census(self.scripts.values().flatten().map(|c| c.flags)) },
             "limitations": limitations.into_iter().map(|(code, source_ids)| serde_json::json!({"code":format!("eventai.{code}"),"classification":"unsupported","occurrences":source_ids.len(),"source_ids":source_ids})).collect::<Vec<_>>(),
             "findings": findings.into_iter().map(|(code, source_ids)| serde_json::json!({"code":format!("eventai.{code}"),"classification":"unsupported","occurrences":source_ids.len(),"source_ids":source_ids})).collect::<Vec<_>>()
@@ -302,6 +336,7 @@ impl Source {
         &self,
         event: &Event,
         templates: &HashSet<u64>,
+        scripts: &delayed::Scripts,
     ) -> std::result::Result<(String, Compiled), String> {
         if event.flags & !31 != 0
             || event.chance == 0
@@ -338,7 +373,21 @@ impl Source {
                 {
                     return Err(format!("command-condition:{}", command.condition));
                 }
-                let instruction = self.compile_command(command, &mut compiled, templates)?;
+                let instruction = if command.kind == 39 {
+                    let choices = delayed::choices(command)?;
+                    if command.flags & !(4 | 8 | 16) != 0 {
+                        return Err("start-script-source-target-swap".into());
+                    }
+                    let target = command.target()?;
+                    compiled.relays.extend(scripts.closure(&choices)?);
+                    format!(
+                        "start-script:{}:{target}:{}",
+                        joined(&choices),
+                        super::RELAY_CATALOGUE_VERSION_PLACEHOLDER
+                    )
+                } else {
+                    self.compile_command(command, &mut compiled, templates)?
+                };
                 if command.flags & 8 != 0 {
                     compiled.aborts.push(compiled.instructions.len() as u32);
                 }
@@ -413,7 +462,7 @@ impl Source {
                     joined(&ids)
                 ))
             }
-            1 if actor && c.ints[0] == 0 => {
+            1 if actor && a != 0 && c.ints[0] == 0 => {
                 let count = 1 + c.longs[1..].iter().take_while(|id| **id != 0).count();
                 if c.longs[..count].iter().any(|id| *id > i32::MAX as u32) {
                     return Err(unsupported());
@@ -503,10 +552,10 @@ impl Source {
             33 if actor => Ok("evade:0".into()),
             42 if actor && a <= 1 => Ok(format!("auto-attack:{a}")),
             43 if actor && a <= 1 => Ok(format!("combat-movement:{a}")),
-            44 if actor && a < 32 && (b == 0 || b == 2 || (b == 1 && a == 0)) => Ok(match b {
+            44 if actor && a < 32 && b <= 2 => Ok(match b {
                 0 => format!("phase:{a}"),
-                1 => format!("phase-inc:{a}"),
-                _ => format!("phase-inc:-{a}"),
+                1 => format!("phase-inc-checked:{a}"),
+                _ => format!("phase-inc-checked:-{a}"),
             }),
             45 if actor && c.longs.iter().all(|v| *v < 32) => {
                 let count = if e != 0 {
@@ -721,11 +770,12 @@ mod tests {
     use crate::world_source::{sqlite_fixture, FixtureTable};
     use rusqlite::types::Value;
 
-    fn source() -> Source {
+    pub(super) fn source() -> Source {
         Source {
             events: Vec::new(),
             event_ai_entries: BTreeSet::from([100]),
             scripts: BTreeMap::new(),
+            delayed: BTreeMap::new(),
             broadcasts: BTreeMap::new(),
             predicates: BTreeMap::from([(0, Some("always".into()))]),
             quests: BTreeSet::from([41]),
@@ -733,7 +783,7 @@ mod tests {
         }
     }
 
-    fn step(kind: u32, longs: [u32; 4]) -> Command {
+    pub(super) fn step(kind: u32, longs: [u32; 4]) -> Command {
         Command {
             id: 10,
             delay: 0,
@@ -750,7 +800,7 @@ mod tests {
         }
     }
 
-    fn event(actions: [u32; 3]) -> Event {
+    pub(super) fn event(actions: [u32; 3]) -> Event {
         Event {
             id: 1,
             entry: 100,
@@ -814,7 +864,13 @@ mod tests {
         source.scripts.insert(11, vec![step(44, [3, 0, 0, 0])]);
         let mut event = event([10, 11, 0]);
         event.flags = 2 | 4 | 8;
-        let (rule, _) = source.compile_event(&event, &HashSet::from([100])).unwrap();
+        let (rule, _) = source
+            .compile_event(
+                &event,
+                &HashSet::from([100]),
+                &delayed::Scripts::compile(&source),
+            )
+            .unwrap();
         assert_eq!(
             rule,
             "1,aggro,100,4294967295,once,lists:1:2.3:0,script:1:1:always,phase:1+phase:2+phase:3"
