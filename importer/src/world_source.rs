@@ -1,5 +1,5 @@
 use std::borrow::Cow;
-use std::collections::{BTreeSet, HashMap};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -11,8 +11,8 @@ use crate::dump::TableRows;
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) enum SourceKind {
-    #[default]
     ClassicDb,
+    #[default]
     Vmangos,
 }
 
@@ -183,6 +183,70 @@ impl Row {
             StoredCell::Zero => "0",
             StoredCell::Number(value) | StoredCell::Text(value) => self.value(value).trim(),
         })
+    }
+}
+
+pub(crate) struct CachedSource<'a, T> {
+    source: &'a T,
+    tables: BTreeMap<&'static str, std::cell::OnceCell<Vec<Row>>>,
+}
+
+impl<'a, T: TableRows> CachedSource<'a, T> {
+    pub(crate) fn new(source: &'a T) -> Self {
+        Self {
+            source,
+            tables: [
+                "creature",
+                "creature_template",
+                "creature_ai_events",
+                "creature_ai_scripts",
+                "generic_scripts",
+                "conditions",
+            ]
+            .into_iter()
+            .map(|name| (name, std::cell::OnceCell::new()))
+            .collect(),
+        }
+    }
+}
+
+impl<T: TableRows> TableRows for CachedSource<'_, T> {
+    fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
+        let Some(cell) = self.tables.get(table) else {
+            return self.source.rows(table);
+        };
+        if cell.get().is_none() {
+            let rows = self.source.rows(table)?.into_owned();
+            cell.set(rows).expect("source cache is initialized once");
+        }
+        Ok(Cow::Borrowed(cell.get().expect("initialized above")))
+    }
+
+    fn columns(&self, table: &str, columns: &[&str]) -> Result<Cow<'_, [Row]>> {
+        if !self.tables.contains_key(table) {
+            return self.source.columns(table, columns);
+        }
+        let rows = self.rows(table)?;
+        if let Some(row) = rows.first() {
+            for column in columns {
+                row.cell(column)?;
+            }
+        } else {
+            self.source.columns(table, columns)?;
+        }
+        Ok(rows)
+    }
+
+    fn kind(&self) -> SourceKind {
+        self.source.kind()
+    }
+
+    fn source_hash(&self) -> Result<String> {
+        self.source.source_hash()
+    }
+
+    fn source_profile_report(&self) -> Option<serde_json::Value> {
+        self.source.source_profile_report()
     }
 }
 
@@ -359,12 +423,17 @@ fn read_rows(
         "SELECT {projection} FROM {}",
         quote_identifier(table)
     ))?;
+    // Resolve the named projection once; source column ordinals are never assumed.
+    let indices = columns
+        .iter()
+        .map(|name| statement.column_index(name))
+        .collect::<rusqlite::Result<Vec<_>>>()?;
     let mut output = TableBuilder::new(table, columns.iter().cloned());
     let mut rows = statement.query([])?;
     while let Some(row) = rows.next()? {
-        let cells = columns
+        let cells = indices
             .iter()
-            .map(|name| Cell::try_from(row.get::<_, Value>(name.as_str())?))
+            .map(|&index| Cell::try_from(row.get::<_, Value>(index)?))
             .collect::<Result<Vec<_>>>()?;
         output.push(cells)?;
     }
@@ -508,6 +577,39 @@ mod tests {
                 .to_string()
                 .contains("example.missing"));
         }
+    }
+
+    #[test]
+    fn combined_cache_keeps_patch_selection_and_checked_projection() {
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "creature_template",
+            columns: &[("entry", "INTEGER"), ("patch", "INTEGER"), ("name", "TEXT")],
+            key: &["entry", "patch"],
+            rows: &[
+                &[
+                    ("entry", Value::Integer(1)),
+                    ("patch", Value::Integer(9)),
+                    ("name", Value::Text("old".into())),
+                ],
+                &[
+                    ("entry", Value::Integer(1)),
+                    ("patch", Value::Integer(10)),
+                    ("name", Value::Text("selected".into())),
+                ],
+            ],
+        }])
+        .unwrap();
+        let cached = CachedSource::new(&source);
+        assert_eq!(
+            cached.columns("creature_template", &["name"]).unwrap()[0]
+                .text("name")
+                .unwrap(),
+            "selected"
+        );
+        assert_eq!(cached.rows("creature_template").unwrap().len(), 1);
+        assert!(cached.columns("creature_template", &["missing"]).is_err());
+        assert!(cached.rows("missing").is_err());
+        assert_eq!(cached.kind(), SourceKind::Vmangos);
     }
 
     #[test]

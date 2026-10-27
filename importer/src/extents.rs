@@ -1,6 +1,6 @@
 use anyhow::{bail, Result};
 
-use crate::dump::{cr, field, parse_table, pc, read_dump};
+use crate::dump::{cr, field, parse_table, pc};
 
 struct Extents {
     count: u64,
@@ -101,10 +101,11 @@ fn start_positions_on_map(
 
 pub(crate) fn print_extents(
     dump_path: &str,
+    source: crate::world_source::SourceKind,
     map: i64,
     bbox: Option<(f64, f64, f64, f64)>,
 ) -> Result<()> {
-    let dump = &read_dump(dump_path)?;
+    let dump = &crate::world_source::WorldSource::open(std::path::Path::new(dump_path), source)?;
     let scope = match bbox {
         Some((x0, x1, y0, y1)) => format!(" inside --box {x0:.0},{x1:.0},{y0:.0},{y1:.0}"),
         None => String::new(),

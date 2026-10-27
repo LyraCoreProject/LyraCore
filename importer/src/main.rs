@@ -90,7 +90,7 @@ where
     S: Into<String>,
 {
     let mut a = Args {
-        source: world_source::SourceKind::ClassicDb,
+        source: world_source::SourceKind::Vmangos,
         census: None,
         dbc_diff: false,
         dump: None,
@@ -445,6 +445,17 @@ where
     if a.family.is_some() && a.dump.is_none() {
         bail!("--family is only valid with --dump (it names one of the cmangos-dump ETL families)");
     }
+    if a.family.is_some()
+        && (a.spells
+            || a.talents
+            || a.go_models.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.print_extents)
+    {
+        bail!("--family cannot run with another import mode");
+    }
     if !a.include_maps.is_empty() {
         if a.dump.is_none() {
             bail!("--include-map is only valid with --dump (it widens the cmangos content slice)");
@@ -518,42 +529,12 @@ where
         {
             bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|creature-ai|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
-    } else if a.source == world_source::SourceKind::Vmangos
-        && (a.dump.is_none()
-            || (a.go_models.is_none()
-                && a.spell_snapshot.is_none()
-                && !matches!(
-                    a.family.as_deref(),
-                    Some(
-                        "globals"
-                            | "creatures"
-                            | "creature-ai"
-                            | "casts"
-                            | "spell"
-                            | "spellmeta"
-                            | "dbc"
-                            | "items"
-                            | "loot"
-                            | "gameobjects"
-                            | "trainers"
-                            | "quests"
-                            | "gossip"
-                    )
-                ))
-            || (a.go_models.is_some() && a.family.is_some())
-            || a.pack_client.is_some()
-            || a.pack_out.is_some()
-            || a.terrain.is_some()
-            || a.nav.is_some()
-            || a.vmap.is_some()
-            || a.vmap_status
-            || a.vmap_prepare_coverage.is_some()
-            || a.dump_collision.is_some()
-            || a.spells
-            || a.talents
-            || a.print_extents)
+    }
+    if a.source == world_source::SourceKind::Vmangos
+        && (a.spells || a.spell_snapshot.is_some())
+        && a.dump.is_none()
     {
-        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|dbc|creatures|creature-ai|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos spells require --dump <sqlite> and --dbc <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -578,6 +559,7 @@ where
             bail!("--source vmangos requires its vmangos Source Profile");
         }
         if a.apply
+            && (a.dump.is_some() || a.taxi_mounts.is_some())
             && (a.source_sha.len() != 40
                 || !a.source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
         {
@@ -721,6 +703,14 @@ fn main() -> Result<()> {
         if args.spells {
             return spell::run_spells(&dir, &args.spell_args()?);
         }
+        if args.source == world_source::SourceKind::Vmangos {
+            let path = args
+                .taxi_mounts
+                .as_deref()
+                .context("standalone --dbc requires --taxi-mounts <sqlite>")?;
+            let source = world_source::WorldSource::open(std::path::Path::new(path), args.source)?;
+            return dbc::run_from_dump(&dir, &source, args.apply, &args.shard);
+        }
         return dbc::run(&dir, args.taxi_mounts.as_deref(), args.apply, &args.shard);
     }
 
@@ -738,9 +728,22 @@ fn main() -> Result<()> {
     }
 
     if args.print_extents {
-        return extents::print_extents(&dump_path, args.map, args.bbox);
+        return extents::print_extents(&dump_path, args.source, args.map, args.bbox);
     }
 
+    if args.spells && args.source == world_source::SourceKind::Vmangos {
+        let source =
+            world_source::WorldSource::open(std::path::Path::new(&dump_path), args.source)?;
+        let plan = spell::selected_world_plan(
+            &source,
+            args.dbc.as_deref().context("spells require --dbc")?,
+            &args.only,
+            &args.trainers,
+        )?;
+        let mut world = args.world_import_args()?;
+        world.family = Some("spell".into());
+        return world_import::emit_plan(&source, &world, &plan);
+    }
     world_import::run(&dump_path, &args.world_import_args()?, &args.spell_args()?)
 }
 
@@ -789,10 +792,10 @@ mod tests {
     }
 
     #[test]
-    fn source_defaults_to_classic_and_vmangos_census_cannot_apply() {
+    fn source_defaults_to_vmangos_and_census_cannot_apply() {
         assert_eq!(
             parse_args_from(["--dump", "source.sql"]).unwrap().source,
-            world_source::SourceKind::ClassicDb
+            world_source::SourceKind::Vmangos
         );
         assert!(parse_args_from(["--dump", "source.sql", "--source", "unknown"]).is_err());
         let args = [
@@ -816,11 +819,19 @@ mod tests {
 
     #[test]
     fn the_enabled_packages_root_is_absent_until_the_operator_names_it() {
-        let unnamed = parse_args_from(["--dbc", "/path/need-not-exist", "--spells"])
-            .expect("the spell importer parses without a packages root");
+        let unnamed = parse_args_from([
+            "--dump",
+            "source.sqlite",
+            "--dbc",
+            "/path/need-not-exist",
+            "--spells",
+        ])
+        .expect("the spell importer parses without a packages root");
         assert_eq!(unnamed.packages, None);
 
         let named = parse_args_from([
+            "--dump",
+            "source.sqlite",
             "--dbc",
             "/path/need-not-exist",
             "--spells",
@@ -834,6 +845,8 @@ mod tests {
     #[test]
     fn the_base_snapshot_mode_is_standalone() {
         let alone = parse_args_from([
+            "--dump",
+            "source.sqlite",
             "--dbc",
             "/path/need-not-exist",
             "--spell-snapshot",
@@ -933,16 +946,16 @@ mod tests {
     fn command_selects_only_the_committed_eventai_source_profile() {
         let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
             .expect("default Source Profile");
-        assert_eq!(default.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+        assert_eq!(default.eventai_profile, vmangos_profile::NAME);
 
         let selected = parse_args_from([
             "--dump",
             "/path/need-not-exist.sql",
             "--eventai-profile",
-            eventai::SOURCE_PROFILE_NAME,
+            vmangos_profile::NAME,
         ])
         .expect("named Source Profile");
-        assert_eq!(selected.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+        assert_eq!(selected.eventai_profile, vmangos_profile::NAME);
 
         let error = parse_args_from([
             "--dump",

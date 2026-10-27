@@ -1632,19 +1632,31 @@ pub(crate) fn world_plan(
     source: &impl crate::dump::TableRows,
     data_dir: &str,
 ) -> Result<crate::world_import::DumpPlan> {
+    selected_world_plan(source, data_dir, &[], &[])
+}
+
+pub(crate) fn selected_world_plan(
+    source: &impl crate::dump::TableRows,
+    data_dir: &str,
+    only: &[u32],
+    trainers: &[(u32, Vec<u32>)],
+) -> Result<crate::world_import::DumpPlan> {
     let (spells, manifest) = if source.kind() == crate::world_source::SourceKind::Vmangos {
         let (spells, manifest) = crate::vmangos_spell::read(source)?;
         (Some(spells), Some(serde_json::to_string_pretty(&manifest)?))
     } else {
         (None, None)
     };
-    let (mut rows, cov, _) =
-        derive_spell_rows(&open_spell_tables(Path::new(data_dir), spells)?, &[], &[])?;
+    let (mut rows, cov, _) = derive_spell_rows(
+        &open_spell_tables(Path::new(data_dir), spells)?,
+        only,
+        trainers,
+    )?;
     let replaced: std::collections::HashSet<_> =
         rows.fishing.iter().map(SpellEffectRow::row_id).collect();
     rows.effects
         .retain(|effect| !replaced.contains(&effect.row_id()));
-    let mut stmts = assemble_spell_sql(&rows, &[], false);
+    let mut stmts = assemble_spell_sql(&rows, only, !trainers.is_empty());
     if source.kind() == crate::world_source::SourceKind::Vmangos {
         stmts.retain(|s| {
             !s.starts_with("INSERT INTO game_spell (")

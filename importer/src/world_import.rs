@@ -4032,6 +4032,14 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
 }
 
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    if args.family.is_none() {
+        combined_vmangos_plan(dump, args)
+    } else {
+        vmangos_family_plan(dump, args)
+    }
+}
+
+fn vmangos_family_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
         Some("dbc") => dbc::replacement_plan(dump, args.dbc.as_deref().context("dbc requires --dbc")?),
         Some("spellmeta") => vmangos_spellmeta::plan(dump),
@@ -4060,6 +4068,48 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             "vmangos currently supports --family creatures, casts, creature-ai, dbc, globals, items, loot, gameobjects, trainers, quests, gossip, spell or spellmeta"
         ),
     }
+}
+
+fn combined_vmangos_plan(source: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let client = args
+        .dbc
+        .as_deref()
+        .context("a complete world import requires --dbc")?;
+    let cached = crate::world_source::CachedSource::new(source);
+    let source = &cached;
+    let mut combined = spell::world_plan(source, client)?;
+    let catalogues = dbc::catalogue_statements(client, source)?;
+    combined.stamps.push(("dbc", insert_row_count(&catalogues)));
+    combined.stmts.extend(catalogues);
+    let mut manifests = vec![dbc::findings(source)?];
+    if let Some(manifest) = combined.world_source_manifest.take() {
+        manifests.push(serde_json::from_str::<serde_json::Value>(&manifest)?);
+    }
+    for family in FAMILIES {
+        let mut selected = args.clone();
+        selected.family = Some((*family).into());
+        let plan = vmangos_family_plan(source, &selected)?;
+        combined.stmts.extend(plan.stmts);
+        combined.stamps.extend(plan.stamps);
+        combined.spawn_batches.extend(plan.spawn_batches);
+        combined.spawn_row_count += plan.spawn_row_count;
+        combined.go_batches.extend(plan.go_batches);
+        combined.go_row_count += plan.go_row_count;
+        combined
+            .eventai_definition_batches
+            .extend(plan.eventai_definition_batches);
+        combined
+            .eventai_relay_definition_batches
+            .extend(plan.eventai_relay_definition_batches);
+        combined.eventai_definition_count += plan.eventai_definition_count;
+        combined.eventai_relay_definition_count += plan.eventai_relay_definition_count;
+        combined.eventai_instruction_count += plan.eventai_instruction_count;
+        if let Some(manifest) = plan.world_source_manifest {
+            manifests.push(serde_json::from_str::<serde_json::Value>(&manifest)?);
+        }
+    }
+    combined.world_source_manifest = Some(serde_json::to_string_pretty(&manifests)?);
+    Ok(combined)
 }
 
 pub(crate) fn census_plan(source: &WorldSource, args: &WorldImportArgs) -> Result<DumpPlan> {
@@ -4165,7 +4215,11 @@ pub(crate) fn run(
     emit_plan(&dump, args, &plan)
 }
 
-fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> Result<()> {
+pub(crate) fn emit_plan(
+    dump: &impl TableRows,
+    args: &WorldImportArgs,
+    plan: &DumpPlan,
+) -> Result<()> {
     if let Some(profile) = dump.source_profile_report() {
         eprintln!(
             "World Source Profile\n{}",
@@ -4218,7 +4272,7 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
         for family in FAMILIES {
             run_package_stage(args, family)?;
         }
-        if args.family.as_deref() == Some("spell") {
+        if family_active(args, "spell") {
             run_package_stage(args, "spell")?;
         }
         return Ok(());
@@ -4246,7 +4300,7 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
     for family in FAMILIES {
         run_package_stage(args, family)?;
     }
-    if args.family.as_deref() == Some("spell") {
+    if family_active(args, "spell") {
         run_package_stage(args, "spell")?;
     }
     Ok(())
@@ -4283,6 +4337,10 @@ mod tests {
     use crate::standalone_support;
 
     fn import_args<const N: usize>(argv: [&str; N]) -> Result<WorldImportArgs> {
+        let mut argv = argv.to_vec();
+        if !argv.contains(&"--source") {
+            argv.extend(["--source", "classic-db"]);
+        }
         crate::parse_args_from(argv)?.world_import_args()
     }
 
@@ -8476,7 +8534,7 @@ mod tests {
             "creature-ai",
         ])
         .unwrap();
-        args.family = None;
+        args.family = Some("unknown".into());
         let error = build_vmangos_plan(&source, &args)
             .err()
             .unwrap()
