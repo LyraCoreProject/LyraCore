@@ -4,3 +4,4 @@ game_spell single_target_key 0
 game_spell_effect bonus_coefficient -1.0
 game_creature_ai_broadcast_text sound_id 0
 game_creature_display gender 0
+game_creature_display bounding_radius 0.389

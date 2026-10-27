@@ -118,6 +118,6 @@ mod tests {
     #[test]
     fn legacy_creature_catalogues_get_silent_sound_and_male_gender_defaults() {
         let sql = "INSERT INTO game_creature_ai_broadcast_text (id,male_text) VALUES (1,'Greeting');INSERT INTO game_creature_display (id,display_id) VALUES (2,100)";
-        assert_eq!(spell_defaults(sql), "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0);INSERT INTO game_creature_display (id,display_id,gender) VALUES (2,100,0)");
+        assert_eq!(insert_defaults(sql), "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0);INSERT INTO game_creature_display (id,display_id,gender,bounding_radius) VALUES (2,100,0,0.389)");
     }
 }

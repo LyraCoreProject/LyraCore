@@ -24,6 +24,8 @@ pub struct CreatureDisplay {
     pub weight: u32,
     #[default(0u8)]
     pub gender: u8,
+    #[default(0.389f32)]
+    pub bounding_radius: f32,
 }
 
 pub(crate) fn display_gender(ctx: &ReducerContext, display_id: u32) -> u8 {
@@ -127,6 +129,7 @@ mod tests {
                 scale: 0.5,
                 weight: 1,
                 gender: 0,
+                bounding_radius: 0.389,
             },
             CreatureDisplay {
                 id: 2,
@@ -135,6 +138,7 @@ mod tests {
                 scale: 2.0,
                 weight: 3,
                 gender: 1,
+                bounding_radius: 0.389,
             },
             CreatureDisplay {
                 id: 3,
@@ -143,6 +147,7 @@ mod tests {
                 scale: 1.0,
                 weight: 0,
                 gender: 2,
+                bounding_radius: 0.389,
             },
         ];
         let outcomes: Vec<_> = (0..4)

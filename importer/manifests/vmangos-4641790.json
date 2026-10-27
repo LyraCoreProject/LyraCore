@@ -527,6 +527,7 @@
     },
     "creature_display_info_addon": {
       "columns": {
+        "real": ["bounding_radius"],
         "integer": [
           "build",
           "display_id",
