@@ -52,6 +52,7 @@ struct Compiled {
 pub(crate) struct Source {
     events: Vec<Event>,
     event_ai_entries: BTreeSet<u32>,
+    source_maps: BTreeMap<u32, BTreeSet<u32>>,
     scripts: BTreeMap<u32, Vec<Command>>,
     delayed: BTreeMap<&'static str, BTreeMap<u32, Vec<Command>>>,
     broadcasts: BTreeMap<u32, Broadcast>,
@@ -301,6 +302,9 @@ impl Source {
                 match (kind, values[0]) {
                     (6, 469) => Some("alliance".into()),
                     (6, 67) => Some("horde".into()),
+                    (15, map) if (0..=i64::from(u32::MAX)).contains(&map) => {
+                        Some(format!("map.{map}"))
+                    }
                     (9, quest) if quest > 0 && quest <= i64::from(u32::MAX) => {
                         Some(format!("quest-taken.{quest}"))
                     }
@@ -327,7 +331,15 @@ impl Source {
                 }
             }
         }
+        let mut source_maps: BTreeMap<u32, BTreeSet<u32>> = BTreeMap::new();
+        for row in source.columns("creature", &["id", "map"])?.iter() {
+            source_maps
+                .entry(row.number("id")?)
+                .or_default()
+                .insert(row.number("map")?);
+        }
         Ok(Self {
+            source_maps,
             events,
             event_ai_entries: source
                 .columns("creature_template", &["entry", "ai_name"])?
@@ -526,7 +538,9 @@ impl Source {
                 {
                     return Err(format!("command-condition:{}", command.condition));
                 }
-                let instruction = if command.kind == 39 {
+                let instruction = if command.kind == 37 {
+                    self.encounter_command(event.entry, command)?
+                } else if command.kind == 39 {
                     let choices = delayed::choices(command)?;
                     if command.flags & !(4 | 8 | 16) != 0 {
                         return Err("start-script-source-target-swap".into());
@@ -569,6 +583,54 @@ impl Source {
             compiled.instructions.join("+")
         );
         Ok((rule, compiled))
+    }
+
+    fn encounter_command(
+        &self,
+        entry: u32,
+        command: &Command,
+    ) -> std::result::Result<String, String> {
+        let [field, state, operation, unused] = command.longs;
+        if command.target != 0
+            || command.target_params != [0, 0]
+            || command.flags & !(4 | 8 | 16) != 0
+            || operation != 0
+            || unused != 0
+        {
+            return Err("encounter-parameters".into());
+        }
+        let (map, binding) = match (entry, field) {
+            (4832, 10) => (48, "blackfathom-deeps-kelris"),
+            (9034..=9040, 3) => (230, "blackrock-depths-tomb-of-seven"),
+            (11492, 11) => (429, "dire-maul-alzzin"),
+            (4625, 1) if state == 3 => (47, "razorfen-kraul-ward-keepers"),
+            (3914, 2) => (33, "shadowfang-keep-rethilgore"),
+            (4274, 3) => (33, "shadowfang-keep-fenrus"),
+            (3927, 4) => (33, "shadowfang-keep-nandos"),
+            (8440, 8) => (109, "sunken-temple-avatar"),
+            (3671, 0) => (43, "wailing-caverns-anacondra"),
+            (3669, 1) => (43, "wailing-caverns-cobrahn"),
+            (3670, 2) => (43, "wailing-caverns-pythas"),
+            (3673, 3) => (43, "wailing-caverns-serpentis"),
+            (3654, 5) => (43, "wailing-caverns-mutanus"),
+            (11391, 5) => (309, "zul-gurub-ohgan"),
+            _ => return Err(format!("encounter-binding:{entry}:{field}")),
+        };
+        if self
+            .source_maps
+            .get(&entry)
+            .is_some_and(|maps| maps.iter().any(|id| *id != map))
+        {
+            return Err(format!("encounter-cross-map:{entry}:{field}"));
+        }
+        let signal = match state {
+            1 => "begin",
+            2 => "fail",
+            3 => "complete",
+            4 if entry == 11492 => "break-alzzin-crumble-wall",
+            _ => return Err(format!("encounter-state:{entry}:{field}:{state}")),
+        };
+        Ok(format!("notify-encounter:{binding}:{signal}"))
     }
 
     fn compile_command(
@@ -940,6 +1002,7 @@ mod tests {
     pub(super) fn source() -> Source {
         Source {
             guardian_entries: BTreeMap::new(),
+            source_maps: BTreeMap::new(),
             events: Vec::new(),
             event_ai_entries: BTreeSet::from([100]),
             scripts: BTreeMap::new(),
@@ -1307,5 +1370,68 @@ mod tests {
         assert!(source.spawn_immunity_clears(&templates).is_empty());
         source.scripts.get_mut(&10).unwrap()[0] = step(99, [0; 4]);
         assert!(source.spawn_immunity_clears(&templates).is_empty());
+    }
+    #[test]
+    fn encounter_fields_and_states_follow_vmangos_instance_scripts() {
+        let mut source = source();
+        assert_eq!(
+            source
+                .encounter_command(4832, &step(37, [10, 3, 0, 0]))
+                .unwrap(),
+            "notify-encounter:blackfathom-deeps-kelris:complete"
+        );
+        assert_eq!(
+            source
+                .encounter_command(4625, &step(37, [1, 3, 0, 0]))
+                .unwrap(),
+            "notify-encounter:razorfen-kraul-ward-keepers:complete"
+        );
+        assert_eq!(
+            source
+                .encounter_command(11492, &step(37, [11, 4, 0, 0]))
+                .unwrap(),
+            "notify-encounter:dire-maul-alzzin:break-alzzin-crumble-wall"
+        );
+        for (entry, field, state) in [
+            (4832, 1, 3),
+            (9034, 4, 2),
+            (11391, 5, 4),
+            (8440, 8, 4),
+            (3671, 0, 0),
+            (3671, 0, 4),
+        ] {
+            assert!(source
+                .encounter_command(entry, &step(37, [field, state, 0, 0]))
+                .is_err());
+        }
+        source.source_maps.insert(4832, BTreeSet::from([48, 0]));
+        assert_eq!(
+            source
+                .encounter_command(4832, &step(37, [10, 3, 0, 0]))
+                .unwrap_err(),
+            "encounter-cross-map:4832:10"
+        );
+    }
+
+    #[test]
+    fn rajaxx_uses_map_condition_and_faction_without_classic_projection() {
+        let mut source = source();
+        source.event_ai_entries.insert(15341);
+        source.predicates.insert(509, Some("map.509".into()));
+        source.events = vec![Event {
+            id: 1534106,
+            entry: 15341,
+            kind: 11,
+            condition: 509,
+            ..event([10, 0, 0])
+        }];
+        source.scripts.insert(10, vec![step(22, [310, 0, 0, 0])]);
+        let (plan, _) = source.assemble(&HashSet::from([15341]), &HashSet::from([15341]));
+        assert_eq!(plan.definition_rows.len(), 1);
+        assert!(plan.definition_rows[0].contains("script:0:0:map.509,faction:310"));
+        assert!(!plan.definition_rows[0].contains("rajaxx-spawn-protection"));
+        source.scripts.insert(10, vec![step(4, [46, 832, 1, 0])]);
+        let (plan, _) = source.assemble(&HashSet::from([15341]), &HashSet::from([15341]));
+        assert!(plan.definition_rows.is_empty());
     }
 }

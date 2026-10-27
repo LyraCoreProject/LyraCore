@@ -133,6 +133,7 @@ pub enum EventPredicate {
     Alliance,
     Horde,
     QuestTaken(QuestTakenPredicate),
+    Map(u32),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]

@@ -354,13 +354,13 @@ fn parse_import_verified_instruction(
     source_rule_id: u64,
     creature_guid: u64,
 ) -> Result<CreatureInstruction, String> {
-    const RAJAXX_RULE_ID: u64 = 1_534_108;
-    const RAJAXX_CREATURE_GUID: u64 = 17_379_391_219_402_170_660;
+    const CLASSIC_RAJAXX_RULE_ID: u64 = 1_534_108;
+    const CLASSIC_RAJAXX_CREATURE_GUID: u64 = 17_379_391_219_402_170_660;
 
     if encoded != "unit-flags:set:rajaxx-spawn-protection" {
         return parse_instruction(encoded);
     }
-    if source_rule_id != RAJAXX_RULE_ID || creature_guid != RAJAXX_CREATURE_GUID {
+    if source_rule_id != CLASSIC_RAJAXX_RULE_ID || creature_guid != CLASSIC_RAJAXX_CREATURE_GUID {
         return Err("Rajaxx client projection is reserved for its pinned source rule".to_string());
     }
     Ok(CreatureInstruction::Presentation(
@@ -541,6 +541,7 @@ fn parse_event_predicate(encoded: &str) -> Result<EventPredicate, String> {
         "always" => Ok(EventPredicate::Always),
         "alliance" => Ok(EventPredicate::Alliance),
         "horde" => Ok(EventPredicate::Horde),
+        value if value.starts_with("map.") => parse_u32(&value[4..]).map(EventPredicate::Map),
         value => value
             .strip_prefix("quest-taken.")
             .map(parse_u32)
@@ -1461,6 +1462,13 @@ mod tests {
                 CreaturePresentationInstruction::SetRajaxxSpawnProtection(_)
             )
         ));
+        let vmangos_subject = "entry:15341";
+        let material = format!("{vmangos_subject}@{quarantine_rule}");
+        assert!(parse_definition(&format!(
+            "{vmangos_subject}@{}@{quarantine_rule}",
+            definition_revision(&material)
+        ))
+        .is_err());
         let invalid_rule = quarantine_rule.replacen("1534108", "1534109", 1);
         let material = format!("{quarantine_subject}@{invalid_rule}");
         assert!(parse_definition(&format!(

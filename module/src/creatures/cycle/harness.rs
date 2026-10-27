@@ -1577,6 +1577,9 @@ impl EventAiWorld for Scenario {
                 .eventai_quests_taken
                 .borrow()
                 .contains(&(guid, quest.quest_entry)),
+            EventPredicate::Map(map_id) => self
+                .eventai_unit(guid)
+                .is_some_and(|unit| unit.map_id == map_id),
         }
     }
 
