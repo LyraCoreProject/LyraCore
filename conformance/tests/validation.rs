@@ -184,3 +184,28 @@ source = { commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77", path = "src/game
         .join("\n");
     assert!(load(&without_source).is_err());
 }
+
+#[test]
+fn known_gaps_require_locations_and_evidence_without_status() {
+    assert!(load(EXAMPLE).unwrap().behaviors()[0].known_gaps.is_empty());
+    let gap = r#"
+[[known_gaps]]
+description = "Reward reply is absent."
+path = "module/src/quests.rs"
+symbol = "reward_quest"
+evidence = "Comparison record 1: missing_packet."
+"#;
+    let source = format!("{EXAMPLE}\n{gap}");
+    let ledger = load(&source).unwrap();
+    assert_eq!(ledger.behaviors()[0].known_gaps.len(), 1);
+    for (old, new) in [
+        ("Reward reply is absent.", " "),
+        ("module/src/quests.rs", "../quests.rs"),
+        ("reward_quest", ""),
+        ("Comparison record 1: missing_packet.", ""),
+    ] {
+        assert!(load(&source.replace(old, new)).is_err());
+    }
+    assert!(load(&format!("{source}\nstatus = \"open\"\n")).is_err());
+    assert!(load(&format!("known_gaps = [\"missing reply\"]\n{EXAMPLE}")).is_err());
+}

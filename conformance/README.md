@@ -17,7 +17,8 @@ and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
 
-All fields below except `data_fields` are required. Use an empty array when no entry exists yet.
+All fields below except `data_fields` and `known_gaps` are required. Use an empty array when no
+entry exists yet.
 All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
 
 | Field | Meaning |
@@ -32,6 +33,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
+| `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
 | `data_fields` | Optional array of sourced, typed data-dependent fields, empty when omitted |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
@@ -58,6 +60,11 @@ After that check, use `status = "verified"` with a valid `date` in `YYYY-MM-DD` 
 and `evidence`. The last field names the recorded observations. Audits never update this table.
 No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
 Deviation; that field records a result LyraCore has chosen to keep different.
+
+Known gaps record observed defects and their comparison evidence. They neither excuse differences
+nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
+separately. Each entry requires nonempty description, symbol and evidence fields and a relative
+source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
@@ -100,7 +107,9 @@ keeps `wire-client` out of normal and build dependencies, including renamed and 
 
 Every scenario reference must exist in that catalogue and name the Behavior that lists it.
 A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
-checkout is read and no catalogue check can skip.
+checkout is read and no catalogue check can skip. Both consumers enable `serde_json/float_roundtrip`
+for development builds so loading a Golden Trace preserves exact wire-coordinate values. Without
+it, decimal parsing can move a recorded coordinate by one f64 ULP and fail an exact comparison.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
 The runner prepares the scenario's Character through debug reducers, then runs the
@@ -153,7 +162,9 @@ is needed by the Module. The durable test loads these rows into its own Shard. M
 with a setup error; it never substitutes the seeded geometry or skips a comparison. The same SQL
 can prepare a disposable Native Host for the harness's LyraCore adapter.
 
-The [T2d comparison](reports/2026-10-27-t2d.md) records the observed rule and data differences.
+The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
+and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
+retains the earlier conformance.3 evidence.
 The ignored taxi test still fails with the comparator report when run with imported data.
 Durable CI explicitly skips `taxi_single_hop_matches_its_golden_trace`, naming its ledger entry in
 the workflow. All other conformance checks remain in CI. This skip records an open Behavior;
