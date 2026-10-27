@@ -179,9 +179,12 @@ trainer output.
 The quests family selects quest patches and relation ranges. Full profiles share the full quest
 catalogue; other canonical profiles share the existing starter and instance catalogue. Giver
 relations use the selected profile's enabled creature choices and GameObjects. Source exploration
-or event flags add an event-credit requirement unless an area-trigger objective already supplies
-the gate. This follows [QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
-Source script delivery and EventAI dependency closure remain part of S6.
+or event flags add an event-credit requirement only when the same scoped import emits a translated
+EventAI or script credit source for that quest, and no area-trigger objective already supplies it.
+Otherwise normal imported objectives determine completion. The Compatibility Manifest lists each
+missing source under `quests.event-credit-without-source`; the M4 event-credit ledger records the
+refused SQL, absent dispatcher or C++ source reference. The source flag meaning follows
+[QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
 
 Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sender zero retains the
 Module's quest-ender sender rule. Used mail loot must be one unconditional item at 100% chance.
