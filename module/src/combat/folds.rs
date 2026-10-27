@@ -413,10 +413,12 @@ pub(crate) fn weapon_strike_damage(
     caster: &WorldEntity,
     target: &WorldEntity,
     flat_bonus: i32,
+    (mod_flat, mod_pct): (i32, i32),
 ) -> (u32, bool) {
     let (min, max) = swing_range_ctx(ctx, caster);
     let base = min + ctx.random::<u32>() % (max - min + 1);
     let total = (base as i32 + flat_bonus).max(1) as u32;
+    let total = crate::spell::apply_spell_mod(total, mod_flat, mod_pct).max(1);
     let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
     let pre_mit = if crit { total * CRIT_MULT } else { total };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
@@ -443,7 +445,7 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
     if victim.dead || attacker.dead {
         return;
     }
-    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0);
+    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0, (0, 0));
     crate::spell::apply_target_damage(
         ctx,
         attacker_guid,

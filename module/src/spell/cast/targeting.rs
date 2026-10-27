@@ -847,8 +847,10 @@ fn apply_damage_effect(
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
             ) {
+                let damage_mods =
+                    crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
                 let (dmg, crit) =
-                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
+                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points, damage_mods);
                 // Physical crit travels in Hit; EffectHit.crit is the magic crit roll.
                 let (dealt, absorbed) = apply_target_damage(
                     ctx,

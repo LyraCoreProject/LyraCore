@@ -29,13 +29,13 @@ use lyracore_shared::spell::taxonomy::{
     E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
     E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
     E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR, M_POLY, M_ROOT, M_STUN,
-    P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY,
-    P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK, P_SPEED_KIND,
-    P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE, SPEED_MOVE_ALWAYS,
-    SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED, SPELL_ATTR_FINISHER_DURATION,
-    SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND,
-    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
+    SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT,
+    SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
     SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
     STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
     T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
@@ -83,22 +83,14 @@ const EFFECT_WEAPON_DAMAGE_NOSCHOOL: i32 = 17;
 const EFFECT_WEAPON_DAMAGE: i32 = 58;
 const EFFECT_NORMALIZED_WEAPON_DAMAGE: i32 = 121;
 
-fn is_weapon_strike(effect_id: i32, kind: u8) -> bool {
-    kind == E_DAMAGE
-        && matches!(
-            effect_id,
-            EFFECT_WEAPON_DAMAGE_NOSCHOOL | EFFECT_WEAPON_DAMAGE | EFFECT_NORMALIZED_WEAPON_DAMAGE
-        )
-}
-
 // A queued strike is one physical weapon swing plus flat damage; any other spell stays instant.
-fn queues_on_next_swing(attributes: u32, school_mask: u8, effects: &[(i32, u8)]) -> bool {
+fn queues_on_next_swing(attributes: u32, school_mask: u8, kinds: &[u8]) -> bool {
     attributes & ATTR_ON_NEXT_SWING_MASK != 0
         && school_mask == SCHOOL_MASK_PHYSICAL
-        && effects.iter().any(|&(id, kind)| is_weapon_strike(id, kind))
-        && effects
+        && kinds.contains(&E_WEAPON_STRIKE)
+        && kinds
             .iter()
-            .all(|&(id, kind)| is_weapon_strike(id, kind) || kind == E_SCRIPTED)
+            .all(|&kind| kind == E_WEAPON_STRIKE || kind == E_SCRIPTED)
 }
 
 const EFFECT_APPLY_AURA: i32 = 6;
@@ -242,7 +234,10 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 
 fn instant_effect_to_kind(effect_id: i32) -> u8 {
     match effect_id {
-        2 | 17 | 58 | 121 | 31 => E_DAMAGE,
+        2 | 31 => E_DAMAGE,
+        EFFECT_WEAPON_DAMAGE_NOSCHOOL | EFFECT_WEAPON_DAMAGE | EFFECT_NORMALIZED_WEAPON_DAMAGE => {
+            E_WEAPON_STRIKE
+        }
         10 => E_HEAL,
         67 => E_HEAL_MAX_HEALTH,
         30 => E_ENERGIZE,
@@ -1016,10 +1011,7 @@ fn push_spell_effect_rows(
         .filter(|&i| s.effect[i] != 0)
         .map(|i| (i, resolve_effect_kind(s, i, header, creature_displays, cov)))
         .collect();
-    let effect_kinds: Vec<(i32, u8)> = resolved
-        .iter()
-        .map(|(i, effect)| (s.effect[*i], effect.kind))
-        .collect();
+    let effect_kinds: Vec<u8> = resolved.iter().map(|(_, effect)| effect.kind).collect();
     let queued_strike = queues_on_next_swing(s.attributes, header.school_mask, &effect_kinds);
     let mut used_slots = [false; 4];
     let mut healed_target = T_SELF;
@@ -1036,7 +1028,7 @@ fn push_spell_effect_rows(
             per_level,
             period_ms,
         } = effect;
-        let kind = if queued_strike && is_weapon_strike(effect_id, kind) {
+        let kind = if queued_strike && kind == E_WEAPON_STRIKE {
             E_NEXT_SWING
         } else {
             kind
@@ -1487,6 +1479,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_INTERRUPT => "E_INTERRUPT",
         E_REDUCE_THREAT => "E_REDUCE_THREAT",
         E_NEXT_SWING => "E_NEXT_SWING",
+        E_WEAPON_STRIKE => "E_WEAPON_STRIKE",
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
@@ -2791,16 +2784,16 @@ mod tests {
         }
         assert_eq!(
             kind(3242),
-            E_DAMAGE,
+            E_WEAPON_STRIKE,
             "a strike with a live aura stays instant"
         );
         assert_eq!(kind(678), E_DAMAGE, "school damage is not a weapon swing");
         assert_eq!(
             kind(13953),
-            E_DAMAGE,
+            E_WEAPON_STRIKE,
             "a holy weapon strike is not a physical swing"
         );
-        assert_eq!(kind(1752), E_DAMAGE, "no on-next-swing attribute");
+        assert_eq!(kind(1752), E_WEAPON_STRIKE, "no on-next-swing attribute");
     }
 
     #[test]
@@ -2975,8 +2968,9 @@ mod tests {
     #[test]
     fn instant_effects_map_to_real_kinds() {
         assert_eq!(instant_effect_to_kind(2), E_DAMAGE);
-        assert_eq!(instant_effect_to_kind(58), E_DAMAGE);
-        assert_eq!(instant_effect_to_kind(121), E_DAMAGE);
+        assert_eq!(instant_effect_to_kind(17), E_WEAPON_STRIKE);
+        assert_eq!(instant_effect_to_kind(58), E_WEAPON_STRIKE);
+        assert_eq!(instant_effect_to_kind(121), E_WEAPON_STRIKE);
         assert_eq!(instant_effect_to_kind(10), E_HEAL);
         assert_eq!(instant_effect_to_kind(67), E_HEAL_MAX_HEALTH);
         assert_eq!(instant_effect_to_kind(30), E_ENERGIZE);
