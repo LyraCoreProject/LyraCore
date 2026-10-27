@@ -55,6 +55,21 @@ pub struct RelayTalkOverride {
     pub talk: RelayTalk,
     pub chat_type: u8,
 }
+impl RelayTalkOverride {
+    fn parse(chat_type: &str, ids: &str) -> Result<Self, String> {
+        let chat_type = parse_u8(chat_type)?;
+        if !crate::chat::is_supported_chat_type(chat_type) {
+            return Err("unsupported script chat type".into());
+        }
+        Ok(Self {
+            talk: RelayTalk {
+                broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
+            },
+            chat_type,
+        })
+    }
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub struct RelayEmote {
     pub emote_ids: Vec<u32>,
@@ -998,18 +1013,9 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         ["creature-control", rest @ ..] => Ok(RelayInstruction::CreatureControl(
             super::relay_control::RelayCreatureControl::parse(rest)?,
         )),
-        ["talk-as", chat_type, ids] => {
-            let chat_type = parse_u8(chat_type)?;
-            if !crate::chat::is_supported_chat_type(chat_type) {
-                return Err("unsupported script chat type".into());
-            }
-            Ok(RelayInstruction::TalkAs(RelayTalkOverride {
-                talk: RelayTalk {
-                    broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
-                },
-                chat_type,
-            }))
-        }
+        ["talk-as", chat_type, ids] => Ok(RelayInstruction::TalkAs(RelayTalkOverride::parse(
+            chat_type, ids,
+        )?)),
         ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk {
             broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),

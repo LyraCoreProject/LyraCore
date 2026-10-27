@@ -391,15 +391,7 @@ pub(super) fn receive(
                 request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward)?;
                 crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
             }) {
-                let packets = quest_detail_view(ctx, q.quest_id)
-                    .map(|detail| {
-                        packet(ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                            codec::build_offer_reward(q.guid.guid(), &detail),
-                        )))
-                    })
-                    .transpose()?
-                    .into_iter()
-                    .collect();
+                let packets = reward_screen(ctx, q.guid.guid(), guid, q.quest_id)?;
                 return Err(Rollback::replies(packets, reason));
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)

@@ -767,6 +767,13 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         return Err("duplicate quest event credit was not idempotent".to_string());
     }
 
+    group_members.insert(crate::GroupMember {
+        id: 509_296_011,
+        group_id: EVENTAI_CREDIT_FIXTURE_GROUP,
+        character_guid: EVENTAI_CREDIT_FIXTURE_MEMBER,
+        owner_identity: fixture_owner,
+        raid_slot: 0,
+    });
     for (distance_yd, group, selected_x, selected_z) in [
         (20, true, 20.5, 0.0),
         (20, false, 21.0, 0.0),
