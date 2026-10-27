@@ -26,13 +26,14 @@ pub enum EncounterBinding {
     WailingCavernsSerpentis,
     WailingCavernsMutanus,
     ZulGurubOhgan,
+    RuinsOfAhnQirajRajaxx,
 }
 
 pub(crate) type EncounterPackageHandler =
     fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
 
 impl EncounterBinding {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::BlackfathomDeepsKelris,
         Self::BlackrockDepthsTombOfSeven,
         Self::DireMaulAlzzin,
@@ -47,6 +48,7 @@ impl EncounterBinding {
         Self::WailingCavernsSerpentis,
         Self::WailingCavernsMutanus,
         Self::ZulGurubOhgan,
+        Self::RuinsOfAhnQirajRajaxx,
     ];
 
     pub(crate) fn map_id(self) -> u32 {
@@ -65,6 +67,7 @@ impl EncounterBinding {
             | Self::WailingCavernsSerpentis
             | Self::WailingCavernsMutanus => 43,
             Self::ZulGurubOhgan => 309,
+            Self::RuinsOfAhnQirajRajaxx => 509,
         }
     }
 }
@@ -77,6 +80,7 @@ pub enum EncounterSignal {
     BreakAlzzinCrumbleWall,
     InterruptAvatarSuppression,
     SendMandokirDownstairs,
+    Reset,
 }
 
 pub(crate) fn notify_from_eventai(
@@ -151,6 +155,7 @@ fn package_handler_for(
 #[cfg(test)]
 fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
     match signal {
+        EncounterSignal::Reset => Some(ENCOUNTER_NOT_STARTED),
         EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
         EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
         EncounterSignal::Complete => Some(ENCOUNTER_DONE),
@@ -792,6 +797,7 @@ mod tests {
 
     #[test]
     fn named_source_states_translate_to_the_internal_encounter_contract() {
+        assert_eq!(encounter_state_for_signal(EncounterSignal::Reset), Some(0));
         assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
         assert_eq!(
             encounter_state_for_signal(EncounterSignal::Complete),

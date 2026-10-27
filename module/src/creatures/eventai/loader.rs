@@ -1039,6 +1039,7 @@ fn parse_encounter_binding(value: &str) -> Result<crate::encounter::EncounterBin
         "wailing-caverns-serpentis" => Ok(WailingCavernsSerpentis),
         "wailing-caverns-mutanus" => Ok(WailingCavernsMutanus),
         "zul-gurub-ohgan" => Ok(ZulGurubOhgan),
+        "ruins-of-ahnqiraj-rajaxx" => Ok(RuinsOfAhnQirajRajaxx),
         _ => Err(format!("unknown encounter binding: {value}")),
     }
 }
@@ -1046,6 +1047,7 @@ fn parse_encounter_binding(value: &str) -> Result<crate::encounter::EncounterBin
 fn parse_encounter_signal(value: &str) -> Result<crate::encounter::EncounterSignal, String> {
     use crate::encounter::EncounterSignal::*;
     match value {
+        "reset" => Ok(Reset),
         "begin" => Ok(Begin),
         "fail" => Ok(Fail),
         "complete" => Ok(Complete),

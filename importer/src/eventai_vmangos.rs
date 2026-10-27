@@ -228,6 +228,35 @@ pub(crate) fn restorable_immunities(
         .collect())
 }
 
+fn predicates(source: &(impl TableRows + ?Sized)) -> Result<BTreeMap<u32, Option<String>>> {
+    let condition_rows = source.rows("conditions")?;
+    let static_conditions = crate::source_selection::static_conditions(&condition_rows)?;
+    let mut predicates = BTreeMap::from([(0, Some("always".into()))]);
+    for row in condition_rows.iter() {
+        let id: u32 = row.number("condition_entry")?;
+        let kind: i32 = row.number("type")?;
+        let values: [i64; 4] = array(|i| row.number(&format!("value{}", i + 1)))?;
+        let flags: u32 = row.number("flags")?;
+        let predicate = if static_conditions.get(&id) == Some(&Some(true)) {
+            Some("always".into())
+        } else if flags == 0 && values[1..].iter().all(|v| *v == 0) {
+            match (kind, values[0]) {
+                (6, 469) => Some("alliance".into()),
+                (6, 67) => Some("horde".into()),
+                (33, map) if (0..=i64::from(u32::MAX)).contains(&map) => Some(format!("map.{map}")),
+                (9, quest) if quest > 0 && quest <= i64::from(u32::MAX) => {
+                    Some(format!("quest-taken.{quest}"))
+                }
+                _ => None,
+            }
+        } else {
+            None
+        };
+        predicates.insert(id, predicate);
+    }
+    Ok(predicates)
+}
+
 impl Source {
     pub(crate) fn read(source: &(impl TableRows + ?Sized)) -> Result<Self> {
         let mut events = Vec::new();
@@ -288,33 +317,7 @@ impl Source {
                 },
             );
         }
-        let condition_rows = source.rows("conditions")?;
-        let static_conditions = crate::source_selection::static_conditions(&condition_rows)?;
-        let mut predicates = BTreeMap::from([(0, Some("always".into()))]);
-        for row in condition_rows.iter() {
-            let id: u32 = row.number("condition_entry")?;
-            let kind: i32 = row.number("type")?;
-            let values: [i64; 4] = array(|i| row.number(&format!("value{}", i + 1)))?;
-            let flags: u32 = row.number("flags")?;
-            let predicate = if static_conditions.get(&id) == Some(&Some(true)) {
-                Some("always".into())
-            } else if flags == 0 && values[1..].iter().all(|v| *v == 0) {
-                match (kind, values[0]) {
-                    (6, 469) => Some("alliance".into()),
-                    (6, 67) => Some("horde".into()),
-                    (15, map) if (0..=i64::from(u32::MAX)).contains(&map) => {
-                        Some(format!("map.{map}"))
-                    }
-                    (9, quest) if quest > 0 && quest <= i64::from(u32::MAX) => {
-                        Some(format!("quest-taken.{quest}"))
-                    }
-                    _ => None,
-                }
-            } else {
-                None
-            };
-            predicates.insert(id, predicate);
-        }
+        let predicates = predicates(source)?;
         let spells = source
             .columns("spell_template", &["entry"])?
             .iter()
@@ -614,16 +617,17 @@ impl Source {
             (3673, 3) => (43, "wailing-caverns-serpentis"),
             (3654, 5) => (43, "wailing-caverns-mutanus"),
             (11391, 5) => (309, "zul-gurub-ohgan"),
+            (15341, 2) => (509, "ruins-of-ahnqiraj-rajaxx"),
             _ => return Err(format!("encounter-binding:{entry}:{field}")),
         };
-        if self
-            .source_maps
-            .get(&entry)
-            .is_some_and(|maps| maps.iter().any(|id| *id != map))
-        {
+        if self.source_maps.get(&entry).is_some_and(|maps| {
+            maps.iter()
+                .any(|id| *id != map && !(entry == 15341 && *id == 1))
+        }) {
             return Err(format!("encounter-cross-map:{entry}:{field}"));
         }
         let signal = match state {
+            0 => "reset",
             1 => "begin",
             2 => "fail",
             3 => "complete",
@@ -998,6 +1002,65 @@ mod tests {
     use super::*;
     use crate::world_source::{sqlite_fixture, FixtureTable};
     use rusqlite::types::Value;
+
+    fn condition_fixture() -> crate::world_source::WorldSource {
+        let fields = [
+            "condition_entry",
+            "type",
+            "value1",
+            "value2",
+            "value3",
+            "value4",
+            "flags",
+        ];
+        let values = [
+            [990, 33, 0, 0, 0, 0, 0],
+            [991, 33, 1, 0, 0, 0, 0],
+            [1706, 33, 34, 0, 0, 0, 0],
+            [4622, 33, 229, 0, 0, 0, 0],
+            [509, 33, 509, 0, 0, 0, 0],
+            [15, 15, 60, 0, 0, 0, 0],
+            [16, 6, 469, 0, 0, 0, 0],
+            [17, 6, 67, 0, 0, 0, 0],
+            [18, 9, 41, 0, 0, 0, 0],
+            [19, 9, 41, 1, 0, 0, 0],
+            [20, 0, 0, 0, 0, 0, 0],
+            [21, 24, 10, 0, 0, 0, 0],
+            [22, -1, 20, 21, 0, 0, 0],
+            [23, -2, 20, 21, 0, 0, 0],
+            [24, -3, 20, 0, 0, 0, 0],
+            [25, -3, 24, 0, 0, 0, 0],
+        ];
+        let rows: Vec<Vec<_>> = values
+            .into_iter()
+            .map(|values| fields.into_iter().zip(values.map(Value::Integer)).collect())
+            .collect();
+        sqlite_fixture(&[FixtureTable {
+            name: "conditions",
+            columns: &fields.map(|name| (name, "INTEGER")),
+            key: &["condition_entry"],
+            rows: &rows.iter().map(Vec::as_slice).collect::<Vec<_>>(),
+        }])
+        .unwrap()
+    }
+
+    #[test]
+    fn condition_reader_uses_vmangos_numbers_and_refuses_unimplemented_quest_states() {
+        let database = condition_fixture();
+        let predicates = predicates(&database).unwrap();
+        for (id, map) in [(990, 0), (991, 1), (1706, 34), (4622, 229), (509, 509)] {
+            assert_eq!(predicates[&id], Some(format!("map.{map}")));
+        }
+        assert_eq!(predicates[&15], None);
+        assert_eq!(predicates[&16].as_deref(), Some("alliance"));
+        assert_eq!(predicates[&17].as_deref(), Some("horde"));
+        assert_eq!(predicates[&18].as_deref(), Some("quest-taken.41"));
+        assert_eq!(predicates[&19], None);
+        for id in [20, 21, 22, 23, 25] {
+            assert_eq!(predicates[&id].as_deref(), Some("always"));
+        }
+        assert_eq!(predicates[&24], None);
+    }
 
     pub(super) fn source() -> Source {
         Source {
@@ -1374,6 +1437,27 @@ mod tests {
     #[test]
     fn encounter_fields_and_states_follow_vmangos_instance_scripts() {
         let mut source = source();
+        for (entry, field, binding) in [
+            (3670, 2, "pythas"),
+            (3671, 0, "anacondra"),
+            (3673, 3, "serpentis"),
+        ] {
+            assert_eq!(
+                source
+                    .encounter_command(entry, &step(37, [field, 0, 0, 0]))
+                    .unwrap(),
+                format!("notify-encounter:wailing-caverns-{binding}:reset")
+            );
+        }
+        source.source_maps.insert(15341, BTreeSet::from([1, 509]));
+        for (state, signal) in [(1, "begin"), (3, "complete")] {
+            assert_eq!(
+                source
+                    .encounter_command(15341, &step(37, [2, state, 0, 0]))
+                    .unwrap(),
+                format!("notify-encounter:ruins-of-ahnqiraj-rajaxx:{signal}")
+            );
+        }
         assert_eq!(
             source
                 .encounter_command(4832, &step(37, [10, 3, 0, 0]))
@@ -1397,7 +1481,6 @@ mod tests {
             (9034, 4, 2),
             (11391, 5, 4),
             (8440, 8, 4),
-            (3671, 0, 0),
             (3671, 0, 4),
         ] {
             assert!(source
@@ -1417,7 +1500,8 @@ mod tests {
     fn rajaxx_uses_map_condition_and_faction_without_classic_projection() {
         let mut source = source();
         source.event_ai_entries.insert(15341);
-        source.predicates.insert(509, Some("map.509".into()));
+        let database = condition_fixture();
+        source.predicates = predicates(&database).unwrap();
         source.events = vec![Event {
             id: 1534106,
             entry: 15341,

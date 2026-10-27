@@ -624,20 +624,28 @@ columns; other commands in those tables remain unsupported.
 
 The vmangos encounter bindings use the pinned instance script fields. Kelris uses field 10,
 Tomb of Seven uses 3, Alzzin uses 11, and Avatar uses 8. Razorfen ward keepers use field 1,
-Shadowfang bosses use 2/3/4, Wailing Caverns uses 0/1/2/3/5, and Ohgan uses 5. Existing bindings
-carry begin, fail and complete signals. Alzzin also supports the wall-breaking special signal.
+Shadowfang bosses use 2/3/4, Wailing Caverns uses 0/1/2/3/5, Ohgan uses 5, and Rajaxx uses 2.
+Bindings carry reset, begin, fail and complete signals. Source state 0 means reset to the Module's
+not-started state. Alzzin also supports the wall-breaking special signal.
 The pinned Tomb rows use field 4, which belongs to Lyceum; those rows remain unsupported. Ohgan's
 special state does not send Mandokir downstairs in this source, so it cannot use the classic signal.
-Wailing Caverns reset and Anacondra's special state also remain unsupported. A binding does not
+Anacondra's special state remains unsupported. A binding does not
 install an encounter Package handler.
 
 These fields and effects were checked in the
 [vmangos instance scripts at the pin](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/scripts).
-The importer refuses a binding when a selected source spawn puts that creature on another map.
-Rajaxx's vmangos spawn event checks map 509 and changes faction to 310. The classic Rajaxx client
+The importer refuses a binding when a selected source spawn puts that creature on another map,
+except Rajaxx's known map-1 appearance. His encounter notification is eligible only in a map-509
+instance. His map-1 spawn line, map-509 spawn faction and evade yell use source map predicates.
+The classic Rajaxx client
 projection remains restricted to its original rule and spawn GUID; vmangos entry rules cannot
 request it. Display-template dependencies come from each accepted command rather than the classic
 allowlist. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
+
+The condition reader follows `Conditions.h` at the pinned source: 33 is map, 15 is level,
+6 is team, and 9 is quest-taken with state 0 only. Level and quest states 1/2 remain unsupported.
+Static conditions use 0 (always), 24 (patch), -1 (and), -2 (or), and -3 (not); these numbers also
+match that header. Flagged runtime conditions remain unsupported.
 
 
 ### The vmangos Source Profile
