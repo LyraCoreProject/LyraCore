@@ -43,7 +43,7 @@ jobs:
           args=()
           for target in "${targets[@]}"; do args+=(--test "$target"); done
           echo "targets: ${targets[*]}"
-          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip lethal_floor --skip populated_old_module_upgrades_without_clearing
+          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing
 
       - name: Check out the populated-upgrade baseline
         if: matrix.shard == 2

@@ -49,7 +49,7 @@
   "instance_removal": 5,
   "inventory_protocol": 7,
   "item_guids": 8,
-  "lethal_damage_floor": 0,
+  "lethal_damage_floor": 14,
   "loot_tag": 1,
   "mail_delivery": 2,
   "mail_expiry": 7,
