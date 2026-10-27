@@ -171,7 +171,7 @@ These ignored tests read data you own. Set the variable, then run the test with 
 | --- | --- | --- |
 | `LYRACORE_CLIENT_DATA` | your 1.12.1 client's `Data/` directory | the terrain slice self-checks in `importer/src/terrain.rs` |
 | `LYRACORE_TEST_DBC` | the DBC files of a build 5875 client | the spell catalogue tests in `importer/src/spell.rs` |
-| `LYRACORE_CLASSIC_DB_SQL` | the pinned classic-db dump, decompressed or gzip | the dump tests in `importer/src/world_import.rs` |
+| `LYRACORE_VMANGOS_SQLITE` | a locally fetched vmangos SQLite snapshot | real-source importer tests |
 
 For example:
 
@@ -179,12 +179,12 @@ For example:
 LYRACORE_CLIENT_DATA=/games/WoW-1.12.1/Data cargo test -p lyracore-importer terrain -- --ignored
 ```
 
-The complete creature import test loads the pinned dump and client catalogues into a private local
-SpacetimeDB node, checks every source position, waits for the shared-world population, and reimports
+The complete creature import test loads the local SQLite snapshot and client catalogues into a
+private SpacetimeDB node, checks every source position, waits for the shared-world population, and reimports
 the populated roster:
 
 ```bash
-LYRACORE_CLASSIC_DB_SQL=/path/to/classic.sql LYRACORE_TEST_DBC=/path/to/client/Data \
+LYRACORE_VMANGOS_SQLITE=/path/to/mangos.sqlite LYRACORE_TEST_DBC=/path/to/client/Data \
   cargo test -p lyracore-importer full_world_source_loads_every_definition_and_spawn_locally -- --ignored
 ```
 

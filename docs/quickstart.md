@@ -315,13 +315,13 @@ LAN one below.
 What you just logged into is a fixture: a few demo creatures, one questgiver, a gather node or two,
 and a flight master with one short test route. It gives every system something to act on without
 a world database. The fixture's taxi nodes have no map art in an unmodified client, so test
-flights visually with the imported `TaxiNodes.dbc` catalogue. It is not a zone.
+flights visually with the imported taxi catalogue. It is not a zone.
 
 The real thing is the Alliance early game: the Human Elwynn, Westfall and Redridge corridor, Dun
 Morogh and Loch Modan, Teldrassil and Darkshore, plus Deadmines. **That data is not in this
-repository and never will be.** You rebuild it on your machine from cmangos'
-[`classic-db`](https://github.com/cmangos/classic-db) world database (GPL-3.0, pulled from cmangos
-at a pinned commit) and from your own 1.12.1 client's `Data/` directory.
+repository and never will be.** You rebuild it locally from the [vmangos](https://github.com/vmangos/core)
+SQLite snapshot and your own 1.12.1 client's `Data/` directory. GPL-2.0 migrations from `vmangos/core`
+are applied on top of base data from `brotalnia/database`, which has no license file.
 [ADR 0001](./adr/0001-ship-tools-not-data.md) records why.
 
 One command, and it asks before it does anything:
@@ -330,15 +330,16 @@ One command, and it asks before it does anything:
 ./lyracore import --client-data /path/to/WoW-1.12.1/Data
 ```
 
-It prints the licensing notice in full and waits for you to type `yes`. Then it pulls `classic-db`
-(checksum-verified against the pinned commit), confirms the client path, and runs the world ETL plus
+It prints the licensing notice and waits for you to type `yes`. It checks the client path, downloads
+the current vmangos SQLite asset, verifies GitHub's digest, and runs the Source Profile gate before
+loading world content. The import records the actual commit. It also loads
 the curated class-spell trainer offerings on `lyracore`. Its `alliance-single` profile includes
 both continent corridors, Deadmines on map 36 and Deeprun Tram on map 369. Pass `--accept` to
 answer the consent question in advance for a scripted run, and leave `--client-data` off to be
 prompted for the path.
 
-**What to expect.** The pull is a few hundred megabytes of git history. The ETL takes tens of
-minutes, most of it in the terrain and navigation passes, which rasterize each bounded slice cell
+**What to expect.** The fetch downloads one compressed SQLite asset, without cloning a repository.
+The ETL takes tens of minutes, most of it in the terrain and navigation passes, which rasterize each bounded slice cell
 by cell. It ends with global catalogue checks, named Human, Dwarf/Gnome and Night Elf corridor
 checks, caster-spell completeness and distinct Deadmines checks. A failed stage stops later work
 and names the destination and mode. Fix the cause and rerun: each owned family clears and reloads,
