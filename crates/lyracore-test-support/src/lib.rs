@@ -2,10 +2,12 @@ mod rng;
 pub use rng::Rng;
 
 mod module_wasm;
+mod reducer_connection;
 pub mod source_scan;
 mod subscription;
 
 pub use module_wasm::module_bytes;
+pub use reducer_connection::{ReducerConnection, ReducerRows};
 pub use subscription::TableSubscription;
 
 use std::collections::{BTreeMap, BTreeSet};
@@ -282,6 +284,21 @@ impl Standalone {
         command.args(["call", "-s", &self.server, database, reducer, "--"]);
         command.args(args);
         command.output().expect("failed to call reducer")
+    }
+
+    pub fn connect_reducers(&self, queries: &[&str]) -> ReducerConnection {
+        ReducerConnection::connect(
+            &self.address,
+            &self.database,
+            Some(&self.owner_token()),
+            queries,
+        )
+        .expect("failed to connect to fixture as Operator")
+    }
+
+    pub fn connect_reducers_anonymous(&self, queries: &[&str]) -> ReducerConnection {
+        ReducerConnection::connect(&self.address, &self.database, None, queries)
+            .expect("failed to connect anonymously to fixture")
     }
 
     pub fn subscribe(&self, queries: &[&str]) -> TableSubscription {

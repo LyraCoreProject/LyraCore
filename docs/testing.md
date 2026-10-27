@@ -29,6 +29,7 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test build_script
+cargo test -p lyracore-module --test native_debug_gate
 cargo test -p lyracore-module --test notification_tables
 cargo test -p lyracore-module --test package_api_lint
 cargo test -p lyracore-package-delta
@@ -151,6 +152,25 @@ Package AI, so it does not establish populated-world capacity.
 
 The independent Benilla codec checks and opcode inventory are described in
 [`benilla-compatibility.md`](./benilla-compatibility.md).
+
+## Conformance
+
+The Milestone 1 native reducer check starts its own local Shard and bypasses WoW transport and
+SRP through a debug-only reducer. It proves world entry and a ping/pong transaction, with a gtker
+decoder used directly by the test. It has no Golden Trace yet. See
+[ADR 0005](adr/0005-1-12-conformance.md) for the planned tiers and their ownership.
+
+```bash
+export CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/conformance/target"
+export TMPDIR="$HOME/.cache/lyracore-scratch/conformance/tmp"
+mkdir -p "$TMPDIR"
+cargo test -p lyracore-module --test native_debug_gate
+cargo test -p lyracore-module --test native_conformance -- --ignored
+```
+
+The existing durable CI target discovery includes `native_conformance` automatically.
+`native_debug_gate` checks that the debug module remains behind the `debug_reducers` feature and
+that the check detects a missing or ineffective feature gate.
 
 ## Runtime Scripts
 

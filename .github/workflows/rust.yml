@@ -51,6 +51,7 @@ jobs:
       - run: cargo test -p lyracore-importer
       - run: cargo test -p lyracore-module --lib --features=debug_reducers
       - run: cargo test -p lyracore-module --test build_script
+      - run: cargo test -p lyracore-module --test native_debug_gate
       - run: cargo test -p lyracore-module --test notification_tables
       - run: cargo test -p lyracore-module --test package_api_lint
       - run: cargo test -p lyracore-package-delta

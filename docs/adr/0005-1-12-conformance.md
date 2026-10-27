@@ -90,9 +90,25 @@ the Native Host.
 
 The Module currently requires the Operator and a connection id in
 [`native/mod.rs`](../../module/src/native/mod.rs). `native_world_open` starts in `AwaitingProof`;
-`game_native_packet` is a private event table. The durable fixture currently uses CLI reducer calls
-and a separate subscription process. C1b will record the connection choice and executable evidence
-here. C1c will record the ledger schema and its scenario-reference checks.
+`game_native_packet` is a private event table. The durable fixture now offers a synchronous Operator WebSocket
+connection in `lyracore-test-support`. It uses SpacetimeDB 2.7.1's JSON protocol. A CLI subscription
+cannot submit reducer calls on its existing connection, and the SDK would require generated
+Module bindings. Each call returns the subscribed inserts from its own transaction; separate
+subscriptions remain the path for observing broadcasts.
 
-The harness format and release pin are pending the parallel harness milestone. A pin update must
-name its prerelease tag and full SHA. The tier 1 library dependency follows in Milestone 2.
+`debug_native_enter_world` exists only with `debug_reducers`. It requires the Operator and an open
+connection in `AwaitingProof`. It establishes a fixture Session and world proof, then uses normal
+world entry. Later requests still pass the normal Account and Session Gates. The Architecture Test
+`native_debug_gate` checks the feature gate and detects its removal or replacement with a weaker
+condition. No production authentication Gate is bypassed without the feature.
+
+The durable `native_conformance` test enters a Character, sends `CMSG_PING` through
+`native_world_receive`, reads the private packet event on the same connection and decodes
+`SMSG_PONG` directly with gtker. It also checks the non-Operator refusal. The decoder is a single
+function for replacement with the harness library in Milestone 2. This proves the mechanism, not
+agreement with a Golden Trace. Run it with the command in [testing](../testing.md#conformance).
+C1c will record the ledger schema and its scenario-reference checks.
+
+The harness scenario format is pending the parallel harness milestone. The existing pin stays
+unchanged in Milestone 1. Milestone 2 updates its prerelease tag and full SHA and adds the tier 1
+library dependency at that same SHA.

@@ -13,6 +13,8 @@ mod chat_flood;
 mod combat;
 mod creature;
 mod death;
+#[cfg(feature = "debug_reducers")]
+mod debug;
 mod duel;
 mod economy;
 mod environment;
