@@ -89,6 +89,8 @@ pub use spawn::{
     NpcText, NpcTextSlot, MOVEMENT_IDLE, MOVEMENT_RANDOM,
 };
 
+#[cfg(feature = "debug_reducers")]
+pub(crate) use spawn::build_creature_from_template;
 #[cfg(test)]
 pub(crate) use spawn::rank_hp_multiplier_permille;
 pub(crate) use spawn::{

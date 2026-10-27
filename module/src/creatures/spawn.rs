@@ -469,6 +469,25 @@ pub(crate) fn build_creature_entity(
     rand: u32,
     instance_id: u64,
 ) -> WorldEntity {
+    let mut entity = build_creature_from_template(spawn, tmpl, rand, instance_id);
+    if let Some(stats) = super::catalogue::level_stats(ctx, tmpl, entity.level) {
+        entity.health = stats.health;
+        entity.max_health = stats.health;
+        entity.armor = stats.armor;
+    }
+    let (display_id, scale) = super::catalogue::display(ctx, tmpl, ctx.random());
+    entity.display_id = display_id;
+    entity.native_display_id = display_id;
+    entity.scale_x = scale;
+    entity
+}
+
+pub(crate) fn build_creature_from_template(
+    spawn: &CreatureSpawn,
+    tmpl: &CreatureTemplate,
+    rand: u32,
+    instance_id: u64,
+) -> WorldEntity {
     let (grid_x, grid_y) = spatial::grid_cell(spawn.x, spawn.y);
     let (level, rolled_health) = rolled_creature_stats(
         tmpl.level,
@@ -478,9 +497,6 @@ pub(crate) fn build_creature_entity(
         rand,
     );
     let health = scale_health_for_rank(rolled_health, tmpl.rank);
-    let stats = super::catalogue::level_stats(ctx, tmpl, level);
-    let health = stats.as_ref().map_or(health, |stats| stats.health);
-    let (display_id, scale) = super::catalogue::display(ctx, tmpl, ctx.random());
     WorldEntity {
         guid: spawn.guid,
         owner_identity: Identity::ZERO,
@@ -496,7 +512,7 @@ pub(crate) fn build_creature_entity(
         last_move_ms: 0,
         type_mask: constants::type_mask::CREATURE,
         entry: spawn.entry,
-        scale_x: scale,
+        scale_x: tmpl.scale,
         health,
         max_health: health,
         power: 0,
@@ -504,8 +520,8 @@ pub(crate) fn build_creature_entity(
         level,
         faction_template: tmpl.faction_template,
         unit_bytes_0: 0x0101,
-        display_id,
-        native_display_id: display_id,
+        display_id: tmpl.display_id,
+        native_display_id: tmpl.display_id,
         unit_flags: tmpl.unit_flags,
         base_attack_time_ms: tmpl.base_attack_time_ms,
         dynamic_flags: 0,
@@ -526,7 +542,7 @@ pub(crate) fn build_creature_entity(
         intellect: 0,
         spirit: 0,
         npc_flags: tmpl.npc_flags,
-        armor: stats.map_or(tmpl.armor, |stats| stats.armor),
+        armor: tmpl.armor,
         leg_ends_ms: 0,
         wp_target: 0,
         movement_flags: 0,
