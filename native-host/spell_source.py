@@ -1,6 +1,6 @@
 import struct
 
-from headless import cast
+from headless import cast, spell_id
 
 
 def check_spell_source_behavior(host):
@@ -12,7 +12,7 @@ def check_spell_source_behavior(host):
     def spell(flags=0, kind=0xbe, amount=1, coefficient=-1, **fields):
         nonlocal next_id
         next_id += 1
-        sid = next_id
+        sid = fields.get('spell_id', next_id)
         header = dict(spell_id=sid, name=f"'Source {sid}'", power_type=0, cost=0,
                       cast_time_ms=0, gcd_ms=0, cooldown_ms=0, range_yd=0, duration_ms=60000,
                       school_mask=1, dispel_type=0, mechanic=0, max_stacks=5, aura_interrupt=0,
@@ -26,6 +26,7 @@ def check_spell_source_behavior(host):
                       p1=0, script_id=0, enters_combat='false', bonus_coefficient=coefficient)
         for table, row in [('game_spell', header), ('game_spell_effect', effect)]:
             host.restore(table, f'spell_id = {sid}')
+            host.sql(f'DELETE FROM {table} WHERE spell_id = {sid}')
             host.sql(f"INSERT INTO {table} ({','.join(row)}) VALUES ({','.join(str(x) for x in row.values())})")
         return sid
 
@@ -141,26 +142,89 @@ def check_spell_source_behavior(host):
             assert host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {b}') == [[before_max]], (before_max, host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {b}'))
         host.call('debug_teleport', [b, 0, 8005, 9000, 0, 0])
 
-    delayed = spell(flags=0x80, cast_time_ms=500)
-    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
-    host.call('debug_begin_cast', [a, delayed, b])
-    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
-    host.wait_until(lambda: auras(delayed), 'completion repeated the cast-start facing check')
+    for flags, turner in [(0x80, a), (0x40, b)]:
+        delayed = spell(flags=flags, cast_time_ms=500, cost=3)
+        host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
+        host.call('debug_teleport', [b, 0, 8005, 9000, 0, 0])
+        host.sql(f'UPDATE game_world_entity SET power = 100, max_power = 100 WHERE guid = {a}')
+        host.call('debug_learn_spell', [a, delayed])
+        caster.collect()
+        caster.send(0x12e, cast(delayed, b))
+        pending = f'SELECT scheduled_id FROM game_pending_cast WHERE caster_guid = {a}'
+        host.wait_until(lambda: host.rows(pending), 'cast did not start')
+        host.call('debug_teleport', [turner, 0, 8000 if turner == a else 8005, 9000, 0, 3.14159265])
+        assert host.rows(pending), 'turning cancelled before completion'
+        host.wait_until(lambda: not host.rows(pending), 'cast did not complete')
+        assert not auras(delayed), 'completion ignored the facing requirement'
+        assert host.rows(f'SELECT power FROM game_world_entity WHERE guid = {a}') == [[100]]
+        packets = caster.collect()
+        assert any(op == 0x130 and body[:5] == struct.pack('<IB', delayed, 2) for op, body in packets), packets
+
+    original_factions = {guid: host.rows(f'SELECT faction_template FROM game_world_entity WHERE guid = {guid}')[0][0] for guid in [a, b]}
+    for faction, group, enemy in [(50908, 1, 2), (50909, 2, 1)]:
+        host.restore('game_faction_template', f'id = {faction}')
+        host.sql(f'DELETE FROM game_faction_template WHERE id = {faction}')
+        host.sql(f'INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES ({faction},{faction},{group},{group},{enemy},0,0,0,0,0,0,0,0)')
+    host.sql(f'UPDATE game_world_entity SET faction_template = 50908 WHERE guid = {a}')
+    for target_kind, refused_faction, admitted_faction in [(2, 50909, 50908), (1, 50908, 50909)]:
+        triggered_aura = spell(kind=0xa0, is_negative='true' if target_kind == 1 else 'false')
+        host.sql(f'UPDATE game_spell_effect SET target = {target_kind}, p0_kind = 1, p0 = 2 WHERE spell_id = {triggered_aura}')
+        holder = spell(kind=0x93)
+        host.sql(f'UPDATE game_spell_effect SET target = 0, period_ms = 100, trigger_spell = {triggered_aura} WHERE spell_id = {holder}')
+        host.sql(f'UPDATE game_world_entity SET faction_template = {refused_faction} WHERE guid = {b}')
+        host.call('debug_begin_cast', [a, holder, b])
+        first_tick = host.rows(f'SELECT next_tick_micros FROM game_aura WHERE spell_id = {holder}')[0][0]
+        host.wait_until(lambda: host.rows(f'SELECT next_tick_micros FROM game_aura WHERE spell_id = {holder}')[0][0] > first_tick + 100000,
+                        'periodic trigger did not run')
+        assert not auras(triggered_aura), 'triggered cast ignored faction targeting'
+        host.sql(f'UPDATE game_world_entity SET faction_template = {admitted_faction} WHERE guid = {b}')
+        host.wait_until(lambda: auras(triggered_aura), 'eligible triggered aura did not land')
+        host.sql(f'DELETE FROM game_aura WHERE spell_id = {holder}')
+        host.sql(f'DELETE FROM game_aura WHERE spell_id = {triggered_aura}')
+    for guid, faction in original_factions.items():
+        host.sql(f'UPDATE game_world_entity SET faction_template = {faction} WHERE guid = {guid}')
 
     host.sql(f'DELETE FROM game_aura WHERE caster_guid = {a}')
     for channeled in [0x80, 0]:
-        missile = spell(flags=0xc0, kind=2, amount=1000, coefficient=0, range_yd=1)
+        missile = spell(flags=0xc0, kind=2, amount=1000, coefficient=0, range_yd=1, cost=1000, gcd_ms=60000, cooldown_ms=60000)
         channel = spell(flags=0x80, kind=0x93, cast_flags=channeled, range_yd=10)
         host.sql(f'UPDATE game_spell_effect SET target = 0, period_ms = 100, trigger_spell = {missile} WHERE spell_id = {channel}')
         host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
+        host.call('debug_teleport', [b, 0, 8008, 9000, 0, 0])
         host.call('debug_begin_cast', [a, channel, b])
         host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
-        host.call('debug_teleport', [b, 0, 8005, 9000, 0, 3.14159265])
+        host.call('debug_teleport', [b, 0, 8008, 9000, 0, 3.14159265])
         host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
         host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}')[0][0] >= 2100,
                         'turning stopped aura-triggered missiles')
         assert auras(channel), 'turning ended the channel'
+        assert not host.rows(f'SELECT id FROM game_spell_cd WHERE caster_guid = {a} AND spell_id = {missile}')
+        assert host.rows(f'SELECT power FROM game_world_entity WHERE guid = {a}') == [[100]]
         host.sql(f'DELETE FROM game_aura WHERE spell_id = {channel}')
+
+    missile = spell(spell_id=7268, name="'Arcane Missile'", flags=0x80, kind=1, amount=24,
+                    coefficient=0.132, range_yd=30, school_mask=64)
+    missiles = spell(spell_id=5143, name="'Arcane Missiles'", flags=0x80, kind=0x93,
+                     cast_flags=0x80, range_yd=30, duration_ms=3000, cost=85, school_mask=64)
+    host.sql(f'UPDATE game_spell_effect SET target = 1 WHERE spell_id = {missile}')
+    host.sql(f'UPDATE game_spell_effect SET target = 0, period_ms = 1000, trigger_spell = {missile} WHERE spell_id = {missiles}')
+    before = {row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')}
+    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
+    host.call('debug_spawn_at_feet', [a, 51000, 8])
+    victim = ({row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')} - before).pop()
+    host.sql(f'UPDATE game_world_entity SET health = 10000, max_health = 10000 WHERE guid = {victim}')
+    caster.collect()
+    host.call('debug_begin_cast', [a, missiles, victim])
+    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
+    packets = []
+
+    def missile_ticks_arrived():
+        packets.extend(caster.collect())
+        return sum(op == 0x132 and spell_id(body) == 7268 for op, body in packets) >= 2
+
+    host.wait_until(missile_ticks_arrived, 'turning stopped Arcane Missile 7268')
+    assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {victim}')[0][0] < 10000
+    host.sql(f'DELETE FROM game_aura WHERE spell_id = {missiles}')
 
     area_channel = spell(kind=0x91, amount=1000, coefficient=0, cast_flags=0x80, range_yd=1)
     host.sql(f'UPDATE game_spell_effect SET target = 5, radius_yd = 10, period_ms = 100 WHERE spell_id = {area_channel}')
