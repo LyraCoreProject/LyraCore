@@ -196,6 +196,10 @@ pub(crate) fn armor_mitigation_pct(armor: u32, attacker_level: u32) -> u32 {
     (armor * 100 / denom).min(75)
 }
 
+pub(crate) fn armor_mitigated(damage: u32, mitigation_pct: u32) -> u32 {
+    (damage * (100 - mitigation_pct) / 100).max(1)
+}
+
 pub(crate) fn resist_mitigation_pct(resistance: u32, caster_level: u32) -> u32 {
     if resistance == 0 || caster_level == 0 {
         return 0;
@@ -205,7 +209,7 @@ pub(crate) fn resist_mitigation_pct(resistance: u32, caster_level: u32) -> u32 {
     (75 * r / cap).min(75)
 }
 
-#[cfg(any(test, feature = "debug_reducers"))]
+#[cfg(feature = "debug_reducers")]
 pub struct SwingProfile {
     pub base_min: u32,
     pub base_max: u32,
@@ -214,7 +218,7 @@ pub struct SwingProfile {
     pub final_max: u32,
 }
 
-#[cfg(any(test, feature = "debug_reducers"))]
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn swing_profile(
     base_min: u32,
     base_max: u32,
@@ -222,13 +226,12 @@ pub(crate) fn swing_profile(
     attacker_level: u32,
 ) -> SwingProfile {
     let mitigation_pct = armor_mitigation_pct(target_armor, attacker_level);
-    let mit = |d: u32| (d * (100 - mitigation_pct) / 100).max(1);
     SwingProfile {
         base_min,
         base_max,
         mitigation_pct,
-        final_min: mit(base_min),
-        final_max: mit(base_max),
+        final_min: armor_mitigated(base_min, mitigation_pct),
+        final_max: armor_mitigated(base_max, mitigation_pct),
     }
 }
 
@@ -367,11 +370,6 @@ fn regen_power_with_flat(
     }
 }
 
-#[cfg(test)]
-pub(crate) fn regen_health(current: u32, max: u32, spirit: u32, level: u32) -> u32 {
-    regen_health_with_flat(current, max, spirit, level, 0)
-}
-
 fn regen_health_with_flat(
     current: u32,
     max: u32,
@@ -465,7 +463,21 @@ pub(crate) fn regen_energy(current: u32, max: u32, ticks: u64, regen_rate: f64) 
         .min(u64::from(max)) as u32
 }
 
-#[cfg(any(test, feature = "debug_reducers"))]
+fn regen_health_in_combat_with_flat(
+    current: u32,
+    max: u32,
+    spirit: u32,
+    level: u32,
+    combat_regen_pct: u32,
+    health_flat_tick: i32,
+) -> u32 {
+    let partial = (i128::from(health_regen_per_tick(spirit, level)) * i128::from(combat_regen_pct)
+        / 100)
+        .clamp(0, i128::from(u32::MAX)) as u32;
+    apply_regen(current, max, partial, health_flat_tick)
+}
+
+#[cfg(feature = "debug_reducers")]
 pub(crate) fn regen_health_in_combat(
     current: u32,
     max: u32,
@@ -473,13 +485,7 @@ pub(crate) fn regen_health_in_combat(
     level: u32,
     combat_regen_pct: u32,
 ) -> u32 {
-    if max == 0 || combat_regen_pct == 0 {
-        return current;
-    }
-    let partial = (i128::from(health_regen_per_tick(spirit, level)) * i128::from(combat_regen_pct)
-        / 100)
-        .clamp(0, i128::from(u32::MAX)) as u32;
-    apply_regen(current, max, partial, 0)
+    regen_health_in_combat_with_flat(current, max, spirit, level, combat_regen_pct, 0)
 }
 
 pub(crate) fn regen_entity_health_in_combat(
@@ -488,13 +494,12 @@ pub(crate) fn regen_entity_health_in_combat(
     health_per_five: i32,
     window: RegenWindow,
 ) -> u32 {
-    let partial =
-        (i128::from(health_regen_per_tick(e.spirit, e.level)) * i128::from(combat_regen_pct) / 100)
-            .clamp(0, i128::from(u32::MAX)) as u32;
-    apply_regen(
+    regen_health_in_combat_with_flat(
         e.health,
         e.max_health,
-        partial,
+        e.spirit,
+        e.level,
+        combat_regen_pct,
         per_five_in_window(health_per_five, window),
     )
 }
@@ -537,7 +542,7 @@ mod tests {
         assert!(agility_crit_bp(40, 5) > agility_crit_bp(20, 5));
         assert!(agility_crit_bp(20, 10) < agility_crit_bp(20, 1));
         assert_eq!(agility_crit_bp(0, 5), 0);
-        assert_eq!(crit_bp_with_bonus(agility_crit_bp(0, 5) as i32), CRIT_BP);
+        assert_eq!(crit_bp_with_bonus(agility_crit_bp(0, 5) as i32), 1000);
     }
 
     #[test]
@@ -648,27 +653,21 @@ mod tests {
 
     #[test]
     fn dodge_scales_with_agility_level_and_caps() {
-        assert_eq!(dodge_chance_bp(0, sd(10, 10)), BASE_DODGE_BP);
-        assert_eq!(
-            dodge_chance_bp(20, sd(10, 10)),
-            BASE_DODGE_BP + 20 * DODGE_BP_PER_AGILITY
-        );
+        assert_eq!(dodge_chance_bp(0, sd(10, 10)), 500);
+        assert_eq!(dodge_chance_bp(20, sd(10, 10)), 600);
         assert!(dodge_chance_bp(100, sd(10, 10)) > dodge_chance_bp(20, sd(10, 10)));
         assert!(dodge_chance_bp(0, sd(10, 13)) > dodge_chance_bp(0, sd(10, 10)));
-        assert_eq!(dodge_chance_bp(0, sd(10, 5)), BASE_DODGE_BP);
-        assert_eq!(dodge_chance_bp(1_000_000, sd(10, 10)), MAX_DODGE_BP);
+        assert_eq!(dodge_chance_bp(0, sd(10, 5)), 500);
+        assert_eq!(dodge_chance_bp(1_000_000, sd(10, 10)), 3000);
     }
 
     #[test]
     fn parry_scales_with_defense_skill_not_agility_and_caps() {
-        assert_eq!(parry_chance_bp(sd(10, 10)), PARRY_BP);
-        assert_eq!(parry_chance_bp(sd(10, 5)), PARRY_BP);
-        assert_eq!(
-            parry_chance_bp(sd(10, 11)),
-            PARRY_BP + 5 * PARRY_BP_PER_SKILL
-        );
+        assert_eq!(parry_chance_bp(sd(10, 10)), 500);
+        assert_eq!(parry_chance_bp(sd(10, 5)), 500);
+        assert_eq!(parry_chance_bp(sd(10, 11)), 550);
         assert!(parry_chance_bp(sd(10, 13)) > parry_chance_bp(sd(10, 11)));
-        assert_eq!(parry_chance_bp(sd(1, 1_000_000)), MAX_PARRY_BP);
+        assert_eq!(parry_chance_bp(sd(1, 1_000_000)), 3000);
     }
 
     #[test]
@@ -724,46 +723,34 @@ mod tests {
 
     #[test]
     fn miss_chance_follows_the_level_hit_curve() {
-        assert_eq!(miss_chance_bp(sd(10, 10)), BASE_MISS_BP);
-        assert_eq!(miss_chance_bp(sd(10, 5)), BASE_MISS_BP);
+        assert_eq!(miss_chance_bp(sd(10, 10)), 500);
+        assert_eq!(miss_chance_bp(sd(10, 5)), 500);
         assert_eq!(miss_chance_bp(sd(10, 12)), 600);
         assert_eq!(miss_chance_bp(sd(10, 13)), 900);
         assert!(miss_chance_bp(sd(10, 14)) > miss_chance_bp(sd(10, 13)));
-        assert_eq!(miss_chance_bp(sd(1, 60)), MAX_MISS_BP);
+        assert_eq!(miss_chance_bp(sd(1, 60)), 6000);
     }
 
     #[test]
     fn crit_and_hit_ratings_fold_into_the_attack_table_bands() {
-        assert_eq!(crit_bp_with_bonus(0), CRIT_BP);
-        assert_eq!(
-            miss_bp_with_bonus(miss_chance_bp(sd(10, 10)), 0),
-            miss_chance_bp(sd(10, 10))
-        );
-
-        assert_eq!(crit_bp_with_bonus(1000), CRIT_BP + 1000);
-        assert!(crit_bp_with_bonus(1000) > crit_bp_with_bonus(0));
-
-        let base_miss = miss_chance_bp(sd(10, 12));
-        assert_eq!(miss_bp_with_bonus(base_miss, 500), base_miss - 500);
-        assert!(miss_bp_with_bonus(base_miss, 500) < base_miss);
-
-        assert_eq!(
-            miss_bp_with_bonus(BASE_MISS_BP, BASE_MISS_BP as i32 + 1000),
-            0
-        );
-        assert_eq!(miss_bp_with_bonus(0, 100), 0);
-
+        assert_eq!(crit_bp_with_bonus(0), 1000);
+        assert_eq!(crit_bp_with_bonus(1000), 2000);
         assert_eq!(crit_bp_with_bonus(100_000), 10_000);
-        assert_eq!(crit_bp_with_bonus(-(CRIT_BP as i32) - 500), 0);
+        assert_eq!(crit_bp_with_bonus(-1500), 0);
+
+        assert_eq!(miss_bp_with_bonus(600, 0), 600);
+        assert_eq!(miss_bp_with_bonus(600, 500), 100);
+        assert_eq!(miss_bp_with_bonus(500, 1500), 0);
+        assert_eq!(miss_bp_with_bonus(0, 100), 0);
     }
 
     #[test]
     fn glancing_only_vs_higher_level_and_caps() {
         assert_eq!(glancing_chance_bp(10, 10), 0);
         assert_eq!(glancing_chance_bp(10, 5), 0);
-        assert_eq!(glancing_chance_bp(10, 11), GLANCING_BP_PER_LEVEL);
-        assert_eq!(glancing_chance_bp(10, 13), 3 * GLANCING_BP_PER_LEVEL);
-        assert_eq!(glancing_chance_bp(10, 60), MAX_GLANCING_BP);
+        assert_eq!(glancing_chance_bp(10, 11), 1000);
+        assert_eq!(glancing_chance_bp(10, 13), 3000);
+        assert_eq!(glancing_chance_bp(10, 60), 4000);
     }
 
     #[test]
@@ -807,10 +794,10 @@ mod tests {
         assert_eq!(crushing_chance_bp(10, 10), 0);
         assert_eq!(crushing_chance_bp(10, 13), 0);
         assert_eq!(crushing_chance_bp(12, 10), 0);
-        assert_eq!(crushing_chance_bp(13, 10), CRUSH_BP_PER_LEVEL);
-        assert_eq!(crushing_chance_bp(14, 10), 2 * CRUSH_BP_PER_LEVEL);
+        assert_eq!(crushing_chance_bp(13, 10), 1000);
+        assert_eq!(crushing_chance_bp(14, 10), 2000);
         assert!(crushing_chance_bp(15, 10) > crushing_chance_bp(14, 10));
-        assert_eq!(crushing_chance_bp(60, 1), MAX_CRUSH_BP);
+        assert_eq!(crushing_chance_bp(60, 1), 5000);
 
         let t = AttackTable {
             miss: 0,
@@ -829,18 +816,12 @@ mod tests {
 
     #[test]
     fn block_chance_mirrors_parry_structure_and_caps() {
-        assert_eq!(block_chance_bp(sd(10, 10)), BLOCK_BP);
-        assert_eq!(block_chance_bp(sd(13, 10)), BLOCK_BP);
-        assert_eq!(
-            block_chance_bp(sd(10, 11)),
-            BLOCK_BP + 5 * BLOCK_BP_PER_SKILL
-        );
-        assert_eq!(
-            block_chance_bp(sd(10, 13)),
-            BLOCK_BP + 15 * BLOCK_BP_PER_SKILL
-        );
+        assert_eq!(block_chance_bp(sd(10, 10)), 500);
+        assert_eq!(block_chance_bp(sd(13, 10)), 500);
+        assert_eq!(block_chance_bp(sd(10, 11)), 550);
+        assert_eq!(block_chance_bp(sd(10, 13)), 650);
         assert!(block_chance_bp(sd(10, 14)) > block_chance_bp(sd(10, 13)));
-        assert_eq!(block_chance_bp(sd(1, 1_000_000)), MAX_BLOCK_BP);
+        assert_eq!(block_chance_bp(sd(1, 1_000_000)), 3000);
         assert_eq!(block_chance_bp(sd(10, 13)), parry_chance_bp(sd(10, 13)));
     }
 
@@ -1275,37 +1256,51 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::identity_op)]
     fn health_regen_is_spirit_and_level_scaled_and_clamped() {
-        assert_eq!(regen_health(100, 1000, 30, 10), 100 + 41);
-        let lo = regen_health(0, 100_000, 10, 10);
-        let hi = regen_health(0, 100_000, 100, 10);
-        assert!(hi > lo, "more spirit must regen more health ({hi} !> {lo})");
-        assert_eq!(regen_health(995, 1000, 30, 10), 1000);
-        assert_eq!(regen_health(0, 1000, 0, 9), 0 + 10);
-        assert!(regen_health(0, 1000, 0, 1) > 0);
-        assert_eq!(regen_health(0, 0, 30, 10), 0);
+        assert_eq!(regen_health_with_flat(100, 1000, 30, 10, 0), 141);
+        assert_eq!(regen_health_with_flat(0, 100_000, 10, 10, 0), 21);
+        assert_eq!(regen_health_with_flat(0, 100_000, 100, 10, 0), 111);
+        assert_eq!(regen_health_with_flat(995, 1000, 30, 10, 0), 1000);
+        assert_eq!(regen_health_with_flat(0, 1000, 0, 9, 0), 10);
+        assert_eq!(regen_health_with_flat(0, 1000, 0, 1, 0), 2);
+        assert_eq!(regen_health_with_flat(0, 0, 30, 10, 0), 0);
     }
 
     #[test]
     fn combat_regen_is_partial_fraction_of_normal_tick() {
-        assert_eq!(regen_health_in_combat(100, 1000, 30, 10, 0), 100);
         assert_eq!(
-            regen_health_in_combat(100, 1000, 30, 10, 100),
-            regen_health(100, 1000, 30, 10)
+            regen_health_in_combat_with_flat(100, 1000, 30, 10, 0, 0),
+            100
         );
-        assert_eq!(regen_health_in_combat(100, 1000, 0, 5, 10), 100);
-        assert_eq!(regen_health_in_combat(100, 1000, 50, 20, 10), 100 + 7);
         assert_eq!(
-            regen_health_in_combat(100, 1000, 50, 20, 40),
-            100 + 71 * 40 / 100
+            regen_health_in_combat_with_flat(100, 1000, 30, 10, 100, 0),
+            141
         );
-        assert!(
-            regen_health_in_combat(0, 10000, 50, 20, 50)
-                >= regen_health_in_combat(0, 10000, 50, 20, 10)
+        assert_eq!(
+            regen_health_in_combat_with_flat(100, 1000, 0, 5, 10, 0),
+            100
         );
-        assert_eq!(regen_health_in_combat(995, 1000, 50, 20, 100), 1000);
-        assert_eq!(regen_health_in_combat(0, 0, 30, 10, 10), 0);
+        assert_eq!(
+            regen_health_in_combat_with_flat(100, 1000, 50, 20, 10, 0),
+            107
+        );
+        assert_eq!(
+            regen_health_in_combat_with_flat(100, 1000, 50, 20, 40, 0),
+            128
+        );
+        assert_eq!(
+            regen_health_in_combat_with_flat(0, 10000, 50, 20, 50, 0),
+            35
+        );
+        assert_eq!(
+            regen_health_in_combat_with_flat(0, 10000, 300, 60, 50, 0),
+            180
+        );
+        assert_eq!(
+            regen_health_in_combat_with_flat(995, 1000, 50, 20, 100, 0),
+            1000
+        );
+        assert_eq!(regen_health_in_combat_with_flat(0, 0, 30, 10, 10, 0), 0);
     }
 
     #[test]
@@ -1326,15 +1321,11 @@ mod tests {
     }
 
     #[test]
-    #[allow(clippy::unnecessary_min_or_max)]
-    fn swing_profile_applies_mitigation_to_the_range() {
-        let p = swing_profile(5, 7, 0, 1);
-        assert_eq!((p.base_min, p.base_max, p.mitigation_pct), (5, 7, 0));
-        assert_eq!((p.final_min, p.final_max), (5, 7));
-        let q = swing_profile(1, 3, 42, 1);
-        assert_eq!(q.mitigation_pct, 7);
-        assert_eq!(q.final_min, 1);
-        assert_eq!(q.final_max, (3 * 93 / 100).max(1));
+    fn armor_mitigation_scales_the_hit_and_never_drops_below_one() {
+        assert_eq!(armor_mitigated(7, 0), 7);
+        assert_eq!(armor_mitigated(3, 7), 2);
+        assert_eq!(armor_mitigated(1, 7), 1);
+        assert_eq!(armor_mitigated(1000, 75), 250);
     }
 
     mod offhand_tests {

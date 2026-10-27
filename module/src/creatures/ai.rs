@@ -419,10 +419,7 @@ mod tests {
             ticks += 1;
             assert!(ticks < 10_000, "no arrival from {start} yd out");
         }
-        assert_eq!(
-            ticks,
-            ((start - RETURN_LEASH_SQ.sqrt()) / step).ceil() as u32
-        );
+        assert_eq!(ticks, 82, "(300 - 15) yd at 3.5 yd per tick");
     }
 
     #[test]
@@ -808,14 +805,11 @@ mod tests {
 
     #[test]
     fn sense_tick_for_interval_fires_on_the_documented_boundary_at_default_cadence() {
-        for step in 0..200i64 {
-            let now = step * 137_777;
-            let expected = (now / MOVE_TICK_MICROS) % SENSE_EVERY_N_TICKS == 0;
-            assert_eq!(
-                is_sense_tick_for_interval(now, MOVE_TICK_MICROS),
-                expected,
-                "divergence at now={now}"
-            );
+        for now in [0, 499_999, 4_000_000, 4_499_999, 8_000_000] {
+            assert!(is_sense_tick_for_interval(now, 500_000), "{now}");
+        }
+        for now in [500_000, 1_234_567, 3_999_999, 4_500_000, 7_999_999] {
+            assert!(!is_sense_tick_for_interval(now, 500_000), "{now}");
         }
     }
 
@@ -868,20 +862,25 @@ mod tests {
 
     #[test]
     fn sense_period_matches_actual_sense_tick_spacing() {
-        assert_eq!(
-            sense_period_secs_for_interval(MOVE_TICK_MICROS),
-            MOVE_TICK_SECS * SENSE_EVERY_N_TICKS as f32
-        );
-        assert_eq!(sense_period_secs_for_interval(100_000), 4.0);
-        assert_eq!(sense_period_secs_for_interval(200_000), 4.0);
-        assert_eq!(sense_period_secs_for_interval(2_500_000), 2.5);
-        assert_eq!(sense_period_secs_for_interval(10_000_000), 10.0);
-        assert_eq!(sense_period_secs_for_interval(3_000_000), 3.0);
+        let spacing_micros = |interval: i64| {
+            let mut firings = (0..).map(|n| n * interval);
+            firings
+                .find(|&now| now > 0 && is_sense_tick_for_interval(now, interval))
+                .expect("every cadence senses again")
+        };
+        for (interval, period_secs) in [
+            (500_000, 4.0),
+            (100_000, 4.0),
+            (200_000, 4.0),
+            (2_500_000, 2.5),
+            (3_000_000, 3.0),
+            (10_000_000, 10.0),
+        ] {
+            assert_eq!(sense_period_secs_for_interval(interval), period_secs);
+            assert_eq!(spacing_micros(interval) as f32 / 1_000_000.0, period_secs);
+        }
         assert!((sense_period_secs_for_interval(707_000) - 3.535).abs() < 1e-4);
-        assert_eq!(
-            sense_period_secs_for_interval(0),
-            MOVE_TICK_SECS * SENSE_EVERY_N_TICKS as f32
-        );
+        assert_eq!(sense_period_secs_for_interval(0), 4.0);
     }
 
     #[test]

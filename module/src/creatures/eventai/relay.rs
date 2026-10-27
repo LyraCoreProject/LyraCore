@@ -1146,10 +1146,6 @@ fn source_lifetime_ends(lifetime: RelayLifetime) -> bool {
     lifetime == RelayLifetime::SourceCreature
 }
 
-fn step_due_ms(started_at_ms: u64, offset_ms: u32) -> u64 {
-    started_at_ms.saturating_add(u64::from(offset_ms))
-}
-
 pub(crate) fn start_imported_relay(
     ctx: &ReducerContext,
     relay_id: u32,
@@ -1286,7 +1282,7 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
     let now_ms = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000;
     let start_ms = run.started_at.to_micros_since_unix_epoch().max(0) as u64 / 1000;
     while let Some(step) = definition.steps.get(run.next_step as usize) {
-        let due_ms = step_due_ms(start_ms, step.offset_ms);
+        let due_ms = start_ms.saturating_add(u64::from(step.offset_ms));
         if due_ms > now_ms {
             run.due_at = Timestamp::from_micros_since_unix_epoch(
                 i64::try_from(due_ms.saturating_mul(1000)).unwrap_or(i64::MAX),
@@ -1562,7 +1558,7 @@ fn apply_leaf_for_pair(
             },
         ),
         RelayInstruction::MoveDynamic(dynamic) => {
-            if !dynamic_move_should_start(crate::combat::is_engaged(ctx, guid)) {
+            if crate::combat::is_engaged(ctx, guid) {
                 return Ok(());
             }
             let (target_x, target_y, target_z) = participant_position(ctx, target_guid)?;
@@ -1760,10 +1756,6 @@ fn arrival_motion(
         }
         _ => ArrivalCheck::Stale,
     }
-}
-
-fn dynamic_move_should_start(engaged: bool) -> bool {
-    !engaged
 }
 
 #[reducer]
@@ -2517,34 +2509,27 @@ mod tests {
     }
 
     #[test]
-    fn delayed_steps_keep_the_invocation_start_as_their_time_base() {
-        let due = step_due_ms(10_000, 250);
-        assert_eq!(due, 10_250);
-        assert_ne!(due, step_due_ms(10_100, 250));
+    fn relay_random_states_follow_the_splitmix64_reference_sequence() {
+        assert_eq!(
+            next_random(0),
+            (0xE220_A839_7B1D_CDAF, 0x9E37_79B9_7F4A_7C15)
+        );
+        assert_eq!(
+            next_random(0x9E37_79B9_7F4A_7C15),
+            (0x6E78_9E6A_A1B9_65F4, 0x3C6E_F372_FE94_F82A)
+        );
+        assert_eq!(next_random(0x3C6E_F372_FE94_F82A).0, 0x06C4_5D18_8009_454F);
     }
 
     #[test]
-    fn random_choices_advance_a_state_that_can_be_persisted_between_wakes() {
-        let choices = [10, 20, 30];
-        let mut uninterrupted = 77;
-        let first = choose(&choices, &mut uninterrupted);
-        let persisted_after_first = uninterrupted;
-        let second = choose(&choices, &mut uninterrupted);
-
-        let mut reloaded = persisted_after_first;
-        assert_eq!(choose(&choices, &mut reloaded), second);
-        assert_eq!(reloaded, uninterrupted);
-        assert!(choices.contains(&first));
-    }
-
-    #[test]
-    fn nested_runs_split_child_and_parent_random_states() {
-        let initial = 91;
-        let (child, parent) = next_random(initial);
-        assert_ne!(child, parent);
-        assert_ne!(parent, initial);
-        assert_eq!(next_random(initial), (child, parent));
-        assert_ne!(next_random(parent), (child, parent));
+    fn a_choice_spends_one_draw_unless_there_is_only_one_option() {
+        let mut state = 0;
+        assert_eq!(choose(&[10, 20, 30], &mut state), 20);
+        assert_eq!(state, 0x9E37_79B9_7F4A_7C15);
+        assert_eq!(choose(&[10, 20, 30], &mut state), 10);
+        let mut single = 5;
+        assert_eq!(choose(&[42], &mut single), 42);
+        assert_eq!(single, 5);
     }
 
     #[test]
@@ -2574,12 +2559,6 @@ mod tests {
         assert!(!termination_matches(RelayTerminateWhen::Present, false));
         assert!(!source_lifetime_ends(RelayLifetime::MapOrInstance));
         assert!(source_lifetime_ends(RelayLifetime::SourceCreature));
-    }
-
-    #[test]
-    fn dynamic_movement_preserves_an_active_combat_generator() {
-        assert!(dynamic_move_should_start(false));
-        assert!(!dynamic_move_should_start(true));
     }
 
     #[test]

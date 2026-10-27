@@ -289,7 +289,7 @@ pub(crate) fn aura_apply(
             }
             crate::spell::stacking::ApplyDecision::Apply {
                 duration_scale_bp, ..
-            } => ((duration_ms as u64) * (duration_scale_bp as u64) / 10_000) as u32,
+            } => crate::spell::stacking::dr_scaled_duration_ms(duration_ms, duration_scale_bp),
         }
     } else {
         duration_ms

@@ -48,8 +48,8 @@ pub(crate) use effects::{
 };
 #[cfg(test)]
 pub(crate) use math::{
-    absorb_draw, can_afford, cast_finish_micros, int_spell_power, intellect_crit_bp,
-    spell_crit_bp_with_bonus, stance_damage_taken_pct, SPELL_CRIT_BP,
+    absorb_draw, can_afford, int_spell_power, intellect_crit_bp, spell_crit_bp_with_bonus,
+    stance_damage_taken_pct,
 };
 pub(crate) use math::{
     add_flat_pool_bonus, apply_damage_pct, apply_resistance, apply_spell_crit, apply_spell_mod,

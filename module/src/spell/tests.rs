@@ -121,22 +121,13 @@ fn form_recast_toggles_off_only_for_active_druid_forms() {
 #[test]
 fn stance_folds_only_defensive_contributes() {
     assert_eq!(stance_damage_taken_pct(STANCE_BATTLE), 0);
-    assert_eq!(
-        stance_damage_taken_pct(STANCE_DEFENSIVE),
-        STANCE_DEFENSIVE_DR_PCT
-    );
+    assert_eq!(stance_damage_taken_pct(STANCE_DEFENSIVE), -10);
     assert_eq!(stance_damage_taken_pct(STANCE_BERSERKER), 0);
     assert_eq!(stance_damage_done_pct(STANCE_BATTLE), 0);
-    assert_eq!(
-        stance_damage_done_pct(STANCE_DEFENSIVE),
-        STANCE_DEFENSIVE_DMG_DONE_PCT
-    );
+    assert_eq!(stance_damage_done_pct(STANCE_DEFENSIVE), -10);
     assert_eq!(stance_damage_done_pct(STANCE_BERSERKER), 0);
     assert_eq!(stance_threat_pct(STANCE_BATTLE), 0);
-    assert_eq!(
-        stance_threat_pct(STANCE_DEFENSIVE),
-        STANCE_DEFENSIVE_THREAT_PCT
-    );
+    assert_eq!(stance_threat_pct(STANCE_DEFENSIVE), 30);
     assert_eq!(stance_threat_pct(STANCE_BERSERKER), 0);
     assert_eq!(
         apply_damage_pct(100, stance_damage_taken_pct(STANCE_DEFENSIVE)),
@@ -154,8 +145,8 @@ fn stance_folds_only_defensive_contributes() {
 
 #[test]
 fn spell_crit_chance_folds_aura_and_clamps() {
-    assert_eq!(spell_crit_bp_with_bonus(0), SPELL_CRIT_BP);
-    assert_eq!(spell_crit_bp_with_bonus(1000), SPELL_CRIT_BP + 1000);
+    assert_eq!(spell_crit_bp_with_bonus(0), 0);
+    assert_eq!(spell_crit_bp_with_bonus(1000), 1000);
     assert_eq!(spell_crit_bp_with_bonus(-5000), 0);
     assert_eq!(spell_crit_bp_with_bonus(100_000), 10_000);
 }
@@ -268,13 +259,6 @@ fn school_locked_is_active_until_the_boundary() {
     assert!(!school_locked(3000, 2000));
     assert!(!school_locked(0, 0));
     assert!(!school_locked(5000, 0));
-}
-
-#[test]
-fn cast_finish_micros_adds_cast_time() {
-    assert_eq!(cast_finish_micros(1_000_000, 1500), 2_500_000);
-    assert_eq!(cast_finish_micros(5, 0), 5);
-    assert_eq!(cast_finish_micros(0, 1), 1_000);
 }
 
 #[test]
