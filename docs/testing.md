@@ -161,8 +161,10 @@ The independent Benilla codec checks and opcode inventory are described in
 
 Tier 1 starts a disposable local Shard and drives native reducers through an Operator WebSocket
 connection. `connection_identity` compares ping and name-query replies with the pinned harness's
-Golden Trace. The same target checks preserved login credentials and later-transaction packet
-delivery. Fixture world entry requires `conformance_test_fixture`; normal publication excludes it.
+Golden Trace. `taxi_single_hop` uses imported route data as described in the
+[conformance data setup](../conformance/README.md#taxi-data). The same target checks preserved login
+credentials, later-transaction packet delivery and the known-flight-node debug reducer. Fixture
+world entry requires `conformance_test_fixture`; normal publication excludes it.
 See [ADR 0005](adr/0005-1-12-conformance.md) for repository ownership.
 
 ```bash

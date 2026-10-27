@@ -1,3 +1,3 @@
 # Tag and verified commit used by dev smoke and the conformance library.
 # Before bumping, read lyracore-cli/docs/commands.md under dev smoke.
-v0.2.0-conformance.2 b4dcbc1a6323777a843c800b29ecbe99d3946d7f
+v0.2.0-conformance.3 c24ebb3c69613c7d442cc737f199e7a1f181da52

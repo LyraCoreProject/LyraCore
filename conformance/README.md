@@ -83,23 +83,57 @@ A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check
 checkout is read and no catalogue check can skip.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
-`connection_identity` prepares the scenario's Character through debug reducers, then runs the
+The runner prepares the scenario's Character through debug reducers, then runs the
 harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
 ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
 unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
 `wait_for_packets`.
 
-The pinned v2 runner starts after `prepare`. Core consumes setup delivery instructions to establish
-AOI Grants before the first request. It does not compare setup packets. This revision cannot record
-an opening phase. T2d must adopt the harness's opening format so login packets become recorded
-observations outside comparison. Core never filters packets during the scenario or changes its
-Equivalence Rules.
+The schema-3 runner records world-entry packets in the opening phase. Core applies their delivery
+instructions to establish AOI Grants, then retains the packets as opening observations. The harness
+excludes opening observations from comparison and starts comparison at the first step. Core never
+filters packets during the scenario or changes its Equivalence Rules.
 
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
-revision, capture time and the harness comparison. It removes the previous result before starting,
-so a setup failure leaves no old pass. Differences remain in the report and fail the test. No
-packet text enters this result. The scoreboard consumes it.
+revision, capture time and the harness comparison. It removes the scenario's previous result before
+setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
+and preserve other scenarios from the same revision. Differences remain in the report and fail the
+test. No packet text enters this result. The scoreboard consumes it.
+
+## Taxi data
+
+`taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The
+Operator transport calls the same debug reducers as the wire adapter. `debug_learn_taxi_node`
+requires the Operator, an existing Character and a storage id in `game_taxi_node`. Imported storage
+ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
+
+The seeded three-point taxi fixture is not route 6. Use your client and the pinned classic-db dump
+to prepare the actual route through the existing importer, without `--apply`. No source data or
+route coordinates belong in this repository. `taxi-fixture.py` selects unchanged tuples from the
+importer's output, not from a MySQL source dump.
+
+```bash
+scratch="$HOME/.cache/lyracore-scratch/conformance/taxi"
+mkdir -p "$scratch"
+cargo run -p lyracore-importer -- --dbc "$LYRACORE_CLIENT_DATA" \
+  --taxi-mounts "$LYRACORE_CLASSIC_DB_SQL" > "$scratch/dbc.sql"
+cargo run -p lyracore-importer -- --dump "$LYRACORE_CLASSIC_DB_SQL" \
+  --dbc "$LYRACORE_CLIENT_DATA" --world-profile alliance-single > "$scratch/world.sql"
+python3 conformance/taxi-fixture.py "$scratch/dbc.sql" "$scratch/world.sql" \
+  > "$scratch/taxi.sql"
+export LYRACORE_TEST_TAXI_SQL="$scratch/taxi.sql"
+cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture
+```
+
+The selection contains two taxi nodes, route 6, its 28 path nodes and creature template 352. The
+importer resolves mount creature 541 to a client display in each node, so no extra mount template
+is needed by the Module. The durable test loads these rows into its own Shard. Missing input fails
+with a setup error; it never substitutes the seeded geometry or skips a comparison. The same SQL
+can prepare a disposable Native Host for the harness's LyraCore adapter.
+
+The [T2d comparison](reports/2026-10-27-t2d.md) records the observed rule and data differences.
+The ignored taxi test still fails with the comparator report when run with imported data.
 
 ## Scoreboard
 

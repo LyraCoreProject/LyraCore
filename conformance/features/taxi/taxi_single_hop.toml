@@ -1,0 +1,20 @@
+schema_version = 1
+id = "taxi_single_hop"
+system = "taxi"
+scope = "A Character queries a known flight master, sees known flight nodes, pays for a direct flight from Stormwind to Sentinel Hill, follows its mount spline and lands. Taxi chains are outside this Behavior."
+requests = ["0x00C7", "0x01AA", "0x01AC", "0x01AD"]
+replies = ["0x00A9", "0x00C7", "0x00DD", "0x014E", "0x016E", "0x016F", "0x01A9", "0x01AB", "0x01AE"]
+dependencies = ["connection_identity"]
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = ["taxi_single_hop"]
+deliberate_deviations = []
+prerequisites = ["Imported taxi nodes 2 and 4, route 6 with all 28 path nodes, resolved mount displays and flight-master template 352", "The scenario's money, known-node and creature Fixture Verbs"]
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/TaxiHandler.cpp"
+symbol = "WorldSession::HandleActivateTaxiOpcode"
+
+[real_client]
+status = "unverified"

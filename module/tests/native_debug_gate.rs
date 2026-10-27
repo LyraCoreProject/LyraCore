@@ -59,8 +59,23 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
     let reducers = schema["reducers"].as_array().expect("Module reducers");
     assert!(reducers
         .iter()
-        .any(|reducer| reducer["name"] == "debug_set_money"));
+        .any(|reducer| reducer["name"] == "debug_learn_taxi_node"));
     assert!(!reducers
         .iter()
         .any(|reducer| reducer["name"] == "debug_native_enter_world"));
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn default_build_does_not_export_taxi_discovery() {
+    use lyracore_test_support::{module_bytes_with_features, Standalone};
+
+    let wasm = module_bytes_with_features("");
+    let mut shard = Standalone::start("taxi-debug-gate");
+    shard.publish_module_bytes(&wasm);
+    let schema = shard.describe();
+    let reducers = schema["reducers"].as_array().expect("Module reducers");
+    assert!(!reducers
+        .iter()
+        .any(|reducer| reducer["name"] == "debug_learn_taxi_node"));
 }

@@ -7,6 +7,8 @@ use serde_json::json;
 use serde_json::value::RawValue;
 use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
+#[path = "conformance/taxi.rs"]
+mod taxi;
 #[path = "conformance/tier1.rs"]
 mod tier1;
 #[path = "conformance/transport.rs"]

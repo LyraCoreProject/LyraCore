@@ -377,7 +377,7 @@ fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
         .any(|row| row.node_id == node_id)
 }
 
-fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
+pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
     if should_insert_discovery(is_known(ctx, character_guid, node_id)) {
         ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
             id: 0,
