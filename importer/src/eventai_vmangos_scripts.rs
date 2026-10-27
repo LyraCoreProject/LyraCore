@@ -198,7 +198,7 @@ fn instruction(source: &Source, c: &Command, script: &mut Script) -> Result<Stri
     let [a, b, d, e] = c.longs;
     let no_extra = d == 0 && e == 0;
     match c.kind {
-        0 if a == 0 => {
+        0 if matches!(a, 0..=4 | 6 | 7) => {
             let ids = c
                 .ints
                 .iter()
@@ -215,7 +215,16 @@ fn instruction(source: &Source, c: &Command, script: &mut Script) -> Result<Stri
                 return Err("broadcast-dependency".into());
             }
             script.texts.extend(&ids);
-            Ok(format!("talk:{}", joined(&ids)))
+            Ok(if a == 0 {
+                format!("talk:{}", joined(&ids))
+            } else {
+                let chat = match a {
+                    3 => lyracore_shared::chat::broadcast_chat::CREATURE_BOSS_EMOTE,
+                    4 => lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER,
+                    other => other as u8,
+                };
+                format!("talk-as:{chat}:{}", joined(&ids))
+            })
         }
         1 if a != 0 && b == 0 && no_extra && c.ints[0] == 0 => Ok(format!("emote:{a}")),
         4 if matches!(a, 46 | 147) && matches!(d, 1 | 2) => Ok(format!(
@@ -223,9 +232,9 @@ fn instruction(source: &Source, c: &Command, script: &mut Script) -> Result<Stri
             if a == 46 { "unit" } else { "npc" },
             if d == 1 { "add" } else { "remove" }
         )),
-        7 if b == 0 && no_extra && source.quests.contains(&a) => {
+        7 if d <= 1 && e == 0 && source.quests.contains(&a) => {
             script.quests.insert(a);
-            Ok(format!("creature-control:quest-event:{a}"))
+            Ok(format!("creature-control:script-quest-event:{a}:{b}:{d}"))
         }
         8 if b == 0 && no_extra => Ok(format!("creature-control:kill-credit:{a}")),
         14 if b == 0 && source.spells.contains(&a) => {
@@ -277,6 +286,31 @@ mod tests {
     use super::*;
     use crate::eventai::vmangos::tests::{event, source, step};
     use std::collections::HashSet;
+
+    #[test]
+    fn examination_speech_and_credit_preserve_chat_type_and_delay() {
+        let mut source = source();
+        source.broadcasts.insert(
+            55,
+            super::super::Broadcast {
+                encoded: String::new(),
+                mode: "say",
+                supported: true,
+            },
+        );
+        let mut speech = step(0, [2, 0, 0, 0]);
+        speech.ints[0] = 55;
+        speech.delay = 1;
+        let mut credit = step(7, [41, 20, 1, 0]);
+        credit.delay = 33;
+        let script = compile_script(&source, 2608, &[speech, credit]).unwrap();
+        let encoded = script.encode(2608);
+        assert!(encoded.contains("1000,0,1,source>optional-selected,talk-as:2:55"));
+        assert!(encoded.contains(
+            "33000,0,3,source>optional-selected,creature-control:script-quest-event:41:20:1"
+        ));
+        assert_eq!(script.quests, BTreeSet::from([41]));
+    }
 
     #[test]
     fn weighted_starts_preserve_unused_probability_and_delayed_order() {

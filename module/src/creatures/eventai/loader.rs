@@ -897,6 +897,13 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             }
             value => return Err(format!("unknown clear unit flag: {value}")),
         })),
+        ["script-quest-event", quest, distance, group] => Ok(CreatureInstruction::QuestCredit(
+            crate::quest::EventAiQuestCredit::ScriptEvent(crate::quest::ScriptQuestEvent {
+                quest_entry: nonzero_u32(quest, "quest")?,
+                distance_yd: parse_u32(distance)?,
+                group: parse_bool(group)?,
+            }),
+        )),
         ["quest-event", quest, recipient] => Ok(CreatureInstruction::QuestCredit(
             crate::quest::EventAiQuestCredit::QuestEvent(QuestEvent {
                 quest_entry: nonzero_u32(quest, "quest event quest")?,

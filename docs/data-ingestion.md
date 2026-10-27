@@ -112,12 +112,6 @@ type flags are derived from the source static flags. PC and NPC immunity bits ar
 when a fully translated, unconditional spawn command list clears the bit. Random lists, aborting
 commands, phase exclusions and conditional events cannot establish that clear. Other bits stay
 unflagged and the Compatibility Manifest lists the template as `creatures.scripted-immunity`.
-At the pinned source, only Overlord Mok'Morokk (4500) meets that rule, for player immunity.
-The Native creation packet contains the restored bit, followed by a values update clearing it.
-The spawn transaction commits without immunity, so this creates no lasting server-side immunity.
-A real-client frame effect has not been checked. Four templates have any EventAI immunity clear: 1840, 4275, 4500
-and 10992. The other three do not meet the unconditional spawn rule. Full-world still omits at
-least one immunity on 3,407 templates; alliance-single omits one on 1,022 templates.
 Only waypoint movement, type 2, emits paths
 on the vmangos path; classic path selection is unchanged. Trainer, vendor and gossip joins retain their
 existing family ownership.
@@ -179,9 +173,13 @@ trainer output.
 The quests family selects quest patches and relation ranges. Full profiles share the full quest
 catalogue; other canonical profiles share the existing starter and instance catalogue. Giver
 relations use the selected profile's enabled creature choices and GameObjects. Source exploration
-or event flags add an event-credit requirement unless an area-trigger objective already supplies
-the gate. This follows [QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
-Source script delivery and EventAI dependency closure remain part of S6.
+or event flags add an event-credit requirement only when the same scoped import emits a translated
+EventAI or script credit source for that quest, and no area-trigger objective already supplies it.
+Otherwise normal imported objectives determine completion, except classic script-gated quests 2460
+and 2608, which retain their gates even when the scene is unsupported. The Compatibility Manifest lists each
+missing source under `quests.event-credit-without-source`; the M4 event-credit ledger records the
+refused SQL, absent dispatcher or C++ source reference. The source flag meaning follows
+[QuestSpecialFlags at the pin](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/QuestDef.h#L166-L167).
 
 Reward mail uses `RewMailTemplateId`, `RewMailDelaySecs` and `RewMailMoney`. Sender zero retains the
 Module's quest-ender sender rule. Used mail loot must be one unconditional item at 100% chance.

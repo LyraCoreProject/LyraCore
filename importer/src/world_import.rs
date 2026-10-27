@@ -3979,7 +3979,10 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
     )
 }
 
-fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+fn vmangos_creature_ai(
+    dump: &impl TableRows,
+    args: &WorldImportArgs,
+) -> Result<(eventai::EventAiPlan, serde_json::Value)> {
     let source = eventai::vmangos::Source::read(dump)?;
     let templates = dump
         .columns("creature_template", &["entry"])?
@@ -3999,6 +4002,11 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
             break (plan, manifest);
         }
     };
+    Ok((eventai, manifest))
+}
+
+fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let (eventai, manifest) = vmangos_creature_ai(dump, args)?;
     let mut stmts = vec![
         "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into(),
         "DELETE FROM game_creature_ai_summon WHERE id > 0".into(),

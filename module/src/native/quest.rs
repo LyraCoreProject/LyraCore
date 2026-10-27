@@ -391,15 +391,7 @@ pub(super) fn receive(
                 request_turn_in_quest(ctx, guid, q.guid.guid(), q.quest_id, q.reward)?;
                 crate::mail_reward::file_reward_letter(ctx, guid, q.guid.guid(), q.quest_id)
             }) {
-                let packets = quest_detail_view(ctx, q.quest_id)
-                    .map(|detail| {
-                        packet(ServerOpcodeMessage::SMSG_QUESTGIVER_OFFER_REWARD(Box::new(
-                            codec::build_offer_reward(q.guid.guid(), &detail),
-                        )))
-                    })
-                    .transpose()?
-                    .into_iter()
-                    .collect();
+                let packets = reward_screen(ctx, q.guid.guid(), guid, q.quest_id)?;
                 return Err(Rollback::replies(packets, reason));
             }
             let mut packets: Vec<Packet> = quest_detail_view(ctx, q.quest_id)
@@ -495,9 +487,17 @@ pub(crate) fn changed(
             ));
         }
         if !old.failed && row.failed {
-            messages.push(ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
-                codec::build_questupdate_failedtimer(row.quest_entry),
-            ));
+            messages.push(if old.deadline_micros != 0 {
+                ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
+                    codec::build_questupdate_failedtimer(row.quest_entry),
+                )
+            } else {
+                ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILED(
+                    lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_FAILED {
+                        quest_id: row.quest_entry,
+                    },
+                )
+            });
         }
         for message in messages {
             let packet = packet(message).expect("bounded quest progress fits a world frame");

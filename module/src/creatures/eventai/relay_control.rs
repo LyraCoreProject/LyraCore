@@ -10,10 +10,26 @@ pub enum RelayCreatureControl {
     RemoveAura(u32),
     QuestEvent(u32),
     KillCredit(u32),
+    ScriptQuestEvent(crate::quest::ScriptQuestEvent),
 }
 
 impl RelayCreatureControl {
     pub(super) fn parse(fields: &[&str]) -> Result<Self, String> {
+        if let ["script-quest-event", quest, distance, group] = fields {
+            return Ok(Self::ScriptQuestEvent(crate::quest::ScriptQuestEvent {
+                quest_entry: quest
+                    .parse::<u32>()
+                    .ok()
+                    .filter(|entry| *entry != 0)
+                    .ok_or("invalid quest entry")?,
+                distance_yd: distance.parse().map_err(|_| "invalid quest distance")?,
+                group: match *group {
+                    "0" => false,
+                    "1" => true,
+                    _ => return Err("invalid quest group switch".into()),
+                },
+            }));
+        }
         let [kind, value] = fields else {
             return Err("creature control needs kind and value".into());
         };
@@ -49,6 +65,9 @@ impl RelayCreatureControl {
 
     pub(super) fn instruction(self) -> CreatureInstruction {
         match self {
+            Self::ScriptQuestEvent(request) => CreatureInstruction::QuestCredit(
+                crate::quest::EventAiQuestCredit::ScriptEvent(request),
+            ),
             Self::Phase(phase) => CreatureInstruction::SetPhase(SetPhaseInstruction { phase }),
             Self::IncrementPhase(amount) => {
                 CreatureInstruction::CheckedIncrementPhase(IncrementPhaseInstruction { amount })

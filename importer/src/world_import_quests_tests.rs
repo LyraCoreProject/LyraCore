@@ -341,7 +341,7 @@ fn classic_nullable_quest_text_keeps_its_existing_output() {
 }
 
 #[test]
-fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
+fn emitted_credit_and_classic_script_gates_determine_event_requirements() {
     let quest = |entry, flags| {
         [
             ("entry", N(entry)),
@@ -363,6 +363,8 @@ fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
                 &quest(101, 3),
                 &quest(102, 1),
                 &quest(103, 2),
+                &quest(2460, 2),
+                &quest(2608, 2),
             ],
         },
         FixtureTable {
@@ -374,8 +376,30 @@ fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
     ])
     .unwrap();
     assert_eq!(
-        event_requirements(&source, &HashSet::from([100, 101, 102])).unwrap(),
-        ["(1,101)"]
+        event_requirements(
+            &source,
+            &HashSet::from([100, 101, 102, 103]),
+            &BTreeSet::from([100, 101])
+        )
+        .unwrap(),
+        (vec!["(1,101)".into()], vec![103])
+    );
+    assert_eq!(
+        event_requirements(&source, &HashSet::from([100, 101, 102]), &BTreeSet::new()).unwrap(),
+        (vec![], vec![101])
+    );
+    assert_eq!(
+        event_requirements(&source, &HashSet::from([2460, 2608]), &BTreeSet::new()).unwrap(),
+        (vec!["(1,2460)".into(), "(2,2608)".into()], vec![2460, 2608])
+    );
+    assert_eq!(
+        event_requirements(
+            &source,
+            &HashSet::from([2460, 2608]),
+            &BTreeSet::from([2460])
+        )
+        .unwrap(),
+        (vec!["(1,2460)".into(), "(2,2608)".into()], vec![2608])
     );
 }
 

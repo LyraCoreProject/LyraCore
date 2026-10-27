@@ -50,6 +50,32 @@ pub struct RelayNearby {
 pub struct RelayTalk {
     pub broadcast_ids: Vec<u32>,
 }
+impl RelayTalk {
+    fn parse(ids: &str) -> Result<Self, String> {
+        Ok(Self {
+            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
+pub struct RelayTalkOverride {
+    pub talk: RelayTalk,
+    pub chat_type: u8,
+}
+impl RelayTalkOverride {
+    fn parse(chat_type: &str, ids: &str) -> Result<Self, String> {
+        let chat_type = parse_u8(chat_type)?;
+        if !crate::chat::is_supported_chat_type(chat_type) {
+            return Err("unsupported script chat type".into());
+        }
+        Ok(Self {
+            talk: RelayTalk::parse(ids)?,
+            chat_type,
+        })
+    }
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub struct RelayEmote {
     pub emote_ids: Vec<u32>,
@@ -246,6 +272,7 @@ pub enum RelayInstruction {
     StartChoices(RelayChoices),
     CastWithOptions(super::CastInstruction),
     CreatureControl(super::relay_control::RelayCreatureControl),
+    TalkAs(RelayTalkOverride),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
@@ -472,7 +499,8 @@ fn validate_definition_dependencies(
     for definition in definitions {
         for step in &definition.steps {
             match &step.instruction {
-                RelayInstruction::Talk(talk) => {
+                RelayInstruction::Talk(talk)
+                | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. }) => {
                     for broadcast_id in &talk.broadcast_ids {
                         if ctx
                             .db
@@ -800,7 +828,7 @@ fn validate_step_capability(relay_id: u32, step: &RelayStep) -> Result<(), Strin
                 step.source_order
             ))
         }
-        RelayInstruction::Talk(talk)
+        RelayInstruction::Talk(talk) | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. })
             if talk.broadcast_ids.is_empty() || talk.broadcast_ids.contains(&0) =>
         {
             Err(format!(
@@ -991,9 +1019,10 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         ["creature-control", rest @ ..] => Ok(RelayInstruction::CreatureControl(
             super::relay_control::RelayCreatureControl::parse(rest)?,
         )),
-        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk {
-            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
-        })),
+        ["talk-as", chat_type, ids] => Ok(RelayInstruction::TalkAs(RelayTalkOverride::parse(
+            chat_type, ids,
+        )?)),
+        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk::parse(ids)?)),
         ["emote", ids] => Ok(RelayInstruction::Emote(RelayEmote {
             emote_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),
@@ -1522,7 +1551,7 @@ fn apply_leaf_for_pair(
     instruction: &RelayInstruction,
 ) -> Result<(), String> {
     match instruction {
-        RelayInstruction::Talk(talk) => {
+        RelayInstruction::Talk(talk) | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. }) => {
             if talk.broadcast_ids.is_empty() {
                 return Err("relay talk has no broadcast text".to_string());
             }
@@ -1541,12 +1570,16 @@ fn apply_leaf_for_pair(
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
             let gender = crate::creatures::catalogue::display_gender(ctx, source.display_id);
             let message = line.text_for_gender(gender).to_owned();
-            crate::native::creature_sound(ctx, guid, line.sound_id, line.chat_type);
+            let chat_type = match instruction {
+                RelayInstruction::TalkAs(overridden) => overridden.chat_type,
+                _ => line.chat_type,
+            };
+            crate::native::creature_sound(ctx, guid, line.sound_id, chat_type);
             crate::chat::apply_send_chat_to(
                 ctx,
                 source,
                 target_guid,
-                line.chat_type,
+                chat_type,
                 line.language_id,
                 message,
             )

@@ -77,7 +77,7 @@ of each counted quest is absent. Used mail loot passes validation and adds no lo
 | `quests.breadcrumb` | 23 | 9 | Breadcrumb prerequisites are not represented. |
 | `quests.complete-script` | 252 | 96 | Completion script dispatch is unsupported; there is no classic importer dispatcher to port. |
 | `quests.condition` | 76 | 35 | Quest acceptance has no imported condition reference. |
-| `quests.event-credit` | 176 | 53 | The completion gate is imported. Every unresolved quest is listed in the Milestone 4 event-credit audit below. |
+| `quests.event-credit-without-source` | 175 | 53 | Normal imported objectives determine completion except for 2608, which retains its classic gate. Missing grant sources are listed in the event-credit ledger. |
 | `quests.exclusive-group` | 427 | 151 | Exclusive quest groups are not represented. |
 | `quests.explicit-zero-xp` | 725 | 228 | The Module treats zero as a fallback request and can grant XP. |
 | `quests.extra-reputation-rewards` | 37 | 6 | Only the first two reputation reward slots are stored. |
@@ -225,29 +225,45 @@ The [full-world census](census/creature-ai.md) and
 The [approved sets](approved-sets-m4.md) document the gate. Approval classifies source values;
 it does not promise that each command, condition or target can run in the Module.
 
-Full-world emits 4,917 of 6,179 source events. It excludes 310 rows whose template does not use
-EventAI and drops 952 unsupported rules. The importer drops the complete rule on its first
+Full-world emits 4,923 of 6,179 source events. It excludes 310 rows whose template does not use
+EventAI and drops 946 unsupported rules. The importer drops the complete rule on its first
 unsupported command, target, condition or dependency. The following grouped counts describe
 that first refusal, not the number of every unsupported command in the source.
 
 | Finding group | Full-world rules | Alliance-single rules |
 | --- | ---: | ---: |
-| `eventai.command` | 437 | 89 |
+| `eventai.command` | 467 | 107 |
 | `eventai.command-condition` | 51 | 11 |
-| `eventai.condition` | 250 | 81 |
+| `eventai.condition` | 213 | 59 |
 | `eventai.encounter` | 69 | 1 |
 | `eventai.event` | 75 | 10 |
-| `eventai.script` | 47 | 24 |
+| `eventai.script` | 48 | 25 |
 | `eventai.start-script-source-target-swap` | 2 | 0 |
 | `eventai.target` | 28 | 0 |
 
 The Module cannot express the refused per-command conditions, source/target swaps, several
 friend and map-event selectors, summons with flags, limits or scripts, movement modes,
 instance special states or field mutations.
+Of 197 source summon commands, 154 have supported plain shapes, including all 139 plain
+opponent-target summons from the review. The emitted full-world rules contain 149 commands. The census lists all 197 by script and step;
+the former 157 total incorrectly accepted three target-10 commands in script 1128901.
+
+43 shapes remain refused and five otherwise supported commands do not survive rule admission
+or scope. Mor Grayhoof and Isalien triggers, Crystal Fang, the Defias Dockmaster and Shy-Rotam
+emit summons. Sethir 6909 retains no translated rule: its summons require uniqueness limits,
+radius searches and summon flags. Thor 523 and Dungar Longdrink 352 retain their speech and
+both gryphon summons. The Module's summon corpse lifetime differs for source modes 1/4;
+`eventai.summon-corpse-lifetime` identifies 84 full-world rules and 17 alliance-single rules.
+
+Twenty of 21 random-emote commands appear in the emitted program. All 93 targeted-emote rows
+at this pin remain refused (the review counted 92). Source targeted emotes pause movement,
+face the target, delay the animation and restore orientation; a target GUID alone does not
+implement that sequence.
+
 These refusals do not substitute a nearby unit or another target. Generic-script refusal reasons
 and unreachable script ids remain in the local Compatibility Manifest.
 
-The translated flee command emits broadcast 1150 and retains the Module's fixed ten-second flight. The source controls
+The translated flee command emits broadcast 1150 only when fleeing succeeds and retains the Module's fixed ten-second flight. The source controls
 its duration through different movement state. `eventai.flee-fixed-duration` reports 1,563
 full-world rules and the alliance count shown in its census. This limitation is explicit.
 
@@ -256,7 +272,7 @@ full-world rules and the alliance count shown in its census. This limitation is 
 | `creature_movement_scripts` | 1788 | 729 | 0 | 729 |
 | `event_scripts` | 379 | 119 | 0 | 119 |
 | `gameobject_scripts` | 139 | 77 | 0 | 77 |
-| `generic_scripts` | 3057 | 701 | 27 | 674 |
+| `generic_scripts` | 3057 | 701 | 32 | 669 |
 | `gossip_scripts` | 522 | 380 | 0 | 380 |
 | `quest_end_scripts` | 1696 | 224 | 0 | 224 |
 | `quest_start_scripts` | 666 | 99 | 0 | 99 |
@@ -266,12 +282,27 @@ families have no classic importer dispatcher. vmangos quest-end mail already com
 columns. `gameobject_scripts` keys are spawn GUIDs, confirmed in `GameObject::Use` at the pinned
 source commit. No entry-key substitution is made.
 
-All 176 full-world event-credit quests remain unsupported, each with a reason in the
-[event-credit ledger](event-credit-m4.md). Seventy-four have a SQL command-7 reference blocked by
-conditions, a script refusal or absent dispatch. The other 102 have no SQL command-7 reference;
-this audit makes no claim about their source C++ behavior. Quests 28 and 29 fall in that latter
-group. Quest 2460 is blocked by condition 806. Quests 6001 and 6002 require gossip-script dispatch.
-The Module has no supported completion path for any of these 176 quests.
+Of 176 full-world event-credit candidates, 2460 has emitted credit, 2608 retains its classic
+event gate without a working grant, and 174 use their normal imported objectives. The
+[event-credit ledger](event-credit-m4.md) lists each outcome and source reference. The 174
+fallbacks comprise 11 refused SQL sequences, 61 scripts without dispatch, 39 C++ spell effects,
+60 C++ script references and three unresolved grant sources, 3366, 6847 and 6848.
+
+Quest 2460 translates incomplete-quest condition 806 and command 7's 20-yard credit limit.
+Quest 2608 is a known completion regression against classic. Its condition 3694 and chat
+requests translate, but its scene is refused before it can emit command 7 at 33 seconds.
+Persistent emote state 69 and clearing state 0 need a durable animation field and client updates.
+The move at 4 seconds is relative to the player; moves at 14, 20 and 30 seconds need the source's
+point-movement controller, movement options and final orientation. These systems are absent.
+Accepting or flexing cannot complete this quest. Quests 6001 and 6002 still need gossip dispatch.
+
+A dwarf hunter accepted quest 6085, received its Taming Rod, returned the rod, and accepted
+Training the Beast 6086 using actual imported rows and Native packets. This verifies the normal
+objective fallback. Casting the rod still deletes it, so that path cannot then return it; the same
+failure occurs on pre-fix Core 928e3489. The item-use code is unchanged from base 95396fa2 and also
+ignores the supplied target. These existing item-use defects are outside the event-gate change.
+The reward importer refuses the three-spell wrapper 1579, so Tame Beast is not learned. The
+source's C++ taming aura callback is also unimplemented. This is not a verified taming sequence.
 
 Quests 8353-8360 use creature-objective credit, not those event requirements. All eight passed
 wrong-emote and correct-emote checks with their actual imported NPC rules and replies on a
@@ -292,7 +323,8 @@ use source type 33; type 15 is level and remains refused. The classic spawn proj
 limited to classic definitions. His enrage spell and emote also translate. The encounter translator
 uses vmangos instance field ids and states. It
 maps source state 0 to reset, and refuses classic field aliases, unrelated special states
-and cross-map entries, including alternative spawn choices. Rajaxx may also spawn on map 1;
+and entries whose source spawn maps exclude the bound instance map. Alternative spawn choices
+participate in that check. Rajaxx may also spawn on map 1;
 his encounter notifications are eligible only in a map-509 instance. A translated encounter notification does not install a Package encounter handler.
 The missing handlers and additional source C++ encounter effects remain unsupported.
 
