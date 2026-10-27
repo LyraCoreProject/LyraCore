@@ -232,15 +232,15 @@ pub(crate) fn static_conditions(rows: &[Row]) -> Result<BTreeMap<u32, Option<boo
         let result = if let Some(row) = rows.get(&id) {
             let flags: u32 = row.number("flags")?;
             let kind: i32 = row.number("type")?;
-            let value1: u32 = row.number("value1")?;
-            let value2: u32 = row.number("value2")?;
             let value = match kind {
                 0 => Some(true),
-                24 => Some(wow_patch(value1, value2)?),
-                -3 => evaluate(value1, rows, path)?.map(|value| !value),
+                24 => Some(wow_patch(row.number("value1")?, row.number("value2")?)?),
+                -3 => evaluate(row.number("value1")?, rows, path)?.map(|value| !value),
                 -2 | -1 => {
-                    let mut values =
-                        vec![evaluate(value1, rows, path)?, evaluate(value2, rows, path)?];
+                    let mut values = vec![
+                        evaluate(row.number("value1")?, rows, path)?,
+                        evaluate(row.number("value2")?, rows, path)?,
+                    ];
                     for column in ["value3", "value4"] {
                         let id: u32 = row.number(column)?;
                         if id != 0 {

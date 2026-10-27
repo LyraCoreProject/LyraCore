@@ -235,7 +235,7 @@ fn patch_conditions_remove_unavailable_vendor_offers_and_creature_drops() {
         INSERT INTO conditions (condition_entry,type,value1,value2,flags) VALUES
             (1,24,9,2,0), (2,24,10,0,0), (3,-3,1,0,0),
             (4,-1,2,3,0), (5,-2,1,2,0), (6,0,0,0,1),
-            (7,-1,1,6,0), (8,9,42,0,0), (9,-2,2,8,0),
+            (7,-1,1,6,0), (8,11,-42,0,0), (9,-2,2,8,0),
             (10,-3,10,0,0), (11,24,10,0,1), (12,-1,2,3,0), (13,-2,1,6,0);
         UPDATE conditions SET value4 = 1 WHERE condition_entry = 12;
         UPDATE conditions SET value3 = 2 WHERE condition_entry = 13;
