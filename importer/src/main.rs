@@ -3,6 +3,7 @@ mod classic_columns;
 mod collision;
 mod creature_population;
 mod dbc;
+mod dbc_diff;
 mod dump;
 mod eventai;
 mod eventai_presentation;
@@ -40,6 +41,7 @@ use world_import_scope::{WorldImportProfile, WorldImportScope};
 struct Args {
     source: world_source::SourceKind,
     census: Option<String>,
+    dbc_diff: bool,
     taxi_mounts: Option<String>,
     dump: Option<String>,
     dbc: Option<String>,
@@ -87,6 +89,7 @@ where
     let mut a = Args {
         source: world_source::SourceKind::ClassicDb,
         census: None,
+        dbc_diff: false,
         dump: None,
         taxi_mounts: None,
         dbc: None,
@@ -133,6 +136,7 @@ where
                     .context("--source needs classic-db or vmangos")?
                     .parse()?
             }
+            "--dbc-diff" => a.dbc_diff = true,
             "--census" => {
                 a.census = Some(
                     it.next()
@@ -431,7 +435,30 @@ where
             );
         }
     }
-    if a.census.is_some() {
+    if a.dbc_diff {
+        if a.source != world_source::SourceKind::Vmangos
+            || a.dump.is_none()
+            || a.dbc.is_none()
+            || a.apply
+            || a.family.is_some()
+            || a.census.is_some()
+            || a.spells
+            || a.spell_snapshot.is_some()
+            || a.talents
+            || a.go_models.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.print_extents
+        {
+            bail!("--dbc-diff needs only --source vmangos --dump <sqlite> --dbc <client Data> and optional --source-sha");
+        }
+    } else if a.census.is_some() {
         if a.source != world_source::SourceKind::Vmangos
             || a.dump.is_none()
             || a.dbc.is_none()
@@ -563,6 +590,17 @@ impl Args {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    if args.dbc_diff {
+        print!(
+            "{}",
+            dbc_diff::run(
+                std::path::Path::new(args.dump.as_deref().context("missing source")?),
+                std::path::Path::new(args.dbc.as_deref().context("missing client")?),
+                &args.source_sha
+            )?
+        );
+        return Ok(());
+    }
     if let Some(classic) = &args.census {
         print!(
             "{}",
@@ -981,6 +1019,7 @@ mod tests {
         Args {
             source: world_source::SourceKind::ClassicDb,
             census: None,
+            dbc_diff: false,
             dump: None,
             taxi_mounts: None,
             dbc: None,
