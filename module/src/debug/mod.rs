@@ -9,6 +9,7 @@ mod meeting_stone;
 mod package_config;
 mod readout;
 mod runtime_script;
+mod taxi;
 
 pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
 

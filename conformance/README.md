@@ -17,8 +17,9 @@ and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
 
-All fields below are required. Use an empty array when no entry exists yet. All nested tables
-refuse unknown fields too. Paths are relative, without parent-directory components.
+All fields below except `data_fields` and `known_gaps` are required. Use an empty array when no
+entry exists yet.
+All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
 
 | Field | Meaning |
 | --- | --- |
@@ -32,6 +33,8 @@ refuse unknown fields too. Paths are relative, without parent-directory componen
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
+| `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `data_fields` | Optional array of sourced, typed data-dependent fields, empty when omitted |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -43,8 +46,8 @@ A Behavior must claim at least one request or reply. Claims need not be exclusiv
 
 The rungs are `unit`, `codec`, `durable_module`, `tier1`, `conformance_audit` and `real_client`.
 A required rung is an obligation, not a result. The `tests` array names Rust source evidence from
-the first three rungs. Harness scenarios supply tier 1 and audit evidence. Tools will join those
-results to the ledger in later milestones.
+the first three rungs. Harness scenarios supply tier 1 and audit evidence. The scoreboard joins
+those results to the ledger.
 
 Until a person checks the Behavior in a build-5875 client, write:
 
@@ -57,6 +60,29 @@ After that check, use `status = "verified"` with a valid `date` in `YYYY-MM-DD` 
 and `evidence`. The last field names the recorded observations. Audits never update this table.
 No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
 Deviation; that field records a result LyraCore has chosen to keep different.
+
+Known gaps record observed defects and their comparison evidence. They neither excuse differences
+nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
+separately. Each entry requires nonempty description, symbol and evidence fields and a relative
+source path. Unknown fields, including status, fail.
+
+### Data-dependent fields
+
+Each `[[data_fields]]` declaration names one exact field location. It requires `scenario`,
+`checkpoint`, `stream`, `opcode`, `field_path`, `value_type`, `reason` and `source`.
+The scenario must belong to this Behavior. `stream` is a table with `kind = "reply"` or
+`kind = "broadcast"` and a stream `id`. `opcode` is a numeric server opcode already claimed in
+`replies`. `field_path` is a nonempty array of field names and decimal list indices, with no
+wildcards. `value_type` is `unsigned`, `signed`, `float` or `text_sha256`.
+`source` holds a pinned `commit`, relative `path` and `symbol`, like `vmangos`.
+`reason` explains why this field depends on world data. Duplicate locations and opening-phase declarations fail.
+
+Only an `exact_field` difference at that location, with both values of the declared type and a
+packet index, can count as data. Missing fields, type or structure changes, packet counts and order,
+timing, identity rules and counted Deliberate Deviations remain rule differences. A declaration
+does not change the harness comparison or excuse tier 1 failures. No current ledger entry declares
+a data-dependent field. The T2d destination-coordinate observation has no comparator record because
+the landing packet is missing.
 
 ## Migration and source evidence
 
@@ -76,30 +102,73 @@ checks remain unverified and their scenario lists are empty.
 `wire_client::catalogue` embeds the scenarios and Golden Traces at the revision in
 `.wire-harness-rev`. The workspace pins `wire-client` to that full commit SHA. The Module tests
 and ledger tests use it only as a dev-dependency. The `harness_pin` Architecture Test checks
-that both consumers inherit the same revision as `dev smoke`.
+that both consumers inherit the same revision as `dev smoke`, and that every workspace member
+keeps `wire-client` out of normal and build dependencies, including renamed and target-specific uses.
 
 Every scenario reference must exist in that catalogue and name the Behavior that lists it.
 A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
-checkout is read and no catalogue check can skip.
+checkout is read and no catalogue check can skip. Both consumers enable `serde_json/float_roundtrip`
+for development builds so loading a Golden Trace preserves exact wire-coordinate values. Without
+it, decimal parsing can move a recorded coordinate by one f64 ULP and fail an exact comparison.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
-`connection_identity` prepares the scenario's Character through debug reducers, then runs the
+The runner prepares the scenario's Character through debug reducers, then runs the
 harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
 ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
 unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
 `wait_for_packets`.
 
-The pinned v2 runner starts after `prepare`. Core consumes setup delivery instructions to establish
-AOI Grants before the first request. It does not compare setup packets. This revision cannot record
-an opening phase. T2d must adopt the harness's opening format so login packets become recorded
-observations outside comparison. Core never filters packets during the scenario or changes its
-Equivalence Rules.
+The schema-3 runner records world-entry packets in the opening phase. Core applies their delivery
+instructions to establish AOI Grants, then retains the packets as opening observations. The harness
+excludes opening observations from comparison and starts comparison at the first step. Core never
+filters packets during the scenario or changes its Equivalence Rules.
 
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
-revision, capture time and the harness comparison. It removes the previous result before starting,
-so a setup failure leaves no old pass. Differences remain in the report and fail the test. No
-packet text enters this result. The scoreboard consumes it.
+revision, capture time and the harness comparison. It removes the scenario's previous result before
+setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
+and preserve other scenarios from the same revision. Differences remain in the report and fail the
+test. No packet text enters this result. The scoreboard consumes it.
+
+## Taxi data
+
+`taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The
+Operator transport calls the same debug reducers as the wire adapter. `debug_learn_taxi_node`
+requires the Operator, an existing Character and a storage id in `game_taxi_node`. Imported storage
+ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
+
+The seeded three-point taxi fixture is not route 6. Use your client and the pinned classic-db dump
+to prepare the actual route through the existing importer, without `--apply`. Golden Traces retain
+numeric route points. Commit no packet text, vmangos or client files, or bulk world data. The recorder
+hashes text before writing a trace. `taxi-fixture.py` selects unchanged tuples from the importer's
+output, not from a MySQL source dump.
+
+```bash
+scratch="$HOME/.cache/lyracore-scratch/conformance/taxi"
+mkdir -p "$scratch"
+cargo run -p lyracore-importer -- --dbc "$LYRACORE_CLIENT_DATA" \
+  --taxi-mounts "$LYRACORE_CLASSIC_DB_SQL" > "$scratch/dbc.sql"
+cargo run -p lyracore-importer -- --dump "$LYRACORE_CLASSIC_DB_SQL" \
+  --dbc "$LYRACORE_CLIENT_DATA" --world-profile alliance-single > "$scratch/world.sql"
+python3 conformance/taxi-fixture.py "$scratch/dbc.sql" "$scratch/world.sql" \
+  > "$scratch/taxi.sql"
+export LYRACORE_TEST_TAXI_SQL="$scratch/taxi.sql"
+cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture
+```
+
+The selection contains two taxi nodes, route 6, its 28 path nodes and creature template 352. The
+importer resolves mount creature 541 to a client display in each node, so no extra mount template
+is needed by the Module. The durable test loads these rows into its own Shard. Missing input fails
+with a setup error; it never substitutes the seeded geometry or skips a comparison. The same SQL
+can prepare a disposable Native Host for the harness's LyraCore adapter.
+
+The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
+and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
+retains the earlier conformance.3 evidence.
+The ignored taxi test still fails with the comparator report when run with imported data.
+Durable CI explicitly skips `taxi_single_hop_matches_its_golden_trace`, naming its ledger entry in
+the workflow. All other conformance checks remain in CI. This skip records an open Behavior;
+there is no known-differences baseline.
 
 ## Scoreboard
 
@@ -126,9 +195,9 @@ narrative beside that JSON. No audit report exists yet. To select inputs explici
 Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
 explicit input or malformed report fails the command. A different core commit, harness revision
 or scenario hash shows `stale`. A pass requires every scenario listed by the Behavior. Any harness
-difference, including a counted Deliberate Deviation, prevents a pass. A `*` marks a run made with
-uncommitted changes and does not certify the clean commit. Real-client cells come only from the
-ledger, never from a report.
+difference, including a counted Deliberate Deviation, prevents a pass. A matching run made with
+uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
+Real-client cells come only from the ledger, never from a report.
 
 Counts use unique opcode values. The denominator is every variant of the pinned core
 `ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
@@ -141,10 +210,13 @@ Neither opcode claims nor these source counts prove conformance. Spell counts ar
 ### Result schema version 1
 
 The tier 1 runner writes this shape. Audit reports use `tier = "conformance_audit"` and the same
-fields. A later audit producer must put only rule differences in `comparison.differences`, and put
-data differences in a separate `data_differences` array for each scenario. Both arrays contain the
-harness's serialized `Difference` records. Data differences print separately and do not prevent an
-audit pass. Tier 1 cannot classify data differences.
+fields. An audit producer partitions the complete harness comparison into `comparison.differences`
+for rule differences and `data_differences` for declared data-dependent fields. Both arrays contain
+the harness's serialized `Difference` records, unchanged. The scoreboard re-derives each record's
+classification from the current ledger's typed, sourced declarations and rejects a report if either
+array disagrees. Unknown Behaviors and unlisted scenarios also fail, including extra result rows.
+This check applies before freshness checks. Data differences print separately and do not prevent a
+clean audit pass. Tier 1 keeps every difference in `comparison.differences` and cannot classify data.
 
 | Field | Meaning |
 | --- | --- |

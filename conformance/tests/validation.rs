@@ -136,3 +136,76 @@ fn unknown_nested_fields_fail_instead_of_disappearing() {
         assert!(load(&source).is_err(), "unknown field in {table}");
     }
 }
+
+#[test]
+fn data_fields_require_an_exact_typed_location_and_source() {
+    let source = format!(
+        "{}\n{}",
+        EXAMPLE.replace("scenarios = []", "scenarios = [\"choice\"]"),
+        r#"
+[[data_fields]]
+scenario = "choice"
+checkpoint = "turn_in"
+stream = { kind = "reply", id = "reward" }
+opcode = 401
+field_path = ["items", "0", "entry"]
+value_type = "unsigned"
+reason = "The item entry comes from the quest reward catalogue."
+source = { commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77", path = "src/game/Handlers/QuestHandler.cpp", symbol = "WorldSession::HandleQuestgiverChooseRewardOpcode" }
+"#
+    );
+    assert!(load(&source).is_ok());
+    for (old, new) in [
+        ("scenario = \"choice\"", "scenario = \"absent\""),
+        ("checkpoint = \"turn_in\"", "checkpoint = \"opening\""),
+        ("kind = \"reply\"", "kind = \"unexpected\""),
+        ("id = \"reward\"", "id = \"*\""),
+        ("opcode = 401", "opcode = 402"),
+        ("[\"items\", \"0\", \"entry\"]", "[]"),
+        ("[\"items\", \"0\", \"entry\"]", "[\"items\", \"*\"]"),
+        ("value_type = \"unsigned\"", "value_type = \"guid\""),
+        ("value_type = \"unsigned\"", "value_type = \"list\""),
+        ("The item entry comes from the quest reward catalogue.", ""),
+        ("source = {", "source = { typo = true,"),
+        (
+            "source = { commit = \"d9173eca3ea08dd985c52dabbcc826898d1d0b77\"",
+            "source = { commit = \"main\"",
+        ),
+    ] {
+        assert!(source.contains(old));
+        assert!(load(&source.replace(old, new)).is_err(), "accepted {new}");
+    }
+    let declaration = source.split_once("[[data_fields]]").unwrap().1;
+    assert!(load(&format!("{source}\n[[data_fields]]\n{declaration}")).is_err());
+    let without_source = source
+        .lines()
+        .filter(|line| !line.starts_with("source ="))
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(load(&without_source).is_err());
+}
+
+#[test]
+fn known_gaps_require_locations_and_evidence_without_status() {
+    assert!(load(EXAMPLE).unwrap().behaviors()[0].known_gaps.is_empty());
+    let gap = r#"
+[[known_gaps]]
+description = "Reward reply is absent."
+path = "module/src/quests.rs"
+symbol = "reward_quest"
+evidence = "Comparison record 1: missing_packet."
+"#;
+    let source = format!("{EXAMPLE}\n{gap}");
+    let ledger = load(&source).unwrap();
+    assert_eq!(ledger.behaviors()[0].known_gaps.len(), 1);
+    for (old, new) in [
+        ("Reward reply is absent.", " "),
+        ("module/src/quests.rs", "../quests.rs"),
+        ("reward_quest", ""),
+        ("Comparison record 1: missing_packet.", ""),
+    ] {
+        assert!(load(&source.replace(old, new)).is_err());
+    }
+    assert!(load(&format!("{source}\nstatus = \"open\"\n")).is_err());
+    assert!(load(&format!("known_gaps = [\"missing reply\"]\n{EXAMPLE}")).is_err());
+}

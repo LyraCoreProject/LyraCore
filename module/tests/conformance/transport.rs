@@ -1,4 +1,4 @@
-use std::collections::{BTreeSet, VecDeque};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::{Duration, Instant};
 
 use anyhow::{anyhow, bail, ensure, Result};
@@ -6,11 +6,13 @@ use lyracore_test_support::{ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::{json, value::RawValue};
 use wire_client::runner::Transport;
-use wire_client::scenario::{FixtureVerb, Scenario};
+use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
 pub struct OperatorTransport {
     connection: ReducerConnection,
     guid: u64,
+    fixtures: BTreeMap<String, u64>,
+    opening: Vec<Observation>,
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
 }
@@ -24,52 +26,17 @@ impl OperatorTransport {
             class,
             level,
             at,
-        } = &scenario.fixtures[0];
-        let credentials = serde_json::to_string(&vec![0u8; 32])?;
-        shard.assert_call(
-            "provision_account",
-            &["\"CONFORMANCE\"", &credentials, &credentials],
-        );
-        let account = &shard
-            .query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]["id"];
-        let race = wire_client::cli::parse_race(race)?.as_int().to_string();
-        let class = wire_client::cli::parse_class(class)?.as_int().to_string();
-        shard.assert_call(
-            "create_character",
-            &[
-                account,
-                &serde_json::to_string(name)?,
-                &race,
-                &class,
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-                "0",
-            ],
-        );
-        let character = &shard.query_rows(&format!(
-            "SELECT * FROM game_character WHERE name = '{name}'"
-        ))[0];
-        let guid = character["guid"].parse::<u64>()?;
-        shard.assert_call("debug_set_level", &[&guid.to_string(), &level.to_string()]);
-        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
-        shard.assert_call(
-            "debug_teleport",
-            &[
-                &guid.to_string(),
-                &at.map.to_string(),
-                &at.x.to_string(),
-                &at.y.to_string(),
-                &at.z.to_string(),
-                &at.orientation.to_string(),
-            ],
-        );
+        } = &scenario.fixtures[0]
+        else {
+            bail!("first fixture must be a Character");
+        };
+        let guid = prepare_character(shard, name, race, class, *level, at)?;
+        let fixtures = prepare_fixtures(shard, guid, &scenario.fixtures[1..], at)?;
         let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
         connection
             .call("native_world_open", json!([42]))
             .map_err(|e| anyhow!(e))?;
+        connection.drain_packets();
         connection
             .call("debug_native_enter_world", json!([guid]))
             .map_err(|e| anyhow!(e))?;
@@ -77,11 +44,17 @@ impl OperatorTransport {
             delivery: Delivery::new(connection.connection_id()),
             connection,
             guid,
+            fixtures,
+            opening: Vec::new(),
             pending: VecDeque::new(),
         };
-        // For the setup boundary in schema v2, read conformance/README.md.
         let setup = transport.connection.drain_packets();
-        transport.delivery.route_rows(setup)?;
+        transport.opening = transport
+            .delivery
+            .route_rows(setup)?
+            .into_iter()
+            .map(|(opcode, body)| Observation::opening(opcode, &body))
+            .collect();
         let character = &shard.query_rows(&format!(
             "SELECT * FROM game_world_entity WHERE guid = {guid}"
         ))[0];
@@ -108,7 +81,146 @@ impl OperatorTransport {
     }
 }
 
+fn prepare_character(
+    shard: &Standalone,
+    name: &str,
+    race: &str,
+    class: &str,
+    level: u8,
+    at: &wire_client::scenario::Position,
+) -> Result<u64> {
+    let credentials = serde_json::to_string(&vec![0u8; 32])?;
+    shard.assert_call(
+        "provision_account",
+        &["\"CONFORMANCE\"", &credentials, &credentials],
+    );
+    let account =
+        &shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]["id"];
+    let race = wire_client::cli::parse_race(race)?.as_int().to_string();
+    let class = wire_client::cli::parse_class(class)?.as_int().to_string();
+    shard.assert_call(
+        "create_character",
+        &[
+            account,
+            &serde_json::to_string(name)?,
+            &race,
+            &class,
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let character = &shard.query_rows(&format!(
+        "SELECT * FROM game_character WHERE name = '{name}'"
+    ))[0];
+    ensure!(
+        character["race"] == race && character["class"] == class,
+        "fixture race or class did not apply"
+    );
+    let guid = character["guid"].parse::<u64>()?;
+    shard.assert_call("debug_set_level", &[&guid.to_string(), &level.to_string()]);
+    shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+    shard.assert_call(
+        "debug_teleport",
+        &[
+            &guid.to_string(),
+            &at.map.to_string(),
+            &at.x.to_string(),
+            &at.y.to_string(),
+            &at.z.to_string(),
+            &at.orientation.to_string(),
+        ],
+    );
+    Ok(guid)
+}
+
+fn prepare_fixtures(
+    shard: &Standalone,
+    guid: u64,
+    verbs: &[FixtureVerb],
+    at: &wire_client::scenario::Position,
+) -> Result<BTreeMap<String, u64>> {
+    let mut fixtures = BTreeMap::new();
+    for fixture in verbs {
+        match fixture {
+            FixtureVerb::Character { .. } => bail!("duplicate Character fixture"),
+            FixtureVerb::Money { copper } => {
+                shard.assert_call("debug_set_money", &[&guid.to_string(), &copper.to_string()]);
+                let rows = shard.query_rows(&format!(
+                    "SELECT money FROM game_character WHERE guid = {guid}"
+                ));
+                ensure!(
+                    rows[0]["money"].parse::<u32>()? == *copper,
+                    "fixture money did not apply"
+                );
+            }
+            FixtureVerb::KnownFlightNode { node_id } => {
+                shard.assert_call(
+                    "debug_learn_taxi_node",
+                    &[&guid.to_string(), &node_id.to_string()],
+                );
+                let rows = shard.query_rows(&format!(
+                    "SELECT node_id FROM game_character_taxi_node WHERE character_guid = {guid}"
+                ));
+                ensure!(
+                    rows.iter().any(|row| row["node_id"] == node_id.to_string()),
+                    "fixture node did not apply"
+                );
+            }
+            FixtureVerb::Creature { id, entry, offset } => {
+                let query = format!("SELECT * FROM game_world_entity WHERE entry = {entry}");
+                let before: BTreeSet<_> = shard
+                    .query_rows(&query)
+                    .into_iter()
+                    .map(|row| row["guid"].clone())
+                    .collect();
+                shard.assert_call(
+                    "debug_spawn_at_feet",
+                    &[&guid.to_string(), &entry.to_string(), &offset.to_string()],
+                );
+                let spawned: Vec<_> = shard
+                    .query_rows(&query)
+                    .into_iter()
+                    .filter(|row| !before.contains(&row["guid"]))
+                    .collect();
+                ensure!(
+                    spawned.len() == 1,
+                    "fixture {id} did not spawn one creature"
+                );
+                let creature = &spawned[0];
+                ensure!(
+                    creature["map_id"].parse::<u32>()? == at.map && creature["instance_id"] == "0",
+                    "fixture {id} partition differs"
+                );
+                for (field, expected) in [
+                    ("x", at.x + offset * at.orientation.cos()),
+                    ("y", at.y + offset * at.orientation.sin()),
+                    ("z", at.z),
+                ] {
+                    ensure!(
+                        (creature[field].parse::<f32>()? - expected).abs() < 0.01,
+                        "fixture {id} {field} differs"
+                    );
+                }
+                fixtures.insert(id.clone(), creature["guid"].parse()?);
+            }
+        }
+    }
+    Ok(fixtures)
+}
+
 impl Transport for OperatorTransport {
+    fn fixture_guids(&self) -> BTreeMap<String, u64> {
+        self.fixtures.clone()
+    }
+
+    fn take_opening(&mut self) -> Vec<Observation> {
+        std::mem::take(&mut self.opening)
+    }
+
     fn character_guid(&self) -> u64 {
         self.guid
     }

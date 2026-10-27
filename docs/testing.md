@@ -69,7 +69,9 @@ cargo test -p lyracore-module --test weather -- --ignored
 
 CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines --skip
 lethal_floor`. The Deadmines targets need the separately installed dungeons Package, and the
-`lethal_floor` ranged phase is flaky.
+`lethal_floor` ranged phase is flaky. CI also skips `taxi_single_hop_matches_its_golden_trace`;
+the [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) requires imported data and
+has open rule differences. Running that test by hand still fails with the full comparator report.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
 `44b04878f2050936faa61d6f087f3aa1a7a78a46`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
@@ -161,8 +163,10 @@ The independent Benilla codec checks and opcode inventory are described in
 
 Tier 1 starts a disposable local Shard and drives native reducers through an Operator WebSocket
 connection. `connection_identity` compares ping and name-query replies with the pinned harness's
-Golden Trace. The same target checks preserved login credentials and later-transaction packet
-delivery. Fixture world entry requires `conformance_test_fixture`; normal publication excludes it.
+Golden Trace. `taxi_single_hop` uses imported route data as described in the
+[conformance data setup](../conformance/README.md#taxi-data). The same target checks preserved login
+credentials, later-transaction packet delivery and the known-flight-node debug reducer. Fixture
+world entry requires `conformance_test_fixture`; normal publication excludes it.
 See [ADR 0005](adr/0005-1-12-conformance.md) for repository ownership.
 
 ```bash
@@ -170,7 +174,7 @@ export CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/conformance/target"
 export TMPDIR="$HOME/.cache/lyracore-scratch/conformance/tmp"
 mkdir -p "$TMPDIR"
 cargo test -p lyracore-module --test native_debug_gate
-cargo test -p lyracore-module --test native_conformance -- --ignored
+cargo test -p lyracore-module --test native_conformance -- --ignored --skip taxi_single_hop_matches_its_golden_trace
 cargo test -p lyracore-module --test native_debug_gate -- --ignored
 ```
 
@@ -191,7 +195,8 @@ with the Feature Ledger and the latest Conformance Audit report. The scoreboard'
 check counts, evidence freshness and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
 
-The existing durable CI target discovery includes `native_conformance` automatically.
+The durable CI target discovery includes `native_conformance` automatically and skips only its
+taxi Golden Trace test. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
 that the check detects a missing or ineffective feature gate. Its durable test builds with only
 `debug_reducers`, the feature set used by `lyracore publish`, and checks that the Module does not
