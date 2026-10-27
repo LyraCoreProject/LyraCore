@@ -131,8 +131,14 @@ These checks get their own Host. CI runs the shared checks and these checks in t
 | `slow-readers` | A blocked output connection closes while another client stays responsive |
 | `accept-recovery` | The listeners recover after descriptor exhaustion |
 
-To add a check, write a function `check_<name>(host)` in `native-host/check.py` and add it to
-`SHARED`. `host.enter_world(name)` creates an Account and a Character and returns its World Session.
+`native-host/check.py` retains Host and transport properties: TCP, the Login Queue, crash recovery,
+slow readers and World Session replacement. Move gameplay checks into recorded conformance
+scenarios one Behavior at a time as that Behavior enters the Feature Ledger. Remove a gameplay
+check from `check.py` once its recorded scenario covers it. Existing checks stay until replaced;
+this rule does not require a bulk migration. New gameplay checks belong in conformance.
+
+To add a Host or transport check, write `check_<name>(host)` in `native-host/check.py` and add it
+to `SHARED`. `host.enter_world(name)` creates an Account and a Character and returns its World Session.
 `native_and_peer(host)` gives the common pair of Characters, Native and Peer, and `spawn()` returns
 the guid of the creature it spawns. Before a check changes a seeded row, such as a creature template
 or a spell, call `host.restore(table, condition, columns...)`; the runner writes the row back after
@@ -194,6 +200,12 @@ The tier 1 test writes `.lyracore/conformance/tier1.json`. Run `./conformance/sc
 with the Feature Ledger and the latest Conformance Audit report. The scoreboard's example tests
 check counts, evidence freshness and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
+
+For each new or changed Behavior, assign two different people or agents. The scenario author
+writes and records the scenario in a harness PR. A different implementer makes tier 1 pass in core.
+Record both assignments and the harness PR in the implementation brief. An implementer reports
+suspected scenario defects to the author; implementation work never edits the scenario, Golden
+Trace or Equivalence Rules to obtain a pass. See [ADR 0005](adr/0005-1-12-conformance.md).
 
 The durable CI target discovery includes `native_conformance` automatically and skips only its
 taxi Golden Trace test. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.

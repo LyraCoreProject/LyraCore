@@ -68,10 +68,14 @@ using a separate scenario author and independent decoders.
 15. `native-host/check.py` retains Host and transport checks: TCP, Login Queue, crash recovery,
     slow readers and World Session replacement. Move each gameplay scenario into conformance as
     its Behavior enters the ledger, then remove that check from `check.py`. Do not move them all
-    as part of this work.
+    as part of this work. New gameplay checks belong in conformance; existing checks stay until
+    their recorded replacements cover them.
 16. For later Behavior implementation, one author writes and records the scenario in a harness PR.
     A different implementer makes tier 1 pass in core. Nobody performs both roles for one Behavior.
-    The orchestration instructions must retain this separation.
+    Record both assignments and the harness PR in the implementation brief. The implementer
+    reports suspected scenario defects to the author and never changes a scenario, Golden Trace
+    or Equivalence Rule to obtain a pass. [Testing](../testing.md#conformance) and the
+    [orchestration skill](../../.claude/skills/orchestrate-backlog/SKILL.md#5-implement) enforce these roles.
 
 ## Two verification tiers
 
