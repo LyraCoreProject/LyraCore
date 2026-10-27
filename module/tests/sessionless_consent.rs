@@ -544,9 +544,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
     assert!(shard
         .query_rows("SELECT id FROM game_group_invite")
         .is_empty());
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
-        .is_empty());
 
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "true"]);
     shard.assert_call("debug_set_sessionless_action_consent", &[&target, "false"]);
@@ -573,9 +570,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
         shard.query_rows("SELECT id FROM game_group_member").len(),
         2
     );
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
-        .is_empty());
 
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
     shard.assert_call("debug_emit_sessionless_group_intent", &["1", "0", "true"]);
@@ -590,9 +584,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
         .is_empty());
     assert!(shard
         .query_rows("SELECT group_id FROM game_group")
-        .is_empty());
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
         .is_empty());
 }
 

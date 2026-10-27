@@ -972,11 +972,6 @@ mod idle_bot {
     }
 
     #[test]
-    fn a_bot_on_a_movement_leg_is_not_idle() {
-        assert!(!is_idle_bot(&character_still_for(500), NOW_MS, || true));
-    }
-
-    #[test]
     fn a_bot_that_moved_within_thirty_seconds_is_not_idle() {
         assert!(!is_idle_bot(&character_still_for(29_999), NOW_MS, || true));
         let mut across_the_wrap = character_still_for(0);

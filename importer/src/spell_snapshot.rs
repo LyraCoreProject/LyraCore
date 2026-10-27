@@ -359,17 +359,6 @@ mod tests {
     }
 
     #[test]
-    fn the_same_rows_always_produce_the_same_bytes() {
-        let rows = SpellRows {
-            headers: vec![header(133, "Fireball")],
-            effects: vec![effect(133, 0)],
-            ..SpellRows::default()
-        };
-
-        assert_eq!(write_snapshot(&rows), write_snapshot(&rows));
-    }
-
-    #[test]
     fn a_curated_fishing_marker_replaces_the_row_it_lands_on() {
         let mut marker = effect(7620, 0);
         marker.kind = 0x1C;

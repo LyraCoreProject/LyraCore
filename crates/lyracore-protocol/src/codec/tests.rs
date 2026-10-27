@@ -9,6 +9,41 @@ use wow_world_messages::vanilla::{
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::RollVote;
 
+/// OBJECT_FIELD_TYPE is field 2: bit 2 of the first mask word in a one-object VALUES body.
+fn values_mask_has_object_type(body: &[u8]) -> bool {
+    assert_eq!(
+        &body[..4],
+        &1u32.to_le_bytes(),
+        "one object; body {body:02x?}"
+    );
+    assert_eq!(body[5], 0, "VALUES update type; body {body:02x?}");
+    let blocks = 7 + body[6].count_ones() as usize;
+    assert!(body[blocks] > 0, "the mask has a block; body {body:02x?}");
+    let first = u32::from_le_bytes(body[blocks + 1..blocks + 5].try_into().unwrap());
+    first & (1 << 2) != 0
+}
+
+fn assert_no_object_type(body: &[u8]) {
+    assert!(
+        !values_mask_has_object_type(body),
+        "OBJECT_FIELD_TYPE must not be re-sent in a partial VALUES update; body {body:02x?}"
+    );
+}
+
+#[test]
+fn the_object_type_probe_detects_a_mask_that_keeps_field_2() {
+    let msg = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(1),
+            mask1: UpdateMask::Player(UpdatePlayer::builder().set_player_xp(450).finalize()),
+        }],
+    };
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    assert!(values_mask_has_object_type(&buf[4..]));
+}
+
 fn warrior_entity() -> EntityView {
     EntityView {
         guid: 1,
@@ -274,12 +309,7 @@ fn resistance_values_is_unit_only_no_object_type() {
         "resistance VALUES must carry only indices 155..=161; tail was {:02x?}",
         &buf[buf.len().saturating_sub(56)..]
     );
-    let contains = |needle: &[u8]| buf.windows(needle.len()).any(|w| w == needle);
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the resistance VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -304,11 +334,7 @@ fn dynamic_flags_values_is_unit_only_no_object_type() {
         "expected dynamic_flags value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in a partial VALUES update; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -332,11 +358,7 @@ fn coinage_values_is_player_mask_without_object_type() {
         "expected coinage value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the coinage VALUES update; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -384,11 +406,7 @@ fn aura_values_is_player_mask_without_object_type() {
         "cleared aura mask must never carry OBJECT_FIELD_TYPE"
     );
     let (_op, clear_body) = build_values_update_raw(1, &clear);
-    assert!(
-        !win(&clear_body, &[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not appear in the cleared aura VALUES update; clear body {:02x?}",
-        clear_body
-    );
+    assert_no_object_type(&clear_body);
 }
 
 #[test]
@@ -553,11 +571,7 @@ fn ghost_values_is_player_mask_without_object_type() {
         "expected unit_bytes_1 vis-ghost (byte 3); buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the ghost VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -674,23 +688,18 @@ fn resurrect_request_names_the_caster_without_sickness_or_delay() {
 fn level_values_is_player_mask_without_object_type() {
     let msg = build_level_values(1, 2);
     match &msg.objects[0] {
-        Object::Values { guid1, mask1 } => {
+        Object::Values {
+            guid1,
+            mask1: UpdateMask::Player(p),
+        } => {
             assert_eq!(guid1.guid(), 1);
-            assert!(
-                matches!(mask1, UpdateMask::Player(_)),
-                "ding update must be a Player mask"
-            );
+            assert_eq!(p.unit_level(), Some(2));
         }
-        other => panic!("expected Object::Values, got {other:?}"),
+        other => panic!("expected a Player Values update, got {other:?}"),
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    let type_word = [0x09u8, 0x00, 0x00, 0x00];
-    assert!(
-        !buf.windows(4).any(|w| w == type_word),
-        "build_level_values must not re-send OBJECT_FIELD_TYPE (0x09 word present); body {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2235,11 +2244,7 @@ fn unit_flags_values_is_unit_only_no_object_type() {
         "expected the unit_flags value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the unit_flags VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2271,11 +2276,7 @@ fn power_values_selects_the_descriptor_by_power_byte() {
     let msg = build_power_values(1, 1, 222);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the power VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2294,11 +2295,7 @@ fn target_values_is_unit_only_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the target VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2331,11 +2328,7 @@ fn max_vitals_values_sets_maxhealth_and_selects_max_power_descriptor() {
     let msg = build_max_vitals_values(1, 777, 0, 1001);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the max-vitals VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2352,11 +2345,7 @@ fn player_ammo_id_values_is_player_only_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the ammo VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2397,11 +2386,7 @@ fn player_xp_values_carries_xp_and_next_level_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the xp VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2431,11 +2416,7 @@ fn item_values_clamps_zero_stack_count_to_one_and_carries_durability() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the item VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
