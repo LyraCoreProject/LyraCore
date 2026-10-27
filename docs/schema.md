@@ -109,6 +109,15 @@ Two shapes recur:
 
 ## 3. Tables with rules the struct cannot show
 
+### Map catalogue (`module/src/config.rs`)
+
+`game_map` stores selected vmangos `map_template` rows. `internal_name` alone comes from the
+client's `Map.dbc`, joined by map id, and names the WDT/ADT archive directory. Missing client
+maps refuse the import. The gameplay fields are `map_type`, `linked_zone`, `parent`, `name`,
+`player_limit`, `reset_delay`, and `ghost_entrance_map/x/y`. A ghost map of -1 means
+no entrance. Instance admission, reset schedules and ghost routing do not yet consume these fields.
+This is a new table, so publishing it adds an empty catalogue without changing existing rows.
+
 ### Taxi catalogue (`module/src/config.rs`)
 
 `game_taxi_node`, `game_taxi_path` and `game_taxi_path_node` are public rows imported from the

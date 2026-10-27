@@ -12,6 +12,7 @@ Counts and keys come from production plans for patch 10 and build 5875, without 
 | game_area_trigger | 432 | 449 |
 | game_faction | 190 | 190 |
 | game_faction_template | 314 | 314 |
+| game_map | 0 | 44 |
 | game_skill_ability | 5072 | 5072 |
 | game_taxi_node | 87 | 87 |
 
@@ -47,6 +48,14 @@ Added (0): none.
 
 Removed (0): none.
 
+## game_map
+
+Entry key: `id`. Counts above include all rows per entry.
+
+Added (44): 0, 1, 109, 129, 13, 169, 189, 209, 229, 230, 249, 25, 269, 289, 29, 30, 309, 329, 33, 34, 349, 35, 36, 369, 37, 389, 409, 42, 429, 43, 44, 449, 450, 451, 469, 47, 48, 489, 509, 529, 531, 533, 70, 90.
+
+Removed (0): none.
+
 ## game_skill_ability
 
 Entry key: `spell_id:skill_line`. Counts above include all rows per entry.
@@ -65,9 +74,10 @@ Removed (0): none.
 
 ## Differences
 
-- All six eligible tables use source rows selected for build 5875, with area_template unversioned. Every consumed column has a source equivalent. The field-level changes are in dbc-diff.md.
+- Seven catalogues use vmangos rows: map_template selects patch 10, area_template is unversioned, and the other five select build 5875. Every consumed column has a source equivalent. The field-level changes are in dbc-diff.md.
+- Map adds a new 44-row Module catalogue; the previous importer stored no Map rows. Gameplay fields come from vmangos and archive names from the client by id. Player limits, reset delays, ghost entrances and named map scripts remain unsupported in gameplay.
 - AreaTrigger adds 17 IDs and changes geometry on 34 matched IDs. TaxiNodes changes 13 matched IDs. The other catalogues retain their client IDs; source skill abilities use source row IDs instead of generated ordinals.
-- Trigger cooldowns, conditions and scripts remain unsupported. Separate client tables still supply taxi routes, path geometry and display validation. Map stays entirely on Map.dbc.
+- Trigger cooldowns, conditions and scripts remain unsupported. Separate client tables still supply taxi routes, path geometry and display validation. Map gameplay fields use map_template, with only the archive directory joined from Map.dbc.
 
 ## Consumed floors
 
@@ -77,11 +87,11 @@ Removed (0): none.
 | AREA_TRIGGERS | 400 | 432 | 449 |
 | TAXI_NODES | 1 | 87 | 87 |
 
-TaxiPath and TaxiPathNode remain client tables. This slice replaces only TaxiNodes; two reserved fixture nodes remain. Map stays on Map.dbc because map_template lacks internal_name. There are no count floors for faction, faction_template or skill_line_ability.
+TaxiPath and TaxiPathNode remain client tables. This slice replaces only TaxiNodes; two reserved fixture nodes remain. Map gameplay fields use map_template; only the archive directory uses Map.dbc. There are no count floors for faction, faction_template or skill_line_ability.
 
 ## Compatibility Manifest
 
-Production findings, with source keys omitted here. The import prints the full findings. The approved-value Source Profile gate is due in S6c.
+Production findings, with source keys omitted here. The import prints the full findings. The vmangos Source Profile checks columns and approved values before planning; counts do not gate the import.
 
 ```json
 {
@@ -107,10 +117,32 @@ Production findings, with source keys omitted here. The import prints the full f
       "classification": "unsupported",
       "code": "dbc.trigger-script-name",
       "occurrences": 53
+    },
+    {
+      "classification": "unsupported",
+      "code": "dbc.map-script-name",
+      "occurrences": 24
+    },
+    {
+      "classification": "unsupported",
+      "code": "dbc.map-player-limit",
+      "occurrences": 30
+    },
+    {
+      "classification": "unsupported",
+      "code": "dbc.map-reset-delay",
+      "occurrences": 7
+    },
+    {
+      "classification": "unsupported",
+      "code": "dbc.map-ghost-entrance",
+      "occurrences": 25
     }
   ],
   "format_version": 1,
+  "limitations": null,
   "patch": 10,
+  "scripts": null,
   "source": "vmangos"
 }
 ```

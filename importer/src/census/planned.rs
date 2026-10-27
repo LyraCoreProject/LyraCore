@@ -95,7 +95,11 @@ fn key_columns(table: &str) -> Result<&'static [&'static str]> {
         "game_creature_ai_broadcast_text" | "game_creature_ai_summon" => &["id"],
         "game_world_state_name" => &["variable_id"],
         "game_faction" => &["faction_id"],
-        "game_faction_template" | "game_area" | "game_area_trigger" | "game_taxi_node" => &["id"],
+        "game_map"
+        | "game_faction_template"
+        | "game_area"
+        | "game_area_trigger"
+        | "game_taxi_node" => &["id"],
         "game_skill_ability" => &["spell_id", "skill_line"],
         "game_spell_learn" => &["parent_spell", "learn_spell"],
         "game_spell"
@@ -412,7 +416,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         writeln!(output, "- The sources have different event populations and numbering. vmangos supplies entry rules for EventAI templates; classic-db also supplies spawn-GUID rules. Profile scope and accepted template dependencies determine subjects.\n- A vmangos event carries up to three ordered command lists. Unsupported commands, targets, conditions or dependencies drop the complete rule. The source and emitted counts therefore measure different things.\n- Only generic scripts reachable from accepted EventAI roots become relays. The other six delayed-script families have no current classic importer dispatcher; quest-end mail already uses the vmangos quest columns.\n- Broadcast membership follows accepted talk and flee instructions. Plain summons retain their explicit locations or use the actor position. Summon flags, limits, scripts and unsupported lifetime modes remain refused; accepted lifetime differences are reported. World-state names remain unsupported. Event-credit requirements for vmangos quests belong to the quests family; classic-db derives them from accepted AI instructions.")?;
     }
     if family == "dbc" {
-        writeln!(output, "- All six eligible tables use source rows selected for build 5875, with area_template unversioned. Every consumed column has a source equivalent. The field-level changes are in dbc-diff.md.\n- AreaTrigger adds 17 IDs and changes geometry on 34 matched IDs. TaxiNodes changes 13 matched IDs. The other catalogues retain their client IDs; source skill abilities use source row IDs instead of generated ordinals.\n- Trigger cooldowns, conditions and scripts remain unsupported. Separate client tables still supply taxi routes, path geometry and display validation. Map stays entirely on Map.dbc.")?;
+        writeln!(output, "- Seven catalogues use vmangos rows: map_template selects patch 10, area_template is unversioned, and the other five select build 5875. Every consumed column has a source equivalent. The field-level changes are in dbc-diff.md.\n- Map adds a new 44-row Module catalogue; the previous importer stored no Map rows. Gameplay fields come from vmangos and archive names from the client by id. Player limits, reset delays, ghost entrances and named map scripts remain unsupported in gameplay.\n- AreaTrigger adds 17 IDs and changes geometry on 34 matched IDs. TaxiNodes changes 13 matched IDs. The other catalogues retain their client IDs; source skill abilities use source row IDs instead of generated ordinals.\n- Trigger cooldowns, conditions and scripts remain unsupported. Separate client tables still supply taxi routes, path geometry and display validation. Map gameplay fields use map_template, with only the archive directory joined from Map.dbc.")?;
     }
     if family == "spellmeta" {
         writeln!(output, "- Spell chains, proc overlays and dependent learns use build ranges. Missing explicit rank families are derived from selected skill_line_ability rows. Proc effect selection uses vmangos spell_template. Existing plate and mail dependent learns remain when absent from source rows. Inactive learn visibility and unrepresentable proc masks have manifest findings.")?;
@@ -566,7 +570,7 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
                 after[table].rows
             )?;
         }
-        writeln!(output, "\nTaxiPath and TaxiPathNode remain client tables. This slice replaces only TaxiNodes; two reserved fixture nodes remain. Map stays on Map.dbc because map_template lacks internal_name. There are no count floors for faction, faction_template or skill_line_ability.")?;
+        writeln!(output, "\nTaxiPath and TaxiPathNode remain client tables. This slice replaces only TaxiNodes; two reserved fixture nodes remain. Map gameplay fields use map_template; only the archive directory uses Map.dbc. There are no count floors for faction, faction_template or skill_line_ability.")?;
         return Ok(());
     }
     if family == "spellmeta" {

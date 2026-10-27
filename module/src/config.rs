@@ -73,6 +73,27 @@ pub struct CharBaseInfo {
     pub class: u8,
 }
 
+#[table(accessor = game_map, public)]
+pub struct GameMap {
+    #[primary_key]
+    pub id: u32,
+    pub internal_name: String,
+    pub name: String,
+    pub map_type: u32,
+    pub linked_zone: u32,
+    pub parent: u32,
+    #[default(0u32)]
+    pub player_limit: u32,
+    #[default(0u32)]
+    pub reset_delay: u32,
+    #[default({ -1i32 })]
+    pub ghost_entrance_map: i32,
+    #[default(0.0f32)]
+    pub ghost_entrance_x: f32,
+    #[default(0.0f32)]
+    pub ghost_entrance_y: f32,
+}
+
 #[table(accessor = game_area, public)]
 pub struct GameArea {
     #[primary_key]
