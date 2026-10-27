@@ -1,3 +1,7 @@
+#[path = "dbc_source.rs"]
+mod source;
+pub(crate) use source::world_plan as replacement_plan;
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Cursor;
@@ -178,8 +182,17 @@ pub(crate) fn catalogue_statements(
 
     eprintln!("dbc: toolchain OK — read + parsed real client DBCs, wrote no .dbc to the tree.");
 
-    let (faction_stmts, fn_count) = faction_template_sql(&mut chain)?;
-    let (gf_stmts, gf_count) = faction_sql(&mut chain)?;
+    let vmangos = mount_dump.kind() == crate::world_source::SourceKind::Vmangos;
+    let (faction_stmts, fn_count) = if vmangos {
+        source::faction_template(mount_dump)?
+    } else {
+        faction_template_sql(&mut chain)?
+    };
+    let (gf_stmts, gf_count) = if vmangos {
+        source::faction(mount_dump)?
+    } else {
+        faction_sql(&mut chain)?
+    };
     let auction_houses: DbcAuctionHouse = read_table(&mut chain)?;
     let (auction_house_stmts, auction_house_count) = auction_house_sql(&auction_houses)?;
     let mail_templates: DbcMailTemplate = read_table(&mut chain)?;
@@ -189,10 +202,16 @@ pub(crate) fn catalogue_statements(
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
     let (property_stmts, _, _) = crate::item_property::catalogue_sql(&mut chain)?;
 
-    let area_table: DbcAreaTable = read_table(&mut chain)?;
-    let (area_stmts, area_count) = area_sql(&area_table);
-    let area_triggers: DbcAreaTrigger = read_table(&mut chain)?;
-    let (trigger_stmts, trigger_count) = area_trigger_sql(&area_triggers);
+    let (area_stmts, area_count) = if vmangos {
+        source::area(mount_dump)?
+    } else {
+        area_sql(&read_table(&mut chain)?)
+    };
+    let (trigger_stmts, trigger_count) = if vmangos {
+        source::area_trigger(mount_dump)?
+    } else {
+        area_trigger_sql(&read_table(&mut chain)?)
+    };
     let safe_locs: DbcWorldSafeLocs = read_table(&mut chain)?;
     let (graveyard_stmts, graveyard_count) = graveyard_sql(&safe_locs);
 
@@ -207,7 +226,11 @@ pub(crate) fn catalogue_statements(
     let locks: DbcLock = read_table(&mut chain)?;
     let (lock_stmts, lock_count, lock_unmapped) = lock_sql(&locks);
 
-    let taxi_nodes: DbcTaxiNodes = read_table(&mut chain)?;
+    let taxi_nodes: DbcTaxiNodes = if vmangos {
+        source::taxi_nodes(mount_dump)?
+    } else {
+        read_table(&mut chain)?
+    };
     let taxi_paths: DbcTaxiPath = read_table(&mut chain)?;
     let taxi_path_nodes: DbcTaxiPathNode = read_table(&mut chain)?;
     let TaxiCatalogueSql {
@@ -230,16 +253,28 @@ pub(crate) fn catalogue_statements(
     }
 
     let skill_lines: DbcSkillLine = read_table(&mut chain)?;
-    let skill_abilities: DbcSkillLineAbility = read_table(&mut chain)?;
     let skill_availability: DbcSkillRaceClassInfo = read_table(&mut chain)?;
-    let autolearn_count = skill_abilities
-        .rows()
-        .iter()
-        // wow_dbc misnames the real AcquireMethod column.
-        .filter(|r| r.trivial_skill_line_rank_high == AUTOLEARN_ACQUIRE_METHOD)
-        .count();
     let (sl_stmts, sl_count) = skill_line_sql(&skill_lines);
-    let (sa_stmts, sa_count) = skill_ability_sql(&skill_abilities);
+    let ((sa_stmts, sa_count), autolearn_count) = if vmangos {
+        let count = mount_dump
+            .rows("skill_line_ability")?
+            .iter()
+            .map(|row| row.number::<i32>("learn_on_get_skill"))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|method| *method == AUTOLEARN_ACQUIRE_METHOD)
+            .count();
+        (source::skill_ability(mount_dump)?, count)
+    } else {
+        let abilities: DbcSkillLineAbility = read_table(&mut chain)?;
+        // wow_dbc misnames the real AcquireMethod column.
+        let count = abilities
+            .rows()
+            .iter()
+            .filter(|row| row.trivial_skill_line_rank_high == AUTOLEARN_ACQUIRE_METHOD)
+            .count();
+        (skill_ability_sql(&abilities), count)
+    };
     let (sav_stmts, sav_count) = skill_availability_sql(&skill_availability);
 
     println!("FactionTemplate: {fn_count} templates; Faction: {gf_count} factions");
@@ -751,6 +786,39 @@ fn taxi_mount_displays(
     dump: &(impl crate::dump::TableRows + ?Sized),
     display_ids: &HashSet<u32>,
 ) -> Result<HashMap<u32, u32>> {
+    if dump.kind() == crate::world_source::SourceKind::Vmangos {
+        let mut mounts = HashMap::new();
+        for row in dump
+            .columns(
+                "creature_template",
+                &[
+                    "entry",
+                    "display_id1",
+                    "display_id2",
+                    "display_id3",
+                    "display_id4",
+                ],
+            )?
+            .iter()
+        {
+            let entry: u32 = row.number("entry")?;
+            let mut display = 0;
+            for column in ["display_id1", "display_id2", "display_id3", "display_id4"] {
+                let model = row.number::<u32>(column)?;
+                if display == 0 {
+                    display = model;
+                }
+            }
+            if !display_ids.contains(&display) {
+                display = 0;
+            }
+            anyhow::ensure!(
+                mounts.insert(entry, display).is_none(),
+                "duplicate taxi mount creature {entry}"
+            );
+        }
+        return Ok(mounts);
+    }
     let rows = crate::dump::parse_table(dump, "creature_template")?;
     if rows.is_empty() {
         bail!("taxi mount dump has no creature_template rows");

@@ -304,9 +304,9 @@ where
             "--apply" => a.apply = true,
             "--family" => {
                 let v = it.next().context("--family <name>")?;
-                if !FAMILIES.contains(&v.as_str()) && v != "spell" {
+                if !FAMILIES.contains(&v.as_str()) && !matches!(v.as_str(), "spell" | "dbc") {
                     bail!(
-                        "--family {v}: unknown family (valid: {}, spell)",
+                        "--family {v}: unknown family (valid: {}, spell, dbc)",
                         FAMILIES.join(", ")
                     );
                 }
@@ -492,6 +492,7 @@ where
                         | "casts"
                         | "spell"
                         | "spellmeta"
+                        | "dbc"
                 )
             )
             || a.apply
@@ -508,7 +509,7 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
@@ -522,6 +523,7 @@ where
                             | "casts"
                             | "spell"
                             | "spellmeta"
+                            | "dbc"
                             | "items"
                             | "loot"
                             | "gameobjects"
@@ -543,7 +545,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|dbc|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -721,6 +723,24 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dbc_family_accepts_each_source_and_read_only_census() {
+        for source in ["classic-db", "vmangos"] {
+            let args = [
+                "--source", source, "--dump", "source", "--dbc", "client", "--family", "dbc",
+            ];
+            assert_eq!(
+                parse_args_from(args).unwrap().family.as_deref(),
+                Some("dbc")
+            );
+            if source == "vmangos" {
+                assert!(
+                    parse_args_from(args.into_iter().chain(["--census", "classic.sql"])).is_ok()
+                );
+            }
+        }
+    }
 
     #[test]
     fn vmangos_snapshot_accepts_its_source_and_refuses_mutating_or_competing_modes() {

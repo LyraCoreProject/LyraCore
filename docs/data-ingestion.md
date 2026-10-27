@@ -71,8 +71,17 @@ this affects the curated Seal of the Crusader marker on spell 21082 in both sour
 Source scripts remain unsupported. Source `effectItemType` can hold a 64-bit spell-family mask,
 as declared in [SpellEntry.h at the pinned vmangos commit](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Spells/SpellEntry.h#L656).
 The Module's existing modifier parameter retains its low 32 bits; the Compatibility Manifest
-lists slots with higher bits. The extra coefficient, custom-flag and minimum-level columns belong
-to S5d.
+lists slots with higher bits. The extra coefficient, custom-flag and minimum-level columns carry
+source spell behavior, as described below.
+
+The `dbc` family replaces six catalogues from complete vmangos rows: faction, faction templates,
+areas, taxi nodes, skill abilities and area triggers. `--family dbc` can also read the classic
+client catalogues for a census. It writes only those six Module tables. TaxiPath and TaxiPathNode
+remain separate client tables, so an existing client taxi-route import is still required. Taxi
+mount entries resolve through selected source creature templates and client CreatureDisplayInfo.
+The import reports trigger cooldowns, conditions and scripts that the Module cannot represent.
+Map stays entirely on Map.dbc because `map_template` lacks `internal_name`, the archive directory
+used to find WDT and ADT files. No Map columns are mixed across sources.
 
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
 entry choices, paths and spell lists. The creature plan preserves signed event membership and
