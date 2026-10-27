@@ -87,7 +87,7 @@ fn event_requirements(
             && row.number::<u32>("SpecialFlags")? & 2 != 0
         {
             let entry: u32 = row.number("entry")?;
-            // Preserve the two script-only quest gates; see docs/data-ingestion.md for the 2608 gap.
+            // Preserve the two script-only quest gates; see conformance/unsupported-vmangos.md for 2608.
             if credit_sources.contains(&entry) || matches!(entry, 2460 | 2608) {
                 rows.push(format!("({},{entry})", rows.len() + 1));
             }

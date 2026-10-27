@@ -1,7 +1,7 @@
 # World Source port census
 
 These reports record the transition from classic-db to vmangos at patch 10 and client build 5875.
-The Source Profile now enforces column contracts and approved values. Reported counts do not gate
+The Source Profile enforces column contracts and approved values. Reported counts do not gate
 imports. The current import floors and their reasons are in
 [vmangos-floors.md](../../importer/manifests/vmangos-floors.md).
 

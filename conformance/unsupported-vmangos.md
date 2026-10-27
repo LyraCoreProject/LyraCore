@@ -1,11 +1,11 @@
 # Unsupported vmangos behavior
 
 This list covers the ported Import Families. The family imports and generated censuses report
-these Compatibility Manifest findings. The vmangos Source Profile now checks consumed columns and approved source values. Counts do not gate import.
+these Compatibility Manifest findings. The vmangos Source Profile checks consumed columns and approved source values. Counts do not gate import.
 
 | Finding | Selected rows | Current limit | Status |
 | --- | ---: | --- | --- |
-| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The current classic-db import also omits portal conditions. The globals import retains these rows and reports their trigger ids as unsupported. | Condition kinds are translated. Portal gameplay support remains unimplemented. |
+| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The globals import retains these rows and reports their trigger ids as unsupported. | Condition kinds are translated. Portal gameplay support remains unimplemented. |
 
 Verified against vmangos commit `464179081673cfd240f7ffe7f0daf96bca0b5a70`, selected for patch 10,
 and the current `build_areatrigger_teleport_sql` output columns. No source rows are included here.
@@ -309,7 +309,7 @@ source's C++ taming aura callback is also unimplemented. This is not a verified 
 Quests 8353-8360 use creature-objective credit, not those event requirements. All eight passed
 wrong-emote and correct-emote checks with their actual imported NPC rules and replies on a
 Disposable Host. Quest acceptance was staged for these checks; acceptance and reward flows were
-not tested. Female and genderless models now select nonempty female broadcast text with male
+not tested. Female and genderless models select nonempty female broadcast text with male
 fallback. Missing gender metadata is reported for three full-world templates. Alternate-gender
 model choice remains unsupported; no nonzero alternative was observed at this pin.
 

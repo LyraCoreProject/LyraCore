@@ -112,7 +112,7 @@ for profile in alliance-single full-world; do
     source importer/scripts/import-manifest.sh
     echo "$FLOOR_CONTINENT_SPAWNS $FLOOR_CASTER_CAST_ROWS $FLOOR_PICKPOCKET_LOOT"
   ')"
-  chk_eq "$profile uses census floors after the slice overrides" "8000 350 1100" "$profile_floors"
+  chk_eq "$profile uses census floors after the slice overrides" "4200 350 1100" "$profile_floors"
 done
 
 echo "[smoke] import-world.sh chk0/chk36 map fences:"

@@ -48,6 +48,7 @@ jobs:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - uses: ./.github/actions/setup-spacetime
+      - run: bash importer/scripts/import-manifest-smoke.sh
       - run: python3 -m unittest discover -s importer/scripts/tests -v
       - run: cargo test -p lyracore-importer
       - run: cargo test -p lyracore-module --lib --features=debug_reducers
