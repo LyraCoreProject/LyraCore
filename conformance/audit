@@ -1,0 +1,13 @@
+#!/usr/bin/env python3
+import json
+import os
+from pathlib import Path
+import sys
+
+os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
+os.environ['LYRACORE_AUDIT_ARGS'] = json.dumps(sys.argv[1:])
+os.environ['LYRACORE_AUDIT_SCRIPT'] = str(Path(__file__).resolve().with_name('audit.py'))
+os.execvp('bash', ['bash', '-c', '''newgrp docker <<'DOCKER'
+python3 "$LYRACORE_AUDIT_SCRIPT"
+DOCKER
+'''])

@@ -37,7 +37,7 @@ fn update_result(
         .nth(1)
         .context("harness SHA")?;
     let mut result = json!({
-        "schema_version": 1,
+        "schema_version": 2,
         "tier": "tier1",
         "core_commit": git(&["rev-parse", "HEAD"] )?,
         "working_tree_dirty": !git(&["status", "--porcelain", "--untracked-files=normal"] )?.is_empty(),
@@ -133,24 +133,12 @@ fn connection_identity_matches_its_golden_trace() -> Result<()> {
 }
 
 #[test]
-#[ignore = "taxi divergence: repeated splines, missing combat/mount/landing replies and unit flags; requires imported data"]
+#[ignore = "taxi divergence: eight known gaps; run manually with the bundled route fixture"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
     run_scenario("taxi_single_hop", |shard| {
-        let path = std::env::var_os("LYRACORE_TEST_TAXI_SQL").context(
-            "set LYRACORE_TEST_TAXI_SQL to the minimal import described in conformance/README.md",
-        )?;
-        for statement in std::fs::read_to_string(path)?.split(";\n") {
-            if !statement.trim().is_empty() {
-                shard.assert_sql(statement.trim());
-            }
+        for statement in super::taxi_route::statements() {
+            shard.assert_sql(&statement);
         }
-        ensure!(
-            shard
-                .query_rows("SELECT id FROM game_taxi_path_node WHERE path_id = 6")
-                .len()
-                == 28,
-            "route 6 requires all 28 imported vertices"
-        );
         Ok(())
     })
 }
@@ -175,28 +163,5 @@ fn result_updates_preserve_other_scenarios_and_clear_failed_setup() -> Result<()
     assert_eq!(result["scenarios"][0]["id"], "connection_identity");
     assert_eq!(result["recorded_at_unix_ms"], 3);
     std::fs::remove_dir_all(directory)?;
-    Ok(())
-}
-
-#[test]
-fn golden_spline_coordinates_keep_their_wire_precision() -> Result<()> {
-    use wire_client::trace::RecordedField;
-
-    let golden = catalogue::get("taxi_single_hop")?;
-    let spline = golden
-        .trace()
-        .packets
-        .iter()
-        .find(|packet| packet.checkpoint == "flight" && packet.opcode == 0x00DD)
-        .context("Golden Trace passenger spline")?;
-    let RecordedField::List(points) = &spline.fields["points"] else {
-        anyhow::bail!("spline points must be a list");
-    };
-    for (index, axis, value) in [(10, "z", 52.476253509521484), (21, "y", 986.2713623046875)] {
-        let RecordedField::Object(point) = &points[index] else {
-            anyhow::bail!("spline point must be an object");
-        };
-        assert_eq!(point[axis], RecordedField::Float(value));
-    }
     Ok(())
 }

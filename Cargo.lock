@@ -1167,11 +1167,13 @@ name = "lyracore-conformance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lyracore-shared",
  "serde",
  "serde_json",
  "syn 2.0.119",
  "toml",
  "wire-client",
+ "wow_world_base 0.2.0",
  "wow_world_messages",
 ]
 
@@ -2748,8 +2750,8 @@ dependencies = [
 
 [[package]]
 name = "wire-client"
-version = "0.2.0-conformance.4"
-source = "git+https://github.com/LyraCoreProject/wire-harness?rev=a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca#a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca"
+version = "0.2.0-conformance.5"
+source = "git+https://github.com/LyraCoreProject/wire-harness?rev=bc83d81cc1992fd1b522cab38c2ea048b5c6db23#bc83d81cc1992fd1b522cab38c2ea048b5c6db23"
 dependencies = [
  "anyhow",
  "flate2",
