@@ -660,7 +660,9 @@ Each table is checked before it is read, including empty tables. A missing colum
 of that table; unrelated tables remain usable.
 
 The profile approves event types, script commands, target types, condition types, and flag bits.
-It checks command-specific flag fields separately, such as cast flags in command 15. Approved
+It checks command-specific flag fields separately, such as cast flags in command 15. Field-write
+masks are checked per destination field, and threat-selection flags per target type. Movement
+options and creature-group flags also have separate masks. Approved
 values can still be unsupported by the Module; those receive Compatibility Manifest findings.
 Unapproved values refuse dry run and apply with the table, column and values. Row counts compared
 with the accepted snapshot are informational and appear in the Source Profile report.

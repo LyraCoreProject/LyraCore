@@ -54,7 +54,7 @@ impl SourceProfile {
         }
         if let Some(values) = contract["values"].as_object() {
             for (column, approved) in values {
-                check_values(connection, table, column, None, |value| {
+                check_values(connection, table, column, &[], |value| {
                     approved
                         .as_array()
                         .is_some_and(|allowed| allowed.contains(&json!(value)))
@@ -64,31 +64,40 @@ impl SourceProfile {
         if let Some(bits) = contract["bits"].as_object() {
             for (column, allowed) in bits {
                 let allowed = allowed.as_u64().context("invalid profile flag bits")?;
-                check_values(connection, table, column, None, |value| {
+                check_values(connection, table, column, &[], |value| {
                     u64::try_from(value).is_ok_and(|value| value & !allowed == 0)
                 })?;
             }
         }
-        if let Some(bits) = contract["command_bits"].as_array() {
-            for rule in bits {
-                let command = rule["command"]
-                    .as_u64()
-                    .context("invalid profile command")?;
-                let column = rule["column"]
-                    .as_str()
-                    .context("invalid profile command column")?;
-                let allowed = rule["allowed"]
-                    .as_u64()
-                    .context("invalid profile command bits")?;
-                check_values(connection, table, column, Some(command), |value| {
-                    u64::try_from(value).is_ok_and(|value| value & !allowed == 0)
-                })?;
+        for (group, key, selector) in [
+            ("command_bits", "command", "command"),
+            ("target_bits", "target", "target_type"),
+        ] {
+            if let Some(bits) = contract[group].as_array() {
+                for rule in bits {
+                    let selected = rule[key].as_i64().context("invalid profile selector")?;
+                    let mut filters = vec![(selector, selected)];
+                    if let Some(field) = rule.get("field") {
+                        ensure!(group == "command_bits", "field requires a command selector");
+                        filters
+                            .push(("datalong", field.as_i64().context("invalid profile field")?));
+                    }
+                    let column = rule["column"]
+                        .as_str()
+                        .context("invalid profile flag column")?;
+                    let allowed = rule["allowed"]
+                        .as_u64()
+                        .context("invalid profile flag bits")?;
+                    check_values(connection, table, column, &filters, |value| {
+                        u64::try_from(value).is_ok_and(|value| value & !allowed == 0)
+                    })?;
+                }
             }
         }
         if let Some(values) = contract["command_values"].as_array() {
             for rule in values {
                 let command = rule["command"]
-                    .as_u64()
+                    .as_i64()
                     .context("invalid profile command")?;
                 let column = rule["column"]
                     .as_str()
@@ -96,9 +105,13 @@ impl SourceProfile {
                 let allowed = rule["allowed"]
                     .as_array()
                     .context("invalid profile command values")?;
-                check_values(connection, table, column, Some(command), |value| {
-                    allowed.contains(&json!(value))
-                })?;
+                check_values(
+                    connection,
+                    table,
+                    column,
+                    &[("command", command)],
+                    |value| allowed.contains(&json!(value)),
+                )?;
             }
         }
         let count = connection.query_row(
@@ -122,10 +135,21 @@ fn check_values(
     connection: &Connection,
     table: &str,
     column: &str,
-    command: Option<u64>,
+    filters: &[(&str, i64)],
     accepted: impl Fn(i64) -> bool,
 ) -> Result<()> {
-    let filter = command.map_or_else(String::new, |command| format!(" WHERE command = {command}"));
+    let filter = if filters.is_empty() {
+        String::new()
+    } else {
+        format!(
+            " WHERE {}",
+            filters
+                .iter()
+                .map(|(column, value)| format!("{} = {value}", quote(column)))
+                .collect::<Vec<_>>()
+                .join(" AND ")
+        )
+    };
     let mut statement = connection.prepare(&format!(
         "SELECT DISTINCT {} AS value FROM {}{filter} ORDER BY value",
         quote(column),
@@ -141,7 +165,7 @@ fn check_values(
     if !unapproved.is_empty() {
         bail!(
             "{}",
-            json!({"source_profile":NAME,"classification":"unapproved","table":table,"column":column,"command":command,"values":unapproved})
+            json!({"source_profile":NAME,"classification":"unapproved","table":table,"column":column,"filters":filters.iter().copied().collect::<BTreeMap<_,_>>(),"values":unapproved})
         );
     }
     Ok(())
@@ -237,18 +261,59 @@ mod tests {
     fn command_flag_checks_apply_to_their_command_only() {
         let database = Connection::open_in_memory().unwrap();
         database.execute_batch("CREATE TABLE scripts (command INTEGER, datalong2 INTEGER); INSERT INTO scripts VALUES (15,2),(28,999);").unwrap();
-        check_values(&database, "scripts", "datalong2", Some(15), |value| {
-            value & !3 == 0
-        })
+        check_values(
+            &database,
+            "scripts",
+            "datalong2",
+            &[("command", 15)],
+            |value| value & !3 == 0,
+        )
         .unwrap();
         database
             .execute("INSERT INTO scripts VALUES (15,4)", [])
             .unwrap();
-        assert!(
-            check_values(&database, "scripts", "datalong2", Some(15), |value| value
-                & !3
-                == 0)
-            .is_err()
-        );
+        assert!(check_values(
+            &database,
+            "scripts",
+            "datalong2",
+            &[("command", 15)],
+            |value| value & !3 == 0
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn field_and_target_flag_contracts_reject_new_bits_without_gating_other_parameters() {
+        let database = Connection::open_in_memory().unwrap();
+        database.execute_batch("CREATE TABLE scripts (command INTEGER, datalong INTEGER, datalong2 INTEGER, target_type INTEGER, target_param1 INTEGER); INSERT INTO scripts VALUES (4,46,256,0,9000),(4,147,3,4,0);").unwrap();
+        let make_profile = || SourceProfile {
+            definition: json!({"tables":{"scripts":{
+                "columns":{"integer":["command","datalong","datalong2","target_type","target_param1"]},
+                "command_bits":[{"command":4,"field":46,"column":"datalong2","allowed":768}],
+                "target_bits":[{"target":4,"column":"target_param1","allowed":0}],
+                "locked_rows":1
+            }}}),
+            counts: RefCell::default(),
+        };
+        make_profile().check_table(&database, "scripts").unwrap();
+        database
+            .execute("UPDATE scripts SET datalong2=1024 WHERE datalong=46", [])
+            .unwrap();
+        assert!(make_profile()
+            .check_table(&database, "scripts")
+            .unwrap_err()
+            .to_string()
+            .contains("datalong2"));
+        database
+            .execute("UPDATE scripts SET datalong2=768 WHERE datalong=46", [])
+            .unwrap();
+        database
+            .execute("UPDATE scripts SET target_param1=1 WHERE target_type=4", [])
+            .unwrap();
+        assert!(make_profile()
+            .check_table(&database, "scripts")
+            .unwrap_err()
+            .to_string()
+            .contains("target_param1"));
     }
 }
