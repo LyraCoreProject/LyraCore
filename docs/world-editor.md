@@ -1,6 +1,6 @@
 # World Editor
 
-The World Editor is [Meld](https://github.com/Mathih13/Meld/tree/lyracore), a 1.12.1 map editor. Its
+The World Editor is [Meld](https://github.com/LyraCoreProject/Meld/tree/lyracore), a 1.12.1 map editor. Its
 `lyracore` branch reads spawns from a Realm and saves spawn edits through the
 [Operator Content API](./operator-content-api.md), so a moved, added or deleted spawn shows in the
 world at once.
@@ -54,5 +54,7 @@ import, put it in a Package ([durability](./operator-content-api.md#durability))
 
 ## Change the pinned build
 
-Push the Meld commit to `Mathih13/Meld` and write its full SHA to `.lyracore-editor-rev`. The next
-`lyracore editor` builds it.
+Push the Meld commit to the `lyracore` branch of
+[LyraCoreProject/Meld](https://github.com/LyraCoreProject/Meld) and write its full SHA to
+`.lyracore-editor-rev`. The next `lyracore editor` builds it. Upstream's changes come in by merging
+`Coldensjo/Meld`'s `main` into `lyracore`.
