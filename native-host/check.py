@@ -1441,6 +1441,9 @@ def check_duels(host):
     activate(flag)
     host.call('debug_teleport', [watcher_guid, 0, 2000, 1000, 0, 0])
     watcher.collect()
+    # Regeneration must not change the one-health knockout before the observation.
+    max_health = host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {second_guid}')[0][0]
+    host.sql(f'UPDATE game_world_entity SET max_health = 1 WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1])
     first.collect()
     second.collect()
@@ -1454,10 +1457,12 @@ def check_duels(host):
         time.sleep(0.05)
     completion(knocked_out, flag, 0, 'Duelone', 'Dueltwo')
     completion(second.collect(), flag, 0, 'Duelone', 'Dueltwo')
-    assert host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}') == [[1, False]]
+    remaining = host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}')
+    assert remaining == [[1, False]], remaining
     assert not host.rows(f'SELECT owner_guid FROM game_corpse WHERE owner_guid = {second_guid}')
     assert not host.rows(f'SELECT attacker_guid FROM game_melee_attack WHERE attacker_guid = {first_guid}')
     assert not duel_packets(watcher.collect())
+    host.sql(f'UPDATE game_world_entity SET max_health = {max_health} WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1000])
     host.call('debug_teleport', [watcher_guid, 0, 1002, 1000, 0, 0])
     watcher.collect()
