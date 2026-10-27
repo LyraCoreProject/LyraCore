@@ -3978,12 +3978,60 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
     )
 }
 
+fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let source = eventai::vmangos::Source::read(dump)?;
+    let templates = dump
+        .columns("creature_template", &["entry"])?
+        .iter()
+        .map(|row| row.number::<u64>("entry"))
+        .collect::<Result<std::collections::HashSet<_>>>()?;
+    let mut entries = vmangos_creature_entries(dump, args)?;
+    let (eventai, manifest) = loop {
+        let (plan, manifest) = source.assemble(&entries, &templates);
+        if plan
+            .forced_template_entries
+            .iter()
+            .filter(|entry| entries.insert(**entry))
+            .count()
+            == 0
+        {
+            break (plan, manifest);
+        }
+    };
+    let mut stmts = vec![
+        "DELETE FROM game_creature_ai_broadcast_text WHERE id > 0".into(),
+        "DELETE FROM game_creature_ai_summon WHERE id > 0".into(),
+    ];
+    push_insert(&mut stmts, "game_creature_ai_broadcast_text", "id,male_text,female_text,chat_type,language_id,emote_delay_1_ms,emote_id_1,emote_delay_2_ms,emote_id_2,emote_delay_3_ms,emote_id_3", &eventai.broadcast_rows);
+    push_insert(
+        &mut stmts,
+        "game_creature_ai_summon",
+        "id,x,y,z,orientation,lifetime_ms",
+        &eventai.summon_rows,
+    );
+    if args.apply {
+        bail!("vmangos creature-ai apply awaits its Source Profile gate");
+    }
+    Ok(DumpPlan {
+        stmts,
+        stamps: vec![("creature-ai", eventai.row_count())],
+        eventai_definition_count: eventai.definition_count(),
+        eventai_instruction_count: eventai.instruction_count(),
+        eventai_relay_definition_count: eventai.relay_definition_rows.len() as u64,
+        eventai_definition_batches: eventai.definition_batches,
+        eventai_relay_definition_batches: eventai.relay_definition_batches,
+        world_source_manifest: Some(serde_json::to_string_pretty(&manifest)?),
+        ..Default::default()
+    })
+}
+
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
         Some("dbc") => dbc::replacement_plan(dump, args.dbc.as_deref().context("dbc requires --dbc")?),
         Some("spellmeta") => vmangos_spellmeta::plan(dump),
         Some("spell") => spell::world_plan(dump, args.dbc.as_deref().context("spell requires --dbc")?),
         Some("creatures" | "casts") => vmangos_creatures::plan(dump, args),
+        Some("creature-ai") => vmangos_eventai_plan(dump, args),
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
         Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
@@ -4003,7 +4051,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             })
         }
         _ => bail!(
-            "vmangos currently supports --family creatures, casts, globals, items, loot, gameobjects, trainers, quests or gossip"
+            "vmangos currently supports --family creatures, casts, creature-ai, dbc, globals, items, loot, gameobjects, trainers, quests, gossip, spell or spellmeta"
         ),
     }
 }
@@ -8403,5 +8451,45 @@ mod tests {
             stmts,
             vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()]
         );
+    }
+    #[test]
+    fn vmangos_family_help_names_every_supported_family() {
+        let source = crate::world_source::sqlite_fixture(&[]).unwrap();
+        let mut args = import_args([
+            "--dump",
+            "unused",
+            "--source",
+            "vmangos",
+            "--family",
+            "creature-ai",
+        ])
+        .unwrap();
+        args.family = None;
+        let error = build_vmangos_plan(&source, &args)
+            .err()
+            .unwrap()
+            .to_string();
+        for family in [
+            "creatures",
+            "casts",
+            "creature-ai",
+            "dbc",
+            "globals",
+            "items",
+            "loot",
+            "gameobjects",
+            "trainers",
+            "quests",
+            "gossip",
+            "spell",
+            "spellmeta",
+        ] {
+            assert!(
+                error
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .any(|word| word == family),
+                "{error} omits {family}"
+            );
+        }
     }
 }

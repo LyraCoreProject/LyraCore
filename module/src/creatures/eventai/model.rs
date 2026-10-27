@@ -636,6 +636,7 @@ pub enum CreatureInstruction {
     ZoneCombat,
     SetSheath(u8),
     EmptyTextNoEffect,
+    FleeWithText(u32),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

@@ -119,9 +119,6 @@ fn spawn_at_actor<W: EventAiWorld>(
         return ActionResult::Refused;
     }
     let selected_target = super::combat::unit_target(world, context, target, None, choice);
-    if target != InstructionTarget::SelfActor && selected_target.is_none() {
-        return ActionResult::Refused;
-    }
     let sequence = world.eventai_claim_summon_sequence(lifetime_ms);
     let Some(guid) = summon_guid(creature_entry, sequence) else {
         world.eventai_release_summon_sequence(sequence);
@@ -370,9 +367,6 @@ fn summon<W: EventAiWorld>(
     }
 
     let selected_target = super::combat::unit_target(world, context, target, None, choice);
-    if target != InstructionTarget::SelfActor && selected_target.is_none() {
-        return ActionResult::Refused;
-    }
     let sequence = world.eventai_claim_summon_sequence(location.lifetime_ms);
     let Some(guid) = summon_guid(creature_entry, sequence) else {
         world.eventai_release_summon_sequence(sequence);

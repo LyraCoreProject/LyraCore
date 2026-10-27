@@ -655,14 +655,15 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 .split('.')
                 .map(parse_i32)
                 .collect::<Result<Vec<_>, _>>()?;
-            if emote_ids.len() != 3 {
-                return Err("random-emote needs exactly three source choices".to_string());
+            if !(1..=4).contains(&emote_ids.len()) {
+                return Err("random-emote needs one through four choices".to_string());
             }
             Ok(CreatureInstruction::RandomEmote(RandomEmoteInstruction {
                 emote_ids,
             }))
         }
         ["attack-start", target] => Ok(CreatureInstruction::AttackStart(parse_target(target)?)),
+        ["flee", text] => Ok(CreatureInstruction::FleeWithText(parse_u32(text)?)),
         ["flee"] => Ok(CreatureInstruction::FleeForAssist),
         ["help", radius] => Ok(CreatureInstruction::CallForHelp(CallForHelpInstruction {
             radius_yd: parse_u32(radius)?,
@@ -1523,7 +1524,9 @@ mod tests {
             })
         ));
 
-        assert!(parse_instruction("random-emote:11.18").is_err());
+        assert!(parse_instruction("random-emote:11.18").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21.22").is_err());
         assert!(parse_instruction("set-react-state:3").is_err());
         assert!(parse_instruction("no-effect:missing-text-template:0").is_err());
     }

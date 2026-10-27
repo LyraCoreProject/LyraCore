@@ -580,7 +580,10 @@ pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> Autho
                     ..
                 })
             );
-            authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
+            authored.flee |= matches!(
+                instruction,
+                CreatureInstruction::FleeForAssist | CreatureInstruction::FleeWithText(_)
+            );
         }
     }
     authored

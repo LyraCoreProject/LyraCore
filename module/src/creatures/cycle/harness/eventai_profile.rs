@@ -578,3 +578,85 @@ fn provided_speech_without_a_target_still_reaches_nearby_players() {
         vec![(CREATURE, crate::chat::CHAT_SAY, "Hello".into())]
     );
 }
+
+#[test]
+fn a_fleeing_creature_delivers_its_emote_to_the_player() {
+    let mut scenario = world()
+        .attacking(CREATURE, TARGET)
+        .eventai_broadcast(1150, "%s attempts to run away in fear!", 2)
+        .eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            1,
+            InstructionSelection::All,
+            vec![CreatureInstruction::FleeWithText(1150)],
+        ));
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_speech().len(), 1);
+    assert_eq!(scenario.eventai_speech_targets(), [(CREATURE, TARGET)]);
+    assert!(rout_window_open(1_000, scenario.rout_ends_ms(CREATURE)));
+}
+
+#[test]
+fn a_refused_flee_does_not_tell_the_player_it_ran_away() {
+    let mut scenario = world()
+        .eventai_broadcast(1150, "%s attempts to run away in fear!", 2)
+        .eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            1,
+            InstructionSelection::All,
+            vec![CreatureInstruction::FleeWithText(1150)],
+        ));
+    dispatch(&mut scenario, CREATURE);
+    assert!(scenario.eventai_speech().is_empty());
+    assert_eq!(scenario.rout_ends_ms(CREATURE), 0);
+}
+
+#[test]
+fn every_random_emote_choice_reaches_the_player() {
+    for choices in [vec![18, 20], vec![4, 21, 22, 11]] {
+        for (roll, expected) in choices.iter().enumerate() {
+            let mut scenario = world()
+                .rolls([roll as u32])
+                .eventai_native_definition(definition(
+                    EventAiSubject::Entry(ENTRY),
+                    1,
+                    InstructionSelection::All,
+                    vec![CreatureInstruction::RandomEmote(RandomEmoteInstruction {
+                        emote_ids: choices.clone(),
+                    })],
+                ));
+            dispatch(&mut scenario, CREATURE);
+            assert_eq!(
+                scenario.eventai_emotes(),
+                [(CREATURE, 0, *expected as u32, 0)]
+            );
+        }
+    }
+}
+
+#[test]
+fn a_summon_without_a_current_opponent_still_appears_for_the_player() {
+    let mut scenario = world()
+        .eventai_template(GUARDIAN_ENTRY)
+        .eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            1,
+            InstructionSelection::All,
+            vec![CreatureInstruction::SpawnAtActor(SpawnAtActorInstruction {
+                creature_entry: GUARDIAN_ENTRY,
+                target: InstructionTarget::CurrentOpponent,
+                lifetime_ms: 10_000,
+            })],
+        ));
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext::empty(EventKind::OnAggro, CREATURE, 1_000)),
+    );
+    let summons = scenario.eventai_summoned_guids();
+    assert_eq!(summons.len(), 1);
+    assert_eq!(
+        scenario.creatures.borrow()[&summons[0]].entry,
+        GUARDIAN_ENTRY
+    );
+    assert!(scenario.fights.borrow().is_empty());
+}

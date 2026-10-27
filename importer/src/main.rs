@@ -520,6 +520,7 @@ where
                     Some(
                         "globals"
                             | "creatures"
+                            | "creature-ai"
                             | "casts"
                             | "spell"
                             | "spellmeta"
@@ -545,7 +546,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|dbc|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|dbc|creatures|creature-ai|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
