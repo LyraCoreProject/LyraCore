@@ -15,6 +15,7 @@ crate-type = ["cdylib", "rlib"]
 [features]
 debug_reducers = []
 package_test_fixture = ["debug_reducers"]
+conformance_test_fixture = ["debug_reducers"]
 
 [dependencies]
 anyhow = "1"
@@ -33,6 +34,8 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 
 [dev-dependencies]
+syn = { version = "2", features = ["full"] }
+wow_world_messages = { version = "0.3", default-features = false, features = ["vanilla", "sync"] }
 serde = { version = "1", features = ["derive"] }
 lyracore-test-support.workspace = true
 serde_json = "1"

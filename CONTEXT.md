@@ -1133,32 +1133,40 @@ _Avoid_: client patch, distribution, release bundle, player package
 
 **Behavior**:
 One interaction a player would recognize, with a defined 1.12.1 result and verification needs.
+_Avoid_: feature (when meaning one interaction)
 
 **Conformance Audit**:
 A dated comparison of LyraCore and the Reference Server through the same wire scenarios. It
 separates rule differences from data differences.
+_Avoid_: compatibility audit
 
 **Reference Server**:
 The vmangos server whose observable results define 1.12.1 behavior for conformance checks.
+_Avoid_: reference core
 
 **Golden Trace**:
 A recording of a scenario on the Reference Server, with text replaced by SHA-256 digests, used as
 expected results for conformance checks.
+_Avoid_: golden file, snapshot (for recorded packets)
 
 **Equivalence Rule**:
 A named rule with a reason that permits a specified difference between decoded results, such as
 consistent GUID remapping or a time tolerance.
+_Avoid_: normalization rule
 
 **Deliberate Deviation**:
 A client-visible result LyraCore intentionally keeps different from the Reference Server, with a
 reason and a source. A different implementation with the same result is not a deviation.
+_Avoid_: intentional divergence
 
 **Fixture Verb**:
 A scenario's request for setup that both the LyraCore and Reference Server adapters implement.
+_Avoid_: setup command (in a scenario)
 
 **Feature Ledger**:
 The collection of Behaviors, their scope, evidence requirements and Deliberate Deviations from
 which tools derive conformance progress.
+_Avoid_: feature matrix, support matrix
 
 ### Working method
 
