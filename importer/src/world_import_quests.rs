@@ -31,27 +31,18 @@ pub(super) fn learn_spells(dump: &(impl TableRows + ?Sized)) -> Result<HashMap<u
         )?
         .iter()
     {
-        let Ok(wrapper) = row.numeric_text(id)?.parse::<u32>() else {
-            continue;
-        };
+        let wrapper = row.number::<u32>(id)?;
         let mut effects = Vec::new();
         for slot in 1..=3 {
-            let value = row.numeric_text(&format!("{effect}{slot}"))?;
-            if value != "0" {
+            let value = row.number::<u32>(&format!("{effect}{slot}"))?;
+            if value != 0 {
                 effects.push((slot, value));
             }
         }
-        if effects.len() != 1
-            || effects[0].1.parse::<u32>().ok() != Some(SpellEffect::LearnSpell.as_int())
-        {
+        if effects.len() != 1 || effects[0].1 != SpellEffect::LearnSpell.as_int() {
             continue;
         }
-        let Ok(target) = row
-            .numeric_text(&format!("{trigger}{}", effects[0].0))?
-            .parse::<u32>()
-        else {
-            continue;
-        };
+        let target = row.number::<u32>(&format!("{trigger}{}", effects[0].0))?;
         if target != 0 {
             learned.insert(wrapper, target);
         }

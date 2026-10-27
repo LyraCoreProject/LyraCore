@@ -1196,12 +1196,12 @@ fn gameobject_loot_item_set(
     let loot = parse_loot_family(dump, "gameobject_loot_template", &refs)?;
     let mut set = std::collections::HashSet::new();
     for row in parse_table(dump, "gameobject_template")?.iter() {
-        let entry: u64 = row.numeric_text(got::ENTRY)?.parse().unwrap_or(0);
-        let ty: u64 = row.numeric_text(got::TYPE)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(got::ENTRY)?;
+        let ty: u64 = row.number(got::TYPE)?;
         if ty != GO_TYPE_CHEST || !used_go.contains(&entry) {
             continue;
         }
-        let lootid: u64 = row.numeric_text(got::DATA1)?.parse().unwrap_or(0);
+        let lootid: u64 = row.number(got::DATA1)?;
         if let Some(drops) = loot.get(&lootid) {
             for &(item, ..) in drops {
                 set.insert(item);
@@ -1222,9 +1222,9 @@ fn vendor_stock_item_set(
     };
     let mut set = std::collections::HashSet::new();
     for row in parse_table(dump, "npc_vendor")?.iter() {
-        let entry: u64 = row.numeric_text(nv::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(nv::ENTRY)?;
         if local_creatures.contains(&entry) {
-            let item: u64 = row.numeric_text(nv::ITEM)?.parse().unwrap_or(0);
+            let item: u64 = row.number(nv::ITEM)?;
             if item > 0 {
                 set.insert(item);
             }
@@ -1232,18 +1232,18 @@ fn vendor_stock_item_set(
     }
     let mut tmpl_items: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
     for row in parse_table(dump, "npc_vendor_template")?.iter() {
-        let t: u64 = row.numeric_text("entry")?.parse().unwrap_or(0);
-        let item: u64 = row.numeric_text("item")?.parse().unwrap_or(0);
+        let t: u64 = row.number("entry")?;
+        let item: u64 = row.number("item")?;
         if t > 0 && item > 0 {
             tmpl_items.entry(t).or_default().push(item);
         }
     }
     for row in parse_table(dump, "creature_template")?.iter() {
-        let entry: u64 = row.numeric_text(entry_column)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(entry_column)?;
         if !local_creatures.contains(&entry) {
             continue;
         }
-        let vt: u64 = row.numeric_text(vendor_column)?.parse().unwrap_or(0);
+        let vt: u64 = row.number(vendor_column)?;
         if let Some(items) = tmpl_items.get(&vt) {
             set.extend(items.iter().copied());
         }
@@ -1271,12 +1271,8 @@ fn build_quests(
         parse_table(dump, table)?
             .iter()
             .map(|row| -> Result<_> {
-                let Ok(entry) = row.numeric_text(qr::CREATURE)?.parse::<u64>() else {
-                    return Ok(None);
-                };
-                let Ok(quest) = row.numeric_text(qr::QUEST)?.parse::<u64>() else {
-                    return Ok(None);
-                };
+                let entry = row.number::<u64>(qr::CREATURE)?;
+                let quest = row.number::<u64>(qr::QUEST)?;
                 Ok((entries.contains(&entry) && quest > 0).then_some((entry, quest)))
             })
             .filter_map(Result::transpose)
@@ -1317,7 +1313,7 @@ fn build_quests(
     let mut rew_choice_id: u64 = 1;
     let mut quest_obj_count: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
     for row in parse_table(dump, "quest_template")?.iter() {
-        let entry: u64 = row.numeric_text(qt::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(qt::ENTRY)?;
         if entry == 0 || !candidate_quests.contains(&entry) {
             continue;
         }
@@ -1330,15 +1326,9 @@ fn build_quests(
                     .map(|text| crate::dump::sql_str(text.unwrap_or_default().trim()))
             }
         };
-        let mail_template: u32 = row
-            .numeric_text(qt::REW_MAIL_TEMPLATE_ID)?
-            .parse()
-            .unwrap_or(0);
+        let mail_template: u32 = row.number(qt::REW_MAIL_TEMPLATE_ID)?;
         if mail_template != 0 {
-            let mail_delay: u32 = row
-                .numeric_text(qt::REW_MAIL_DELAY_SECS)?
-                .parse()
-                .unwrap_or(0);
+            let mail_delay: u32 = row.number(qt::REW_MAIL_DELAY_SECS)?;
             let mail_money = if dump.kind() == SourceKind::Vmangos {
                 row.number::<u32>("RewMailMoney")?
             } else {
@@ -1350,11 +1340,11 @@ fn build_quests(
             reward_mail_template_ids.insert(mail_template as u64);
             reward_mail_quests.insert(entry);
         }
-        let reward_cast: u32 = row.numeric_text(qt::REW_SPELL_CAST)?.parse().unwrap_or(0);
+        let reward_cast: u32 = row.number(qt::REW_SPELL_CAST)?;
         let reward_cast = if reward_cast != 0 {
             reward_cast
         } else {
-            row.numeric_text(qt::REW_SPELL)?.parse().unwrap_or(0)
+            row.number(qt::REW_SPELL)?
         };
         if let Some(learned) = reward_learn_spells.get(&reward_cast) {
             reward_spell_rows.push(format!("({entry},{learned})"));
@@ -1365,37 +1355,31 @@ fn build_quests(
         } else {
             0
         };
-        let min_level: u32 = row.numeric_text(qt::MIN_LEVEL)?.parse().unwrap_or(0);
-        let quest_level: i64 = row.numeric_text(qt::QUEST_LEVEL)?.parse().unwrap_or(0);
-        let money: i64 = row.numeric_text(qt::REW_OR_REQ_MONEY)?.parse().unwrap_or(0);
-        let reward_money_max_level: i64 = row
-            .numeric_text(qt::REW_MONEY_MAX_LEVEL)?
-            .parse()
-            .unwrap_or(0);
-        let prev_quest: i64 = row.numeric_text(qt::PREV_QUEST_ID)?.parse().unwrap_or(0);
-        let special_flags: u32 = row.numeric_text(qt::SPECIAL_FLAGS)?.parse().unwrap_or(0);
+        let min_level: u32 = row.number(qt::MIN_LEVEL)?;
+        let quest_level: i64 = row.number(qt::QUEST_LEVEL)?;
+        let money: i64 = row.number(qt::REW_OR_REQ_MONEY)?;
+        let reward_money_max_level: i64 = row.number(qt::REW_MONEY_MAX_LEVEL)?;
+        let prev_quest: i64 = row.number(qt::PREV_QUEST_ID)?;
+        let special_flags: u32 = row.number(qt::SPECIAL_FLAGS)?;
         let repeatable = (special_flags & 1) != 0;
-        let req_races: u32 = row.numeric_text(qt::REQUIRED_RACES)?.parse().unwrap_or(0);
-        let req_classes: u32 = row.numeric_text(qt::REQUIRED_CLASSES)?.parse().unwrap_or(0);
-        let zone_or_sort: i64 = row.numeric_text(qt::ZONE_OR_SORT)?.parse().unwrap_or(0);
-        let rf1: u32 = row.numeric_text(qt::REW_REP_FACTION1)?.parse().unwrap_or(0);
-        let rv1: i64 = row.numeric_text(qt::REW_REP_VALUE1)?.parse().unwrap_or(0);
-        let rf2: u32 = row.numeric_text("RewRepFaction2")?.parse().unwrap_or(0);
-        let rv2: i64 = row.numeric_text("RewRepValue2")?.parse().unwrap_or(0);
-        let src_item: u64 = row.numeric_text(qt::SRC_ITEM_ID)?.parse().unwrap_or(0);
-        let src_item_count: u32 = row.numeric_text(qt::SRC_ITEM_COUNT)?.parse().unwrap_or(0);
-        let next_quest_raw: i64 = row
-            .numeric_text(qt::NEXT_QUEST_IN_CHAIN)?
-            .parse()
-            .unwrap_or(0);
-        let limit_time_raw: i64 = row.numeric_text(qt::LIMIT_TIME)?.parse().unwrap_or(0);
+        let req_races: u32 = row.number(qt::REQUIRED_RACES)?;
+        let req_classes: u32 = row.number(qt::REQUIRED_CLASSES)?;
+        let zone_or_sort: i64 = row.number(qt::ZONE_OR_SORT)?;
+        let rf1: u32 = row.number(qt::REW_REP_FACTION1)?;
+        let rv1: i64 = row.number(qt::REW_REP_VALUE1)?;
+        let rf2: u32 = row.number("RewRepFaction2")?;
+        let rv2: i64 = row.number("RewRepValue2")?;
+        let src_item: u64 = row.number(qt::SRC_ITEM_ID)?;
+        let src_item_count: u32 = row.number(qt::SRC_ITEM_COUNT)?;
+        let next_quest_raw: i64 = row.number(qt::NEXT_QUEST_IN_CHAIN)?;
+        let limit_time_raw: i64 = row.number(qt::LIMIT_TIME)?;
         if next_quest_raw > 0 {
             chained_count += 1;
         }
         if limit_time_raw > 0 {
             timed_count += 1;
         }
-        let quest_type: u32 = row.numeric_text(qt::TYPE)?.parse().unwrap_or(0);
+        let quest_type: u32 = row.number(qt::TYPE)?;
         if quest_type == 62 {
             raid_quest_count += 1;
         }
@@ -1418,18 +1402,9 @@ fn build_quests(
         ));
         let mut obj_index: u8 = 0;
         for i in 0..4 {
-            let id: i64 = row
-                .numeric_text(&format!("ReqCreatureOrGOId{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let count: u32 = row
-                .numeric_text(&format!("ReqCreatureOrGOCount{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let spell_id: u32 = row
-                .numeric_text(&format!("ReqSpellCast{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
+            let id: i64 = row.number(&format!("ReqCreatureOrGOId{}", i + 1))?;
+            let count: u32 = row.number(&format!("ReqCreatureOrGOCount{}", i + 1))?;
+            let spell_id: u32 = row.number(&format!("ReqSpellCast{}", i + 1))?;
             if count == 0 {
                 continue;
             }
@@ -1463,14 +1438,8 @@ fn build_quests(
             req_item_entries.insert(src_item);
         }
         for i in 0..4 {
-            let item: i64 = row
-                .numeric_text(&format!("ReqItemId{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let count: u32 = row
-                .numeric_text(&format!("ReqItemCount{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
+            let item: i64 = row.number(&format!("ReqItemId{}", i + 1))?;
+            let count: u32 = row.number(&format!("ReqItemCount{}", i + 1))?;
             if item > 0 {
                 req_item_entries.insert(item as u64);
             }
@@ -1484,14 +1453,8 @@ fn build_quests(
         }
         quest_obj_count.insert(entry, obj_index);
         for i in 0..4 {
-            let item: u64 = row
-                .numeric_text(&format!("RewItemId{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let count: u32 = row
-                .numeric_text(&format!("RewItemCount{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
+            let item: u64 = row.number(&format!("RewItemId{}", i + 1))?;
+            let count: u32 = row.number(&format!("RewItemCount{}", i + 1))?;
             if item > 0 {
                 reward_item_entries.insert(item);
                 reward_item_rows.push(format!(
@@ -1503,14 +1466,8 @@ fn build_quests(
         }
         let mut choice_rank = 0u8;
         for i in 0..6 {
-            let item: u64 = row
-                .numeric_text(&format!("RewChoiceItemId{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
-            let count: u32 = row
-                .numeric_text(&format!("RewChoiceItemCount{}", i + 1))?
-                .parse()
-                .unwrap_or(0);
+            let item: u64 = row.number(&format!("RewChoiceItemId{}", i + 1))?;
+            let count: u32 = row.number(&format!("RewChoiceItemCount{}", i + 1))?;
             if item > 0 {
                 reward_item_entries.insert(item);
                 reward_choice_rows.push(format!(
@@ -1525,11 +1482,11 @@ fn build_quests(
 
     if dump.kind() == SourceKind::ClassicDb {
         for row in parse_table(dump, "dbscripts_on_quest_end")?.iter() {
-            let command: u32 = row.numeric_text(dse::COMMAND)?.parse().unwrap_or(0);
+            let command: u32 = row.number(dse::COMMAND)?;
             if command != dse::SEND_MAIL {
                 continue;
             }
-            let entry: u64 = row.numeric_text(dse::ID)?.parse().unwrap_or(0);
+            let entry: u64 = row.number(dse::ID)?;
             if entry == 0 || !valid_quests.contains(&entry) {
                 continue;
             }
@@ -1539,10 +1496,10 @@ fn build_quests(
                  quest_template.RewMailTemplateId and a SCRIPT_COMMAND_SEND_MAIL row"
                 );
             }
-            let mail_template: u32 = row.numeric_text(dse::DATALONG)?.parse().unwrap_or(0);
-            let sender: u32 = row.numeric_text(dse::DATALONG2)?.parse().unwrap_or(0);
-            let money: u32 = row.numeric_text(dse::DATALONG3)?.parse().unwrap_or(0);
-            let delay: u32 = row.numeric_text(dse::DATAINT)?.parse().unwrap_or(0);
+            let mail_template: u32 = row.number(dse::DATALONG)?;
+            let sender: u32 = row.number(dse::DATALONG2)?;
+            let money: u32 = row.number(dse::DATALONG3)?;
+            let delay: u32 = row.number(dse::DATAINT)?;
             reward_mail_template_ids.insert(mail_template as u64);
             reward_mail_rows.push(format!(
                 "({entry},{mail_template},{delay},{sender},{money})"
@@ -1551,8 +1508,8 @@ fn build_quests(
     }
 
     for row in parse_table(dump, "areatrigger_involvedrelation")?.iter() {
-        let trigger: u64 = row.numeric_text(ai::TRIGGER)?.parse().unwrap_or(0);
-        let quest: u64 = row.numeric_text(ai::QUEST)?.parse().unwrap_or(0);
+        let trigger: u64 = row.number(ai::TRIGGER)?;
+        let quest: u64 = row.number(ai::QUEST)?;
         if trigger == 0 || !valid_quests.contains(&quest) {
             continue;
         }
@@ -1877,7 +1834,7 @@ fn build_mail_loot(
     let mut item_entries: HashSet<u64> = HashSet::new();
     let mut seen_templates: HashSet<u64> = HashSet::new();
     for row in parse_table(dump, "mail_loot_template")?.iter() {
-        let entry: u64 = row.numeric_text(mlt::ENTRY)?.parse().unwrap_or(0);
+        let entry: u64 = row.number(mlt::ENTRY)?;
         if !reward_mail_template_ids.contains(&entry)
             || forbidden.contains(&row.number::<u64>(mlt::ITEM)?)
         {
@@ -1886,34 +1843,31 @@ fn build_mail_loot(
         if !seen_templates.insert(entry) {
             bail!("mail_loot_template: mail template {entry} carries more than one loot row");
         }
-        let chance: f64 = row.numeric_text(mlt::CHANCE)?.parse().unwrap_or(0.0);
-        if (chance - 100.0).abs() > f64::EPSILON {
+        let chance: f64 = row.number(mlt::CHANCE)?;
+        if !chance.is_finite() || (chance - 100.0).abs() > f64::EPSILON {
             bail!("mail_loot_template: mail template {entry} has a non-100% chance ({chance})");
         }
-        let group: i64 = row.numeric_text(mlt::GROUP)?.parse().unwrap_or(-1);
+        let group: i64 = row.number(mlt::GROUP)?;
         if group != 0 {
             bail!("mail_loot_template: mail template {entry} has a non-zero group ({group})");
         }
-        let mincount_or_ref: i64 = row
-            .numeric_text(mlt::MINCOUNT_OR_REF)?
-            .parse()
-            .unwrap_or(-1);
+        let mincount_or_ref: i64 = row.number(mlt::MINCOUNT_OR_REF)?;
         if mincount_or_ref < 0 {
             bail!(
                 "mail_loot_template: mail template {entry} references another loot group ({mincount_or_ref})"
             );
         }
-        let maxcount: i64 = row.numeric_text(mlt::MAXCOUNT)?.parse().unwrap_or(-1);
+        let maxcount: i64 = row.number(mlt::MAXCOUNT)?;
         if maxcount != 1 {
             bail!(
                 "mail_loot_template: mail template {entry} has a count other than 1 ({maxcount})"
             );
         }
-        let condition: u64 = row.numeric_text(mlt::CONDITION_ID)?.parse().unwrap_or(1);
+        let condition: u64 = row.number(mlt::CONDITION_ID)?;
         if condition != 0 {
             bail!("mail_loot_template: mail template {entry} carries a condition ({condition})");
         }
-        let item: u64 = row.numeric_text(mlt::ITEM)?.parse().unwrap_or(0);
+        let item: u64 = row.number(mlt::ITEM)?;
         if item == 0 {
             bail!("mail_loot_template: mail template {entry} has no item");
         }

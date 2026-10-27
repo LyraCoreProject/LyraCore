@@ -378,3 +378,40 @@ fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
         ["(1,101)"]
     );
 }
+
+#[test]
+fn invalid_reward_numbers_cannot_silently_remove_a_spell_or_item() {
+    for (sql, column) in [
+        (
+            "UPDATE quest_template SET RewSpellCast = 4294967296",
+            "RewSpellCast",
+        ),
+        (
+            "UPDATE quest_template SET RewItemCount1 = -1",
+            "RewItemCount1",
+        ),
+        (
+            "UPDATE spell_template SET effectTriggerSpell1 = -1 WHERE entry = 500",
+            "effectTriggerSpell1",
+        ),
+    ] {
+        let source = source();
+        let WorldSource::Vmangos(connection) = &source else {
+            panic!("SQLite fixture")
+        };
+        connection.pragma_update(None, "query_only", false).unwrap();
+        connection.execute_batch(sql).unwrap();
+        connection.pragma_update(None, "query_only", true).unwrap();
+        let error = build_quests(
+            &source,
+            &HashSet::from([200]),
+            &HashSet::from([300]),
+            &HashSet::from([300]),
+            &HashSet::from([900]),
+            None,
+        )
+        .err()
+        .expect("invalid reward must stop the import");
+        assert!(error.to_string().contains(column), "{error:#}");
+    }
+}
