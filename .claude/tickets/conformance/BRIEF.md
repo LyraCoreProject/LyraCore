@@ -255,18 +255,68 @@ comparator's rule tests; ADR 0005 so far.
 Single-hop flights, a behavior LyraCore already has, end to end. This tests the system, not the
 game.
 
-- **T2a (harness).** The `taxi_single_hop` scenario: a Character with money and a known node, a
-  flight master spawned at an offset, the node list, takeoff, landing. Record its Golden Trace from
-  the Reference Server. Tag a harness prerelease.
-- **T2b (core).** Bump the pin. Replace the C1b decoder with the harness library. The tier 1 runner
-  plays the scenario in-process against the trace and passes. Add the ledger entry.
-- **T2c (core).** The scoreboard script (decision 14), with the opcode count and `unavailable.rs`
-  count. Spell counts come in Milestone 3.
-- **T2d (both).** Play the same scenario over the wire against a local LyraCore Realm through the
-  harness's LyraCore adapter, and compare with the trace.
+**What Milestone 1 settled** (added 2026-10-27 after its review; these are decisions now):
+
+- **The harness owns the rules.** Equivalence Rules live in each scenario's TOML under `[rules]`,
+  covered by `scenario_sha256`. Core passes only typed, named Deliberate Deviations, and every one
+  that applies is counted in the result. Never add a way for a caller to loosen a rule.
+- **Every packet counts.** The comparator reports undeclared packets as `unexpected_packet`
+  differences unless the scenario names an excusing rule.
+- **The opening phase.** Entering the world produces many packets that depend on world data (the
+  first LyraCore-against-vmangos comparison of `connection_identity` reported 113 unexpected
+  packets with every declared field matching). Scenarios get an opening phase: packets from login
+  until the scenario's first step are recorded in the trace but not compared. Comparison starts at
+  the first step. Don't excuse world-entry noise with per-opcode rules.
+- **Core reaches the harness only through the library.** `wire_client::catalogue` embeds every
+  scenario and trace. Core adds `wire-client` as a git dev-dependency at the exact SHA in
+  `.wire-harness-rev`; an Architecture Test checks the two agree. Core never reads harness files
+  from a checkout path.
+- **The fixture reducer** is `debug_native_enter_world`, compiled only with
+  `conformance_test_fixture`. `lyracore publish` never enables that feature; keep it that way.
+- **Packets across transactions.** The test-support connection buffers every
+  `game_native_packet` row for the connection across transactions, with drain and timed-wait
+  APIs. Scheduled ticks (a taxi landing) depend on it.
+- **Candidate traces.** The harness can run a scenario against any adapter and write a candidate
+  trace, marked as a candidate, and compare observations with a Golden Trace.
+
+**Slices.** Harness and core run in parallel; the core agent wires the whole tier 1 path using
+`connection_identity` (already in `v0.2.0-conformance.2`) while the harness agent builds the taxi
+scenario. A last core slice switches to the taxi tag.
+
+- **T2a (harness).**
+  - The opening phase above, with tests. Re-record `connection_identity`.
+  - The Fixture Verbs the taxi scenario needs, each with both adapters: give money, mark flight
+    nodes known, spawn a creature (the flight master) at an offset from the Character. Allow more
+    than one fixture per scenario.
+  - The taxi client packets and the harness's own decoders for their replies (node status, node
+    list, activate taxi reply, the flight's movement, landing).
+  - The `taxi_single_hop` scenario: a Character with money and both nodes known, a flight master at
+    an offset, the node list, takeoff, landing. Pick two Alliance nodes on map 0 that both servers'
+    data define with the same id (for example Stormwind and Sentinel Hill or Lakeshire); check them
+    in vmangos's `taxi_nodes` and in the client's TaxiNodes.dbc. Record its Golden Trace. Explain
+    in the scenario's rules every Equivalence Rule a flight needs (a flight's duration and spline
+    timing are likely candidates; say why each tolerance is the size it is).
+  - Tag `v0.2.0-conformance.3`.
+- **T2b (core).**
+  - Bump `.wire-harness-rev` to `v0.2.0-conformance.2`; add the `wire-client` dev-dependency and
+    the Architecture Test that its `rev` equals the pin's SHA.
+  - The tier 1 runner: implement the harness's scenario `Transport` (or whatever the library
+    calls the adapter interface) in core over the buffered Operator connection, with the Fixture
+    Verbs backed by debug reducers. Replace the C1b gtker decoder with the harness library.
+  - `connection_identity` passes in-process against its Golden Trace. Add its ledger entry.
+  - The ledger check reads scenario ids from `wire_client::catalogue`. Delete the checkout reader
+    and every SKIP path. It fails when a ledger scenario id is missing, and when a scenario's
+    `behavior` doesn't name the Behavior that lists it.
+- **T2c (core).** The scoreboard script (decision 14): per system and Behavior, with the opcode
+  count, `unavailable.rs` count and the real-client column. Spell counts come in Milestone 3.
+- **T2d (core, after T2a's tag).** Bump the pin to `v0.2.0-conformance.3`. Add the core backing for
+  the new Fixture Verbs. `taxi_single_hop` passes in-process (tier 1) against its trace. Add its
+  ledger entry. Then play it over the wire against a local LyraCore Realm through the harness's
+  LyraCore adapter, write a candidate trace and compare it with the Golden Trace.
 
 If a divergence shows up, sort it per decision 11 and report it; fix nothing in gameplay unless the
-fix is trivial and clearly a LyraCore bug.
+fix is trivial and clearly a LyraCore bug. Never loosen a rule to make LyraCore pass: a real
+difference stays a reported difference.
 
 **Milestone 2 handoff:** tier 1 and the wire run both green against the same trace (or the sorted
 divergences); the scoreboard output.
