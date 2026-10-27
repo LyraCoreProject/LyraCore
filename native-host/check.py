@@ -16,6 +16,7 @@ from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_point
 from host import MODULE, Host
 import reload
 import retention
+from spell_source import check_spell_source_behavior
 
 # The guid of the seeded Character Tester, on the TEST Account.
 TESTER = 1
@@ -4947,7 +4948,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,

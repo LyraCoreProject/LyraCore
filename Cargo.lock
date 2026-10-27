@@ -1243,6 +1243,7 @@ version = "0.1.0"
 name = "lyracore-test-support"
 version = "0.1.0"
 dependencies = [
+ "lyracore-shared",
  "rustc_lexer",
  "serde_json",
 ]

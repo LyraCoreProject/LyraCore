@@ -1,4 +1,6 @@
 from collections import namedtuple
+from sql_defaults import spell_defaults
+
 import json
 import os
 from pathlib import Path
@@ -150,6 +152,7 @@ class Host:
             'POST', authenticated=operator)
 
     def sql(self, query):
+        query = spell_defaults(query)
         return json.loads(self.request(f'/v1/database/{self.database}/sql', query.encode(), 'POST', 'text/plain'))
 
     def rows(self, query):

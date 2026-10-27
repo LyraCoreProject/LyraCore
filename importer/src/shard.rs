@@ -62,6 +62,7 @@ impl Shard {
     // Each SQL statement commits separately; a failed sequence requires an idempotent rerun.
     pub(crate) fn run_sql_statements(&self, stmts: &[String], label: &str) -> Result<()> {
         for (n, s) in stmts.iter().enumerate() {
+            let s = lyracore_shared::import_sql::spell_defaults(s);
             eprintln!(
                 "{label} sql [{}/{}]: {}…",
                 n + 1,
@@ -69,7 +70,7 @@ impl Shard {
                 &s[..s.len().min(60)]
             );
             let out = spacetime()
-                .args(["sql", "-s", &self.server, &self.db, s])
+                .args(["sql", "-s", &self.server, &self.db, &s])
                 .output()
                 .context("run spacetime sql")?;
             if !out.status.success() {

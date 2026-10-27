@@ -542,3 +542,18 @@ families now compare effect magnitude, with an existing aura's stack count folde
   value. The policy tests use its 5-combo-point value.
 
 The policy tests in `module/src/spell/stacking.rs` and `module/tests/aura_tick.rs` cover the families.
+
+Spell catalogue imports carry source custom flags, minimum target levels and effect coefficients.
+The additive Module schema defaults old rows to flags 0, minimum level 0, single-target key 0
+and coefficient -1.
+Package Deltas created before these columns remain valid. New Base Snapshots and Datascript
+clones include them. A negative coefficient uses the Module's existing automatic fallback.
+
+Classic dry-run SQL retains its legacy column lists. The importer supplies the appended defaults
+when it executes that SQL with `--apply`. A direct `spacetime sql` invocation of legacy spell
+INSERTs must supply `custom_flags`, `min_target_level`, `single_target_key` and `bonus_coefficient`
+on their respective tables; SQL INSERT does not use migration defaults.
+
+Rust Packages that construct these row types directly must supply all four appended fields.
+The legacy fixture values are `custom_flags: 0`, `min_target_level: 0`, `single_target_key: 0`
+and `bonus_coefficient: -1.0`.

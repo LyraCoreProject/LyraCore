@@ -123,7 +123,7 @@ function readRow(
 ): BaseRow {
   const row = new Map<string, FieldValue>();
   for (const column of Object.values(columns)) {
-    const value = raw[column.column];
+    const value = raw[column.column] ?? column.defaultValue;
     if (value === undefined) {
       throw new BaseDataError(
         `${origin}: ${where} has no column \`${column.column}\`; the snapshot does not match this build's schema`,

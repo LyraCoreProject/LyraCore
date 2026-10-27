@@ -12,6 +12,7 @@ mod math;
 pub(crate) mod proc;
 mod scheduler;
 mod self_resurrect;
+pub(crate) mod source_behavior;
 pub(crate) mod spellbook;
 pub(crate) mod stacking;
 mod tables;

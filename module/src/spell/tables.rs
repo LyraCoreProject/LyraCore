@@ -42,6 +42,18 @@ pub struct Spell {
     // Zero means unlimited charges.
     #[default(0u8)]
     pub proc_charges: u8,
+    #[default(0u32)]
+    pub custom_flags: u32,
+    #[default(0u32)]
+    pub min_target_level: u32,
+    #[default(0u64)]
+    pub single_target_key: u64,
+}
+
+impl Spell {
+    pub(crate) fn negative(&self) -> bool {
+        lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
 }
 
 #[table(
@@ -71,6 +83,8 @@ pub struct SpellEffect {
     pub script_id: u32,
     #[default(false)]
     pub enters_combat: bool,
+    #[default({ -1.0f32 })]
+    pub bonus_coefficient: f32,
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]
@@ -138,7 +152,7 @@ pub struct Aura {
     // Unix microseconds; zero means no pending tick.
     #[default(0i64)]
     pub next_tick_micros: i64,
-    // Channel auras target the caster; this guid holds the missile destination.
+    // Cast target for channels; missile target for periodic triggers.
     #[default(0u64)]
     pub channel_target: u64,
     #[default(false)]

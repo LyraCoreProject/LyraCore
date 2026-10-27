@@ -526,7 +526,9 @@ The unit on the other side of the hit that fired a Proc: the victim of a dealt e
 _Avoid_: other unit, opponent
 
 **Triggered Cast**:
-The cast a fired Proc starts. It runs the cast core's effect loop and nothing else: no Gate, no cost, no cooldown, no stealth break. Its own hits fire no further Procs.
+A cast started by a Proc, a periodic aura or another triggered effect. It checks faction targeting
+and target life, then runs the cast core's effect loop without cast-start position, range, line of
+sight, power cost, cooldown or stealth-break checks. Its own hits fire no further Procs.
 _Avoid_: proc cast, internal cast, free cast
 
 **Spell Cast Event Kind**:

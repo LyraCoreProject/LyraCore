@@ -5,6 +5,9 @@ use lyracore_package_delta::{packed_spell_effect_id, FieldValue};
 use crate::dump::sql_text;
 
 const SNAPSHOT_VERSION: u32 = 1;
+// Classic dry-run SQL retains its pre-extension column lists for byte parity.
+const LEGACY_HEADER_COLUMNS: usize = 25;
+const LEGACY_EFFECT_COLUMNS: usize = 18;
 
 pub(crate) struct SpellHeaderRow {
     pub(crate) spell_id: u32,
@@ -32,6 +35,9 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u8,
     pub(crate) proc_charges: u8,
+    pub(crate) custom_flags: u32,
+    pub(crate) min_target_level: u32,
+    pub(crate) single_target_key: u64,
 }
 
 impl SpellHeaderRow {
@@ -62,11 +68,18 @@ impl SpellHeaderRow {
             ("proc_flags", FieldValue::U32(self.proc_flags)),
             ("proc_chance", FieldValue::U8(self.proc_chance)),
             ("proc_charges", FieldValue::U8(self.proc_charges)),
+            ("custom_flags", FieldValue::U32(self.custom_flags)),
+            ("min_target_level", FieldValue::U32(self.min_target_level)),
+            ("single_target_key", FieldValue::U64(self.single_target_key)),
         ]
     }
 
-    pub(crate) fn sql_values(&self) -> String {
+    pub(crate) fn source_sql_values(&self) -> String {
         sql_tuple(&self.columns())
+    }
+
+    pub(crate) fn sql_values(&self) -> String {
+        sql_tuple(&self.columns()[..LEGACY_HEADER_COLUMNS])
     }
 }
 
@@ -88,6 +101,7 @@ pub(crate) struct SpellEffectRow {
     pub(crate) p1: i32,
     pub(crate) script_id: u32,
     pub(crate) enters_combat: bool,
+    pub(crate) bonus_coefficient: f32,
 }
 
 impl SpellEffectRow {
@@ -114,13 +128,20 @@ impl SpellEffectRow {
             ("p1", FieldValue::I32(self.p1)),
             ("script_id", FieldValue::U32(self.script_id)),
             ("enters_combat", FieldValue::Bool(self.enters_combat)),
+            ("bonus_coefficient", FieldValue::F32(self.bonus_coefficient)),
         ]
+    }
+
+    pub(crate) fn source_sql_values(&self) -> String {
+        let mut columns = self.columns();
+        columns.insert(0, ("id", FieldValue::U64(self.row_id())));
+        sql_tuple(&columns)
     }
 
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
-        sql_tuple(&columns)
+        sql_tuple(&columns[..LEGACY_EFFECT_COLUMNS])
     }
 }
 
@@ -231,6 +252,9 @@ mod tests {
             proc_flags: 0,
             proc_chance: 0,
             proc_charges: 0,
+            custom_flags: 0,
+            min_target_level: 0,
+            single_target_key: 0,
         }
     }
 
@@ -253,6 +277,7 @@ mod tests {
             p1: 0,
             script_id: 0,
             enters_combat: false,
+            bonus_coefficient: -1.0,
         }
     }
 

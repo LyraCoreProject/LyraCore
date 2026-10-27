@@ -113,6 +113,7 @@ pub mod cast_failure {
     pub const INTERRUPTED: u8 = 0x23;
     pub const NO_AMMO: u8 = 0x24;
     pub const LEVEL_REQUIREMENT: u8 = 0x29;
+    pub const LOW_LEVEL: u8 = 0x2b;
     pub const LINE_OF_SIGHT: u8 = 0x2A;
     pub const NOT_BEHIND: u8 = 0x33;
     pub const NOT_READY: u8 = 0x3C;

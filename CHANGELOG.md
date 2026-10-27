@@ -15,6 +15,11 @@ and is not reconstructed here.
 
 ## [Unreleased]
 
+### Added
+
+- Package API `actor::CastRefusalKind::TargetLevelTooLow` reports a target below a spell's
+  minimum target level. This is an additive refusal kind; existing fallback handling still applies.
+
 ### Changed
 
 - Package API version 4 adds `actor::EffectKind`, the shared spell effect taxonomy. Existing
