@@ -663,6 +663,7 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             }))
         }
         ["attack-start", target] => Ok(CreatureInstruction::AttackStart(parse_target(target)?)),
+        ["flee", text] => Ok(CreatureInstruction::FleeWithText(parse_u32(text)?)),
         ["flee"] => Ok(CreatureInstruction::FleeForAssist),
         ["help", radius] => Ok(CreatureInstruction::CallForHelp(CallForHelpInstruction {
             radius_yd: parse_u32(radius)?,

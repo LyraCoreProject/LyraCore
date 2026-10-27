@@ -533,10 +533,7 @@ impl Source {
                     return Err("broadcast-dependency".into());
                 }
                 compiled.texts.insert(1150);
-                compiled
-                    .instructions
-                    .push("speak:emote:opponent:1150".into());
-                Ok("flee".into())
+                Ok("flee:1150".into())
             }
             49 if actor && a == 1 => Ok("zone-combat".into()),
             50 if actor && c.position[0] >= 0.0 && c.position[0].fract() == 0.0 => {
@@ -946,8 +943,8 @@ mod tests {
         source.scripts.insert(10, vec![step(47, [0; 4])]);
         source.events.push(event([10, 0, 0]));
         let (plan, _) = source.assemble(&HashSet::from([100]), &HashSet::from([100]));
-        assert!(plan.definition_rows[0].contains("lists:0:2:"));
-        assert!(plan.definition_rows[0].ends_with("speak:emote:opponent:1150+flee"));
+        assert!(plan.definition_rows[0].contains("lists:0:1:"));
+        assert!(plan.definition_rows[0].ends_with("flee:1150"));
         assert_eq!(plan.broadcast_rows.len(), 1);
     }
 

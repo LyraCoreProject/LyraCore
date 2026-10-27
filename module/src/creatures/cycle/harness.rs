@@ -543,7 +543,10 @@ impl Scenario {
                         ..
                     })
                 );
-                authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
+                authored.flee |= matches!(
+                    instruction,
+                    CreatureInstruction::FleeForAssist | CreatureInstruction::FleeWithText(_)
+                );
             }
         }
         authored

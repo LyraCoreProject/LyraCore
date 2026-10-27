@@ -8484,7 +8484,12 @@ mod tests {
             "spell",
             "spellmeta",
         ] {
-            assert!(error.contains(family), "{error} omits {family}");
+            assert!(
+                error
+                    .split(|c: char| !c.is_ascii_alphanumeric() && c != '-')
+                    .any(|word| word == family),
+                "{error} omits {family}"
+            );
         }
     }
 }

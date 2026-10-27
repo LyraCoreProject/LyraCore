@@ -588,20 +588,27 @@ fn a_fleeing_creature_delivers_its_emote_to_the_player() {
             EventAiSubject::Entry(ENTRY),
             1,
             InstructionSelection::All,
-            vec![
-                CreatureInstruction::Speak(SpeakInstruction {
-                    mode: SpeechMode::Emote,
-                    broadcast_ids: vec![1150],
-                    legacy_text: String::new(),
-                    target: InstructionTarget::CurrentOpponent,
-                }),
-                CreatureInstruction::FleeForAssist,
-            ],
+            vec![CreatureInstruction::FleeWithText(1150)],
         ));
     dispatch(&mut scenario, CREATURE);
     assert_eq!(scenario.eventai_speech().len(), 1);
     assert_eq!(scenario.eventai_speech_targets(), [(CREATURE, TARGET)]);
     assert!(rout_window_open(1_000, scenario.rout_ends_ms(CREATURE)));
+}
+
+#[test]
+fn a_refused_flee_does_not_tell_the_player_it_ran_away() {
+    let mut scenario = world()
+        .eventai_broadcast(1150, "%s attempts to run away in fear!", 2)
+        .eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            1,
+            InstructionSelection::All,
+            vec![CreatureInstruction::FleeWithText(1150)],
+        ));
+    dispatch(&mut scenario, CREATURE);
+    assert!(scenario.eventai_speech().is_empty());
+    assert_eq!(scenario.rout_ends_ms(CREATURE), 0);
 }
 
 #[test]

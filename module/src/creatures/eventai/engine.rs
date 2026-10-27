@@ -415,6 +415,29 @@ fn execute_instruction<W: EventAiWorld>(
     linked_choice: u64,
 ) -> ActionResult {
     match instruction {
+        CreatureInstruction::FleeWithText(text) => {
+            let result = super::combat::execute(
+                world,
+                context,
+                &CreatureInstruction::FleeForAssist,
+                linked_choice,
+            );
+            if result == ActionResult::Applied {
+                speak(
+                    world,
+                    context,
+                    &SpeakInstruction {
+                        mode: SpeechMode::Emote,
+                        broadcast_ids: vec![*text],
+                        legacy_text: String::new(),
+                        target: super::InstructionTarget::CurrentOpponent,
+                    },
+                    context.current_target_guid.unwrap_or(0),
+                    linked_choice,
+                );
+            }
+            result
+        }
         CreatureInstruction::Speak(speech) => {
             let Some(target) =
                 super::combat::unit_target(world, context, speech.target, None, linked_choice)
@@ -835,6 +858,7 @@ fn instruction_uses_random(instruction: &CreatureInstruction) -> bool {
         CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => true,
         CreatureInstruction::StartRelay(_) => true,
         CreatureInstruction::FleeForAssist
+        | CreatureInstruction::FleeWithText(_)
         | CreatureInstruction::CallForHelp(_)
         | CreatureInstruction::SetPhase(_)
         | CreatureInstruction::IncrementPhase(_)
