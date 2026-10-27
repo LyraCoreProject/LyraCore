@@ -720,6 +720,45 @@ pub(crate) struct SpellCatalogue {
 pub(crate) fn read_catalogue(data_dir: &str) -> Result<SpellCatalogue> {
     let mut chain = open_chain(Path::new(data_dir))?;
     let spells = read_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
+    Ok(catalogue(&spells))
+}
+
+pub(crate) fn source_catalogue(source: &impl crate::dump::TableRows) -> Result<SpellCatalogue> {
+    let rows = source.columns(
+        "spell_template",
+        &[
+            "entry",
+            "effect1",
+            "effect2",
+            "effect3",
+            "effectApplyAuraName1",
+            "effectApplyAuraName2",
+            "effectApplyAuraName3",
+        ],
+    )?;
+    let spells = rows
+        .iter()
+        .map(|row| {
+            Ok(Spell {
+                id: row.number("entry")?,
+                effect: [
+                    row.number("effect1")?,
+                    row.number("effect2")?,
+                    row.number("effect3")?,
+                ],
+                effect_aura: [
+                    row.number("effectApplyAuraName1")?,
+                    row.number("effectApplyAuraName2")?,
+                    row.number("effectApplyAuraName3")?,
+                ],
+                ..Default::default()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(catalogue(&spells))
+}
+
+fn catalogue(spells: &[Spell]) -> SpellCatalogue {
     let ids = spells.iter().map(|spell| u64::from(spell.id)).collect();
     let proc_effects = spells
         .iter()
@@ -736,7 +775,7 @@ pub(crate) fn read_catalogue(data_dir: &str) -> Result<SpellCatalogue> {
             (spell.id, effects)
         })
         .collect();
-    Ok(SpellCatalogue { ids, proc_effects })
+    SpellCatalogue { ids, proc_effects }
 }
 
 struct SpellTables {

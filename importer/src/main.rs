@@ -491,6 +491,7 @@ where
                         | "creatures"
                         | "casts"
                         | "spell"
+                        | "spellmeta"
                 )
             )
             || a.apply
@@ -507,7 +508,7 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
@@ -520,6 +521,7 @@ where
                             | "creatures"
                             | "casts"
                             | "spell"
+                            | "spellmeta"
                             | "items"
                             | "loot"
                             | "gameobjects"
@@ -541,7 +543,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos needs --dump <sqlite> and --family spell|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos needs --dump <sqlite> and --family spell|spellmeta|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
