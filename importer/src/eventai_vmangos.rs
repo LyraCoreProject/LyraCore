@@ -732,12 +732,12 @@ impl Source {
             }
             7 if c.target == 0
                 && c.flags & 7 == 0
-                && b == 0
-                && no_extra
+                && d <= 1
+                && e == 0
                 && self.quests.contains(&a) =>
             {
                 compiled.quests.insert(a);
-                Ok(format!("quest-event:{a}:selected-character"))
+                Ok(format!("script-quest-event:{a}:{b}:{d}"))
             }
             8 if c.target == 0 && c.flags & 7 == 0 && b == 0 && no_extra => {
                 Ok(format!("kill-credit:{a}:selected-character"))
@@ -1101,6 +1101,23 @@ mod tests {
             predicates: BTreeMap::from([(0, Some("always".into()))]),
             quests: BTreeSet::from([41]),
             spells: BTreeSet::from([42]),
+        }
+    }
+
+    #[test]
+    fn script_credit_retains_distance_and_group_fields() {
+        let source = source();
+        for (distance, group) in [(0, 0), (20, 0), (50, 1), (0, 1)] {
+            let mut compiled = Compiled::default();
+            let encoded = source
+                .compile_command(
+                    &step(7, [41, distance, group, 0]),
+                    &mut compiled,
+                    &HashSet::new(),
+                )
+                .unwrap();
+            assert_eq!(encoded, format!("script-quest-event:41:{distance}:{group}"));
+            assert_eq!(compiled.quests, BTreeSet::from([41]));
         }
     }
 

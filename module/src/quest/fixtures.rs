@@ -767,6 +767,90 @@ pub fn debug_verify_eventai_quest_credit_fixture(ctx: &ReducerContext) -> Result
         return Err("duplicate quest event credit was not idempotent".to_string());
     }
 
+    for (distance_yd, group, selected_x, selected_z) in [
+        (20, true, 20.5, 0.0),
+        (20, false, 21.0, 0.0),
+        (0, true, 100.0, 0.0),
+        (20, true, 0.0, 21.0),
+    ] {
+        let members = [
+            EVENTAI_CREDIT_FIXTURE_PLAYER,
+            EVENTAI_CREDIT_FIXTURE_MEMBER,
+            EVENTAI_CREDIT_FIXTURE_DISTANT_MEMBER,
+        ];
+        for (index, guid) in members.into_iter().enumerate() {
+            for credit in event_credits
+                .by_character()
+                .filter(guid)
+                .collect::<Vec<_>>()
+            {
+                CharacterQuestEventCredit::delete(ctx, credit.id);
+            }
+            let mut entity = entities
+                .guid()
+                .find(guid)
+                .ok_or("script credit Character missing")?;
+            let (x, z) = if index == 0 {
+                (selected_x, selected_z)
+            } else if index == 1 {
+                (10.0, 0.0)
+            } else {
+                (100.0, 0.0)
+            };
+            entity
+                .place(
+                    source.x + x,
+                    source.y,
+                    source.z + z,
+                    crate::world::MoveClock::Unchanged,
+                )
+                .unexplored();
+            entity.scale_x = 1.0;
+            entity.update(ctx);
+            if let Some(quest) = character_quest_row(ctx, guid, EVENTAI_CREDIT_FIXTURE_EVENT_QUEST)
+            {
+                CharacterQuest::delete(ctx, quest.id);
+            }
+            CharacterQuest::insert(
+                ctx,
+                CharacterQuest {
+                    id: 509_297_100 + index as u64,
+                    character_guid: guid,
+                    owner_identity: fixture_owner,
+                    quest_entry: EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
+                    counts: vec![1],
+                    rewarded: false,
+                    deadline_micros: 0,
+                    failed: false,
+                },
+            );
+        }
+        let request = EventAiQuestCredit::ScriptEvent(ScriptQuestEvent {
+            quest_entry: EVENTAI_CREDIT_FIXTURE_EVENT_QUEST,
+            distance_yd,
+            group,
+        });
+        if apply_eventai_credit(ctx, request, &tap_context) != QuestCreditOutcome::Applied {
+            return Err("script quest credit was refused".into());
+        }
+        for (index, guid) in members.into_iter().enumerate() {
+            let quest = character_quest_row(ctx, guid, EVENTAI_CREDIT_FIXTURE_EVENT_QUEST)
+                .ok_or("script credit quest missing")?;
+            let addressed = group || index == 0;
+            let in_range = distance_yd == 0
+                || if index == 0 {
+                    selected_x == 20.5
+                } else {
+                    index == 1
+                };
+            if quest.failed != (addressed && !in_range)
+                || quest_is_complete(ctx, &quest) != (addressed && in_range)
+            {
+                return Err(format!("script credit outcome differs for {guid}: distance {distance_yd}, group {group}, selected {selected_x}/{selected_z}"));
+            }
+        }
+    }
+
     crate::loot::tag::clear(ctx, EVENTAI_CREDIT_FIXTURE_SOURCE);
     Ok(())
 }

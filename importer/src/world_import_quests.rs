@@ -92,9 +92,11 @@ fn event_requirements(
             && row.number::<u32>("SpecialFlags")? & 2 != 0
         {
             let entry: u32 = row.number("entry")?;
-            if credit_sources.contains(&entry) {
+            // Classic gates these quests through scripts despite their empty objective lists.
+            if credit_sources.contains(&entry) || matches!(entry, 2460 | 2608) {
                 rows.push(format!("({},{entry})", rows.len() + 1));
-            } else {
+            }
+            if !credit_sources.contains(&entry) {
                 without_source.push(entry);
             }
         }

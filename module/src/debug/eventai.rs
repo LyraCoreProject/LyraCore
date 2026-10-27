@@ -202,3 +202,12 @@ pub fn debug_stage_script_failure_policies(ctx: &ReducerContext) -> Result<(), S
     crate::creatures::insert_creature_entity(ctx, second);
     crate::creatures::stage_script_failure_policies_for_debug(ctx, FIXTURE_OWNER_GUID, second_guid)
 }
+
+#[reducer]
+pub fn debug_script_speech_override(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let version =
+        crate::creatures::replace_single_relay_for_debug(ctx, 90_104, "talk-as:2:5090099")?;
+    crate::creatures::start_imported_relay(ctx, 90_104, FIXTURE_OWNER_GUID, 0, 1, version)?;
+    Ok(())
+}

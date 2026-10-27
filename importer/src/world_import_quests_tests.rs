@@ -341,7 +341,7 @@ fn classic_nullable_quest_text_keeps_its_existing_output() {
 }
 
 #[test]
-fn only_emitted_credit_sources_can_add_an_event_requirement() {
+fn emitted_credit_and_classic_script_gates_determine_event_requirements() {
     let quest = |entry, flags| {
         [
             ("entry", N(entry)),
@@ -363,6 +363,8 @@ fn only_emitted_credit_sources_can_add_an_event_requirement() {
                 &quest(101, 3),
                 &quest(102, 1),
                 &quest(103, 2),
+                &quest(2460, 2),
+                &quest(2608, 2),
             ],
         },
         FixtureTable {
@@ -385,6 +387,19 @@ fn only_emitted_credit_sources_can_add_an_event_requirement() {
     assert_eq!(
         event_requirements(&source, &HashSet::from([100, 101, 102]), &BTreeSet::new()).unwrap(),
         (vec![], vec![101])
+    );
+    assert_eq!(
+        event_requirements(&source, &HashSet::from([2460, 2608]), &BTreeSet::new()).unwrap(),
+        (vec!["(1,2460)".into(), "(2,2608)".into()], vec![2460, 2608])
+    );
+    assert_eq!(
+        event_requirements(
+            &source,
+            &HashSet::from([2460, 2608]),
+            &BTreeSet::from([2460])
+        )
+        .unwrap(),
+        (vec!["(1,2460)".into(), "(2,2608)".into()], vec![2608])
     );
 }
 

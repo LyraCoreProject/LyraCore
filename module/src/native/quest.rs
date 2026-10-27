@@ -495,9 +495,17 @@ pub(crate) fn changed(
             ));
         }
         if !old.failed && row.failed {
-            messages.push(ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
-                codec::build_questupdate_failedtimer(row.quest_entry),
-            ));
+            messages.push(if old.deadline_micros != 0 {
+                ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILEDTIMER(
+                    codec::build_questupdate_failedtimer(row.quest_entry),
+                )
+            } else {
+                ServerOpcodeMessage::SMSG_QUESTUPDATE_FAILED(
+                    lyracore_protocol::messages::vanilla::SMSG_QUESTUPDATE_FAILED {
+                        quest_id: row.quest_entry,
+                    },
+                )
+            });
         }
         for message in messages {
             let packet = packet(message).expect("bounded quest progress fits a world frame");
