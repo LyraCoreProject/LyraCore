@@ -167,6 +167,7 @@ pub(crate) fn include_required_templates(
         let kind = row.number::<u32>("command")?;
         let value = row.number::<u32>("datalong")?;
         let entry = match kind {
+            10 => Some(value),
             23 if row.number::<u32>("datalong2")? == 0 => Some(value),
             15 if value == 5200 => guardian,
             _ => None,
@@ -974,7 +975,7 @@ mod tests {
     }
 
     #[test]
-    fn scoped_templates_follow_display_and_guardian_dependencies_to_closure() {
+    fn scoped_templates_follow_display_summon_and_guardian_dependencies_to_closure() {
         let source = crate::vmangos_spell::guardian_fixture();
         let crate::world_source::WorldSource::Vmangos(connection) = &source else {
             unreachable!()
@@ -982,10 +983,10 @@ mod tests {
         connection.execute_batch("CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
             CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
             INSERT INTO creature_ai_events VALUES (100,10,0,0),(101,11,0,0),(636,12,0,0),(999,13,0,0);
-            INSERT INTO creature_ai_scripts VALUES (10,23,101,0),(11,15,5200,4),(12,23,5099001,0),(13,23,102,0);").unwrap();
+            INSERT INTO creature_ai_scripts VALUES (10,23,101,0),(11,15,5200,4),(12,23,5099001,0),(12,10,103,0),(13,23,102,0);").unwrap();
         let mut entries = HashSet::from([100]);
         include_required_templates(&source, &mut entries).unwrap();
-        assert_eq!(entries, HashSet::from([100, 101, 636]));
+        assert_eq!(entries, HashSet::from([100, 101, 103, 636]));
     }
 
     #[test]
