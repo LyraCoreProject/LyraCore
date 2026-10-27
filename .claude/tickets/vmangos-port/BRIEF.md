@@ -491,6 +491,13 @@ speech). These are accepted and don't block the flip.
   comes after the port. Then delete `.claude/tickets/vmangos-port/` from the branch, so it never
   reaches `main`. The directory is gitignored, so it was force-added.
 
+- **CI pairing cleanup.** Remove the temporary `vmangos/*` → `feat/vmangos-world-data` fallback
+  from Core's CI (`.github/workflows/rust.yml`) and the Packages `core-ref` action before the
+  final merge. Unpaired PRs into `main` keep the pinned Core revision.
+- **Event-requirement ownership.** The vmangos quests family deletes rows in
+  `game_quest_event_requirement`, which the creature-ai family owns. With classic-db gone this
+  can't erase another source's rows, but give the table one owning family.
+
 **Final handoff.** Include:
 
 - a full vmangos import on a local dev Realm: `./lyracore dev up`, `./lyracore import`,
