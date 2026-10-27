@@ -660,3 +660,47 @@ fn a_summon_without_a_current_opponent_still_appears_for_the_player() {
     );
     assert!(scenario.fights.borrow().is_empty());
 }
+
+#[test]
+fn script_start_can_keep_an_absent_provided_target_and_an_empty_weighted_choice() {
+    for (ids, expected) in [(vec![7], 1), (vec![0], 0)] {
+        let mut definition = definition(
+            EventAiSubject::Entry(ENTRY),
+            77,
+            InstructionSelection::All,
+            vec![CreatureInstruction::StartRelay(StartRelayInstruction {
+                relay_ids: ids,
+                target: InstructionTarget::ProvidedTarget,
+                catalogue_version: 17,
+            })],
+        );
+        definition.rules[0].event = EventCondition::OnSpawn(SpawnCondition::Always);
+        let mut scenario = world().rolls([1]).eventai_native_definition(definition);
+        evaluate(
+            &mut scenario,
+            EventAiRequest::Edge(EventContext::empty(EventKind::OnSpawn, CREATURE, 1000)),
+        );
+        let starts = scenario.eventai_relay_starts.borrow();
+        assert_eq!(starts.len(), expected);
+        if expected != 0 {
+            assert_eq!(starts[0].2, 0);
+        }
+    }
+}
+
+#[test]
+fn checked_phase_increments_refuse_overflow_and_clamp_only_at_zero() {
+    for (amount, expected) in [(11, 31), (20, 20), (-30, 0)] {
+        let mut scenario = world().eventai_native_definition(definition(
+            EventAiSubject::Entry(ENTRY),
+            78,
+            InstructionSelection::All,
+            vec![
+                CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 20 }),
+                CreatureInstruction::CheckedIncrementPhase(IncrementPhaseInstruction { amount }),
+            ],
+        ));
+        dispatch(&mut scenario, CREATURE);
+        assert_eq!(scenario.eventai_creature_state(CREATURE).phase, expected);
+    }
+}

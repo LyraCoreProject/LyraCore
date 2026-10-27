@@ -474,39 +474,12 @@ fn execute_instruction<W: EventAiWorld>(
                 super::combat::cast(world, context, cast, target)
             }
         }
-        CreatureInstruction::SetPhase(set_phase) => {
-            if set_phase.phase >= 32 {
-                return ActionResult::Refused;
-            }
-            world.set_eventai_phase(context.creature_guid, set_phase.phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::IncrementPhase(increment) => {
-            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
-                .saturating_add(increment.amount)
-                .clamp(0, 31) as u8;
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::RandomPhase(random) => {
-            let Some(phase) = random
-                .phases
-                .get(linked_choice as usize % random.phases.len())
-                .copied()
-            else {
-                return ActionResult::Refused;
-            };
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::RandomPhaseRange(range) => {
-            if range.min_phase >= range.max_phase || range.max_phase >= 32 {
-                return ActionResult::Refused;
-            }
-            let span = u32::from(range.max_phase - range.min_phase) + 1;
-            let phase = range.min_phase + (linked_choice % u64::from(span)) as u8;
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
+        CreatureInstruction::SetPhase(_)
+        | CreatureInstruction::IncrementPhase(_)
+        | CreatureInstruction::CheckedIncrementPhase(_)
+        | CreatureInstruction::RandomPhase(_)
+        | CreatureInstruction::RandomPhaseRange(_) => {
+            execute_phase(world, context, instruction, linked_choice)
         }
         CreatureInstruction::AttackStart(_)
         | CreatureInstruction::Emote(_)
@@ -620,6 +593,9 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::StartRelay(start) => {
             let Some(selected) =
                 super::combat::unit_target(world, context, start.target, None, linked_choice)
+                    .or_else(|| {
+                        (start.target == super::InstructionTarget::ProvidedTarget).then_some(0)
+                    })
             else {
                 return ActionResult::Refused;
             };
@@ -630,18 +606,75 @@ fn execute_instruction<W: EventAiWorld>(
             else {
                 return ActionResult::Refused;
             };
-            if world.eventai_start_relay(
-                relay_id,
-                context.creature_guid,
-                selected,
-                linked_choice,
-                start.catalogue_version,
-            ) {
+            if relay_id != 0
+                && world.eventai_start_relay(
+                    relay_id,
+                    context.creature_guid,
+                    selected,
+                    linked_choice,
+                    start.catalogue_version,
+                )
+            {
                 ActionResult::Applied
             } else {
                 ActionResult::Refused
             }
         }
+    }
+}
+
+fn execute_phase<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    instruction: &CreatureInstruction,
+    linked_choice: u64,
+) -> ActionResult {
+    match instruction {
+        CreatureInstruction::SetPhase(set_phase) => {
+            if set_phase.phase >= 32 {
+                return ActionResult::Refused;
+            }
+            world.set_eventai_phase(context.creature_guid, set_phase.phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::IncrementPhase(increment) => {
+            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
+                .saturating_add(increment.amount)
+                .clamp(0, 31) as u8;
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::CheckedIncrementPhase(increment) => {
+            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
+                .saturating_add(increment.amount)
+                .max(0);
+            if phase >= 32 {
+                return ActionResult::Refused;
+            }
+            world.set_eventai_phase(context.creature_guid, phase as u8);
+            ActionResult::Applied
+        }
+        CreatureInstruction::RandomPhase(random) => {
+            let Some(phase) = random
+                .phases
+                .get(linked_choice as usize % random.phases.len())
+                .copied()
+            else {
+                return ActionResult::Refused;
+            };
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::RandomPhaseRange(range) => {
+            if range.min_phase >= range.max_phase || range.max_phase >= 32 {
+                return ActionResult::Refused;
+            }
+            let span = u32::from(range.max_phase - range.min_phase) + 1;
+            let phase = range.min_phase + (linked_choice % u64::from(span)) as u8;
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        _ => ActionResult::Unsupported,
     }
 }
 
@@ -871,6 +904,7 @@ fn instruction_uses_random(instruction: &CreatureInstruction) -> bool {
         | CreatureInstruction::CallForHelp(_)
         | CreatureInstruction::SetPhase(_)
         | CreatureInstruction::IncrementPhase(_)
+        | CreatureInstruction::CheckedIncrementPhase(_)
         | CreatureInstruction::SetRangedPosture(_)
         | CreatureInstruction::SetLethalDamageFloor(_)
         | CreatureInstruction::ForceDeath

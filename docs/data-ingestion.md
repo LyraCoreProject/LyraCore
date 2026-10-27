@@ -587,3 +587,19 @@ source rule id. SpacetimeDB rejects adding payloads to the existing fieldless en
 stored size changes. This separate table preserves existing definitions on publish. An import
 replaces definitions and their policies in one transaction; append batches preserve both. A script
 rule with missing policy data cannot run.
+
+Delayed command lists use relay definitions. A failure-policy instruction chooses whether later
+commands continue after a refused command. The policy persists across scheduled steps. Aborting a
+script ends pending runs with the same script id, source and selected target; already-started child
+scripts with other ids keep running. Existing relay definitions retain their original failure
+behavior because the appended `RelayRun.failure_policy` defaults to `None`.
+
+Weighted script choices use at most 100 slots. A zero slot means no script was chosen and follows
+the command's failure policy. A provided target may be absent for commands such as speech and
+starting another script. Commands that require a target still refuse an absent target. Casting
+keeps triggered and interrupt-previous as separate options. Checked phase increments refuse an
+increase past phase 31 instead of clamping it. The existing phase instruction keeps its behavior.
+
+The depth, step and scheduled-work limits include translated control instructions and nested
+script choices. These rules follow `ChooseScriptIdToStart`, `ScriptsProcess` and `TerminateScript`
+at the pinned vmangos revision linked above.

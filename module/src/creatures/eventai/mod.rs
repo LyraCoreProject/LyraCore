@@ -88,7 +88,9 @@ pub(crate) use relay::{
     cancel_relay_runs_for_instance, cancel_relay_runs_for_new_life, cancel_relay_runs_for_source,
 };
 #[cfg(feature = "debug_reducers")]
-pub(crate) use relay::{run_relay_arrival, start_imported_relay};
+pub(crate) use relay::{
+    run_relay_arrival, stage_script_failure_policies_for_debug, start_imported_relay,
+};
 
 #[cfg(feature = "debug_reducers")]
 pub(crate) use relay::{

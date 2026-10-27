@@ -51,3 +51,45 @@ fn obsolete_callbacks_leave_replacement_summons_and_living_summons_expire_natura
         ))
         .is_empty());
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scripts() {
+    let mut standalone = Standalone::start("eventai-script-failure");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+    standalone.assert_call("debug_stage_script_failure_policies", &[]);
+    let first = lyracore_package_delta::packed_creature_spawn_guid(51_000, 1);
+    let second = lyracore_package_delta::packed_creature_spawn_guid(51_000, 2);
+    let stand_state = |guid| {
+        standalone
+            .query_rows(&format!(
+                "SELECT unit_bytes_1 FROM game_world_entity WHERE guid = {guid}"
+            ))
+            .first()
+            .and_then(|row| row["unit_bytes_1"].parse::<u64>().ok())
+            .map(|value| value & 0xff)
+    };
+    assert!(
+        poll_until(POLL_TIMEOUT, || stand_state(first) == Some(3)),
+        "a continued failure lost the delayed command"
+    );
+    assert!(poll_until(POLL_TIMEOUT, || standalone
+        .query_rows("SELECT id FROM game_creature_ai_relay_run WHERE relay_id = 90102")
+        .is_empty()));
+    assert_ne!(
+        stand_state(second),
+        Some(4),
+        "an aborted script ran its later command"
+    );
+    assert!(
+        poll_until(POLL_TIMEOUT, || stand_state(second) == Some(8)),
+        "aborting the parent canceled its delayed child"
+    );
+    assert!(standalone
+        .query_rows("SELECT id FROM game_creature_ai_relay_run WHERE relay_id = 90102")
+        .is_empty());
+    assert!(standalone
+        .query_rows("SELECT id FROM game_creature_ai_relay_run WHERE relay_id = 90103")
+        .is_empty());
+}

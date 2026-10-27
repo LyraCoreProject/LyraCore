@@ -37,6 +37,13 @@ changes the template endpoints; edited values never acquire classic rank multipl
 display or scale change likewise takes precedence over the imported display choices.
 Classic imports clear the level rows and restore classic rank scaling.
 
+EventAI keeps the published rule's policy enums fieldless. The new private
+`game_creature_ai_script_policy` table holds command-list boundaries and event admission policies,
+keyed by definition revision and source rule id. Imports replace rules and policies together.
+`game_creature_ai_relay_run.failure_policy` is an end-appended optional enum with a typed `None`
+default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
+for execution and failure rules.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

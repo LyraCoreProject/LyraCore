@@ -637,6 +637,7 @@ pub enum CreatureInstruction {
     SetSheath(u8),
     EmptyTextNoEffect,
     FleeWithText(u32),
+    CheckedIncrementPhase(IncrementPhaseInstruction),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]

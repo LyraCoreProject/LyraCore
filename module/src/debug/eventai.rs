@@ -187,3 +187,18 @@ fn start_relay_move(
     )?;
     Ok(())
 }
+
+#[reducer]
+pub fn debug_stage_script_failure_policies(ctx: &ReducerContext) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let mut second = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(FIXTURE_OWNER_GUID)
+        .ok_or_else(|| "fixture script source is unavailable".to_string())?;
+    second.guid = packed_creature_spawn_guid(FIXTURE_OWNER_ENTRY, 2);
+    let second_guid = second.guid;
+    crate::creatures::insert_creature_entity(ctx, second);
+    crate::creatures::stage_script_failure_policies_for_debug(ctx, FIXTURE_OWNER_GUID, second_guid)
+}

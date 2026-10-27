@@ -32,7 +32,9 @@ pub(crate) use eventai::{
     CreatureInstruction, CreatureReactState, SummonLocation,
 };
 #[cfg(feature = "debug_reducers")]
-pub(crate) use eventai::{run_relay_arrival, start_imported_relay};
+pub(crate) use eventai::{
+    run_relay_arrival, stage_script_failure_policies_for_debug, start_imported_relay,
+};
 
 pub use eventai::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
