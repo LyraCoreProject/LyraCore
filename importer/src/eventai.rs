@@ -1,3 +1,6 @@
+#[path = "eventai_vmangos.rs"]
+pub(crate) mod vmangos;
+
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use crate::dump::{bt, field, parse_table, sql_text};
