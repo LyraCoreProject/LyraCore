@@ -444,3 +444,137 @@ fn creature_whispers_require_and_keep_a_character_recipient() {
         }
     }
 }
+
+fn command_list_definition(random: bool, abort_on_failure: Vec<u32>) -> EventAiDefinition {
+    let mut result = definition(
+        EventAiSubject::Entry(ENTRY),
+        90,
+        InstructionSelection::CommandLists(CommandLists {
+            ends: vec![2, 4],
+            abort_on_failure,
+            random,
+        }),
+        vec![
+            CreatureInstruction::Emote(EmoteInstruction {
+                emote_id: 1,
+                target: InstructionTarget::SelfActor,
+            }),
+            CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 1 }),
+            CreatureInstruction::Emote(EmoteInstruction {
+                emote_id: 2,
+                target: InstructionTarget::SelfActor,
+            }),
+            CreatureInstruction::SetPhase(SetPhaseInstruction { phase: 2 }),
+        ],
+    );
+    result.rules[0].execution = ExecutionPolicy::ScriptEvent(ScriptEventPolicy {
+        not_casting: false,
+        check_result: false,
+        predicate: EventPredicate::Always,
+    });
+    result
+}
+
+#[test]
+fn random_command_list_runs_every_command_in_one_group() {
+    let mut scenario = world()
+        .rolls([1])
+        .eventai_native_definition(command_list_definition(true, vec![]));
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_emotes(), vec![(CREATURE, 0, 2, CREATURE)]);
+    assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 2);
+}
+
+#[test]
+fn failed_command_aborts_its_list_and_retry_leaves_the_other_list_effects() {
+    let mut definition = command_list_definition(false, vec![0]);
+    definition.rules[0].instructions[0] =
+        CreatureInstruction::AttackStart(InstructionTarget::Spawner);
+    definition.rules[0].execution = ExecutionPolicy::ScriptEvent(ScriptEventPolicy {
+        not_casting: false,
+        check_result: true,
+        predicate: EventPredicate::Always,
+    });
+    let mut scenario = world().eventai_native_definition(definition);
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 2);
+    assert_eq!(scenario.eventai_emotes().len(), 1);
+    let state = scenario.eventai_rule_state(CREATURE, 90).unwrap();
+    assert!(!state.consumed);
+    assert!(!state.executing);
+    assert!(!state.invocation_started);
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_emotes().len(), 2);
+}
+
+#[test]
+fn command_failure_without_abort_continues_and_spends_the_opportunity() {
+    let mut definition = command_list_definition(false, vec![]);
+    definition.rules[0].instructions[0] =
+        CreatureInstruction::AttackStart(InstructionTarget::Spawner);
+    let mut scenario = world().eventai_native_definition(definition);
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_creature_state(CREATURE).phase, 2);
+    assert!(scenario.eventai_rule_state(CREATURE, 90).unwrap().consumed);
+}
+
+#[test]
+fn script_event_waits_for_cast_to_finish_before_spending_the_opportunity() {
+    let mut definition = command_list_definition(false, vec![]);
+    definition.rules[0].execution = ExecutionPolicy::ScriptEvent(ScriptEventPolicy {
+        not_casting: true,
+        check_result: false,
+        predicate: EventPredicate::Always,
+    });
+    let mut scenario = world().eventai_native_definition(definition);
+    scenario.casting.borrow_mut().insert(CREATURE);
+    dispatch(&mut scenario, CREATURE);
+    assert!(scenario.eventai_emotes().is_empty());
+    scenario.casting.borrow_mut().remove(&CREATURE);
+    dispatch(&mut scenario, CREATURE);
+    assert_eq!(scenario.eventai_emotes().len(), 2);
+}
+
+#[test]
+fn provided_target_prefers_event_invoker_to_current_opponent() {
+    let mut definition = command_list_definition(false, vec![]);
+    definition.rules[0].instructions[0] = CreatureInstruction::Emote(EmoteInstruction {
+        emote_id: 5,
+        target: InstructionTarget::ProvidedTarget,
+    });
+    let mut scenario = world()
+        .player(ALLY, point(3.0))
+        .eventai_native_definition(definition);
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext {
+            current_target_guid: Some(TARGET),
+            invoker_guid: Some(ALLY),
+            engaged: true,
+            ..EventContext::empty(EventKind::OnAggro, CREATURE, 1_000)
+        }),
+    );
+    assert_eq!(scenario.eventai_emotes()[0], (CREATURE, 0, 5, ALLY));
+}
+
+#[test]
+fn provided_speech_without_a_target_still_reaches_nearby_players() {
+    let mut definition = command_list_definition(false, vec![]);
+    definition.rules[0].instructions[0] = CreatureInstruction::Speak(SpeakInstruction {
+        mode: SpeechMode::Say,
+        broadcast_ids: vec![8],
+        legacy_text: String::new(),
+        target: InstructionTarget::ProvidedTarget,
+    });
+    let mut scenario = world()
+        .eventai_broadcast(8, "Hello", crate::chat::CHAT_SAY)
+        .eventai_native_definition(definition);
+    evaluate(
+        &mut scenario,
+        EventAiRequest::Edge(EventContext::empty(EventKind::OnAggro, CREATURE, 1_000)),
+    );
+    assert_eq!(
+        scenario.eventai_speech(),
+        vec![(CREATURE, crate::chat::CHAT_SAY, "Hello".into())]
+    );
+}

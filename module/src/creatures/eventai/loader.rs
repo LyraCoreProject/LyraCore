@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use spacetimedb::{reducer, ReducerContext, Table};
 
+use super::stored::game_creature_ai_script_policy;
 use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
@@ -74,12 +75,28 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
         }
     }
     if replace {
+        for policy in ctx.db.game_creature_ai_script_policy().iter() {
+            ctx.db
+                .game_creature_ai_script_policy()
+                .id()
+                .delete(policy.id);
+        }
         for id in table.iter().map(|row| row.id).collect::<Vec<_>>() {
             table.id().delete(id);
         }
     }
     for definition in definitions {
-        table.insert(definition);
+        table.insert(CreatureAiDefinition {
+            id: 0,
+            creature_entry: definition.creature_entry,
+            creature_guid: definition.creature_guid,
+            definition_revision: definition.definition_revision,
+            rules: definition
+                .rules
+                .into_iter()
+                .map(|rule| super::stored::store(ctx, definition.definition_revision, rule))
+                .collect(),
+        });
     }
     super::relay::reap_unused_definitions(ctx);
     Ok(())
@@ -87,7 +104,7 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
 
 fn validate_relay_catalogue_pins(
     ctx: &ReducerContext,
-    definitions: &[CreatureAiDefinition],
+    definitions: &[ParsedDefinition],
 ) -> Result<(), String> {
     let current = super::relay::current_catalogue_version(ctx);
     for definition in definitions {
@@ -126,7 +143,14 @@ pub(crate) fn replace_definition_for_debug(
     load_definition_batch(ctx, packed, true)
 }
 
-fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, String> {
+struct ParsedDefinition {
+    creature_entry: u32,
+    creature_guid: u64,
+    definition_revision: u64,
+    rules: Vec<EventAiRule>,
+}
+
+fn parse_definition_batch(packed: &str) -> Result<Vec<ParsedDefinition>, String> {
     let mut subjects = HashSet::new();
     packed
         .lines()
@@ -145,7 +169,7 @@ fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, Str
         .collect()
 }
 
-fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
+fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     let mut fields = line.splitn(3, '@');
     let subject = fields.next().ok_or("definition subject is missing")?;
     let revision = parse_u64(fields.next().ok_or("definition revision is missing")?)?;
@@ -186,8 +210,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
     {
         return Err("definition rules must have unique ascending source ids".to_string());
     }
-    Ok(CreatureAiDefinition {
-        id: 0,
+    Ok(ParsedDefinition {
         creature_entry,
         creature_guid,
         definition_revision: revision,
@@ -244,25 +267,86 @@ fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRu
     if instructions.is_empty() {
         return Err("rule has no instructions".to_string());
     }
+    let selection = parse_selection(fields[5], instructions.len())?;
+    let execution = parse_execution(fields[6])?;
+    if matches!(selection, InstructionSelection::CommandLists(_))
+        != matches!(execution, ExecutionPolicy::ScriptEvent(_))
+    {
+        return Err("command lists require a script event policy".to_string());
+    }
     Ok(EventAiRule {
         source_rule_id,
         event: parse_event(fields[1])?,
         chance_pct,
         allowed_phases,
         recurrence: parse_recurrence(fields[4])?,
-        selection: match fields[5] {
-            "all" => InstructionSelection::All,
-            "random" => InstructionSelection::RandomOne,
-            value => return Err(format!("unknown instruction selection: {value}")),
-        },
-        execution: match fields[6] {
-            "ordinary" => ExecutionPolicy::Ordinary,
-            "combat" => ExecutionPolicy::CombatAction,
-            value => return Err(format!("unknown execution policy: {value}")),
-        },
+        selection,
+        execution,
         posture,
         instructions,
     })
+}
+
+fn parse_selection(
+    encoded: &str,
+    instruction_count: usize,
+) -> Result<InstructionSelection, String> {
+    match encoded {
+        "all" => return Ok(InstructionSelection::All),
+        "random" => return Ok(InstructionSelection::RandomOne),
+        _ => {}
+    }
+    let fields = encoded.split(':').collect::<Vec<_>>();
+    let ["lists", random, ends, aborts] = fields.as_slice() else {
+        return Err(format!("unknown instruction selection: {encoded}"));
+    };
+    let ends = ends
+        .split('.')
+        .map(parse_u32)
+        .collect::<Result<Vec<_>, _>>()?;
+    let abort_on_failure = if aborts.is_empty() {
+        Vec::new()
+    } else {
+        aborts
+            .split('.')
+            .map(parse_u32)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if ends.is_empty()
+        || ends.len() > 3
+        || ends[0] == 0
+        || ends.windows(2).any(|pair| pair[0] >= pair[1])
+        || ends.last().copied().map(|end| end as usize) != Some(instruction_count)
+        || instruction_count > 4096
+        || abort_on_failure
+            .iter()
+            .any(|index| *index as usize >= instruction_count)
+        || abort_on_failure.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err("invalid command list boundaries or abort indices".to_string());
+    }
+    Ok(InstructionSelection::CommandLists(super::CommandLists {
+        ends,
+        abort_on_failure,
+        random: parse_bool(random)?,
+    }))
+}
+
+fn parse_execution(encoded: &str) -> Result<ExecutionPolicy, String> {
+    match encoded {
+        "ordinary" => return Ok(ExecutionPolicy::Ordinary),
+        "combat" => return Ok(ExecutionPolicy::CombatAction),
+        _ => {}
+    }
+    let fields = encoded.splitn(4, ':').collect::<Vec<_>>();
+    let ["script", not_casting, check_result, predicate] = fields.as_slice() else {
+        return Err(format!("unknown execution policy: {encoded}"));
+    };
+    Ok(ExecutionPolicy::ScriptEvent(super::ScriptEventPolicy {
+        not_casting: parse_bool(not_casting)?,
+        check_result: parse_bool(check_result)?,
+        predicate: parse_event_predicate(predicate)?,
+    }))
 }
 
 fn parse_import_verified_instruction(
@@ -947,6 +1031,7 @@ fn parse_encounter_signal(value: &str) -> Result<crate::encounter::EncounterSign
 fn parse_target(value: &str) -> Result<InstructionTarget, String> {
     match value {
         "opponent" => Ok(InstructionTarget::CurrentOpponent),
+        "provided" => Ok(InstructionTarget::ProvidedTarget),
         "self" => Ok(InstructionTarget::SelfActor),
         "highest-threat" => Ok(InstructionTarget::HighestThreat),
         "second-threat" => Ok(InstructionTarget::SecondThreat),
@@ -1178,6 +1263,39 @@ pub fn debug_verify_eventai_revision_fixture(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn command_list_boundaries_and_abort_indices_are_checked_before_loading() {
+        assert!(parse_rule(
+            "7,aggro,100,4294967295,once,lists:1:2.3:0,script:1:1:always,phase:1+phase:2+phase:3"
+        )
+        .is_ok());
+        for selection in [
+            "lists:1:0.3:",
+            "lists:1:2.1:",
+            "lists:0:2:2",
+            "lists:0:2:1.1",
+            "lists:0:3:",
+        ] {
+            assert!(
+                parse_rule(&format!(
+                    "7,aggro,100,4294967295,once,{selection},script:0:0:always,phase:1+phase:2"
+                ))
+                .is_err(),
+                "{selection}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_selection_and_execution_must_be_loaded_together() {
+        for (selection, execution) in [("all", "script:0:0:always"), ("lists:0:1:", "ordinary")] {
+            assert!(parse_rule(&format!(
+                "7,aggro,100,1,once,{selection},{execution},phase:1"
+            ))
+            .is_err());
+        }
+    }
 
     #[test]
     fn native_definition_decodes_more_than_three_ordered_instructions() {

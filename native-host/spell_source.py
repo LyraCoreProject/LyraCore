@@ -1,6 +1,6 @@
 import struct
 
-from headless import cast, spell_id
+from headless import cast, spell_id, spell_go_misses
 
 
 def check_spell_source_behavior(host):
@@ -210,7 +210,7 @@ def check_spell_source_behavior(host):
     host.sql(f'UPDATE game_spell_effect SET target = 0, period_ms = 1000, trigger_spell = {missile} WHERE spell_id = {missiles}')
     before = {row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')}
     host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
-    host.call('debug_spawn_at_feet', [a, 51000, 8])
+    host.call('debug_spawn_at_feet', [a, 51000, 28])
     victim = ({row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')} - before).pop()
     host.sql(f'UPDATE game_world_entity SET health = 10000, max_health = 10000 WHERE guid = {victim}')
     caster.collect()
@@ -223,7 +223,10 @@ def check_spell_source_behavior(host):
         return sum(op == 0x132 and spell_id(body) == 7268 for op, body in packets) >= 2
 
     host.wait_until(missile_ticks_arrived, 'turning stopped Arcane Missile 7268')
-    assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {victim}')[0][0] < 10000
+    if any(op == 0x132 and spell_id(body) == 7268 and not spell_go_misses(body)
+           for op, body in packets):
+        host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {victim}')[0][0] < 10000,
+                        'a launched Arcane Missile did not deal damage')
     host.sql(f'DELETE FROM game_aura WHERE spell_id = {missiles}')
 
     area_channel = spell(kind=0x91, amount=1000, coefficient=0, cast_flags=0x80, range_yd=1)

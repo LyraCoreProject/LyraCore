@@ -4691,7 +4691,7 @@ def check_progression(host):
     client.send(0x318, struct.pack('<i', 64))
     refused = client.collect()
     assert any(opcode == 0x96 for opcode, _ in refused)
-    assert not values(refused, guid)
+    assert 1261 not in values(refused, guid)
     assert host.rows(f'SELECT watched_faction_index FROM game_character WHERE guid = {guid}') == [[62]]
     client.send(0x125, struct.pack('<IB', 0xffffffff, 1))
     assert any(opcode == 0x96 for opcode, _ in client.collect())

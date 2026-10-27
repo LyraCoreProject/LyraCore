@@ -260,16 +260,32 @@ pub enum RecurrencePolicy {
     RepeatOnEvent,
 }
 
-#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
 pub enum InstructionSelection {
     All,
     RandomOne,
+    CommandLists(CommandLists),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, Eq, PartialEq)]
+pub struct CommandLists {
+    pub ends: Vec<u32>,
+    pub abort_on_failure: Vec<u32>,
+    pub random: bool,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScriptEventPolicy {
+    pub not_casting: bool,
+    pub check_result: bool,
+    pub predicate: EventPredicate,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ExecutionPolicy {
     Ordinary,
     CombatAction,
+    ScriptEvent(ScriptEventPolicy),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -299,6 +315,7 @@ pub enum InstructionTarget {
     RandomHostileManaUser,
     EligibleCasterArea,
     FarthestHostile,
+    ProvidedTarget,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]

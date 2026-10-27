@@ -127,7 +127,10 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             creature_entry: entry,
             creature_guid: 0,
             definition_revision: revision.value,
-            rules,
+            rules: rules
+                .into_iter()
+                .map(|rule| super::stored::store(ctx, revision.value, rule))
+                .collect(),
         });
     }
 }
