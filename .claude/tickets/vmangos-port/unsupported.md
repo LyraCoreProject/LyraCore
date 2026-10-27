@@ -1,11 +1,11 @@
 # Unsupported vmangos behavior
 
-This list covers the ported Import Families. The globals import and generated census report the
-same Compatibility Manifest finding. The complete vmangos Source Profile gate is due in S6c.
+This list covers the ported Import Families. The family imports and generated censuses report
+these Compatibility Manifest findings. The complete vmangos Source Profile gate is due in S6c.
 
 | Finding | Selected rows | Current limit | Next slice |
 | --- | ---: | --- | --- |
-| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The current classic-db import also omits portal conditions. The globals import retains these rows and reports their trigger ids as unsupported. | S3g translates supported condition kinds. Gameplay support needs a later decision. |
+| `globals.portal-condition` | 16 | `areatrigger_teleport.required_condition` is nonzero, but the Module's portal catalogue has no condition field. The current classic-db import also omits portal conditions. The globals import retains these rows and reports their trigger ids as unsupported. | S3g translates condition kinds. Portal gameplay support remains unimplemented. |
 
 Verified against vmangos commit `464179081673cfd240f7ffe7f0daf96bca0b5a70`, selected for patch 10,
 and the current `build_areatrigger_teleport_sql` output columns. No source rows are included here.
@@ -15,13 +15,12 @@ offers, 208 offers with item flags, and 951 offers with a restock interval. Alli
 21, 36 and 276 respectively. The Module stores `max_count`, but no restock interval, source item
 flags or offer condition. The items import retains the offers and reports these fields as
 `items.vendor-condition`, `items.vendor-item-flags` and `items.vendor-restock`. The generated
-items censuses include these counts. Loot conditions are audited with the remaining loot family
-in S3c. The 16 portal conditions above remain unsupported.
+items censuses include these counts. The loot audit below includes source conditions. The 16 portal conditions above remain unsupported.
 
 The loot audit covers all nine selected source tables, before profile-specific owner filtering.
 These counts are source rows after patch and static-condition selection.
-The items manifest also reports findings from creature and reference loot. Quest mail validation
-remains part of S3f.
+The items manifest also reports findings from creature and reference loot. Quest mail uses the
+single-item, unconditional validation added in S3f.
 
 | Finding | Occurrences | Current limit |
 | --- | ---: | --- |
@@ -97,3 +96,30 @@ of each counted quest is absent. Used mail loot passes validation and adds no lo
 
 The 16 portal conditions remain unsupported. Source event gates keep quests pending while their
 script delivery is still being ported.
+
+Gossip findings count the complete source catalogue in both profiles. Condition graphs and menu
+profiles are shared by scoped and full imports. The broadcast metadata count covers all broadcast
+rows; option-gender counts distinct broadcast references. Other option findings count menu/option
+keys, greeting findings count menu/text keys, and condition findings count condition IDs. Counts
+overlap and do not count distinct broken interactions.
+
+| Finding | Occurrences in each profile | Current limit |
+| --- | ---: | --- |
+| `gossip.broadcast-metadata` | 5720 | Language, chat type, sound and emote metadata are absent from the text tables. |
+| `gossip.condition-flags` | 57 | Only reverse-result flags are represented; swapped targets stay unavailable. |
+| `gossip.condition-kind` | 735 | Unsupported source kinds become an unavailable sentinel. |
+| `gossip.conditional-greeting` | 1280 | The Module cannot select greeting text by current condition state. It uses the last unconditional greeting, or source default 0xffffff. |
+| `gossip.menu-script` | 8 | Source greeting scripts are not dispatched. |
+| `gossip.option-action` | 14 | Unsupported service actions stay unavailable. |
+| `gossip.option-condition` | 521 | The referenced condition graph contains unavailable predicates, operands or flags. |
+| `gossip.option-confirmation` | 5 | The option table has no confirmation text. |
+| `gossip.option-gender` | 7 | Option labels store one string; male text wins when both genders are present. |
+| `gossip.option-poi` | 351 | Source points of interest are not sent. |
+| `gossip.option-script` | 526 | Source option scripts are not dispatched. |
+| `gossip.profile-npc-flags` | 2548 | Profile options cannot carry the source NPC flag mask. Creature entry options apply it during import. |
+| `gossip.spawn-greeting` | 8 | Greeting tables are keyed by creature entry, not spawn GUID. |
+
+Payment and text-input options would stay unavailable; neither occurs at this pin. The 16 portal
+conditions remain unsupported. Compiling patch predicates and owning condition kinds does not
+add a condition field to the portal catalogue. Script delivery and the complete Source Profile
+gate remain for S6.

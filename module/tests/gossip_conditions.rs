@@ -1,6 +1,7 @@
 mod support;
 
 use lyracore_shared::constants::{gossip_option, npc_flags};
+use lyracore_shared::gossip::ConditionKind;
 use support::Standalone;
 
 const OPTION: u32 = 509_9001;
@@ -67,7 +68,7 @@ fn fixture(name: &str) -> (Standalone, String) {
     ))[0]["guid"]
         .clone();
     shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{VENDOR},0,0,'Quest supplies',3,0,7,{CONDITION},0)"));
-    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES ({CONDITION},9,{QUEST},1,0,0,0)"));
+    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES ({CONDITION},{},{QUEST},1,0,0,0)", ConditionKind::QuestTaken.code()));
     let artifact = serde_json::json!({
         "kind": "script", "version": 1, "package": "test_fixture.gossip",
         "source_hash": "0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef",
@@ -84,6 +85,8 @@ fn fixture(name: &str) -> (Standalone, String) {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction() {
+    let rewarded = ConditionKind::QuestRewarded.code();
+    let not = ConditionKind::Not.code();
     let (shard, npc) = fixture("gossip-conditions");
     select(&shard, &npc, OPTION, false);
     shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
@@ -99,7 +102,7 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     ));
     select(&shard, &npc, OPTION, false);
     shard.assert_sql(&format!(
-        "UPDATE game_gossip_condition SET kind = 8, value2 = 0 WHERE condition_id = {CONDITION}"
+        "UPDATE game_gossip_condition SET kind = {rewarded}, value2 = 0 WHERE condition_id = {CONDITION}"
     ));
     select(&shard, &npc, OPTION, true);
 
@@ -111,8 +114,8 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
         "UPDATE game_gossip_option SET entry = {VENDOR} WHERE row_id = {OPTION}"
     ));
     select(&shard, &npc, OPTION + 1, false);
-    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = -3, value1 = 5099002, value2 = 0 WHERE condition_id = {CONDITION}"));
-    shard.assert_sql("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES (5099002,99,0,0,0,0,1)");
+    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {not}, value1 = 5099002, value2 = 0 WHERE condition_id = {CONDITION}"));
+    shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES (5099002,{},0,0,0,0,1)", ConditionKind::Unsupported(99).code()));
     select(&shard, &npc, OPTION, false);
     shard.assert_sql("DELETE FROM game_gossip_condition WHERE condition_id = 5099002");
     select(&shard, &npc, OPTION, false);
@@ -125,10 +128,11 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook() {
+    let always = ConditionKind::Always.code();
     const FIRST_MENU: u32 = 509_9001;
     const SECOND_MENU: u32 = 509_9002;
     let (shard, npc) = fixture("gossip-menu-source");
-    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = 0, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
+    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {always}, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
     shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({FIRST_MENU},1),({SECOND_MENU},1)"));
     shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{FIRST_MENU},0,0,'Profile supplies',3,0,0,0,0)"));
     select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, true);
@@ -212,7 +216,12 @@ fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
         "true"
     );
 
-    for (kind, expected) in [(8, false), (9, false), (22, true)] {
+    for (kind, expected) in [
+        (ConditionKind::QuestRewarded, false),
+        (ConditionKind::QuestTaken, false),
+        (ConditionKind::QuestAbsent, true),
+    ] {
+        let kind = kind.code();
         for flags in [0, 1] {
             shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {kind}, value2 = 0, flags = {flags} WHERE condition_id = {CONDITION}"));
             select(
@@ -228,9 +237,10 @@ fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
+    let always = ConditionKind::Always.code();
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-service-identity");
-    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = 0, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
+    shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {always}, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
     shard.assert_sql(&format!(
         "INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({MENU},1)"
     ));
@@ -306,6 +316,9 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
 fn authored_services_require_current_capability_before_the_hook() {
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-authored-capability");
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {VENDOR}"
+    ));
     shard.assert_sql("UPDATE game_world_entity SET level = 20 WHERE guid = 1");
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET cond_type = 0 WHERE row_id = {OPTION}"
@@ -399,6 +412,22 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         "UPDATE game_creature_template SET trainer_class = 1 WHERE entry = {VENDOR}"
     ));
     select_from(&shard, &npc, OPTION, 0, gossip_option::UNLEARNTALENTS, true);
+    for trainer_type in [1, 2, 3] {
+        shard.assert_sql(&format!(
+            "UPDATE game_creature_template SET trainer_type = {trainer_type} WHERE entry = {VENDOR}"
+        ));
+        select_from(
+            &shard,
+            &npc,
+            OPTION,
+            0,
+            gossip_option::UNLEARNTALENTS,
+            false,
+        );
+    }
+    shard.assert_sql(&format!(
+        "UPDATE game_creature_template SET trainer_type = 0 WHERE entry = {VENDOR}"
+    ));
     shard.assert_sql("UPDATE game_world_entity SET level = 9 WHERE guid = 1");
     select_from(
         &shard,
@@ -419,7 +448,12 @@ fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
     shard.assert_sql(&format!(
         "DELETE FROM game_quest_template WHERE entry = {QUEST}"
     ));
-    for kind in [8, 9, 22] {
+    for kind in [
+        ConditionKind::QuestRewarded,
+        ConditionKind::QuestTaken,
+        ConditionKind::QuestAbsent,
+    ] {
+        let kind = kind.code();
         for flags in [0, 1] {
             shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {kind}, value2 = 0, flags = {flags} WHERE condition_id = {CONDITION}"));
             select(&shard, &npc, OPTION, false);

@@ -199,6 +199,7 @@ pub(super) fn enter_character(
         account_id,
         open_loot: 0,
         gossip_menu: None,
+        gossip_root_menu_id: 0,
         teleport: None,
         teleport_counter,
         zone_id: entity.zone_id,

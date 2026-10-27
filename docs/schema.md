@@ -23,6 +23,11 @@ say: invariants, why a column exists and ordering rules.
   `#[default(...)]`. Ordering-sensitive data uses explicit sequence or timestamp columns, never
   auto-inc ordering.
 
+`game_native_player.gossip_root_menu_id` is an end-appended column with default 0, the creature
+entry menu. Submenu selections keep this root so a Runtime Script menu replacement invalidates
+the open menu. SpacetimeDB disconnects clients for this schema update; reconnect starts at the
+entry menu. The Host does not decode this table, and its delivery layouts do not change.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

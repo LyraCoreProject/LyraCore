@@ -4171,6 +4171,70 @@ def check_inventory(host):
     assert not host.rows(f'SELECT id FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900')
 
 
+def check_gossip_submenus(host):
+    client = host.enter_world('Gossip', at=(0, 0, 0, 0))
+    guid = client.guid
+    host.call('debug_set_level', [guid, 60])
+    trainer = spawn(host, guid, 51001, 2)
+    host.restore('game_creature_template', 'entry = 51001', 'trainer_type', 'trainer_class')
+    host.sql('UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = 51001')
+    host.sql(f'UPDATE game_world_entity SET npc_flags = 17 WHERE guid = {trainer}')
+    host.restore('game_gossip_option', 'row_id = 5090920')
+    host.sql("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES (5090920,51001,0,0,'I wish to unlearn my talents.',1,5090920,0,0,0)")
+    for menu, text in [(5090920, 16777215), (5090921, 70)]:
+        host.restore('game_gossip_menu_profile', f'menu_id = {menu}')
+        host.sql(f'INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({menu},{text})')
+    for row, menu, index, text, action, target, condition in [
+        (5090920, 5090920, 0, 'Yes. I do.', 16, 0, 0),
+        (5090921, 5090920, 1, 'Hidden answer', 1, 0, 3),
+        (5090922, 5090920, 2, 'More', 1, 5090921, 0),
+        (5090923, 5090921, 0, 'Back', 1, 5090920, 0),
+    ]:
+        host.restore('game_gossip_menu_profile_option', f'row_id = {row}')
+        host.sql(f"INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({row},{menu},{index},0,'{text}',{action},{target},{condition},0,0)")
+
+    def click(index):
+        client.send(0x17c, struct.pack('<QI', trainer, index))
+        return client.collect()
+
+    def submenu():
+        client.send(0x17b, struct.pack('<Q', trainer))
+        root = next(body for opcode, body in client.collect() if opcode == 0x17d)
+        assert b'I wish to unlearn my talents.\0' in root
+        packets = click(0)
+        assert not any(opcode == 0x17e for opcode, _ in packets)
+        return next(body for opcode, body in packets if opcode == 0x17d)
+
+    menu = submenu()
+    assert struct.unpack_from('<II', menu, 8) == (16777215, 2)
+    assert b'Yes. I do.\0' in menu and b'Hidden answer\0' not in menu
+    nested = next(body for opcode, body in click(1) if opcode == 0x17d)
+    assert struct.unpack_from('<II', nested, 8) == (70, 1) and b'Back\0' in nested
+    assert any(opcode == 0x17d for opcode, _ in click(0))
+    host.sql('UPDATE game_gossip_menu_profile_option SET cond_type = 3 WHERE row_id = 5090920')
+    refused = click(0)
+    assert (0x17e, b'') in refused and not any(opcode == 0x2aa for opcode, _ in refused)
+    host.sql('UPDATE game_gossip_menu_profile_option SET cond_type = 0 WHERE row_id = 5090920')
+    submenu()
+    assert (0x2aa, struct.pack('<QI', trainer, 10000)) in click(0)
+
+    for trainer_type, trainer_class in [(1, 1), (2, 1), (3, 1), (0, 8)]:
+        host.sql(f'UPDATE game_creature_template SET trainer_type = {trainer_type}, trainer_class = {trainer_class} WHERE entry = 51001')
+        menu = submenu()
+        assert b'Yes. I do.\0' not in menu and struct.unpack_from('<I', menu, 12)[0] == 1
+    host.sql('UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = 51001')
+    submenu()
+    host.restore('game_creature_gossip_menu_override', f'creature_guid = {trainer}')
+    host.sql(f'INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({trainer},5090921,0,0)')
+    refused = click(0)
+    assert (0x17e, b'') in refused and not any(opcode == 0x2aa for opcode, _ in refused)
+    host.sql(f'DELETE FROM game_creature_gossip_menu_override WHERE creature_guid = {trainer}')
+    host.sql('UPDATE game_gossip_option SET action = 16, action_menu_id = 0 WHERE row_id = 5090920')
+    client.send(0x17b, struct.pack('<Q', trainer))
+    assert any(opcode == 0x17d for opcode, _ in client.collect())
+    assert (0x2aa, struct.pack('<QI', trainer, 10000)) in click(0)
+
+
 def check_enchantments(host):
     client, peer = native_and_peer(host)
     guid = client.guid
@@ -4826,7 +4890,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,

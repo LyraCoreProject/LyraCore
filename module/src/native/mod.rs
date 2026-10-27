@@ -177,6 +177,8 @@ pub struct NativePlayer {
     pub teleport_counter: u32,
     #[default(0u32)]
     pub zone_id: u32,
+    #[default(0u32)]
+    pub gossip_root_menu_id: u32,
 }
 
 pub(crate) fn group_event(
