@@ -148,3 +148,9 @@ establish AOI Grants before sending the first request. T2d must replace this bou
 harness's opening phase, which records login packets outside comparison. All packets received
 during scenario steps reach the comparator. See the [runner contract](../../conformance/README.md#scenario-catalogue-and-tier-1)
 for failure handling and the local result file.
+
+T2c adds `conformance/scoreboard`. It joins the ledger with local tier 1 evidence and the latest
+JSON audit report, keeping real-client checks in their own column. It derives opcode and unavailable
+request counts from core's dependency source and `unavailable.rs`. Missing, stale and malformed
+evidence cannot become a pass. [The scoreboard contract](../../conformance/README.md#scoreboard)
+defines the counts and the report format for the Milestone 3 audit producer.

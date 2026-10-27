@@ -1168,8 +1168,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "serde_json",
+ "syn 2.0.119",
  "toml",
  "wire-client",
+ "wow_world_messages",
 ]
 
 [[package]]
