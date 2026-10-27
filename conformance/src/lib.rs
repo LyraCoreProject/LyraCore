@@ -1,6 +1,9 @@
 mod schema;
 
-pub use schema::{Behavior, DeliberateDeviation, RealClient, Rung, SourceReference, TestEvidence};
+pub use schema::{
+    Behavior, DataDependentField, DataStream, DataValueType, DeliberateDeviation, RealClient, Rung,
+    SourceReference, TestEvidence,
+};
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
