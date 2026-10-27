@@ -15,17 +15,17 @@ entry in both files.
 
 **A** [Account](CORE_TERMS.md#account) · [Account Character Owner](#retired-terms) · [Account Claim](#retired-terms) · [Account Fence](#retired-terms) · [Action Outcome](#procs) · [Actor](CORE_TERMS.md#actor) · [Alpha Test Tools](#accounts-characters-and-sessions) · [AOI](CORE_TERMS.md#aoi) · [AOI Grant](CORE_TERMS.md#aoi-grant) · [Architecture Test](CORE_TERMS.md#architecture-test) · [Assistant](#groups) · [Auction Cut](#auctions) · [Auction Mail](#auctions) · [Auction Market](#auctions) · [Auction Notice](#auctions) · [Authored Casting](#creature-ai) · [Authored Combat](#creature-ai) · [Authored Flee](#creature-ai) · [Authored Spawn](#requests-and-delivery) · [Authoring Library](#packages) · [Auto-Reply](#chat) · [Away Status](#chat)
 
-**B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bot Objective](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
+**B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bot Objective](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Candidate](#bots) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Companion Order](#bots) · [Compatibility Manifest](#realm-topology) · [Content Identity](#packages) · [Coordinator](#retired-terms) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Candidate](#bots) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Companion Order](#bots) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Coordinator](#retired-terms) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
-**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
+**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
 
-**F** [Fake](CORE_TERMS.md#fake) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#bots) · [Fuel Budget](#runtime-scripts)
+**F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#bots) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Home Shard](#retired-terms) · [Host Operation](#runtime-scripts)
 
@@ -41,7 +41,7 @@ entry in both files.
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Provisioning Profile](#bots) · [Public Note](#guilds)
 
-**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#retired-terms) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Recovery Attempt](#bots) · [Recovery Scan](#bots) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#retired-terms) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#retired-terms) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Recovery Attempt](#bots) · [Recovery Scan](#bots) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#retired-terms) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Shard Boundary](#retired-terms) · [Shard Map](#retired-terms) · [Signature](#guilds) · [Solo Target Claim](#bots) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Strategy](#bots) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
@@ -1128,6 +1128,45 @@ The directory tree `lyracore client pack` builds for a player to copy over a sto
 carries package-authored bytes only. The packer refuses a baseline-derived file by name before it
 writes the first byte.
 _Avoid_: client patch, distribution, release bundle, player package
+
+### Conformance
+
+**Behavior**:
+One interaction a player would recognize, with a defined 1.12.1 result and verification needs.
+_Avoid_: feature (when meaning one interaction)
+
+**Conformance Audit**:
+A dated comparison of LyraCore and the Reference Server through the same wire scenarios. It
+separates rule differences from data differences.
+_Avoid_: compatibility audit
+
+**Reference Server**:
+The vmangos server whose observable results define 1.12.1 behavior for conformance checks.
+_Avoid_: reference core
+
+**Golden Trace**:
+A recording of a scenario on the Reference Server, with text replaced by SHA-256 digests, used as
+expected results for conformance checks.
+_Avoid_: golden file, snapshot (for recorded packets)
+
+**Equivalence Rule**:
+A named rule with a reason that permits a specified difference between decoded results, such as
+consistent GUID remapping or a time tolerance.
+_Avoid_: normalization rule
+
+**Deliberate Deviation**:
+A client-visible result LyraCore intentionally keeps different from the Reference Server, with a
+reason and a source. A different implementation with the same result is not a deviation.
+_Avoid_: intentional divergence
+
+**Fixture Verb**:
+A scenario's request for setup that both the LyraCore and Reference Server adapters implement.
+_Avoid_: setup command (in a scenario)
+
+**Feature Ledger**:
+The collection of Behaviors, their scope, evidence requirements and Deliberate Deviations from
+which tools derive conformance progress.
+_Avoid_: feature matrix, support matrix
 
 ### Working method
 

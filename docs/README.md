@@ -12,6 +12,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [danger-zones.md](./danger-zones.md) | Reference, authority | You change a schema, publish, or touch a §1 trap |
 | [architecture.md](./architecture.md) | Reference | You need to know where a responsibility lives |
 | [schema.md](./schema.md) | Reference | You add or change a table |
+| [Feature Ledger](../conformance/README.md) | Reference | You add or validate a conformance Behavior and its evidence requirements |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
 | [benilla-compatibility.md](./benilla-compatibility.md) | Reference | You change packet layouts or the opcode inventory |
 | [native-operations.md](./native-operations.md) | Runbook | An Operator updates a deployed Realm |
@@ -30,5 +31,6 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [recipes/add-a-spell-effect.md](./recipes/add-a-spell-effect.md) | How-to | You implement a spell effect |
 | [agents/maintainer.md](./agents/maintainer.md) | Runbook | An agent works for a maintainer |
 | [agents/cross-repo-cli.md](./agents/cross-repo-cli.md) | How-to | A change spans this repository and `lyracore-cli` |
+| [adr/0005-1-12-conformance.md](./adr/0005-1-12-conformance.md) | Decision record | You change conformance scenarios, evidence or the Feature Ledger |
 | [adr/](./adr/) | Decision records | You want the reason behind a standing decision |
 | [verify-lyracore checks](../.claude/skills/verify-lyracore/checks.md) | Checklist | A change needs a check on a real 1.12.1 client |

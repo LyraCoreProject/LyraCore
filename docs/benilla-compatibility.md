@@ -17,8 +17,9 @@ assertions. These tests do not establish every gameplay path or real-client pres
 ## Generate the opcode inventory
 
 ```sh
+mkdir -p "$HOME/.cache/lyracore-scratch/conformance"
 cargo run --locked --quiet -p lyracore-protocol --example benilla_inventory \
-  > /tmp/benilla-inventory.json
+  > "$HOME/.cache/lyracore-scratch/conformance/benilla-inventory.json"
 ```
 
 The inventory reads the pinned Benilla writer, movement selectors and decoder. It matches their
@@ -39,10 +40,12 @@ Source presence does not certify behavior. The scanner excludes imports, comment
 test code, handles `match`, destructuring and `matches!`, and does not expand other macros or trace
 calls. A decoder in Benilla does not require every Realm to emit that message.
 
-The curated `behaviors` list names retained Rust tests in
-`crates/lyracore-protocol/examples/benilla_inventory/behaviors.json`. The inventory checks their
-declarations and records whether they are ignored. It does not run them. Native Python scenarios
-are separate. An empty test list means no retained Rust scenario in this inventory. Real-client Verification remains unverified.
+The `behaviors` list comes from the [Feature Ledger](../conformance/README.md), with one TOML file
+per Behavior under `conformance/features/`. The loader checks the schema and Behavior references.
+The inventory checks named Rust test declarations and records whether they are ignored. It does
+not run them. Native Python scenarios remain separate until recorded conformance scenarios replace
+them. An empty test list means no retained Rust evidence in this inventory. Real-client Verification
+comes only from the ledger's human-maintained `real_client` field.
 
 ## Transport movement
 
