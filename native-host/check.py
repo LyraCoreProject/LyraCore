@@ -3960,7 +3960,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     client.send(0x1a2, struct.pack('<QIBB', vendor, 5090050, 17, 1))
     refused = client.collect()
-    assert (0x1a5, struct.pack('<QIB', vendor, 5090050, 0)) in refused, 'BUY_ERR_CANT_FIND_ITEM'
+    assert (0x1a5, struct.pack('<QIB', vendor, 5090050, 8)) in refused, ('BUY_ERR_CANT_CARRY_MORE', refused)
     assert not values(refused, guid) and not creates(refused)
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     assert not host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')
