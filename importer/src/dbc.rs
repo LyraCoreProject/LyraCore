@@ -193,6 +193,11 @@ pub(crate) fn catalogue_statements(
     } else {
         faction_sql(&mut chain)?
     };
+    let map_stmts = if vmangos {
+        crate::map_catalogue::statements(mount_dump, &read_table(&mut chain)?)?.0
+    } else {
+        Vec::new()
+    };
     let auction_houses: DbcAuctionHouse = read_table(&mut chain)?;
     let (auction_house_stmts, auction_house_count) = auction_house_sql(&auction_houses)?;
     let mail_templates: DbcMailTemplate = read_table(&mut chain)?;
@@ -304,6 +309,7 @@ pub(crate) fn catalogue_statements(
     );
     println!("Transports: {} single-map routes", transports.count);
     Ok([
+        map_stmts,
         property_stmts,
         faction_stmts,
         gf_stmts,

@@ -13,6 +13,7 @@ mod gossip_conditions;
 mod instance_vmap;
 mod item_property;
 mod m2_collision;
+mod map_catalogue;
 mod nav;
 mod pack_client;
 mod package_delta;

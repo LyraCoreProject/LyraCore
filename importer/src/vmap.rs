@@ -1228,25 +1228,11 @@ fn instance_map_source(
         .with_context(|| format!("reading {map_dbc_path}"))?;
     let maps = ClientMap::read(&mut Cursor::new(&map_dbc))
         .context("parsing Map.dbc for Instance Vmap Slice")?;
-    let mut rows = maps.rows.iter().filter(|row| row.id.id == map_id);
-    let row = rows
-        .next()
-        .with_context(|| format!("Map.dbc has no map {map_id}"))?;
-    if rows.next().is_some() {
-        bail!("Map.dbc has more than one map {map_id}");
-    }
-    if row.internal_name.is_empty()
-        || !row
-            .internal_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        bail!(
-            "Map.dbc map {map_id} has unsafe internal name {:?}",
-            row.internal_name
-        );
-    }
-    let map_name = row.internal_name.clone();
+    let names = crate::map_catalogue::archive_names(&maps)?;
+    let map_name = names
+        .get(&map_id)
+        .with_context(|| format!("Map.dbc has no map {map_id}"))?
+        .to_string();
     let wdt_path = format!("World\\Maps\\{map_name}\\{map_name}.wdt");
     let wdt = chain
         .read_file(&wdt_path)

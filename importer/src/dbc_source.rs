@@ -205,16 +205,37 @@ fn findings(source: &impl TableRows) -> Result<serde_json::Value> {
             .collect::<Result<Vec<_>>>()?;
         findings.push(serde_json::json!({"code":code,"classification":"unsupported","occurrences":ids.len(),"source_ids":ids}));
     }
-    let ids = source
-        .rows("areatrigger_template")?
-        .iter()
-        .filter_map(|row| match row.optional_text("script_name") {
-            Ok(None | Some("")) => None,
-            Ok(Some(_)) => Some(row.number::<u32>("id")),
-            Err(error) => Some(Err(error)),
-        })
-        .collect::<Result<Vec<_>>>()?;
-    findings.push(serde_json::json!({"code":"dbc.trigger-script-name","classification":"unsupported","occurrences":ids.len(),"source_ids":ids}));
+    for (table, key, code) in [
+        ("areatrigger_template", "id", "dbc.trigger-script-name"),
+        ("map_template", "entry", "dbc.map-script-name"),
+    ] {
+        let ids = source
+            .rows(table)?
+            .iter()
+            .filter_map(|row| match row.optional_text("script_name") {
+                Ok(None | Some("")) => None,
+                Ok(Some(_)) => Some(row.number::<u32>(key)),
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        findings.push(serde_json::json!({"code":code,"classification":"unsupported","occurrences":ids.len(),"source_ids":ids}));
+    }
+    for (column, code, sentinel) in [
+        ("player_limit", "dbc.map-player-limit", 0),
+        ("reset_delay", "dbc.map-reset-delay", 0),
+        ("ghost_entrance_map", "dbc.map-ghost-entrance", -1),
+    ] {
+        let ids = source
+            .rows("map_template")?
+            .iter()
+            .filter_map(|row| match row.number::<i32>(column) {
+                Ok(value) if value == sentinel => None,
+                Ok(_) => Some(row.number::<u32>("entry")),
+                Err(error) => Some(Err(error)),
+            })
+            .collect::<Result<Vec<_>>>()?;
+        findings.push(serde_json::json!({"code":code,"classification":"unsupported","occurrences":ids.len(),"source_ids":ids}));
+    }
     Ok(
         serde_json::json!({"format_version":1,"source":"vmangos","family":"dbc","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),
     )
@@ -256,6 +277,9 @@ pub(crate) fn world_plan(
     ] {
         statements.extend(sql);
     }
+    if vmangos {
+        statements.extend(crate::map_catalogue::statements(source, &read_table(&mut chain)?)?.0);
+    }
     let nodes = if vmangos {
         taxi_nodes(source)?
     } else {
@@ -296,7 +320,7 @@ mod tests {
 
     fn fixture() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
-        connection.execute_batch("CREATE TABLE faction (id INTEGER, build INTEGER,reputation_list_id INTEGER,base_rep_value1 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction VALUES (1,5875,-1,-100),(1,6000,5,999);
+        connection.execute_batch("CREATE TABLE map_template (entry INTEGER, patch INTEGER, player_limit INTEGER, reset_delay INTEGER, ghost_entrance_map INTEGER, script_name TEXT, PRIMARY KEY(entry,patch)); INSERT INTO map_template VALUES (1,10,10,7,0,'instance_example'); CREATE TABLE faction (id INTEGER, build INTEGER,reputation_list_id INTEGER,base_rep_value1 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction VALUES (1,5875,-1,-100),(1,6000,5,999);
             CREATE TABLE faction_template (id INTEGER, build INTEGER, faction_id INTEGER,our_mask INTEGER,friendly_mask INTEGER,hostile_mask INTEGER,enemy_faction1 INTEGER,enemy_faction2 INTEGER,enemy_faction3 INTEGER,enemy_faction4 INTEGER,friend_faction1 INTEGER,friend_faction2 INTEGER,friend_faction3 INTEGER,friend_faction4 INTEGER,PRIMARY KEY(id,build)); INSERT INTO faction_template VALUES(1,5875,1,2,3,4,5,6,7,8,9,10,11,12);
             CREATE TABLE area_template (entry INTEGER,map_id INTEGER,zone_id INTEGER,explore_flag INTEGER,flags INTEGER,area_level INTEGER,team INTEGER,name TEXT); INSERT INTO area_template VALUES (1,0,2,3,4,-1,6,'O''Brien');
             CREATE TABLE areatrigger_template (id INTEGER,build INTEGER,map_id INTEGER,x REAL,y REAL,z REAL,radius REAL,box_x REAL,box_y REAL,box_z REAL,box_orientation REAL,cooldown INTEGER,condition_id INTEGER,script_id INTEGER,script_name TEXT,PRIMARY KEY(id,build)); INSERT INTO areatrigger_template VALUES (1,5875,0,1,2,3,4,5,6,7,8,9,10,11,'example');
