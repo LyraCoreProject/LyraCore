@@ -1,4 +1,4 @@
-"""Materialize the defaults omitted by spell SQL fixtures predating the additive schema."""
+"""Materialize migration defaults for older SQL INSERT statements."""
 
 import re
 from pathlib import Path

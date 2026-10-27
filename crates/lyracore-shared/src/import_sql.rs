@@ -105,4 +105,13 @@ mod tests {
             assert_eq!(spell_defaults(sql), sql);
         }
     }
+
+    #[test]
+    fn older_broadcast_rows_are_silent_unless_they_supply_a_sound() {
+        let silent =
+            "INSERT INTO game_creature_ai_broadcast_text (id,male_text) VALUES (1,'Greeting')";
+        assert_eq!(spell_defaults(silent), "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0)");
+        let audible = "INSERT INTO game_creature_ai_broadcast_text (id,sound_id) VALUES (1,42)";
+        assert_eq!(spell_defaults(audible), audible);
+    }
 }
