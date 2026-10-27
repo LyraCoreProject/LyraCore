@@ -401,7 +401,30 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 197
+        },
+        {
+          "command": 3,
           "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33948610
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
           "allowed": 3
         },
         {
@@ -433,6 +456,11 @@
           "command": 74,
           "column": "datalong2",
           "allowed": 8
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 3
         }
       ],
       "command_values": [
@@ -454,6 +482,32 @@
             1,
             8
           ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
+          ]
+        }
+      ],
+      "target_bits": [
+        {
+          "target": 4,
+          "column": "target_param1",
+          "allowed": 771
+        },
+        {
+          "target": 5,
+          "column": "target_param1",
+          "allowed": 259
+        },
+        {
+          "target": 7,
+          "column": "target_param1",
+          "allowed": 1
         }
       ]
     },
@@ -627,8 +681,37 @@
       },
       "command_bits": [
         {
+          "command": 2,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 327
+        },
+        {
           "command": 3,
           "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33555202
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
           "allowed": 3
         },
         {
@@ -655,6 +738,11 @@
           "command": 22,
           "column": "datalong2",
           "allowed": 3
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 1
         }
       ],
       "command_values": [
@@ -664,6 +752,15 @@
           "allowed": [
             -1,
             0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
           ]
         }
       ]
@@ -875,8 +972,25 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 1
+        },
+        {
+          "command": 3,
           "column": "datalong4",
           "allowed": 2
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 768
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
         },
         {
           "command": 10,
@@ -906,6 +1020,14 @@
           "allowed": [
             -1,
             0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
           ]
         }
       ]
@@ -1163,6 +1285,11 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 4
+        },
+        {
+          "command": 3,
           "column": "datalong4",
           "allowed": 2
         },
@@ -1336,7 +1463,30 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 335
+        },
+        {
+          "command": 3,
           "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 17
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33817474
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
           "allowed": 3
         },
         {
@@ -1368,6 +1518,11 @@
           "command": 74,
           "column": "datalong2",
           "allowed": 0
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 7
         }
       ],
       "command_values": [
@@ -1378,6 +1533,15 @@
             -1,
             0,
             8
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
           ]
         }
       ]
@@ -1499,8 +1663,31 @@
       },
       "command_bits": [
         {
+          "command": 2,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 69
+        },
+        {
           "command": 3,
           "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33554944
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
           "allowed": 3
         },
         {
@@ -1541,6 +1728,14 @@
           "allowed": [
             -1,
             0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
           ]
         }
       ]
@@ -2067,8 +2262,31 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 327
+        },
+        {
+          "command": 3,
           "column": "datalong4",
           "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 768
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 23
         },
         {
           "command": 10,
@@ -2108,6 +2326,15 @@
           "allowed": [
             -1,
             0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
           ]
         }
       ]
@@ -2190,7 +2417,24 @@
       "command_bits": [
         {
           "command": 3,
+          "column": "datalong3",
+          "allowed": 71
+        },
+        {
+          "command": 3,
           "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 770
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
           "allowed": 3
         },
         {
@@ -2230,6 +2474,14 @@
           "column": "dataint3",
           "allowed": [
             -1
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
           ]
         }
       ]
