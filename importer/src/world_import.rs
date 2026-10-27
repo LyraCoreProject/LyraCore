@@ -1,7 +1,7 @@
-#[path = "world_import_loot.rs"]
-mod vmangos_loot;
 #[path = "world_import_trainers.rs"]
 mod trainers;
+#[path = "world_import_loot.rs"]
+mod vmangos_loot;
 
 use std::collections::HashMap;
 
