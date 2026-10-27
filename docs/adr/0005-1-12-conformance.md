@@ -36,7 +36,7 @@ using a separate scenario author and independent decoders.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/c24ebb3c69613c7d442cc737f199e7a1f181da52/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -141,8 +141,8 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.3`, commit
-`c24ebb3c69613c7d442cc737f199e7a1f181da52`, through a git dev-dependency at the full SHA in
+Core pins `wire-client` to `v0.2.0-conformance.4`, commit
+`a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
 on `wire-client` in every workspace member. The ledger reads only
 `wire_client::catalogue`; every scenario must exist and name the Behavior that lists it.
@@ -152,9 +152,9 @@ connection. It handles delivery audiences before passing plaintext packets to `r
 The harness owns decoding and comparison. Core passes no Equivalence Rule overrides.
 `connection_identity` and `taxi_single_hop` have ledger entries and durable Golden Trace comparisons.
 
-At this pin `FixtureAdapter::prepare` returns a TCP `WireClient`, so core uses `run_on` with its
-own `Transport`. The schema-3 runner records login packets in the opening phase. Core applies their
-delivery instructions to establish AOI Grants and retains the packets as opening observations.
+At this pin `FixtureAdapter::prepare` returns a `PreparedClient` backed by TCP, so core uses
+`run_on` with its own `Transport`. The schema-3 runner records login packets in the opening phase.
+Core applies their delivery instructions to establish AOI Grants and retains the packets as opening observations.
 The harness excludes opening observations from comparison and begins comparison at the first step.
 All packets received during scenario steps reach the comparator. See the [runner contract](../../conformance/README.md#scenario-catalogue-and-tier-1)
 for failure handling and the local result file.
@@ -167,3 +167,14 @@ Audit data classifications require exact scalar field locations and matching val
 ledger. Packet structure, ordering, missing fields, timing and identity differences remain rules.
 [The scoreboard contract](../../conformance/README.md#scoreboard)
 defines the counts and the report format for the Milestone 3 audit producer.
+
+T2g moves to the conformance.4 recordings and LCS packet alignment. Missing and extra packets
+produce their own records; aligned packets retain strict field and delivery-time checks. The taxi
+scenario also checks zone world states, weather and every passenger VALUES field. The
+[comparison record](../../conformance/reports/2026-10-27-t2g.md) maps the observed differences to
+core defects. No gameplay or Equivalence Rule changes belong to this update.
+
+The ledger can record `known_gaps` with a description, core source path, symbol and comparison
+evidence. These entries have no status and never participate in rule/data classification. They
+are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
+results; the durable taxi skip remains until the Behavior conforms with imported data.

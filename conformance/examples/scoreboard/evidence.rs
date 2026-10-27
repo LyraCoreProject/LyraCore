@@ -436,6 +436,36 @@ source = { commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77", path = "src/game
     }
 
     #[test]
+    fn known_gaps_neither_excuse_rules_nor_change_passes() {
+        let (_, mut value) = example();
+        let source = format!(
+            "{}\n{}",
+            include_str!("../../features/connection/connection_identity.toml"),
+            r#"
+[[known_gaps]]
+description = "Missing reply."
+path = "module/src/native/mod.rs"
+symbol = "native_world_receive"
+evidence = "missing_packet record"
+"#
+        );
+        let ledger =
+            FeatureLedger::from_sources([("connection/connection_identity.toml", source.as_str())])
+                .unwrap();
+        assert!(state(&value, &ledger).is_match());
+        value["tier"] = json!("conformance_audit");
+        let (_, _, difference) = audit_example();
+        value["scenarios"][0]["comparison"]["differences"] = json!([difference]);
+        assert_eq!(
+            state(&value, &ledger),
+            State::Different { rules: 1, data: 0 }
+        );
+        value["scenarios"][0]["comparison"]["differences"] = json!([]);
+        value["scenarios"][0]["data_differences"] = json!([difference]);
+        assert!(parse(&value, &ledger).is_err());
+    }
+
+    #[test]
     fn changed_scenario_hashes_are_stale_and_malformed_results_fail() {
         let (ledger, value) = example();
         let mut stale = value.clone();

@@ -163,7 +163,7 @@ fn main() -> Result<()> {
             claimed.intersection(&counts.unavailable).count()
         );
     }
-    println!("\n| System / Behavior | Tier 1 | Audit | Real client | Claimed opcodes | Unavailable |\n| --- | --- | --- | --- | ---: | ---: |");
+    println!("\n| System / Behavior | Tier 1 | Audit | Real client | Claimed opcodes | Unavailable | Known gaps |\n| --- | --- | --- | --- | ---: | ---: | ---: |");
     for (system, behaviors) in systems {
         for behavior in behaviors {
             let claimed = requests(&[behavior])?;
@@ -172,12 +172,13 @@ fn main() -> Result<()> {
                 RealClient::Verified { date, .. } => format!("verified {date}"),
             };
             println!(
-                "| {system} / {} | {} | {} | {real_client} | {} | {} |",
+                "| {system} / {} | {} | {} | {real_client} | {} | {} | {} |",
                 behavior.id,
                 state(tier1.as_ref(), behavior, head, revision)?,
                 state(audit, behavior, head, revision)?,
                 claimed.len(),
-                claimed.intersection(&counts.unavailable).count()
+                claimed.intersection(&counts.unavailable).count(),
+                behavior.known_gaps.len()
             );
         }
     }

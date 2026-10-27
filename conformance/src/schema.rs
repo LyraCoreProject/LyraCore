@@ -19,6 +19,8 @@ pub struct Behavior {
     pub scenarios: Vec<String>,
     pub deliberate_deviations: Vec<DeliberateDeviation>,
     #[serde(default)]
+    pub known_gaps: Vec<KnownGap>,
+    #[serde(default)]
     pub data_fields: Vec<DataDependentField>,
     pub real_client: RealClient,
     pub prerequisites: Vec<String>,
@@ -40,6 +42,15 @@ pub struct DeliberateDeviation {
     pub result: String,
     pub reason: String,
     pub source: String,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct KnownGap {
+    pub description: String,
+    pub path: String,
+    pub symbol: String,
+    pub evidence: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -155,6 +166,12 @@ impl Behavior {
                     && !deviation.source.contains(char::is_whitespace),
                 "deviation source must be an HTTPS URL"
             );
+        }
+        for gap in &self.known_gaps {
+            nonempty(&gap.description, "known gap description")?;
+            relative_path(&gap.path)?;
+            nonempty(&gap.symbol, "known gap symbol")?;
+            nonempty(&gap.evidence, "known gap evidence")?;
         }
         self.validate_data_fields()?;
         self.real_client.validate()?;

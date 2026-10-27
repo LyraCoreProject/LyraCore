@@ -39,7 +39,7 @@ syn = { version = "2", features = ["full"] }
 wow_world_messages = { version = "0.3", default-features = false, features = ["vanilla", "sync"] }
 serde = { version = "1", features = ["derive"] }
 lyracore-test-support.workspace = true
-serde_json = "1"
+serde_json = { version = "1", features = ["float_roundtrip"] }
 
 [lints]
 workspace = true
