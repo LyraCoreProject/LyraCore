@@ -35,3 +35,24 @@ The generated loot censuses break these findings down by source table. Item-cont
 
 The pre-existing small-chance clamp remains. A positive independent chance below one basis point
 can emit one basis point. Fishing and skinning quest-only flags remain unsupported.
+
+Gameobject findings count selected enabled source placements inside the profile, before the
+fishing-hole omission. Template findings count the complete selected catalogue. Event and pool
+counts are membership rows joined to those placements. Placement timing and population selection
+are not implemented by this family import.
+
+| Finding | Full-world | Alliance-single | Current limit |
+| --- | ---: | ---: | --- |
+| `gameobjects.animation` | 4325 | 1414 | The catalogue does not carry source animation progress. |
+| `gameobjects.fishinghole` | 24 | 24 | Real type 25 conflicts with the Module's synthetic gather type and is omitted. |
+| `gameobjects.game-event` | 12102 | 4844 | Event schedules do not control these placements. |
+| `gameobjects.gather-loot` | 8 | 8 | Authored gather nodes keep their fixed primary item. |
+| `gameobjects.pool` | 29465 | 5874 | Pool membership does not select these placements. |
+| `gameobjects.respawn-range` | 10903 | 2054 | Source spawn respawn ranges are not represented. |
+| `gameobjects.script` | 207 | 207 | Source script names have no importer behavior. |
+| `gameobjects.spawn-flags` | 440 | 123 | Active, random and dynamic flags are not represented. Disabled spawns are omitted. |
+| `gameobjects.summoned-spawn` | 467 | 52 | Negative respawn times do not restrict placement to a summon. |
+| `gameobjects.visibility` | 4 | 0 | Per-spawn visibility distance is not represented. |
+
+The 16 portal conditions remain unsupported. Gameobject source states are translated; they are
+not an unsupported finding.

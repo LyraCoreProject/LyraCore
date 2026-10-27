@@ -6,7 +6,7 @@ use wow_dbc::vanilla_tables::game_object_display_info::{
 };
 use wow_dbc::Indexable;
 
-use crate::dump::{field, got, parse_table};
+use crate::dump::{got, parse_table};
 use crate::nav::Tri;
 use crate::world_import::{GO_BUTTON, GO_DOOR};
 
@@ -77,12 +77,8 @@ fn door_templates(
     parse_table(dump, "gameobject_template")?
         .iter()
         .map(|row| -> anyhow::Result<_> {
-            let Ok(entry) = field(row, got::ENTRY)?.parse::<u64>() else {
-                return Ok(None);
-            };
-            let Ok(raw_type) = field(row, got::TYPE)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let entry: u64 = row.number(got::ENTRY)?;
+            let raw_type: u32 = row.number(got::TYPE)?;
             let Some(stored_type) = crate::world_import::classify_go_type(entry, raw_type) else {
                 return Ok(None);
             };
@@ -91,8 +87,8 @@ fn door_templates(
             }
             Ok(Some(DoorTemplate {
                 entry,
-                display_id: field(row, got::DISPLAY_ID)?.parse().unwrap_or(0),
-                size: field(row, got::SIZE)?.parse().unwrap_or(0.0),
+                display_id: row.number(got::DISPLAY_ID)?,
+                size: row.number(got::SIZE)?,
             }))
         })
         .filter_map(Result::transpose)
@@ -101,20 +97,14 @@ fn door_templates(
 
 const BATCH_BYTES: usize = 28_000;
 
-pub(crate) fn run(
-    data_dir: &str,
-    dump_path: Option<&str>,
-    apply: bool,
-    shard: &crate::shard::Shard,
-) -> Result<()> {
-    let data_dir = Path::new(data_dir);
-    let dump_path = dump_path
-        .context("--go-models needs --dump too (gameobject_template is the template source)")?;
-    let dump = crate::dump::read_dump(dump_path)?;
-    let templates = door_templates(&dump)?;
+pub(crate) fn packed_rows(
+    data_dir: &Path,
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
+    let templates = door_templates(dump)?;
     if templates.is_empty() {
-        println!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
-        return Ok(());
+        eprintln!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
+        return Ok(Vec::new());
     }
 
     let mut dbc_chain = crate::dbc::open_chain(data_dir)?;
@@ -154,8 +144,8 @@ pub(crate) fn run(
         let shuffled: Vec<Tri> = local_tris.into_iter().map(shuffle_tri).collect();
         let radius = bounding_radius(&shuffled);
         let blob = encode_capped(t.entry, model_name, &shuffled)?;
-        println!(
-            "go-models: entry {} model {model_name} — {} tri(s), radius {radius:.2}",
+        eprintln!(
+            "go-models: entry {} model {model_name}, {} tri(s), radius {radius:.2}",
             t.entry,
             shuffled.len()
         );
@@ -163,12 +153,31 @@ pub(crate) fn run(
         rows.push(format!("{},{},{radius},{hex}", t.entry, t.size));
     }
 
-    println!(
+    eprintln!(
         "go-models: {}/{} DOOR/BUTTON template(s) resolved ({skipped_missing_display} missing \
          display, {skipped_wmo} WMO skipped, {skipped_empty} empty mesh)",
         rows.len(),
         templates.len()
     );
+
+    Ok(rows)
+}
+
+pub(crate) fn run(
+    data_dir: &str,
+    dump_path: Option<&str>,
+    source: crate::world_source::SourceKind,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
+    let data_dir = Path::new(data_dir);
+    let dump_path = dump_path
+        .context("--go-models needs --dump too (gameobject_template is the template source)")?;
+    let dump = crate::world_source::WorldSource::open(Path::new(dump_path), source)?;
+    let rows = packed_rows(data_dir, &dump)?;
+    if rows.is_empty() && door_templates(&dump)?.is_empty() {
+        return Ok(());
+    }
 
     if !apply {
         println!(
@@ -220,6 +229,39 @@ mod tests {
             [[-half, -half, z], [half, -half, z], [-half, half, z]],
             [[half, -half, z], [half, half, z], [-half, half, z]],
         ]
+    }
+
+    #[test]
+    fn vmangos_door_models_use_selected_template_versions() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::Integer as N;
+        let row = |patch, display| {
+            [
+                ("entry", N(7)),
+                ("patch", N(patch)),
+                ("type", N(0)),
+                ("displayId", N(display)),
+                ("size", N(1)),
+            ]
+        };
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "gameobject_template",
+            columns: &[
+                ("size", "REAL"),
+                ("displayId", "INTEGER"),
+                ("type", "INTEGER"),
+                ("patch", "INTEGER"),
+                ("entry", "INTEGER"),
+            ],
+            key: &["entry", "patch"],
+            rows: &[&row(0, 1), &row(10, 2), &row(11, 3)],
+        }])
+        .unwrap();
+        let templates = door_templates(&source).unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].entry, 7);
+        assert_eq!(templates[0].display_id, 2);
+        assert_eq!(templates[0].size, 1.0);
     }
 
     #[test]

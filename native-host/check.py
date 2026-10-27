@@ -1506,28 +1506,30 @@ def check_world_objects(host):
     host.call('debug_spawn_gameobject', [door_entry, 0, 259, 0, 0, 3002, 1000, 0, 0, 0, 0, 0])
     spawned = outside.collect()
     assert door in creates(spawned)
+    assert values(spawned, door, create=True)[14] == 1
     assert [values(spawned, door)[i] for i in range(10, 14)] == [0, 0, 0, 0x3f800000]
     assert door not in creates(first.collect() + second.collect())
     grant = host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}')[0][0]
     outside.send(0xb1, struct.pack('<Q', door))
     toggled = outside.collect()
-    assert values(toggled, door)[14] == 1 and door not in creates(toggled)
+    assert values(toggled, door)[14] == 0 and door not in creates(toggled)
     assert host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}') == [[grant]]
     assert not values(first.collect() + second.collect(), door)
     host.sql(f'UPDATE game_gameobject SET rotation_0 = 0.5, rotation_1 = 0.5, rotation_2 = 0.5, rotation_3 = 0.5 WHERE guid = {door}')
     outside.send(0xb1, struct.pack('<Q', door))
     closed = outside.collect()
-    assert values(closed, door)[14] == 0
+    assert values(closed, door)[14] == 1
     assert [values(closed, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     opened = outside.collect()
-    assert values(opened, door)[14] == 1 and door not in creates(opened)
+    assert values(opened, door)[14] == 0 and door not in creates(opened)
     assert [values(opened, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     assert not values(outside.collect(), door)
     host.call('debug_enter_instance', [first_guid, 0])
     joined = first.collect()
     assert door in creates(joined)
+    assert values(joined, door, create=True)[14] == 0
     assert [values(joined, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     create_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == door)
     rotation_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] == 0 and packed_guid(body[6:]) == door)
