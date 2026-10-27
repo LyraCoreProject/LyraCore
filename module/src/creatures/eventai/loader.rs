@@ -122,7 +122,7 @@ fn validate_relay_catalogue_pins(
                     start.catalogue_version, current
                 ));
             }
-            for relay_id in &start.relay_ids {
+            for relay_id in start.relay_ids.iter().filter(|id| **id != 0) {
                 if !super::relay::catalogue_contains(ctx, start.catalogue_version, *relay_id) {
                     return Err(format!(
                         "EventAI rule {rule_id} relay dependency {relay_id} is missing from catalogue {}",
@@ -675,6 +675,11 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             }
             Ok(CreatureInstruction::SetPhase(SetPhaseInstruction { phase }))
         }
+        ["phase-inc-checked", amount] => Ok(CreatureInstruction::CheckedIncrementPhase(
+            IncrementPhaseInstruction {
+                amount: parse_i32(amount)?,
+            },
+        )),
         ["phase-inc", amount] => Ok(CreatureInstruction::IncrementPhase(
             IncrementPhaseInstruction {
                 amount: parse_i32(amount)?,
@@ -955,12 +960,15 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 signal: parse_encounter_signal(signal)?,
             },
         )),
-        ["start-relay", relays, target, catalogue] => {
+        [kind @ ("start-relay" | "start-script"), relays, target, catalogue] => {
             let relay_ids = relays
                 .split('.')
                 .map(parse_u32)
                 .collect::<Result<Vec<_>, _>>()?;
-            if relay_ids.is_empty() || relay_ids.contains(&0) {
+            if relay_ids.is_empty()
+                || (*kind == "start-relay" && relay_ids.contains(&0))
+                || (*kind == "start-script" && relay_ids.len() > 100)
+            {
                 return Err("start-relay needs nonzero definition ids".to_string());
             }
             let catalogue_version = parse_u64(catalogue)?;
@@ -1371,6 +1379,22 @@ mod tests {
             CreatureInstruction::ScaleAllThreat(ScaleAllThreatInstruction { percent: -100 })
         ));
         assert!(parse_instruction("threat-all:-101").is_err());
+    }
+
+    #[test]
+    fn weighted_script_starts_keep_empty_choices_and_bound_the_choice_count() {
+        let CreatureInstruction::StartRelay(start) =
+            parse_instruction("start-script:7.7.0:provided:17").unwrap()
+        else {
+            panic!("expected a script start")
+        };
+        assert_eq!(start.relay_ids, [7, 7, 0]);
+        assert!(parse_instruction("start-relay:7.0:self:17").is_err());
+        assert!(parse_instruction(&format!(
+            "start-script:{}:self:17",
+            vec!["7"; 101].join(".")
+        ))
+        .is_err());
     }
 
     #[test]
