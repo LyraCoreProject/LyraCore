@@ -82,7 +82,8 @@ pub(crate) use presentation::{
 pub use relay::{
     game_creature_ai_relay_arrival, game_creature_ai_relay_continuation,
     game_creature_ai_relay_definition, game_creature_ai_relay_run, RelayArrival, RelayContinuation,
-    RelayDefinition, RelayFlagOperation, RelayForcedMovement, RelayMovement, RelayRun,
+    RelayDefinition, RelayFlagChange, RelayFlagOperation, RelayForcedMovement, RelayMovement,
+    RelayRun,
 };
 
 pub(crate) use relay::{

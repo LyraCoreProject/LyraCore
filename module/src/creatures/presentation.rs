@@ -40,6 +40,8 @@ pub struct CreaturePresentation {
     pub rajaxx_client_projection: bool,
     pub mana_emptied: bool,
     pub virtual_main_hand_cleared: bool,
+    #[default(None::<u32>)]
+    pub npc_flags_override: Option<u32>,
 }
 
 #[table(accessor = game_creature_relay_temporary_faction)]
@@ -92,6 +94,7 @@ pub(crate) fn apply_eventai_instruction(
             rajaxx_client_projection: false,
             mana_emptied: false,
             virtual_main_hand_cleared: false,
+            npc_flags_override: None,
         });
     match instruction {
         CreaturePresentationInstruction::SetFaction { faction_template } => {
@@ -105,7 +108,17 @@ pub(crate) fn apply_eventai_instruction(
             state.display_template_override = template_entry;
         }
         CreaturePresentationInstruction::SetCreatureMount { mount } => state.creature_mount = mount,
-        CreaturePresentationInstruction::SetNpcFlags { flags } => state.npc_flags = flags,
+        CreaturePresentationInstruction::SetNpcFlags { flags } => {
+            state.npc_flags = flags;
+            state.npc_flags_override = None;
+        }
+        CreaturePresentationInstruction::ModifyNpcFlags(change) => {
+            let super::eventai::RelayFlagChange { flags, operation } = change;
+            if flags == 0 || flags & !3 != 0 {
+                return false;
+            }
+            state.npc_flags_override = Some(apply_relay_flags(entity.npc_flags, flags, operation));
+        }
         CreaturePresentationInstruction::EmptyMana => state.mana_emptied = true,
         CreaturePresentationInstruction::ClearVirtualMainHand => {
             state.virtual_main_hand_cleared = true;
@@ -335,17 +348,30 @@ pub(crate) fn apply_relay_npc_flags(
     flags: u32,
     operation: RelayFlagOperation,
 ) -> Result<(), String> {
-    if flags == 0 || flags & !0x3 != 0 {
-        return Err(format!("relay NPC flags {flags:#x} are not named"));
-    }
-    let entities = ctx.db.game_world_entity();
-    let mut entity = entities
-        .guid()
+    let lifecycle_id = ctx
+        .db
+        .game_creature_ai_state()
+        .creature_guid()
         .find(creature_guid)
-        .filter(|entity| !entity.is_player())
-        .ok_or_else(|| format!("relay NPC-flag subject {creature_guid} is unavailable"))?;
-    entity.npc_flags = apply_relay_flags(entity.npc_flags, flags, operation);
-    entity.update(ctx);
+        .map_or_else(
+            || crate::creatures::current_life_seq(ctx, creature_guid),
+            |state| state.lifecycle_id,
+        );
+    let revision = super::eventai::current_definition_revision(ctx, creature_guid).value;
+    if !apply_eventai_instruction(
+        ctx,
+        creature_guid,
+        lifecycle_id,
+        revision,
+        CreaturePresentationInstruction::ModifyNpcFlags(super::eventai::RelayFlagChange {
+            flags,
+            operation,
+        }),
+    ) {
+        return Err(format!(
+            "relay NPC-flag subject {creature_guid} refused flag change"
+        ));
+    }
     Ok(())
 }
 
@@ -465,11 +491,11 @@ fn project(
     entity.display_id = display;
     entity.native_display_id = display;
     entity.mount_display_id = state.creature_mount.display_id();
-    entity.npc_flags = match state.npc_flags {
+    entity.npc_flags = state.npc_flags_override.unwrap_or(match state.npc_flags {
         NpcFlagsProjection::Base => base.npc_flags,
         NpcFlagsProjection::Clear => 0,
         NpcFlagsProjection::GossipAndQuest => 0x0000_0003,
-    };
+    });
     if state.mana_emptied {
         entity.power = 0;
     }
@@ -540,6 +566,7 @@ mod tests {
             rajaxx_client_projection: false,
             mana_emptied: false,
             virtual_main_hand_cleared: false,
+            npc_flags_override: None,
         };
         let combat_flag = lyracore_shared::constants::unit_flags::IN_COMBAT;
         let projected = project_unit_flags(NOT_ATTACKABLE | combat_flag, NOT_ATTACKABLE, &state);
