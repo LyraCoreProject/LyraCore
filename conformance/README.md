@@ -11,8 +11,8 @@ cargo test -p lyracore-protocol --example benilla_inventory
 cargo run -p lyracore-protocol --example benilla_inventory
 ```
 
-The first command checks every ledger file and, when available, its scenario references. The
-second checks retained Rust evidence declarations. The inventory command reads these same files
+The first command checks every ledger file and its scenario references. The second checks retained
+Rust evidence declarations. The inventory command reads these same files
 and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
@@ -71,16 +71,91 @@ contain no copied implementation or world data. Those references identify where 
 and record each Behavior; they are not a claim that all nine conform today. All nine real-client
 checks remain unverified and their scenario lists are empty.
 
-## Scenario catalogue integration
+## Scenario catalogue and tier 1
 
-Milestone 1 keeps `.wire-harness-rev` unchanged. Its pinned revision predates the scenario
-catalogue, so the Architecture Test prints an explicit skip for the scenario-id cross-check and
-still checks all ledger files and dependencies.
+`wire_client::catalogue` embeds the scenarios and Golden Traces at the revision in
+`.wire-harness-rev`. The workspace pins `wire-client` to that full commit SHA. The Module tests
+and ledger tests use it only as a dev-dependency. The `harness_pin` Architecture Test checks
+that both consumers inherit the same revision as `dev smoke`.
 
-The assumed catalogue path and its TOML shape live together in
-[`pinned_scenario_catalogue`](tests/ledger.rs). They are unverified until the orchestrator connects
-them to the harness's actual format in Milestone 2. For a later pin, the test requires the
-`.lyracore/wire-harness/<sha>/` checkout to match that SHA and reads the committed catalogue at that SHA. Local edits cannot change
-the scenario ids. A missing assumed catalogue prints a
-skip. A present catalogue must parse, contain unique nonempty ids, and include every scenario id
-named by the ledger. The test never fetches or edits the harness checkout.
+Every scenario reference must exist in that catalogue and name the Behavior that lists it.
+A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
+checkout is read and no catalogue check can skip.
+
+Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+`connection_identity` prepares the scenario's Character through debug reducers, then runs the
+harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
+with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
+ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
+unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
+`wait_for_packets`.
+
+The pinned v2 runner starts after `prepare`. Core consumes setup delivery instructions to establish
+AOI Grants before the first request. It does not compare setup packets. This revision cannot record
+an opening phase. T2d must adopt the harness's opening format so login packets become recorded
+observations outside comparison. Core never filters packets during the scenario or changes its
+Equivalence Rules.
+
+The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
+revision, capture time and the harness comparison. It removes the previous result before starting,
+so a setup failure leaves no old pass. Differences remain in the report and fail the test. No
+packet text enters this result. The scoreboard consumes it.
+
+## Scoreboard
+
+From the repo root:
+
+```bash
+./conformance/scoreboard
+cargo test -p lyracore-conformance --example scoreboard
+```
+
+The script runs the Rust example `scoreboard`. It reads the Feature Ledger and prints system totals
+and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
+It does not infer a pass from a test declaration or claim overall completion from these columns.
+The ledger's other required rungs remain obligations.
+
+The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
+under `conformance/reports/` with the greatest `recorded_at_unix_ms`. An audit can keep a Markdown
+narrative beside that JSON. No audit report exists yet. To select inputs explicitly:
+
+```bash
+./conformance/scoreboard --tier1 /path/to/tier1.json --audit /path/to/audit.json
+```
+
+Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
+explicit input or malformed report fails the command. A different core commit, harness revision
+or scenario hash shows `stale`. A pass requires every scenario listed by the Behavior. Any harness
+difference, including a counted Deliberate Deviation, prevents a pass. A `*` marks a run made with
+uncommitted changes and does not certify the clean commit. Real-client cells come only from the
+ledger, never from a report.
+
+Counts use unique opcode values. The denominator is every variant of the pinned core
+`ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
+a separate count. System totals count shared claims once. The unavailable count includes request
+patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
+control receipts, tests, comments, imports and explicit empty responses for ignored requests.
+Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
+Neither opcode claims nor these source counts prove conformance. Spell counts arrive in Milestone 3.
+
+### Result schema version 1
+
+The tier 1 runner writes this shape. Audit reports use `tier = "conformance_audit"` and the same
+fields. A later audit producer must put only rule differences in `comparison.differences`, and put
+data differences in a separate `data_differences` array for each scenario. Both arrays contain the
+harness's serialized `Difference` records. Data differences print separately and do not prevent an
+audit pass. Tier 1 cannot classify data differences.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `tier` | `tier1` or `conformance_audit` |
+| `core_commit` | Full core commit SHA measured by the run |
+| `working_tree_dirty` | Whether the run included uncommitted changes |
+| `harness_revision` | Full pinned harness commit SHA |
+| `recorded_at_unix_ms` | Capture time used to choose the latest report |
+| `scenarios` | Result array, with unique scenario ids |
+| `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
+| `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
+| `scenarios[].comparison` | Harness `Comparison` with its counted differences |
+| `scenarios[].data_differences` | Optional audit-only array, empty when omitted |

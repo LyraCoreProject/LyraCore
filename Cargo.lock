@@ -1168,7 +1168,11 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "serde",
+ "serde_json",
+ "syn 2.0.119",
  "toml",
+ "wire-client",
+ "wow_world_messages",
 ]
 
 [[package]]
@@ -1206,6 +1210,7 @@ dependencies = [
  "serde_json",
  "spacetimedb",
  "syn 2.0.119",
+ "wire-client",
  "wow_world_messages",
 ]
 
@@ -2007,6 +2012,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "sha2"
+version = "0.10.9"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "a7507d819769d01a365ab707794a4084392c824f54a7a6a7862f8c3d0892b283"
+dependencies = [
+ "cfg-if",
+ "cpufeatures 0.2.17",
+ "digest",
+]
+
+[[package]]
 name = "sha3"
 version = "0.10.9"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2731,6 +2747,23 @@ dependencies = [
 ]
 
 [[package]]
+name = "wire-client"
+version = "0.2.0-conformance.2"
+source = "git+https://github.com/LyraCoreProject/wire-harness?rev=b4dcbc1a6323777a843c800b29ecbe99d3946d7f#b4dcbc1a6323777a843c800b29ecbe99d3946d7f"
+dependencies = [
+ "anyhow",
+ "flate2",
+ "serde",
+ "serde_json",
+ "sha2",
+ "toml",
+ "wow_login_messages",
+ "wow_srp",
+ "wow_world_base 0.3.0",
+ "wow_world_messages",
+]
+
+[[package]]
 name = "wit-bindgen"
 version = "0.57.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -2866,6 +2899,7 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "7df703a8a402cd5fe84c8d560f2d6eefbaaaac66f6e3c49d9c93829e00964209"
 dependencies = [
  "flate2",
+ "wow_srp",
  "wow_world_base 0.3.0",
 ]
 

@@ -1,0 +1,8 @@
+#!/usr/bin/env python3
+import os
+from pathlib import Path
+import sys
+
+os.chdir(Path(__file__).resolve().parent.parent)
+os.execvp("cargo", ["cargo", "run", "--quiet", "--locked", "-p", "lyracore-conformance",
+                    "--example", "scoreboard", "--", *sys.argv[1:]])

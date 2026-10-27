@@ -5,20 +5,12 @@ use lyracore_test_support::{ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::json;
 use serde_json::value::RawValue;
-use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
-use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION, SMSG_AUTH_RESPONSE};
+use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
-// Tier 1 replaces this decoder with the harness library; see docs/adr/0005-1-12-conformance.md.
-fn decode_packet(opcode: u16, body: &[u8]) -> ServerOpcodeMessage {
-    let mut frame = Vec::new();
-    frame.extend_from_slice(&u16::try_from(body.len() + 2).unwrap().to_be_bytes());
-    frame.extend_from_slice(&opcode.to_le_bytes());
-    frame.extend_from_slice(body);
-    let mut reader = Cursor::new(frame);
-    let message = ServerOpcodeMessage::read_unencrypted(&mut reader).unwrap();
-    assert_eq!(reader.position() as usize, reader.get_ref().len());
-    message
-}
+#[path = "conformance/tier1.rs"]
+mod tier1;
+#[path = "conformance/transport.rs"]
+mod transport;
 
 fn fixture(name: &str) -> (Standalone, u64, String) {
     let mut shard = Standalone::start(name);
@@ -76,7 +68,7 @@ struct Packet(
     bool,
 );
 
-fn packet(row: &RawValue, connection_id: u128, opcode: u16) -> ServerOpcodeMessage {
+fn packet(row: &RawValue, connection_id: u128, opcode: u16) -> wire_client::decode::Packet {
     let Packet(
         id,
         (audience, recipient),
@@ -105,7 +97,7 @@ fn packet(row: &RawValue, connection_id: u128, opcode: u16) -> ServerOpcodeMessa
     assert!(!close);
     assert_eq!(not_before, 0);
     assert!(!authenticated);
-    decode_packet(opcode, &body)
+    wire_client::decode::decode(opcode, &body).unwrap()
 }
 
 #[test]
@@ -147,11 +139,11 @@ fn operator_connection_enters_world_and_receives_pong() {
         .unwrap();
     let rows = result.inserts("game_native_packet");
     assert_eq!(rows.len(), 1, "{rows:?}");
-    let ServerOpcodeMessage::SMSG_PONG(pong) = packet(&rows[0], connection.connection_id(), 0x1dd)
-    else {
-        panic!("expected SMSG_PONG");
-    };
-    assert_eq!(pong.sequence_id, sequence);
+    let pong = packet(&rows[0], connection.connection_id(), 0x1dd);
+    assert_eq!(
+        pong.fields["sequence"],
+        wire_client::decode::Field::Unsigned(sequence.into())
+    );
     assert!(shard
         .query_rows("SELECT * FROM game_native_packet")
         .is_empty());
@@ -194,15 +186,16 @@ fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
     let rows = wire
         .call("native_world_receive", json!([0x1edu32, &frame[6..]]))
         .unwrap();
-    let Packet(_, _, _, body, close, _, _) =
+    let Packet(_, _, (option, opcode), body, close, _, _) =
         serde_json::from_str(rows.inserts("game_native_packet")[0].get()).unwrap();
     let bytes: Vec<u8> = (0..body.len())
         .step_by(2)
         .map(|offset| u8::from_str_radix(&body[offset..offset + 2], 16).unwrap())
         .collect();
-    assert!(
-        matches!(decode_packet(0x1ee, &bytes), ServerOpcodeMessage::SMSG_AUTH_RESPONSE(reply) if *reply == SMSG_AUTH_RESPONSE::AuthFailed)
-    );
+    assert_eq!(option, 0);
+    assert_eq!(opcode.get(), "494");
+    // SMSG_AUTH_RESPONSE carries AUTH_FAILED as the single result byte 13.
+    assert_eq!(bytes, [13]);
     assert!(close);
     drop(connection);
     assert!(lyracore_test_support::poll_until(

@@ -47,8 +47,7 @@ using a separate scenario author and independent decoders.
 12. The harness is a Rust library as well as a Headless Client. Its scenario model, independent
     decoders and comparator serve the tier 1 runner through a git dev-dependency. Pin it to the
     same SHA as `.wire-harness-rev`. The harness never depends on a LyraCore crate or shares a
-    decoder with core. Do not use `benilla-protocol` to decode tier 1 results. The first mechanism
-    test uses gtker directly until the harness library is available.
+    decoder with core. Do not use `benilla-protocol` to decode tier 1 results.
 13. Run the Reference Server in Docker outside all repositories. Use vmangos's prebuilt
     `dev-linux-amd64` binaries and MariaDB with the `db_latest` MySQL dump. Extract maps, vmaps and
     mmaps from the maintainer's own client with vmangos's extractors. Keep runtime files under
@@ -76,7 +75,7 @@ Tier 1 runs on every core change in CI. It drives the Module through native redu
 emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
 mechanism test must prove that an Operator WebSocket connection can enter the world through a
 feature-gated debug reducer, call `native_world_receive`, and subscribe to `game_native_packet`.
-It does not yet establish conformance to a recorded Behavior.
+The tier 1 runner now compares `connection_identity` with its recorded Behavior.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and imported world, and the Reference Server, through the same wire scenarios.
@@ -118,12 +117,9 @@ The Architecture Test `native_debug_gate` checks the separate feature gate and d
 or replacement with a weaker condition. Its durable test builds with only `debug_reducers` and
 checks that the published Module does not export the fixture reducer.
 
-The durable `native_conformance` test enters a Character, sends `CMSG_PING` through
-`native_world_receive`, reads the private packet event on the same connection and decodes
-`SMSG_PONG` directly with gtker. It also checks the non-Operator refusal, preserved login
-credentials, refusal of the former fixture key and delivery from a later transaction. The decoder
-is a single function for replacement with the harness library in Milestone 2. This proves the
-mechanism, not agreement with a Golden Trace. Run it with the command in [testing](../testing.md#conformance).
+The durable `native_conformance` target checks non-Operator refusal, preserved login credentials,
+refusal of the former fixture key and delivery from a later transaction. Its ping decoder now uses
+the harness library. Run it with the command in [testing](../testing.md#conformance).
 
 C1c adds schema version 1 and a shared loader in `lyracore-conformance`. TOML keeps the ledger
 readable without a generator and gives each Behavior its own file for parallel work. The loader
@@ -132,11 +128,29 @@ human verification records. The [schema reference](../../conformance/README.md) 
 
 The nine original inventory entries now live in `conformance/features/`. The inventory reads that
 same loader and still checks retained Rust test declarations without running them. Entries contain
-no handwritten support status. Their initial scenario lists are empty; source evidence does not
-stand in for recordings. The Architecture Test validates references when a pinned harness catalogue
-is present and prints a clear skip for the current pre-catalogue pin. The assumed catalogue path
-and shape remain in one test function for Milestone 2 integration.
+no handwritten support status. The nine migrated entries have no scenarios yet; source evidence
+does not stand in for recordings.
 
-The harness has implemented the TOML scenario format from decision 9. The existing pin stays
-unchanged in Milestone 1. Milestone 2 updates its prerelease tag and full SHA and adds the tier 1
-library dependency at that same SHA.
+## Milestone 2 tier 1
+
+Core pins `wire-client` to `v0.2.0-conformance.2` through a git dev-dependency at the full SHA in
+`.wire-harness-rev`. An Architecture Test checks agreement. The ledger reads only
+`wire_client::catalogue`; every scenario must exist and name the Behavior that lists it.
+
+The core `Transport` prepares a Character with debug reducers and uses the buffered Operator
+connection. It handles delivery audiences before passing plaintext packets to `runner::run_on`.
+The harness owns decoding and comparison. Core passes no Equivalence Rule overrides.
+`connection_identity` has a ledger entry and a durable Golden Trace comparison.
+
+At this pin `FixtureAdapter::prepare` returns a TCP `WireClient`, so core uses `run_on` with its
+own `Transport`. The v2 runner begins after setup. Core applies setup delivery instructions to
+establish AOI Grants before sending the first request. T2d must replace this boundary with the
+harness's opening phase, which records login packets outside comparison. All packets received
+during scenario steps reach the comparator. See the [runner contract](../../conformance/README.md#scenario-catalogue-and-tier-1)
+for failure handling and the local result file.
+
+T2c adds `conformance/scoreboard`. It joins the ledger with local tier 1 evidence and the latest
+JSON audit report, keeping real-client checks in their own column. It derives opcode and unavailable
+request counts from core's dependency source and `unavailable.rs`. Missing, stale and malformed
+evidence cannot become a pass. [The scoreboard contract](../../conformance/README.md#scoreboard)
+defines the counts and the report format for the Milestone 3 audit producer.
