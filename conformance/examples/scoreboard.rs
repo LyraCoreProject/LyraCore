@@ -41,7 +41,7 @@ fn provenance(path: &Path, report: &Report) {
         report.harness_revision,
         report.recorded_at_unix_ms,
         if report.working_tree_dirty {
-            ", uncommitted changes (*)"
+            ", uncommitted changes"
         } else {
             ""
         }
@@ -101,16 +101,16 @@ fn main() -> Result<()> {
     }))?;
     let counts = counts::read(root)?;
     let tier1 = if explicit_tier1 || tier1_path.exists() {
-        Some(Report::load(&tier1_path, "tier1")?)
+        Some(Report::load(&tier1_path, "tier1", &ledger)?)
     } else {
         None
     };
     let audit = match audit_path {
         Some(path) => {
-            let report = Report::load(&path, "conformance_audit")?;
+            let report = Report::load(&path, "conformance_audit", &ledger)?;
             Some((path, report))
         }
-        None => evidence::latest_audit(&root.join("conformance/reports"))?,
+        None => evidence::latest_audit(&root.join("conformance/reports"), &ledger)?,
     };
     if let Some(report) = &tier1 {
         provenance(&tier1_path, report);
@@ -163,7 +163,7 @@ fn main() -> Result<()> {
             claimed.intersection(&counts.unavailable).count()
         );
     }
-    println!("\n| System / Behavior | Tier 1 | Audit | Real client | Claimed opcodes | Unavailable |\n| --- | --- | --- | --- | ---: | ---: |");
+    println!("\n| System / Behavior | Tier 1 | Audit | Real client | Claimed opcodes | Unavailable | Known gaps |\n| --- | --- | --- | --- | ---: | ---: | ---: |");
     for (system, behaviors) in systems {
         for behavior in behaviors {
             let claimed = requests(&[behavior])?;
@@ -172,12 +172,13 @@ fn main() -> Result<()> {
                 RealClient::Verified { date, .. } => format!("verified {date}"),
             };
             println!(
-                "| {system} / {} | {} | {} | {real_client} | {} | {} |",
+                "| {system} / {} | {} | {} | {real_client} | {} | {} | {} |",
                 behavior.id,
                 state(tier1.as_ref(), behavior, head, revision)?,
                 state(audit, behavior, head, revision)?,
                 claimed.len(),
-                claimed.intersection(&counts.unavailable).count()
+                claimed.intersection(&counts.unavailable).count(),
+                behavior.known_gaps.len()
             );
         }
     }

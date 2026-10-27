@@ -177,3 +177,26 @@ fn result_updates_preserve_other_scenarios_and_clear_failed_setup() -> Result<()
     std::fs::remove_dir_all(directory)?;
     Ok(())
 }
+
+#[test]
+fn golden_spline_coordinates_keep_their_wire_precision() -> Result<()> {
+    use wire_client::trace::RecordedField;
+
+    let golden = catalogue::get("taxi_single_hop")?;
+    let spline = golden
+        .trace()
+        .packets
+        .iter()
+        .find(|packet| packet.checkpoint == "flight" && packet.opcode == 0x00DD)
+        .context("Golden Trace passenger spline")?;
+    let RecordedField::List(points) = &spline.fields["points"] else {
+        anyhow::bail!("spline points must be a list");
+    };
+    for (index, axis, value) in [(10, "z", 52.476253509521484), (21, "y", 986.2713623046875)] {
+        let RecordedField::Object(point) = &points[index] else {
+            anyhow::bail!("spline point must be an object");
+        };
+        assert_eq!(point[axis], RecordedField::Float(value));
+    }
+    Ok(())
+}

@@ -31,11 +31,12 @@ using a separate scenario author and independent decoders.
    Traces live in the harness repository, so core implementation PRs cannot edit them.
 8. Before writing a trace, the recorder replaces every text field, including names, quest text,
    gossip and chat, with its SHA-256 digest. The comparator compares digests. Numbers, ids, flags
-   and positions remain unchanged. Never commit an unscrubbed recording or client or world data.
+   and positions remain unchanged. Never commit packet text, vmangos or client files, or bulk
+   world data.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/57e9c7018e60ede69da85b5b285df464e81558de/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -43,7 +44,10 @@ using a separate scenario author and independent decoders.
     LyraCore uses debug reducers. vmangos uses a GM Account and GM commands such as `.levelup`,
     `.additem`, `.learn`, `.npc add` and `.tele`.
 11. Scenarios spawn their fixtures and assert rules. Audit reports separate rule differences from
-    data differences. Only rule differences count against conformance.
+    data differences. Only rule differences count against conformance. A data difference must match
+    a typed data-dependent field in the Feature Ledger, with a pinned source and reason. The
+    scoreboard re-derives classification and rejects reports it cannot classify from those
+    declarations. Counted Deliberate Deviations remain rule differences.
 12. The harness is a Rust library as well as a Headless Client. Its scenario model, independent
     decoders and comparator serve the tier 1 runner through a git dev-dependency. Pin it to the
     same SHA as `.wire-harness-rev`. The harness never depends on a LyraCore crate or shares a
@@ -75,7 +79,11 @@ Tier 1 runs on every core change in CI. It drives the Module through native redu
 emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
 mechanism test must prove that an Operator WebSocket connection can enter the world through a
 feature-gated debug reducer, call `native_world_receive`, and subscribe to `game_native_packet`.
-The tier 1 runner now compares `connection_identity` with its recorded Behavior.
+The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
+CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
+pointer to `conformance/features/taxi/taxi_single_hop.toml`. It needs imported route data and has
+open rule differences. A manual run still fails with the full comparator report. Keep no
+known-differences baseline; the other conformance checks continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and imported world, and the Reference Server, through the same wire scenarios.
@@ -133,24 +141,40 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.2` through a git dev-dependency at the full SHA in
-`.wire-harness-rev`. An Architecture Test checks agreement. The ledger reads only
+Core pins `wire-client` to `v0.2.0-conformance.4`, commit
+`a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca`, through a git dev-dependency at the full SHA in
+`.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
+on `wire-client` in every workspace member. The ledger reads only
 `wire_client::catalogue`; every scenario must exist and name the Behavior that lists it.
 
 The core `Transport` prepares a Character with debug reducers and uses the buffered Operator
 connection. It handles delivery audiences before passing plaintext packets to `runner::run_on`.
 The harness owns decoding and comparison. Core passes no Equivalence Rule overrides.
-`connection_identity` has a ledger entry and a durable Golden Trace comparison.
+`connection_identity` and `taxi_single_hop` have ledger entries and durable Golden Trace comparisons.
 
-At this pin `FixtureAdapter::prepare` returns a TCP `WireClient`, so core uses `run_on` with its
-own `Transport`. The v2 runner begins after setup. Core applies setup delivery instructions to
-establish AOI Grants before sending the first request. T2d must replace this boundary with the
-harness's opening phase, which records login packets outside comparison. All packets received
-during scenario steps reach the comparator. See the [runner contract](../../conformance/README.md#scenario-catalogue-and-tier-1)
+At this pin `FixtureAdapter::prepare` returns a `PreparedClient` backed by TCP, so core uses
+`run_on` with its own `Transport`. The schema-3 runner records login packets in the opening phase.
+Core applies their delivery instructions to establish AOI Grants and retains the packets as opening observations.
+The harness excludes opening observations from comparison and begins comparison at the first step.
+All packets received during scenario steps reach the comparator. See the [runner contract](../../conformance/README.md#scenario-catalogue-and-tier-1)
 for failure handling and the local result file.
 
 T2c adds `conformance/scoreboard`. It joins the ledger with local tier 1 evidence and the latest
 JSON audit report, keeping real-client checks in their own column. It derives opcode and unavailable
 request counts from core's dependency source and `unavailable.rs`. Missing, stale and malformed
-evidence cannot become a pass. [The scoreboard contract](../../conformance/README.md#scoreboard)
+evidence cannot become a pass. A matching dirty-tree run is unverified and adds no system pass.
+Audit data classifications require exact scalar field locations and matching value types in the
+ledger. Packet structure, ordering, missing fields, timing and identity differences remain rules.
+[The scoreboard contract](../../conformance/README.md#scoreboard)
 defines the counts and the report format for the Milestone 3 audit producer.
+
+T2g moves to the conformance.4 recordings and LCS packet alignment. Missing and extra packets
+produce their own records; aligned packets retain strict field and delivery-time checks. The taxi
+scenario also checks zone world states, weather and every passenger VALUES field. The
+[comparison record](../../conformance/reports/2026-10-27-t2g.md) maps the observed differences to
+core defects. No gameplay or Equivalence Rule changes belong to this update.
+
+The ledger can record `known_gaps` with a description, core source path, symbol and comparison
+evidence. These entries have no status and never participate in rule/data classification. They
+are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
+results; the durable taxi skip remains until the Behavior conforms with imported data.

@@ -18,3 +18,51 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "The first passenger spline starts at DBC vertex 0 instead of the Character position."
+path = "module/src/taxi.rs"
+symbol = "arm_taxi_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 4-6, SMSG_MONSTER_MOVE position.x/y/z exact_field."
+
+[[known_gaps]]
+description = "Straight-segment timing makes the advertised duration about one second short and clears the landing presentation early."
+path = "module/src/taxi.rs"
+symbol = "segment_micros; route_duration_micros"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 3, 84 and 87, duration and landing passenger_update_delivery."
+
+[[known_gaps]]
+description = "Crossing a route vertex or grid cell sends another spline to the passenger."
+path = "module/src/taxi.rs"
+symbol = "should_refresh_spline; advance_taxi_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 10-83, extra_packet for SMSG_MONSTER_MOVE."
+
+[[known_gaps]]
+description = "Takeoff omits SMSG_CANCEL_COMBAT and SMSG_MOUNTRESULT; landing omits SMSG_DISMOUNTRESULT and SMSG_CANCEL_COMBAT."
+path = "module/src/taxi.rs"
+symbol = "arm_taxi_flight; finish_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 1, 2, 7 and 8, missing_packet for combat and mount result replies; activation delivery is in module/src/native/taxi.rs::receive."
+
+[[known_gaps]]
+description = "Landing sends no MSG_MOVE_TELEPORT_ACK correction."
+path = "module/src/taxi.rs"
+symbol = "finish_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire record 9, missing_packet for MSG_MOVE_TELEPORT_ACK."
+
+[[known_gaps]]
+description = "Takeoff unit flags omit bit 0x4."
+path = "module/src/taxi.rs"
+symbol = "arm_taxi_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire record 86, passenger field_46 exact_field: 1048584 instead of 1048588."
+
+[[known_gaps]]
+description = "Flight movement keeps the old zone and omits the Elwynn and Westfall world-state and weather packets."
+path = "module/src/taxi.rs"
+symbol = "advance_taxi_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 88-91, missing zone packets; this route-only fixture has no terrain import."
+
+[[known_gaps]]
+description = "The passenger PLAYER_FLAGS update when leaving Stormwind is absent. Rest-state changes update player_bytes_2, not player_flags, and flight ticks do not call the rest-state check."
+path = "module/src/rest.rs"
+symbol = "check_rest_state"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire record 85 and tier 1 record 88, missing_packet for passenger field_190; module/src/taxi.rs::advance_taxi_flight does not check rest state."

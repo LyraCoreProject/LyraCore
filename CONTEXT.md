@@ -19,7 +19,7 @@ entry in both files.
 
 **C** [Cancellation](#auctions) · [Candidate](#bots) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Companion Order](#bots) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Coordinator](#retired-terms) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
-**D** [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
+**D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
 **E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
 
@@ -1137,8 +1137,13 @@ _Avoid_: feature (when meaning one interaction)
 
 **Conformance Audit**:
 A dated comparison of LyraCore and the Reference Server through the same wire scenarios. It
-separates rule differences from data differences.
+separates rule differences from data differences using typed, sourced field declarations in the
+Feature Ledger.
 _Avoid_: compatibility audit
+
+**Data-dependent field**:
+An exact packet field declared in the Feature Ledger with its value type, world-data dependency and
+pinned source. Only matching scalar value differences count as data in a Conformance Audit.
 
 **Reference Server**:
 The vmangos server whose observable results define 1.12.1 behavior for conformance checks.
