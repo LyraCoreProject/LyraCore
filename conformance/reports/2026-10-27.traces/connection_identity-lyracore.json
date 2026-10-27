@@ -5,7 +5,7 @@
     "scenario": "connection_identity",
     "behavior": "connection_identity",
     "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
-    "recorded_at_unix_ms": 1793111546867,
+    "recorded_at_unix_ms": 1793121176847,
     "origin": {
       "kind": "candidate",
       "adapter": "lyracore"
@@ -1564,7 +1564,7 @@
                     },
                     "orientation": {
                       "type": "float",
-                      "value": 0.0
+                      "value": -0.09423758089542389
                     },
                     "position": {
                       "type": "object",
@@ -1597,7 +1597,7 @@
                     },
                     "timestamp": {
                       "type": "unsigned",
-                      "value": 0
+                      "value": 2119814032
                     },
                     "turn_rate": {
                       "type": "float",
@@ -1701,6 +1701,74 @@
               }
             }
           ]
+        }
+      }
+    },
+    {
+      "received_after_ms": null,
+      "checkpoint": "opening",
+      "stream": {
+        "kind": "opening"
+      },
+      "opcode": 221,
+      "fields": {
+        "destination": {
+          "type": "object",
+          "value": {
+            "x": {
+              "type": "float",
+              "value": -8938.2802734375
+            },
+            "y": {
+              "type": "float",
+              "value": -127.65083312988281
+            },
+            "z": {
+              "type": "float",
+              "value": 83.53119659423828
+            }
+          }
+        },
+        "duration": {
+          "type": "time_ms",
+          "value": 306
+        },
+        "flags": {
+          "type": "unsigned",
+          "value": 0
+        },
+        "guid": {
+          "type": "guid",
+          "value": 17379391817660760065
+        },
+        "kind": {
+          "type": "unsigned",
+          "value": 0
+        },
+        "offsets": {
+          "type": "list",
+          "value": []
+        },
+        "position": {
+          "type": "object",
+          "value": {
+            "x": {
+              "type": "float",
+              "value": -8939.0419921875
+            },
+            "y": {
+              "type": "float",
+              "value": -127.57884216308594
+            },
+            "z": {
+              "type": "float",
+              "value": 83.53119659423828
+            }
+          }
+        },
+        "spline_id": {
+          "type": "unsigned",
+          "value": 2119814032
         }
       }
     },
@@ -2903,12 +2971,12 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2110185340
+          "value": 2119814532
         }
       }
     },
     {
-      "received_after_ms": 50,
+      "received_after_ms": 56,
       "checkpoint": "ping",
       "stream": {
         "kind": "reply",
@@ -2923,7 +2991,7 @@
       }
     },
     {
-      "received_after_ms": 45,
+      "received_after_ms": 46,
       "checkpoint": "name",
       "stream": {
         "kind": "reply",
@@ -2956,15 +3024,6 @@
           "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       }
-    },
-    {
-      "received_after_ms": 248,
-      "checkpoint": "name",
-      "stream": {
-        "kind": "unexpected"
-      },
-      "opcode": 221,
-      "fields": {}
     }
   ]
 }

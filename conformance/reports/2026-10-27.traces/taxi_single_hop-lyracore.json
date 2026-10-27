@@ -5,7 +5,7 @@
     "scenario": "taxi_single_hop",
     "behavior": "taxi_single_hop",
     "scenario_sha256": "373ebb716ea792004c499e94f969ead95c2bd7cf4c66a119b54e5770cff3cd42",
-    "recorded_at_unix_ms": 1793111548774,
+    "recorded_at_unix_ms": 1793121179107,
     "origin": {
       "kind": "candidate",
       "adapter": "lyracore"
@@ -1527,7 +1527,7 @@
       "fields": {}
     },
     {
-      "received_after_ms": 45,
+      "received_after_ms": 47,
       "checkpoint": "status",
       "stream": {
         "kind": "reply",
@@ -1546,7 +1546,7 @@
       }
     },
     {
-      "received_after_ms": 45,
+      "received_after_ms": 50,
       "checkpoint": "nodes",
       "stream": {
         "kind": "reply",
@@ -1606,7 +1606,7 @@
       }
     },
     {
-      "received_after_ms": 50,
+      "received_after_ms": 54,
       "checkpoint": "flight",
       "stream": {
         "kind": "broadcast",
@@ -1648,7 +1648,7 @@
       }
     },
     {
-      "received_after_ms": 50,
+      "received_after_ms": 54,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -1663,7 +1663,7 @@
       }
     },
     {
-      "received_after_ms": 50,
+      "received_after_ms": 54,
       "checkpoint": "flight",
       "stream": {
         "kind": "broadcast",
@@ -1709,7 +1709,7 @@
       }
     },
     {
-      "received_after_ms": 50,
+      "received_after_ms": 54,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -2216,12 +2216,12 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011055
+          "value": 2399412470
         }
       }
     },
     {
-      "received_after_ms": 301,
+      "received_after_ms": 312,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -2231,7 +2231,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 72209
+          "value": 72208
         },
         "flags": {
           "type": "unsigned",
@@ -2697,26 +2697,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8857.9228515625
+              "value": -8857.9462890625
             },
             "y": {
               "type": "float",
-              "value": 493.86016845703125
+              "value": 493.8451232910156
             },
             "z": {
               "type": "float",
-              "value": 112.8218002319336
+              "value": 112.82905578613281
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011056
+          "value": 2399412471
         }
       }
     },
     {
-      "received_after_ms": 797,
+      "received_after_ms": 803,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -2726,7 +2726,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 71709
+          "value": 71708
         },
         "flags": {
           "type": "unsigned",
@@ -3175,26 +3175,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8871.0
+              "value": -8871.0166015625
             },
             "y": {
               "type": "float",
-              "value": 485.4747009277344
+              "value": 485.4654541015625
             },
             "z": {
               "type": "float",
-              "value": 116.564453125
+              "value": 116.56581115722656
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011057
+          "value": 2399412472
         }
       }
     },
     {
-      "received_after_ms": 1297,
+      "received_after_ms": 1303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -3653,21 +3653,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8884.9150390625
+              "value": -8884.9248046875
             },
             "y": {
               "type": "float",
-              "value": 477.625244140625
+              "value": 477.61968994140625
             },
             "z": {
               "type": "float",
-              "value": 117.71472930908203
+              "value": 117.71554565429688
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011057
+          "value": 2399412472
         }
       }
     },
@@ -4131,26 +4131,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8905.763671875
+              "value": -8905.75
             },
             "y": {
               "type": "float",
-              "value": 465.865234375
+              "value": 465.87274169921875
             },
             "z": {
               "type": "float",
-              "value": 119.43805694580078
+              "value": 119.43695831298828
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011057
+          "value": 2399412472
         }
       }
     },
     {
-      "received_after_ms": 3047,
+      "received_after_ms": 3048,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -4160,7 +4160,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 69459
+          "value": 69458
         },
         "flags": {
           "type": "unsigned",
@@ -4609,26 +4609,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8933.5517578125
+              "value": -8933.5703125
             },
             "y": {
               "type": "float",
-              "value": 450.19061279296875
+              "value": 450.1798400878906
             },
             "z": {
               "type": "float",
-              "value": 121.73503875732422
+              "value": 121.73661804199219
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011057
+          "value": 2399412472
         }
       }
     },
     {
-      "received_after_ms": 3297,
+      "received_after_ms": 3323,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -4638,7 +4638,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 69209
+          "value": 69208
         },
         "flags": {
           "type": "unsigned",
@@ -5070,11 +5070,11 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8940.4580078125
+              "value": -8940.466796875
             },
             "y": {
               "type": "float",
-              "value": 449.2276916503906
+              "value": 449.23321533203125
             },
             "z": {
               "type": "float",
@@ -5084,7 +5084,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011058
+          "value": 2399412473
         }
       }
     },
@@ -5531,11 +5531,11 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8974.50390625
+              "value": -8974.49609375
             },
             "y": {
               "type": "float",
-              "value": 470.23199462890625
+              "value": 470.2270812988281
             },
             "z": {
               "type": "float",
@@ -5545,7 +5545,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011058
+          "value": 2399412473
         }
       }
     },
@@ -5565,7 +5565,7 @@
       }
     },
     {
-      "received_after_ms": 5053,
+      "received_after_ms": 5054,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -6007,11 +6007,11 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -8988.111328125
+              "value": -8988.109375
             },
             "y": {
               "type": "float",
-              "value": 478.6268615722656
+              "value": 478.62579345703125
             },
             "z": {
               "type": "float",
@@ -6021,12 +6021,12 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011058
+          "value": 2399412473
         }
       }
     },
     {
-      "received_after_ms": 6549,
+      "received_after_ms": 6547,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -6451,26 +6451,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9029.1806640625
+              "value": -9029.1904296875
             },
             "y": {
               "type": "float",
-              "value": 500.50531005859375
+              "value": 500.501953125
             },
             "z": {
               "type": "float",
-              "value": 123.26012420654297
+              "value": 123.26333618164062
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011059
+          "value": 2399412474
         }
       }
     },
     {
-      "received_after_ms": 6797,
+      "received_after_ms": 6813,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -6895,26 +6895,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9036.45703125
+              "value": -9036.4521484375
             },
             "y": {
               "type": "float",
-              "value": 498.0750427246094
+              "value": 498.07666015625
             },
             "z": {
               "type": "float",
-              "value": 125.57954406738281
+              "value": 125.57801818847656
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011059
+          "value": 2399412474
         }
       }
     },
     {
-      "received_after_ms": 8547,
+      "received_after_ms": 8560,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -6924,7 +6924,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 63959
+          "value": 63958
         },
         "flags": {
           "type": "unsigned",
@@ -7339,26 +7339,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9087.30078125
+              "value": -9087.31640625
             },
             "y": {
               "type": "float",
-              "value": 481.0931396484375
+              "value": 481.087646484375
             },
             "z": {
               "type": "float",
-              "value": 141.7869415283203
+              "value": 141.79217529296875
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011059
+          "value": 2399412474
         }
       }
     },
     {
-      "received_after_ms": 9548,
+      "received_after_ms": 9561,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -7766,26 +7766,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9115.8056640625
+              "value": -9115.7978515625
             },
             "y": {
               "type": "float",
-              "value": 469.5760192871094
+              "value": 469.5809631347656
             },
             "z": {
               "type": "float",
-              "value": 149.12472534179688
+              "value": 149.1245574951172
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 9804,
+      "received_after_ms": 9799,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -7795,7 +7795,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 62705
+          "value": 62709
         },
         "flags": {
           "type": "unsigned",
@@ -8193,26 +8193,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9122.5302734375
+              "value": -9122.4306640625
             },
             "y": {
               "type": "float",
-              "value": 465.0588073730469
+              "value": 465.12554931640625
             },
             "z": {
               "type": "float",
-              "value": 149.2788848876953
+              "value": 149.276611328125
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 10302,
+      "received_after_ms": 10303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -8222,7 +8222,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 62204
+          "value": 62209
         },
         "flags": {
           "type": "unsigned",
@@ -8620,26 +8620,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9135.849609375
+              "value": -9135.71875
             },
             "y": {
               "type": "float",
-              "value": 456.1117248535156
+              "value": 456.2000732421875
             },
             "z": {
               "type": "float",
-              "value": 149.584228515625
+              "value": 149.58120727539062
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 12313,
+      "received_after_ms": 12303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -8649,7 +8649,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 60209
+          "value": 60208
         },
         "flags": {
           "type": "unsigned",
@@ -9047,26 +9047,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9188.83203125
+              "value": -9188.849609375
             },
             "y": {
               "type": "float",
-              "value": 420.5224914550781
+              "value": 420.5106506347656
             },
             "z": {
               "type": "float",
-              "value": 150.79876708984375
+              "value": 150.79916381835938
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 12552,
+      "received_after_ms": 12560,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -9076,7 +9076,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 59959
+          "value": 59958
         },
         "flags": {
           "type": "unsigned",
@@ -9474,26 +9474,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9195.4609375
+              "value": -9195.4892578125
             },
             "y": {
               "type": "float",
-              "value": 416.069580078125
+              "value": 416.050537109375
             },
             "z": {
               "type": "float",
-              "value": 150.9507293701172
+              "value": 150.95138549804688
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 14052,
+      "received_after_ms": 14053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -9901,26 +9901,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9235.30859375
+              "value": -9235.3095703125
             },
             "y": {
               "type": "float",
-              "value": 389.30303955078125
+              "value": 389.3025207519531
             },
             "z": {
               "type": "float",
-              "value": 151.8641815185547
+              "value": 151.86419677734375
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011060
+          "value": 2399412475
         }
       }
     },
     {
-      "received_after_ms": 14547,
+      "received_after_ms": 14553,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -10315,22 +10315,22 @@
             },
             "y": {
               "type": "float",
-              "value": 381.873779296875
+              "value": 381.8736267089844
             },
             "z": {
               "type": "float",
-              "value": 151.8444061279297
+              "value": 151.84446716308594
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011061
+          "value": 2399412476
         }
       }
     },
     {
-      "received_after_ms": 16057,
+      "received_after_ms": 16053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -10721,26 +10721,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9287.904296875
+              "value": -9287.8916015625
             },
             "y": {
               "type": "float",
-              "value": 407.3591003417969
+              "value": 407.35101318359375
             },
             "z": {
               "type": "float",
-              "value": 141.4309539794922
+              "value": 141.43426513671875
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011061
+          "value": 2399412476
         }
       }
     },
     {
-      "received_after_ms": 16808,
+      "received_after_ms": 16813,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -11131,26 +11131,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9307.5537109375
+              "value": -9307.5556640625
             },
             "y": {
               "type": "float",
-              "value": 420.0938415527344
+              "value": 420.0948486328125
             },
             "z": {
               "type": "float",
-              "value": 136.22747802734375
+              "value": 136.22706604003906
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011061
+          "value": 2399412476
         }
       }
     },
     {
-      "received_after_ms": 17803,
+      "received_after_ms": 17797,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -11524,26 +11524,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9333.0205078125
+              "value": -9333.03125
             },
             "y": {
               "type": "float",
-              "value": 433.72100830078125
+              "value": 433.72076416015625
             },
             "z": {
               "type": "float",
-              "value": 126.23541259765625
+              "value": 126.22501373291016
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011062
+          "value": 2399412477
         }
       }
     },
     {
-      "received_after_ms": 18053,
+      "received_after_ms": 18048,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -11553,7 +11553,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 54459
+          "value": 54458
         },
         "flags": {
           "type": "unsigned",
@@ -11917,26 +11917,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9338.6083984375
+              "value": -9338.62890625
             },
             "y": {
               "type": "float",
-              "value": 433.5798034667969
+              "value": 433.57928466796875
             },
             "z": {
               "type": "float",
-              "value": 120.5087661743164
+              "value": 120.48771667480469
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011062
+          "value": 2399412477
         }
       }
     },
     {
-      "received_after_ms": 20048,
+      "received_after_ms": 20052,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -11946,7 +11946,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 52459
+          "value": 52458
         },
         "flags": {
           "type": "unsigned",
@@ -12293,26 +12293,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9383.8564453125
+              "value": -9383.8837890625
             },
             "y": {
               "type": "float",
-              "value": 430.0750732421875
+              "value": 430.0578918457031
             },
             "z": {
               "type": "float",
-              "value": 76.91264343261719
+              "value": 76.90476989746094
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011063
+          "value": 2399412478
         }
       }
     },
     {
-      "received_after_ms": 21053,
+      "received_after_ms": 21069,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -12669,26 +12669,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9409.9580078125
+              "value": -9409.958984375
             },
             "y": {
               "type": "float",
-              "value": 413.23870849609375
+              "value": 413.2384033203125
             },
             "z": {
               "type": "float",
-              "value": 69.18775939941406
+              "value": 69.1876220703125
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011063
+          "value": 2399412478
         }
       }
     },
     {
-      "received_after_ms": 22053,
+      "received_after_ms": 22055,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -12698,7 +12698,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 50459
+          "value": 50458
         },
         "flags": {
           "type": "unsigned",
@@ -13045,26 +13045,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9436.0390625
+              "value": -9436.060546875
             },
             "y": {
               "type": "float",
-              "value": 396.41546630859375
+              "value": 396.40185546875
             },
             "z": {
               "type": "float",
-              "value": 61.46889114379883
+              "value": 61.46263885498047
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011063
+          "value": 2399412478
         }
       }
     },
     {
-      "received_after_ms": 22798,
+      "received_after_ms": 22803,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -13404,26 +13404,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9456.4111328125
+              "value": -9456.419921875
             },
             "y": {
               "type": "float",
-              "value": 385.25262451171875
+              "value": 385.2505187988281
             },
             "z": {
               "type": "float",
-              "value": 56.688377380371094
+              "value": 56.6879768371582
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011064
+          "value": 2399412479
         }
       }
     },
     {
-      "received_after_ms": 23797,
+      "received_after_ms": 23800,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -13763,26 +13763,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9487.41796875
+              "value": -9487.40234375
             },
             "y": {
               "type": "float",
-              "value": 377.4416809082031
+              "value": 377.4455871582031
             },
             "z": {
               "type": "float",
-              "value": 55.20738983154297
+              "value": 55.208133697509766
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011064
+          "value": 2399412479
         }
       }
     },
     {
-      "received_after_ms": 25047,
+      "received_after_ms": 25054,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -13792,7 +13792,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 47459
+          "value": 47458
         },
         "flags": {
           "type": "unsigned",
@@ -14105,26 +14105,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9526.0166015625
+              "value": -9526.0390625
             },
             "y": {
               "type": "float",
-              "value": 368.7842712402344
+              "value": 368.7958984375
             },
             "z": {
               "type": "float",
-              "value": 53.412757873535156
+              "value": 53.4124755859375
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011065
+          "value": 2399412480
         }
       }
     },
     {
-      "received_after_ms": 25548,
+      "received_after_ms": 25564,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -14447,26 +14447,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9540.2392578125
+              "value": -9540.24609375
             },
             "y": {
               "type": "float",
-              "value": 376.1223449707031
+              "value": 376.1258239746094
             },
             "z": {
               "type": "float",
-              "value": 53.235435485839844
+              "value": 53.235355377197266
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011065
+          "value": 2399412480
         }
       }
     },
     {
-      "received_after_ms": 27298,
+      "received_after_ms": 27303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -14476,7 +14476,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 45209
+          "value": 45208
         },
         "flags": {
           "type": "unsigned",
@@ -14789,26 +14789,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9590.0126953125
+              "value": -9590.029296875
             },
             "y": {
               "type": "float",
-              "value": 401.802490234375
+              "value": 401.81146240234375
             },
             "z": {
               "type": "float",
-              "value": 52.614898681640625
+              "value": 52.614681243896484
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011065
+          "value": 2399412480
         }
       }
     },
     {
-      "received_after_ms": 27831,
+      "received_after_ms": 27802,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -14818,7 +14818,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 44704
+          "value": 44709
         },
         "flags": {
           "type": "unsigned",
@@ -15114,21 +15114,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9604.0546875
+              "value": -9603.92578125
             },
             "y": {
               "type": "float",
-              "value": 409.6794738769531
+              "value": 409.5848693847656
             },
             "z": {
               "type": "float",
-              "value": 52.0720100402832
+              "value": 52.08987808227539
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011066
+          "value": 2399412481
         }
       }
     },
@@ -15439,26 +15439,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9616.751953125
+              "value": -9616.7587890625
             },
             "y": {
               "type": "float",
-              "value": 418.9764099121094
+              "value": 418.9813232421875
             },
             "z": {
               "type": "float",
-              "value": 50.315345764160156
+              "value": 50.31441879272461
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011066
+          "value": 2399412481
         }
       }
     },
     {
-      "received_after_ms": 29048,
+      "received_after_ms": 29062,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -15764,26 +15764,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9636.005859375
+              "value": -9636.0009765625
             },
             "y": {
               "type": "float",
-              "value": 433.0740966796875
+              "value": 433.07073974609375
             },
             "z": {
               "type": "float",
-              "value": 47.65157699584961
+              "value": 47.65221405029297
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011066
+          "value": 2399412481
         }
       }
     },
     {
-      "received_after_ms": 31052,
+      "received_after_ms": 31053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -16072,21 +16072,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9686.8876953125
+              "value": -9686.8974609375
             },
             "y": {
               "type": "float",
-              "value": 471.0285949707031
+              "value": 471.04510498046875
             },
             "z": {
               "type": "float",
-              "value": 40.69132614135742
+              "value": 40.69104766845703
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011067
+          "value": 2399412482
         }
       }
     },
@@ -16380,26 +16380,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9715.2861328125
+              "value": -9715.2890625
             },
             "y": {
               "type": "float",
-              "value": 519.2982788085938
+              "value": 519.3025512695312
             },
             "z": {
               "type": "float",
-              "value": 39.87735366821289
+              "value": 39.877281188964844
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011067
+          "value": 2399412482
         }
       }
     },
     {
-      "received_after_ms": 34075,
+      "received_after_ms": 34071,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -16409,7 +16409,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 38443
+          "value": 38459
         },
         "flags": {
           "type": "unsigned",
@@ -16671,26 +16671,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9734.900390625
+              "value": -9734.8408203125
             },
             "y": {
               "type": "float",
-              "value": 554.5263061523438
+              "value": 554.020263671875
             },
             "z": {
               "type": "float",
-              "value": 39.27539825439453
+              "value": 39.28562545776367
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011068
+          "value": 2399412483
         }
       }
     },
     {
-      "received_after_ms": 34553,
+      "received_after_ms": 34551,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -16700,7 +16700,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 37958
+          "value": 37959
         },
         "flags": {
           "type": "unsigned",
@@ -16962,26 +16962,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9736.7119140625
+              "value": -9736.7109375
             },
             "y": {
               "type": "float",
-              "value": 569.92041015625
+              "value": 569.9135131835938
             },
             "z": {
               "type": "float",
-              "value": 38.96428298950195
+              "value": 38.96442413330078
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011068
+          "value": 2399412483
         }
       }
     },
     {
-      "received_after_ms": 36048,
+      "received_after_ms": 36055,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -16991,7 +16991,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 36459
+          "value": 36458
         },
         "flags": {
           "type": "unsigned",
@@ -17253,26 +17253,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9742.3203125
+              "value": -9742.3212890625
             },
             "y": {
               "type": "float",
-              "value": 617.5775756835938
+              "value": 617.5811767578125
             },
             "z": {
               "type": "float",
-              "value": 38.00113296508789
+              "value": 38.001060485839844
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011068
+          "value": 2399412483
         }
       }
     },
     {
-      "received_after_ms": 36302,
+      "received_after_ms": 36305,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -17282,7 +17282,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 36209
+          "value": 36208
         },
         "flags": {
           "type": "unsigned",
@@ -17527,21 +17527,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9746.6181640625
+              "value": -9746.6337890625
             },
             "y": {
               "type": "float",
-              "value": 622.9293212890625
+              "value": 622.9356689453125
             },
             "z": {
               "type": "float",
-              "value": 38.441158294677734
+              "value": 38.44322204589844
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011069
+          "value": 2399412484
         }
       }
     },
@@ -17801,26 +17801,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9783.361328125
+              "value": -9783.357421875
             },
             "y": {
               "type": "float",
-              "value": 637.9633178710938
+              "value": 637.9614868164062
             },
             "z": {
               "type": "float",
-              "value": 43.36357116699219
+              "value": 43.362972259521484
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011069
+          "value": 2399412484
         }
       }
     },
     {
-      "received_after_ms": 38047,
+      "received_after_ms": 38053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -18058,26 +18058,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9798.595703125
+              "value": -9798.6044921875
             },
             "y": {
               "type": "float",
-              "value": 639.9331665039062
+              "value": 639.931884765625
             },
             "z": {
               "type": "float",
-              "value": 44.344051361083984
+              "value": 44.34401321411133
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011070
+          "value": 2399412485
         }
       }
     },
     {
-      "received_after_ms": 39298,
+      "received_after_ms": 39325,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -18315,26 +18315,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9838.173828125
+              "value": -9838.189453125
             },
             "y": {
               "type": "float",
-              "value": 634.177001953125
+              "value": 634.1747436523438
             },
             "z": {
               "type": "float",
-              "value": 44.186729431152344
+              "value": 44.186668395996094
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011070
+          "value": 2399412485
         }
       }
     },
     {
-      "received_after_ms": 39807,
+      "received_after_ms": 39829,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -18344,7 +18344,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 32706
+          "value": 32708
         },
         "flags": {
           "type": "unsigned",
@@ -18555,26 +18555,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9854.173828125
+              "value": -9854.1044921875
             },
             "y": {
               "type": "float",
-              "value": 632.924560546875
+              "value": 632.923095703125
             },
             "z": {
               "type": "float",
-              "value": 44.161014556884766
+              "value": 44.16088104248047
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011071
+          "value": 2399412486
         }
       }
     },
     {
-      "received_after_ms": 40808,
+      "received_after_ms": 40803,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -18795,26 +18795,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9886.060546875
+              "value": -9886.0791015625
             },
             "y": {
               "type": "float",
-              "value": 633.6142578125
+              "value": 633.6146240234375
             },
             "z": {
               "type": "float",
-              "value": 44.22208786010742
+              "value": 44.22212219238281
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011071
+          "value": 2399412486
         }
       }
     },
     {
-      "received_after_ms": 42297,
+      "received_after_ms": 42303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -19035,26 +19035,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9934.044921875
+              "value": -9934.0546875
             },
             "y": {
               "type": "float",
-              "value": 634.652099609375
+              "value": 634.6522827148438
             },
             "z": {
               "type": "float",
-              "value": 44.31399154663086
+              "value": 44.31400680541992
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011071
+          "value": 2399412486
         }
       }
     },
     {
-      "received_after_ms": 42555,
+      "received_after_ms": 42547,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -19258,21 +19258,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9942.0244140625
+              "value": -9942.0361328125
             },
             "y": {
               "type": "float",
-              "value": 634.8927001953125
+              "value": 634.9041748046875
             },
             "z": {
               "type": "float",
-              "value": 44.32170104980469
+              "value": 44.320472717285156
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011072
+          "value": 2399412487
         }
       }
     },
@@ -19481,26 +19481,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9976.3427734375
+              "value": -9976.349609375
             },
             "y": {
               "type": "float",
-              "value": 668.26123046875
+              "value": 668.2676391601562
             },
             "z": {
               "type": "float",
-              "value": 40.755401611328125
+              "value": 40.75471115112305
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011072
+          "value": 2399412487
         }
       }
     },
     {
-      "received_after_ms": 44553,
+      "received_after_ms": 44552,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -19704,21 +19704,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -9987.787109375
+              "value": -9987.7919921875
             },
             "y": {
               "type": "float",
-              "value": 679.388671875
+              "value": 679.3929443359375
             },
             "z": {
               "type": "float",
-              "value": 39.566139221191406
+              "value": 39.56568908691406
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011072
+          "value": 2399412487
         }
       }
     },
@@ -19733,7 +19733,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 27209
+          "value": 27208
         },
         "flags": {
           "type": "unsigned",
@@ -19910,26 +19910,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10002.56640625
+              "value": -10002.568359375
             },
             "y": {
               "type": "float",
-              "value": 697.6199340820312
+              "value": 697.6265869140625
             },
             "z": {
               "type": "float",
-              "value": 37.82048797607422
+              "value": 37.82000732421875
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011073
+          "value": 2399412488
         }
       }
     },
     {
-      "received_after_ms": 46050,
+      "received_after_ms": 46048,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -19939,7 +19939,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 26459
+          "value": 26458
         },
         "flags": {
           "type": "unsigned",
@@ -20116,26 +20116,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10010.611328125
+              "value": -10010.6201171875
             },
             "y": {
               "type": "float",
-              "value": 720.1591186523438
+              "value": 720.1838989257812
             },
             "z": {
               "type": "float",
-              "value": 36.18463134765625
+              "value": 36.182830810546875
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011073
+          "value": 2399412488
         }
       }
     },
     {
-      "received_after_ms": 47802,
+      "received_after_ms": 47799,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -20145,7 +20145,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 24707
+          "value": 24708
         },
         "flags": {
           "type": "unsigned",
@@ -20322,26 +20322,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10029.412109375
+              "value": -10029.3994140625
             },
             "y": {
               "type": "float",
-              "value": 772.8341674804688
+              "value": 772.7977905273438
             },
             "z": {
               "type": "float",
-              "value": 32.36155319213867
+              "value": 32.364192962646484
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011073
+          "value": 2399412488
         }
       }
     },
     {
-      "received_after_ms": 48299,
+      "received_after_ms": 48322,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -20351,7 +20351,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 24209
+          "value": 24207
         },
         "flags": {
           "type": "unsigned",
@@ -20511,26 +20511,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10034.71875
+              "value": -10034.736328125
             },
             "y": {
               "type": "float",
-              "value": 787.8118896484375
+              "value": 787.8901977539062
             },
             "z": {
               "type": "float",
-              "value": 31.34004783630371
+              "value": 31.350481033325195
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011074
+          "value": 2399412489
         }
       }
     },
     {
-      "received_after_ms": 49303,
+      "received_after_ms": 49308,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -20540,7 +20540,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 23208
+          "value": 23209
         },
         "flags": {
           "type": "unsigned",
@@ -20700,26 +20700,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10041.884765625
+              "value": -10041.8837890625
             },
             "y": {
               "type": "float",
-              "value": 818.74951171875
+              "value": 818.745849609375
             },
             "z": {
               "type": "float",
-              "value": 35.46192932128906
+              "value": 35.46144485473633
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011074
+          "value": 2399412489
         }
       }
     },
     {
-      "received_after_ms": 51047,
+      "received_after_ms": 51049,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -20729,7 +20729,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 21459
+          "value": 21458
         },
         "flags": {
           "type": "unsigned",
@@ -20889,26 +20889,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10054.4150390625
+              "value": -10054.4228515625
             },
             "y": {
               "type": "float",
-              "value": 872.841552734375
+              "value": 872.8736572265625
             },
             "z": {
               "type": "float",
-              "value": 42.66872024536133
+              "value": 42.672996520996094
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011074
+          "value": 2399412489
         }
       }
     },
     {
-      "received_after_ms": 51298,
+      "received_after_ms": 51303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21061,21 +21061,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10060.921875
+              "value": -10060.927734375
             },
             "y": {
               "type": "float",
-              "value": 877.4308471679688
+              "value": 877.435302734375
             },
             "z": {
               "type": "float",
-              "value": 43.007171630859375
+              "value": 43.00749969482422
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011075
+          "value": 2399412490
         }
       }
     },
@@ -21233,26 +21233,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10087.2080078125
+              "value": -10087.21484375
             },
             "y": {
               "type": "float",
-              "value": 895.62158203125
+              "value": 895.626708984375
             },
             "z": {
               "type": "float",
-              "value": 44.32374954223633
+              "value": 44.324119567871094
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011075
+          "value": 2399412490
         }
       }
     },
     {
-      "received_after_ms": 53558,
+      "received_after_ms": 53551,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21262,7 +21262,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 18959
+          "value": 18958
         },
         "flags": {
           "type": "unsigned",
@@ -21405,26 +21405,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10120.06640625
+              "value": -10120.0927734375
             },
             "y": {
               "type": "float",
-              "value": 918.360107421875
+              "value": 918.3788452148438
             },
             "z": {
               "type": "float",
-              "value": 45.969478607177734
+              "value": 45.97083282470703
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011075
+          "value": 2399412490
         }
       }
     },
     {
-      "received_after_ms": 54304,
+      "received_after_ms": 54302,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21434,7 +21434,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 18209
+          "value": 18208
         },
         "flags": {
           "type": "unsigned",
@@ -21560,26 +21560,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10139.826171875
+              "value": -10139.8623046875
             },
             "y": {
               "type": "float",
-              "value": 931.9317016601562
+              "value": 931.9486694335938
             },
             "z": {
               "type": "float",
-              "value": 46.90609359741211
+              "value": 46.9037971496582
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011076
+          "value": 2399412491
         }
       }
     },
     {
-      "received_after_ms": 56078,
+      "received_after_ms": 56053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21589,7 +21589,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 16459
+          "value": 16458
         },
         "flags": {
           "type": "unsigned",
@@ -21715,26 +21715,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10190.41796875
+              "value": -10190.4326171875
             },
             "y": {
               "type": "float",
-              "value": 955.77783203125
+              "value": 955.784912109375
             },
             "z": {
               "type": "float",
-              "value": 43.685970306396484
+              "value": 43.68501663208008
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011076
+          "value": 2399412491
         }
       }
     },
     {
-      "received_after_ms": 57047,
+      "received_after_ms": 57073,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21744,7 +21744,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 15459
+          "value": 15451
         },
         "flags": {
           "type": "unsigned",
@@ -21870,26 +21870,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10219.30078125
+              "value": -10219.5224609375
             },
             "y": {
               "type": "float",
-              "value": 969.3916015625
+              "value": 969.4961547851562
             },
             "z": {
               "type": "float",
-              "value": 41.84761428833008
+              "value": 41.83348846435547
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011076
+          "value": 2399412491
         }
       }
     },
     {
-      "received_after_ms": 57548,
+      "received_after_ms": 57564,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -21899,7 +21899,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 14959
+          "value": 14950
         },
         "flags": {
           "type": "unsigned",
@@ -22025,26 +22025,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10233.7587890625
+              "value": -10234.005859375
             },
             "y": {
               "type": "float",
-              "value": 976.2066040039062
+              "value": 976.3226928710938
             },
             "z": {
               "type": "float",
-              "value": 40.927330017089844
+              "value": 40.91165542602539
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011076
+          "value": 2399412491
         }
       }
     },
     {
-      "received_after_ms": 58300,
+      "received_after_ms": 58297,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22054,7 +22054,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 14209
+          "value": 14208
         },
         "flags": {
           "type": "unsigned",
@@ -22163,26 +22163,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10255.30859375
+              "value": -10255.3115234375
             },
             "y": {
               "type": "float",
-              "value": 986.5689086914062
+              "value": 986.5739135742188
             },
             "z": {
               "type": "float",
-              "value": 39.61163330078125
+              "value": 39.612369537353516
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011077
+          "value": 2399412492
         }
       }
     },
     {
-      "received_after_ms": 59552,
+      "received_after_ms": 59548,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22192,7 +22192,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 12959
+          "value": 12958
         },
         "flags": {
           "type": "unsigned",
@@ -22301,26 +22301,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10277.146484375
+              "value": -10277.1650390625
             },
             "y": {
               "type": "float",
-              "value": 1019.707275390625
+              "value": 1019.7352905273438
             },
             "z": {
               "type": "float",
-              "value": 44.44725036621094
+              "value": 44.45134353637695
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011077
+          "value": 2399412492
         }
       }
     },
     {
-      "received_after_ms": 60047,
+      "received_after_ms": 60053,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22439,26 +22439,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10285.892578125
+              "value": -10285.8955078125
             },
             "y": {
               "type": "float",
-              "value": 1032.9794921875
+              "value": 1032.9840087890625
             },
             "z": {
               "type": "float",
-              "value": 46.38396072387695
+              "value": 46.38462448120117
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011077
+          "value": 2399412492
         }
       }
     },
     {
-      "received_after_ms": 61553,
+      "received_after_ms": 61575,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22468,7 +22468,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 10959
+          "value": 10958
         },
         "flags": {
           "type": "unsigned",
@@ -22560,26 +22560,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10312.7646484375
+              "value": -10312.7802734375
             },
             "y": {
               "type": "float",
-              "value": 1072.151611328125
+              "value": 1072.164306640625
             },
             "z": {
               "type": "float",
-              "value": 51.5045051574707
+              "value": 51.50192642211914
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011078
+          "value": 2399412493
         }
       }
     },
     {
-      "received_after_ms": 62556,
+      "received_after_ms": 62563,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22589,7 +22589,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 9957
+          "value": 9959
         },
         "flags": {
           "type": "unsigned",
@@ -22681,21 +22681,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10337.84375
+              "value": -10337.7939453125
             },
             "y": {
               "type": "float",
-              "value": 1091.755615234375
+              "value": 1091.716796875
             },
             "z": {
               "type": "float",
-              "value": 47.51564407348633
+              "value": 47.5235481262207
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011078
+          "value": 2399412493
         }
       }
     },
@@ -22785,26 +22785,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10370.3154296875
+              "value": -10370.318359375
             },
             "y": {
               "type": "float",
-              "value": 1111.821533203125
+              "value": 1111.8212890625
             },
             "z": {
               "type": "float",
-              "value": 44.095909118652344
+              "value": 44.096248626708984
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011079
+          "value": 2399412494
         }
       }
     },
     {
-      "received_after_ms": 64297,
+      "received_after_ms": 64302,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -22889,21 +22889,21 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10386.1259765625
+              "value": -10386.1142578125
             },
             "y": {
               "type": "float",
-              "value": 1110.318359375
+              "value": 1110.319580078125
             },
             "z": {
               "type": "float",
-              "value": 46.13062286376953
+              "value": 46.12908172607422
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011079
+          "value": 2399412494
         }
       }
     },
@@ -22993,26 +22993,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10433.51171875
+              "value": -10433.5146484375
             },
             "y": {
               "type": "float",
-              "value": 1105.8135986328125
+              "value": 1105.813232421875
             },
             "z": {
               "type": "float",
-              "value": 52.22856140136719
+              "value": 52.22895431518555
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011079
+          "value": 2399412494
         }
       }
     },
     {
-      "received_after_ms": 67548,
+      "received_after_ms": 67552,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -23097,26 +23097,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10488.798828125
+              "value": -10488.8154296875
             },
             "y": {
               "type": "float",
-              "value": 1100.5574951171875
+              "value": 1100.555908203125
             },
             "z": {
               "type": "float",
-              "value": 59.34341812133789
+              "value": 59.34558868408203
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011079
+          "value": 2399412494
         }
       }
     },
     {
-      "received_after_ms": 67797,
+      "received_after_ms": 67798,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -23126,7 +23126,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 4709
+          "value": 4708
         },
         "flags": {
           "type": "unsigned",
@@ -23184,26 +23184,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10496.537109375
+              "value": -10496.5625
             },
             "y": {
               "type": "float",
-              "value": 1098.7601318359375
+              "value": 1098.7537841796875
             },
             "z": {
               "type": "float",
-              "value": 58.58643341064453
+              "value": 58.58320236206055
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011080
+          "value": 2399412495
         }
       }
     },
     {
-      "received_after_ms": 69053,
+      "received_after_ms": 69064,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -23213,7 +23213,7 @@
       "fields": {
         "duration": {
           "type": "time_ms",
-          "value": 3459
+          "value": 3458
         },
         "flags": {
           "type": "unsigned",
@@ -23271,26 +23271,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10535.0625
+              "value": -10535.076171875
             },
             "y": {
               "type": "float",
-              "value": 1089.15576171875
+              "value": 1089.15234375
             },
             "z": {
               "type": "float",
-              "value": 53.73399353027344
+              "value": 53.732261657714844
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011080
+          "value": 2399412495
         }
       }
     },
     {
-      "received_after_ms": 70802,
+      "received_after_ms": 70803,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -23341,26 +23341,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10588.828125
+              "value": -10588.845703125
             },
             "y": {
               "type": "float",
-              "value": 1075.424560546875
+              "value": 1075.40869140625
             },
             "z": {
               "type": "float",
-              "value": 46.912967681884766
+              "value": 46.90903854370117
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011081
+          "value": 2399412496
         }
       }
     },
     {
-      "received_after_ms": 71297,
+      "received_after_ms": 71303,
       "checkpoint": "flight",
       "stream": {
         "kind": "reply",
@@ -23411,26 +23411,26 @@
           "value": {
             "x": {
               "type": "float",
-              "value": -10600.595703125
+              "value": -10600.6123046875
             },
             "y": {
               "type": "float",
-              "value": 1064.9019775390625
+              "value": 1064.88720703125
             },
             "z": {
               "type": "float",
-              "value": 44.29289627075195
+              "value": 44.289215087890625
             }
           }
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 1359011081
+          "value": 2399412496
         }
       }
     },
     {
-      "received_after_ms": 72547,
+      "received_after_ms": 72553,
       "checkpoint": "flight",
       "stream": {
         "kind": "broadcast",
