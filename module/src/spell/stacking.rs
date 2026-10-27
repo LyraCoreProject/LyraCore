@@ -872,7 +872,6 @@ mod tests {
     #[test]
     fn compute_strength_ranks_first_then_magnitude() {
         assert!(compute_strength(2, 1) > compute_strength(1, 99_999));
-        assert_eq!(compute_strength(0, 100), compute_strength(0, 100));
         assert!(compute_strength(0, 200) > compute_strength(0, 100));
         assert_eq!(compute_strength(0, -50), 0);
     }

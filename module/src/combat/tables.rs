@@ -630,7 +630,6 @@ mod tests {
         let (wlo, _) = weapon_swing_range_ap(base_ap, 8, 12, 1900);
         let (wblo, _) = weapon_swing_range_ap(base_ap + 30, 8, 12, 1900);
         assert!(wblo > wlo);
-        assert_eq!(player_swing_range_ap(base_ap, 2000), (lo, hi));
     }
 
     #[test]

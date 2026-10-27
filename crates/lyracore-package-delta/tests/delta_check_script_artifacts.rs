@@ -32,7 +32,10 @@ fn delta_artifact(package: &str, spell_id: u32) -> String {
 }
 
 fn temp_dir(name: &str) -> std::path::PathBuf {
-    let dir = std::env::temp_dir().join(format!("lyracore-delta-check-{name}"));
+    let dir = std::env::temp_dir().join(format!(
+        "lyracore-delta-check-{}-{name}",
+        std::process::id()
+    ));
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).expect("create temp dir");
     dir

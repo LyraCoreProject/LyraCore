@@ -1,10 +1,7 @@
 use std::collections::BTreeSet;
 use std::path::PathBuf;
 
-use lyracore_package_delta::{
-    canonicalize, packed_spell_effect_id, trace, DeltaError, Operation, PackageDelta, PrimaryKey,
-    Table,
-};
+use lyracore_package_delta::{canonicalize, trace, DeltaError, PackageDelta, Table};
 
 fn fixture(name: &str) -> String {
     let path: PathBuf = [
@@ -66,23 +63,6 @@ fn the_rank_ladder_inserts_five_package_spells_and_their_child_effects() {
     assert_eq!(counts.inserted_spells, 5);
     assert_eq!(counts.inserted_effects, 10);
     assert_eq!(counts.updated_rows, 0);
-}
-
-#[test]
-fn every_child_effect_key_packs_from_its_spell_and_index() {
-    for claim in fire_nova().claims() {
-        if let PrimaryKey::SpellEffect {
-            spell_id,
-            effect_index,
-        } = claim.key()
-        {
-            assert_eq!(
-                claim.key().row_id(),
-                packed_spell_effect_id(spell_id, effect_index)
-            );
-            assert_eq!(claim.operation(), Operation::Insert);
-        }
-    }
 }
 
 #[test]

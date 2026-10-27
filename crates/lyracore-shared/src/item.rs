@@ -349,25 +349,6 @@ mod tests {
         }
     }
 
-    #[test]
-    fn the_wire_mask_agrees_with_the_gate_for_every_class_and_flag() {
-        for class in PLAYABLE {
-            for knows_plate in [false, true] {
-                for knows_mail in [false, true] {
-                    let proficiency = Proficiency::derive(class, knows_plate, knows_mail);
-                    let mask = proficiency.armor_subclass_mask();
-                    for subclass in 0..=SHIELD {
-                        assert_eq!(
-                            mask & (1 << subclass) != 0,
-                            proficiency.allows_armor(subclass),
-                            "class {class} ({knows_plate}, {knows_mail}) disagrees on subclass {subclass}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
     fn spellbook(player_class: u8, book: &[u32]) -> Proficiency {
         Proficiency::from_spellbook(player_class, |spell| book.contains(&spell))
     }

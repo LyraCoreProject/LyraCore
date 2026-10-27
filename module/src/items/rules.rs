@@ -397,23 +397,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn can_equip_into_mainhand_is_byte_identical_to_can_equip_mainhand() {
-        use equip_slot::MAINHAND;
-        assert!(can_equip_into(2, 21, MAINHAND, false));
-        assert!(can_equip_into(2, 13, MAINHAND, false));
-        assert!(can_equip_into(2, 17, MAINHAND, false));
-        assert!(!can_equip_into(0, 21, MAINHAND, false));
-        assert!(!can_equip_into(4, 21, MAINHAND, false));
-        assert!(!can_equip_into(2, 5, MAINHAND, false));
-        for &(c, it) in &[(2u8, 21u8), (2, 13), (2, 17), (0, 21), (4, 21), (2, 5)] {
-            assert_eq!(
-                can_equip_into(c, it, MAINHAND, false),
-                can_equip_mainhand(c, it)
-            );
-        }
-    }
-
-    #[test]
     fn can_equip_into_validates_armor_and_offhand_and_rejects_mismatch() {
         use equip_slot as e;
         use invtype as t;

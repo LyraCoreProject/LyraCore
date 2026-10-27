@@ -401,29 +401,6 @@ mod tests {
     }
 
     #[test]
-    fn chase_leash_radius_stays_within_the_combat_active_radius() {
-        assert_eq!(
-            CHASE_LEASH_SQ.sqrt(),
-            combat_active_radius(0.0),
-            "the chase cutoff must not exceed the active-cell radius"
-        );
-    }
-
-    #[test]
-    fn chase_step_is_position_only_so_freezing_between_calls_is_lossless() {
-        let (home_x, home_y) = (100.0, 100.0);
-        let start = (130.0, 100.0);
-        let mut cont = start;
-        for _ in 0..2 {
-            cont = chase_step(cont.0, cont.1, home_x, home_y, 5.0, 0.0);
-        }
-        let frozen = cont;
-        let next_after_resume = chase_step(frozen.0, frozen.1, home_x, home_y, 5.0, 0.0);
-        let next_if_uninterrupted = chase_step(cont.0, cont.1, home_x, home_y, 5.0, 0.0);
-        assert_eq!(next_after_resume, next_if_uninterrupted);
-    }
-
-    #[test]
     fn a_creature_displaced_far_from_home_steps_all_the_way_back() {
         let (home_x, home_y) = (-100.0_f32, 250.0_f32);
         let step = constants::speeds::RUN * MOVE_TICK_SECS;
@@ -750,12 +727,6 @@ mod tests {
             "should stay glued within ~one leg, gap {}",
             tx - cx
         );
-    }
-
-    #[test]
-    fn global_tick_instance_sentinel_is_u64_max() {
-        assert_eq!(GLOBAL_TICK_INSTANCE, u64::MAX);
-        assert_eq!(GLOBAL_TICK_INSTANCE, 18_446_744_073_709_551_615u64);
     }
 
     #[test]

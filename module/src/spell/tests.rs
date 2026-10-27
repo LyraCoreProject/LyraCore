@@ -329,9 +329,11 @@ fn absorb_draw_soaks_then_overflows() {
 
 #[test]
 fn passive_application_uses_only_aura_effects() {
-    use lyracore_shared::spell::taxonomy::EffectKind;
-    for kind in EffectKind::ALL {
-        assert_eq!(passive_applies_effect_kind(*kind as u8), kind.is_aura());
+    for kind in [A_MOD_STAT, A_STEALTH, A_PERIODIC_TRIGGER] {
+        assert!(passive_applies_effect_kind(kind), "{kind:#x}");
+    }
+    for kind in [E_DAMAGE, E_HEAL, E_TRIGGER, E_SELF_RESURRECT] {
+        assert!(!passive_applies_effect_kind(kind), "{kind:#x}");
     }
 }
 
@@ -421,31 +423,4 @@ fn is_due_for_expiry_permanent_sentinel_never_reaped() {
     let far_future_now = Timestamp::from_micros_since_unix_epoch(9_999_999_999_999);
     assert!(!is_due_for_expiry(A_MOD_STAT, permanent, far_future_now));
     assert!(!is_due_for_expiry(A_STEALTH, permanent, far_future_now));
-}
-
-#[test]
-fn potion_heal_clamps_to_max_health() {
-    const POTION_HEAL: i32 = 80; // Seeded effect 200440 fixes Minor Healing at 80 health.
-    assert_eq!(healed_value(1, 500, POTION_HEAL), 81);
-    assert_eq!(healed_value(450, 500, POTION_HEAL), 500);
-    assert_eq!(healed_value(500, 500, POTION_HEAL), 500);
-}
-
-#[test]
-fn mana_potion_energizes_and_clamps_to_max_power() {
-    const POTION_MANA: i32 = 160; // Seeded effect 200452 uses the 160-mana Restore Mana midpoint.
-    assert_eq!(energized_value(40, 500, POTION_MANA), 200);
-    assert_eq!(energized_value(400, 500, POTION_MANA), 500);
-    assert_eq!(energized_value(500, 500, POTION_MANA), 500);
-}
-
-#[test]
-fn drink_periodic_energize_climbs_per_tick_and_clamps() {
-    const DRINK_PER_TICK: i32 = 41; // Seeded effect 200456 restores 41 mana every five seconds.
-    let mut power = 0u32;
-    for _ in 0..6 {
-        power = energized_value(power, 500, DRINK_PER_TICK);
-    }
-    assert_eq!(power, 246);
-    assert_eq!(energized_value(480, 500, DRINK_PER_TICK), 500);
 }

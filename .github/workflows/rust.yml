@@ -57,6 +57,11 @@ jobs:
       - run: cargo test -p lyracore-protocol
       - run: cargo test -p lyracore-shared
       - run: cargo test -p lyracore-test-support
+      - name: Run the importer script tests
+        run: |
+          bash importer/scripts/import-world-sql-test.sh
+          bash importer/scripts/pull-classic-db-checksum-test.sh
+          bash importer/scripts/import-manifest-smoke.sh
 
   wasm:
     runs-on: ubuntu-latest

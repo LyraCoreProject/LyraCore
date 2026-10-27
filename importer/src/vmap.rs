@@ -1772,7 +1772,6 @@ mod tests {
         };
         let mut shifted = placement.clone();
 
-        assert_eq!(placement_key(&placement), placement_key(&placement));
         shifted.position[0] += 1.0;
         assert_ne!(placement_key(&placement), placement_key(&shifted));
     }
