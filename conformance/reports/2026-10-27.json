@@ -1,0 +1,2102 @@
+{
+  "schema_version": 2,
+  "tier": "conformance_audit",
+  "core_commit": "899d5330360505435bc67ec53f3dcc7ec999ed66",
+  "working_tree_dirty": false,
+  "harness_revision": "bc83d81cc1992fd1b522cab38c2ea048b5c6db23",
+  "recorded_at_unix_ms": 1793108506798,
+  "scenarios": [
+    {
+      "id": "connection_identity",
+      "behavior": "connection_identity",
+      "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
+      "comparison": {
+        "differences": []
+      },
+      "reference_comparison": {
+        "differences": []
+      }
+    },
+    {
+      "id": "taxi_single_hop",
+      "behavior": "taxi_single_hop",
+      "scenario_sha256": "373ebb716ea792004c499e94f969ead95c2bd7cf4c66a119b54e5770cff3cd42",
+      "comparison": {
+        "differences": [
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 0,
+            "field_path": [],
+            "opcode": 334,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 334
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 2,
+            "field_path": [],
+            "opcode": 366,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 366
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 3,
+            "field_path": [
+              "duration"
+            ],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "time_tolerance",
+            "reason": "time exceeds the configured millisecond tolerance",
+            "expected": {
+              "type": "time_ms",
+              "value": 73484
+            },
+            "actual": {
+              "type": "time_ms",
+              "value": 72461
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 3,
+            "field_path": [
+              "position",
+              "x"
+            ],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "exact_field",
+            "reason": "field type and value must match",
+            "expected": {
+              "type": "float",
+              "value": -8840.5595703125
+            },
+            "actual": {
+              "type": "float",
+              "value": -8851.658203125
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 3,
+            "field_path": [
+              "position",
+              "y"
+            ],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "exact_field",
+            "reason": "field type and value must match",
+            "expected": {
+              "type": "float",
+              "value": 489.70001220703125
+            },
+            "actual": {
+              "type": "float",
+              "value": 498.5517578125
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 3,
+            "field_path": [
+              "position",
+              "z"
+            ],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "exact_field",
+            "reason": "field type and value must match",
+            "expected": {
+              "type": "float",
+              "value": 109.61000061035156
+            },
+            "actual": {
+              "type": "float",
+              "value": 111.25601959228516
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 4,
+            "field_path": [],
+            "opcode": 367,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 367
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 5,
+            "field_path": [],
+            "opcode": 334,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 334
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 6,
+            "field_path": [],
+            "opcode": 199,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 199
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 2,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 3,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 4,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 5,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 6,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 7,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 8,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 9,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 10,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 11,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 12,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 13,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 14,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 15,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 16,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 17,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 18,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 19,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 20,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 21,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 22,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 23,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 24,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 25,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 26,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 27,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 28,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 29,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 30,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 31,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 32,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 33,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 34,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 35,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 36,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 37,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 38,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 39,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 40,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 41,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 42,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 43,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 44,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 45,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 46,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 47,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 48,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 49,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 50,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 51,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 52,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 53,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 54,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 55,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 56,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 57,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 58,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 59,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 60,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 61,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 62,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 63,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 64,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 65,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 66,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 67,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 68,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 69,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 70,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 71,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 72,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 73,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 74,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "reply",
+              "id": "flight"
+            },
+            "packet_index": 75,
+            "field_path": [],
+            "opcode": 221,
+            "deviations": [],
+            "rule": "extra_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": null,
+            "actual": {
+              "type": "unsigned",
+              "value": 221
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "values"
+            },
+            "packet_index": 1,
+            "field_path": [
+              "objects",
+              "0",
+              "values",
+              "field_133"
+            ],
+            "opcode": 169,
+            "deviations": [],
+            "rule": "passenger_update_delivery",
+            "reason": "Each passenger field retains its arrival time from activation. 150 ms covers one 100 ms map tick plus 50 ms local delivery jitter; fare and mount changes must occur at takeoff or landing as recorded.",
+            "expected": {
+              "type": "time_ms",
+              "value": 73444
+            },
+            "actual": {
+              "type": "time_ms",
+              "value": 72553
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "values"
+            },
+            "packet_index": 0,
+            "field_path": [
+              "objects",
+              "0",
+              "values",
+              "field_190"
+            ],
+            "opcode": 169,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 169
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "values"
+            },
+            "packet_index": 0,
+            "field_path": [
+              "objects",
+              "0",
+              "values",
+              "field_46"
+            ],
+            "opcode": 169,
+            "deviations": [],
+            "rule": "exact_field",
+            "reason": "field type and value must match",
+            "expected": {
+              "type": "unsigned",
+              "value": 1048588
+            },
+            "actual": {
+              "type": "unsigned",
+              "value": 1048584
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "values"
+            },
+            "packet_index": 1,
+            "field_path": [
+              "objects",
+              "0",
+              "values",
+              "field_46"
+            ],
+            "opcode": 169,
+            "deviations": [],
+            "rule": "passenger_update_delivery",
+            "reason": "Each passenger field retains its arrival time from activation. 150 ms covers one 100 ms map tick plus 50 ms local delivery jitter; fare and mount changes must occur at takeoff or landing as recorded.",
+            "expected": {
+              "type": "time_ms",
+              "value": 73444
+            },
+            "actual": {
+              "type": "time_ms",
+              "value": 72553
+            }
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "zones"
+            },
+            "packet_index": 0,
+            "field_path": [],
+            "opcode": 706,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 706
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "zones"
+            },
+            "packet_index": 1,
+            "field_path": [],
+            "opcode": 756,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 756
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "zones"
+            },
+            "packet_index": 2,
+            "field_path": [],
+            "opcode": 706,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 706
+            },
+            "actual": null
+          },
+          {
+            "classification": "rule",
+            "checkpoint": "flight",
+            "stream": {
+              "kind": "broadcast",
+              "id": "zones"
+            },
+            "packet_index": 3,
+            "field_path": [],
+            "opcode": 756,
+            "deviations": [],
+            "rule": "missing_packet",
+            "reason": "packets must align by opcode and mapped subject GUID in stream order",
+            "expected": {
+              "type": "unsigned",
+              "value": 756
+            },
+            "actual": null
+          }
+        ]
+      },
+      "reference_comparison": {
+        "differences": []
+      }
+    }
+  ],
+  "audit": {
+    "native_host_sha256": "2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce",
+    "module_sha256": "0e097c9d1aba339e3738d0810274daab4099212cd790409f9755dc24433f82ed",
+    "content": "Module seed content and the hand-written taxi route fixture, nodes 2 and 4, path 6, 28 vertices and flight master 352; no world import",
+    "reference": {
+      "server": "vmangos",
+      "binary_release": "latest/dev-linux-amd64-d9173ec.tar.gz",
+      "binary_sha256": "6fadf9dd692fdffccec1ad75aea15ff3e8d75b92a162f750f6affc9da6fd7d88",
+      "source_commit": "d9173eca3ea08dd985c52dabbcc826898d1d0b77",
+      "database_commit": "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+    },
+    "previous_report": null,
+    "behaviors": {
+      "connection_identity": {
+        "candidate": {
+          "rule": {
+            "raw_records": 0,
+            "signatures": []
+          },
+          "data": {
+            "raw_records": 0,
+            "signatures": []
+          }
+        },
+        "reference": {
+          "rule": {
+            "raw_records": 0,
+            "signatures": []
+          },
+          "data": {
+            "raw_records": 0,
+            "signatures": []
+          }
+        },
+        "changes": null
+      },
+      "taxi_single_hop": {
+        "candidate": {
+          "rule": {
+            "raw_records": 91,
+            "signatures": [
+              {
+                "signature": {
+                  "rule": "exact_field",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 221,
+                  "field_path": [
+                    "position",
+                    "x"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "exact_field",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 221,
+                  "field_path": [
+                    "position",
+                    "y"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "exact_field",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 221,
+                  "field_path": [
+                    "position",
+                    "z"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "exact_field",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "values"
+                  },
+                  "opcode": 169,
+                  "field_path": [
+                    "objects",
+                    "0",
+                    "values",
+                    "field_46"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "extra_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 221,
+                  "field_path": []
+                },
+                "raw_records": 74
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 199,
+                  "field_path": []
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 334,
+                  "field_path": []
+                },
+                "raw_records": 2
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 366,
+                  "field_path": []
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 367,
+                  "field_path": []
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "values"
+                  },
+                  "opcode": 169,
+                  "field_path": [
+                    "objects",
+                    "0",
+                    "values",
+                    "field_190"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "zones"
+                  },
+                  "opcode": 706,
+                  "field_path": []
+                },
+                "raw_records": 2
+              },
+              {
+                "signature": {
+                  "rule": "missing_packet",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "zones"
+                  },
+                  "opcode": 756,
+                  "field_path": []
+                },
+                "raw_records": 2
+              },
+              {
+                "signature": {
+                  "rule": "passenger_update_delivery",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "values"
+                  },
+                  "opcode": 169,
+                  "field_path": [
+                    "objects",
+                    "0",
+                    "values",
+                    "field_133"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "passenger_update_delivery",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "broadcast",
+                    "id": "values"
+                  },
+                  "opcode": 169,
+                  "field_path": [
+                    "objects",
+                    "0",
+                    "values",
+                    "field_46"
+                  ]
+                },
+                "raw_records": 1
+              },
+              {
+                "signature": {
+                  "rule": "time_tolerance",
+                  "checkpoint": "flight",
+                  "stream": {
+                    "kind": "reply",
+                    "id": "flight"
+                  },
+                  "opcode": 221,
+                  "field_path": [
+                    "duration"
+                  ]
+                },
+                "raw_records": 1
+              }
+            ]
+          },
+          "data": {
+            "raw_records": 0,
+            "signatures": []
+          }
+        },
+        "reference": {
+          "rule": {
+            "raw_records": 0,
+            "signatures": []
+          },
+          "data": {
+            "raw_records": 0,
+            "signatures": []
+          }
+        },
+        "changes": null
+      }
+    }
+  }
+}
