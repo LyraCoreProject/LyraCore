@@ -437,9 +437,21 @@ fn hit_roll(
         entities.guid().find(target_guid),
     ) {
         (Some(caster), Some(target)) => {
-            crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged)
+            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged);
+            arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
+            roll
         }
         _ => crate::combat::HIT_NORMAL,
+    }
+}
+
+fn arm_avoidance_reacts(ctx: &ReducerContext, caster_guid: u64, target_guid: u64, roll: u8) {
+    use crate::combat::{arm_react, ReactKind, HIT_DODGE, HIT_PARRY};
+    if roll == HIT_DODGE {
+        arm_react(ctx, caster_guid, ReactKind::Overpower);
+    }
+    if matches!(roll, HIT_DODGE | HIT_PARRY) {
+        arm_react(ctx, target_guid, ReactKind::Revenge);
     }
 }
 

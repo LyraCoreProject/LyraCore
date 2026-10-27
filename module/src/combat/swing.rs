@@ -748,13 +748,21 @@ pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
 
     let dmg = if target.godmode { 0 } else { shot.damage };
     let damage = final_damage(ctx, shot.target_guid, dmg);
-    let outcome = apply_hit(
-        ctx,
-        shot.attacker_guid,
-        shot.target_guid,
-        damage,
-        Hit::weapon(HitSource::Ranged, false),
-    );
+    // An auto-repeat shot lands as a white hit; a Weapon Strike keeps its spell and crit.
+    let strike = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(shot.ranged_spell_id)
+        .is_some_and(|spell| {
+            spell.cast_flags & lyracore_shared::spell::taxonomy::SPELL_ATTR_RANGED_AUTO_REPEAT == 0
+        });
+    let hit = if strike {
+        Hit::spell(HitSource::Ranged, shot.ranged_spell_id, shot.is_crit)
+    } else {
+        Hit::weapon(HitSource::Ranged, false)
+    };
+    let outcome = apply_hit(ctx, shot.attacker_guid, shot.target_guid, damage, hit);
     if damage.amount > 0 && shot.ranged_spell_id != 0 {
         crate::spell::SpellCastEvent::insert(
             ctx,
