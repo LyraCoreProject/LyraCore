@@ -14,6 +14,7 @@ struct TableCount {
     keys: BTreeSet<String>,
     per_entry: BTreeMap<String, usize>,
     per_map: BTreeMap<u32, usize>,
+    skill_offers: usize,
 }
 type Records = BTreeMap<String, TableCount>;
 
@@ -51,6 +52,13 @@ fn records(statements: &[String]) -> Result<Records> {
                         .collect::<BTreeMap<_, _>>();
                     let count = output.entry(table.to_string()).or_default();
                     count.rows += 1;
+                    if table == "game_trainer_spell"
+                        && fields
+                            .get("learn_skill_line")
+                            .is_some_and(|line| line != "0")
+                    {
+                        count.skill_offers += 1;
+                    }
                     for key in keys(&[fields], key_columns(table)?)? {
                         *count.per_entry.entry(key.clone()).or_default() += 1;
                         count.keys.insert(key);
@@ -77,6 +85,7 @@ fn key_columns(table: &str) -> Result<&'static [&'static str]> {
         "game_go_model" => &["entry"],
         "game_gameobject" => &["template_entry"],
         "game_item_template" => &["entry"],
+        "game_trainer_spell" => &["trainer_entry"],
         "game_creature_loot" => &["creature_entry"],
         "game_pickpocket_loot" => &["creature_entry"],
         "game_skinning_loot" => &["skin_loot_id"],
@@ -256,6 +265,17 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         }
         writeln!(output, "- Pickpocket differences follow selected creature-to-loot links and source drops. Skinning imports distinct loot ids shared by those creatures.\n- Chest loot follows every selected chest template except the eight authored gather nodes. Fishing imports every selected zone. Both retain source membership after patch selection and reference expansion.\n- vmangos zero-chance group members share the probability left by explicit members. Classic-db keeps its existing omission of direct zero-chance rows for byte parity. Forbidden items are removed before reference weights are expanded, so forbidden children do not take a share of the remaining reference weight. Direct quest-only drops retain the sign as a separate flag where the Module table supports it.\n- Item-container and disenchant tables have no World Source import path in the current Module; they are counted in unsupported findings. Mail loot belongs to quests and is integrated in S3f.\n- Reference group-zero entries roll independently, group selectors select only the named group, and maxcount repeats each reference. Largest-remainder allocation keeps grouped shares within the reference chance. The manifest retains variable counts, runtime conditions and quest-only fishing or skinning drops. S6 supplies EventAI dependency closure for scoped creature selections.")?;
     }
+    if family == "trainers" {
+        for table in ["npc_trainer", "npc_trainer_template"] {
+            writeln!(
+                output,
+                "- `{table}`: build selection keeps {} of {} source rows.",
+                vmangos.rows(table)?.len(),
+                vmangos.row_count(table)?
+            )?;
+        }
+        writeln!(output, "- Offer differences follow the selected creature catalogue and direct/shared trainer lists. Shared offers join through `trainer_id` and take precedence for duplicate spell IDs. Only templates with the trainer flag receive offers.\n- vmangos imports the source teach-spell wrappers and its constant skill-step effects. It does not synthesize the classic-db profession list. The manifest's profession audit compares offered skill targets with `PROFESSION_LEARN`. Each skill step raises the cap by 75 ranks.\n- A zero source required level falls back to the selected wrapper's spell level. Source skill/rank requirements and multiple learn targets are reported as unsupported because the current Module cannot carry them in a trainer offer.\n- Scoped profiles use selected creature entries; EventAI dependency closure remains due in S6.")?;
+    }
     if family == "gameobjects" {
         for table in ["gameobject_template", "gameobject", "transports"] {
             writeln!(
@@ -298,6 +318,30 @@ fn floors(output: &mut String, family: &str, before: &Records, after: &Records) 
             )?;
         }
         writeln!(output, "\n`CREATURES_WITH_PICKPOCKET`, `CREATURES_WITH_SKIN` and `DEADMINES_NAMED_LOOT` depend on the creatures family and its spawned entities. Their minimum is one, one and two respectively; verify them after S4.")?;
+    }
+    if family == "trainers" {
+        for (name, skills) in [
+            ("TRAINER_OFFERINGS_CLASS", false),
+            ("TRAINER_OFFERINGS_PROFESSION", true),
+        ] {
+            let count = |records: &Records| {
+                records.get("game_trainer_spell").map_or(0, |count| {
+                    if skills {
+                        count.skill_offers
+                    } else {
+                        count.rows - count.skill_offers
+                    }
+                })
+            };
+            writeln!(
+                output,
+                "| {name} | {} | {} | {} |",
+                super::floor(name)?,
+                count(before),
+                count(after)
+            )?;
+        }
+        writeln!(output, "\n`CLASS_TRAINERS` minimum {} and `TRAINER_COVERAGE` minimum {} need spawned creatures and remain for S4. The profession floor counts every skill-grant offer, including riding.", super::floor("CLASS_TRAINERS")?, super::floor("TRAINER_COVERAGE")?)?;
     }
     if family == "gameobjects" {
         let gather = |records: &Records| {
