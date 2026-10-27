@@ -1078,7 +1078,8 @@ fn resolve_ref_pool(
     let mut out = Vec::new();
     for &(item, chance, mincount_or_ref, maxcount) in rows {
         if mincount_or_ref < 0 {
-            // Reference chance zero means always; otherwise it gates the normalized child weights.
+            // A classic-db reference chance of zero means always; otherwise it gates the normalized child
+            // weights.
             let children = resolve_ref_pool(mincount_or_ref.unsigned_abs(), refs, visited);
             let gate = chance.abs();
             if gate > 0.0 {

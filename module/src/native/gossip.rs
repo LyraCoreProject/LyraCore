@@ -124,10 +124,12 @@ fn send_menu(
             .collect()
     };
     options.sort_by_key(|(index, option)| (*index, option.row_id));
+    // Quests and the synthesized service options belong to the menu the creature opens with.
+    let opening = source == root;
     let options: Vec<_> = codec::gossip_menu_options(
         options.into_iter().map(|(_, option)| option).collect(),
-        npc.npc_flags & npc_flags::VENDOR != 0,
-        npc.npc_flags & npc_flags::INNKEEPER != 0,
+        opening && npc.npc_flags & npc_flags::VENDOR != 0,
+        opening && npc.npc_flags & npc_flags::INNKEEPER != 0,
     )
     .into_iter()
     .filter(|option| {
@@ -166,7 +168,11 @@ fn send_menu(
             .collect(),
     });
     ctx.db.game_native_player().connection_id().update(player);
-    let quests = codec::quest_menu_items(&super::quest::evaluations(ctx, npc.guid, guid));
+    let quests = if opening {
+        codec::quest_menu_items(&super::quest::evaluations(ctx, npc.guid, guid))
+    } else {
+        Vec::new()
+    };
     Ok(super::send(
         ctx,
         connection,
@@ -220,12 +226,15 @@ fn select(
     match action {
         gossip_option::GOSSIP if target_menu != 0 => {
             use crate::game_gossip_menu_profile;
-            let menu = ctx
+            // Classic-db options can name a submenu it never imported; those close the window.
+            let Some(menu) = ctx
                 .db
                 .game_gossip_menu_profile()
                 .menu_id()
                 .find(target_menu)
-                .ok_or("gossip submenu is unavailable")?;
+            else {
+                return complete(ctx, connection);
+            };
             let npc = crate::helpers::acting_entity_by_guid(ctx, npc)
                 .ok_or("gossip creature is unavailable")?;
             send_menu(

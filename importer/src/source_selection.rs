@@ -87,13 +87,20 @@ pub(crate) fn select(
             })
             .collect();
     }
-    if table == "conditions" {
-        for row in &rows {
-            if row.number::<i32>("type")? == 24 {
-                wow_patch(row.number("value1")?, row.number("value2")?)?;
+    // vmangos skips a WOW_PATCH condition with an invalid value or comparison when it loads.
+    let rows = if table == "conditions" {
+        let mut valid = Vec::with_capacity(rows.len());
+        for row in rows {
+            if row.number::<i32>("type")? != 24
+                || wow_patch(row.number("value1")?, row.number("value2")?).is_ok()
+            {
+                valid.push(row);
             }
         }
-    }
+        valid
+    } else {
+        rows
+    };
     let revision = if columns.contains("patch") {
         Some(("patch", PATCH))
     } else if columns.contains("build") && table != "skill_line_ability" {
@@ -482,7 +489,7 @@ mod tests {
     }
 
     #[test]
-    fn wow_patch_condition_checks_each_comparison_and_refuses_unknown_values() {
+    fn wow_patch_condition_checks_each_comparison_and_skips_invalid_rows() {
         for (value, comparison, result) in [
             (10, 0, true),
             (9, 0, false),
@@ -495,12 +502,36 @@ mod tests {
         }
         assert!(wow_patch(11, 0).is_err());
         assert!(wow_patch(10, 3).is_err());
-        assert!(selected(
+        let conditions = selected(
             "conditions",
             &[],
-            &[&[("type", 24), ("value1", 10), ("value2", 3)]]
+            &[
+                &[
+                    ("condition_entry", 1),
+                    ("type", 24),
+                    ("value1", 10),
+                    ("value2", 3),
+                ],
+                &[
+                    ("condition_entry", 2),
+                    ("type", 24),
+                    ("value1", 11),
+                    ("value2", 0),
+                ],
+                &[
+                    ("condition_entry", 3),
+                    ("type", 24),
+                    ("value1", 10),
+                    ("value2", 0),
+                ],
+            ],
         )
-        .is_err());
+        .unwrap();
+        let kept: Vec<u32> = conditions
+            .iter()
+            .map(|row| row.number("condition_entry").unwrap())
+            .collect();
+        assert_eq!(kept, [3]);
     }
 
     #[test]

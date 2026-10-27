@@ -323,3 +323,18 @@ fn a_gated_reference_splits_its_exact_share_among_equal_members() {
     assert!((loot_probability(&drops[&1], 100) - 0.037).abs() < 1e-12);
     assert!((loot_probability(&drops[&1], 103) - 0.111).abs() < 1e-12);
 }
+
+#[test]
+fn a_negative_chance_reference_keeps_its_children_available_to_everyone() {
+    let source = loot_source(&[(1, 0, -100.0, 0, -20, 1)], &[(20, 100, 100.0, 0, 1, 1)]);
+    let drops = parse_creature_drops(&source).unwrap();
+    assert_eq!(loot_probability(&drops[&1], 100), 1.0);
+    assert!(drops[&1].iter().all(|drop| !drop.4));
+}
+
+#[test]
+fn a_repeated_reference_below_full_chance_is_refused() {
+    let source = loot_source(&[(1, 0, 50.0, 0, -20, 2)], &[(20, 100, 100.0, 0, 1, 1)]);
+    let error = parse_creature_drops(&source).unwrap_err().to_string();
+    assert!(error.contains("repeats 2 times at 50%"), "{error}");
+}

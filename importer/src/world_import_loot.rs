@@ -81,13 +81,20 @@ fn expand(
                 path.len() < 64 && path.insert(id),
                 "reference_loot_template: cyclic or too deep reference {id}"
             );
+            // vmangos rolls a reference's chance once and then runs it `count` times, which
+            // independent loot rows cannot express.
+            ensure!(
+                row.count <= 1 || row.chance >= 100.0,
+                "reference_loot_template: reference {id} repeats {} times at {}%",
+                row.count,
+                row.chance
+            );
             if let Some(children) = refs.get(&id) {
                 for _ in 0..row.count {
                     let mut children = expand(children, row.group, refs, path)?;
                     for roll in &mut children {
                         for member in &mut roll.members {
                             member.chance *= row.chance / 100.0;
-                            member.quest_only |= row.quest_only;
                         }
                     }
                     rolls.extend(children);
