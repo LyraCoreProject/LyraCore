@@ -1,6 +1,6 @@
 mod support;
 
-use support::Standalone;
+use support::{fence_subscription, subscribe_with_fence, Standalone};
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
@@ -21,6 +21,7 @@ fn spawn_commands_keep_quest_flags_when_clearing_immunity() {
         "import_creature_ai_definitions",
         &[&serde_json::to_string(&format!("entry:51006@{revision}@{rules}")).unwrap()],
     );
+    let subscription = subscribe_with_fence(&shard, &["SELECT * FROM game_world_entity"]);
     shard.assert_call("debug_spawn_at_feet", &["1", "51006", "2"]);
     let rows = shard
         .query_rows("SELECT guid,npc_flags,unit_flags FROM game_world_entity WHERE entry = 51006");
@@ -30,6 +31,17 @@ fn spawn_commands_keep_quest_flags_when_clearing_immunity() {
         .unwrap();
     assert_eq!(row["npc_flags"], "130");
     assert_eq!(row["unit_flags"].parse::<u32>().unwrap() & 256, 0);
+    fence_subscription(&shard, &subscription);
+    let guid = row["guid"].parse::<u64>().unwrap();
+    let delivered: Vec<_> = subscription
+        .inserts("game_world_entity")
+        .into_iter()
+        .filter(|entity| entity["guid"] == guid)
+        .collect();
+    assert!(!delivered.is_empty());
+    assert!(delivered
+        .iter()
+        .all(|entity| entity["unit_flags"].as_u64().unwrap() & 256 == 0));
     assert_eq!(
         shard.query_rows("SELECT unit_flags FROM game_creature_template WHERE entry = 51006")[0]
             ["unit_flags"],

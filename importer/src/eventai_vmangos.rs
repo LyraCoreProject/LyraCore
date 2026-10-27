@@ -1307,6 +1307,5 @@ mod tests {
         assert!(source.spawn_immunity_clears(&templates).is_empty());
         source.scripts.get_mut(&10).unwrap()[0] = step(99, [0; 4]);
         assert!(source.spawn_immunity_clears(&templates).is_empty());
-
     }
 }
