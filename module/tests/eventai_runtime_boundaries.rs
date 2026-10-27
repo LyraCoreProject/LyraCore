@@ -115,7 +115,5 @@ fn delayed_speech_uses_the_authored_chat_override() {
         "game_chat_event_live"
     )
     .iter()
-    .any(
-        |row| row["message"] == "Examining the patient."
-    )));
+    .any(|row| row["message"] == "Examining the patient.")));
 }
