@@ -51,6 +51,8 @@ follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L7512-L7524).
 The existing dungeon entrance and static fallbacks remain after the imported links.
 
+`--source vmangos --dump <sqlite> --dbc <client Data> --dbc-diff` prints a field comparison for Spell and the seven other DBC replacements. It reports every shared field, source-only fields, unmatched client columns, changed row and cell counts, and bounded examples. The command only reads local files. Map remains entirely on Map.dbc while the archive-directory decision is pending.
+
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
 entry choices, paths and spell lists. The creature plan preserves signed event membership and
 pool limits. Nested pools that the current population model cannot express stay inactive and
