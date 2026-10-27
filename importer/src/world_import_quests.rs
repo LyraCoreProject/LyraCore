@@ -1,4 +1,4 @@
-use std::collections::{BTreeMap, HashMap, HashSet};
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 
 use anyhow::Result;
 use wow_world_base::vanilla::SpellEffect;
@@ -73,23 +73,33 @@ fn placed_creatures(dump: &impl TableRows, scope: &WorldImportScope) -> Result<H
     Ok(entries)
 }
 
-fn event_requirements(dump: &impl TableRows, entries: &HashSet<u64>) -> Result<Vec<String>> {
+fn event_requirements(
+    dump: &impl TableRows,
+    entries: &HashSet<u64>,
+    credit_sources: &BTreeSet<u32>,
+) -> Result<(Vec<String>, Vec<u32>)> {
     let explored = dump
         .rows("areatrigger_involvedrelation")?
         .iter()
         .map(|row| row.number::<u64>("quest"))
         .collect::<Result<HashSet<_>>>()?;
     let mut rows = Vec::new();
+    let mut without_source = Vec::new();
     for row in dump.rows("quest_template")?.iter() {
         let entry = row.number::<u64>("entry")?;
         if entries.contains(&entry)
             && !explored.contains(&entry)
             && row.number::<u32>("SpecialFlags")? & 2 != 0
         {
-            rows.push(format!("({},{entry})", rows.len() + 1));
+            let entry: u32 = row.number("entry")?;
+            if credit_sources.contains(&entry) {
+                rows.push(format!("({},{entry})", rows.len() + 1));
+            } else {
+                without_source.push(entry);
+            }
         }
     }
-    Ok(rows)
+    Ok((rows, without_source))
 }
 
 pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
@@ -140,7 +150,9 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
     let (mail, _) = build_mail_loot(dump, &quests.reward_mail_template_ids)?;
     let mut stmts = Vec::new();
     push_quest_statements(&mut stmts, &quests, &mail);
-    let events = event_requirements(dump, &quests.entries)?;
+    let (creature_ai, _) = super::vmangos_creature_ai(dump, args)?;
+    let (events, without_source) =
+        event_requirements(dump, &quests.entries, &creature_ai.quest_event_entries)?;
     stmts.push("DELETE FROM game_quest_event_requirement WHERE id > 0".into());
     push_insert(
         &mut stmts,
@@ -156,7 +168,7 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             &quests,
             &obtainable,
             &catalogue_go.goober_entries,
-            events.len(),
+            &without_source,
         )?)?),
         ..Default::default()
     })
@@ -167,12 +179,9 @@ fn findings(
     quests: &QuestEtl,
     obtainable: &HashSet<u64>,
     goobers: &HashSet<u64>,
-    event_count: usize,
+    without_source: &[u32],
 ) -> Result<serde_json::Value> {
     let mut counts: BTreeMap<&str, usize> = BTreeMap::new();
-    if event_count != 0 {
-        counts.insert("quests.event-credit", event_count);
-    }
     let mut add = |code, present| {
         if present {
             *counts.entry(code).or_default() += 1;
@@ -251,6 +260,14 @@ fn findings(
         );
     }
     let mut findings = counts.into_iter().map(|(code, occurrences)| serde_json::json!({"code":code,"classification":"unsupported","occurrences":occurrences})).collect::<Vec<_>>();
+    if !without_source.is_empty() {
+        findings.push(serde_json::json!({
+            "code": "quests.event-credit-without-source",
+            "classification": "unsupported",
+            "occurrences": without_source.len(),
+            "source_ids": without_source,
+        }));
+    }
     findings.extend(loot_findings(dump, &["mail_loot_template"])?);
     Ok(
         serde_json::json!({"format_version":1,"source":"vmangos","family":"quests","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":findings}),

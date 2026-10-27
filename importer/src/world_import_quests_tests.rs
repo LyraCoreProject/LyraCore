@@ -341,7 +341,7 @@ fn classic_nullable_quest_text_keeps_its_existing_output() {
 }
 
 #[test]
-fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
+fn only_emitted_credit_sources_can_add_an_event_requirement() {
     let quest = |entry, flags| {
         [
             ("entry", N(entry)),
@@ -374,8 +374,17 @@ fn event_quests_wait_for_credit_unless_an_area_objective_supplies_it() {
     ])
     .unwrap();
     assert_eq!(
-        event_requirements(&source, &HashSet::from([100, 101, 102])).unwrap(),
-        ["(1,101)"]
+        event_requirements(
+            &source,
+            &HashSet::from([100, 101, 102, 103]),
+            &BTreeSet::from([100, 101])
+        )
+        .unwrap(),
+        (vec!["(1,101)".into()], vec![103])
+    );
+    assert_eq!(
+        event_requirements(&source, &HashSet::from([100, 101, 102]), &BTreeSet::new()).unwrap(),
+        (vec![], vec![101])
     );
 }
 
