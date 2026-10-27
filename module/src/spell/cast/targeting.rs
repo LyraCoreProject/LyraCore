@@ -557,6 +557,7 @@ pub(crate) fn apply_effect(
     points: i32,
     dest: Option<(f32, f32, f32)>,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
 
@@ -605,9 +606,16 @@ pub(crate) fn apply_effect(
         EffectKind::Damage
         | EffectKind::WeaponStrike
         | EffectKind::Judgement
-        | EffectKind::FinisherDamage => {
-            apply_damage_effect(ctx, e, hdr, caster_guid, target_guid, points, triggered)
-        }
+        | EffectKind::FinisherDamage => apply_damage_effect(
+            ctx,
+            e,
+            hdr,
+            caster_guid,
+            target_guid,
+            points,
+            triggered,
+            strike_crit,
+        ),
         EffectKind::Heal
         | EffectKind::HealMaxHealth
         | EffectKind::Energize
@@ -768,6 +776,7 @@ fn hit_of(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -776,6 +785,7 @@ fn apply_damage_effect(
     target_guid: u64,
     points: i32,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE => {
@@ -843,25 +853,53 @@ fn apply_damage_effect(
         }
         E_WEAPON_STRIKE => {
             let entities = ctx.db.game_world_entity();
-            if let (Some(caster), Some(target)) = (
+            let (Some(caster), Some(target)) = (
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
-            ) {
-                let damage_mods =
-                    crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
-                let (dmg, crit) =
-                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points, damage_mods);
-                // Physical crit travels in Hit; EffectHit.crit is the magic crit roll.
-                let (dealt, absorbed) = apply_target_damage(
+            ) else {
+                return EffectHit::none();
+            };
+            let strike = crate::combat::WeaponStrike {
+                bonus: points,
+                percent: e.p0.max(0) as u32,
+                normalized: e.p1 != 0,
+                ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
+            };
+            let dmg = crate::combat::weapon_strike_spell_damage(
+                ctx,
+                &caster,
+                &target,
+                strike,
+                hdr,
+                strike_crit,
+            );
+            if strike.ranged && target_guid != caster_guid {
+                // The impact emits the damage log, so this GO carries no damage.
+                crate::combat::launch_ranged_strike(
                     ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg as i32,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, crit),
+                    &caster,
+                    &target,
+                    dmg,
+                    hdr.spell_id,
+                    strike_crit,
                 );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+                return EffectHit::none();
+            }
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
             }
         }
         E_JUDGEMENT => {

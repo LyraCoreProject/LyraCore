@@ -51,7 +51,7 @@ entry in both files.
 
 **V** [Verification](CORE_TERMS.md#verification)
 
-**W** [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms)
+**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms)
 
 **Z** [Zone Weather](#world-clock-and-weather)
 
@@ -506,8 +506,15 @@ _Avoid_: cast flags, event flags, signal flags
 **Cast Miss**:
 The primary target's outcome when a damage spell's hit roll fails, recorded on the GO row. The
 roll runs once per target, and a missed target takes none of the spell's effects. A physical spell
-misses; a magic spell is resisted outright.
+misses; a magic spell is resisted outright. A Weapon Strike rolls the physical attack table, so its
+target can also dodge or parry it.
 _Avoid_: spell miss flag, resist flag
+
+**Weapon Strike**:
+A spell effect that deals the caster's weapon damage plus the spell's flat bonus, scaled by its
+weapon damage percent. A ranged-slot spell such as Throw strikes with the ranged weapon and spends
+one thrown weapon or one ammo. A queued strike instead waits for the next melee swing.
+_Avoid_: weapon damage spell, special attack
 
 **Swing Error**:
 Why a player's due melee swing could not land: the target is out of reach or behind the player.

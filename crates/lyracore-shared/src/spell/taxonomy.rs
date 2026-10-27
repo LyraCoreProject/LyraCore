@@ -38,6 +38,7 @@ effect_kinds! {
     E_TRIGGER => Trigger = 0x05,
     E_TAUNT => Taunt = 0x06,
     E_CREATE_ITEM => CreateItem = 0x07,
+    // WeaponStrike p0 is the weapon damage percent; p1 is 1 when the weapon speed is normalized.
     E_WEAPON_STRIKE => WeaponStrike = 0x08,
     E_CHARGE => Charge = 0x09,
     E_CONVERT_RESOURCE => ConvertResource = 0x0A,
@@ -101,6 +102,8 @@ effect_kinds! {
 
 pub const KIND_AURA_BIT: u8 = 0x80;
 pub const SPELL_ATTR_PASSIVE: u32 = 0x40;
+// A Spell.dbc Attributes bit like SPELL_ATTR_PASSIVE, not a cast_flags bit.
+pub const SPELL_ATTR_USES_RANGED_SLOT: u32 = 0x02;
 pub const SPELL_ATTR_REQ_BEHIND: u32 = 0x0001;
 pub const SPELL_ATTR_REQ_STEALTH: u32 = 0x0002;
 pub const SPELL_ATTR_STEALTH_SAFE: u32 = 0x0004;
