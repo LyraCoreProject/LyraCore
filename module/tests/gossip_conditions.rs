@@ -521,7 +521,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
             OPTION,
             0,
             gossip_option::UNLEARNTALENTS,
-            NOT_IN_MENU,
+            SERVICE_GONE,
         );
     }
     shard.assert_sql(&format!(

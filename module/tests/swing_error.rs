@@ -52,7 +52,8 @@ fn a_due_swing_records_out_of_range_and_bad_facing_and_a_landed_swing_clears_it(
         "SELECT * FROM game_combat_event_live WHERE attacker_guid = 1",
         "SELECT * FROM game_melee_attack WHERE attacker_guid = 1",
     ]);
-    make_swing_due(&standalone);
+    // Restart after subscribing so an earlier tick cannot consume the error transition.
+    standalone.assert_call("debug_engage", &[&PLAYER.to_string(), &wolf.to_string()]);
     wait_for_swing_error(&events, BAD_FACING);
     assert!(
         own_swings(&events).is_empty(),

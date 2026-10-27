@@ -4649,8 +4649,8 @@ def check_combo_points(host):
         finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
         host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
-    def shown():
-        seen = []
+    def shown(packets=()):
+        seen = list(packets)
         def combo():
             seen.extend(rogue.collect())
             fields = values(seen, guid)
@@ -4672,8 +4672,24 @@ def check_combo_points(host):
                     'the finisher on a target without combo points was not refused')
     assert (0x130, struct.pack('<IBB', 133, 2, 0x46)) in refused, refused
     assert host.rows(held) == [[first, 2]]
-    rogue.send(0x12e, cast(133, first))
-    assert shown() == (first, 0)
+    for _ in range(10):
+        rogue.send(0x12e, cast(133, first))
+        packets = []
+        def finished():
+            packets.extend(rogue.collect())
+            return (1222 in values(packets, guid)
+                    or any(opcode == 0x24b for opcode, _ in packets))
+        host.wait_until(finished, 'the finisher neither spent its points nor reported a miss')
+        # Client-initiated casts report avoidance through SPELLLOGMISS after their launch GO.
+        missed = [struct.unpack('<IQBIQB', body) for opcode, body in packets if opcode == 0x24b]
+        if not missed:
+            assert shown(packets) == (first, 0)
+            break
+        assert len(missed) == 1 and missed[0][:5] == (133, guid, 0, 1, first), missed
+        assert missed[0][5] in (1, 3, 4), missed
+        assert host.rows(held) == [[first, 2]], 'an avoided finisher consumed combo points'
+    else:
+        raise AssertionError('all finisher casts were avoided')
     assert not host.rows(held)
 
     effect(0x0c)
