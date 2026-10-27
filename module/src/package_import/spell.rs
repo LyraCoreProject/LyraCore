@@ -134,6 +134,7 @@ fn blank_spell(spell_id: u32) -> Spell {
         proc_flags: 0,
         proc_chance: 0,
         proc_charges: 0,
+        max_duration_ms: 0,
     }
 }
 
@@ -157,6 +158,7 @@ fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         p1: 0,
         script_id: 0,
         enters_combat: false,
+        points_per_combo: 0.0,
     }
 }
 

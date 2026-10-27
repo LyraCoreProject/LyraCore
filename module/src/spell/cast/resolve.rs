@@ -261,7 +261,10 @@ fn run_spell_effects(
     let mut item_grants = 0;
     let mut item_refused = false;
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
-    let table = if effects.iter().any(|e| e.kind == E_WEAPON_STRIKE) {
+    let table = if effects
+        .iter()
+        .any(|e| matches!(e.kind, E_WEAPON_STRIKE | E_FINISHER_DAMAGE))
+    {
         HitTable::Weapon {
             ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
         }
@@ -330,6 +333,7 @@ fn run_spell_effects(
                     ..Default::default()
                 }
             } else {
+                let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
                     ctx,
                     e,
@@ -362,6 +366,10 @@ fn run_spell_effects(
                 any_crit |= hit.crit;
             }
         }
+    }
+    // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
+    if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 && !is_avoided(primary_avoided) {
+        crate::combo::spend_combo(ctx, caster_guid);
     }
     if !item_refused {
         if let Some(plan) = craft {
@@ -1241,14 +1249,12 @@ fn check_cast_gate_suffix(
     }
 
     // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
-    let combo_points = if !caster.is_player() {
+    let combo_points = if !caster.is_player() || hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER == 0 {
         None
-    } else if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
+    } else if spends_points_on_target(effects) {
         Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
-    } else if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        Some(crate::combo::held_points(ctx, caster_guid))
     } else {
-        None
+        Some(crate::combo::held_points(ctx, caster_guid))
     };
     if combo_points == Some(0) {
         return Err(CastGateRefusal::other(
@@ -1295,6 +1301,13 @@ fn check_ranged_weapon(
         }
         Some(_) => Ok(()),
     }
+}
+
+// Slice and Dice pairs a self aura with an enemy-targeted dummy, so dummies do not count.
+fn spends_points_on_target(effects: &[SpellEffect]) -> bool {
+    effects
+        .iter()
+        .any(|e| e.target == T_TARGET_ENEMY && e.kind != E_SCRIPTED)
 }
 
 fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool {
@@ -1595,6 +1608,7 @@ mod eventai_hit_tests {
             p1: 0,
             script_id: 0,
             enters_combat: false,
+            points_per_combo: 0.0,
         }
     }
 
@@ -1607,6 +1621,18 @@ mod eventai_hit_tests {
         }
 
         assert_eq!(ordered, vec![20, 10, 30]);
+    }
+
+    #[test]
+    fn slice_and_dice_reads_held_points_and_kidney_shot_reads_the_target() {
+        let aimed = |kind, target| SpellEffect {
+            target,
+            ..effect(kind)
+        };
+        let slice_and_dice = [aimed(E_SCRIPTED, T_TARGET_ENEMY), aimed(A_FLAG, T_SELF)];
+        let kidney_shot = [aimed(A_CONTROL, T_TARGET_ENEMY)];
+        assert!(!spends_points_on_target(&slice_and_dice));
+        assert!(spends_points_on_target(&kidney_shot));
     }
 
     #[test]

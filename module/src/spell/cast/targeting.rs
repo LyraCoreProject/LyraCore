@@ -267,9 +267,9 @@ pub(crate) fn aura_apply(
     } else {
         points
     };
-    let duration_ms = if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
+    let duration_ms = if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
-        crate::combo::finisher_duration_ms(hdr.duration_ms, combo)
+        crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)
     } else {
         hdr.duration_ms
     };
@@ -477,11 +477,6 @@ pub(crate) fn aura_apply(
     }
     if crate::mount::mount_aura_moves_mount(e.kind, e.p0) {
         crate::mount::recompute_mount(ctx, target_guid);
-    }
-
-    // Spend combo points after reading duration and successfully placing the aura.
-    if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        crate::combo::spend_combo(ctx, caster_guid);
     }
 
     if hdr.is_negative {
@@ -919,22 +914,37 @@ fn apply_damage_effect(
             }
         }
         E_FINISHER_DAMAGE => {
-            let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
-            let dmg = crate::combo::finisher_damage(points, combo);
-            let hit = if dmg > 0 {
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, false),
-                );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+            let entities = ctx.db.game_world_entity();
+            let (Some(caster), Some(target)) = (
+                entities.guid().find(caster_guid),
+                entities.guid().find(target_guid),
+            ) else {
+                return EffectHit::none();
             };
-            crate::combo::spend_combo(ctx, caster_guid);
-            hit
+            let dmg = crate::combat::finisher_strike_damage(
+                ctx,
+                &caster,
+                &target,
+                hdr,
+                points,
+                strike_crit,
+            );
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
+            }
         }
         _ => EffectHit::none(),
     }

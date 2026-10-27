@@ -109,8 +109,8 @@ def check_charge_movement(host):
     client, peer = native_and_peer(host)
     guid, peer_guid = client.guid, peer.guid
     spell = 5099100
-    host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({spell * 4},{spell},0,9,0,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false)')
+    host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({spell * 4},{spell},0,9,0,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)')
     for target, x in [(guid, 10), (peer_guid, 11)]:
         host.call('debug_teleport', [target, 0, x, 0, 0, 0])
     client.collect()
@@ -228,8 +228,8 @@ def check_death(host):
     assert host.rows(f'SELECT dead FROM game_world_entity WHERE guid = {guid}') == [[False]]
     assert not host.rows(f'SELECT guid FROM game_corpse WHERE guid = {corpse}')
     for spell, kind, points, target, parameter in [(51991, 14, 40, 3, 0), (51992, 38, 40, 0, 0), (51993, 181, 0, 0, 51992)]:
-        host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native resurrection',0,0,0,0,0,100,60000,1,0,0,1,0,0,0,0,false,0,0,0,0,0,0,0)")
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({spell * 4},{spell},0,{kind},{points},0,0.0,0,{target},0.0,0,0,0,{parameter},15,0,0,false)')
+        host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Native resurrection',0,0,0,0,0,100,60000,1,0,0,1,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({spell * 4},{spell},0,{kind},{points},0,0.0,0,{target},0.0,0,0,0,{parameter},15,0,0,false,0.0)')
     host.call('debug_learn_spell', [peer_guid, 51991])
     host.call('debug_set_health', [guid, 0])
     client.collect()
@@ -1284,8 +1284,8 @@ def check_duels(host):
         raise AssertionError(f'duel transition did not arrive: {duel_packets(packets)}')
 
     host.sql("INSERT INTO game_gameobject_template (entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size) VALUES (5090490,16,787,'Native duel flag',0,0,0,0,0,0,1.0)")
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090173,'Native duel challenge',0,0,0,0,0,30,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360692,5090173,0,34,0,0,0.0,0,1,0.0,0,0,0,5090490,13,0,0,false)')
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090173,'Native duel challenge',0,0,0,0,0,30,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360692,5090173,0,34,0,0,0.0,0,1,0.0,0,0,0,5090490,13,0,0,false,0.0)')
     worlds = []
     for index, name in enumerate(['Duelone', 'Dueltwo', 'Duelviewer']):
         world = host.enter_world(name, cls=8, at=(0, 1000 + index, 1000, 0))
@@ -4055,9 +4055,9 @@ def check_inventory(host):
     skills = values(client.collect(), guid)
     assert any(value == 356 and skills.get(index + 1) == (5 << 16 | 4) for index, value in skills.items())
     assert not any(opcode in (0x19f, 0x1b1, 0x1b3, 0x12b, 0x1ba, 0x166) for opcode, _ in peer.collect())
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
     for index in (0, 1):
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({20360684 + index},5090171,{index},7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)')
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({20360684 + index},5090171,{index},7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)')
     host.sql('INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,5090052,1)')
     host.call('debug_learn_spell', [guid, 5090171])
     client.collect()
@@ -4079,8 +4079,8 @@ def check_inventory(host):
     assert values(crafted, food_guid)[14] == 5
     assert sum(opcode == 0x166 for opcode, _ in crafted) == 2
     assert len(host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')) == 2
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090172,'Triggered product',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360688,5090172,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)')
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090172,'Triggered product',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360688,5090172,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)')
     host.sql('UPDATE game_spell_effect SET kind = 5, trigger_spell = 5090172 WHERE id = 20360684')
     client.send(0x12e, cast(5090171))
     nested_craft = client.collect()
@@ -4500,7 +4500,7 @@ def check_combo_points(host):
     observer = host.enter_world('Observer', at=(0, 10, 0, 0))
     guid = rogue.guid
     host.call('debug_learn_spell', [guid, 133])
-    host.restore('game_spell', 'spell_id = 133', 'gcd_ms')
+    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags')
     host.restore('game_spell_effect', 'spell_id = 133', 'kind')
     host.sql('UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 133')
     first = spawn(host, guid, 51000, 5)
@@ -4511,6 +4511,8 @@ def check_combo_points(host):
 
     def effect(kind):
         host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
+        finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
+        host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
     def shown():
         seen = []
@@ -4598,9 +4600,9 @@ def check_progression(host):
     host.call('debug_set_level', [guid, 10])
     host.sql("INSERT INTO game_talent_tab (tab_id,name,class_mask,race_mask,order_index) VALUES (5090901,'Native talent',1,0,0)")
     host.sql("INSERT INTO game_talent (talent_id,name,tree_id,tier,column,max_rank,spell_id,required_talent_id,required_points_in_tree,grant_spell_id,tab_id,rank_spell_2,rank_spell_3,rank_spell_4,rank_spell_5,required_talent_rank,required_spell_id) VALUES (124,'Native talent',0,0,0,1,51990,0,0,0,5090901,0,0,0,0,0,0)")
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (51990,'Native passive',0,0,0,0,0,0,4294967295,1,0,0,1,0,64,0,0,false,0,0,0,0,0,0,0)")
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (51990,'Native passive',0,0,0,0,0,0,4294967295,1,0,0,1,0,64,0,0,false,0,0,0,0,0,0,0,0)")
     for index, kind, points, param, mask in [(0, 160, 5, 0, 0), (1, 172, -5, 10, 1)]:
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({207960 + index},51990,{index},{kind},{points},0,0.0,0,0,0.0,0,0,0,{param},0,{mask},0,false)')
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({207960 + index},51990,{index},{kind},{points},0,0.0,0,0,0.0,0,0,0,{param},0,{mask},0,false,0.0)')
     client.collect()
     peer.collect()
     client.send(0x251, struct.pack('<II', 124, 0))

@@ -93,6 +93,14 @@ call `debug_backfill_cell_ids` as the Operator before you open the native listen
 DynamicObjects and reconciles their AOI Grants. New ground effects stamp their cell on insertion;
 expiry removes the DynamicObject and its Grants in the same transaction.
 
+### Combo finisher migration
+
+`game_spell.max_duration_ms` and `game_spell_effect.points_per_combo` default to zero, and older
+spell rows mark only Slice and Dice with `SPELL_ATTR_COMBO_FINISHER`. Until spells are reimported,
+the other finishers skip the combo-point Gate and keep their points, no finisher scales with combo
+points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
+Shard, reimport spells with `--dbc` before play resumes.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

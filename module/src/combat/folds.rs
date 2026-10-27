@@ -397,13 +397,7 @@ fn melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bool) -
         }
         return (min, max);
     }
-    let class = attacker.class();
-    let ap = melee_attack_power_for(
-        class,
-        effective_strength(ctx, attacker),
-        effective_agility(ctx, attacker),
-        attacker.level,
-    ) + aura_attack_power_bonus(ctx, attacker.guid);
+    let ap = melee_attack_power(ctx, attacker);
     let mainhand = lyracore_shared::constants::starter_item::MAINHAND_SLOT;
     let speed = |delay| {
         if normalized {
@@ -498,6 +492,29 @@ pub(crate) fn weapon_strike_spell_damage(
         0
     };
     strike_amount(weapon, strike.bonus, strike.percent, mods, crit, mit_pct)
+}
+
+/// A finisher's damage: `amount` with the damage spell mods, the strike's crit and the target's armor.
+pub(crate) fn finisher_strike_damage(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    spell: &crate::spell::Spell,
+    amount: i32,
+    crit: bool,
+) -> u32 {
+    let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
+    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+    strike_amount(0, amount, 100, mods, crit, mit_pct)
+}
+
+pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    melee_attack_power_for(
+        unit.class(),
+        effective_strength(ctx, unit),
+        effective_agility(ctx, unit),
+        unit.level,
+    ) + aura_attack_power_bonus(ctx, unit.guid)
 }
 
 const SCHOOL_MASK_PHYSICAL: u8 = 1;

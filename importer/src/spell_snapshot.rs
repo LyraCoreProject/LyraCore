@@ -32,6 +32,8 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u8,
     pub(crate) proc_charges: u8,
+    // The Package API does not claim the combo-point columns, so the snapshot omits them.
+    pub(crate) max_duration_ms: u32,
 }
 
 impl SpellHeaderRow {
@@ -66,7 +68,9 @@ impl SpellHeaderRow {
     }
 
     pub(crate) fn sql_values(&self) -> String {
-        sql_tuple(&self.columns())
+        let mut columns = self.columns();
+        columns.push(("max_duration_ms", FieldValue::U32(self.max_duration_ms)));
+        sql_tuple(&columns)
     }
 }
 
@@ -88,6 +92,7 @@ pub(crate) struct SpellEffectRow {
     pub(crate) p1: i32,
     pub(crate) script_id: u32,
     pub(crate) enters_combat: bool,
+    pub(crate) points_per_combo: f32,
 }
 
 impl SpellEffectRow {
@@ -120,6 +125,7 @@ impl SpellEffectRow {
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
+        columns.push(("points_per_combo", FieldValue::F32(self.points_per_combo)));
         sql_tuple(&columns)
     }
 }
@@ -231,6 +237,7 @@ mod tests {
             proc_flags: 0,
             proc_chance: 0,
             proc_charges: 0,
+            max_duration_ms: 8000,
         }
     }
 
@@ -253,6 +260,7 @@ mod tests {
             p1: 0,
             script_id: 0,
             enters_combat: false,
+            points_per_combo: 0.0,
         }
     }
 
@@ -290,7 +298,7 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000)"),
             "{sql}"
         );
     }
