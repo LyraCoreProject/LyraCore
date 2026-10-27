@@ -8,23 +8,23 @@ Counts and keys come from production plans for patch 10 and build 5875, without 
 
 | Module table | Classic | vmangos |
 | --- | ---: | ---: |
-| game_creature_ai_broadcast_text | 379 | 269 |
-| game_creature_ai_summon | 3 | 0 |
+| game_creature_ai_broadcast_text | 379 | 275 |
+| game_creature_ai_summon | 3 | 4 |
 | game_quest_event_requirement | 6 | 0 |
 
 ## game_creature_ai_broadcast_text
 
 Entry key: `id`. Counts above include all rows per entry.
 
-Added (55): 10125, 10126, 10127, 10128, 10129, 10130, 10131, 10132, 10137, 10138, 10139, 10140, 10141, 10142, 10143, 10144, 10149, 10150, 10151, 10152, 10171, 10948, 10949, 10950, 10951, 10952, 10953, 10954, 10955, 11430, 1145, 1401, 1402, 1403, 1404, 4422, 485, 487, 489, 496, 497, 77, 7798, 79, 83, 9088, 9089, 9098, 9149, 9150, 9689, 9690, 9691, 9692, 9735.
+Added (57): 10125, 10126, 10127, 10128, 10129, 10130, 10131, 10132, 10137, 10138, 10139, 10140, 10141, 10142, 10143, 10144, 10149, 10150, 10151, 10152, 10171, 10948, 10949, 10950, 10951, 10952, 10953, 10954, 10955, 11430, 1145, 1401, 1402, 1403, 1404, 4422, 4562, 4568, 485, 487, 489, 496, 497, 77, 7798, 79, 83, 9088, 9089, 9098, 9149, 9150, 9689, 9690, 9691, 9692, 9735.
 
-Removed (165): 10033, 10034, 10145, 10146, 10147, 10148, 10155, 10160, 1064, 1092, 1094, 1097, 1098, 1099, 1100, 1150, 1225, 1234, 12366, 12367, 12368, 12369, 12370, 12371, 12372, 12373, 131, 132, 133, 134, 135, 136, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 149, 150, 151, 152, 1521, 1529, 153, 1530, 1531, 1532, 1533, 1534, 1535, 1536, 154, 155, 156, 157, 158, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 181, 187, 1916, 1919, 1922, 1923, 1924, 1987, 1991, 201, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 2422, 2553, 2983, 3074, 3131, 3565, 3566, 3568, 3988, 399, 400, 401, 402, 403, 405, 407, 408, 409, 410, 411, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 4561, 4566, 4707, 4708, 4709, 4711, 4712, 49, 637, 638, 7134, 7900, 7901, 9615, 9616, 9617, 9618, 9619, 9620, 9621, 9622, 9623, 995, 996, 997, 998.
+Removed (161): 10033, 10034, 10145, 10146, 10147, 10148, 10155, 10160, 1064, 1092, 1094, 1097, 1098, 1099, 1100, 1225, 1234, 12366, 12367, 12368, 12369, 12370, 12371, 12372, 12373, 131, 132, 133, 134, 135, 136, 138, 139, 140, 141, 142, 143, 144, 145, 146, 147, 149, 150, 151, 152, 1521, 1529, 153, 1530, 1531, 1532, 1533, 1534, 1535, 1536, 154, 155, 156, 157, 158, 166, 167, 168, 169, 170, 171, 172, 173, 174, 175, 176, 177, 178, 181, 187, 1916, 1919, 1922, 1923, 1924, 1987, 1991, 201, 203, 204, 205, 206, 207, 208, 209, 210, 211, 212, 213, 214, 215, 216, 217, 218, 219, 220, 221, 222, 223, 224, 225, 2422, 2553, 3074, 3131, 3565, 3566, 3568, 3988, 399, 400, 401, 402, 403, 405, 407, 408, 409, 410, 411, 413, 414, 415, 416, 417, 418, 419, 420, 421, 422, 423, 424, 4707, 4708, 4709, 4711, 4712, 49, 637, 638, 7134, 7900, 7901, 9615, 9616, 9617, 9618, 9619, 9620, 9621, 9622, 9623, 995, 996, 997, 998.
 
 ## game_creature_ai_summon
 
 Entry key: `id`. Counts above include all rows per entry.
 
-Added (0): none.
+Added (4): 2851, 3108, 3109, 3110.
 
 Removed (3): 4, 5, 6.
 
@@ -42,16 +42,16 @@ Counts come from the reducer batches. Rules and instructions are nested in their
 
 | Measure | Classic | vmangos |
 | --- | ---: | ---: |
-| Definition subjects | 769 | 585 |
-| Rules | 1750 | 917 |
-| EventAI instructions | 2122 | 1039 |
-| Command-list policies | 0 | 917 |
+| Definition subjects | 769 | 605 |
+| Rules | 1750 | 942 |
+| EventAI instructions | 2122 | 1389 |
+| Command-list policies | 0 | 942 |
 | Relay definitions | 27 | 9 |
 | Relay steps, including control instructions | 108 | 21 |
 
-Definition subjects added (57): entry:1141, entry:12021, entry:12026, entry:12423, entry:12427, entry:12429, entry:13016, entry:13546, entry:14041, entry:1422, entry:14497, entry:14822, entry:14828, entry:14844, entry:14846, entry:14847, entry:14871, entry:15745, entry:15917, entry:15961, entry:1976, entry:2070, entry:2152, entry:2168, entry:2169, entry:2189, entry:2234, entry:2477, entry:2478, entry:276, entry:3137, entry:332, entry:349, entry:3644, entry:3660, entry:3825, entry:3834, entry:3919, entry:3926, entry:3937, entry:467, entry:4783, entry:505, entry:5081, entry:5694, entry:5993, entry:6124, entry:6790, entry:7170, entry:734, entry:739, entry:754, entry:770, entry:820, entry:8383, entry:840, entry:8479.
+Definition subjects added (60): entry:1141, entry:12021, entry:12026, entry:12423, entry:12427, entry:12429, entry:13016, entry:13546, entry:14041, entry:1422, entry:14497, entry:14822, entry:14828, entry:14844, entry:14846, entry:14847, entry:14871, entry:15745, entry:15917, entry:15961, entry:1976, entry:2070, entry:2152, entry:2168, entry:2169, entry:2189, entry:2234, entry:2477, entry:2478, entry:276, entry:3137, entry:332, entry:349, entry:3644, entry:3660, entry:3825, entry:3834, entry:3919, entry:3926, entry:3937, entry:467, entry:4783, entry:505, entry:5081, entry:5694, entry:583, entry:5917, entry:5993, entry:6124, entry:6790, entry:7170, entry:734, entry:739, entry:754, entry:770, entry:820, entry:8383, entry:840, entry:8479, entry:9297.
 
-Definition subjects removed (241): entry:100, entry:10077, entry:10158, entry:1030, entry:1050, entry:10604, entry:10606, entry:10644, entry:10897, entry:10942, entry:1109, entry:1111, entry:1130, entry:1132, entry:1133, entry:1134, entry:1135, entry:1137, entry:115, entry:11552, entry:11900, entry:1196, entry:12123, entry:1224, entry:12298, entry:12377, entry:12378, entry:1243, entry:12481, entry:12578, entry:1258, entry:1270, entry:1271, entry:12740, entry:12996, entry:1328, entry:1355, entry:1366, entry:1367, entry:1368, entry:1370, entry:1371, entry:1388, entry:1413, entry:1414, entry:1415, entry:14266, entry:14339, entry:14363, entry:14365, entry:14367, entry:14388, entry:14393, entry:14394, entry:14428, entry:14429, entry:14469, entry:14721, entry:1477, entry:1478, entry:14823, entry:14860, entry:1487, entry:15113, entry:154, entry:1572, entry:1573, entry:15766, entry:16043, entry:16075, entry:1642, entry:16422, entry:16423, entry:16437, entry:16438, entry:16781, entry:1693, entry:17038, entry:17048, entry:17049, entry:1961, entry:1998, entry:202, entry:2027, entry:205, entry:2057, entry:206, entry:210, entry:2176, entry:2177, entry:2178, entry:2191, entry:2236, entry:2299, entry:2409, entry:2784, entry:2941, entry:300, entry:3291, entry:3305, entry:335, entry:343, entry:3504, entry:3513, entry:3516, entry:352, entry:3586, entry:36, entry:3626, entry:3695, entry:3721, entry:3722, entry:3733, entry:3838, entry:3841, entry:428, entry:441, entry:4416, entry:4417, entry:4423, entry:462, entry:471, entry:472, entry:473, entry:4788, entry:480, entry:487, entry:490, entry:503, entry:511, entry:522, entry:523, entry:533, entry:534, entry:5607, entry:565, entry:5677, entry:570, entry:573, entry:5846, entry:5858, entry:5979, entry:5981, entry:5988, entry:5990, entry:60, entry:6007, entry:6009, entry:604, entry:6174, entry:623, entry:6237, entry:624, entry:625, entry:628, entry:642, entry:647, entry:6491, entry:6788, entry:6789, entry:6866, entry:688, entry:6909, entry:6911, entry:7016, entry:7025, entry:7026, entry:7028, entry:7040, entry:7042, entry:7043, entry:7044, entry:7045, entry:7046, entry:7086, entry:7092, entry:7093, entry:7105, entry:7109, entry:7110, entry:7111, entry:7135, entry:7149, entry:7155, entry:7157, entry:7207, entry:7234, entry:7235, entry:7318, entry:732, entry:7369, entry:7370, entry:7371, entry:7372, entry:7376, entry:740, entry:741, entry:7441, entry:7444, entry:7450, entry:7457, entry:785, entry:787, entry:7917, entry:7937, entry:7999, entry:804, entry:806, entry:807, entry:810, entry:811, entry:8296, entry:8300, entry:8303, entry:8304, entry:832, entry:833, entry:8419, entry:8675, entry:8976, entry:8979, entry:8981, entry:9176, entry:928, entry:931, entry:94, entry:946, entry:949, entry:9690, entry:9694, entry:9695, entry:9697, entry:9698, entry:9776, entry:9777, entry:9778, entry:9860, entry:9861, entry:9877, entry:9879, entry:99.
+Definition subjects removed (224): entry:100, entry:10077, entry:10158, entry:1030, entry:1050, entry:10604, entry:10606, entry:10644, entry:10942, entry:1109, entry:1111, entry:1130, entry:1132, entry:1133, entry:1134, entry:1135, entry:1137, entry:115, entry:11552, entry:1196, entry:12123, entry:1224, entry:12298, entry:12377, entry:12378, entry:1243, entry:12481, entry:1258, entry:1270, entry:1271, entry:12996, entry:1328, entry:1355, entry:1366, entry:1367, entry:1368, entry:1370, entry:1371, entry:1388, entry:1413, entry:1414, entry:1415, entry:14266, entry:14339, entry:14363, entry:14365, entry:14367, entry:14388, entry:14393, entry:14394, entry:14428, entry:14429, entry:14469, entry:14721, entry:1477, entry:1478, entry:14823, entry:14860, entry:1487, entry:15113, entry:154, entry:15766, entry:16043, entry:16075, entry:1642, entry:16422, entry:16423, entry:16437, entry:16438, entry:16781, entry:1693, entry:17038, entry:17048, entry:17049, entry:1961, entry:1998, entry:202, entry:2027, entry:205, entry:2057, entry:206, entry:210, entry:2176, entry:2177, entry:2178, entry:2191, entry:2236, entry:2784, entry:300, entry:3291, entry:335, entry:343, entry:3504, entry:3513, entry:3516, entry:3586, entry:36, entry:3626, entry:3695, entry:3721, entry:3722, entry:3733, entry:428, entry:441, entry:4416, entry:4417, entry:4423, entry:462, entry:471, entry:472, entry:473, entry:4788, entry:480, entry:487, entry:490, entry:503, entry:511, entry:522, entry:533, entry:534, entry:5607, entry:565, entry:5677, entry:570, entry:573, entry:5846, entry:5858, entry:5979, entry:5981, entry:5988, entry:5990, entry:60, entry:6007, entry:6009, entry:604, entry:6174, entry:623, entry:6237, entry:624, entry:625, entry:628, entry:642, entry:647, entry:6491, entry:6788, entry:6789, entry:688, entry:6909, entry:7016, entry:7025, entry:7026, entry:7028, entry:7040, entry:7042, entry:7043, entry:7044, entry:7045, entry:7046, entry:7086, entry:7092, entry:7093, entry:7105, entry:7109, entry:7110, entry:7111, entry:7135, entry:7149, entry:7155, entry:7157, entry:7207, entry:7234, entry:7235, entry:7318, entry:732, entry:7369, entry:7370, entry:7371, entry:7372, entry:7376, entry:740, entry:741, entry:7441, entry:7444, entry:7450, entry:7457, entry:785, entry:787, entry:7917, entry:7937, entry:7999, entry:804, entry:806, entry:807, entry:810, entry:811, entry:8296, entry:8300, entry:8303, entry:8304, entry:832, entry:833, entry:8419, entry:8675, entry:8976, entry:8979, entry:8981, entry:9176, entry:928, entry:94, entry:946, entry:949, entry:9690, entry:9694, entry:9695, entry:9697, entry:9698, entry:9776, entry:9777, entry:9778, entry:9860, entry:9861, entry:9877, entry:9879, entry:99.
 
 Relay ids added (9): 12938, 55001, 55002, 838301, 838302, 838303, 838304, 838305, 847901.
 
@@ -92,7 +92,7 @@ These are selected source rows, before reachability and compatibility filtering.
 - The sources have different event populations and numbering. vmangos supplies entry rules for EventAI templates; classic-db also supplies spawn-GUID rules. Profile scope and accepted template dependencies determine subjects.
 - A vmangos event carries up to three ordered command lists. Unsupported commands, targets, conditions or dependencies drop the complete rule. The source and emitted counts therefore measure different things.
 - Only generic scripts reachable from accepted EventAI roots become relays. The other six delayed-script families have no current classic importer dispatcher; quest-end mail already uses the vmangos quest columns.
-- Broadcast membership follows accepted talk instructions. Summon-location rows and world-state names differ because the vmangos commands needing those catalogues remain unsupported. Event-credit requirements for vmangos quests belong to the quests family; classic-db derives them from accepted AI instructions.
+- Broadcast membership follows accepted talk and flee instructions. Plain summons retain their explicit locations or use the actor position. Summon flags, limits, scripts and unsupported lifetime modes remain refused; accepted lifetime differences are reported. World-state names remain unsupported. Event-credit requirements for vmangos quests belong to the quests family; classic-db derives them from accepted AI instructions.
 
 ## Consumed floors
 
@@ -105,11 +105,11 @@ Production findings, with source keys omitted here. The import prints the full f
 ```json
 {
   "counts": {
-    "definitions": 585,
-    "dropped_rules": 237,
-    "emitted_instructions": 1039,
-    "emitted_rules": 917,
-    "excluded_rules": 5025,
+    "definitions": 605,
+    "dropped_rules": 216,
+    "emitted_instructions": 1389,
+    "emitted_rules": 942,
+    "excluded_rules": 5021,
     "relays": 9,
     "source_rules": 6179
   },
@@ -153,7 +153,7 @@ Production findings, with source keys omitted here. The import prints the full f
     {
       "classification": "unsupported",
       "code": "eventai.command:10:parameters",
-      "occurrences": 19
+      "occurrences": 2
     },
     {
       "classification": "unsupported",
@@ -173,7 +173,7 @@ Production findings, with source keys omitted here. The import prints the full f
     {
       "classification": "unsupported",
       "code": "eventai.command:1:parameters",
-      "occurrences": 59
+      "occurrences": 55
     },
     {
       "classification": "unsupported",
@@ -497,6 +497,11 @@ Production findings, with source keys omitted here. The import prints the full f
       "classification": "unsupported",
       "code": "eventai.flee-fixed-duration",
       "occurrences": 293
+    },
+    {
+      "classification": "unsupported",
+      "code": "eventai.summon-corpse-lifetime",
+      "occurrences": 17
     }
   ],
   "scripts": {
