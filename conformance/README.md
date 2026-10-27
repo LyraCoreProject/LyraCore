@@ -231,3 +231,18 @@ clean audit pass. Tier 1 keeps every difference in `comparison.differences` and 
 | `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
 | `scenarios[].comparison` | Harness `Comparison` with its counted differences |
 | `scenarios[].data_differences` | Optional audit-only array, empty when omitted |
+
+## Opcode coverage
+
+`tests/opcode_coverage.rs` checks every variant of the pinned `ClientOpcodeMessage` against ledger
+request claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. Out-of-scope entries map a
+variant name to a nonempty reason. That list is currently empty. The initial allowlist has 285
+variants. Adding a Behavior or a scope decision requires removing its opcodes from the allowlist
+in the same change. Unknown names, duplicate allowances and overlapping categories fail.
+
+The Architecture Test compares the current allowlist with every earlier committed version reachable
+from `HEAD`. Membership may only shrink, even if an edit removes one opcode and adds another, or
+restores a previously removed allowance. The first committed version establishes the starting set.
+A shallow checkout fails with an instruction to fetch full history; Rust CI uses `fetch-depth: 0`.
+The scanner uses `cargo metadata --locked`, which can download missing workspace dependency
+sources on a fresh checkout. It never changes the dependency lockfile.
