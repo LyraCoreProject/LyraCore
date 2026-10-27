@@ -495,6 +495,7 @@ where
                         | "gossip"
                         | "creatures"
                         | "casts"
+                        | "creature-ai"
                         | "spell"
                         | "spellmeta"
                         | "dbc"
@@ -514,7 +515,7 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|creature-ai|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
