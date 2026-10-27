@@ -22,6 +22,12 @@ and is not reconstructed here.
 
 ### Changed
 
+- Draft Package API version 5 switches imported spawn identifiers to vmangos. Rebuild
+  creature and GameObject Spatial Claims against the new source, checking entry, map and
+  position. An old numeric spawn identifier can now name a different placement. Package and
+  Operator identifier ranges are unchanged. The collection version and tag remain a maintainer
+  decision; this draft creates no tag.
+
 - Package API version 4 adds `actor::EffectKind`, the shared spell effect taxonomy. Existing
   Actor byte constants keep their values. Package authors can use `EffectKind::try_from`
   when reading effect rows; unknown bytes remain possible in authored content. The five API
