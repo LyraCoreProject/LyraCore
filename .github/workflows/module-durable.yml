@@ -33,7 +33,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests
 
       - name: Build the module wasm
-        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
+        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture,conformance_test_fixture
 
       # Each test owns a standalone process; the thread limit bounds memory use.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 3

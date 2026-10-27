@@ -13,8 +13,9 @@ description = "LyraCore SpacetimeDB module: all WoW 1.12 game state and logic."
 crate-type = ["cdylib", "rlib"]
 
 [features]
-debug_reducers = ["dep:sha1"]
+debug_reducers = []
 package_test_fixture = ["debug_reducers"]
+conformance_test_fixture = ["debug_reducers"]
 
 [dependencies]
 anyhow = "1"
@@ -27,7 +28,6 @@ lyracore-package-delta.workspace = true
 # Fuel budgets and library behavior depend on this exact interpreter version.
 piccolo = "=0.3.3"
 getrandom = "0.3"
-sha1 = { version = "0.10", optional = true }
 
 [build-dependencies]
 serde = { version = "1", features = ["derive"] }

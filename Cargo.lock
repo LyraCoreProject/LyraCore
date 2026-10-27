@@ -1204,7 +1204,6 @@ dependencies = [
  "piccolo",
  "serde",
  "serde_json",
- "sha1",
  "spacetimedb",
  "syn 2.0.119",
  "wow_world_messages",
@@ -1246,6 +1245,7 @@ name = "lyracore-test-support"
 version = "0.1.0"
 dependencies = [
  "rustc_lexer",
+ "serde",
  "serde_json",
  "tungstenite",
 ]

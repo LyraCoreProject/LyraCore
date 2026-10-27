@@ -6,7 +6,7 @@ mod reducer_connection;
 pub mod source_scan;
 mod subscription;
 
-pub use module_wasm::module_bytes;
+pub use module_wasm::{module_bytes, module_bytes_with_features};
 pub use reducer_connection::{ReducerConnection, ReducerRows};
 pub use subscription::TableSubscription;
 

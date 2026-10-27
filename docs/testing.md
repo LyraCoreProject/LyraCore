@@ -54,14 +54,14 @@ compile checks their types and generated registrations.
 
 From `.github/workflows/module-durable.yml`. Durable tests in `module/tests/` are `#[ignore]`d because
 each starts its own SpacetimeDB standalone on a free loopback port, publishes the Module with
-`--features=debug_reducers,package_test_fixture`, calls reducers and reads the result. The
-`lyracore-test-support` crate owns that fixture. Standalone logs go to `lyracore-standalone-logs`
-under the system temp directory.
+`--features=debug_reducers,package_test_fixture,conformance_test_fixture`, calls reducers and reads
+the result. The `lyracore-test-support` crate owns that fixture. Standalone logs go to
+`lyracore-standalone-logs` under the system temp directory.
 
 Build the Module first, so a build failure shows before any fixture starts. Then run one target:
 
 ```bash
-cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
+cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture,conformance_test_fixture
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
@@ -158,8 +158,9 @@ The independent Benilla codec checks and opcode inventory are described in
 ## Conformance
 
 The Milestone 1 native reducer check starts its own local Shard and bypasses WoW transport and
-SRP through a debug-only reducer. It proves world entry and a ping/pong transaction, with a gtker
-decoder used directly by the test. It has no Golden Trace yet. See
+SRP through a reducer gated by `conformance_test_fixture`. It proves world entry, a ping/pong
+transaction, preserved login credentials and packet delivery from a later transaction. The test
+uses a gtker decoder directly. It has no Golden Trace yet. See
 [ADR 0005](adr/0005-1-12-conformance.md) for the planned tiers and their ownership.
 
 ```bash
@@ -168,6 +169,7 @@ export TMPDIR="$HOME/.cache/lyracore-scratch/conformance/tmp"
 mkdir -p "$TMPDIR"
 cargo test -p lyracore-module --test native_debug_gate
 cargo test -p lyracore-module --test native_conformance -- --ignored
+cargo test -p lyracore-module --test native_debug_gate -- --ignored
 ```
 
 The [Feature Ledger](../conformance/README.md) has its own Architecture Test:
@@ -183,8 +185,10 @@ skip. The second command checks retained Rust evidence declarations in the inven
 command establishes that a Behavior passes its required verification rungs.
 
 The existing durable CI target discovery includes `native_conformance` automatically.
-`native_debug_gate` checks that the debug module remains behind the `debug_reducers` feature and
-that the check detects a missing or ineffective feature gate.
+`native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
+that the check detects a missing or ineffective feature gate. Its durable test builds with only
+`debug_reducers`, the feature set used by `lyracore publish`, and checks that the Module does not
+export fixture entry. The normal durable Module build enables all three test features.
 
 ## Runtime Scripts
 

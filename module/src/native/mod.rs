@@ -13,7 +13,7 @@ mod chat_flood;
 mod combat;
 mod creature;
 mod death;
-#[cfg(feature = "debug_reducers")]
+#[cfg(feature = "conformance_test_fixture")]
 mod debug;
 mod duel;
 mod economy;
@@ -262,6 +262,8 @@ fn send_raw(
 }
 
 fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
+    #[cfg(feature = "conformance_test_fixture")]
+    debug::close(ctx, connection_id);
     ctx.db.game_native_packet().insert(NativePacket {
         id: 0,
         audience: NativeAudience::Connection(connection_id),
@@ -599,6 +601,14 @@ fn current_account(
         .id()
         .find(account_id)
         .ok_or("Account no longer exists")?;
+    #[cfg(feature = "conformance_test_fixture")]
+    let account = {
+        let mut account = account;
+        if debug::account(ctx, connection.connection_id, &mut account)? {
+            return Ok(account);
+        }
+        account
+    };
     let session = ctx
         .db
         .game_session()
@@ -658,6 +668,8 @@ pub(crate) fn active_session_accounts(ctx: &ReducerContext) -> std::collections:
 
 pub(crate) fn close(ctx: &ReducerContext) {
     if let Some(connection_id) = ctx.connection_id() {
+        #[cfg(feature = "conformance_test_fixture")]
+        debug::close(ctx, connection_id);
         logon::close(ctx, connection_id);
         admission::remove(ctx, connection_id);
         world::leave(ctx, connection_id);
