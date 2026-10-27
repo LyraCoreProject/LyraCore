@@ -171,7 +171,7 @@ The spell catalogue reports the same findings in both profiles. Source scripts a
 spell entries. The `spells.script` finding lists those entries. `spells.modifier-high-mask` lists
 34 effect slots whose source mask exceeds the Module's 32-bit modifier parameter. The low mask
 bits retain their existing meaning; high-bit matching and override-class-script behavior remain
-unsupported. Coefficients, custom flags and minimum target level are due in S5d.
+unsupported. S5d implements coefficients and minimum target level; two custom flags remain held as described below.
 
 The full Base Snapshot includes the core synthetic effect at slot 3 on spell 21082. Datascripts
 can load the Snapshot and author other spells. Opening spell 21082 is refused because the Package
@@ -185,3 +185,11 @@ import omits that rank link and reports `spellmeta.missing-rank-spell`. Both pro
 same findings. The selected proc overlays have no conflicting active-effect masks. A future row
 with distinct active masks would remain unloaded and report `spellmeta.proc-mask`, because the
 Module stores one family mask per spell.
+
+S5d implements the extra spell columns. `spells.custom-flags` reports 47 selected spells in each
+profile. Seventeen use `SEND_CHANNEL_VISUAL`, bit 0x800, which needs a SpellVisual channel-kit
+catalogue and repeating visual delivery. Thirty use `TRIGGER_WEAPON_PROCS`, bit 0x2000, which
+needs weapon-enchant and item-on-hit dispatch. These two bits are held under decision 11; all
+other defined custom bits have gameplay checks. The catalogue retains the held flags. The
+spell-behavior report lists every bit and the tests. The existing script and high-mask findings
+remain. Automatic negative-coefficient fallbacks retain the Module's prior formulas.

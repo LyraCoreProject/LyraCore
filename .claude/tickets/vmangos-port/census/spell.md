@@ -74,6 +74,11 @@ Production findings, with source keys omitted here. The import prints the full f
       "classification": "unsupported",
       "code": "spells.modifier-high-mask",
       "occurrences": 34
+    },
+    {
+      "classification": "unsupported",
+      "code": "spells.custom-flags",
+      "occurrences": 47
     }
   ],
   "format_version": 1,

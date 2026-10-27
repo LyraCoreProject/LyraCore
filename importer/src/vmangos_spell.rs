@@ -25,7 +25,29 @@ fn word(row: &Row, column: &str) -> Result<u32> {
 }
 
 fn source_spell(row: &Row) -> Result<Spell> {
+    let family: u8 = row.number("spellFamilyName")?;
+    let icon: u32 = row.number("spellIconId")?;
+    let family_flags: u64 = row.number("spellFamilyFlags")?;
+    let category = if family == 3
+        && family_flags & 0x12000000 == 0
+        && row.number::<u32>("effectApplyAuraName1")? == 5
+        && row.number::<u32>("preventionType")? == 1
+    {
+        2
+    } else if family == 10
+        && ((family_flags & 0x20180400 != 0 && row.number::<u32>("baseLevel")? != 0)
+            || (icon == 561 && row.number::<u32>("spellVisual1")? == 5652))
+    {
+        1
+    } else {
+        0
+    };
+
     let spell = Spell {
+        single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
+        custom_flags: row.number("customFlags")?,
+        min_target_level: row.number("minTargetLevel")?,
+        bonus_coefficient: Some(array(row, "effectBonusCoefficient")?),
         id: row.number("entry")?,
         school: row.number("school")?,
         dispel_type: row.number("dispel")?,
@@ -86,6 +108,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
             .chain(&spell.effect_real_points_per_level)
             .chain(&spell.effect_multiple_values)
             .chain(&spell.effect_points_per_combo)
+            .chain(spell.bonus_coefficient.iter().flatten())
             .all(|v| v.is_finite()),
         "spell {}: non-finite effect magnitude",
         spell.id
@@ -104,7 +127,17 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     let mut scripts = Vec::new();
     let mut masks = Vec::new();
     let mut spells = Vec::new();
+    let mut flags = Vec::new();
     let columns = [
+        "spellIconId",
+        "baseLevel",
+        "spellVisual1",
+        "preventionType",
+        "customFlags",
+        "minTargetLevel",
+        "effectBonusCoefficient1",
+        "effectBonusCoefficient2",
+        "effectBonusCoefficient3",
         "attributes",
         "attributesEx",
         "attributesEx2",
@@ -209,6 +242,18 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     ];
     for row in source.columns("spell_template", &columns)?.iter() {
         let spell = source_spell(row)?;
+        ensure!(
+            spell.custom_flags & !lyracore_shared::spell_custom::KNOWN == 0,
+            "spell {}: unknown customFlags bits",
+            spell.id
+        );
+        if spell.custom_flags & lyracore_shared::spell_custom::UNSUPPORTED != 0 {
+            flags.push(format!(
+                "{}:0x{:x}",
+                spell.id,
+                spell.custom_flags & lyracore_shared::spell_custom::UNSUPPORTED
+            ));
+        }
         if !row
             .optional_text("script_name")?
             .unwrap_or_default()
@@ -225,7 +270,8 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     }
     let manifest = serde_json::json!({"format_version":1,"source":"vmangos","family":"spell","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":[
         {"code":"spells.script","classification":"unsupported","occurrences":scripts.len(),"source_ids":scripts},
-        {"code":"spells.modifier-high-mask","classification":"unsupported","occurrences":masks.len(),"source_ids":masks}
+        {"code":"spells.modifier-high-mask","classification":"unsupported","occurrences":masks.len(),"source_ids":masks},
+        {"code":"spells.custom-flags","classification":"unsupported","occurrences":flags.len(),"source_ids":flags}
     ]});
     Ok((spells, manifest))
 }
@@ -233,8 +279,9 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
 #[cfg(test)]
 pub(crate) fn fixture() -> crate::world_source::WorldSource {
     let connection = rusqlite::Connection::open_in_memory().unwrap();
-    let mut columns = "school dispel mechanic attributes attributesEx attributesEx2 stances targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
+    let mut columns = "customFlags minTargetLevel spellIconId baseLevel spellVisual1 preventionType school dispel mechanic attributes attributesEx attributesEx2 stances targets requiresSpellFocus castingTimeIndex recoveryTime categoryRecoveryTime auraInterruptFlags procFlags procChance procCharges maxLevel spellLevel durationIndex powerType manaCost rangeIndex stackAmount equippedItemClass equippedItemSubClassMask equippedItemInventoryTypeMask spellFamilyName spellFamilyFlags".split_whitespace().map(str::to_owned).collect::<Vec<_>>();
     for prefix in [
+        "effectBonusCoefficient",
         "effect",
         "effectDieSides",
         "effectBaseDice",
@@ -295,6 +342,34 @@ mod tests {
             manifest["findings"][1]["source_ids"],
             serde_json::json!(["10:1"])
         );
+    }
+
+    #[test]
+    fn source_behavior_fields_are_checked_and_unknown_bits_are_refused() {
+        let source = fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute("UPDATE spell_template SET customFlags=1024,minTargetLevel=8,effectBonusCoefficient1=0.5,effectBonusCoefficient2=-1,effectBonusCoefficient3=0 WHERE build=5875", []).unwrap();
+        let (spells, _) = read(&source).unwrap();
+        assert_eq!(spells[0].custom_flags, 1024);
+        assert_eq!(spells[0].min_target_level, 8);
+        assert_eq!(spells[0].bonus_coefficient, Some([0.5, -1.0, 0.0]));
+        connection
+            .execute(
+                "UPDATE spell_template SET customFlags=16384 WHERE build=5875",
+                [],
+            )
+            .unwrap();
+        assert!(read(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("unknown customFlags"));
+        connection.execute("UPDATE spell_template SET customFlags=0,effectBonusCoefficient1=1e40 WHERE build=5875", []).unwrap();
+        assert!(read(&source)
+            .unwrap_err()
+            .to_string()
+            .contains("non-finite"));
     }
 
     #[test]

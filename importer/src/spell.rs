@@ -177,6 +177,7 @@ fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
         p1: 0,
         script_id: 0,
         enters_combat: false,
+        bonus_coefficient: -1.0,
     }
 }
 
@@ -919,7 +920,8 @@ fn push_spell_header_row(
     let spell_level = s.spell_level.min(255) as u8;
     spell_levels.insert(spell_id, spell_level);
     let max_level = s.max_level.min(255) as u8;
-    let is_negative = spell_is_negative(s);
+    let is_negative =
+        lyracore_shared::spell_custom::is_negative(s.custom_flags, spell_is_negative(s));
 
     let family_name = s.family_name as u8;
     let family_flags = s.family_flags;
@@ -951,6 +953,9 @@ fn push_spell_header_row(
         proc_flags,
         proc_chance,
         proc_charges,
+        custom_flags: s.custom_flags,
+        min_target_level: s.min_target_level,
+        single_target_key: s.single_target_key,
     });
     if binding_summon_entry(
         spell_id,
@@ -1123,6 +1128,7 @@ fn push_spell_effect_rows(
             p1,
             script_id,
             enters_combat,
+            bonus_coefficient: s.bonus_coefficient.map_or(-1.0, |c| c[i]),
         });
 
         cov.effects += 1;
@@ -1635,8 +1641,17 @@ pub(crate) fn world_plan(
         rows.fishing.iter().map(SpellEffectRow::row_id).collect();
     rows.effects
         .retain(|effect| !replaced.contains(&effect.row_id()));
+    let mut stmts = assemble_spell_sql(&rows, &[], false);
+    if source.kind() == crate::world_source::SourceKind::Vmangos {
+        stmts.retain(|s| {
+            !s.starts_with("INSERT INTO game_spell (")
+                && !s.starts_with("INSERT INTO game_spell_effect (")
+        });
+        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::source_sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::source_sql_values).collect::<Vec<_>>());
+    }
     Ok(crate::world_import::DumpPlan {
-        stmts: assemble_spell_sql(&rows, &[], false),
+        stmts,
         stamps: vec![("spell", cov.spells as u64)],
         world_source_manifest: manifest,
         ..Default::default()

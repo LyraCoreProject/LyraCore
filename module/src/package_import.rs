@@ -357,7 +357,7 @@ fn check_insert_is_whole(row: &TracedRow) -> Result<(), String> {
         .columns()
         .iter()
         .map(|column| column.name)
-        .filter(|name| !row.fields().contains_key(*name))
+        .filter(|name| !row.fields().contains_key(*name) && !row.table().column_has_default(name))
         .collect();
     if missing.is_empty() {
         Ok(())

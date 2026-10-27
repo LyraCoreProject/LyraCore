@@ -215,6 +215,7 @@ pub(crate) fn eventai_on_receive_emote(
 }
 
 pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
+    crate::spell::source_behavior::remove_auras_on_evade(ctx, creature_guid);
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };

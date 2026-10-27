@@ -53,6 +53,10 @@ pub(crate) struct Spell {
     pub(crate) name: String,
     pub(crate) family_name: u32,
     pub(crate) family_flags: u64,
+    pub(crate) custom_flags: u32,
+    pub(crate) min_target_level: u32,
+    pub(crate) single_target_key: u64,
+    pub(crate) bonus_coefficient: Option<[f32; 3]>,
 }
 
 pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
@@ -94,6 +98,10 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
             let name = std::str::from_utf8(&name[..end])
                 .with_context(|| format!("Spell.dbc row {id} name is not UTF-8"))?;
             let spell = Spell {
+                custom_flags: 0,
+                min_target_level: 0,
+                single_target_key: 0,
+                bonus_coefficient: None,
                 id: column(0),
                 school: column(1),
                 dispel_type: column(4),
