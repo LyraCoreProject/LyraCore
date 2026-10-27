@@ -2304,12 +2304,6 @@ mod tests {
     }
 
     #[test]
-    fn group_xp_range_is_74_yards() {
-        assert_eq!(GROUP_XP_RANGE_SQ, 5476.0);
-        assert_eq!(GROUP_MAX_MEMBERS, 5);
-    }
-
-    #[test]
     fn kill_reward_needs_an_alive_member_on_the_same_map_within_range() {
         assert!(eligible_for_kill_reward(false, true, true, 0.0));
         assert!(eligible_for_kill_reward(

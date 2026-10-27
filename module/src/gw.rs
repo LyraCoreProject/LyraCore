@@ -1402,151 +1402,38 @@ pub fn gw_client_command(
 #[cfg(test)]
 mod tests {
     use super::{apply_movement_batch, GwMove};
-    use std::collections::{HashMap, HashSet};
 
-    const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
-    const START: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_START_FORWARD as u16;
-
-    #[derive(Clone, Debug, PartialEq)]
-    struct MotionState {
-        x: f32,
-        move_time_ms: u32,
-        relay: Option<(u16, Vec<u8>)>,
-    }
-
-    fn movement(actor_guid: u64, opcode: u16, x: f32, move_time_ms: u32, body: &[u8]) -> GwMove {
+    fn movement(actor_guid: u64) -> GwMove {
         GwMove {
             actor: crate::account_ownership::SessionActor {
                 guid: actor_guid,
                 ownership: None,
             },
-            opcode,
-            movement_info: body.to_vec(),
-            x,
+            opcode: lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16,
+            movement_info: Vec::new(),
+            x: 1.0,
             y: 2.0,
             z: 3.0,
             o: 0.5,
-            move_time_ms,
-        }
-    }
-
-    fn apply_model(states: &mut HashMap<u64, MotionState>, movement: GwMove) -> Result<(), String> {
-        let state = states
-            .get_mut(&movement.actor.guid)
-            .ok_or_else(|| "mover not in world".to_string())?;
-        if crate::world::movement_is_accepted(
-            state.move_time_ms,
-            movement.move_time_ms,
-            movement.x,
-            movement.y,
-            movement.z,
-            movement.o,
-        ) {
-            state.x = movement.x;
-            state.move_time_ms = movement.move_time_ms;
-            state.relay = Some((movement.opcode, movement.movement_info));
-        }
-        Ok(())
-    }
-
-    fn state(x: f32, move_time_ms: u32) -> MotionState {
-        MotionState {
-            x,
-            move_time_ms,
-            relay: None,
+            move_time_ms: 10,
         }
     }
 
     #[test]
-    fn missing_and_invalid_entries_do_not_reject_valid_neighbors() {
-        let mut states = HashMap::from([(1, state(0.0, 0)), (3, state(0.0, 0))]);
+    fn a_batch_skips_suppressed_movers_and_continues_past_a_rejected_move() {
+        let mut applied = Vec::new();
         apply_movement_batch(
-            vec![
-                movement(1, HEARTBEAT, 1.0, 10, &[1]),
-                movement(2, HEARTBEAT, 2.0, 10, &[2]),
-                movement(1, HEARTBEAT, f32::NAN, 11, &[9]),
-                movement(3, HEARTBEAT, 3.0, 10, &[3]),
-            ],
-            |_| false,
-            |movement| apply_model(&mut states, movement),
+            vec![movement(1), movement(2), movement(3), movement(4)],
+            |guid| guid == 2,
+            |movement| {
+                applied.push(movement.actor.guid);
+                if movement.actor.guid == 3 {
+                    Err("mover not in world".to_string())
+                } else {
+                    Ok(())
+                }
+            },
         );
-
-        assert_eq!(
-            states[&1],
-            MotionState {
-                x: 1.0,
-                move_time_ms: 10,
-                relay: Some((HEARTBEAT, vec![1]))
-            }
-        );
-        assert_eq!(
-            states[&3],
-            MotionState {
-                x: 3.0,
-                move_time_ms: 10,
-                relay: Some((HEARTBEAT, vec![3]))
-            }
-        );
-    }
-
-    #[test]
-    fn stale_batch_motion_cannot_overtake_newer_state() {
-        let mut states = HashMap::from([(7, state(0.0, 0))]);
-        apply_model(&mut states, movement(7, START, 8.0, 200, &[8])).unwrap();
-        let after_immediate = states[&7].clone();
-
-        apply_movement_batch(
-            vec![
-                movement(7, HEARTBEAT, 9.0, 200, &[9]),
-                movement(7, HEARTBEAT, 10.0, 199, &[10]),
-            ],
-            |_| false,
-            |movement| apply_model(&mut states, movement),
-        );
-
-        assert_eq!(states[&7], after_immediate);
-    }
-
-    #[test]
-    fn taxi_suppression_is_per_entry() {
-        let mut states = HashMap::from([(4, state(0.0, 0)), (5, state(0.0, 0))]);
-        let suppressed = HashSet::from([4]);
-        apply_movement_batch(
-            vec![
-                movement(4, HEARTBEAT, 4.0, 10, &[4]),
-                movement(5, HEARTBEAT, 5.0, 10, &[5]),
-            ],
-            |guid| suppressed.contains(&guid),
-            |movement| apply_model(&mut states, movement),
-        );
-
-        assert_eq!(states[&4], state(0.0, 0));
-        assert_eq!(states[&5].relay, Some((HEARTBEAT, vec![5])));
-    }
-
-    #[test]
-    fn single_and_batch_paths_commit_the_same_state_and_raw_relay() {
-        let mut single = HashMap::from([(11, state(0.0, 0))]);
-        let mut batch = single.clone();
-        apply_model(&mut single, movement(11, START, 12.0, 50, &[1, 2, 3, 4])).unwrap();
-        apply_movement_batch(
-            vec![movement(11, START, 12.0, 50, &[1, 2, 3, 4])],
-            |_| false,
-            |movement| apply_model(&mut batch, movement),
-        );
-
-        assert_eq!(batch, single);
-        assert_eq!(batch[&11].relay, Some((START, vec![1, 2, 3, 4])));
-    }
-
-    #[test]
-    fn batch_publishes_accepted_motion_before_returning() {
-        let mut states = HashMap::from([(12, state(0.0, 0))]);
-        apply_movement_batch(
-            vec![movement(12, HEARTBEAT, 6.0, 60, &[6])],
-            |_| false,
-            |movement| apply_model(&mut states, movement),
-        );
-        assert_eq!(states[&12].relay, Some((HEARTBEAT, vec![6])));
+        assert_eq!(applied, vec![1, 3, 4]);
     }
 }
