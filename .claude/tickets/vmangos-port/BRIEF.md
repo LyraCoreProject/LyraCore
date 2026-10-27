@@ -94,6 +94,12 @@ data come from the same project.
     doesn't read (for example `link_kind`) isn't a stop. Neither is a defect in today's classic-db
     reader (see the standing rule in S1).
 
+    **The one named exception: `Map`** (decided by the maintainer on 2026-10-27). vmangos
+    `map_template` supplies every gameplay column of the Map catalogue. The client's `Map.dbc`
+    supplies only `internal_name`, looked up by map id, because that column is the archive
+    directory the importer uses to find a map's WDT and ADT files. That's client-asset lookup, like
+    terrain, not world data. No other column of `Map` comes from `Map.dbc`.
+
 ## Rules
 
 - **Branches.**
@@ -408,6 +414,18 @@ importer's `eventai.rs` first, then `research/vmangos-schema.md` §4.
   the dungeons Package; see `docs/testing.md`).
 
 ### Milestone 5: flip the default, then everything downstream
+
+**S7-pre. Map from vmangos (the decision-11 exception).**
+
+- Import `map_template` (versioned by patch) for every Map column LyraCore reads today. Take
+  `internal_name` from the client `Map.dbc` by map id, and refuse any vmangos map that has no
+  client row.
+- Carry the vmangos-only fields the dbc-diff report found as additive Module columns: `player_limit`
+  (26 maps differ from the client), `reset_delay` (7 maps) and the ghost entrance
+  (`ghost_entrance_map/x/y`, about 30 maps). Using them in gameplay (instance player limits, raid
+  lockouts, issue #533, ghost entrances) is later ledger work. List it in `unsupported.md`, unless
+  it's a small parity fix.
+- Census, plus a test that terrain lookup still finds every map's archive files.
 
 **S7a. Flip the default to vmangos in the importer.**
 
