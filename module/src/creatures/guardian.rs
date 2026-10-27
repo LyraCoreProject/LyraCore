@@ -61,14 +61,12 @@ pub(crate) fn summon(
         .filter(caster_guid)
         .filter(|entity| entity.entry == effect.p0 as u32 && is_guardian(ctx, entity.guid))
         .count();
-    if count > 15 {
-        return Ok(());
-    }
     if points > 16 {
         return Err("guardian summon count exceeds 16".into());
     }
+    let summons = (points.max(1) as usize).min(16usize.saturating_sub(count));
     let level_roll = ctx.random();
-    for index in 0..points.max(1) {
+    for index in 0..summons {
         super::eventai::place_guardian(
             ctx,
             &caster,
