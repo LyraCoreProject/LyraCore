@@ -92,6 +92,10 @@ fn records(statements: &[String]) -> Result<Records> {
 
 fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
+        "game_spell"
+        | "game_spell_effect"
+        | "game_spell_reagent"
+        | "game_creature_ai_spell_metadata" => &["spell_id"],
         "game_creature_template"
         | "game_creature_level_stats"
         | "game_creature_display"
@@ -367,6 +371,9 @@ fn records_of_service(
 
 fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<()> {
     writeln!(output, "\n## Differences\n")?;
+    if family == "spell" {
+        writeln!(output, "- The complete spell catalogue uses the selected vmangos spell_template rows in both profiles. The same derived rows supply the Base Snapshot. SpellCastTimes, SpellDuration, SpellRadius and SpellRange remain separate client tables.\n- The detailed field comparison is in dbc-diff.md. Existing effect translation and synthetic fishing markers remain. Source scripts and the high 32 bits of spell modifier masks remain unsupported.")?;
+    }
     if family == "creatures" || family == "casts" {
         for table in [
             "creature_template",
@@ -494,6 +501,10 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
 }
 
 fn floors(output: &mut String, family: &str, before: &Records, after: &Records) -> Result<()> {
+    if family == "spell" {
+        writeln!(output, "\n## Consumed floors\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |\n| SPELL_TOTAL | {} | {} | {} |",super::floor("SPELL_TOTAL")?,before["game_spell"].rows,after["game_spell"].rows)?;
+        return Ok(());
+    }
     if family == "gossip" {
         writeln!(output, "\n## Consumed floors\n\nThe import manifest defines no gossip-specific count floor. Creature-service coverage remains for S4.")?;
         return Ok(());

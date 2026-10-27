@@ -8,6 +8,8 @@ import {
 import type { FieldValue } from "./canonical.ts";
 
 const SNAPSHOT_VERSION = 1;
+// The core can use slot 3 for a synthetic effect; Package claims still stop at slot 2.
+const CORE_SYNTHETIC_EFFECT_INDEX = 3;
 
 export type BaseRow = ReadonlyMap<string, FieldValue>;
 
@@ -51,10 +53,10 @@ export class BaseSnapshot {
     for (const raw of expectArray(record.game_spell_effect, origin, "game_spell_effect")) {
       const spellId = expectNumber(raw, "spell_id", origin);
       const effectIndex = expectNumber(raw, "effect_index", origin);
-      if (effectIndex < 0 || effectIndex > MAX_SPELL_EFFECT_INDEX) {
+      if (!Number.isInteger(effectIndex) || effectIndex < 0 || effectIndex > CORE_SYNTHETIC_EFFECT_INDEX) {
         throw new BaseDataError(
-          `${origin}: spell ${spellId} carries an effect at index ${effectIndex}; a spell has ` +
-            `effects 0..=${MAX_SPELL_EFFECT_INDEX} and no Package can claim any other slot`,
+          `${origin}: spell ${spellId} carries an invalid core effect index ${effectIndex}; ` +
+            `core effects stop at ${CORE_SYNTHETIC_EFFECT_INDEX}, Package claims at ${MAX_SPELL_EFFECT_INDEX}`,
         );
       }
       const slots = effects.get(spellId) ?? new Map<number, BaseRow>();

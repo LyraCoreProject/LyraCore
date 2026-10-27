@@ -191,3 +191,15 @@ test("a spell another Package would have invented is not readable", () => {
 test("an effect slot the base row does not fill cannot be claimed", () => {
   expect(() => registry().spell(BOLT).effect(2)).toThrow(BaseDataError);
 });
+
+test("a core synthetic slot does not block unrelated Datascripts or widen Package slots", () => {
+  const input = JSON.parse(readFileSync(SNAPSHOT_PATH, "utf8"));
+  const coreSpell = 21082;
+  input.game_spell.push({ ...input.game_spell[0], spell_id: coreSpell });
+  input.game_spell_effect.push({ ...input.game_spell_effect[0], spell_id: coreSpell, effect_index: 3 });
+  const snapshot = BaseSnapshot.parse(JSON.stringify(input), "core synthetic fixture");
+  const claims = new ClaimRegistry(snapshot);
+  claims.spell(BOLT).clone(PACKAGE_SPELL);
+  expect(claims.claims().length).toBeGreaterThan(1);
+  expect(refusalKind(() => claims.spell(coreSpell))).toBe("EffectIndexOutOfRange");
+});

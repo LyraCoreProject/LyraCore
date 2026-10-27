@@ -165,3 +165,15 @@ NPC immunity, 3264 templates. Reason for every listed entry: the script that cle
 
 Creature mana is carried by neither World Source import. Both spawn with zero power and maximum power; source mana pools and mana multipliers remain unsupported.
 `map_template` remains on Map.dbc in full. The source has no `internal_name`, which the vmap importer uses to locate WDT and ADT files. The S5a DBC comparison includes its shared fields. The maintainer is deciding whether to permit vmangos gameplay fields with the archive directory from Map.dbc; this milestone does not mix them.
+
+
+The spell catalogue reports the same findings in both profiles. Source scripts affect 286 selected
+spell entries. The `spells.script` finding lists those entries. `spells.modifier-high-mask` lists
+34 effect slots whose source mask exceeds the Module's 32-bit modifier parameter. The low mask
+bits retain their existing meaning; high-bit matching and override-class-script behavior remain
+unsupported. Coefficients, custom flags and minimum target level are due in S5d.
+
+The full Base Snapshot includes the core synthetic effect at slot 3 on spell 21082. Datascripts
+can load the Snapshot and author other spells. Opening spell 21082 is refused because the Package
+API permits only slots 0 through 2. The baseline Snapshot parser failed on this row before any
+Datascript ran; S5b confines the Refusal to that spell without changing Package Identifier Ranges.

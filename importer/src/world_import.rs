@@ -3981,6 +3981,7 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
 
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
+        Some("spell") => spell::world_plan(dump, args.dbc.as_deref().context("spell requires --dbc")?),
         Some("creatures" | "casts") => vmangos_creatures::plan(dump, args),
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
@@ -4007,6 +4008,9 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
 }
 
 pub(crate) fn census_plan(source: &WorldSource, args: &WorldImportArgs) -> Result<DumpPlan> {
+    if args.family.as_deref() == Some("spell") {
+        return spell::world_plan(source, args.dbc.as_deref().context("spell requires --dbc")?);
+    }
     if source.kind() == SourceKind::Vmangos {
         return build_vmangos_plan(source, args);
     }
@@ -4057,6 +4061,10 @@ pub(crate) fn run(
     spells: &spell::SpellArgs,
 ) -> Result<()> {
     let dump = WorldSource::open(std::path::Path::new(dump_path), args.source)?;
+    if args.family.as_deref() == Some("spell") {
+        let plan = spell::world_plan(&dump, args.dbc.as_deref().context("spell requires --dbc")?)?;
+        return emit_plan(&dump, args, &plan);
+    }
     if args.source == SourceKind::Vmangos {
         let plan = build_vmangos_plan(&dump, args)?;
         return emit_plan(&dump, args, &plan);
@@ -4141,6 +4149,9 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
         for family in FAMILIES {
             run_package_stage(args, family)?;
         }
+        if args.family.as_deref() == Some("spell") {
+            run_package_stage(args, "spell")?;
+        }
         return Ok(());
     }
 
@@ -4165,6 +4176,9 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
 
     for family in FAMILIES {
         run_package_stage(args, family)?;
+    }
+    if args.family.as_deref() == Some("spell") {
+        run_package_stage(args, "spell")?;
     }
     Ok(())
 }
