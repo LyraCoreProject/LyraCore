@@ -97,6 +97,7 @@ impl<'a> WhoFilter<'a> {
 mod tests {
     use super::*;
     use lyracore_shared::faction::{TEAM_ALLIANCE, TEAM_HORDE};
+    use wow_world_messages::vanilla::Level;
 
     fn baseline() -> (WhoFilter<'static>, WhoCandidate<'static>) {
         let filter = WhoFilter {
@@ -130,15 +131,6 @@ mod tests {
         candidate.class = 1;
         candidate.race = 32;
         assert!(!matches(&filter, &candidate));
-    }
-
-    #[test]
-    fn request_bounds_apply_before_candidate_matching() {
-        let request = CMSG_WHO {
-            zones: vec![0; 11],
-            ..Default::default()
-        };
-        assert!(WhoFilter::from_request(1, &request).is_none());
     }
 
     #[test]
@@ -180,9 +172,16 @@ mod tests {
 
     #[test]
     fn a_maximum_level_at_or_above_100_removes_the_upper_bound() {
-        let (mut filter, mut candidate) = baseline();
-        filter.max_level = u8::MAX;
-        candidate.level = 60;
+        let request = CMSG_WHO {
+            minimum_level: Level::new(1),
+            maximum_level: Level::new(100),
+            race_mask: 1 << 1,
+            class_mask: 1 << 1,
+            ..Default::default()
+        };
+        let filter = WhoFilter::from_request(1, &request).expect("a bounded request answers");
+        let (_, mut candidate) = baseline();
+        candidate.level = 150;
         assert!(matches(&filter, &candidate));
     }
 
@@ -282,15 +281,13 @@ mod tests {
 
     #[test]
     fn more_than_ten_zones_is_oversized() {
-        assert!(is_oversized(&CMSG_WHO {
-            zones: vec![0; 11],
+        let zones = |count| CMSG_WHO {
+            zones: vec![0; count],
             ..Default::default()
-        }));
+        };
+        assert!(WhoFilter::from_request(1, &zones(11)).is_none());
         assert!(
-            !is_oversized(&CMSG_WHO {
-                zones: vec![0; 10],
-                ..Default::default()
-            }),
+            WhoFilter::from_request(1, &zones(10)).is_some(),
             "exactly 10 zones still answers"
         );
     }

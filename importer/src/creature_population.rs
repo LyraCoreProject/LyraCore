@@ -552,7 +552,12 @@ mod tests {
     #[test]
     fn rejects_incomplete_population_source() {
         let scope = WorldImportScope::quest_catalogue().unwrap();
-        assert!(collect("INSERT INTO `spawn_group` VALUES (1", &scope).is_err());
+        assert_eq!(
+            collect("INSERT INTO `spawn_group` VALUES (1", &scope)
+                .err()
+                .map(|error| error.to_string()),
+            Some("unterminated spawn_group INSERT in dump".to_string())
+        );
     }
 
     #[test]

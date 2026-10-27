@@ -148,14 +148,11 @@ mod tests {
     }
 
     #[test]
-    fn grid_rect_from_box_matches_bounds_exactly() {
+    fn northshire_abbey_falls_in_grid_cell_520_343() {
+        assert_eq!(grid_cell(-8949.95, -132.493), (520, 343));
         let b = GridBox::around(0, -8949.95, -132.493);
-        let r = GridRect::from_box(&b);
-        assert_eq!((r.map_id, r.gx_min, r.gx_max, r.gy_min, r.gy_max), {
-            let (x0, x1, y0, y1) = b.bounds();
-            (b.map_id, x0, x1, y0, y1)
-        });
-        assert_eq!(r.bounds(), b.bounds());
+        assert_eq!(b.bounds(), (518, 522, 341, 345));
+        assert_eq!(GridRect::from_box(&b).bounds(), (518, 522, 341, 345));
     }
 
     #[test]
@@ -236,28 +233,35 @@ mod tests {
     }
 
     #[test]
-    fn cell_id_at_matches_grid_cell_composed_with_the_packer() {
-        for (x, y) in [
-            (-8949.95f32, -132.493f32),
-            (0.0, 0.0),
-            (MAP_COORD_MAX, MAP_COORD_MAX),
-            (MAP_COORD_MAX + 1000.0, -MAP_COORD_MAX - 1000.0),
-            (1600.0, -4400.0),
+    fn cell_id_at_packs_the_cell_of_known_coordinates() {
+        for ((x, y), (gx, gy)) in [
+            ((-8949.95f32, -132.493f32), (520, 343)),
+            ((0.0, 0.0), (341, 341)),
+            ((MAP_COORD_MAX, MAP_COORD_MAX), (0, 0)),
+            (
+                (MAP_COORD_MAX + 1000.0, -MAP_COORD_MAX - 1000.0),
+                (-20, 702),
+            ),
+            ((1600.0, -4400.0), (309, 429)),
         ] {
-            let (gx, gy) = grid_cell(x, y);
-            assert_eq!(cell_id_at(x, y), grid_cell_id(gx, gy), "at ({x},{y})");
-            assert_eq!(grid_cell_of_id(cell_id_at(x, y)), (gx, gy));
+            assert_eq!(grid_cell(x, y), (gx, gy), "at ({x},{y})");
+            assert_eq!(
+                cell_id_at(x, y),
+                (i64::from(gx) << 32) | i64::from(gy as u32)
+            );
         }
     }
 
     #[test]
     fn box_and_rect_cell_ids_are_exactly_the_packed_cells() {
         let b = GridBox::around(0, -8949.95, -132.493);
-        let want: Vec<i64> = b.cells().map(|(gx, gy)| grid_cell_id(gx, gy)).collect();
         let got: Vec<i64> = b.cell_ids().collect();
-        assert_eq!(got, want, "the box's packed ids must track cells() exactly");
         let side = (2 * BOX_HALF_SPAN + 1) as usize;
         assert_eq!(got.len(), side * side);
+        assert_eq!(got[0], (518 << 32) | 341);
+        assert_eq!(got[1], (518 << 32) | 342);
+        assert_eq!(got[side], (519 << 32) | 341);
+        assert_eq!(got[side * side - 1], (522 << 32) | 345);
         assert_eq!(
             got.iter()
                 .copied()

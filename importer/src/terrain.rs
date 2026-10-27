@@ -412,7 +412,10 @@ mod tests {
     fn truncated_map_tile_catalogue_is_refused() {
         let mut bytes = b"NIAM".to_vec();
         bytes.extend_from_slice(&32768u32.to_le_bytes());
-        assert!(parse_map_tiles(&bytes).is_err());
+        assert_eq!(
+            parse_map_tiles(&bytes).unwrap_err().to_string(),
+            "truncated WDT chunk payload"
+        );
     }
 
     fn collect_test_adt(bytes: Vec<u8>) -> Result<(Vec<CellRow>, u32)> {
@@ -517,15 +520,14 @@ mod tests {
 
     #[test]
     fn slice_cell_range_from_box_uses_corners_not_center_radius() {
-        let (x0, x1, y0, y1) = (-11400.0f64, -8000.0, -1600.0, 2000.0);
-        let (cx_min, cx_max, cy_min, cy_max) =
-            slice_cell_range(Some((x0, x1, y0, y1)), (-8949.95, -132.493, 83.5312), 180.0);
-        assert_eq!(cx_min, cell_index(x1 as f32));
-        assert_eq!(cx_max, cell_index(x0 as f32));
-        assert_eq!(cy_min, cell_index(y1 as f32));
-        assert_eq!(cy_max, cell_index(y0 as f32));
-        assert!(cx_min < cx_max);
-        assert!(cy_min < cy_max);
+        assert_eq!(
+            slice_cell_range(
+                Some((-11400.0, -8000.0, -1600.0, 2000.0)),
+                (-8949.95, -132.493, 83.5312),
+                180.0
+            ),
+            (752, 854, 452, 560)
+        );
     }
 
     #[test]
@@ -537,21 +539,18 @@ mod tests {
             err36.contains("stacked instance floors"),
             "the map-36 refusal names the floor representation limit: {err36}"
         );
-        assert!(super::map_dir(429).is_err());
+        assert_eq!(
+            super::map_dir(429).unwrap_err().to_string(),
+            "no terrain map-name mapping for map 429"
+        );
     }
 
     #[test]
     fn slice_cell_range_without_box_falls_back_to_center_radius_square() {
-        let center = (-8949.95f64, -132.493, 83.5312);
-        let radius = 180.0f64;
-        let got = slice_cell_range(None, center, radius);
-        let want = (
-            cell_index((center.0 + radius) as f32),
-            cell_index((center.0 - radius) as f32),
-            cell_index((center.1 + radius) as f32),
-            cell_index((center.1 - radius) as f32),
+        assert_eq!(
+            slice_cell_range(None, (-8949.95, -132.493, 83.5312), 180.0),
+            (775, 785, 510, 521)
         );
-        assert_eq!(got, want);
     }
 
     #[test]

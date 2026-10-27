@@ -2345,7 +2345,9 @@ mod tests {
 
     #[test]
     fn every_pinned_location_target_uses_its_companion_unit_selection() {
-        for target_a in LOCATION_TARGET_CODES {
+        for target_a in [
+            9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
+        ] {
             assert_eq!(
                 resolve_target(unit_selection_from_pair(target_a, 6), true),
                 T_TARGET_ENEMY,

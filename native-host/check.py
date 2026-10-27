@@ -654,6 +654,7 @@ def check_guild(host):
     peer.send(0x81, b'Forbidden Guild\0')
     assert not any(op in (0x55, 0x93) for op, _ in peer.collect())
     assert not host.rows(f'SELECT guild_id FROM game_guild_member WHERE character_guid = {peer_guid}')
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     gm = host.rows("SELECT gm_level FROM game_account WHERE username = 'NATIVE'")[0][0]
     host.call('set_gm_level', ['Native', 1])
     client.send(0x81, b'Temporary Guild\0')
@@ -2511,6 +2512,8 @@ def check_mail(host):
         if (0x285, bytes(4)) in first.collect():
             break
         time.sleep(0.02)
+    else:
+        raise AssertionError('the delivered copy must notify its recipient')
     copied_again = request(first, 0x246, copy_mail)
     result(copied_again, copy_mail, 2, 0, struct.pack('<II', 8383, 1))
     held_copy = host.rows(f'SELECT guid, slot FROM game_item_instance WHERE owner_guid = {first_guid} AND item_text_id = {letter}')[0]
@@ -2743,19 +2746,23 @@ def check_member_stats(host):
     host.call('debug_teleport', [peer_guid, 0, 11, 0, 0, 0])
     peer.collect(auto_ack=False)
     assert full(peer_guid) == {0: 0x21}
-    time.sleep(5.2)
+    # A loading member's tick writes nothing, so two 5 s intervals stand in for proof of one.
+    time.sleep(10.5)
     assert not changes(), 'loading members must not be reported offline'
     peer.send(0xdc)
     peer.collect()
     client.collect()
-    time.sleep(5.2)
+    host.wait_until(
+        lambda: host.rows(f'SELECT snapshots FROM game_native_member_stats WHERE owner_guid = {guid}')[0][0] == [],
+        'a member stats tick must drop the member the client now sees', timeout=12)
     assert not changes(), 'AOI members must use entity updates'
     peer.send(0x4b)
     peer.collect()
     assert not host.rows(f'SELECT id FROM game_native_member_stats WHERE owner_guid = {peer_guid}')
     assert full(peer_guid) == {0: 0}
     changed_until(lambda fields: fields == {0: 0})
-    time.sleep(5.2)
+    # The offline packet marks a tick; the next one is due 5 s later.
+    time.sleep(6)
     assert not changes(), 'offline status is sent once'
     peer.send(0x3d, struct.pack('<Q', peer_guid))
     peer.collect()
@@ -2990,6 +2997,7 @@ def check_channels(host):
     command(peer, 0x9a)
     roster = next(body for opcode, body in peer.collect() if opcode == 0x9b)
     assert struct.pack('<Q', guid) in roster and struct.pack('<Q', peer_guid) in roster
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     host.call('set_gm_level', ['Native', 1])
     say(client, 'channel line')
     assert any(opcode == 0x96 and b'channel line\0' in body for opcode, body in client.collect())
@@ -3347,6 +3355,7 @@ def check_chat(host):
     def chat(packets):
         return [packet for packet in packets if packet[0] == 0x96]
 
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     host.call('set_gm_level', ['Native', 1])
     send(client, 0, '  native say  ')
     expected = line(0, guid, 'native say', 7)
@@ -3930,7 +3939,7 @@ def check_inventory(host):
     assert weapon_slot >= 23
     assert item_pointer(values(unequipped, guid), 15) == 0
     assert item_pointer(values(unequipped, guid), weapon_slot) == weapon_guid
-    assert any(opcode == 0xa9 for opcode, _ in peer.collect())
+    assert values(peer.collect(), guid).get(440) == 0, 'the main-hand visible item entry clears for observers'
     client.send(0x10a, bytes([255, weapon_slot]))
     equipped = client.collect()
     assert item_pointer(values(equipped, guid), 15) == weapon_guid
@@ -3951,7 +3960,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     client.send(0x1a2, struct.pack('<QIBB', vendor, 5090050, 17, 1))
     refused = client.collect()
-    assert any(opcode == 0x1a5 for opcode, _ in refused)
+    assert (0x1a5, struct.pack('<QIB', vendor, 5090050, 0)) in refused, 'BUY_ERR_CANT_FIND_ITEM'
     assert not values(refused, guid) and not creates(refused)
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     assert not host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')
@@ -4037,7 +4046,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 2050') == [[2050]]
     client.send(0x1b2, struct.pack('<QI', trainer, 2050))
     refused = client.collect()
-    assert any(opcode == 0x1b4 for opcode, _ in refused)
+    assert (0x1b4, struct.pack('<QII', trainer, 2050, 0)) in refused, 'TRAINER_BUY_FAILED Unavailable'
     assert not any(opcode in (0x12b, 0xa9) for opcode, _ in refused)
     host.call('debug_set_skill', [guid, 356, 3])
     skills = values(client.collect(), guid)
@@ -4283,7 +4292,13 @@ def check_group_loot(host):
         awarded += client.collect()
     assert any(opcode == 0x29f for opcode, _ in awarded)
     assert any(opcode == 0x166 for opcode, _ in awarded)
-    assert any(opcode == 0x29f for opcode, _ in peer.collect())
+    peer_awarded = peer.collect()
+    for _ in range(50):
+        if any(opcode == 0x29f for opcode, _ in peer_awarded):
+            break
+        time.sleep(0.02)
+        peer_awarded += peer.collect()
+    assert any(opcode == 0x29f for opcode, _ in peer_awarded), peer_awarded
     assert not host.rows(f'SELECT id FROM game_loot_roll WHERE corpse_guid = {corpse}')
     assert not host.rows(f'SELECT id FROM game_corpse_loot WHERE corpse_guid = {corpse}')
     client.send(0x15d, struct.pack('<Q', corpse))
@@ -4341,7 +4356,7 @@ def check_auras(host):
     assert host.rows(f'SELECT id FROM game_aura WHERE target_guid = {peer_guid} AND spell_id = 168')
     peer.send(0x136, struct.pack('<I', 168))
     cancelled = peer.collect()
-    assert any(opcode == 0xa9 for opcode, _ in cancelled)
+    assert values(cancelled, peer_guid).get(47) == 0, 'cancelling the buff clears UNIT_FIELD_AURA slot 0'
     assert not host.rows(f'SELECT id FROM game_aura WHERE target_guid = {peer_guid} AND spell_id = 168')
     client.collect()
 
@@ -4440,9 +4455,13 @@ def check_casting(host):
     started = peer.collect()
     assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
     host.sql(f'UPDATE game_world_entity SET power = 0 WHERE guid = {peer_guid}')
-    time.sleep(1.6)
-    refused = peer.collect()
-    assert [packet for packet in refused if packet[0] in (0x130, 0x132, 0x133, 0x2a6)] == interrupted, refused
+    refused, deadline = [], time.monotonic() + 5
+    while time.monotonic() < deadline:
+        refused += [packet for packet in peer.collect() if packet[0] in (0x130, 0x132, 0x133, 0x2a6)]
+        if len(refused) >= len(interrupted):
+            break
+        time.sleep(0.05)
+    assert refused == interrupted, refused
     assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
     host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 133')
     client.collect()
@@ -4680,6 +4699,9 @@ def check_progression(host):
     host.call('debug_teleport', [guid, 0, 20, 0, 0, 0])
     client.collect()
     peer.collect()
+    def connections():
+        return sorted(json.dumps(row) for row in host.rows('SELECT connection_id FROM game_native_world_connection'))
+    before_replacement = connections()
     replacement = host.connect()
     assert replacement.read()[0] == 0x1ee
     replacement.send(0x3d, struct.pack('<Q', guid))
@@ -4695,7 +4717,9 @@ def check_progression(host):
         except EOFError:
             break
     client.close()
-    time.sleep(0.05)
+    host.wait_until(
+        lambda: (now := connections()) != before_replacement and len(now) == len(before_replacement),
+        'the replaced World Session must close its connection')
     assert host.rows(f'SELECT guid FROM game_world_entity WHERE guid = {guid}')
     replacement.send(0x4b)
     replacement.send(0xee, struct.pack('<IIffffI', 0, 3000, 12, 0, 0, 0, 0))

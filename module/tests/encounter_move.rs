@@ -112,15 +112,24 @@ fn a_move_dynamic_arrival_is_dropped_when_a_newer_leg_replaced_the_leg() {
     let start = position(&pair[0]);
 
     shard.assert_call("debug_start_relay_move", &[&mover, &target]);
-    move_to(&shard, &mover, (start.0, start.1 + LEG_YD, start.2));
+    let destination = (start.0, start.1 + LEG_YD, start.2);
+    move_to(&shard, &mover, destination);
     assert!(arrival_pending(&shard, &mover));
 
     assert!(
         poll_until(POLL_TIMEOUT, || !arrival_pending(&shard, &mover)),
         "the arrival never came due"
     );
-    let newer: u32 = number(&leg(&shard, &mover), "dur_ms");
-    assert!(newer >= 7_000, "the newer leg must still be in flight");
+    let newer = leg(&shard, &mover);
+    assert_near(
+        (
+            number(&newer, "dx"),
+            number(&newer, "dy"),
+            number(&newer, "dz"),
+        ),
+        destination,
+        "the leg still in flight is the newer move",
+    );
     assert_eq!(
         equipment_rows(&shard, &mover),
         0,

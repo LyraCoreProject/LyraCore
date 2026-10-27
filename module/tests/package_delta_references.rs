@@ -26,6 +26,7 @@ const REAL_GRAVEYARD: u32 = 105;
 const MISSING_GRAVEYARD: u32 = 4_000_000;
 const PACKAGE_SPELL_LEARN: u64 = 14_000_001;
 const PACKAGE_SPELL: u32 = 6_000_001;
+const PACKAGE_QUEST: u32 = 8_000_001;
 
 fn arg(value: &str) -> String {
     serde_json::to_string(value).expect("a string encodes as JSON")
@@ -202,6 +203,34 @@ fn quest_and_loot_claims_refuse_missing_cross_table_references() {
         "SELECT * FROM game_pickpocket_loot WHERE id = {PACKAGE_LOOT}"
     ));
     assert_eq!(loot[0]["item_entry"], REAL_ITEM.to_string());
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn tuning_a_package_quest_no_enabled_package_inserts_is_refused() {
+    let mut standalone = Standalone::start("package-delta-uninvented-quest");
+    standalone.publish_module();
+    standalone.assert_call("claim_operator", &[]);
+
+    let tuning = artifact(
+        "example.tuner",
+        &format!(
+            r#"{{"table":"game_quest_template","key":{{"entry":{PACKAGE_QUEST}}},"operation":"update","fields":{{"reward_money":{{"type":"u32","value":100}}}}}}"#
+        ),
+    );
+    let refused = apply(&standalone, "quests", &tuning);
+    let text = refusal_text(&refused);
+    assert!(
+        !refused.status.success()
+            && text.contains("`game_quest_template` row")
+            && text.contains("an enabled Package tunes it, but no enabled Package inserts it"),
+        "{text}"
+    );
+    assert!(standalone
+        .query_rows(&format!(
+            "SELECT entry FROM game_quest_template WHERE entry = {PACKAGE_QUEST}"
+        ))
+        .is_empty());
 }
 
 #[test]

@@ -164,25 +164,20 @@ mod tests {
 
     #[test]
     fn saved_properties_cross_events_and_old_events_stay_plain() {
-        assert_eq!(
-            decode_start(&encode_start(1, 2, 3, 4000, 117)),
-            Some((1, 2, 3, 4000, 117))
-        );
+        assert_eq!(encode_start(1, 2, 3, 4000, 117), "1,2,3,4000,117");
+        assert_eq!(decode_start("1,2,3,4000,117"), Some((1, 2, 3, 4000, 117)));
         assert_eq!(decode_start("1,2,3,4000"), Some((1, 2, 3, 4000, 0)));
+        assert_eq!(encode_vote(1, 2, 3, 99, 1, false, 117), "1,2,3,99,1,0,117");
         assert_eq!(
-            decode_vote(&encode_vote(1, 2, 3, 99, 1, false, 117)),
+            decode_vote("1,2,3,99,1,0,117"),
             Some((1, 2, 3, 99, 1, false, 117))
         );
         assert_eq!(
-            decode_won(&encode_won(1, 2, 3, 99, 1, 117)),
-            Some((1, 2, 3, 99, 1, 117))
+            decode_vote("1,2,3,99,1,0"),
+            Some((1, 2, 3, 99, 1, false, 0))
         );
-    }
-
-    #[test]
-    fn start_round_trips() {
-        let wire = encode_start(555, 2, 1234, 60_000, 0);
-        assert_eq!(decode_start(&wire), Some((555, 2, 1234, 60_000, 0)));
+        assert_eq!(encode_won(1, 2, 3, 99, 1, 117), "1,2,3,99,1,117");
+        assert_eq!(decode_won("1,2,3,99,1,117"), Some((1, 2, 3, 99, 1, 117)));
     }
 
     #[test]
@@ -196,11 +191,13 @@ mod tests {
     #[test]
     fn vote_round_trips_including_auto_pass() {
         let wire = encode_vote(555, 2, 1234, 87, vote_kind::NEED, false, 0);
+        assert_eq!(wire, "555,2,1234,87,1,0,0");
         assert_eq!(
             decode_vote(&wire),
             Some((555, 2, 1234, 87, vote_kind::NEED, false, 0))
         );
         let auto = encode_vote(555, 2, 1234, 0, vote_kind::PASS, true, 0);
+        assert_eq!(auto, "555,2,1234,0,0,1,0");
         assert_eq!(
             decode_vote(&auto),
             Some((555, 2, 1234, 0, vote_kind::PASS, true, 0))
@@ -217,6 +214,7 @@ mod tests {
     #[test]
     fn won_round_trips() {
         let wire = encode_won(555, 2, 1234, 96, vote_kind::GREED, 0);
+        assert_eq!(wire, "555,2,1234,96,2,0");
         assert_eq!(
             decode_won(&wire),
             Some((555, 2, 1234, 96, vote_kind::GREED, 0))
@@ -226,6 +224,7 @@ mod tests {
     #[test]
     fn master_list_round_trips() {
         let wire = encode_master_list(555, &[10, 20, 30]);
+        assert_eq!(wire, "555|10,20,30");
         assert_eq!(decode_master_list(&wire), Some((555, vec![10, 20, 30])));
     }
 
@@ -268,8 +267,9 @@ mod tests {
 
     #[test]
     fn all_passed_round_trips_and_fails_closed() {
+        assert_eq!(encode_all_passed(555, 2, 1234, 117), "555,2,1234,117");
         assert_eq!(
-            decode_all_passed(&encode_all_passed(555, 2, 1234, 117)),
+            decode_all_passed("555,2,1234,117"),
             Some((555, 2, 1234, 117))
         );
         assert!(decode_all_passed("555,2,1234").is_none());
@@ -279,10 +279,10 @@ mod tests {
 
     #[test]
     fn money_share_round_trips() {
-        let wire = encode_money_share(37);
-        assert_eq!(decode_money_share(&wire), Some(37));
-        let zero = encode_money_share(0);
-        assert_eq!(decode_money_share(&zero), Some(0));
+        assert_eq!(encode_money_share(37), "37");
+        assert_eq!(decode_money_share("37"), Some(37));
+        assert_eq!(encode_money_share(0), "0");
+        assert_eq!(decode_money_share("0"), Some(0));
     }
 
     #[test]

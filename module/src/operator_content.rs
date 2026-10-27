@@ -737,16 +737,27 @@ mod tests {
             Ok(14_000_000)
         );
         assert_eq!(next_operator_spawn_id(14_000_041), Ok(14_000_042));
-        assert!(next_operator_spawn_id(14_999_999).is_err());
+        assert_eq!(
+            next_operator_spawn_id(14_999_999),
+            Err("the Operator Spawn Range (14000000 to 14999999) is exhausted".to_string())
+        );
     }
 
     #[test]
     fn a_position_must_be_finite_and_inside_the_map() {
         assert!(check_position(-8_949.95, -132.493, 83.5312, 0.0).is_ok());
-        assert!(check_position(f32::NAN, 0.0, 0.0, 0.0).is_err());
-        assert!(check_position(0.0, 0.0, 0.0, f32::INFINITY).is_err());
-        assert!(check_position(17_100.0, 0.0, 0.0, 0.0).is_err());
-        assert!(check_position(0.0, -17_100.0, 0.0, 0.0).is_err());
-        assert!(check_position(0.0, 0.0, 20_000.0, 0.0).is_err());
+        let not_finite = Err("the position and orientation must be finite".to_string());
+        assert_eq!(check_position(f32::NAN, 0.0, 0.0, 0.0), not_finite);
+        assert_eq!(check_position(0.0, 0.0, 0.0, f32::INFINITY), not_finite);
+        for (x, y, z, shown) in [
+            (17_100.0, 0.0, 0.0, "(17100, 0, 0)"),
+            (0.0, -17_100.0, 0.0, "(0, -17100, 0)"),
+            (0.0, 0.0, 20_000.0, "(0, 0, 20000)"),
+        ] {
+            assert_eq!(
+                check_position(x, y, z, 0.0),
+                Err(format!("{shown} is outside the map bounds"))
+            );
+        }
     }
 }

@@ -277,8 +277,9 @@ fn built_creature_spell(row: &TracedRow) -> Result<CreatureSpell, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, creature_cast_claim, creature_spell_claim, plan, some_value,
-        PACKAGE_CREATURE_SPELL, REAL_CREATURE_CAST, REAL_CREATURE_SPELL, WHOLE_CREATURE_SPELL_ROW,
+        artifact, assert_each_column_sets_its_own_field, creature_cast_claim, creature_spell_claim,
+        plan, PACKAGE_CREATURE_SPELL, REAL_CREATURE_CAST, REAL_CREATURE_SPELL,
+        WHOLE_CREATURE_SPELL_ROW,
     };
     use super::*;
 
@@ -352,24 +353,24 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_creature_cast_column_has_a_setter() {
-        let mut cast = CreatureCast {
-            creature_entry: REAL_CREATURE_CAST,
-            spell_id: 0,
-        };
-        for column in ClaimTable::CreatureCast.columns() {
-            apply_creature_cast_field(&mut cast, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_creature_cast` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_creature_cast_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureCast,
+            || CreatureCast {
+                creature_entry: REAL_CREATURE_CAST,
+                spell_id: 0,
+            },
+            apply_creature_cast_field,
+        );
     }
 
     #[test]
-    fn every_claimable_creature_spell_column_has_a_setter() {
-        let mut spell = blank_creature_spell(PACKAGE_CREATURE_SPELL);
-        for column in ClaimTable::CreatureSpell.columns() {
-            apply_creature_spell_field(&mut spell, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_creature_spell` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_creature_spell_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureSpell,
+            || blank_creature_spell(PACKAGE_CREATURE_SPELL),
+            apply_creature_spell_field,
+        );
     }
 
     #[test]

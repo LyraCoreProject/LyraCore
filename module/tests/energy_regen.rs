@@ -108,7 +108,7 @@ fn adrenaline_rush_doubles_each_energy_tick() {
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
          family_name, family_flags, proc_flags, proc_chance, proc_charges) \
-         VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 15000, 1, \
+         VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 60000, 1, \
          0, 0, 0, 0, 0, 20, 0, false, 0, 0, 8, 0, 0, 0, 0)"
     ));
     let effect_id = u64::from(ADRENALINE_RUSH) << 2;

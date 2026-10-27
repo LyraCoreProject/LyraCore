@@ -1,9 +1,10 @@
 mod support;
 
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use support::{
-    distance, leg, leg_destination, lone_wolf, number, position, Row, Standalone, LEG_YD,
+    distance, event_rows, fence_subscription, leg, leg_destination, lone_wolf, number, poll_until,
+    position, subscribe_with_fence, Row, Standalone, LEG_YD,
 };
 
 const PERSIST_MAX_DRIFT_YD: f32 = 4.0;
@@ -39,24 +40,22 @@ fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
         "a walk must advance under 4 yd per 0.5 s firing, and {LEG_YD} yd took {dur_ms} ms"
     );
 
-    let row_query = format!("SELECT * FROM game_world_entity WHERE guid = {guid}");
-    let leg_query = format!("SELECT guid FROM game_creature_spline WHERE guid = {guid}");
-    let deadline = Instant::now() + Duration::from_millis(u64::from(dur_ms)) * 3;
-    let mut stored: Vec<Row> = Vec::new();
-    loop {
-        let in_flight = !shard.query_rows(&leg_query).is_empty();
-        let row = shard.query_rows(&row_query).remove(0);
-        if stored.last() != Some(&row) {
-            stored.push(row);
-        }
-        if !in_flight {
-            break;
-        }
-        assert!(
-            Instant::now() < deadline,
-            "the leg did not land: {stored:?}"
-        );
-    }
+    let updates = subscribe_with_fence(
+        &shard,
+        &[
+            &format!("SELECT * FROM game_world_entity WHERE guid = {guid}"),
+            &format!("SELECT * FROM game_creature_spline WHERE guid = {guid}"),
+        ],
+    );
+    assert!(
+        poll_until(Duration::from_millis(u64::from(dur_ms)) * 3, || {
+            !updates.deletes("game_creature_spline").is_empty()
+        }),
+        "the leg did not land"
+    );
+    fence_subscription(&shard, &updates);
+    let mut stored: Vec<Row> = event_rows(&updates, "game_world_entity");
+    stored.dedup();
 
     let (arrival, walk) = stored.split_last().unwrap();
     assert!(

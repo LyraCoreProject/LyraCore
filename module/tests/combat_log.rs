@@ -7,8 +7,8 @@ use lyracore_shared::spell::taxonomy::{
 };
 
 use support::{
-    event_rows, number, poll_until, wait_for_event_rows, Row, Standalone, TableSubscription,
-    POLL_TIMEOUT,
+    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, wait_for_event_rows,
+    Row, Standalone, TableSubscription, POLL_TIMEOUT,
 };
 
 const CHARACTER: u64 = 1;
@@ -57,9 +57,12 @@ fn damage_heal_and_energize_ticks_each_log_their_outcome() {
             "UPDATE game_aura SET eff_kind = {kind}, amount = {amount} WHERE spell_id = {spell_id}"
         ));
     }
-    let events = standalone.subscribe(&[&format!(
-        "SELECT * FROM game_spell_cast_event_live WHERE kind = {PERIODIC_LOG}"
-    )]);
+    let events = subscribe_with_fence(
+        &standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE kind = {PERIODIC_LOG}"
+        )],
+    );
     let due = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -74,7 +77,15 @@ fn damage_heal_and_energize_ticks_each_log_their_outcome() {
         "every tick must leave a log, got {:?}",
         logs(&events)
     );
+    fence_subscription(&standalone, &events);
     let logs = logs(&events);
+    let mut spells: Vec<u32> = logs.iter().map(|row| number(row, "spell_id")).collect();
+    spells.sort_unstable();
+    assert_eq!(
+        spells,
+        [HOT, ENERGIZE, DOT],
+        "one log per ticking aura: {logs:?}"
+    );
     let log = |spell_id: u32| -> &Row {
         logs.iter()
             .find(|row| number::<u32>(row, "spell_id") == spell_id)
@@ -170,10 +181,13 @@ fn a_direct_energize_records_the_power_given_on_the_go() {
             .expect("the Character must be live"),
         "power",
     );
-    assert!(power > 0, "the energize must fill the pool");
+    assert_eq!(
+        power, 9,
+        "base_points 9 with no die fills an empty pool by 9"
+    );
     assert_eq!(
         number::<u32>(&go, "energized"),
-        power,
+        9,
         "the GO names the power given to an empty pool"
     );
     assert_eq!(number::<u32>(&go, "power_type"), power_type);
