@@ -4236,12 +4236,16 @@ def check_quest_items(host):
     host.call('debug_grant_quest', [guid, 50900])
     client.collect()
     # The client's toast adds the packet's count to its bags, so the packet leads the item's update.
-    for count in (3, 1):
+    # The tracker redraws only when a quest log counter changes, so the counter follows the item.
+    for count, carried in ((3, 3), (1, 4)):
         host.call('debug_grant_item', [guid, 5090052, count])
         packets = client.collect()
         opcodes = [opcode for opcode, _ in packets]
         assert (0x19a, struct.pack('<II', 5090052, count)) in packets
         assert opcodes.index(0x19a) < opcodes.index(0xa9)
+        quest_log = [index for index, packet in enumerate(packets) if 199 in values([packet], guid)]
+        assert quest_log and quest_log[-1] > opcodes.index(0xa9)
+        assert values(packets, guid)[199] >> 6 & 0x3f == carried
     jerky_slot = host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052')[0][0]
     used = {row[0] for row in host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid}')}
     split_slot = next(slot for slot in range(23, 39) if slot not in used)
