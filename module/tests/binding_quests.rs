@@ -45,9 +45,9 @@ fn copy_template(
 }
 
 fn insert_spell(node: &Standalone, spell: u32, entry: u32, kind: u8) {
-    node.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Binding fixture',0,0,50,0,180000,10,360000,1,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0)"));
+    node.assert_sql(&format!("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Binding fixture',0,0,50,0,180000,10,360000,1,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0,0)"));
     let id = u64::from(spell) << 2;
-    node.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({id},{spell},0,{kind},1,0,0.0,0,0,0.0,0,0,0,{entry},9,83,0,false)"));
+    node.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{spell},0,{kind},1,0,0.0,0,0,0.0,0,0,0,{entry},9,83,0,false,0.0)"));
 }
 
 fn actor(node: &Standalone) -> BTreeMap<String, String> {

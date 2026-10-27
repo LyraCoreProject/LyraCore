@@ -322,6 +322,19 @@ and leaves a running cooldown alone. That is why `debug_repair_after_publish` fr
 aura applied before the columns existed reads as "never procs", and a permanent self-buff never
 refreshes on its own.
 
+### Combo finishers (`module/src/combo.rs`)
+
+A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or
+0x0040_0000. The importer marks its `game_spell.cast_flags` with `SPELL_ATTR_COMBO_FINISHER`.
+A Character cannot cast one without combo points, on the target for an enemy-targeted finisher and
+anywhere for Slice and Dice. A cast spends the points unless it misses its target.
+
+`game_spell_effect.points_per_combo` is the DBC `EffectPointsPerComboPoint`. Each effect adds it
+once per point the caster holds on the effect's target. `game_spell.max_duration_ms` is the DBC
+maximum duration. A finisher's aura grows from `duration_ms` toward it by a fifth per point.
+Physical finisher damage imports as `E_FINISHER_DAMAGE`. Eviscerate, Ferocious Bite, Rupture and Rip also add the 1.12
+attack-power share that vmangos gives them. The Package API does not claim either new column.
+
 ### `game_item_enchantment` (`module/src/items/properties.rs`)
 
 One row per enchantment effect. `kind` is the Stat Kind: an append-only code for the effect's

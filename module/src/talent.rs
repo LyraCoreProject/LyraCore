@@ -624,6 +624,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     proc_flags: 0,
                     proc_chance: 0,
                     proc_charges: 0,
+                    max_duration_ms: 0,
                 });
                 let effect_index: u8 = 0;
                 ctx.db.game_spell_effect().insert(SpellEffect {
@@ -645,6 +646,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     p1: 0,
                     script_id: 0,
                     enters_combat: false,
+                    points_per_combo: 0.0,
                 });
             }
         };
@@ -690,6 +692,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 proc_flags: 0,
                 proc_chance: 0,
                 proc_charges: 0,
+                max_duration_ms: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
                 id: packed_spell_effect_id(spell_id, 0),
@@ -710,6 +713,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 p1: 0,
                 script_id: 0,
                 enters_combat: false,
+                points_per_combo: 0.0,
             });
         }
     };

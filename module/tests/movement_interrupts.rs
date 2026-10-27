@@ -38,16 +38,16 @@ fn fixture(name: &str) -> (Standalone, [f32; 3]) {
             "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
              cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
              aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-             family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+             family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
              VALUES ({spell_id}, 'Fixture {spell_id}', 0, 0, 0, 0, 0, 0, 600000, 1, 0, 0, 0, \
-             {aura_interrupt}, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0)"
+             {aura_interrupt}, 0, 0, 0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
         ));
         shard.assert_sql(&format!(
             "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \
              die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, \
-             effect_mechanic, p0, p0_kind, p1, script_id, enters_combat) \
+             effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
              VALUES ({}, {spell_id}, 0, {kind}, 0, 0, 0.0, 0, 0, 0.0, 0, 0, 0, {p0}, 3, 0, 0, \
-             false)",
+             false, 0.0)",
             u64::from(spell_id) << 2
         ));
     }

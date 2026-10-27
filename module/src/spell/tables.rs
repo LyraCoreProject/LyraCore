@@ -42,6 +42,9 @@ pub struct Spell {
     // Zero means unlimited charges.
     #[default(0u8)]
     pub proc_charges: u8,
+    // A finisher's duration grows from duration_ms toward this at five combo points.
+    #[default(0u32)]
+    pub max_duration_ms: u32,
 }
 
 #[table(
@@ -71,6 +74,8 @@ pub struct SpellEffect {
     pub script_id: u32,
     #[default(false)]
     pub enters_combat: bool,
+    #[default(0.0f32)]
+    pub points_per_combo: f32,
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]
