@@ -566,3 +566,17 @@ on their respective tables; SQL INSERT does not use migration defaults.
 Rust Packages that construct these row types directly must supply all four appended fields.
 The legacy fixture values are `custom_flags: 0`, `min_target_level: 0`, `single_target_key: 0`
 and `bonus_coefficient: -1.0`.
+
+### Command lists in EventAI
+
+The Module can keep up to three ordered command lists in a rule. Random selection chooses one
+whole list. A failed command with abort-on-failure skips the rest of its list; other lists still
+run. A check-result rule reopens after an aborted list, keeping effects already applied. The
+not-casting policy checks the creature before it spends the opportunity. Event predicates use
+the invoker, or the current opponent when there is no invoker.
+
+These policies follow `CreatureEventAI::ProcessEvent`, `ProcessAction` and
+`Map::ScriptCommandStartDirect` in vmangos at
+[`4641790`](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game).
+The Rust implementation stores LyraCore policies, not source flag numbers. New persisted enum
+variants follow the existing variants, so stored classic rules retain their discriminants.

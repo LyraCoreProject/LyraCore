@@ -278,6 +278,19 @@ fn evaluate_rule<W: EventAiWorld>(
         return;
     }
 
+    if let ExecutionPolicy::ScriptEvent(policy) = rule.execution {
+        if policy.not_casting && world.eventai_is_casting(context.creature_guid) {
+            return;
+        }
+        if policy.predicate != EventPredicate::Always
+            && !context
+                .invoker_guid
+                .or(context.current_target_guid)
+                .is_some_and(|guid| world.eventai_matches_predicate(guid, policy.predicate))
+        {
+            return;
+        }
+    }
     if initialized {
         return;
     }
@@ -314,33 +327,81 @@ fn evaluate_rule<W: EventAiWorld>(
         return;
     }
 
-    let instructions: Vec<&CreatureInstruction> = match (rule.selection, rule.instructions.len()) {
-        (InstructionSelection::RandomOne, 0) => Vec::new(),
-        (InstructionSelection::RandomOne, len) => rule
-            .instructions
-            .get(invocation_choice(seed, branch, 2) as usize % len)
-            .into_iter()
-            .collect(),
-        (InstructionSelection::All, _) => rule.instructions.iter().collect(),
-    };
-    for (index, instruction) in instructions.into_iter().enumerate() {
-        if context.assisted && matches!(instruction, CreatureInstruction::Speak(_)) {
-            continue;
-        }
-        let result = execute_instruction(world, &context, instruction, linked_choice);
-        match result {
-            ActionResult::Applied => {}
-            // A later action's Refusal keeps earlier effects and spends the opportunity.
-            ActionResult::Refused
-                if index == 0 && rule.execution == ExecutionPolicy::CombatAction =>
-            {
-                hold_opportunity_open(world, &context, rule, open_state);
-                return;
+    if let InstructionSelection::CommandLists(lists) = &rule.selection {
+        let selected = lists.random.then(|| branch as usize % lists.ends.len());
+        let mut start = 0;
+        let mut aborted = false;
+        for (group, &end) in lists.ends.iter().enumerate() {
+            if selected.is_none_or(|selected| selected == group) {
+                for index in start..end as usize {
+                    let instruction = &rule.instructions[index];
+                    let choice = if instruction_uses_random(instruction) {
+                        u64::from(world.eventai_roll())
+                    } else {
+                        linked_choice
+                    };
+                    let result = execute_instruction(world, &context, instruction, choice);
+                    if result != ActionResult::Applied
+                        && lists.abort_on_failure.contains(&(index as u32))
+                    {
+                        aborted = true;
+                        break;
+                    }
+                }
             }
-            ActionResult::Refused => {}
-            ActionResult::Unsupported => {
-                finish_opportunity(world, &context, rule, creature_state);
-                return;
+            start = end as usize;
+        }
+        if aborted
+            && matches!(
+                rule.execution,
+                ExecutionPolicy::ScriptEvent(super::ScriptEventPolicy {
+                    check_result: true,
+                    ..
+                })
+            )
+        {
+            world.put_eventai_rule_state(
+                context.creature_guid,
+                rule.source_rule_id,
+                RuleState {
+                    next_eligible_ms: context.now_ms,
+                    invocation_started: false,
+                    executing: false,
+                    ..open_state
+                },
+            );
+            return;
+        }
+    } else {
+        let instructions: Vec<&CreatureInstruction> =
+            match (&rule.selection, rule.instructions.len()) {
+                (InstructionSelection::RandomOne, 0) => Vec::new(),
+                (InstructionSelection::RandomOne, len) => rule
+                    .instructions
+                    .get(invocation_choice(seed, branch, 2) as usize % len)
+                    .into_iter()
+                    .collect(),
+                _ => rule.instructions.iter().collect(),
+            };
+        for (index, instruction) in instructions.into_iter().enumerate() {
+            if context.assisted && matches!(instruction, CreatureInstruction::Speak(_)) {
+                continue;
+            }
+            let result = execute_instruction(world, &context, instruction, linked_choice);
+            match result {
+                ActionResult::Applied => {}
+                // A later action's Refusal keeps earlier effects and spends the opportunity.
+                ActionResult::Refused
+                    if index == 0 && rule.execution == ExecutionPolicy::CombatAction =>
+                {
+                    hold_opportunity_open(world, &context, rule, open_state);
+                    return;
+                }
+                ActionResult::Refused => {}
+                ActionResult::Unsupported => {
+                    finish_opportunity(world, &context, rule, creature_state);
+                    return;
+                }
             }
         }
     }
@@ -357,6 +418,9 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::Speak(speech) => {
             let Some(target) =
                 super::combat::unit_target(world, context, speech.target, None, linked_choice)
+                    .or_else(|| {
+                        (speech.target == super::InstructionTarget::ProvidedTarget).then_some(0)
+                    })
             else {
                 return ActionResult::Refused;
             };
@@ -729,7 +793,11 @@ fn fresh_invocation<W: EventAiWorld>(
     } else {
         deterministic.rotate_left(11)
     };
-    let branch = if rule.selection == InstructionSelection::RandomOne {
+    let branch = if matches!(
+        &rule.selection,
+        InstructionSelection::RandomOne
+            | InstructionSelection::CommandLists(super::CommandLists { random: true, .. })
+    ) {
         world.eventai_roll()
     } else {
         linked
@@ -748,47 +816,46 @@ fn invocation_choice(seed: u64, branch: u32, lane: u64) -> u64 {
 
 fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
     matches!(rule.event, EventCondition::SelectAttackingTarget(_))
-        || rule
-            .instructions
-            .iter()
-            .any(|instruction| match instruction {
-                CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
-                CreatureInstruction::Cast(cast) => random_target(cast.target),
-                CreatureInstruction::AttackStart(target) => random_target(*target),
-                CreatureInstruction::Emote(emote) => random_target(emote.target),
-                CreatureInstruction::RandomEmote(_) => true,
-                CreatureInstruction::Summon(summon) => random_target(summon.target),
-                CreatureInstruction::SpawnAtActor(spawn) => random_target(spawn.target),
-                CreatureInstruction::RemoveAura(remove) => random_target(remove.target),
-                CreatureInstruction::ThrowAiEvent(event) => random_target(event.target),
-                CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
-                CreatureInstruction::SetFacing(facing) => random_target(facing.target),
-                CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
-                    true
-                }
-                CreatureInstruction::StartRelay(_) => true,
-                CreatureInstruction::FleeForAssist
-                | CreatureInstruction::CallForHelp(_)
-                | CreatureInstruction::SetPhase(_)
-                | CreatureInstruction::IncrementPhase(_)
-                | CreatureInstruction::SetRangedPosture(_)
-                | CreatureInstruction::SetLethalDamageFloor(_)
-                | CreatureInstruction::ForceDeath
-                | CreatureInstruction::ForceDespawn(_)
-                | CreatureInstruction::SetStandState(_)
-                | CreatureInstruction::SetReactState(_)
-                | CreatureInstruction::RemoveGuardians(_)
-                | CreatureInstruction::SetAutoAttack(_)
-                | CreatureInstruction::ZoneCombat
-                | CreatureInstruction::SetSheath(_)
-                | CreatureInstruction::EmptyTextNoEffect
-                | CreatureInstruction::MissingTextTemplateNoEffect(_)
-                | CreatureInstruction::ScaleAllThreat(_)
-                | CreatureInstruction::Presentation(_)
-                | CreatureInstruction::QuestCredit(_)
-                | CreatureInstruction::Movement(_)
-                | CreatureInstruction::NotifyEncounter(_) => false,
-            })
+        || rule.instructions.iter().any(instruction_uses_random)
+}
+
+fn instruction_uses_random(instruction: &CreatureInstruction) -> bool {
+    match instruction {
+        CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
+        CreatureInstruction::Cast(cast) => random_target(cast.target),
+        CreatureInstruction::AttackStart(target) => random_target(*target),
+        CreatureInstruction::Emote(emote) => random_target(emote.target),
+        CreatureInstruction::RandomEmote(_) => true,
+        CreatureInstruction::Summon(summon) => random_target(summon.target),
+        CreatureInstruction::SpawnAtActor(spawn) => random_target(spawn.target),
+        CreatureInstruction::RemoveAura(remove) => random_target(remove.target),
+        CreatureInstruction::ThrowAiEvent(event) => random_target(event.target),
+        CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
+        CreatureInstruction::SetFacing(facing) => random_target(facing.target),
+        CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => true,
+        CreatureInstruction::StartRelay(_) => true,
+        CreatureInstruction::FleeForAssist
+        | CreatureInstruction::CallForHelp(_)
+        | CreatureInstruction::SetPhase(_)
+        | CreatureInstruction::IncrementPhase(_)
+        | CreatureInstruction::SetRangedPosture(_)
+        | CreatureInstruction::SetLethalDamageFloor(_)
+        | CreatureInstruction::ForceDeath
+        | CreatureInstruction::ForceDespawn(_)
+        | CreatureInstruction::SetStandState(_)
+        | CreatureInstruction::SetReactState(_)
+        | CreatureInstruction::RemoveGuardians(_)
+        | CreatureInstruction::SetAutoAttack(_)
+        | CreatureInstruction::ZoneCombat
+        | CreatureInstruction::SetSheath(_)
+        | CreatureInstruction::EmptyTextNoEffect
+        | CreatureInstruction::MissingTextTemplateNoEffect(_)
+        | CreatureInstruction::ScaleAllThreat(_)
+        | CreatureInstruction::Presentation(_)
+        | CreatureInstruction::QuestCredit(_)
+        | CreatureInstruction::Movement(_)
+        | CreatureInstruction::NotifyEncounter(_) => false,
+    }
 }
 
 fn random_target(target: super::InstructionTarget) -> bool {
