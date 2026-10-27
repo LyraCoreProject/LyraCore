@@ -177,3 +177,11 @@ The full Base Snapshot includes the core synthetic effect at slot 3 on spell 210
 can load the Snapshot and author other spells. Opening spell 21082 is refused because the Package
 API permits only slots 0 through 2. The baseline Snapshot parser failed on this row before any
 Datascript ran; S5b confines the Refusal to that spell without changing Package Identifier Ranges.
+
+Spell metadata has two inactive learn links, `17002:24867` and `24866:24864`. The Module has no
+activation flag on a learn link, so it retains them and reports `spellmeta.inactive-learn`.
+The source ability link `1515:2997` names a spell absent from the selected spell catalogue. The
+import omits that rank link and reports `spellmeta.missing-rank-spell`. Both profiles have these
+same findings. The selected proc overlays have no conflicting active-effect masks. A future row
+with distinct active masks would remain unloaded and report `spellmeta.proc-mask`, because the
+Module stores one family mask per spell.

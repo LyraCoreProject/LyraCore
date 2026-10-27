@@ -92,7 +92,10 @@ fn records(statements: &[String]) -> Result<Records> {
 
 fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
+        "game_spell_learn" => &["parent_spell", "learn_spell"],
         "game_spell"
+        | "game_spell_chain"
+        | "game_spell_proc_event"
         | "game_spell_effect"
         | "game_spell_reagent"
         | "game_creature_ai_spell_metadata" => &["spell_id"],
@@ -371,6 +374,9 @@ fn records_of_service(
 
 fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<()> {
     writeln!(output, "\n## Differences\n")?;
+    if family == "spellmeta" {
+        writeln!(output, "- Spell chains, proc overlays and dependent learns use build ranges. Missing explicit rank families are derived from selected skill_line_ability rows. Proc effect selection uses vmangos spell_template. Existing plate and mail dependent learns remain when absent from source rows. Inactive learn visibility and unrepresentable proc masks have manifest findings.")?;
+    }
     if family == "spell" {
         writeln!(output, "- The complete spell catalogue uses the selected vmangos spell_template rows in both profiles. The same derived rows supply the Base Snapshot. SpellCastTimes, SpellDuration, SpellRadius and SpellRange remain separate client tables.\n- The detailed field comparison is in dbc-diff.md. Existing effect translation and synthetic fishing markers remain. Source scripts and the high 32 bits of spell modifier masks remain unsupported.")?;
     }
@@ -501,6 +507,23 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
 }
 
 fn floors(output: &mut String, family: &str, before: &Records, after: &Records) -> Result<()> {
+    if family == "spellmeta" {
+        writeln!(output,"\n## Consumed floors\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |")?;
+        for (floor, table) in [
+            ("SPELL_CHAIN", "game_spell_chain"),
+            ("SPELL_LEARN", "game_spell_learn"),
+            ("SPELL_PROC_EVENT", "game_spell_proc_event"),
+        ] {
+            writeln!(
+                output,
+                "| {floor} | {} | {} | {} |",
+                super::floor(floor)?,
+                before[table].rows,
+                after[table].rows
+            )?;
+        }
+        return Ok(());
+    }
     if family == "spell" {
         writeln!(output, "\n## Consumed floors\n\n| Floor | Minimum | Classic | vmangos |\n| --- | ---: | ---: | ---: |\n| SPELL_TOTAL | {} | {} | {} |",super::floor("SPELL_TOTAL")?,before["game_spell"].rows,after["game_spell"].rows)?;
         return Ok(());

@@ -8,6 +8,8 @@ mod vmangos_gossip;
 mod vmangos_loot;
 #[path = "world_import_quests.rs"]
 mod vmangos_quests;
+#[path = "world_import_spellmeta.rs"]
+mod vmangos_spellmeta;
 
 use std::collections::HashMap;
 
@@ -531,7 +533,7 @@ fn build_spell_chain_sql(
         .collect::<Result<_>>()?;
     let explicit = parsed.iter().map(|(spell, _)| *spell).collect();
     let mut rows: Vec<_> = parsed.into_iter().map(|(_, sql)| sql).collect();
-    rows.extend(client_spell_rank_rows(links, &explicit)?);
+    rows.extend(derived_spell_rank_rows(links, &explicit)?);
     let mut stmts = vec!["DELETE FROM game_spell_chain WHERE spell_id > 0".to_string()];
     push_insert(
         &mut stmts,
@@ -543,7 +545,7 @@ fn build_spell_chain_sql(
     Ok(stmts)
 }
 
-fn client_spell_rank_rows(
+fn derived_spell_rank_rows(
     links: &[(u32, u32)],
     explicit: &std::collections::BTreeSet<u32>,
 ) -> Result<Vec<String>> {
@@ -608,10 +610,7 @@ fn client_spell_rank_rows(
     if successors.keys().any(|spell| !visited.contains(spell)) {
         anyhow::bail!("client spell rank links contain a cycle");
     }
-    eprintln!(
-        "spell chain: {} additional client-derived ranks",
-        rows.len()
-    );
+    eprintln!("spell chain: {} additional derived ranks", rows.len());
     Ok(rows)
 }
 
@@ -3981,6 +3980,7 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
 
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
+        Some("spellmeta") => vmangos_spellmeta::plan(dump),
         Some("spell") => spell::world_plan(dump, args.dbc.as_deref().context("spell requires --dbc")?),
         Some("creatures" | "casts") => vmangos_creatures::plan(dump, args),
         Some("items") => vmangos_items_plan(dump, args),
