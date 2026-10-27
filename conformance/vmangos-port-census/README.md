@@ -6,7 +6,7 @@ imports. The current import floors and their reasons are in
 [vmangos-floors.md](../../importer/manifests/vmangos-floors.md).
 
 The comparison commands in these reports refer to the temporary census reader. To reproduce them,
-use Core commit `1f0b0b0d` and the source identities recorded in each report. The final importer reads
+use Core commit `65ecc0cd` and the source identities recorded in each report. The final importer reads
 only vmangos SQLite. Source snapshots and exported plans remain local.
 
 Milestone 5 assigns `game_quest_event_requirement` to `creature-ai`. It emits two rows for
