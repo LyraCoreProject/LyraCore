@@ -71,20 +71,32 @@ struct DoorTemplate {
     size: f32,
 }
 
-fn door_templates(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<DoorTemplate> {
-    parse_table(dump, "gameobject_template")
+fn door_templates(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> anyhow::Result<Vec<DoorTemplate>> {
+    parse_table(dump, "gameobject_template")?
         .iter()
-        .filter_map(|row| {
-            let entry: u64 = field(row, got::ENTRY).parse().ok()?;
-            let raw_type: u32 = field(row, got::TYPE).parse().ok()?;
-            let stored_type = crate::world_import::classify_go_type(entry, raw_type)?;
-            (stored_type == GO_DOOR || stored_type == GO_BUTTON).then(|| DoorTemplate {
+        .map(|row| -> anyhow::Result<_> {
+            let Ok(entry) = field(row, got::ENTRY)?.parse::<u64>() else {
+                return Ok(None);
+            };
+            let Ok(raw_type) = field(row, got::TYPE)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Some(stored_type) = crate::world_import::classify_go_type(entry, raw_type) else {
+                return Ok(None);
+            };
+            if stored_type != GO_DOOR && stored_type != GO_BUTTON {
+                return Ok(None);
+            }
+            Ok(Some(DoorTemplate {
                 entry,
-                display_id: field(row, got::DISPLAY_ID).parse().unwrap_or(0),
-                size: field(row, got::SIZE).parse().unwrap_or(0.0),
-            })
+                display_id: field(row, got::DISPLAY_ID)?.parse().unwrap_or(0),
+                size: field(row, got::SIZE)?.parse().unwrap_or(0.0),
+            }))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 const BATCH_BYTES: usize = 28_000;
@@ -99,7 +111,7 @@ pub(crate) fn run(
     let dump_path = dump_path
         .context("--go-models needs --dump too (gameobject_template is the template source)")?;
     let dump = crate::dump::read_dump(dump_path)?;
-    let templates = door_templates(&dump);
+    let templates = door_templates(&dump)?;
     if templates.is_empty() {
         println!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
         return Ok(());
@@ -217,7 +229,7 @@ mod tests {
             (2,1,20,'Button',0,0,0,1.0,0,0),\
             (3,3,30,'Chest',0,0,0,1.0,0,0),\
             (4,10,40,'Goober',0,0,0,1.0,0,0);";
-        let templates = door_templates(dump);
+        let templates = door_templates(dump).unwrap();
         let entries: Vec<u64> = templates.iter().map(|t| t.entry).collect();
         assert_eq!(
             entries,
@@ -232,7 +244,7 @@ mod tests {
     fn door_templates_drops_a_row_with_no_classification() {
         let dump =
             "INSERT INTO `gameobject_template` (`entry`, `type`, `displayId`, `name`, `faction`, `flags`, `ExtraFlags`, `size`, `data0`, `data1`) VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
-        assert!(door_templates(dump).is_empty());
+        assert!(door_templates(dump).unwrap().is_empty());
     }
 
     #[test]

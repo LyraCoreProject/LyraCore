@@ -24,7 +24,8 @@ names and types from `CREATE TABLE`, checks its column contract before planning,
 the source SQL. The SQLite reader opens the file read-only, disables trusted schemas, refuses views
 and virtual tables, and checks requested field types. Both readers return the same named row type.
 The full classic-db importer requires the tables listed in `importer/src/classic_columns.rs`.
-Small source-reader tests can use individual tables through `WorldSource`.
+`WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
+errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
 `--source vmangos` currently supports the globals census. It refuses import until the family ports
 are ready. Generate the comparison with both local sources and your client:
@@ -81,7 +82,8 @@ whether the snapshot is newer, older or diverged from the previous lock. A chang
 fingerprint at the same commit is reported without a direction. The lock stays unchanged unless
 `--accept-lock` is supplied. Fetch does not evaluate the Source Profile or permit apply. S6c must
 check the actual snapshot's column contract and approved values before a later CLI imports it, then
-record its actual commit.
+record its actual commit. If GitHub cannot compare an unreachable accepted commit and returns
+404, `--accept-lock` can replace that lock after the archive and migrations checks pass.
 
 Use the `sqlite_path` and `commit` from `current.json` as the census's `--dump` and `--source-sha`.
 The source switch remains classic-db by default. No downloaded data belongs in a commit or PR.

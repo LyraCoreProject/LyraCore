@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{bail, Context, Result};
 
-use crate::dump::{cr, field, parse_complete_table, sql_str};
+use crate::dump::{cr, field, parse_table, sql_str};
 use crate::world_import::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow};
 use crate::world_import_scope::WorldImportScope;
 
@@ -50,14 +50,14 @@ fn number<T: std::str::FromStr>(
     column: &str,
     table: &str,
 ) -> Result<T> {
-    field(row, column)
+    field(row, column)?
         .parse()
         .map_err(|_| anyhow::anyhow!("{table}: invalid column {column} in row {row:?}"))
 }
 
 fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeMap<u64, Group>> {
     let mut groups = BTreeMap::new();
-    for row in parse_complete_table(dump, "spawn_group")?.iter() {
+    for row in parse_table(dump, "spawn_group")?.iter() {
         if number::<u32>(row, "Type", "spawn_group")? != 0 {
             continue;
         }
@@ -79,7 +79,7 @@ fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeM
             bail!("duplicate creature spawn group {id}");
         }
     }
-    for row in parse_complete_table(dump, "spawn_group_entry")?.iter() {
+    for row in parse_table(dump, "spawn_group_entry")?.iter() {
         let id = number(row, "Id", "spawn_group_entry")?;
         let Some(group) = groups.get_mut(&id) else {
             continue;
@@ -171,7 +171,7 @@ fn add_legacy_pools(
     events: &mut BTreeMap<u64, BTreeSet<i32>>,
 ) -> Result<()> {
     let mut pools = BTreeMap::new();
-    for row in parse_complete_table(dump, "pool_template")?.iter() {
+    for row in parse_table(dump, "pool_template")?.iter() {
         let id = number(row, "entry", "pool_template")?;
         if pools
             .insert(
@@ -187,7 +187,7 @@ fn add_legacy_pools(
             bail!("duplicate pool_template {id}");
         }
     }
-    let creatures = parse_complete_table(dump, "creature")?;
+    let creatures = parse_table(dump, "creature")?;
     let mut by_entry = BTreeMap::<u64, Vec<u64>>::new();
     let mut maps = BTreeMap::<u64, i64>::new();
     for row in creatures.iter() {
@@ -201,7 +201,7 @@ fn add_legacy_pools(
     let mut used = BTreeSet::new();
     let mut seen = BTreeSet::new();
     for table in ["pool_creature", "pool_creature_template"] {
-        for row in parse_complete_table(dump, table)?.iter() {
+        for row in parse_table(dump, table)?.iter() {
             let source = number(
                 row,
                 if table == "pool_creature" {
@@ -231,7 +231,7 @@ fn add_legacy_pools(
         }
     }
     let mut parents = BTreeMap::new();
-    for row in parse_complete_table(dump, "pool_pool")?.iter() {
+    for row in parse_table(dump, "pool_pool")?.iter() {
         let child = number(row, "pool_id", "pool_pool")?;
         let parent = number(row, "mother_pool", "pool_pool")?;
         let chance = chance_bp(row, "chance", "pool_pool")?;
@@ -255,7 +255,7 @@ fn add_legacy_pools(
     }
     let mut object_pools = BTreeSet::new();
     for table in ["pool_gameobject", "pool_gameobject_template"] {
-        for row in parse_complete_table(dump, table)?.iter() {
+        for row in parse_table(dump, table)?.iter() {
             let mut id = number(row, "pool_entry", table)?;
             let mut chain = BTreeSet::new();
             while let Some(parent) = parents.get(&id) {
@@ -326,7 +326,7 @@ pub(crate) fn collect(
 ) -> Result<PopulationPlan> {
     let mut groups = source_groups(dump)?;
     let mut memberships = BTreeMap::new();
-    for row in parse_complete_table(dump, "spawn_group_spawn")?.iter() {
+    for row in parse_table(dump, "spawn_group_spawn")?.iter() {
         let id = number(row, "Id", "spawn_group_spawn")?;
         if !groups.contains_key(&id) {
             continue;
@@ -341,7 +341,7 @@ pub(crate) fn collect(
         }
     }
     let mut choices: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
-    for row in parse_complete_table(dump, "creature_spawn_entry")?.iter() {
+    for row in parse_table(dump, "creature_spawn_entry")?.iter() {
         let guid = number(row, "guid", "creature_spawn_entry")?;
         let entry = number(row, "entry", "creature_spawn_entry")?;
         if entry == 0 {
@@ -350,7 +350,7 @@ pub(crate) fn collect(
         choices.entry(guid).or_default().insert(entry);
     }
     let mut events: BTreeMap<u64, BTreeSet<i32>> = BTreeMap::new();
-    for row in parse_complete_table(dump, "game_event_creature")?.iter() {
+    for row in parse_table(dump, "game_event_creature")?.iter() {
         let guid = number(row, "guid", "game_event_creature")?;
         let event = number(row, "event", "game_event_creature")?;
         if event == 0 {
@@ -359,7 +359,7 @@ pub(crate) fn collect(
         events.entry(guid).or_default().insert(event);
     }
     add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
-    let templates: BTreeSet<u32> = parse_complete_table(dump, "creature_template")?
+    let templates: BTreeSet<u32> = parse_table(dump, "creature_template")?
         .iter()
         .map(|row| number(row, "Entry", "creature_template"))
         .collect::<Result<_>>()?;
@@ -373,7 +373,7 @@ pub(crate) fn collect(
     };
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
-    for row in parse_complete_table(dump, "creature")?.iter() {
+    for row in parse_table(dump, "creature")?.iter() {
         let map: i64 = number(row, cr::MAP, "creature")?;
         let x: f64 = number(row, cr::X, "creature")?;
         let y: f64 = number(row, cr::Y, "creature")?;
@@ -506,7 +506,7 @@ mod tests {
             ("(1,10,0,0,0),(1,10,0,0,0)", "duplicate spawn_group_entry"),
             ("(1,10,0,0,60),(1,20,0,0,50)", "chances exceed 100"),
         ] {
-            let dump = format!("INSERT INTO `spawn_group` VALUES (1,'fixture',0,0,0,0,0,''); INSERT INTO `spawn_group_entry` VALUES {entries};");
+            let dump = format!("INSERT INTO `spawn_group` VALUES (1,'fixture',0,0,0,0,0,0); INSERT INTO `spawn_group_entry` VALUES {entries};");
             let error = collect(&dump, &scope).err().unwrap();
             assert!(error.to_string().contains(reason), "{error}");
         }

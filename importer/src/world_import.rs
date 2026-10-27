@@ -8,8 +8,8 @@ use lyracore_package_delta::{
 
 use crate::dump::{
     ai, at, bt, cls, clt, cm, cmt, ct, cts, dse, field, gm, gmo, go, got, insert_row_count, it,
-    lvl, mlt, npct, nt, nv, parse_complete_table, parse_table, pc, pca, pci, pcs, push_insert, qr,
-    qt, read_dump, sc, sls, spe, sql_text, TableRows,
+    lvl, mlt, npct, nt, nv, parse_table, pc, pca, pci, pcs, push_insert, qr, qt, read_dump, sc,
+    sls, spe, sql_text, TableRows,
 };
 use crate::shard::Shard;
 use crate::world_import_scope::{WorldImportProfile, WorldImportScope};
@@ -205,47 +205,59 @@ fn is_drink_consumable(class: u8, subclass: u8, name: &str) -> bool {
         .any(|w| DRINK_WORDS.contains(&w))
 }
 
-fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String> {
+fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
     let mut stmts: Vec<String> = vec![
         "DELETE FROM game_class_level_stats WHERE class_level >= 0".into(),
         "DELETE FROM game_level_stats WHERE race_class_level >= 0".into(),
     ];
-    let cls_rows: Vec<String> = parse_table(dump, "player_classlevelstats")
+    let cls_rows: Vec<String> = parse_table(dump, "player_classlevelstats")?
         .iter()
-        .filter_map(|r| {
-            let class: u32 = field(r, cls::CLASS).parse().ok()?;
-            let level: u32 = field(r, cls::LEVEL).parse().ok()?;
-            Some(format!(
+        .map(|r| -> Result<_> {
+            let Ok(class) = field(r, cls::CLASS)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(level) = field(r, cls::LEVEL)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            Ok(Some(format!(
                 "({},{class},{level},{},{})",
                 packed_class_level_id(class as u8, level as u8),
-                field(r, cls::BASEHP),
-                field(r, cls::BASEMANA),
-            ))
+                field(r, cls::BASEHP)?,
+                field(r, cls::BASEMANA)?,
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
         "game_class_level_stats",
         "class_level,class,level,base_health,base_mana",
         &cls_rows,
     );
-    let lvl_rows: Vec<String> = parse_table(dump, "player_levelstats")
+    let lvl_rows: Vec<String> = parse_table(dump, "player_levelstats")?
         .iter()
-        .filter_map(|r| {
-            let race: u32 = field(r, lvl::RACE).parse().ok()?;
-            let class: u32 = field(r, lvl::CLASS).parse().ok()?;
-            let level: u32 = field(r, lvl::LEVEL).parse().ok()?;
-            Some(format!(
+        .map(|r| -> Result<_> {
+            let Ok(race) = field(r, lvl::RACE)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(class) = field(r, lvl::CLASS)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(level) = field(r, lvl::LEVEL)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            Ok(Some(format!(
                 "({},{race},{class},{level},{},{},{},{},{})",
                 packed_race_class_level_id(race as u8, class as u8, level as u8),
-                field(r, lvl::STR),
-                field(r, lvl::AGI),
-                field(r, lvl::STA),
-                field(r, lvl::INTE),
-                field(r, lvl::SPI),
-            ))
+                field(r, lvl::STR)?,
+                field(r, lvl::AGI)?,
+                field(r, lvl::STA)?,
+                field(r, lvl::INTE)?,
+                field(r, lvl::SPI)?,
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     push_insert(
         &mut stmts,
         "game_level_stats",
@@ -257,27 +269,32 @@ fn build_stats_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String>
         cls_rows.len(),
         lvl_rows.len()
     );
-    stmts
+    Ok(stmts)
 }
 
-fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String> {
-    let rows: Vec<String> = parse_table(dump, "playercreateinfo")
+fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
+    let rows: Vec<String> = parse_table(dump, "playercreateinfo")?
         .iter()
-        .filter_map(|r| {
-            let race: u32 = field(r, pc::RACE).parse().ok()?;
-            let class: u32 = field(r, pc::CLASS).parse().ok()?;
-            Some(format!(
+        .map(|r| -> Result<_> {
+            let Ok(race) = field(r, pc::RACE)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(class) = field(r, pc::CLASS)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            Ok(Some(format!(
                 "({},{race},{class},{},{},{},{},{},{},0)",
                 packed_race_class_id(race as u8, class as u8),
-                field(r, pc::MAP),
-                field(r, pc::ZONE),
-                field(r, pc::X),
-                field(r, pc::Y),
-                field(r, pc::Z),
-                field(r, pc::O),
-            ))
+                field(r, pc::MAP)?,
+                field(r, pc::ZONE)?,
+                field(r, pc::X)?,
+                field(r, pc::Y)?,
+                field(r, pc::Z)?,
+                field(r, pc::O)?,
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_start_position WHERE race_class >= 0".to_string()];
     push_insert(
         &mut stmts,
@@ -286,11 +303,11 @@ fn build_start_position_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Ve
         &rows,
     );
     eprintln!("start positions: {} (race,class) rows", rows.len());
-    stmts
+    Ok(stmts)
 }
 
 fn build_graveyard_zone_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
-    let rows = parse_complete_table(dump, "game_graveyard_zone")?
+    let rows = parse_table(dump, "game_graveyard_zone")?
         .iter()
         .enumerate()
         .map(|(i, row)| -> Result<String> {
@@ -320,22 +337,35 @@ fn build_graveyard_zone_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Re
 
 fn build_areatrigger_teleport_sql(
     dump: &(impl crate::dump::TableRows + ?Sized),
-) -> (Vec<String>, usize) {
-    let rows: Vec<String> = parse_table(dump, "areatrigger_teleport")
+) -> Result<(Vec<String>, usize)> {
+    let rows: Vec<String> = parse_table(dump, "areatrigger_teleport")?
         .iter()
-        .filter_map(|r| {
-            let trigger_id: u32 = field(r, at::ID).parse().ok()?;
-            let target_map: u32 = field(r, at::TARGET_MAP).parse().ok()?;
-            let x: f32 = field(r, at::TARGET_X).parse().ok()?;
-            let y: f32 = field(r, at::TARGET_Y).parse().ok()?;
-            let z: f32 = field(r, at::TARGET_Z).parse().ok()?;
-            let o: f32 = field(r, at::TARGET_O).parse().ok()?;
-            let name = sql_text(field(r, at::NAME));
-            Some(format!(
+        .map(|r| -> Result<_> {
+            let Ok(trigger_id) = field(r, at::ID)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(target_map) = field(r, at::TARGET_MAP)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(x) = field(r, at::TARGET_X)?.parse::<f32>() else {
+                return Ok(None);
+            };
+            let Ok(y) = field(r, at::TARGET_Y)?.parse::<f32>() else {
+                return Ok(None);
+            };
+            let Ok(z) = field(r, at::TARGET_Z)?.parse::<f32>() else {
+                return Ok(None);
+            };
+            let Ok(o) = field(r, at::TARGET_O)?.parse::<f32>() else {
+                return Ok(None);
+            };
+            let name = sql_text(field(r, at::NAME)?);
+            Ok(Some(format!(
                 "({trigger_id},{target_map},{x},{y},{z},{o},{name})"
-            ))
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let n = rows.len();
     let mut stmts = vec!["DELETE FROM game_areatrigger_teleport WHERE trigger_id >= 0".to_string()];
     push_insert(
@@ -345,7 +375,7 @@ fn build_areatrigger_teleport_sql(
         &rows,
     );
     eprintln!("areatrigger_teleport: {n} portal rows");
-    (stmts, n)
+    Ok((stmts, n))
 }
 
 fn distinct_race_class_combos(rows: &[(u32, u32)]) -> usize {
@@ -355,19 +385,28 @@ fn distinct_race_class_combos(rows: &[(u32, u32)]) -> usize {
     combos.len()
 }
 
-fn build_createinfo_spell_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String> {
+fn build_createinfo_spell_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
     let mut race_class_pairs: Vec<(u32, u32)> = Vec::new();
-    let rows: Vec<String> = parse_table(dump, "playercreateinfo_spell")
+    let rows: Vec<String> = parse_table(dump, "playercreateinfo_spell")?
         .iter()
         .enumerate()
-        .filter_map(|(i, r)| {
-            let race: u32 = field(r, pcs::RACE).parse().ok()?;
-            let class: u32 = field(r, pcs::CLASS).parse().ok()?;
-            let spell: u32 = field(r, pcs::SPELL).parse().ok()?;
+        .map(|(i, r)| -> Result<_> {
+            let Ok(race) = field(r, pcs::RACE)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(class) = field(r, pcs::CLASS)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(spell) = field(r, pcs::SPELL)?.parse::<u32>() else {
+                return Ok(None);
+            };
             race_class_pairs.push((race, class));
-            Some(format!("({},{race},{class},{spell})", i as u64 + 1))
+            Ok(Some(format!("({},{race},{class},{spell})", i as u64 + 1)))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()];
     push_insert(
         &mut stmts,
@@ -380,27 +419,40 @@ fn build_createinfo_spell_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> 
         rows.len(),
         distinct_race_class_combos(&race_class_pairs)
     );
-    stmts
+    Ok(stmts)
 }
 
-fn build_createinfo_action_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String> {
+fn build_createinfo_action_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
     let mut race_class_pairs: Vec<(u32, u32)> = Vec::new();
-    let rows: Vec<String> = parse_table(dump, "playercreateinfo_action")
+    let rows: Vec<String> = parse_table(dump, "playercreateinfo_action")?
         .iter()
         .enumerate()
-        .filter_map(|(i, r)| {
-            let race: u32 = field(r, pca::RACE).parse().ok()?;
-            let class: u32 = field(r, pca::CLASS).parse().ok()?;
-            let button: u32 = field(r, pca::BUTTON).parse().ok()?;
-            let action: u32 = field(r, pca::ACTION).parse().ok()?;
-            let action_type: u32 = field(r, pca::TYPE).parse().ok()?;
+        .map(|(i, r)| -> Result<_> {
+            let Ok(race) = field(r, pca::RACE)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(class) = field(r, pca::CLASS)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(button) = field(r, pca::BUTTON)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(action) = field(r, pca::ACTION)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(action_type) = field(r, pca::TYPE)?.parse::<u32>() else {
+                return Ok(None);
+            };
             race_class_pairs.push((race, class));
-            Some(format!(
+            Ok(Some(format!(
                 "({},{race},{class},{button},{action},{action_type})",
                 i as u64 + 1
-            ))
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let mut stmts = vec!["DELETE FROM game_createinfo_action WHERE row_id >= 0".to_string()];
     push_insert(
         &mut stmts,
@@ -413,7 +465,7 @@ fn build_createinfo_action_sql(dump: &(impl crate::dump::TableRows + ?Sized)) ->
         rows.len(),
         distinct_race_class_combos(&race_class_pairs)
     );
-    stmts
+    Ok(stmts)
 }
 
 // Starter extras need an id band disjoint from the DBC outfit clear-and-reload range.
@@ -435,11 +487,11 @@ fn build_createinfo_item_sql(
     let mut deduped = 0usize;
     let mut id = CREATEINFO_ITEM_ID_FLOOR;
     let mut rows: Vec<String> = Vec::new();
-    for r in parse_table(dump, "playercreateinfo_item").iter() {
+    for r in parse_table(dump, "playercreateinfo_item")?.iter() {
         let (Some(race), Some(class), Some(item)) = (
-            field(r, pci::RACE).parse::<u32>().ok(),
-            field(r, pci::CLASS).parse::<u32>().ok(),
-            field(r, pci::ITEM).parse::<i32>().ok(),
+            field(r, pci::RACE)?.parse::<u32>().ok(),
+            field(r, pci::CLASS)?.parse::<u32>().ok(),
+            field(r, pci::ITEM)?.parse::<i32>().ok(),
         ) else {
             continue;
         };
@@ -479,24 +531,35 @@ fn build_spell_chain_sql(
     dump: &(impl crate::dump::TableRows + ?Sized),
     links: &[(u32, u32)],
 ) -> Result<Vec<String>> {
-    let parsed: Vec<(u32, String)> = parse_table(dump, "spell_chain")
+    let parsed: Vec<(u32, String)> = parse_table(dump, "spell_chain")?
         .iter()
-        .filter_map(|r| {
-            let spell_id: u32 = field(r, sc::SPELL_ID).parse().ok()?;
+        .map(|r| -> Result<_> {
+            let Ok(spell_id) = field(r, sc::SPELL_ID)?.parse::<u32>() else {
+                return Ok(None);
+            };
 
             if spell_id == 0 {
-                return None;
+                return Ok(None);
             }
-            let prev_spell: u32 = field(r, sc::PREV_SPELL).parse().ok()?;
-            let first_spell: u32 = field(r, sc::FIRST_SPELL).parse().ok()?;
-            let rank: u8 = field(r, sc::RANK).parse().ok()?;
-            let req_spell: u32 = field(r, sc::REQ_SPELL).parse().ok()?;
-            Some((
+            let Ok(prev_spell) = field(r, sc::PREV_SPELL)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(first_spell) = field(r, sc::FIRST_SPELL)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(rank) = field(r, sc::RANK)?.parse::<u8>() else {
+                return Ok(None);
+            };
+            let Ok(req_spell) = field(r, sc::REQ_SPELL)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            Ok(Some((
                 spell_id,
                 format!("({spell_id},{prev_spell},{first_spell},{rank},{req_spell})"),
-            ))
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let explicit = parsed.iter().map(|(spell, _)| *spell).collect();
     let mut rows: Vec<_> = parsed.into_iter().map(|(_, sql)| sql).collect();
     rows.extend(client_spell_rank_rows(links, &explicit)?);
@@ -583,21 +646,29 @@ fn client_spell_rank_rows(
     Ok(rows)
 }
 
-fn build_spell_learn_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<String> {
+fn build_spell_learn_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<Vec<String>> {
     use lyracore_shared::constants::armor_proficiency;
 
     let mut parents_seen: std::collections::HashSet<u32> = std::collections::HashSet::new();
-    let mut rows: Vec<String> = parse_table(dump, "spell_learn_spell")
+    let mut rows: Vec<String> = parse_table(dump, "spell_learn_spell")?
         .iter()
         .enumerate()
-        .filter_map(|(i, r)| {
-            let parent_spell: u32 = field(r, sls::ENTRY).parse().ok()?;
-            let learn_spell: u32 = field(r, sls::SPELL_ID).parse().ok()?;
-            let _active: u8 = field(r, sls::ACTIVE).parse().unwrap_or(1);
+        .map(|(i, r)| -> Result<_> {
+            let Ok(parent_spell) = field(r, sls::ENTRY)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let Ok(learn_spell) = field(r, sls::SPELL_ID)?.parse::<u32>() else {
+                return Ok(None);
+            };
+            let _active: u8 = field(r, sls::ACTIVE)?.parse().unwrap_or(1);
             parents_seen.insert(parent_spell);
-            Some(format!("({},{parent_spell},{learn_spell})", i as u64 + 1))
+            Ok(Some(format!(
+                "({},{parent_spell},{learn_spell})",
+                i as u64 + 1
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let mut next_id = rows.len() as u64 + 1;
     for (parent, learn) in [
         (
@@ -623,7 +694,7 @@ fn build_spell_learn_sql(dump: &(impl crate::dump::TableRows + ?Sized)) -> Vec<S
         &rows,
     );
     eprintln!("spell learn dependents: {} rows", rows.len());
-    stmts
+    Ok(stmts)
 }
 
 fn proc_family_mask(
@@ -632,9 +703,9 @@ fn proc_family_mask(
     proc_effects: Option<&std::collections::HashMap<u32, Vec<usize>>>,
 ) -> Result<Option<u64>> {
     let masks = [
-        field(row, "SpellFamilyMask0"),
-        field(row, "SpellFamilyMask1"),
-        field(row, "SpellFamilyMask2"),
+        field(row, "SpellFamilyMask0")?,
+        field(row, "SpellFamilyMask1")?,
+        field(row, "SpellFamilyMask2")?,
     ];
     let Some(masks) = masks
         .into_iter()
@@ -672,21 +743,21 @@ fn build_spell_proc_event_sql(
     dump: &(impl crate::dump::TableRows + ?Sized),
     proc_effects: Option<&std::collections::HashMap<u32, Vec<usize>>>,
 ) -> Result<Vec<String>> {
-    let rows: Vec<String> = parse_table(dump, "spell_proc_event")
+    let rows: Vec<String> = parse_table(dump, "spell_proc_event")?
 .iter()
 .map(|r| -> Result<Option<String>> {
-            let Some(spell_id) = field(r, spe::ENTRY).parse::<u32>().ok() else { return Ok(None); };
+            let Some(spell_id) = field(r, spe::ENTRY)?.parse::<u32>().ok() else { return Ok(None); };
             if spell_id == 0 || spell_id >= SYNTHETIC_PROC_EVENT_FLOOR {
                 return Ok(None);
             }
-            let Some(school_mask) = field(r, spe::SCHOOL_MASK).parse::<u8>().ok() else { return Ok(None); };
-            let Some(family_name) = field(r, spe::FAMILY_NAME).parse::<u8>().ok() else { return Ok(None); };
+            let Some(school_mask) = field(r, spe::SCHOOL_MASK)?.parse::<u8>().ok() else { return Ok(None); };
+            let Some(family_name) = field(r, spe::FAMILY_NAME)?.parse::<u8>().ok() else { return Ok(None); };
             let Some(family_flags) = proc_family_mask(r, spell_id, proc_effects)? else { return Ok(None); };
-            let Some(proc_flags) = field(r, spe::PROC_FLAGS).parse::<u32>().ok() else { return Ok(None); };
-            let Some(proc_ex) = field(r, spe::PROC_EX).parse::<u32>().ok() else { return Ok(None); };
-            let Some(ppm_rate) = field(r, spe::PPM_RATE).parse::<f32>().ok() else { return Ok(None); };
-            let Some(custom_chance) = field(r, spe::CUSTOM_CHANCE).parse::<f32>().ok() else { return Ok(None); };
-            let Some(cooldown_s) = field(r, spe::COOLDOWN).parse::<u32>().ok() else { return Ok(None); };
+            let Some(proc_flags) = field(r, spe::PROC_FLAGS)?.parse::<u32>().ok() else { return Ok(None); };
+            let Some(proc_ex) = field(r, spe::PROC_EX)?.parse::<u32>().ok() else { return Ok(None); };
+            let Some(ppm_rate) = field(r, spe::PPM_RATE)?.parse::<f32>().ok() else { return Ok(None); };
+            let Some(custom_chance) = field(r, spe::CUSTOM_CHANCE)?.parse::<f32>().ok() else { return Ok(None); };
+            let Some(cooldown_s) = field(r, spe::COOLDOWN)?.parse::<u32>().ok() else { return Ok(None); };
             if !ppm_rate.is_finite() || ppm_rate < 0.0 || !custom_chance.is_finite() {
                 return Ok(None);
             }
@@ -723,13 +794,15 @@ fn null_to_empty(s: &str) -> &str {
 
 type NpcTextSlot = (String, String, f32);
 
-fn parse_npc_text_slots(row: &crate::world_source::Row) -> [NpcTextSlot; 8] {
-    core::array::from_fn(|slot| {
-        let male = null_to_empty(field(row, &format!("text{slot}_0"))).to_string();
-        let female = null_to_empty(field(row, &format!("text{slot}_1"))).to_string();
-        let prob = field(row, &format!("prob{slot}")).parse().unwrap_or(0.0);
-        (male, female, prob)
-    })
+fn parse_npc_text_slots(row: &crate::world_source::Row) -> Result<[NpcTextSlot; 8]> {
+    let mut slots = core::array::from_fn(|_| (String::new(), String::new(), 0.0));
+    for (slot, value) in slots.iter_mut().enumerate() {
+        let male = null_to_empty(field(row, &format!("text{slot}_0"))?).to_string();
+        let female = null_to_empty(field(row, &format!("text{slot}_1"))?).to_string();
+        let prob = field(row, &format!("prob{slot}"))?.parse().unwrap_or(0.0);
+        *value = (male, female, prob);
+    }
+    Ok(slots)
 }
 
 fn slots_first_nonempty(slots: &[NpcTextSlot; 8]) -> String {
@@ -747,19 +820,19 @@ fn slots_first_nonempty(slots: &[NpcTextSlot; 8]) -> String {
 fn resolve_gossip_option_text(
     row: &crate::world_source::Row,
     broadcast: &HashMap<u64, (String, String)>,
-) -> String {
-    let raw = field(row, gmo::OPTION_TEXT);
+) -> Result<String> {
+    let raw = field(row, gmo::OPTION_TEXT)?;
     if let Ok(bcast_id) = raw.trim().parse::<u64>() {
         if let Some((male, female)) = broadcast.get(&bcast_id) {
             if !male.is_empty() {
-                return male.clone();
+                return Ok(male.clone());
             }
             if !female.is_empty() {
-                return female.clone();
+                return Ok(female.clone());
             }
         }
     }
-    null_to_empty(raw).to_string()
+    Ok(null_to_empty(raw).to_string())
 }
 
 fn reclassify_gossip_option_action(text: &str, raw_action: u32) -> u32 {
@@ -783,17 +856,17 @@ struct GossipEtl {
 fn build_gossip_sql(
     dump: &(impl crate::dump::TableRows + ?Sized),
     creature_entries: &std::collections::HashSet<u64>,
-) -> GossipEtl {
+) -> Result<GossipEtl> {
     use std::collections::{HashMap, HashSet};
 
     let mut broadcast: HashMap<u64, (String, String)> = HashMap::new();
-    for row in parse_table(dump, "broadcast_text").iter() {
-        let id: u64 = field(row, bt::ID).parse().unwrap_or(0);
+    for row in parse_table(dump, "broadcast_text")?.iter() {
+        let id: u64 = field(row, bt::ID)?.parse().unwrap_or(0);
         if id == 0 {
             continue;
         }
-        let male = null_to_empty(field(row, bt::TEXT)).to_string();
-        let female = null_to_empty(field(row, bt::TEXT1)).to_string();
+        let male = null_to_empty(field(row, bt::TEXT)?).to_string();
+        let female = null_to_empty(field(row, bt::TEXT1)?).to_string();
         if !male.is_empty() || !female.is_empty() {
             broadcast.insert(id, (male, female));
         }
@@ -801,12 +874,12 @@ fn build_gossip_sql(
 
     let mut npc_texts: HashMap<u64, String> = HashMap::new();
     let mut npc_text_slots: HashMap<u64, [NpcTextSlot; 8]> = HashMap::new();
-    for row in parse_table(dump, "npc_text").iter() {
-        let id: u64 = field(row, npct::ID).parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_text")?.iter() {
+        let id: u64 = field(row, npct::ID)?.parse().unwrap_or(0);
         if id == 0 {
             continue;
         }
-        let slots = parse_npc_text_slots(row);
+        let slots = parse_npc_text_slots(row)?;
         let text = slots_first_nonempty(&slots);
         if !text.is_empty() {
             npc_texts.insert(id, text);
@@ -816,13 +889,13 @@ fn build_gossip_sql(
 
     let mut menu_to_text: HashMap<u64, u64> = HashMap::new();
     let mut menu_text_is_conditional: HashMap<u64, bool> = HashMap::new();
-    for row in parse_table(dump, "gossip_menu").iter() {
-        let entry: u64 = field(row, gm::ENTRY).parse().unwrap_or(0);
-        let text_id: u64 = field(row, gm::TEXT_ID).parse().unwrap_or(0);
+    for row in parse_table(dump, "gossip_menu")?.iter() {
+        let entry: u64 = field(row, gm::ENTRY)?.parse().unwrap_or(0);
+        let text_id: u64 = field(row, gm::TEXT_ID)?.parse().unwrap_or(0);
         if entry == 0 || text_id == 0 {
             continue;
         }
-        let conditional = field(row, gm::CONDITION_ID).parse::<u64>().unwrap_or(0) != 0;
+        let conditional = field(row, gm::CONDITION_ID)?.parse::<u64>().unwrap_or(0) != 0;
         let held_conditional = menu_text_is_conditional.get(&entry).copied();
         if held_conditional.is_none() || (held_conditional == Some(true) && !conditional) {
             menu_to_text.insert(entry, text_id);
@@ -834,12 +907,12 @@ fn build_gossip_sql(
     let mut needed_text_ids: HashSet<u64> = HashSet::new();
     let mut entry_to_menu: HashMap<u64, u64> = HashMap::new();
 
-    for row in parse_table(dump, "creature_template").iter() {
-        let entry: u64 = field(row, ct::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "creature_template")?.iter() {
+        let entry: u64 = field(row, ct::ENTRY)?.parse().unwrap_or(0);
         if entry == 0 || !creature_entries.contains(&entry) {
             continue;
         }
-        let gossip_menu_id: u64 = field(row, ct::GOSSIP_MENU_ID).parse().unwrap_or(0);
+        let gossip_menu_id: u64 = field(row, ct::GOSSIP_MENU_ID)?.parse().unwrap_or(0);
         if gossip_menu_id == 0 {
             continue;
         }
@@ -889,15 +962,18 @@ fn build_gossip_sql(
         }
     }
 
-    let conditions = gossip_conditions::read(dump);
-    let mut menu_to_options: HashMap<u64, Vec<&crate::world_source::Row>> = HashMap::new();
-    let options = parse_table(dump, "gossip_menu_option");
+    let conditions = gossip_conditions::read(dump)?;
+    let mut menu_to_options: HashMap<u64, Vec<(u64, &crate::world_source::Row)>> = HashMap::new();
+    let options = parse_table(dump, "gossip_menu_option")?;
     for row in options.iter() {
-        let menu_id: u64 = field(row, gmo::MENU_ID).parse().unwrap_or(0);
+        let menu_id: u64 = field(row, gmo::MENU_ID)?.parse().unwrap_or(0);
         if menu_id == 0 {
             continue;
         }
-        menu_to_options.entry(menu_id).or_default().push(row);
+        menu_to_options
+            .entry(menu_id)
+            .or_default()
+            .push((field(row, gmo::ID)?.parse::<u64>().unwrap_or(0), row));
     }
     let mut option_rows: Vec<String> = Vec::new();
     let mut next_row_id: u32 = 1;
@@ -908,22 +984,22 @@ fn build_gossip_sql(
         let Some(opts) = menu_to_options.get(&menu_id) else {
             continue;
         };
-        let mut sorted_opts: Vec<&crate::world_source::Row> = opts.to_vec();
-        sorted_opts.sort_by_key(|r| field(r, gmo::ID).parse::<u64>().unwrap_or(0));
+        let mut sorted_opts = opts.clone();
+        sorted_opts.sort_by_key(|(id, _)| *id);
         let mut option_index = 0u32;
-        for row in sorted_opts.iter() {
-            let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
-            let text = resolve_gossip_option_text(row, &broadcast);
+        for (_, row) in sorted_opts.iter() {
+            let icon: u32 = field(row, gmo::OPTION_ICON)?.parse().unwrap_or(0);
+            let text = resolve_gossip_option_text(row, &broadcast)?;
             let action: u32 = reclassify_gossip_option_action(
                 &text,
-                field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
+                field(row, gmo::OPTION_TYPE)?.parse().unwrap_or(0),
             );
             if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
                 continue;
             }
-            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
+            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID)?.parse().unwrap_or(0);
             let (cond_type, cond_value1, cond_value2) =
-                gossip_conditions::resolve(row, &conditions);
+                gossip_conditions::resolve(row, &conditions)?;
             option_rows.push(format!(
                 "({next_row_id},{entry},{option_index},{icon},{},{action},{action_menu_id},{cond_type},{cond_value1},{cond_value2})",
                 sql_text(&text),
@@ -939,22 +1015,22 @@ fn build_gossip_sql(
         let Some(opts) = menu_to_options.get(&menu_id) else {
             continue;
         };
-        let mut sorted_opts: Vec<&crate::world_source::Row> = opts.to_vec();
-        sorted_opts.sort_by_key(|row| field(row, gmo::ID).parse::<u64>().unwrap_or(0));
+        let mut sorted_opts = opts.clone();
+        sorted_opts.sort_by_key(|(id, _)| *id);
         let mut option_index = 0u32;
-        for row in sorted_opts {
-            let icon: u32 = field(row, gmo::OPTION_ICON).parse().unwrap_or(0);
-            let text = resolve_gossip_option_text(row, &broadcast);
+        for (_, row) in sorted_opts {
+            let icon: u32 = field(row, gmo::OPTION_ICON)?.parse().unwrap_or(0);
+            let text = resolve_gossip_option_text(row, &broadcast)?;
             let action = reclassify_gossip_option_action(
                 &text,
-                field(row, gmo::OPTION_TYPE).parse().unwrap_or(0),
+                field(row, gmo::OPTION_TYPE)?.parse().unwrap_or(0),
             );
             if action == lyracore_shared::constants::gossip_option::QUESTGIVER {
                 continue;
             }
-            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID).parse().unwrap_or(0);
+            let action_menu_id: u32 = field(row, gmo::ACTION_MENU_ID)?.parse().unwrap_or(0);
             let (cond_type, cond_value1, cond_value2) =
-                gossip_conditions::resolve(row, &conditions);
+                gossip_conditions::resolve(row, &conditions)?;
             profile_option_rows.push(format!(
                 "({profile_row_id},{menu_id},{option_index},{icon},{},{action},{action_menu_id},{cond_type},{cond_value1},{cond_value2})",
                 sql_text(&text),
@@ -969,7 +1045,7 @@ fn build_gossip_sql(
         gossip_rows.len(), npc_text_rows.len(), npc_text_slot_rows.len(), option_rows.len(),
         profile_rows.len(), profile_option_rows.len(),
     );
-    GossipEtl {
+    Ok(GossipEtl {
         menu_rows: gossip_rows,
         npc_text_rows,
         npc_text_slot_rows,
@@ -977,7 +1053,7 @@ fn build_gossip_sql(
         profile_rows,
         profile_option_rows,
         condition_rows: gossip_conditions::sql_rows(&conditions),
-    }
+    })
 }
 
 struct QuestEtl {
@@ -999,27 +1075,26 @@ struct QuestEtl {
     raid_quest_count: usize,
 }
 
-fn parse_ref_pools(
-    dump: &(impl crate::dump::TableRows + ?Sized),
-) -> std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>> {
-    let mut refs: std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>> =
-        std::collections::HashMap::new();
-    for row in parse_table(dump, "reference_loot_template").iter() {
-        let g: u64 = field(row, clt::ENTRY).parse().unwrap_or(0);
-        let item: u64 = field(row, clt::ITEM).parse().unwrap_or(0);
-        let chance: f64 = field(row, clt::CHANCE).parse().unwrap_or(0.0);
-        let mincount_or_ref: i64 = field(row, clt::MINCOUNT_OR_REF).parse().unwrap_or(0);
-        let cnt: u32 = field(row, clt::MAXCOUNT).parse().unwrap_or(1);
+type ReferenceLoot = std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>;
+
+fn parse_ref_pools(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<ReferenceLoot> {
+    let mut refs: ReferenceLoot = std::collections::HashMap::new();
+    for row in parse_table(dump, "reference_loot_template")?.iter() {
+        let g: u64 = field(row, clt::ENTRY)?.parse().unwrap_or(0);
+        let item: u64 = field(row, clt::ITEM)?.parse().unwrap_or(0);
+        let chance: f64 = field(row, clt::CHANCE)?.parse().unwrap_or(0.0);
+        let mincount_or_ref: i64 = field(row, clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
+        let cnt: u32 = field(row, clt::MAXCOUNT)?.parse().unwrap_or(1);
         refs.entry(g)
             .or_default()
             .push((item, chance, mincount_or_ref, cnt));
     }
-    refs
+    Ok(refs)
 }
 
 fn resolve_ref_pool(
     pool_id: u64,
-    refs: &std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>,
+    refs: &ReferenceLoot,
     visited: &mut std::collections::HashSet<u64>,
 ) -> Vec<(u64, f64, u32)> {
     if !visited.insert(pool_id) {
@@ -1057,19 +1132,19 @@ fn resolve_ref_pool(
 fn parse_loot_family(
     dump: &(impl crate::dump::TableRows + ?Sized),
     table: &str,
-    refs: &std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>,
-) -> std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> {
+    refs: &ReferenceLoot,
+) -> Result<std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>>> {
     use std::collections::HashMap;
     // Loot chances use basis points, preserving odds below one percent.
     let bp = |pct: f64| (pct * 100.0).round() as i64;
     let mut drops_by_entry: HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> = HashMap::new();
-    for row in parse_table(dump, table).iter() {
-        let entry: u64 = field(row, clt::ENTRY).parse().unwrap_or(0);
-        let item: u64 = field(row, clt::ITEM).parse().unwrap_or(0);
-        let raw_chance: f64 = field(row, clt::CHANCE).parse().unwrap_or(0.0);
-        let groupid: u32 = field(row, clt::GROUPID).parse().unwrap_or(0);
-        let ref_or_min: i64 = field(row, clt::MINCOUNT_OR_REF).parse().unwrap_or(0);
-        let maxcount: u32 = field(row, clt::MAXCOUNT).parse().unwrap_or(1);
+    for row in parse_table(dump, table)?.iter() {
+        let entry: u64 = field(row, clt::ENTRY)?.parse().unwrap_or(0);
+        let item: u64 = field(row, clt::ITEM)?.parse().unwrap_or(0);
+        let raw_chance: f64 = field(row, clt::CHANCE)?.parse().unwrap_or(0.0);
+        let groupid: u32 = field(row, clt::GROUPID)?.parse().unwrap_or(0);
+        let ref_or_min: i64 = field(row, clt::MINCOUNT_OR_REF)?.parse().unwrap_or(0);
+        let maxcount: u32 = field(row, clt::MAXCOUNT)?.parse().unwrap_or(1);
         let quest_only = raw_chance < 0.0;
         let chance = raw_chance.abs();
         if chance == 0.0 {
@@ -1113,22 +1188,22 @@ fn parse_loot_family(
             drops.push((item, cbp, maxcount.max(1), groupid, quest_only));
         }
     }
-    drops_by_entry
+    Ok(drops_by_entry)
 }
 
 #[allow(clippy::type_complexity)]
 fn parse_creature_drops(
     dump: &(impl crate::dump::TableRows + ?Sized),
-) -> std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>> {
-    let refs = parse_ref_pools(dump);
+) -> Result<std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>>> {
+    let refs = parse_ref_pools(dump)?;
     parse_loot_family(dump, "creature_loot_template", &refs)
 }
 
 fn creature_drop_item_set(
     dump: &(impl crate::dump::TableRows + ?Sized),
     creature_loot_ids: &std::collections::HashMap<u64, u64>,
-) -> std::collections::HashSet<u64> {
-    let drops_by_lootid = parse_creature_drops(dump);
+) -> Result<std::collections::HashSet<u64>> {
+    let drops_by_lootid = parse_creature_drops(dump)?;
     let mut set = std::collections::HashSet::new();
     for lootid in creature_loot_ids.values() {
         if let Some(drops) = drops_by_lootid.get(lootid) {
@@ -1137,67 +1212,67 @@ fn creature_drop_item_set(
             }
         }
     }
-    set
+    Ok(set)
 }
 
 fn gameobject_loot_item_set(
     dump: &(impl crate::dump::TableRows + ?Sized),
     used_go: &std::collections::HashSet<u64>,
-) -> std::collections::HashSet<u64> {
+) -> Result<std::collections::HashSet<u64>> {
     const GO_TYPE_CHEST: u64 = 3;
-    let refs = parse_ref_pools(dump);
-    let loot = parse_loot_family(dump, "gameobject_loot_template", &refs);
+    let refs = parse_ref_pools(dump)?;
+    let loot = parse_loot_family(dump, "gameobject_loot_template", &refs)?;
     let mut set = std::collections::HashSet::new();
-    for row in parse_table(dump, "gameobject_template").iter() {
-        let entry: u64 = field(row, got::ENTRY).parse().unwrap_or(0);
-        let ty: u64 = field(row, got::TYPE).parse().unwrap_or(0);
+    for row in parse_table(dump, "gameobject_template")?.iter() {
+        let entry: u64 = field(row, got::ENTRY)?.parse().unwrap_or(0);
+        let ty: u64 = field(row, got::TYPE)?.parse().unwrap_or(0);
         if ty != GO_TYPE_CHEST || !used_go.contains(&entry) {
             continue;
         }
-        let lootid: u64 = field(row, got::DATA1).parse().unwrap_or(0);
+        let lootid: u64 = field(row, got::DATA1)?.parse().unwrap_or(0);
         if let Some(drops) = loot.get(&lootid) {
             for &(item, ..) in drops {
                 set.insert(item);
             }
         }
     }
-    set
+    Ok(set)
 }
 
 fn vendor_stock_item_set(
     dump: &(impl crate::dump::TableRows + ?Sized),
     local_creatures: &std::collections::HashSet<u64>,
-) -> std::collections::HashSet<u64> {
+) -> Result<std::collections::HashSet<u64>> {
     const CT_VENDOR_TEMPLATE_ID: &str = "VendorTemplateId";
     let mut set = std::collections::HashSet::new();
-    for row in parse_table(dump, "npc_vendor").iter() {
-        let entry: u64 = field(row, nv::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_vendor")?.iter() {
+        let entry: u64 = field(row, nv::ENTRY)?.parse().unwrap_or(0);
         if local_creatures.contains(&entry) {
-            let item: u64 = field(row, nv::ITEM).parse().unwrap_or(0);
+            let item: u64 = field(row, nv::ITEM)?.parse().unwrap_or(0);
             if item > 0 {
                 set.insert(item);
             }
         }
     }
     let mut tmpl_items: std::collections::HashMap<u64, Vec<u64>> = std::collections::HashMap::new();
-    for row in parse_table(dump, "npc_vendor_template").iter() {
-        let t: u64 = field(row, "entry").parse().unwrap_or(0);
-        let item: u64 = field(row, "item").parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_vendor_template")?.iter() {
+        let t: u64 = field(row, "entry")?.parse().unwrap_or(0);
+        let item: u64 = field(row, "item")?.parse().unwrap_or(0);
         if t > 0 && item > 0 {
             tmpl_items.entry(t).or_default().push(item);
         }
     }
-    for row in parse_table(dump, "creature_template").iter() {
-        let entry: u64 = field(row, "Entry").parse().unwrap_or(0);
+    for row in parse_table(dump, "creature_template")?.iter() {
+        let entry: u64 = field(row, "Entry")?.parse().unwrap_or(0);
         if !local_creatures.contains(&entry) {
             continue;
         }
-        let vt: u64 = field(row, CT_VENDOR_TEMPLATE_ID).parse().unwrap_or(0);
+        let vt: u64 = field(row, CT_VENDOR_TEMPLATE_ID)?.parse().unwrap_or(0);
         if let Some(items) = tmpl_items.get(&vt) {
             set.extend(items.iter().copied());
         }
     }
-    set
+    Ok(set)
 }
 
 #[allow(clippy::too_many_lines)]
@@ -1214,20 +1289,25 @@ fn build_quests(
 ) -> Result<QuestEtl> {
     use std::collections::HashSet;
 
-    let relations_for = |table: &str, entries: &HashSet<u64>| -> Vec<(u64, u64)> {
-        parse_table(dump, table)
+    let relations_for = |table: &str, entries: &HashSet<u64>| -> Result<Vec<(u64, u64)>> {
+        parse_table(dump, table)?
             .iter()
-            .filter_map(|row| {
-                let entry: u64 = field(row, qr::CREATURE).parse().ok()?;
-                let quest: u64 = field(row, qr::QUEST).parse().ok()?;
-                (entries.contains(&entry) && quest > 0).then_some((entry, quest))
+            .map(|row| -> Result<_> {
+                let Ok(entry) = field(row, qr::CREATURE)?.parse::<u64>() else {
+                    return Ok(None);
+                };
+                let Ok(quest) = field(row, qr::QUEST)?.parse::<u64>() else {
+                    return Ok(None);
+                };
+                Ok((entries.contains(&entry) && quest > 0).then_some((entry, quest)))
             })
-            .collect()
+            .filter_map(Result::transpose)
+            .collect::<Result<_>>()
     };
-    let starts = relations_for("creature_questrelation", catalogue_creatures);
-    let ends = relations_for("creature_involvedrelation", catalogue_creatures);
-    let go_starts = relations_for("gameobject_questrelation", catalogue_gameobjects);
-    let go_ends = relations_for("gameobject_involvedrelation", catalogue_gameobjects);
+    let starts = relations_for("creature_questrelation", catalogue_creatures)?;
+    let ends = relations_for("creature_involvedrelation", catalogue_creatures)?;
+    let go_starts = relations_for("gameobject_questrelation", catalogue_gameobjects)?;
+    let go_ends = relations_for("gameobject_involvedrelation", catalogue_gameobjects)?;
     let candidate_quests: HashSet<u64> = starts
         .iter()
         .chain(ends.iter())
@@ -1242,22 +1322,30 @@ fn build_quests(
     let mut cast_objective_rows: Vec<String> = Vec::new();
     let mut reward_item_rows: Vec<String> = Vec::new();
     let mut reward_spell_rows = Vec::new();
-    let reward_learn_spells: HashMap<u32, u32> = parse_table(dump, "spell_template")
+    let reward_learn_spells: HashMap<u32, u32> = parse_table(dump, "spell_template")?
         .iter()
-        .filter_map(|row| {
-            let wrapper = field(row, "Id").parse().ok()?;
-            let effects: Vec<_> = (0..3)
-                .filter(|&i| field(row, &format!("Effect{}", i + 1)) != "0")
-                .collect();
-            if effects.len() != 1 || field(row, &format!("Effect{}", effects[0] + 1)) != "36" {
-                return None;
+        .map(|row| -> Result<_> {
+            let Some(wrapper) = field(row, "Id")?.parse().ok() else {
+                return Ok(None);
+            };
+            let mut effects = Vec::new();
+            for i in 0..3 {
+                if field(row, &format!("Effect{}", i + 1))? != "0" {
+                    effects.push(i);
+                }
             }
-            let learned: u32 = field(row, &format!("EffectTriggerSpell{}", effects[0] + 1))
-                .parse()
-                .ok()?;
-            (learned != 0).then_some((wrapper, learned))
+            if effects.len() != 1 || field(row, &format!("Effect{}", effects[0] + 1))? != "36" {
+                return Ok(None);
+            }
+            let Ok(learned) =
+                field(row, &format!("EffectTriggerSpell{}", effects[0] + 1))?.parse::<u32>()
+            else {
+                return Ok(None);
+            };
+            Ok((learned != 0).then_some((wrapper, learned)))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let mut reward_choice_rows: Vec<String> = Vec::new();
     let mut reward_item_entries: HashSet<u64> = HashSet::new();
     let mut req_item_entries: HashSet<u64> = HashSet::new();
@@ -1273,61 +1361,61 @@ fn build_quests(
     let mut rew_id: u64 = 1;
     let mut rew_choice_id: u64 = 1;
     let mut quest_obj_count: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
-    for row in parse_table(dump, "quest_template").iter() {
-        let entry: u64 = field(row, qt::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "quest_template")?.iter() {
+        let entry: u64 = field(row, qt::ENTRY)?.parse().unwrap_or(0);
         if entry == 0 || !candidate_quests.contains(&entry) {
             continue;
         }
         valid_quests.insert(entry);
-        let mail_template: u32 = field(row, qt::REW_MAIL_TEMPLATE_ID).parse().unwrap_or(0);
+        let mail_template: u32 = field(row, qt::REW_MAIL_TEMPLATE_ID)?.parse().unwrap_or(0);
         if mail_template != 0 {
-            let mail_delay: u32 = field(row, qt::REW_MAIL_DELAY_SECS).parse().unwrap_or(0);
+            let mail_delay: u32 = field(row, qt::REW_MAIL_DELAY_SECS)?.parse().unwrap_or(0);
             reward_mail_rows.push(format!("({entry},{mail_template},{mail_delay},0,0)"));
             reward_mail_template_ids.insert(mail_template as u64);
             reward_mail_quests.insert(entry);
         }
-        let reward_cast: u32 = field(row, qt::REW_SPELL_CAST).parse().unwrap_or(0);
+        let reward_cast: u32 = field(row, qt::REW_SPELL_CAST)?.parse().unwrap_or(0);
         let reward_cast = if reward_cast != 0 {
             reward_cast
         } else {
-            field(row, qt::REW_SPELL).parse().unwrap_or(0)
+            field(row, qt::REW_SPELL)?.parse().unwrap_or(0)
         };
         if let Some(learned) = reward_learn_spells.get(&reward_cast) {
             reward_spell_rows.push(format!("({entry},{learned})"));
         }
 
-        let min_level: u32 = field(row, qt::MIN_LEVEL).parse().unwrap_or(0);
-        let quest_level: i64 = field(row, qt::QUEST_LEVEL).parse().unwrap_or(0);
-        let money: i64 = field(row, qt::REW_OR_REQ_MONEY).parse().unwrap_or(0);
-        let reward_money_max_level: i64 = field(row, qt::REW_MONEY_MAX_LEVEL).parse().unwrap_or(0);
-        let prev_quest: i64 = field(row, qt::PREV_QUEST_ID).parse().unwrap_or(0);
-        let special_flags: u32 = field(row, qt::SPECIAL_FLAGS).parse().unwrap_or(0);
+        let min_level: u32 = field(row, qt::MIN_LEVEL)?.parse().unwrap_or(0);
+        let quest_level: i64 = field(row, qt::QUEST_LEVEL)?.parse().unwrap_or(0);
+        let money: i64 = field(row, qt::REW_OR_REQ_MONEY)?.parse().unwrap_or(0);
+        let reward_money_max_level: i64 = field(row, qt::REW_MONEY_MAX_LEVEL)?.parse().unwrap_or(0);
+        let prev_quest: i64 = field(row, qt::PREV_QUEST_ID)?.parse().unwrap_or(0);
+        let special_flags: u32 = field(row, qt::SPECIAL_FLAGS)?.parse().unwrap_or(0);
         let repeatable = (special_flags & 1) != 0;
-        let req_races: u32 = field(row, qt::REQUIRED_RACES).parse().unwrap_or(0);
-        let req_classes: u32 = field(row, qt::REQUIRED_CLASSES).parse().unwrap_or(0);
-        let zone_or_sort: i64 = field(row, qt::ZONE_OR_SORT).parse().unwrap_or(0);
-        let rf1: u32 = field(row, qt::REW_REP_FACTION1).parse().unwrap_or(0);
-        let rv1: i64 = field(row, qt::REW_REP_VALUE1).parse().unwrap_or(0);
-        let rf2: u32 = field(row, "RewRepFaction2").parse().unwrap_or(0);
-        let rv2: i64 = field(row, "RewRepValue2").parse().unwrap_or(0);
-        let src_item: u64 = field(row, qt::SRC_ITEM_ID).parse().unwrap_or(0);
-        let src_item_count: u32 = field(row, qt::SRC_ITEM_COUNT).parse().unwrap_or(0);
-        let next_quest_raw: i64 = field(row, qt::NEXT_QUEST_IN_CHAIN).parse().unwrap_or(0);
-        let limit_time_raw: i64 = field(row, qt::LIMIT_TIME).parse().unwrap_or(0);
+        let req_races: u32 = field(row, qt::REQUIRED_RACES)?.parse().unwrap_or(0);
+        let req_classes: u32 = field(row, qt::REQUIRED_CLASSES)?.parse().unwrap_or(0);
+        let zone_or_sort: i64 = field(row, qt::ZONE_OR_SORT)?.parse().unwrap_or(0);
+        let rf1: u32 = field(row, qt::REW_REP_FACTION1)?.parse().unwrap_or(0);
+        let rv1: i64 = field(row, qt::REW_REP_VALUE1)?.parse().unwrap_or(0);
+        let rf2: u32 = field(row, "RewRepFaction2")?.parse().unwrap_or(0);
+        let rv2: i64 = field(row, "RewRepValue2")?.parse().unwrap_or(0);
+        let src_item: u64 = field(row, qt::SRC_ITEM_ID)?.parse().unwrap_or(0);
+        let src_item_count: u32 = field(row, qt::SRC_ITEM_COUNT)?.parse().unwrap_or(0);
+        let next_quest_raw: i64 = field(row, qt::NEXT_QUEST_IN_CHAIN)?.parse().unwrap_or(0);
+        let limit_time_raw: i64 = field(row, qt::LIMIT_TIME)?.parse().unwrap_or(0);
         if next_quest_raw > 0 {
             chained_count += 1;
         }
         if limit_time_raw > 0 {
             timed_count += 1;
         }
-        let quest_type: u32 = field(row, qt::TYPE).parse().unwrap_or(0);
+        let quest_type: u32 = field(row, qt::TYPE)?.parse().unwrap_or(0);
         if quest_type == 62 {
             raid_quest_count += 1;
         }
         quest_rows.push(format!(
             "({entry},{min_level},{ql},{title},{money},0,{prev},{req_races},{req_classes},{zone_or_sort},{rf1},{rv1},{rf2},{rv2},{src_item},{src_item_count},{repeatable},{next_quest},{limit_time},{rmm},{quest_type})",
             ql = quest_level.max(0),
-            title = sql_text(field(row, qt::TITLE)),
+            title = sql_text(field(row, qt::TITLE)?),
             money = money.max(0),
             prev = prev_quest.max(0),
             next_quest = next_quest_raw.max(0),
@@ -1336,20 +1424,20 @@ fn build_quests(
         ));
         quest_text_rows.push(format!(
             "({entry},{details},{objectives},{offer},{request})",
-            details = sql_text(field(row, qt::DETAILS)),
-            objectives = sql_text(field(row, qt::OBJECTIVES)),
-            offer = sql_text(field(row, qt::OFFER_REWARD_TEXT)),
-            request = sql_text(field(row, qt::REQUEST_ITEMS_TEXT)),
+            details = sql_text(field(row, qt::DETAILS)?),
+            objectives = sql_text(field(row, qt::OBJECTIVES)?),
+            offer = sql_text(field(row, qt::OFFER_REWARD_TEXT)?),
+            request = sql_text(field(row, qt::REQUEST_ITEMS_TEXT)?),
         ));
         let mut obj_index: u8 = 0;
         for i in 0..4 {
-            let id: i64 = field(row, &format!("ReqCreatureOrGOId{}", i + 1))
+            let id: i64 = field(row, &format!("ReqCreatureOrGOId{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let count: u32 = field(row, &format!("ReqCreatureOrGOCount{}", i + 1))
+            let count: u32 = field(row, &format!("ReqCreatureOrGOCount{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let spell_id: u32 = field(row, &format!("ReqSpellCast{}", i + 1))
+            let spell_id: u32 = field(row, &format!("ReqSpellCast{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
             if count == 0 {
@@ -1385,10 +1473,10 @@ fn build_quests(
             req_item_entries.insert(src_item);
         }
         for i in 0..4 {
-            let item: i64 = field(row, &format!("ReqItemId{}", i + 1))
+            let item: i64 = field(row, &format!("ReqItemId{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let count: u32 = field(row, &format!("ReqItemCount{}", i + 1))
+            let count: u32 = field(row, &format!("ReqItemCount{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
             if item > 0 {
@@ -1404,10 +1492,10 @@ fn build_quests(
         }
         quest_obj_count.insert(entry, obj_index);
         for i in 0..4 {
-            let item: u64 = field(row, &format!("RewItemId{}", i + 1))
+            let item: u64 = field(row, &format!("RewItemId{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let count: u32 = field(row, &format!("RewItemCount{}", i + 1))
+            let count: u32 = field(row, &format!("RewItemCount{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
             if item > 0 {
@@ -1421,10 +1509,10 @@ fn build_quests(
         }
         let mut choice_rank = 0u8;
         for i in 0..6 {
-            let item: u64 = field(row, &format!("RewChoiceItemId{}", i + 1))
+            let item: u64 = field(row, &format!("RewChoiceItemId{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let count: u32 = field(row, &format!("RewChoiceItemCount{}", i + 1))
+            let count: u32 = field(row, &format!("RewChoiceItemCount{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
             if item > 0 {
@@ -1439,12 +1527,12 @@ fn build_quests(
         }
     }
 
-    for row in parse_table(dump, "dbscripts_on_quest_end").iter() {
-        let command: u32 = field(row, dse::COMMAND).parse().unwrap_or(0);
+    for row in parse_table(dump, "dbscripts_on_quest_end")?.iter() {
+        let command: u32 = field(row, dse::COMMAND)?.parse().unwrap_or(0);
         if command != dse::SEND_MAIL {
             continue;
         }
-        let entry: u64 = field(row, dse::ID).parse().unwrap_or(0);
+        let entry: u64 = field(row, dse::ID)?.parse().unwrap_or(0);
         if entry == 0 || !valid_quests.contains(&entry) {
             continue;
         }
@@ -1454,19 +1542,19 @@ fn build_quests(
                  quest_template.RewMailTemplateId and a SCRIPT_COMMAND_SEND_MAIL row"
             );
         }
-        let mail_template: u32 = field(row, dse::DATALONG).parse().unwrap_or(0);
-        let sender: u32 = field(row, dse::DATALONG2).parse().unwrap_or(0);
-        let money: u32 = field(row, dse::DATALONG3).parse().unwrap_or(0);
-        let delay: u32 = field(row, dse::DATAINT).parse().unwrap_or(0);
+        let mail_template: u32 = field(row, dse::DATALONG)?.parse().unwrap_or(0);
+        let sender: u32 = field(row, dse::DATALONG2)?.parse().unwrap_or(0);
+        let money: u32 = field(row, dse::DATALONG3)?.parse().unwrap_or(0);
+        let delay: u32 = field(row, dse::DATAINT)?.parse().unwrap_or(0);
         reward_mail_template_ids.insert(mail_template as u64);
         reward_mail_rows.push(format!(
             "({entry},{mail_template},{delay},{sender},{money})"
         ));
     }
 
-    for row in parse_table(dump, "areatrigger_involvedrelation").iter() {
-        let trigger: u64 = field(row, ai::TRIGGER).parse().unwrap_or(0);
-        let quest: u64 = field(row, ai::QUEST).parse().unwrap_or(0);
+    for row in parse_table(dump, "areatrigger_involvedrelation")?.iter() {
+        let trigger: u64 = field(row, ai::TRIGGER)?.parse().unwrap_or(0);
+        let quest: u64 = field(row, ai::QUEST)?.parse().unwrap_or(0);
         if trigger == 0 || !valid_quests.contains(&quest) {
             continue;
         }
@@ -1548,7 +1636,7 @@ fn build_items_and_loot(
 ) -> Result<(Vec<String>, Vec<String>, Vec<String>)> {
     use std::collections::HashSet;
 
-    let drops_by_lootid = parse_creature_drops(dump);
+    let drops_by_lootid = parse_creature_drops(dump)?;
 
     let mut loot_rows: Vec<String> = Vec::new();
     let mut item_ids: HashSet<u64> = [25, 50, 51, 52].into_iter().collect();
@@ -1573,28 +1661,28 @@ fn build_items_and_loot(
     let mut vendor_rows: Vec<String> = Vec::new();
     let mut vendor_id: u64 = 1;
     let mut nv_seen: HashSet<(u64, u64)> = HashSet::new();
-    for row in parse_table(dump, "npc_vendor").iter() {
-        let entry: u64 = field(row, nv::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_vendor")?.iter() {
+        let entry: u64 = field(row, nv::ENTRY)?.parse().unwrap_or(0);
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let item: u64 = field(row, nv::ITEM).parse().unwrap_or(0);
+        let item: u64 = field(row, nv::ITEM)?.parse().unwrap_or(0);
         if item == 0 || !nv_seen.insert((entry, item)) {
             continue;
         }
-        let slot: u32 = field(row, nv::SLOT).parse().unwrap_or(0);
-        let max_count: u32 = field(row, nv::MAXCOUNT).parse().unwrap_or(0);
+        let slot: u32 = field(row, nv::SLOT)?.parse().unwrap_or(0);
+        let max_count: u32 = field(row, nv::MAXCOUNT)?.parse().unwrap_or(0);
         item_ids.insert(item);
         vendor_rows.push(format!("({vendor_id},{entry},{item},{slot},{max_count})"));
         vendor_id += 1;
     }
 
     let mut tmpl_stock: HashMap<u64, Vec<(u64, u32, u32)>> = HashMap::new();
-    for row in parse_table(dump, "npc_vendor_template").iter() {
-        let t: u64 = field(row, "entry").parse().unwrap_or(0);
-        let item: u64 = field(row, "item").parse().unwrap_or(0);
-        let max_count: u32 = field(row, "maxcount").parse().unwrap_or(0);
-        let slot: u32 = field(row, "slot").parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_vendor_template")?.iter() {
+        let t: u64 = field(row, "entry")?.parse().unwrap_or(0);
+        let item: u64 = field(row, "item")?.parse().unwrap_or(0);
+        let max_count: u32 = field(row, "maxcount")?.parse().unwrap_or(0);
+        let slot: u32 = field(row, "slot")?.parse().unwrap_or(0);
         if t != 0 && item != 0 {
             tmpl_stock
                 .entry(t)
@@ -1603,12 +1691,12 @@ fn build_items_and_loot(
         }
     }
     const CT_VENDOR_TEMPLATE_ID: &str = "VendorTemplateId";
-    for row in parse_table(dump, "creature_template").iter() {
-        let entry: u64 = field(row, ct::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "creature_template")?.iter() {
+        let entry: u64 = field(row, ct::ENTRY)?.parse().unwrap_or(0);
         if !vendor_entries.contains(&entry) {
             continue;
         }
-        let vt: u64 = field(row, CT_VENDOR_TEMPLATE_ID).parse().unwrap_or(0);
+        let vt: u64 = field(row, CT_VENDOR_TEMPLATE_ID)?.parse().unwrap_or(0);
         let Some(stock) = tmpl_stock.get(&vt).filter(|_| vt != 0) else {
             continue;
         };
@@ -1626,18 +1714,18 @@ fn build_items_and_loot(
     let mut emitted: HashSet<u64> = HashSet::new();
     let mut resist_nonzero_count: u64 = 0;
     let mut startquest_nonzero_count: u64 = 0;
-    for row in parse_table(dump, "item_template").iter() {
-        let entry: u64 = field(row, it::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "item_template")?.iter() {
+        let entry: u64 = field(row, it::ENTRY)?.parse().unwrap_or(0);
         if entry == 0 {
             continue;
         }
         emitted.insert(entry);
         let (mut s_str, mut s_agi, mut s_sta, mut s_int, mut s_spi) = (0i32, 0, 0, 0, 0);
         for i in 0..10 {
-            let st: u8 = field(row, &format!("stat_type{}", i + 1))
+            let st: u8 = field(row, &format!("stat_type{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
-            let sv: i32 = field(row, &format!("stat_value{}", i + 1))
+            let sv: i32 = field(row, &format!("stat_value{}", i + 1))?
                 .parse()
                 .unwrap_or(0);
             match st {
@@ -1649,73 +1737,76 @@ fn build_items_and_loot(
                 _ => {}
             }
         }
-        let stack: u32 = field(row, it::STACKABLE).parse::<u32>().unwrap_or(1).max(1);
+        let stack: u32 = field(row, it::STACKABLE)?
+            .parse::<u32>()
+            .unwrap_or(1)
+            .max(1);
         let allowed_class =
-            normalize_item_mask(field(row, it::ALLOWED_CLASS), ALL_PLAYABLE_CLASS_MASK);
+            normalize_item_mask(field(row, it::ALLOWED_CLASS)?, ALL_PLAYABLE_CLASS_MASK);
         let allowed_race =
-            normalize_item_mask(field(row, it::ALLOWED_RACE), ALL_PLAYABLE_RACE_MASK);
-        let class_v: u8 = field(row, it::CLASS).parse().unwrap_or(0);
-        let subclass_v: u8 = field(row, it::SUBCLASS).parse().unwrap_or(0);
-        let is_drink = is_drink_consumable(class_v, subclass_v, field(row, it::NAME));
-        let holy: i32 = field(row, it::HOLY_RES).parse().unwrap_or(0);
-        let fire: i32 = field(row, it::FIRE_RES).parse().unwrap_or(0);
-        let nature: i32 = field(row, it::NATURE_RES).parse().unwrap_or(0);
-        let frost: i32 = field(row, it::FROST_RES).parse().unwrap_or(0);
-        let shadow: i32 = field(row, it::SHADOW_RES).parse().unwrap_or(0);
-        let arcane: i32 = field(row, it::ARCANE_RES).parse().unwrap_or(0);
+            normalize_item_mask(field(row, it::ALLOWED_RACE)?, ALL_PLAYABLE_RACE_MASK);
+        let class_v: u8 = field(row, it::CLASS)?.parse().unwrap_or(0);
+        let subclass_v: u8 = field(row, it::SUBCLASS)?.parse().unwrap_or(0);
+        let is_drink = is_drink_consumable(class_v, subclass_v, field(row, it::NAME)?);
+        let holy: i32 = field(row, it::HOLY_RES)?.parse().unwrap_or(0);
+        let fire: i32 = field(row, it::FIRE_RES)?.parse().unwrap_or(0);
+        let nature: i32 = field(row, it::NATURE_RES)?.parse().unwrap_or(0);
+        let frost: i32 = field(row, it::FROST_RES)?.parse().unwrap_or(0);
+        let shadow: i32 = field(row, it::SHADOW_RES)?.parse().unwrap_or(0);
+        let arcane: i32 = field(row, it::ARCANE_RES)?.parse().unwrap_or(0);
         if holy != 0 || fire != 0 || nature != 0 || frost != 0 || shadow != 0 || arcane != 0 {
             resist_nonzero_count += 1;
         }
-        let sp3: u32 = field(row, it::SPELLID_3).parse().unwrap_or(0);
-        let spt3: u8 = field(row, it::SPELLTRIGGER_3).parse().unwrap_or(0);
-        let sp4: u32 = field(row, it::SPELLID_4).parse().unwrap_or(0);
-        let spt4: u8 = field(row, it::SPELLTRIGGER_4).parse().unwrap_or(0);
-        let sp5: u32 = field(row, it::SPELLID_5).parse().unwrap_or(0);
-        let spt5: u8 = field(row, it::SPELLTRIGGER_5).parse().unwrap_or(0);
-        let req_skill: u32 = field(row, it::REQUIRED_SKILL).parse().unwrap_or(0);
-        let req_skill_rank: u32 = field(row, it::REQUIRED_SKILL_RANK).parse().unwrap_or(0);
-        let req_rep_faction: u32 = field(row, it::REQUIRED_REPUTATION_FACTION)
+        let sp3: u32 = field(row, it::SPELLID_3)?.parse().unwrap_or(0);
+        let spt3: u8 = field(row, it::SPELLTRIGGER_3)?.parse().unwrap_or(0);
+        let sp4: u32 = field(row, it::SPELLID_4)?.parse().unwrap_or(0);
+        let spt4: u8 = field(row, it::SPELLTRIGGER_4)?.parse().unwrap_or(0);
+        let sp5: u32 = field(row, it::SPELLID_5)?.parse().unwrap_or(0);
+        let spt5: u8 = field(row, it::SPELLTRIGGER_5)?.parse().unwrap_or(0);
+        let req_skill: u32 = field(row, it::REQUIRED_SKILL)?.parse().unwrap_or(0);
+        let req_skill_rank: u32 = field(row, it::REQUIRED_SKILL_RANK)?.parse().unwrap_or(0);
+        let req_rep_faction: u32 = field(row, it::REQUIRED_REPUTATION_FACTION)?
             .parse()
             .unwrap_or(0);
-        let req_rep_rank: u32 = field(row, it::REQUIRED_REPUTATION_RANK)
+        let req_rep_rank: u32 = field(row, it::REQUIRED_REPUTATION_RANK)?
             .parse()
             .unwrap_or(0);
-        let max_count: u32 = field(row, it::MAX_COUNT).parse().unwrap_or(0);
-        let item_flags: u32 = field(row, it::FLAGS).parse().unwrap_or(0);
-        let page_text: u32 = field(row, it::PAGE_TEXT).parse().unwrap_or(0);
-        let start_quest: u32 = field(row, it::START_QUEST).parse().unwrap_or(0);
+        let max_count: u32 = field(row, it::MAX_COUNT)?.parse().unwrap_or(0);
+        let item_flags: u32 = field(row, it::FLAGS)?.parse().unwrap_or(0);
+        let page_text: u32 = field(row, it::PAGE_TEXT)?.parse().unwrap_or(0);
+        let start_quest: u32 = field(row, it::START_QUEST)?.parse().unwrap_or(0);
         if start_quest != 0 {
             startquest_nonzero_count += 1;
         }
-        let bag_family: u32 = field(row, it::BAG_FAMILY).parse().unwrap_or(0);
-        let buy_count: u32 = field(row, it::BUY_COUNT).parse().unwrap_or(1).max(1);
-        let food_type: u8 = field(row, it::FOOD_TYPE).parse().unwrap_or(0);
+        let bag_family: u32 = field(row, it::BAG_FAMILY)?.parse().unwrap_or(0);
+        let buy_count: u32 = field(row, it::BUY_COUNT)?.parse().unwrap_or(1).max(1);
+        let food_type: u8 = field(row, it::FOOD_TYPE)?.parse().unwrap_or(0);
         item_rows.push(format!(
             "({entry},{class},{subclass},{name},{disp},{qual},{inv},{ilvl},{rlvl},{dur},{buy},{sell},{stack},{dmin},{dmax},{delay},{s_str},{s_agi},{s_sta},{s_int},{s_spi},0,0,{armor},{block},{drink},{sp1},{spt1},{sp2},{spt2},{cslots},{sheath},{bonding},{holy},{fire},{nature},{frost},{shadow},{arcane},{sp3},{spt3},{sp4},{spt4},{sp5},{spt5},{req_skill},{req_skill_rank},{req_rep_faction},{req_rep_rank},{max_count},{item_flags},{page_text},{start_quest},{bag_family},{buy_count},{food_type},{allowed_class},{allowed_race},{random_property})",
-            sheath = field(row, it::SHEATH).parse::<u8>().unwrap_or(0),
-            sp1 = field(row, it::SPELLID_1).parse::<u32>().unwrap_or(0),
-            spt1 = field(row, it::SPELLTRIGGER_1).parse::<u8>().unwrap_or(0),
-            sp2 = field(row, it::SPELLID_2).parse::<u32>().unwrap_or(0),
-            spt2 = field(row, it::SPELLTRIGGER_2).parse::<u8>().unwrap_or(0),
-            cslots = field(row, it::CONTAINER_SLOTS).parse::<u8>().unwrap_or(0),
-            bonding = field(row, it::BONDING).parse::<u8>().unwrap_or(0),
-            class = field(row, it::CLASS),
-            subclass = field(row, it::SUBCLASS),
-            name = sql_text(field(row, it::NAME)),
+            sheath = field(row, it::SHEATH)?.parse::<u8>().unwrap_or(0),
+            sp1 = field(row, it::SPELLID_1)?.parse::<u32>().unwrap_or(0),
+            spt1 = field(row, it::SPELLTRIGGER_1)?.parse::<u8>().unwrap_or(0),
+            sp2 = field(row, it::SPELLID_2)?.parse::<u32>().unwrap_or(0),
+            spt2 = field(row, it::SPELLTRIGGER_2)?.parse::<u8>().unwrap_or(0),
+            cslots = field(row, it::CONTAINER_SLOTS)?.parse::<u8>().unwrap_or(0),
+            bonding = field(row, it::BONDING)?.parse::<u8>().unwrap_or(0),
+            class = field(row, it::CLASS)?,
+            subclass = field(row, it::SUBCLASS)?,
+            name = sql_text(field(row, it::NAME)?),
             drink = is_drink,
-            disp = field(row, it::DISPLAY_ID),
-            qual = field(row, it::QUALITY),
-            inv = field(row, it::INVENTORY_TYPE),
-            ilvl = field(row, it::ITEM_LEVEL),
-            rlvl = field(row, it::REQUIRED_LEVEL),
-            dur = field(row, it::MAX_DURABILITY),
-            buy = field(row, it::BUY_PRICE),
-            sell = field(row, it::SELL_PRICE),
-            dmin = field(row, it::DMG_MIN1),
-            dmax = field(row, it::DMG_MAX1),
-            delay = field(row, it::DELAY),
-            armor = field(row, it::ARMOR),
-            block = field(row, it::BLOCK),
+            disp = field(row, it::DISPLAY_ID)?,
+            qual = field(row, it::QUALITY)?,
+            inv = field(row, it::INVENTORY_TYPE)?,
+            ilvl = field(row, it::ITEM_LEVEL)?,
+            rlvl = field(row, it::REQUIRED_LEVEL)?,
+            dur = field(row, it::MAX_DURABILITY)?,
+            buy = field(row, it::BUY_PRICE)?,
+            sell = field(row, it::SELL_PRICE)?,
+            dmin = field(row, it::DMG_MIN1)?,
+            dmax = field(row, it::DMG_MAX1)?,
+            delay = field(row, it::DELAY)?,
+            armor = field(row, it::ARMOR)?,
+            block = field(row, it::BLOCK)?,
             random_property = item_property::template_pool(row)?,
             allowed_class = allowed_class,
             allowed_race = allowed_race,
@@ -1764,39 +1855,39 @@ fn build_mail_loot(
     let mut rows: Vec<(u64, String)> = Vec::new();
     let mut item_entries: HashSet<u64> = HashSet::new();
     let mut seen_templates: HashSet<u64> = HashSet::new();
-    for row in parse_table(dump, "mail_loot_template").iter() {
-        let entry: u64 = field(row, mlt::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "mail_loot_template")?.iter() {
+        let entry: u64 = field(row, mlt::ENTRY)?.parse().unwrap_or(0);
         if !reward_mail_template_ids.contains(&entry) {
             continue;
         }
         if !seen_templates.insert(entry) {
             bail!("mail_loot_template: mail template {entry} carries more than one loot row");
         }
-        let chance: f64 = field(row, mlt::CHANCE).parse().unwrap_or(0.0);
+        let chance: f64 = field(row, mlt::CHANCE)?.parse().unwrap_or(0.0);
         if (chance - 100.0).abs() > f64::EPSILON {
             bail!("mail_loot_template: mail template {entry} has a non-100% chance ({chance})");
         }
-        let group: i64 = field(row, mlt::GROUP).parse().unwrap_or(-1);
+        let group: i64 = field(row, mlt::GROUP)?.parse().unwrap_or(-1);
         if group != 0 {
             bail!("mail_loot_template: mail template {entry} has a non-zero group ({group})");
         }
-        let mincount_or_ref: i64 = field(row, mlt::MINCOUNT_OR_REF).parse().unwrap_or(-1);
+        let mincount_or_ref: i64 = field(row, mlt::MINCOUNT_OR_REF)?.parse().unwrap_or(-1);
         if mincount_or_ref < 0 {
             bail!(
                 "mail_loot_template: mail template {entry} references another loot group ({mincount_or_ref})"
             );
         }
-        let maxcount: i64 = field(row, mlt::MAXCOUNT).parse().unwrap_or(-1);
+        let maxcount: i64 = field(row, mlt::MAXCOUNT)?.parse().unwrap_or(-1);
         if maxcount != 1 {
             bail!(
                 "mail_loot_template: mail template {entry} has a count other than 1 ({maxcount})"
             );
         }
-        let condition: u64 = field(row, mlt::CONDITION_ID).parse().unwrap_or(1);
+        let condition: u64 = field(row, mlt::CONDITION_ID)?.parse().unwrap_or(1);
         if condition != 0 {
             bail!("mail_loot_template: mail template {entry} carries a condition ({condition})");
         }
-        let item: u64 = field(row, mlt::ITEM).parse().unwrap_or(0);
+        let item: u64 = field(row, mlt::ITEM)?.parse().unwrap_or(0);
         if item == 0 {
             bail!("mail_loot_template: mail template {entry} has no item");
         }
@@ -1957,18 +2048,18 @@ fn build_dump_plan(
         creature_pickpocket_ids,
         creature_skin_ids,
         class_trainer_count,
-    } = build_creature_templates(dump, &entries, display_scales);
+    } = build_creature_templates(dump, &entries, display_scales)?;
     let spell_catalogue = args.dbc.as_deref().map(spell::read_catalogue).transpose()?;
     let (creature_casts, creature_rotation_rows) = build_creature_cast_rows(
         dump,
         &entries,
         spell_catalogue.as_ref().map(|catalogue| &catalogue.ids),
-    );
+    )?;
     let SpawnPayload {
         guid_of,
         packed_spawns,
     } = build_packed_spawn_payload(spawns);
-    let waypoints = build_waypoint_rows(dump, spawns, &guid_of);
+    let waypoints = build_waypoint_rows(dump, spawns, &guid_of)?;
 
     eprintln!(
         "mapped: {} templates ({class_trainer_count} class-gated trainers), {} spawns, {} waypoints",
@@ -1977,14 +2068,14 @@ fn build_dump_plan(
         waypoints.len()
     );
 
-    let go_spawns = collect_gameobject_spawns(dump, scope);
+    let go_spawns = collect_gameobject_spawns(dump, scope)?;
     let GameobjectTemplateRows {
         templates: go_template_rows,
         traps: go_trap_rows,
         meeting_stones: go_meeting_stone_rows,
         chest_loot_ids: chest_loot_ids_used,
     } = gameobject_template_rows(&go_spawns, &eventai.forced_gameobject_entries)?;
-    let trainer_rows = build_trainer_spell_rows(dump, &entries, profession_tier_values);
+    let trainer_rows = build_trainer_spell_rows(dump, &entries, profession_tier_values)?;
 
     let catalogue = if args.world_profile.is_some() {
         Some(build_quest_catalogue(dump, args, display_scales)?)
@@ -2001,9 +2092,9 @@ fn build_dump_plan(
             )
         })
         .unwrap_or((&entries, &go_spawns, &creature_loot_ids));
-    let mut obtainable_items = creature_drop_item_set(dump, quest_loot_ids);
-    obtainable_items.extend(gameobject_loot_item_set(dump, &quest_gameobjects.used_go));
-    obtainable_items.extend(vendor_stock_item_set(dump, quest_entries));
+    let mut obtainable_items = creature_drop_item_set(dump, quest_loot_ids)?;
+    obtainable_items.extend(gameobject_loot_item_set(dump, &quest_gameobjects.used_go)?);
+    obtainable_items.extend(vendor_stock_item_set(dump, quest_entries)?);
     let mut local_creature_entries = population.referenced_entries.clone();
     local_creature_entries.extend(&eventai.forced_template_entries);
     let giver_entries = if args
@@ -2066,8 +2157,8 @@ fn build_dump_plan(
         &creature_pickpocket_ids,
         &creature_skin_ids,
         &chest_loot_ids_used,
-    );
-    let gossip = build_gossip_sql(dump, &entries);
+    )?;
+    let gossip = build_gossip_sql(dump, &entries)?;
 
     let quest_event_requirements = catalogue
         .as_ref()
@@ -2237,10 +2328,10 @@ fn build_quest_catalogue(
         &population,
         ScopePurpose::QuestCatalogue,
     )?;
-    let templates = build_creature_templates(dump, &content.entries, display_scales);
+    let templates = build_creature_templates(dump, &content.entries, display_scales)?;
     Ok(QuestCatalogue {
         entries: content.entries,
-        gameobjects: collect_gameobject_spawns(dump, &scope),
+        gameobjects: collect_gameobject_spawns(dump, &scope)?,
         creature_loot_ids: templates.creature_loot_ids,
         eventai: content.eventai,
     })
@@ -2284,8 +2375,8 @@ fn resolve_scope_entries(
         .world_profile
         .is_some_and(WorldImportProfile::imports_all_templates)
     {
-        for row in parse_complete_table(dump, "creature_template")?.iter() {
-            let entry = field(row, ct::ENTRY)
+        for row in parse_table(dump, "creature_template")?.iter() {
+            let entry = field(row, ct::ENTRY)?
                 .parse::<u64>()
                 .context("invalid creature entry")?;
             if entry == 0 {
@@ -2316,18 +2407,21 @@ fn resolve_scope_entries(
         .map(|(guid, entry, ..)| (*guid, *entry))
         .collect();
     let importable_templates: std::collections::HashSet<u64> =
-        parse_table(dump, "creature_template")
+        parse_table(dump, "creature_template")?
             .iter()
-            .filter_map(|row| {
-                let entry = field(row, ct::ENTRY).parse().ok()?;
-                Some(entry)
+            .map(|row| -> Result<_> {
+                let Ok(entry) = field(row, ct::ENTRY)?.parse::<u64>() else {
+                    return Ok(None);
+                };
+                Ok(Some(entry))
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_>>()?;
     let (eventai, eventai_manifest) = if args.world_profile.is_some()
         || family_active(args, "creature-ai")
         || family_active(args, "gameobjects")
     {
-        let source = eventai::parse(dump);
+        let source = eventai::parse(dump)?;
         let plan = loop {
             let plan = source.assemble(&entries, &imported_guid_entries, &importable_templates);
             let added = plan
@@ -2393,7 +2487,7 @@ fn build_creature_templates(
     dump: &(impl crate::dump::TableRows + ?Sized),
     entries: &std::collections::HashSet<u64>,
     display_scales: &Option<std::collections::HashMap<u32, f32>>,
-) -> CreatureTemplates {
+) -> Result<CreatureTemplates> {
     let mut templates: Vec<String> = Vec::new();
     let mut creature_loot_ids: std::collections::HashMap<u64, u64> =
         std::collections::HashMap::new();
@@ -2402,26 +2496,26 @@ fn build_creature_templates(
     let mut creature_skin_ids: std::collections::HashMap<u64, u64> =
         std::collections::HashMap::new();
     let mut class_trainer_count: usize = 0;
-    for row in parse_table(dump, "creature_template").iter() {
-        let entry: u64 = field(row, ct::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "creature_template")?.iter() {
+        let entry: u64 = field(row, ct::ENTRY)?.parse().unwrap_or(0);
         if !entries.contains(&entry) {
             continue;
         }
-        let loot_id: u64 = field(row, ct::LOOT_ID).parse().unwrap_or(0);
+        let loot_id: u64 = field(row, ct::LOOT_ID)?.parse().unwrap_or(0);
         if loot_id > 0 {
             creature_loot_ids.insert(entry, loot_id);
         }
-        let pickpocket_loot_id: u64 = field(row, ct::PICKPOCKET_LOOT_ID).parse().unwrap_or(0);
+        let pickpocket_loot_id: u64 = field(row, ct::PICKPOCKET_LOOT_ID)?.parse().unwrap_or(0);
         if pickpocket_loot_id > 0 {
             creature_pickpocket_ids.insert(entry, pickpocket_loot_id);
         }
-        let skin_loot_id: u64 = field(row, ct::SKIN_LOOT_ID).parse().unwrap_or(0);
+        let skin_loot_id: u64 = field(row, ct::SKIN_LOOT_ID)?.parse().unwrap_or(0);
         if skin_loot_id > 0 {
             creature_skin_ids.insert(entry, skin_loot_id);
         }
         // Scale zero means use CreatureDisplayInfo scale.
-        let display_id: u32 = field(row, ct::MODEL_ID1).parse().unwrap_or(0);
-        let cm_scale: f32 = field(row, ct::SCALE).parse().unwrap_or(0.0);
+        let display_id: u32 = field(row, ct::MODEL_ID1)?.parse().unwrap_or(0);
+        let cm_scale: f32 = field(row, ct::SCALE)?.parse().unwrap_or(0.0);
         let scale_val: f32 = if cm_scale > 0.0 {
             cm_scale
         } else {
@@ -2431,25 +2525,21 @@ fn build_creature_templates(
                 .filter(|s| *s > 0.0)
                 .unwrap_or(1.0)
         };
-        let num_or_zero = |idx: &str| {
-            let v = field(row, idx);
-            if v.is_empty() {
-                "0"
-            } else {
-                v
-            }
+        let num_or_zero = |idx: &str| -> Result<&str> {
+            let v = field(row, idx)?;
+            Ok(if v.is_empty() { "0" } else { v })
         };
-        let faction_template: u32 = field(row, ct::FACTION).parse().unwrap_or(0);
-        let dmg_min: u32 = field(row, ct::MIN_MELEE_DMG)
+        let faction_template: u32 = field(row, ct::FACTION)?.parse().unwrap_or(0);
+        let dmg_min: u32 = field(row, ct::MIN_MELEE_DMG)?
             .parse::<f32>()
             .unwrap_or(0.0)
             .round() as u32;
-        let dmg_max: u32 = field(row, ct::MAX_MELEE_DMG)
+        let dmg_max: u32 = field(row, ct::MAX_MELEE_DMG)?
             .parse::<f32>()
             .unwrap_or(0.0)
             .round() as u32;
-        let trainer_type_val: u8 = field(row, ct::TRAINER_TYPE).parse().unwrap_or(0);
-        let trainer_class_val: u8 = field(row, ct::TRAINER_CLASS).parse().unwrap_or(0);
+        let trainer_type_val: u8 = field(row, ct::TRAINER_TYPE)?.parse().unwrap_or(0);
+        let trainer_class_val: u8 = field(row, ct::TRAINER_CLASS)?.parse().unwrap_or(0);
         if trainer_class_val != 0 {
             class_trainer_count += 1;
         }
@@ -2457,61 +2547,61 @@ fn build_creature_templates(
             "({entry},{name},{subname},{display},{level},{health},{faction},{npc},{unit},{ctype},{family},{tflags},{rank},{scale},{bat},{mmin},{mmax},{maxlvl},{maxhp},0,{dmin},{dmax},{armor},{pploot},{skinloot},{ttype},{tclass})",
             ttype = trainer_type_val,
             tclass = trainer_class_val,
-            armor = num_or_zero(ct::ARMOR),
+            armor = num_or_zero(ct::ARMOR)?,
             dmin = dmg_min,
             dmax = dmg_max,
-            name = sql_text(field(row, ct::NAME)),
-            subname = sql_text(field(row, ct::SUBNAME)),
+            name = sql_text(field(row, ct::NAME)?),
+            subname = sql_text(field(row, ct::SUBNAME)?),
             display = display_id,
-            level = field(row, ct::MIN_LEVEL),
-            health = field(row, ct::MIN_LEVEL_HEALTH),
+            level = field(row, ct::MIN_LEVEL)?,
+            health = field(row, ct::MIN_LEVEL_HEALTH)?,
             faction = faction_template,
-            npc = field(row, ct::NPC_FLAGS),
-            unit = field(row, ct::UNIT_FLAGS),
-            ctype = field(row, ct::CREATURE_TYPE),
-            family = field(row, ct::FAMILY),
-            tflags = field(row, ct::CREATURE_TYPE_FLAGS),
-            rank = field(row, ct::RANK),
+            npc = field(row, ct::NPC_FLAGS)?,
+            unit = field(row, ct::UNIT_FLAGS)?,
+            ctype = field(row, ct::CREATURE_TYPE)?,
+            family = field(row, ct::FAMILY)?,
+            tflags = field(row, ct::CREATURE_TYPE_FLAGS)?,
+            rank = field(row, ct::RANK)?,
             scale = scale_val,
-            bat = field(row, ct::MELEE_BASE_ATTACK_TIME),
-            mmin = field(row, ct::MIN_LOOT_GOLD),
-            mmax = field(row, ct::MAX_LOOT_GOLD),
-            maxlvl = num_or_zero(ct::MAX_LEVEL),
-            maxhp = num_or_zero(ct::MAX_LEVEL_HEALTH),
+            bat = field(row, ct::MELEE_BASE_ATTACK_TIME)?,
+            mmin = field(row, ct::MIN_LOOT_GOLD)?,
+            mmax = field(row, ct::MAX_LOOT_GOLD)?,
+            maxlvl = num_or_zero(ct::MAX_LEVEL)?,
+            maxhp = num_or_zero(ct::MAX_LEVEL_HEALTH)?,
             pploot = pickpocket_loot_id,
             skinloot = skin_loot_id,
         ));
     }
 
-    CreatureTemplates {
+    Ok(CreatureTemplates {
         templates,
         creature_loot_ids,
         creature_pickpocket_ids,
         creature_skin_ids,
         class_trainer_count,
-    }
+    })
 }
 
 fn build_creature_cast_rows(
     dump: &(impl crate::dump::TableRows + ?Sized),
     entries: &std::collections::HashSet<u64>,
     spell_ids: Option<&std::collections::HashSet<u64>>,
-) -> (Vec<String>, Vec<String>) {
+) -> Result<(Vec<String>, Vec<String>)> {
     const COND_ALWAYS: u8 = 0;
     const COND_SELF_MISSING_AURA: u8 = 3;
 
     let mut creature_casts: Vec<String> = Vec::new();
     let mut rotation_id: u64 = 1;
     let mut creature_rotation_rows: Vec<String> = Vec::new();
-    for row in parse_table(dump, "creature_template_spells").iter() {
-        let entry: u64 = field(row, cts::ENTRY).parse().unwrap_or(0);
-        if field(row, cts::SET_ID).parse::<u64>().unwrap_or(0) != 0 {
+    for row in parse_table(dump, "creature_template_spells")?.iter() {
+        let entry: u64 = field(row, cts::ENTRY)?.parse().unwrap_or(0);
+        if field(row, cts::SET_ID)?.parse::<u64>().unwrap_or(0) != 0 {
             continue;
         }
         if !entries.contains(&entry) {
             continue;
         }
-        let spell1: u64 = field(row, cts::SPELL1).parse().unwrap_or(0);
+        let spell1: u64 = field(row, cts::SPELL1)?.parse().unwrap_or(0);
         if spell1 == 0 {
             continue;
         }
@@ -2520,15 +2610,16 @@ fn build_creature_cast_rows(
             continue;
         }
         let secondary: Vec<u64> = (1..=9)
-            .filter_map(|i| {
-                let s: u64 = field(row, &format!("spell{}", i + 1)).parse().unwrap_or(0);
-                if s != 0 && spell_ids.is_none_or(|ids| ids.contains(&s)) {
+            .map(|i| -> Result<_> {
+                let s: u64 = field(row, &format!("spell{}", i + 1))?.parse().unwrap_or(0);
+                Ok(if s != 0 && spell_ids.is_none_or(|ids| ids.contains(&s)) {
                     Some(s)
                 } else {
                     None
-                }
+                })
             })
-            .collect();
+            .filter_map(Result::transpose)
+            .collect::<Result<_>>()?;
 
         if secondary.is_empty() {
             creature_casts.push(format!("({entry},{spell1})"));
@@ -2557,7 +2648,7 @@ fn build_creature_cast_rows(
             .count(),
     );
 
-    (creature_casts, creature_rotation_rows)
+    Ok((creature_casts, creature_rotation_rows))
 }
 
 fn build_packed_spawn_payload(spawns: &[CreatureSpawnRow]) -> SpawnPayload {
@@ -2585,21 +2676,21 @@ fn build_waypoint_rows(
     dump: &(impl crate::dump::TableRows + ?Sized),
     spawns: &[CreatureSpawnRow],
     guid_of: &std::collections::HashMap<u64, u64>,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut waypoints: Vec<String> = Vec::new();
     let mut wp_id: u64 = 1;
     let mut direct_wp_guids: std::collections::HashSet<u64> = std::collections::HashSet::new();
-    for row in parse_table(dump, "creature_movement").iter() {
-        let db_guid: u64 = field(row, cm::ID).parse().unwrap_or(0);
+    for row in parse_table(dump, "creature_movement")?.iter() {
+        let db_guid: u64 = field(row, cm::ID)?.parse().unwrap_or(0);
         let Some(&g) = guid_of.get(&db_guid) else {
             continue;
         };
         waypoints.push(format!(
             "({id},{g},{x},{y},{z})",
             id = wp_id,
-            x = field(row, cm::X),
-            y = field(row, cm::Y),
-            z = field(row, cm::Z),
+            x = field(row, cm::X)?,
+            y = field(row, cm::Y)?,
+            z = field(row, cm::Z)?,
         ));
         direct_wp_guids.insert(db_guid);
         wp_id += 1;
@@ -2607,21 +2698,21 @@ fn build_waypoint_rows(
     {
         let mut tmpl_paths: std::collections::HashMap<u64, Vec<(u32, String, String, String)>> =
             std::collections::HashMap::new();
-        for row in parse_table(dump, "creature_movement_template").iter() {
-            let entry: u64 = field(row, cmt::ENTRY).parse().unwrap_or(0);
+        for row in parse_table(dump, "creature_movement_template")?.iter() {
+            let entry: u64 = field(row, cmt::ENTRY)?.parse().unwrap_or(0);
             if entry == 0 {
                 continue;
             }
-            if field(row, cmt::PATH_ID).parse::<u64>().unwrap_or(0) != 0 {
+            if field(row, cmt::PATH_ID)?.parse::<u64>().unwrap_or(0) != 0 {
                 continue;
             }
             let (pt_i, x_i, y_i, z_i) = ("Point", "PositionX", "PositionY", "PositionZ");
-            let point: u32 = field(row, pt_i).parse().unwrap_or(0);
+            let point: u32 = field(row, pt_i)?.parse().unwrap_or(0);
             tmpl_paths.entry(entry).or_default().push((
                 point,
-                field(row, x_i).to_string(),
-                field(row, y_i).to_string(),
-                field(row, z_i).to_string(),
+                field(row, x_i)?.to_string(),
+                field(row, y_i)?.to_string(),
+                field(row, z_i)?.to_string(),
             ));
         }
         for path in tmpl_paths.values_mut() {
@@ -2652,48 +2743,52 @@ fn build_waypoint_rows(
         }
     }
 
-    waypoints
+    Ok(waypoints)
 }
 
 fn collect_gameobject_spawns(
     dump: &(impl crate::dump::TableRows + ?Sized),
     scope: &WorldImportScope,
-) -> GameobjectSpawns {
-    let go_tmpls = parse_table(dump, "gameobject_template");
+) -> Result<GameobjectSpawns> {
+    let go_tmpls = parse_table(dump, "gameobject_template")?;
     let mut dropped_type25: Vec<u64> = Vec::new();
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
         .iter()
-        .filter_map(|row| {
-            let entry: u64 = field(row, got::ENTRY).parse().ok()?;
-            let raw_type: u32 = field(row, got::TYPE).parse().ok()?;
+        .map(|row| -> Result<_> {
+            let Ok(entry) = field(row, got::ENTRY)?.parse::<u64>() else {
+                return Ok(None);
+            };
+            let Ok(raw_type) = field(row, got::TYPE)?.parse::<u32>() else {
+                return Ok(None);
+            };
             let stored_type = match classify_go_type(entry, raw_type) {
                 Some(t) => t,
                 None => {
                     dropped_type25.push(entry);
-                    return None;
+                    return Ok(None);
                 }
             };
-            let disp: u32 = field(row, got::DISPLAY_ID).parse().unwrap_or(0);
-            let name = field(row, got::NAME).to_string();
-            let data0: u32 = field(row, got::DATA0).parse().unwrap_or(0);
-            let data1: u32 = field(row, got::DATA1).parse().unwrap_or(0);
+            let disp: u32 = field(row, got::DISPLAY_ID)?.parse().unwrap_or(0);
+            let name = field(row, got::NAME)?.to_string();
+            let data0: u32 = field(row, got::DATA0)?.parse().unwrap_or(0);
+            let data1: u32 = field(row, got::DATA1)?.parse().unwrap_or(0);
             let trap_spell_id = if raw_type == 6 {
-                field(row, got::DATA3).parse().unwrap_or(0)
+                field(row, got::DATA3)?.parse().unwrap_or(0)
             } else {
                 0
             };
             let trap_cooldown_secs = if raw_type == 6 {
-                field(row, got::DATA5).parse().unwrap_or(0)
+                field(row, got::DATA5)?.parse().unwrap_or(0)
             } else {
                 0
             };
             let meeting_stone_area_id = if raw_type == u32::from(GO_MEETINGSTONE) {
-                field(row, got::DATA2).parse().unwrap_or(0)
+                field(row, got::DATA2)?.parse().unwrap_or(0)
             } else {
                 0
             };
-            let size: f32 = field(row, got::SIZE).parse().unwrap_or(0.0);
-            Some((
+            let size: f32 = field(row, got::SIZE)?.parse().unwrap_or(0.0);
+            Ok(Some((
                 entry,
                 GoMeta {
                     stored_type,
@@ -2706,9 +2801,10 @@ fn collect_gameobject_spawns(
                     meeting_stone_area_id,
                     size,
                 },
-            ))
+            )))
         })
-        .collect();
+        .filter_map(Result::transpose)
+        .collect::<Result<_>>()?;
     let goober_entries: std::collections::HashSet<u64> = go_meta
         .iter()
         .filter(|(_, m)| m.stored_type == GO_GOOBER)
@@ -2719,25 +2815,25 @@ fn collect_gameobject_spawns(
     let mut go_slice_counts = vec![0usize; scope.bounded_slices.len()];
     let mut go_whole_map_counts: std::collections::BTreeMap<i64, usize> =
         std::collections::BTreeMap::new();
-    for row in parse_table(dump, "gameobject").iter() {
-        let map = field(row, go::MAP).parse::<i64>().unwrap_or(-1);
-        let id: u64 = field(row, go::ID).parse().unwrap_or(0);
+    for row in parse_table(dump, "gameobject")?.iter() {
+        let map = field(row, go::MAP)?.parse::<i64>().unwrap_or(-1);
+        let id: u64 = field(row, go::ID)?.parse().unwrap_or(0);
         let Some(meta) = go_meta.get(&id) else {
             continue;
         };
-        let x: f64 = field(row, go::X).parse().unwrap_or(0.0);
-        let y: f64 = field(row, go::Y).parse().unwrap_or(0.0);
-        let z: f64 = field(row, go::Z).parse().unwrap_or(0.0);
+        let x: f64 = field(row, go::X)?.parse().unwrap_or(0.0);
+        let y: f64 = field(row, go::Y)?.parse().unwrap_or(0.0);
+        let z: f64 = field(row, go::Z)?.parse().unwrap_or(0.0);
         if !scope.contains(map, x, y, z) {
             continue;
         }
-        let db_guid: u32 = field(row, go::GUID).parse().unwrap_or(0);
-        let o: f64 = field(row, go::O).parse().unwrap_or(0.0);
+        let db_guid: u32 = field(row, go::GUID)?.parse().unwrap_or(0);
+        let o: f64 = field(row, go::O)?.parse().unwrap_or(0.0);
         // A zero quaternion is valid packed identity, not a signal to derive rotation from facing.
-        let rot0: f64 = field(row, go::ROT0).parse().unwrap_or(0.0);
-        let rot1: f64 = field(row, go::ROT1).parse().unwrap_or(0.0);
-        let rot2: f64 = field(row, go::ROT2).parse().unwrap_or(0.0);
-        let rot3: f64 = field(row, go::ROT3).parse().unwrap_or(0.0);
+        let rot0: f64 = field(row, go::ROT0)?.parse().unwrap_or(0.0);
+        let rot1: f64 = field(row, go::ROT1)?.parse().unwrap_or(0.0);
+        let rot2: f64 = field(row, go::ROT2)?.parse().unwrap_or(0.0);
+        let rot3: f64 = field(row, go::ROT3)?.parse().unwrap_or(0.0);
         let initial_state = go_initial_state(meta.stored_type, meta.data0);
         go_packed_rows.push(format!(
             "{g},{id},{m},{x},{y},{z},{o},{initial_state},{rot0},{rot1},{rot2},{rot3}",
@@ -2765,13 +2861,13 @@ fn collect_gameobject_spawns(
         eprintln!("filter: whole map {map} → {count} gameobject spawns");
     }
 
-    GameobjectSpawns {
+    Ok(GameobjectSpawns {
         go_meta,
         dropped_type25,
         goober_entries,
         go_packed_rows,
         used_go,
-    }
+    })
 }
 
 struct GameobjectTemplateRows {
@@ -2881,25 +2977,25 @@ fn build_trainer_spell_rows(
     dump: &(impl crate::dump::TableRows + ?Sized),
     entries: &std::collections::HashSet<u64>,
     profession_tier_values: &Option<std::collections::HashMap<u32, [u16; 4]>>,
-) -> Vec<String> {
+) -> Result<Vec<String>> {
     let mut trainer_rows: Vec<String> = Vec::new();
     let mut trainer_id: u64 = 1;
     let mut trainer_lines: std::collections::BTreeMap<u64, std::collections::BTreeSet<u32>> =
         std::collections::BTreeMap::new();
     let mut trainer_spells: std::collections::HashMap<u64, std::collections::HashSet<u64>> =
         std::collections::HashMap::new();
-    for row in parse_table(dump, "npc_trainer").iter() {
-        let entry: u64 = field(row, nt::ENTRY).parse().unwrap_or(0);
+    for row in parse_table(dump, "npc_trainer")?.iter() {
+        let entry: u64 = field(row, nt::ENTRY)?.parse().unwrap_or(0);
         if !entries.contains(&entry) {
             continue;
         }
-        let spell: u64 = field(row, nt::SPELL).parse().unwrap_or(0);
+        let spell: u64 = field(row, nt::SPELL)?.parse().unwrap_or(0);
         if spell == 0 {
             continue;
         }
-        let cost: u64 = field(row, nt::COST).parse().unwrap_or(0);
-        let reqlevel: u32 = field(row, nt::REQ_LEVEL).parse().unwrap_or(0);
-        let reqskill: u32 = field(row, nt::REQ_SKILL).parse().unwrap_or(0);
+        let cost: u64 = field(row, nt::COST)?.parse().unwrap_or(0);
+        let reqlevel: u32 = field(row, nt::REQ_LEVEL)?.parse().unwrap_or(0);
+        let reqskill: u32 = field(row, nt::REQ_SKILL)?.parse().unwrap_or(0);
         if profession_tiers(reqskill).is_some() {
             trainer_lines.entry(entry).or_default().insert(reqskill);
         }
@@ -2935,7 +3031,7 @@ fn build_trainer_spell_rows(
         trainer_rows.len(), trainer_lines.len(),
     );
 
-    trainer_rows
+    Ok(trainer_rows)
 }
 
 fn build_loot_family_rows(
@@ -2943,10 +3039,10 @@ fn build_loot_family_rows(
     creature_pickpocket_ids: &std::collections::HashMap<u64, u64>,
     creature_skin_ids: &std::collections::HashMap<u64, u64>,
     chest_loot_ids_used: &[u32],
-) -> LootFamilyRows {
-    let refs = parse_ref_pools(dump);
+) -> Result<LootFamilyRows> {
+    let refs = parse_ref_pools(dump)?;
 
-    let drops_by_pickpocketid = parse_loot_family(dump, "pickpocketing_loot_template", &refs);
+    let drops_by_pickpocketid = parse_loot_family(dump, "pickpocketing_loot_template", &refs)?;
     let mut pickpocket_rows: Vec<String> = Vec::new();
     let mut pickpocket_row_id: u64 = 1;
     let mut pp_creatures: Vec<(&u64, &u64)> = creature_pickpocket_ids.iter().collect();
@@ -2961,7 +3057,7 @@ fn build_loot_family_rows(
         }
     }
 
-    let drops_by_skinid = parse_loot_family(dump, "skinning_loot_template", &refs);
+    let drops_by_skinid = parse_loot_family(dump, "skinning_loot_template", &refs)?;
     let mut skin_ids_used: Vec<u64> = creature_skin_ids.values().copied().collect();
     skin_ids_used.sort_unstable();
     skin_ids_used.dedup();
@@ -2979,7 +3075,7 @@ fn build_loot_family_rows(
         }
     }
 
-    let drops_by_goloot = parse_loot_family(dump, "gameobject_loot_template", &refs);
+    let drops_by_goloot = parse_loot_family(dump, "gameobject_loot_template", &refs)?;
     let mut go_loot_ids_used: Vec<u32> = chest_loot_ids_used.to_vec();
     go_loot_ids_used.sort_unstable();
     go_loot_ids_used.dedup();
@@ -2997,7 +3093,7 @@ fn build_loot_family_rows(
         }
     }
 
-    let drops_by_zone = parse_loot_family(dump, "fishing_loot_template", &refs);
+    let drops_by_zone = parse_loot_family(dump, "fishing_loot_template", &refs)?;
     let mut fishing_rows: Vec<String> = Vec::new();
     let mut fishing_row_id: u64 = 1;
     let mut zones: Vec<&u64> = drops_by_zone.keys().collect();
@@ -3027,12 +3123,12 @@ fn build_loot_family_rows(
         drops_by_zone.len(),
     );
 
-    LootFamilyRows {
+    Ok(LootFamilyRows {
         pickpocket_rows,
         skinning_rows,
         gameobject_loot_rows,
         fishing_rows,
-    }
+    })
 }
 
 fn push_world_content_statements(
@@ -3358,14 +3454,14 @@ fn push_global_statements(
 ) -> Result<(u64, u64)> {
     let mut globals_row_count = 0u64;
     if family_active(args, "globals") {
-        let stats_sql = build_stats_sql(dump);
-        let start_pos_sql = build_start_position_sql(dump);
+        let stats_sql = build_stats_sql(dump)?;
+        let start_pos_sql = build_start_position_sql(dump)?;
         let graveyard_sql = build_graveyard_zone_sql(dump)?;
-        let createinfo_spell_sql = build_createinfo_spell_sql(dump);
-        let createinfo_action_sql = build_createinfo_action_sql(dump);
+        let createinfo_spell_sql = build_createinfo_spell_sql(dump)?;
+        let createinfo_action_sql = build_createinfo_action_sql(dump)?;
         let createinfo_item_sql = build_createinfo_item_sql(dump, args.dbc.as_deref())?;
         let (areatrigger_teleport_sql, areatrigger_teleport_count) =
-            build_areatrigger_teleport_sql(dump);
+            build_areatrigger_teleport_sql(dump)?;
         globals_row_count = insert_row_count(&stats_sql)
             + insert_row_count(&start_pos_sql)
             + insert_row_count(&graveyard_sql)
@@ -3391,7 +3487,7 @@ fn push_global_statements(
             .transpose()?
             .unwrap_or_default();
         let spell_chain_sql = build_spell_chain_sql(dump, &links)?;
-        let spell_learn_sql = build_spell_learn_sql(dump);
+        let spell_learn_sql = build_spell_learn_sql(dump)?;
         let catalogue = args.dbc.as_deref().map(spell::read_catalogue).transpose()?;
         let spell_proc_event_sql = build_spell_proc_event_sql(
             dump,
@@ -3629,6 +3725,18 @@ pub(crate) fn run(
 
 #[cfg(test)]
 mod tests {
+    mod qt {
+        pub(super) use crate::dump::qt::*;
+        pub const REQ_ITEM_ID1: &str = "ReqItemId1";
+        pub const REQ_ITEM_COUNT1: &str = "ReqItemCount1";
+        pub const REQ_CREATURE_OR_GO_ID1: &str = "ReqCreatureOrGOId1";
+        pub const REQ_CREATURE_OR_GO_COUNT1: &str = "ReqCreatureOrGOCount1";
+        pub const REQ_SPELL_CAST1: &str = "ReqSpellCast1";
+        pub const REW_CHOICE_ITEM_ID1: &str = "RewChoiceItemId1";
+        pub const REW_CHOICE_ITEM_COUNT1: &str = "RewChoiceItemCount1";
+        pub const REW_ITEM_ID1: &str = "RewItemId1";
+        pub const REW_ITEM_COUNT1: &str = "RewItemCount1";
+    }
     use super::*;
     use crate::dump::cr;
     use crate::standalone_support;
@@ -3820,26 +3928,66 @@ mod tests {
     #[test]
     fn cr_columns_map_spawn_time_and_movement_type() {
         let dump = "x INSERT INTO `creature` VALUES (1,299,0,1,10.0,20.0,30.0,1.5,180,300,0,2); y";
-        let rows = parse_table(dump, "creature");
+        let rows = parse_table(dump, "creature").unwrap();
         assert_eq!(rows.len(), 1);
-        assert_eq!(field(&rows[0], cr::GUID), "1");
-        assert_eq!(field(&rows[0], cr::ID), "299");
-        assert_eq!(field(&rows[0], cr::MAP), "0");
-        assert_eq!(field(&rows[0], cr::X), "10.0");
-        assert_eq!(field(&rows[0], cr::O), "1.5");
-        assert_eq!(field(&rows[0], cr::SPAWN_TIME_SECS_MIN), "180");
-        assert_eq!(field(&rows[0], cr::MOVEMENT_TYPE), "2");
+        assert_eq!(field(&rows[0], cr::GUID).unwrap(), "1");
+        assert_eq!(field(&rows[0], cr::ID).unwrap(), "299");
+        assert_eq!(field(&rows[0], cr::MAP).unwrap(), "0");
+        assert_eq!(field(&rows[0], cr::X).unwrap(), "10.0");
+        assert_eq!(field(&rows[0], cr::O).unwrap(), "1.5");
+        assert_eq!(field(&rows[0], cr::SPAWN_TIME_SECS_MIN).unwrap(), "180");
+        assert_eq!(field(&rows[0], cr::MOVEMENT_TYPE).unwrap(), "2");
         let dump_missing = "x INSERT INTO `creature` (`guid`, `id`, `map`, `spawnMask`, `position_x`, `position_y`, `position_z`, `orientation`) VALUES (1,299,0,1,10.0,20.0,30.0,1.5); y";
-        let rows_missing = parse_table(dump_missing, "creature");
+        let rows_missing = parse_table(dump_missing, "creature").unwrap();
         let respawn_secs: u32 = field(&rows_missing[0], cr::SPAWN_TIME_SECS_MIN)
+            .unwrap()
             .parse()
             .unwrap_or(0);
         assert_eq!(respawn_secs, 0);
     }
 
     #[test]
+    fn family_builders_return_sqlite_column_and_table_errors() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value;
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "playercreateinfo",
+            columns: &[("race", "INTEGER"), ("class", "INTEGER")],
+            key: &[],
+            rows: &[&[("race", Value::Integer(1)), ("class", Value::Integer(1))]],
+        }])
+        .unwrap();
+        let error = build_start_position_sql(&source).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("playercreateinfo.map: missing column"));
+        let error = build_createinfo_action_sql(&source).unwrap_err();
+        assert!(error
+            .to_string()
+            .contains("missing source table playercreateinfo_action"));
+    }
+
+    #[test]
+    fn family_builders_return_invalid_patch_ranges() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value;
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "game_graveyard_zone",
+            columns: &[("patch_min", "INTEGER"), ("patch_max", "INTEGER")],
+            key: &[],
+            rows: &[&[
+                ("patch_min", Value::Integer(10)),
+                ("patch_max", Value::Integer(9)),
+            ]],
+        }])
+        .unwrap();
+        let error = build_graveyard_zone_sql(&source).unwrap_err();
+        assert!(error.to_string().contains("patch_min"), "{error:#}");
+    }
+
+    #[test]
     fn the_start_position_family_reads_both_world_sources() {
-        use crate::world_source::{sqlite_fixture, FixtureTable, WorldSource};
+        use crate::world_source::{sqlite_fixture, FixtureTable};
         use rusqlite::types::Value;
         let sqlite = sqlite_fixture(&[FixtureTable {
             name: "playercreateinfo",
@@ -3866,9 +4014,11 @@ mod tests {
             ]],
         }])
         .unwrap();
-        let classic = WorldSource::ClassicDb("CREATE TABLE `playercreateinfo` (\n`class` int,\n`race` int,\n`map` int,\n`zone` int,\n`orientation` float,\n`position_x` float,\n`position_y` float,\n`position_z` float\n); INSERT INTO `playercreateinfo` VALUES (2,1,0,12,0.5,1.5,2.5,3.5);".into());
-        for source in [classic, sqlite] {
-            let sql = build_start_position_sql(&source);
+        let classic = "CREATE TABLE `playercreateinfo` (\n`class` int,\n`race` int,\n`map` int,\n`zone` int,\n`orientation` float,\n`position_x` float,\n`position_y` float,\n`position_z` float\n); INSERT INTO `playercreateinfo` VALUES (2,1,0,12,0.5,1.5,2.5,3.5);";
+        for sql in [
+            build_start_position_sql(classic).unwrap(),
+            build_start_position_sql(&sqlite).unwrap(),
+        ] {
             assert!(sql[1].contains("(258,1,2,0,12,1.5,2.5,3.5,0.5,0)"));
         }
     }
@@ -3923,7 +4073,7 @@ mod tests {
         let dump = "x INSERT INTO `areatrigger_teleport` VALUES \
             (1447,'Deadmines',10,0,0,0,36,-114.8,-9.5,-9.6,3.14,'',0),\
             (1448,'Moonbrook\\'s Exit',0,0,0,0,0,-11235.7,1668.3,23.9,1.57,'',0); y";
-        let (stmts, n) = build_areatrigger_teleport_sql(dump);
+        let (stmts, n) = build_areatrigger_teleport_sql(dump).unwrap();
         assert_eq!(n, 2);
         assert_eq!(
             stmts[0],
@@ -4001,7 +4151,7 @@ mod tests {
             (500,1,50.0,0,0,1),\
             (500,2,-25.5,0,0,1); y";
         let refs: HashMap<u64, Vec<(u64, f64, i64, u32)>> = HashMap::new();
-        let drops = parse_loot_family(dump, "pickpocketing_loot_template", &refs);
+        let drops = parse_loot_family(dump, "pickpocketing_loot_template", &refs).unwrap();
         let rows = drops.get(&500).expect("entry 500 has rows");
         assert_eq!(rows.len(), 2);
         let ordinary = rows.iter().find(|&&(item, ..)| item == 1).unwrap();
@@ -4177,7 +4327,7 @@ mod tests {
     #[test]
     fn build_createinfo_spell_sql_parses_race_class_spell_and_wipes_wholesale() {
         let dump = "x INSERT INTO `playercreateinfo_spell` (`race`, `class`, `Spell`) VALUES (0,1,78),(1,0,20598),(3,1,78); y";
-        let stmts = build_createinfo_spell_sql(dump);
+        let stmts = build_createinfo_spell_sql(dump).unwrap();
         assert_eq!(stmts[0], "DELETE FROM game_createinfo_spell WHERE id >= 0");
         let insert = stmts
             .iter()
@@ -4191,7 +4341,7 @@ mod tests {
     #[test]
     fn build_createinfo_action_sql_parses_race_class_button_action_type() {
         let dump = "x INSERT INTO `playercreateinfo_action` VALUES (1,1,0,6603,0),(1,1,1,78,0); y";
-        let stmts = build_createinfo_action_sql(dump);
+        let stmts = build_createinfo_action_sql(dump).unwrap();
         assert_eq!(
             stmts[0],
             "DELETE FROM game_createinfo_action WHERE row_id >= 0"
@@ -4379,7 +4529,7 @@ mod tests {
         let dump = "INSERT INTO `creature_template_spells` VALUES (7,0,2,4,0,0,0,0,0,0,0,0);";
         let entries = std::collections::HashSet::from([7]);
         let spells = std::collections::HashSet::from([4]);
-        let (casts, rotation) = build_creature_cast_rows(dump, &entries, Some(&spells));
+        let (casts, rotation) = build_creature_cast_rows(dump, &entries, Some(&spells)).unwrap();
         assert!(casts.is_empty());
         assert!(rotation.is_empty());
     }
@@ -4414,7 +4564,7 @@ mod tests {
     #[test]
     fn build_spell_learn_sql_parses_parent_and_dependent_ids_densely_from_one() {
         let dump = "x INSERT INTO `spell_learn_spell` VALUES (196,197,1),(196,198,0); y";
-        let stmts = build_spell_learn_sql(dump);
+        let stmts = build_spell_learn_sql(dump).unwrap();
         assert_eq!(stmts[0], "DELETE FROM game_spell_learn WHERE id > 0");
         let insert = stmts
             .iter()
@@ -4429,7 +4579,7 @@ mod tests {
 
     #[test]
     fn build_spell_learn_sql_empty_table_still_synthesizes_armor_proficiency_wrappers() {
-        let stmts = build_spell_learn_sql("x y");
+        let stmts = build_spell_learn_sql("x y").unwrap();
         assert_eq!(stmts[0], "DELETE FROM game_spell_learn WHERE id > 0");
         let insert = stmts
             .iter()
@@ -4449,7 +4599,7 @@ mod tests {
     fn build_spell_learn_sql_synthesizes_armor_proficiency_wrappers_exactly_once_alongside_real_rows(
     ) {
         let dump = "x INSERT INTO `spell_learn_spell` VALUES (196,197,1); y";
-        let stmts = build_spell_learn_sql(dump);
+        let stmts = build_spell_learn_sql(dump).unwrap();
         let insert = stmts
             .iter()
             .find(|s| s.starts_with("INSERT INTO game_spell_learn "))
@@ -4464,7 +4614,7 @@ mod tests {
     #[test]
     fn build_spell_learn_sql_does_not_double_synthesize_if_dump_already_has_the_wrapper_row() {
         let dump = "x INSERT INTO `spell_learn_spell` VALUES (7109,750,1); y";
-        let stmts = build_spell_learn_sql(dump);
+        let stmts = build_spell_learn_sql(dump).unwrap();
         let insert = stmts
             .iter()
             .find(|s| s.starts_with("INSERT INTO game_spell_learn "))
@@ -4615,7 +4765,7 @@ mod tests {
             gossip_option_row_short(menu_id, 2, 0, "Make this inn your home.", 8),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 3, "{:?}", etl.option_rows);
         assert!(
             etl.option_rows[0].contains(&format!("(1,{entry},0,0,'Lets talk.',1,0,0,0,0)")),
@@ -4654,7 +4804,7 @@ mod tests {
              INSERT INTO `gossip_menu_option` VALUES \
              (6688,7,1,'Second option',0,1,0,12,0,0,0,0,'',0,501), \
              (6687,2,0,'9001',0,1,0,0,0,0,0,0,'',0,0);";
-        let etl = build_gossip_sql(dump, &std::collections::HashSet::new());
+        let etl = build_gossip_sql(dump, &std::collections::HashSet::new()).unwrap();
 
         assert_eq!(
             etl.profile_rows,
@@ -4701,7 +4851,7 @@ mod tests {
             gossip_option_row_short(menu_id, 2, 0, "First.", 1),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 2);
         assert!(
             etl.option_rows[0].contains(&format!("{entry},0,0,'First.'")),
@@ -4738,7 +4888,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 2, "{:?}", etl.option_rows);
         assert!(
             !etl.option_rows
@@ -4765,7 +4915,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(
             etl.menu_rows,
             vec![format!("({entry},5101)")],
@@ -4784,7 +4934,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 1);
         assert_eq!(etl.condition_rows, ["(501,12,0,0,0,0,0)"]);
         assert!(
@@ -4809,7 +4959,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 1);
         assert_eq!(etl.condition_rows, ["(501,9,777,2,0,0,0)"]);
         assert!(
@@ -4834,7 +4984,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.option_rows.len(), 3);
         for (option, id) in etl.option_rows.iter().zip([501, 502, 599]) {
             assert!(option.ends_with(&format!("7,{id},0)")), "{option}");
@@ -4847,7 +4997,7 @@ mod tests {
                 "(503,5,1,4,0,0,1)"
             ]
         );
-        let conditions = gossip_conditions::read(&dump);
+        let conditions = gossip_conditions::read(&dump).unwrap();
         use lyracore_shared::gossip::{evaluate_reference, CharacterFacts, QuestState};
         let facts = CharacterFacts {
             level: 20,
@@ -4882,7 +5032,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert_eq!(etl.menu_rows, vec![format!("({entry},{text_id})")]);
         assert!(
             etl.npc_text_rows
@@ -4926,7 +5076,7 @@ mod tests {
             creature_template_row(entry, menu_id),
         );
         let entries: std::collections::HashSet<u64> = [entry].into_iter().collect();
-        let etl = build_gossip_sql(&dump, &entries);
+        let etl = build_gossip_sql(&dump, &entries).unwrap();
         assert!(
             etl.npc_text_rows[0].contains("Well met."),
             "{:?}",
@@ -6050,7 +6200,7 @@ mod tests {
         assert_eq!(manifest["counts"]["ticket"]["relay_loader_skipped_rows"], 2);
         assert_eq!(
             manifest["counts"]["ticket"]["text_emote_dependency_occurrences"],
-            300
+            307
         );
         let result = |action: u32, classification: &str, reason: &str| {
             let raw_value = action.to_string();
@@ -6076,7 +6226,7 @@ mod tests {
             (45, 1, 1),
             (47, 2, 2),
             (50, 3, 3),
-            (56, 14, 14),
+            (56, 15, 15),
         ] {
             let emitted = result(action, "emitted", "emitted");
             assert_eq!(emitted["source_rule_ids"].as_array().unwrap().len(), rules);
@@ -7126,7 +7276,7 @@ mod tests {
             ),
         ];
         let mut invalid_id = crate::dump::FixtureRow::new("creature_ai_scripts");
-        invalid_id["id"] = "'bad'".into();
+        invalid_id["id"] = "-1".into();
         dump = dump.replacen(
             "; y",
             &format!(",{},({}); y", invalid.join(","), invalid_id.join(",")),
@@ -7135,7 +7285,9 @@ mod tests {
         let entries = [100].into_iter().collect();
         let guids = [(1, 100), (2, 100)].into_iter().collect();
         let templates = [100, 200].into_iter().collect();
-        let plan = eventai::parse(&dump).assemble(&entries, &guids, &templates);
+        let plan = eventai::parse(&dump)
+            .unwrap()
+            .assemble(&entries, &guids, &templates);
         for (reason, value) in [
             ("unsupported_event", 99),
             ("invalid_chance", 0),
@@ -7382,33 +7534,14 @@ mod tests {
     }
 
     #[test]
-    fn build_stats_sql_drops_rows_whose_key_columns_are_missing_or_non_numeric() {
-        let dump = "x INSERT INTO `player_classlevelstats` VALUES (1,1,20,0),\
-                    ('warrior',2,29,0),(1,'two',29,0); \
-                    INSERT INTO `player_levelstats` VALUES (1,1,1,23,20,22,20,21),(1,1,'x',1,1,1,1,1); y";
-        let stmts = build_stats_sql(dump);
-        let cls = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_class_level_stats "))
-            .expect("the one good class row must still import");
-        assert_eq!(
-            tuple_count(cls),
-            1,
-            "exactly one class/level row survives; the two unparseable ones are dropped: {cls}"
-        );
-        assert!(
-            cls.contains(&format!("({},1,1,20,0)", (1u32 << 8) | 1)),
-            "{cls}"
-        );
-        let lvl = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_level_stats "))
-            .expect("the one good race/class/level row must still import");
-        assert_eq!(
-            tuple_count(lvl),
-            1,
-            "the non-numeric level row is dropped, not imported with a garbage key: {lvl}"
-        );
+    fn stats_refuse_non_numeric_keys_before_emitting_sql() {
+        for (dump, column) in [
+            ("INSERT INTO `player_classlevelstats` VALUES (1,1,20,0),('warrior',2,29,0);", "player_classlevelstats.class"),
+            ("INSERT INTO `player_classlevelstats` VALUES (1,'two',29,0);", "player_classlevelstats.level"),
+            ("INSERT INTO `player_levelstats` VALUES (1,1,1,23,20,22,20,21),(1,1,'x',1,1,1,1,1);", "player_levelstats.level"),
+        ] {
+            assert!(build_stats_sql(dump).unwrap_err().to_string().contains(column));
+        }
     }
 
     #[test]
@@ -7419,7 +7552,7 @@ mod tests {
 
     #[test]
     fn build_stats_sql_empty_dump_yields_deletes_only_no_insert() {
-        let stmts = build_stats_sql("");
+        let stmts = build_stats_sql("").unwrap();
         assert_eq!(
             stmts,
             vec![
@@ -7448,9 +7581,9 @@ mod tests {
     }
 
     #[test]
-    fn build_spell_chain_sql_drops_invalid_or_out_of_range_values() {
-        let dump = "x INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(143,133,133,'bad',0),\
-                    (145,133,133,300,0),(147,133,133,2,'x'),(0,0,0,1,0); y";
+    fn spell_chain_drops_zero_ids_and_out_of_range_ranks() {
+        let dump =
+            "INSERT INTO `spell_chain` VALUES (133,0,133,1,0),(145,133,133,300,0),(0,0,0,1,0);";
         let stmts = build_spell_chain_sql(dump, &[]).unwrap();
         let insert = stmts
             .iter()
@@ -7459,34 +7592,44 @@ mod tests {
         assert_eq!(
             tuple_count(insert),
             1,
-            "invalid ranks, operands and spell ids all drop: {insert}"
+            "out-of-range ranks and zero spell ids drop: {insert}"
         );
         assert!(insert.contains("(133,0,133,1,0)"), "{insert}");
     }
 
     #[test]
-    fn build_createinfo_spell_sql_drops_bad_rows_and_leaves_a_gap_in_the_id() {
-        let dump = "x INSERT INTO `playercreateinfo_spell` (`race`, `class`, `Spell`) VALUES (0,1,78),('bad',0,0),(3,1,'fireball'),(3,1,78); y";
-        let stmts = build_createinfo_spell_sql(dump);
-        let insert = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_createinfo_spell "))
-            .expect("the two well-formed starter-spell rows must still import");
-        assert_eq!(
-            tuple_count(insert),
-            2,
-            "the non-numeric race and spell rows must drop: {insert}"
-        );
-        assert!(insert.contains("(1,0,1,78)"), "{insert}");
-        assert!(
-            insert.contains("(4,3,1,78)"),
-            "the id is the PRE-filter index, so it skips the two dropped rows: {insert}"
-        );
+    fn createinfo_spells_refuse_non_numeric_values_before_emitting_sql() {
+        for (values, column) in [
+            ("(0,1,78),('bad',0,0)", "race"),
+            ("(0,1,78),(3,1,'fireball')", "Spell"),
+        ] {
+            let dump = format!(
+                "INSERT INTO `playercreateinfo_spell` (`race`, `class`, `Spell`) VALUES {values};"
+            );
+            assert!(build_createinfo_spell_sql(&dump)
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("playercreateinfo_spell.{column}")));
+        }
+    }
+
+    #[test]
+    fn spell_chain_refuses_non_numeric_values_before_emitting_sql() {
+        for (values, column) in [
+            ("(133,0,133,1,0),(143,133,133,'bad',0)", "rank"),
+            ("(133,0,133,1,0),(147,133,133,2,'x')", "req_spell"),
+        ] {
+            let dump = format!("INSERT INTO `spell_chain` VALUES {values};");
+            assert!(build_spell_chain_sql(&dump, &[])
+                .unwrap_err()
+                .to_string()
+                .contains(&format!("spell_chain.{column}")));
+        }
     }
 
     #[test]
     fn build_createinfo_spell_sql_empty_dump_yields_delete_only_no_insert() {
-        let stmts = build_createinfo_spell_sql("");
+        let stmts = build_createinfo_spell_sql("").unwrap();
         assert_eq!(
             stmts,
             vec!["DELETE FROM game_createinfo_spell WHERE id >= 0".to_string()]

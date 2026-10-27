@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from unittest.mock import patch
+from urllib.error import HTTPError
 import warnings
 import zipfile
 
@@ -87,6 +88,26 @@ class FetchTests(unittest.TestCase):
             report = FETCH.fetch(self.output, self.lock)
         self.assertEqual(report["comparison_to_previous_lock"], "migration fingerprint changed")
         self.assertFalse(report["matches_accepted_lock"])
+
+    def test_accept_lock_can_replace_an_unreachable_commit(self):
+        accepted = FETCH.snapshot_lock("0" * 40, MIGRATIONS)
+        FETCH.write_json(self.lock, accepted)
+        api_json = FETCH.api_json
+
+        def missing_comparison(path):
+            if path.startswith("compare/"):
+                raise HTTPError(f"{FETCH.API}/{path}", 404, "Not Found", {}, None)
+            return api_json(path)
+
+        with self.network(), patch.object(FETCH, "api_json", side_effect=missing_comparison):
+            with self.assertRaises(HTTPError):
+                FETCH.fetch(self.output, self.lock)
+            self.assertEqual(FETCH.read_lock(self.lock), accepted)
+            self.assertFalse((self.output / "current.json").exists())
+            report = FETCH.fetch(self.output, self.lock, accept_lock=True)
+        self.assertEqual(report["comparison_to_previous_lock"], "previous lock unreachable")
+        self.assertTrue(report["matches_accepted_lock"])
+        self.assertEqual(FETCH.read_lock(self.lock), FETCH.snapshot_lock(COMMIT, MIGRATIONS))
 
     def test_an_invalid_comparison_keeps_the_previous_report_and_lock(self):
         accepted = FETCH.snapshot_lock("0" * 40, MIGRATIONS)

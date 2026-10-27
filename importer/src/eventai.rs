@@ -1258,109 +1258,161 @@ struct RawRelayStep {
 
 impl RelaySource {
     #[allow(clippy::too_many_lines)]
-    fn parse(dump: &(impl crate::dump::TableRows + ?Sized)) -> Self {
+    fn parse(dump: &(impl crate::dump::TableRows + ?Sized)) -> anyhow::Result<Self> {
         let mut source = Self::default();
         source.broadcast_ids.extend(
-            parse_table(dump, "broadcast_text")
+            parse_table(dump, "broadcast_text")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "Id"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "Id")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.broadcast_ids.extend(
-            parse_table(dump, "script_texts")
+            parse_table(dump, "script_texts")?
                 .iter()
-                .filter_map(|row| field(row, "entry").parse::<i32>().ok())
+                .map(|row| -> anyhow::Result<_> { Ok(field(row, "entry")?.parse::<i32>().ok()) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten()
                 .map(|id| id as u32),
         );
         source.spell_ids.extend(
-            parse_table(dump, "spell_template")
+            parse_table(dump, "spell_template")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "Id"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "Id")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.item_entries.extend(
-            parse_table(dump, "item_template")
+            parse_table(dump, "item_template")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "entry"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "entry")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.creature_entries.extend(
-            parse_table(dump, "creature_template")
+            parse_table(dump, "creature_template")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "Entry"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "Entry")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
-        for row in parse_table(dump, "gameobject_template").iter() {
-            let Some(entry) = source_u32(field(row, "entry")) else {
+        for row in parse_table(dump, "gameobject_template")?.iter() {
+            let Some(entry) = source_u32(field(row, "entry")?) else {
                 continue;
             };
             source.gameobject_entries.insert(entry);
-            if source_u32(field(row, "type")) == Some(6) {
-                if let Some(spell_id) = source_u32(field(row, "data3")).filter(|id| *id != 0) {
+            if source_u32(field(row, "type")?) == Some(6) {
+                if let Some(spell_id) = source_u32(field(row, "data3")?).filter(|id| *id != 0) {
                     source.gameobject_trap_spells.insert(entry, spell_id);
                 }
             }
         }
-        source
-            .creature_spawns
-            .extend(parse_table(dump, "creature").iter().filter_map(|row| {
-                Some((
-                    source_u32(field(row, "guid"))?,
-                    source_u32(field(row, "id"))?,
-                ))
-            }));
-        source
-            .gameobject_spawns
-            .extend(parse_table(dump, "gameobject").iter().filter_map(|row| {
-                Some((
-                    source_u32(field(row, "guid"))?,
-                    source_u32(field(row, "id"))?,
-                ))
-            }));
-        source.path_ids.extend(
-            parse_table(dump, "creature_movement_template")
+        source.creature_spawns.extend(
+            parse_table(dump, "creature")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "Entry"))),
+                .map(|row| -> anyhow::Result<_> {
+                    Ok(Some((
+                        match source_u32(field(row, "guid")?) {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        },
+                        match source_u32(field(row, "id")?) {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        },
+                    )))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
+        );
+        source.gameobject_spawns.extend(
+            parse_table(dump, "gameobject")?
+                .iter()
+                .map(|row| -> anyhow::Result<_> {
+                    Ok(Some((
+                        match source_u32(field(row, "guid")?) {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        },
+                        match source_u32(field(row, "id")?) {
+                            Some(value) => value,
+                            None => return Ok(None),
+                        },
+                    )))
+                })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.path_ids.extend(
-            parse_table(dump, "waypoint_path")
+            parse_table(dump, "creature_movement_template")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "PathId"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "Entry")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
+        );
+        source.path_ids.extend(
+            parse_table(dump, "waypoint_path")?
+                .iter()
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "PathId")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.pool_ids.extend(
-            parse_table(dump, "pool_template")
+            parse_table(dump, "pool_template")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "entry"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "entry")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.gossip_menu_ids.extend(
-            parse_table(dump, "gossip_menu")
+            parse_table(dump, "gossip_menu")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "entry"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "entry")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
         source.world_state_ids.extend(
-            parse_table(dump, "worldstate_name")
+            parse_table(dump, "worldstate_name")?
                 .iter()
-                .filter_map(|row| source_u32(field(row, "Id"))),
+                .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "Id")?)) })
+                .collect::<anyhow::Result<Vec<_>>>()?
+                .into_iter()
+                .flatten(),
         );
-        for (row_number, row) in parse_table(dump, "dbscripts_on_relay").iter().enumerate() {
-            let parsed = (|| -> Result<(u32, RawRelayStep), String> {
-                let u32_at = |name: &str| {
-                    field(row, name).parse::<u32>().map_err(|_| {
-                        format!(
-                            "dbscripts_on_relay row {row_number} field {name} is not u32: {}",
-                            field(row, name)
+        for (row_number, row) in parse_table(dump, "dbscripts_on_relay")?.iter().enumerate() {
+            let parsed = (|| -> anyhow::Result<(u32, RawRelayStep)> {
+                let u32_at = |name: &str| -> anyhow::Result<u32> {
+                    let value = field(row, name)?;
+                    value.parse().map_err(|_| {
+                        anyhow::anyhow!(
+                            "dbscripts_on_relay row {row_number} field {name} is not u32: {value}"
                         )
                     })
                 };
-                let i32_at = |name: &str| {
-                    field(row, name).parse::<i32>().map_err(|_| {
-                        format!(
-                            "dbscripts_on_relay row {row_number} field {name} is not i32: {}",
-                            field(row, name)
+                let i32_at = |name: &str| -> anyhow::Result<i32> {
+                    let value = field(row, name)?;
+                    value.parse().map_err(|_| {
+                        anyhow::anyhow!(
+                            "dbscripts_on_relay row {row_number} field {name} is not i32: {value}"
                         )
                     })
                 };
-                let f32_at = |name: &str| {
-                    field(row, name).parse::<f32>().map_err(|_| {
-                        format!(
-                            "dbscripts_on_relay row {row_number} field {name} is not f32: {}",
-                            field(row, name)
+                let f32_at = |name: &str| -> anyhow::Result<f32> {
+                    let value = field(row, name)?;
+                    value.parse().map_err(|_| {
+                        anyhow::anyhow!(
+                            "dbscripts_on_relay row {row_number} field {name} is not f32: {value}"
                         )
                     })
                 };
@@ -1395,39 +1447,31 @@ impl RelaySource {
                     },
                 ))
             })();
-            match parsed {
-                Ok((relay_id, step)) => {
-                    source.definitions.entry(relay_id).or_default().push(step);
-                }
-                Err(error) => source.parse_failures.push(error),
-            }
+            let (relay_id, step) = parsed?;
+            source.definitions.entry(relay_id).or_default().push(step);
         }
-        for (row_number, row) in parse_table(dump, "dbscript_random_templates")
+        for (row_number, row) in parse_table(dump, "dbscript_random_templates")?
             .iter()
             .enumerate()
         {
-            let parsed = (|| -> Result<(u32, u32, i32, u32), String> {
-                let template_id = field(row, "id").parse::<u32>().map_err(|_| {
-                    format!("dbscript_random_templates row {row_number} has invalid id")
+            let parsed = (|| -> anyhow::Result<(u32, u32, i32, u32)> {
+                let template_id = field(row, "id")?.parse::<u32>().map_err(|_| {
+                    anyhow::anyhow!("dbscript_random_templates row {row_number} has invalid id")
                 })?;
-                let template_type = field(row, "type").parse::<u32>().map_err(|_| {
-                    format!("dbscript_random_templates row {row_number} has invalid type")
+                let template_type = field(row, "type")?.parse::<u32>().map_err(|_| {
+                    anyhow::anyhow!("dbscript_random_templates row {row_number} has invalid type")
                 })?;
-                let target_id = field(row, "target_id").parse::<i32>().map_err(|_| {
-                    format!("dbscript_random_templates row {row_number} has invalid target_id")
+                let target_id = field(row, "target_id")?.parse::<i32>().map_err(|_| {
+                    anyhow::anyhow!(
+                        "dbscript_random_templates row {row_number} has invalid target_id"
+                    )
                 })?;
-                let chance = field(row, "chance").parse::<u32>().map_err(|_| {
-                    format!("dbscript_random_templates row {row_number} has invalid chance")
+                let chance = field(row, "chance")?.parse::<u32>().map_err(|_| {
+                    anyhow::anyhow!("dbscript_random_templates row {row_number} has invalid chance")
                 })?;
                 Ok((template_id, template_type, target_id, chance))
             })();
-            let (template_id, template_type, target_id, chance) = match parsed {
-                Ok(values) => values,
-                Err(error) => {
-                    source.parse_failures.push(error);
-                    continue;
-                }
-            };
+            let (template_id, template_type, target_id, chance) = parsed?;
             if !matches!(template_type, 0 | 1) {
                 continue;
             }
@@ -1453,7 +1497,7 @@ impl RelaySource {
         for steps in source.definitions.values_mut() {
             steps.sort_by_key(|step| (step.offset_ms, step.priority, step.source_order));
         }
-        source
+        Ok(source)
     }
 
     fn ticket_census(&self, rules: &[RawRule]) -> BTreeMap<String, u64> {
@@ -2885,19 +2929,22 @@ impl RawRelayStep {
     }
 }
 
-fn parse_source_maps(dump: &(impl crate::dump::TableRows + ?Sized)) -> HashMap<u32, BTreeSet<u32>> {
+fn parse_source_maps(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> anyhow::Result<HashMap<u32, BTreeSet<u32>>> {
     let mut maps = HashMap::new();
-    for row in parse_table(dump, "creature").iter() {
-        let (Some(entry), Some(map_id)) =
-            (source_u32(field(row, "id")), source_u32(field(row, "map")))
-        else {
+    for row in parse_table(dump, "creature")?.iter() {
+        let (Some(entry), Some(map_id)) = (
+            source_u32(field(row, "id")?),
+            source_u32(field(row, "map")?),
+        ) else {
             continue;
         };
         maps.entry(entry)
             .or_insert_with(BTreeSet::new)
             .insert(map_id);
     }
-    maps
+    Ok(maps)
 }
 
 #[derive(Clone, Copy)]
@@ -3025,39 +3072,42 @@ pub(crate) struct EventAiSource {
     coverage: Coverage,
 }
 
-pub(crate) fn parse(dump: &(impl crate::dump::TableRows + ?Sized)) -> EventAiSource {
+pub(crate) fn parse(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> anyhow::Result<EventAiSource> {
     let mut coverage = Coverage::default();
-    let mut broadcasts = parse_broadcasts(dump, &mut coverage);
-    broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage));
-    let summon_locations = parse_summons(dump, &mut coverage);
-    let event_predicates = parse_event_predicates(dump);
-    let quest_rows = parse_table(dump, "quest_template");
+    let mut broadcasts = parse_broadcasts(dump, &mut coverage)?;
+    broadcasts.extend(parse_legacy_texts(dump, &broadcasts, &mut coverage)?);
+    let summon_locations = parse_summons(dump, &mut coverage)?;
+    let event_predicates = parse_event_predicates(dump)?;
+    let quest_rows = parse_table(dump, "quest_template")?;
     let quest_entries = quest_rows
         .iter()
-        .filter_map(|row| source_u32(field(row, "entry")))
-        .collect();
-    let mut rules = parse_rules(dump, &mut coverage);
+        .map(|row| -> anyhow::Result<_> { Ok(source_u32(field(row, "entry")?)) })
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()?;
+    let mut rules = parse_rules(dump, &mut coverage)?;
     rules.sort_by_key(|rule| rule.id);
     coverage.movement_dependencies = movement_dependency_census(&rules);
-    coverage.reachable_relays = reachable_relay_census(dump, &rules);
-    let relays = RelaySource::parse(dump);
+    coverage.reachable_relays = reachable_relay_census(dump, &rules)?;
+    let relays = RelaySource::parse(dump)?;
     coverage.ticket_census = relays.ticket_census(&rules);
     coverage.relay_parse_failures = relays.parse_failures.clone();
     let (cast_action_subjects, template_schedule_overlaps, creature_spell_list_overlaps) =
-        source_overlap_census(dump, &rules);
+        source_overlap_census(dump, &rules)?;
     coverage.cast_action_subjects = cast_action_subjects;
     coverage.template_schedule_overlaps = template_schedule_overlaps;
     coverage.creature_spell_list_overlaps = creature_spell_list_overlaps;
-    EventAiSource {
+    Ok(EventAiSource {
         broadcasts,
         summon_locations,
         event_predicates,
         quest_entries,
         rules,
-        source_maps: parse_source_maps(dump),
+        source_maps: parse_source_maps(dump)?,
         relays,
         coverage,
-    }
+    })
 }
 
 fn movement_dependency_census(rules: &[RawRule]) -> MovementDependencyCensus {
@@ -3097,7 +3147,7 @@ fn movement_dependency_census(rules: &[RawRule]) -> MovementDependencyCensus {
 fn reachable_relay_census(
     dump: &(impl crate::dump::TableRows + ?Sized),
     rules: &[RawRule],
-) -> ReachableRelayCensus {
+) -> anyhow::Result<ReachableRelayCensus> {
     const RANDOM_TEMPLATE_SCRIPT: u32 = 1;
     const COMMAND_MOVE_TO: u32 = 3;
     const COMMAND_MOVEMENT: u32 = 20;
@@ -3108,15 +3158,24 @@ fn reachable_relay_census(
     const COMMAND_MOVE_DYNAMIC: u32 = 37;
     const COMMAND_START_RELAY: u32 = 45;
 
-    let random_templates = parse_table(dump, "dbscript_random_templates")
+    let random_templates = parse_table(dump, "dbscript_random_templates")?
         .iter()
-        .filter_map(|row| {
-            let template_id = source_u32(field(row, "id"))?;
-            let kind = source_u32(field(row, "type"))?;
-            let relay_id = field(row, "target_id").parse::<i64>().ok()?;
-            (kind == RANDOM_TEMPLATE_SCRIPT && relay_id > 0)
-                .then_some((template_id, relay_id as u32))
+        .map(|row| -> anyhow::Result<_> {
+            let Some(template_id) = source_u32(field(row, "id")?) else {
+                return Ok(None);
+            };
+            let Some(kind) = source_u32(field(row, "type")?) else {
+                return Ok(None);
+            };
+            let Some(relay_id) = field(row, "target_id")?.parse::<i64>().ok() else {
+                return Ok(None);
+            };
+            Ok((kind == RANDOM_TEMPLATE_SCRIPT && relay_id > 0)
+                .then_some((template_id, relay_id as u32)))
         })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .fold(
             BTreeMap::<u32, BTreeSet<u32>>::new(),
             |mut by_template, value| {
@@ -3124,10 +3183,21 @@ fn reachable_relay_census(
                 by_template
             },
         );
-    let relay_table = parse_table(dump, "dbscripts_on_relay");
+    let relay_table = parse_table(dump, "dbscripts_on_relay")?;
     let relay_rows = relay_table
         .iter()
-        .filter_map(|row| Some((source_u32(field(row, "id"))?, row)))
+        .map(|row| -> anyhow::Result<_> {
+            Ok(Some((
+                match source_u32(field(row, "id")?) {
+                    Some(value) => value,
+                    None => return Ok(None),
+                },
+                row,
+            )))
+        })
+        .collect::<anyhow::Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
         .fold(
             BTreeMap::<u32, Vec<&crate::world_source::Row>>::new(),
             |mut by_id, value| {
@@ -3169,7 +3239,7 @@ fn reachable_relay_census(
         };
         for row in rows {
             census.rows += 1;
-            let Some(command) = source_u32(field(row, "command")) else {
+            let Some(command) = source_u32(field(row, "command")?) else {
                 continue;
             };
             *census.command.entry(u64::from(command)).or_default() += 1;
@@ -3205,14 +3275,14 @@ fn reachable_relay_census(
                 ]
                 .into_iter()
                 .map(|index| field(row, index))
-                .collect::<Vec<_>>()
+                .collect::<anyhow::Result<Vec<_>>>()?
                 .join(":");
                 *census.movement_values.entry(raw).or_default() += 1;
             }
             if command == COMMAND_START_RELAY {
                 census.nested_edges += 1;
-                let direct = source_u32(field(row, "datalong")).unwrap_or(0);
-                let template = source_u32(field(row, "datalong2")).unwrap_or(0);
+                let direct = source_u32(field(row, "datalong")?).unwrap_or(0);
+                let template = source_u32(field(row, "datalong2")?).unwrap_or(0);
                 if direct != 0 {
                     pending.insert(direct);
                 } else if template != 0 {
@@ -3221,35 +3291,37 @@ fn reachable_relay_census(
             }
         }
     }
-    census
+    Ok(census)
 }
 
 fn source_overlap_census(
     dump: &(impl crate::dump::TableRows + ?Sized),
     rules: &[RawRule],
-) -> (u64, u64, u64) {
-    let template_rows = crate::dump::parse_table(dump, "creature_template");
-    let schedule_rows = crate::dump::parse_table(dump, "creature_template_spells");
+) -> anyhow::Result<(u64, u64, u64)> {
+    let template_rows = crate::dump::parse_table(dump, "creature_template")?;
+    let schedule_rows = crate::dump::parse_table(dump, "creature_template_spells")?;
     let template_schedule_entries: HashSet<u64> = schedule_rows
         .iter()
-        .filter_map(|row| field(row, "entry").parse().ok())
-        .collect();
-    let creature_spell_list_entries: HashSet<u64> = template_rows
-        .iter()
-        .filter(|row| {
-            row.raw("SpellList")
-                .ok()
-                .and_then(|value| value.parse::<i64>().ok())
-                .is_some_and(|spell_list| spell_list > 0)
-        })
-        .filter_map(|row| field(row, "Entry").parse().ok())
-        .collect();
+        .map(|row| -> anyhow::Result<_> { Ok(field(row, "entry")?.parse().ok()) })
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()?;
+    let mut creature_spell_list_entries = HashSet::new();
+    for row in template_rows.iter() {
+        if field(row, "SpellList")?
+            .parse::<i64>()
+            .is_ok_and(|spell_list| spell_list > 0)
+        {
+            if let Ok(entry) = field(row, "Entry")?.parse::<u64>() {
+                creature_spell_list_entries.insert(entry);
+            }
+        }
+    }
     let cast_action_entries: HashSet<u64> = rules
         .iter()
         .filter(|rule| rule.actions.iter().any(|action| action[0] == ACTION_CAST))
         .filter_map(|rule| (rule.subject > 0).then_some(rule.subject as u64))
         .collect();
-    (
+    Ok((
         cast_action_entries.len() as u64,
         cast_action_entries
             .intersection(&template_schedule_entries)
@@ -3257,7 +3329,7 @@ fn source_overlap_census(
         cast_action_entries
             .intersection(&creature_spell_list_entries)
             .count() as u64,
-    )
+    ))
 }
 
 impl EventAiSource {
@@ -3921,41 +3993,41 @@ fn record_dropped_rule(coverage: &mut Coverage, rule: &RawRule, failures: Vec<Ma
 fn parse_rules(
     dump: &(impl crate::dump::TableRows + ?Sized),
     coverage: &mut Coverage,
-) -> Vec<RawRule> {
-    parse_table(dump, "creature_ai_scripts")
+) -> anyhow::Result<Vec<RawRule>> {
+    parse_table(dump, "creature_ai_scripts")?
         .iter()
-        .filter_map(|row| {
+        .map(|row| -> anyhow::Result<_> {
             coverage.total_rules += 1;
-            let Some(id) = source_u32(field(row, "id")) else {
+            let Some(id) = source_u32(field(row, "id")?) else {
                 coverage.drop("invalid_numeric", 0);
-                return None;
+                return Ok(None);
             };
-            let Some(subject) = field(row, "creature_id").parse::<i32>().ok() else {
+            let Some(subject) = field(row, "creature_id")?.parse::<i32>().ok() else {
                 coverage.drop("invalid_numeric", 1);
-                return None;
+                return Ok(None);
             };
             if subject < 0 {
                 coverage.source_guid_rules += 1;
             }
-            let Some(event) = source_loader_u32(field(row, "event_type")) else {
+            let Some(event) = source_loader_u32(field(row, "event_type")?) else {
                 coverage.drop("invalid_numeric", 2);
-                return None;
+                return Ok(None);
             };
             Coverage::source_value(&mut coverage.event, event as u64);
             let Some(inverse_phase_mask) =
-                source_loader_u32(field(row, "event_inverse_phase_mask"))
+                source_loader_u32(field(row, "event_inverse_phase_mask")?)
             else {
                 coverage.drop("invalid_numeric", 3);
-                return None;
+                return Ok(None);
             };
-            let Some(raw_chance) = source_u8(field(row, "event_chance")) else {
+            let Some(raw_chance) = source_u8(field(row, "event_chance")?) else {
                 coverage.drop("invalid_numeric", 4);
-                return None;
+                return Ok(None);
             };
             let chance = raw_chance.min(100);
-            let Some(flags) = source_loader_u32(field(row, "event_flags")) else {
+            let Some(flags) = source_loader_u32(field(row, "event_flags")?) else {
                 coverage.drop("invalid_numeric", 5);
-                return None;
+                return Ok(None);
             };
             Coverage::source_value(&mut coverage.flags, flags as u64);
             let mut params = [0; 6];
@@ -3984,18 +4056,18 @@ fn parse_rules(
             }
             for (index, param) in params.iter_mut().enumerate() {
                 let Some(value) =
-                    source_loader_u32(field(row, &format!("event_param{}", index + 1)))
+                    source_loader_u32(field(row, &format!("event_param{}", index + 1))?)
                 else {
                     coverage.drop("invalid_numeric", (6 + index) as u64);
-                    return None;
+                    return Ok(None);
                 };
                 *param = value;
             }
             for (slot, action) in actions.iter_mut().enumerate() {
                 let action_column = format!("action{}_type", slot + 1);
-                let Some(kind) = source_loader_u16(field(row, &action_column)) else {
+                let Some(kind) = source_loader_u16(field(row, &action_column)?) else {
                     coverage.drop("invalid_numeric", slot as u64);
-                    return None;
+                    return Ok(None);
                 };
                 if kind >= ACTION_END {
                     Coverage::source_value(&mut coverage.action, u64::from(kind));
@@ -4013,10 +4085,10 @@ fn parse_rules(
                 }
                 for (part, value) in action.iter_mut().enumerate().skip(1) {
                     let column = format!("action{}_param{part}", slot + 1);
-                    let parsed = source_loader_u32(field(row, &column));
+                    let parsed = source_loader_u32(field(row, &column)?);
                     let Some(parsed) = parsed else {
                         coverage.drop("invalid_numeric", part as u64);
-                        return None;
+                        return Ok(None);
                     };
                     *value = parsed;
                 }
@@ -4053,7 +4125,7 @@ fn parse_rules(
                     Coverage::source_signed_value(&mut coverage.threat_percent, action[1] as i32);
                 }
             }
-            Some(RawRule {
+            Ok(Some(RawRule {
                 id: u64::from(id),
                 subject,
                 event,
@@ -4063,9 +4135,10 @@ fn parse_rules(
                 params,
                 actions,
                 normalizations,
-            })
+            }))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 fn record_presentation_source_census(coverage: &mut Coverage, action: [u32; 4]) {
@@ -4153,138 +4226,147 @@ fn movement_action_kind(action: u32) -> bool {
 fn parse_broadcasts(
     dump: &(impl crate::dump::TableRows + ?Sized),
     coverage: &mut Coverage,
-) -> BTreeMap<u32, Broadcast> {
-    parse_table(dump, "broadcast_text")
+) -> anyhow::Result<BTreeMap<u32, Broadcast>> {
+    parse_table(dump, "broadcast_text")?
         .iter()
-        .filter_map(|row| {
-            let Some(id) = source_u32(field(row, bt::ID)) else {
+        .map(|row| -> anyhow::Result<_> {
+            let Some(id) = source_u32(field(row, bt::ID)?) else {
                 coverage.drop("malformed_broadcast_text", 0);
-                return None;
+                return Ok(None);
             };
             if fixture_id(id) {
                 coverage.drop("reserved_catalogue_id", id as u64);
-                return None;
+                return Ok(None);
             }
             let Some(chat_type) =
-                source_u32(field(row, bt::CHAT_TYPE)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(row, bt::CHAT_TYPE)?).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
-                return None;
+                return Ok(None);
             };
             let Some(language) =
-                source_u32(field(row, bt::LANGUAGE)).and_then(|value| u8::try_from(value).ok())
+                source_u32(field(row, bt::LANGUAGE)?).and_then(|value| u8::try_from(value).ok())
             else {
                 coverage.drop("malformed_broadcast_text", id as u64);
-                return None;
+                return Ok(None);
             };
-            let emotes = std::array::from_fn(|index| {
-                (
-                    source_u32(field(row, &format!("EmoteDelay{}", index + 1))).unwrap_or(0),
-                    source_u32(field(row, &format!("EmoteID{}", index + 1))).unwrap_or(0),
-                )
-            });
-            Some((
+            let mut emotes = [(0, 0); 3];
+            for (index, emote) in emotes.iter_mut().enumerate() {
+                *emote = (
+                    source_u32(field(row, &format!("EmoteDelay{}", index + 1))?).unwrap_or(0),
+                    source_u32(field(row, &format!("EmoteID{}", index + 1))?).unwrap_or(0),
+                );
+            }
+            Ok(Some((
                 id,
                 Broadcast {
-                    male: field(row, bt::TEXT).to_string(),
-                    female: field(row, bt::TEXT1).to_string(),
+                    male: field(row, bt::TEXT)?.to_string(),
+                    female: field(row, bt::TEXT1)?.to_string(),
                     chat_type,
                     language,
                     emotes,
                 },
-            ))
+            )))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 fn parse_legacy_texts(
     dump: &(impl crate::dump::TableRows + ?Sized),
     broadcasts: &BTreeMap<u32, Broadcast>,
     coverage: &mut Coverage,
-) -> BTreeMap<u32, Broadcast> {
-    parse_table(dump, "script_texts")
+) -> anyhow::Result<BTreeMap<u32, Broadcast>> {
+    parse_table(dump, "script_texts")?
         .iter()
-        .filter_map(|row| {
-            let Some(id) = field(row, "entry").parse::<i64>().ok() else {
+        .map(|row| -> anyhow::Result<_> {
+            let Some(id) = field(row, "entry")?.parse::<i64>().ok() else {
                 coverage.drop("malformed_legacy_text", 0);
-                return None;
+                return Ok(None);
             };
-            let broadcast_id = source_u32(field(row, "broadcast_text_id")).unwrap_or(0);
+            let broadcast_id = source_u32(field(row, "broadcast_text_id")?).unwrap_or(0);
             let text = broadcasts.get(&broadcast_id).cloned().unwrap_or(Broadcast {
-                male: field(row, "content_default").to_string(),
-                female: field(row, "content_default").to_string(),
-                chat_type: source_u32(field(row, "type"))
+                male: field(row, "content_default")?.to_string(),
+                female: field(row, "content_default")?.to_string(),
+                chat_type: source_u32(field(row, "type")?)
                     .and_then(|value| u8::try_from(value).ok())
                     .unwrap_or(0),
-                language: source_u32(field(row, "language"))
+                language: source_u32(field(row, "language")?)
                     .and_then(|value| u8::try_from(value).ok())
                     .unwrap_or(0),
                 emotes: [
-                    (0, source_u32(field(row, "emote")).unwrap_or(0)),
+                    (0, source_u32(field(row, "emote")?).unwrap_or(0)),
                     (0, 0),
                     (0, 0),
                 ],
             });
-            (id < 0).then_some((id as u32, text))
+            Ok((id < 0).then_some((id as u32, text)))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 fn parse_event_predicates(
     dump: &(impl crate::dump::TableRows + ?Sized),
-) -> BTreeMap<u32, SourceEventPredicate> {
-    parse_table(dump, "conditions")
+) -> anyhow::Result<BTreeMap<u32, SourceEventPredicate>> {
+    parse_table(dump, "conditions")?
         .iter()
-        .filter_map(|row| {
-            let id = source_u32(field(row, "condition_entry"))?;
-            let kind = field(row, "type").parse::<i32>().ok()?;
-            let value = source_u32(field(row, "value1"))?;
-            let second = source_u32(field(row, "value2"))?;
+        .map(|row| -> anyhow::Result<_> {
+            let Some(id) = source_u32(field(row, "condition_entry")?) else {
+                return Ok(None);
+            };
+            let Some(kind) = field(row, "type")?.parse::<i32>().ok() else {
+                return Ok(None);
+            };
+            let Some(value) = source_u32(field(row, "value1")?) else {
+                return Ok(None);
+            };
+            let Some(second) = source_u32(field(row, "value2")?) else {
+                return Ok(None);
+            };
             let predicate = match (kind, value, second) {
                 (6, 469, 0) => SourceEventPredicate::Alliance,
                 (6, 67, 0) => SourceEventPredicate::Horde,
                 (9, quest_entry, 0) => SourceEventPredicate::QuestTaken(quest_entry),
-                _ => return None,
+                _ => return Ok(None),
             };
-            Some((id, predicate))
+            Ok(Some((id, predicate)))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 fn parse_summons(
     dump: &(impl crate::dump::TableRows + ?Sized),
     coverage: &mut Coverage,
-) -> BTreeMap<u32, SummonLocation> {
-    parse_table(dump, "creature_ai_summons")
+) -> anyhow::Result<BTreeMap<u32, SummonLocation>> {
+    parse_table(dump, "creature_ai_summons")?
         .iter()
-        .filter_map(|row| {
-            let Some(id) = source_u32(field(row, "id")) else {
+        .map(|row| -> anyhow::Result<_> {
+            let Some(id) = source_u32(field(row, "id")?) else {
                 coverage.drop("malformed_summon_location", 0);
-                return None;
+                return Ok(None);
             };
             if fixture_id(id) {
                 coverage.drop("reserved_catalogue_id", id as u64);
-                return None;
+                return Ok(None);
             }
-            let parsed = || {
-                Some((
-                    field(row, "position_x").parse::<f32>().ok()?,
-                    field(row, "position_y").parse::<f32>().ok()?,
-                    field(row, "position_z").parse::<f32>().ok()?,
-                    field(row, "orientation").parse::<f32>().ok()?,
-                    // The source column says seconds, but the summon API consumes milliseconds.
-                    source_u32(field(row, "spawntimesecs"))?,
-                ))
-            };
-            let Some((x, y, z, orientation, lifetime_ms)) = parsed() else {
+            let (Ok(x), Ok(y), Ok(z), Ok(orientation), Some(lifetime_ms)) = (
+                field(row, "position_x")?.parse::<f32>(),
+                field(row, "position_y")?.parse::<f32>(),
+                field(row, "position_z")?.parse::<f32>(),
+                field(row, "orientation")?.parse::<f32>(),
+                // The source column says seconds, but the summon API consumes milliseconds.
+                source_u32(field(row, "spawntimesecs")?),
+            ) else {
                 coverage.drop("malformed_summon_location", id as u64);
-                return None;
+                return Ok(None);
             };
             if !(x.is_finite() && y.is_finite() && z.is_finite() && orientation.is_finite()) {
                 coverage.drop("malformed_summon_location", id as u64);
-                return None;
+                return Ok(None);
             }
-            Some((
+            Ok(Some((
                 id,
                 SummonLocation {
                     x,
@@ -4293,9 +4375,10 @@ fn parse_summons(
                     orientation,
                     lifetime_ms,
                 },
-            ))
+            )))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 enum SubjectResolution {
@@ -5983,6 +6066,7 @@ fn fixture_id(id: u32) -> bool {
 
 #[cfg(test)]
 mod tests {
+
     use super::*;
 
     fn rule(
@@ -6101,7 +6185,7 @@ mod tests {
 
     #[test]
     fn summon_lifetimes_keep_the_source_milliseconds() {
-        let source = parse("INSERT INTO `creature_ai_summons` VALUES (2,-422.562,69.0183,-57.8122,2.72416,86400000,'Dreamscythe');");
+        let source = parse("INSERT INTO `creature_ai_summons` VALUES (2,-422.562,69.0183,-57.8122,2.72416,86400000,'Dreamscythe');").unwrap();
         assert_eq!(source.summon_locations[&2].lifetime_ms, 86_400_000);
     }
 
@@ -6115,7 +6199,8 @@ mod tests {
             1025,
             [800, 0, 0, 0, 0, 0],
             [[ACTION_CAST as i64, 6063, 12, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         assert_eq!(
             map_event(&source.rules[0], &source.event_predicates).unwrap(),
             "friendly-health:800:0:0"
@@ -6132,7 +6217,8 @@ mod tests {
             0,
             [0; 6],
             [[20, 0, 0, 0], [40, 2, 0, 0], [38, 0, 0, 0]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.coverage.dropped_rules, 0);
@@ -6149,7 +6235,8 @@ mod tests {
             0,
             [0; 6],
             [[1, 0, 0, 0], [22, 1, 0, 0], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.coverage.dropped_rules, 0);
@@ -6168,7 +6255,7 @@ mod tests {
             [[1, 900, 0, 0], [0; 4], [0; 4]],
         )])
         .replace("(900,'Hello','Hello',0,", "(900,'Hello','Hello',3,");
-        let source = parse(&sql);
+        let source = parse(&sql).unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.coverage.dropped_rules, 0);
@@ -6295,7 +6382,7 @@ mod tests {
             [[18, 832, 0, 0], [0; 4], [0; 4]],
         ));
 
-        let source = parse(&dump(&rows));
+        let source = parse(&dump(&rows)).unwrap();
         let (entries, mut guids, mut templates) = scope();
         guids.insert(155_940, 100);
         templates.extend([
@@ -6347,7 +6434,8 @@ mod tests {
             0,
             [0; 6],
             [[17, 999, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -6376,7 +6464,8 @@ mod tests {
                 0,
                 [0; 6],
                 [action, [0; 4], [0; 4]],
-            )]));
+            )]))
+            .unwrap();
             let (entries, guids, templates) = scope();
             let plan = source.assemble(&entries, &guids, &templates);
             let profile = fixture_profile(&plan);
@@ -6407,7 +6496,8 @@ mod tests {
             0,
             [0; 6],
             [[18, 832, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -6435,7 +6525,8 @@ mod tests {
             0,
             [0; 6],
             [[3, 11_284, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -6472,7 +6563,8 @@ mod tests {
                     0,
                 ],
             ],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -6510,7 +6602,8 @@ mod tests {
                 [0; 4],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -6593,7 +6686,8 @@ mod tests {
                 [ACTION_SET_INSTANCE_DATA as i64, 1, 2, 0],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let entries = HashSet::from([4_832]);
         let plan = source.assemble(&entries, &HashMap::new(), &entries);
         let manifest =
@@ -6823,7 +6917,8 @@ mod tests {
                 [ACTION_START_RELAY as i64, 404, 0, 0],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let manifest =
@@ -6838,14 +6933,22 @@ mod tests {
     }
 
     #[test]
-    fn relay_parser_reports_malformed_fields_but_accepts_no_action_random_choices() {
+    fn relay_parser_refuses_non_numeric_fields() {
+        let error = RelaySource::parse(
+            "INSERT INTO `dbscripts_on_relay` (`id`, `command`) VALUES (1,'bad');",
+        )
+        .err()
+        .unwrap();
+        assert!(error.to_string().contains("dbscripts_on_relay.command"));
+    }
+
+    #[test]
+    fn relay_parser_accepts_no_action_random_choices() {
         let source = RelaySource::parse(
-            "INSERT INTO `dbscripts_on_relay` VALUES \
-             (1,0,0,'bad',0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,''); \
-             INSERT INTO `dbscript_random_templates` VALUES (4072,1,0,20,'No Action');",
-        );
-        assert_eq!(source.parse_failures.len(), 1);
-        assert!(source.parse_failures[0].contains("field command is not u32"));
+            "INSERT INTO `dbscript_random_templates` VALUES (4072,1,0,20,'No Action');",
+        )
+        .unwrap();
+        assert!(source.parse_failures.is_empty());
         assert!(source.random_templates.is_empty());
     }
 
@@ -6885,7 +6988,7 @@ mod tests {
                 [[ACTION_START_RELAY as i64, 1, 0, 0], [0; 4], [0; 4]],
             )
         );
-        let source = parse(&sql);
+        let source = parse(&sql).unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
 
@@ -6925,7 +7028,7 @@ mod tests {
                 [[ACTION_START_RELAY as i64, 1, 0, 0], [0; 4], [0; 4]],
             )
         );
-        let mut source = parse(&sql);
+        let mut source = parse(&sql).unwrap();
         source.relays.creature_entries.insert(777);
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
@@ -6954,7 +7057,7 @@ mod tests {
                 [[ACTION_START_RELAY as i64, 1, 0, 0], [0; 4], [0; 4]],
             )
         );
-        let source = parse(&sql);
+        let source = parse(&sql).unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.relay_definition_rows.len(), 1);
@@ -6992,7 +7095,7 @@ mod tests {
                 [[ACTION_TEXT_NEW as i64, 0, 0, 35], [0; 4], [0; 4]],
             )
         );
-        let source = parse(&sql);
+        let source = parse(&sql).unwrap();
         assert!(source.relays.string_templates.contains_key(&35));
         assert!(!source.relays.random_templates.contains_key(&35));
         assert!(source.relays.random_templates.contains_key(&36));
@@ -7016,7 +7119,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_TEXT_NEW as i64, 0, 0, 999], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert!(plan.definition_rows[0].contains("no-effect:missing-text-template:999"));
@@ -7052,7 +7156,8 @@ mod tests {
                 [0; 6],
                 [[2, 14, 0, 0], [55, 11, 0, 0], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         let entries = HashSet::from([5676, 5677]);
         let plan = source.assemble(&entries, &HashMap::new(), &entries);
         assert_eq!(plan.definition_rows.len(), 2);
@@ -7089,7 +7194,8 @@ mod tests {
                 [0; 6],
                 [[ACTION_FLEE_FOR_ASSIST as i64, 0, 0, 0], [0; 4], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert_eq!(plan.definition_rows.len(), 2);
@@ -7184,7 +7290,8 @@ mod tests {
                 [ACTION_EMOTE as i64, 15, 0, 0],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         assert!(plan.definition_rows.is_empty());
@@ -7223,7 +7330,8 @@ mod tests {
                     [0; 4],
                 ],
             ),])
-        ));
+        ))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
 
@@ -7271,7 +7379,8 @@ mod tests {
                 [0; 6],
                 [[27, 100, 123, 0], [0; 4], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
 
@@ -7301,7 +7410,8 @@ mod tests {
                 [0; 4],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let manifest =
@@ -7341,7 +7451,8 @@ mod tests {
                 [0; 4],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let missing_context = parse(&format!(
             "INSERT INTO `quest_template` (`entry`) VALUES (77); {}",
             dump(&[rule(
@@ -7362,7 +7473,8 @@ mod tests {
                     [0; 4]
                 ],
             )])
-        ));
+        ))
+        .unwrap();
         let (entries, guids, templates) = scope();
 
         let missing_plan = missing_quest.assemble(&entries, &guids, &templates);
@@ -7428,7 +7540,8 @@ mod tests {
                 [0; 6],
                 [[ACTION_EMOTE as i64, 3, 0, 0], [0; 4], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let definition = &plan.definition_rows[0];
@@ -7467,7 +7580,8 @@ mod tests {
                     [0; 4],
                 ],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
 
@@ -7509,7 +7623,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_TEXT as i64, 900, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7539,8 +7654,9 @@ mod tests {
             ],
         );
         let (entries, guids, templates) = scope();
-        let missing =
-            parse(&dump(std::slice::from_ref(&rule))).assemble(&entries, &guids, &templates);
+        let missing = parse(&dump(std::slice::from_ref(&rule)))
+            .unwrap()
+            .assemble(&entries, &guids, &templates);
         let missing_manifest =
             missing.compatibility_manifest(&fixture_profile(&missing), "fixture", LOADER_CONTRACT);
 
@@ -7554,6 +7670,7 @@ mod tests {
             "INSERT INTO `spell_template` (`Id`) VALUES (123); {}",
             dump(&[rule])
         ))
+        .unwrap()
         .assemble(&entries, &guids, &templates);
         let complete_manifest = complete.compatibility_manifest(
             &fixture_profile(&complete),
@@ -7586,7 +7703,8 @@ mod tests {
                 [0; 4],
                 [0; 4],
             ],
-        )]));
+        )]))
+        .unwrap();
         let mut relays = RelaySource::default();
         relays.broadcast_ids.insert(900);
         relays.spell_ids.extend([123, 124]);
@@ -7738,7 +7856,8 @@ mod tests {
                     [0; 4],
                 ],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let manifest =
@@ -7779,7 +7898,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7798,7 +7918,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7820,7 +7941,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let mut profile = fixture_profile(&plan);
@@ -7848,7 +7970,8 @@ mod tests {
             0,
             [0; 6],
             [[999, 0, 0, 0], [ACTION_EMOTE as i64, 7, 0, 0], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7873,7 +7996,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_TEXT as i64, 901, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7906,7 +8030,7 @@ mod tests {
             "{} INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (100,9,7734,0);",
             dump(std::slice::from_ref(&death))
         );
-        let source = parse(&missing_quest_dump);
+        let source = parse(&missing_quest_dump).unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7925,7 +8049,7 @@ mod tests {
 
         let complete_dump =
             format!("{missing_quest_dump} INSERT INTO `quest_template` (`entry`) VALUES (7734);");
-        let source = parse(&complete_dump);
+        let source = parse(&complete_dump).unwrap();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
         let manifest = plan.compatibility_manifest(&profile, "fixture", LOADER_CONTRACT);
@@ -7947,7 +8071,8 @@ mod tests {
             0,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let mut profile = fixture_profile(&plan);
@@ -7960,14 +8085,15 @@ mod tests {
     #[test]
     fn manifest_refuses_source_rows_without_a_terminal_classification() {
         let source = parse(&dump(&[rule(
-            "bad",
+            -1,
             100,
             EVENT_AGGRO,
             100,
             0,
             [0; 6],
             [[0; 4]; 3],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -7987,7 +8113,8 @@ mod tests {
             0x40,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -8008,7 +8135,8 @@ mod tests {
             FLAG_DEBUG_ONLY | 0x02,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -8040,7 +8168,8 @@ mod tests {
             FLAG_DEBUG_ONLY | 0x40,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -8059,7 +8188,8 @@ mod tests {
             0x04,
             [0; 6],
             [[ACTION_EMOTE as i64, 7, 0, 0], [0; 4], [0; 4]],
-        )]));
+        )]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let profile = fixture_profile(&plan);
@@ -8102,7 +8232,8 @@ mod tests {
                 [0; 6],
                 [[ACTION_EMOTE as i64, 9, 0, 0], [0; 4], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(source.rules.len(), 1);
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
@@ -8144,7 +8275,8 @@ mod tests {
                 [0; 6],
                 [[-1, 0, 0, 0], [ACTION_EMOTE as i64, 9, 0, 0], [0; 4]],
             ),
-        ]));
+        ]))
+        .unwrap();
         assert_eq!(source.rules.len(), 3);
         assert_eq!(source.coverage.event.get(&(u32::MAX as u64)), Some(&1));
         assert_eq!(source.coverage.flags.get(&(u32::MAX as u64)), Some(&1));
@@ -8216,7 +8348,8 @@ mod tests {
                     [0; 4],
                 ],
             ),
-        ]));
+        ]))
+        .unwrap();
         let (entries, guids, templates) = scope();
         let plan = source.assemble(&entries, &guids, &templates);
         let definitions = plan.definition_batches.join("\n");
@@ -8296,6 +8429,7 @@ mod tests {
                 [[ACTION_CHANGE_MOVEMENT as i64, 3, 7, 0], [0; 4], [0; 4]],
             ),
         ]))
+        .unwrap()
         .assemble(&entries, &guids, &templates);
         assert_eq!(unsupported.dropped("unsupported_movement_flag_0x1", 1), 1);
         assert_eq!(unsupported.dropped("unsupported_movement_flag_0x2", 2), 1);
@@ -8338,7 +8472,8 @@ mod tests {
              (7,1,200,50,'first'),(7,1,201,50,'second'); \
              INSERT INTO `dbscripts_on_relay` VALUES {};",
             relay_rows.join(",")
-        ));
+        ))
+        .unwrap();
         let relays = &source.coverage.reachable_relays;
 
         assert_eq!(relays.root_references, 2);
@@ -8397,7 +8532,7 @@ mod tests {
             crate::dump::sha256_hex(&bytes).unwrap(),
             "d2083bcd2670451279cbf93af138eadae04c6d183a4cd0ff0357047e4a565de6"
         );
-        let source = parse(std::str::from_utf8(&bytes).unwrap());
+        let source = parse(std::str::from_utf8(&bytes).unwrap()).unwrap();
         let exclude_caster_spells = [3_477, 4_961, 7_154, 7_638, 11_014, 13_903];
         let exclude_caster_actions: Vec<(u64, u32)> = source
             .rules
