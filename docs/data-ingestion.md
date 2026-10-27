@@ -72,7 +72,7 @@ The import reports trigger cooldowns, conditions and scripts that the Module can
 
 Map has one named source exception. `map_template` supplies every gameplay column; the client's
 `Map.dbc` supplies only `internal_name`, joined by map id, for WDT and ADT archive lookup. A missing
-client row refuses that map. Player limits, reset delays and ghost entrances are stored but do not
+client row refuses the whole Map catalogue before any rows are replaced. Player limits, reset delays and ghost entrances are stored but do not
 yet control gameplay. Other tables never mix vmangos and client columns.
 
 The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,

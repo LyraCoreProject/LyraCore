@@ -416,18 +416,14 @@ of character-keyed tables.
 
 ### Creature stat edits
 
-Classic creature templates store base health and melee damage, so Core applies rank scaling.
-vmangos imports store final values, including rank. The presence of imported
-`game_creature_level_stats` rows for an entry preserves that convention independently of template
-values. A Package edit to health, damage, armor or the level range never enables classic rank
-scaling for that entry. Keep these Core-owned rows when editing a template.
+Imported creature stats include rank. Core uses `game_creature_level_stats` for the selected
+level while the template endpoints match those rows. Keep these Core-owned rows when editing a
+template. When an edit changes the endpoints, Core interpolates template health and uses template
+damage and armor directly, without another rank multiplier. Hunter pets outside the template's
+level range retain level scaling without another rank multiplier.
 
-When template endpoints still match, Core uses the imported value for the selected level.
-After an edit makes the endpoints differ, Core interpolates the template health endpoints and
-uses its damage and armor directly. Outside the template level range, hunter pets keep their level
-scaling without a classic rank multiplier. Classic imports clear the level rows and keep classic
-scaling.
-Package-invented templates without imported level rows use the classic convention.
+Templates without imported level rows, including Package-invented templates, supply base health
+and melee damage. Core applies its rank multiplier to those values.
 
 ### Module roots
 

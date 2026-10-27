@@ -120,10 +120,11 @@ This is a new table, so publishing it adds an empty catalogue without changing e
 
 ### Taxi catalogue (`module/src/config.rs`)
 
-`game_taxi_node`, `game_taxi_path` and `game_taxi_path_node` are public rows imported from the
-Operator's `TaxiNodes.dbc`, `TaxiPath.dbc` and `TaxiPathNode.dbc`. A node's `id` is its storage key
+`game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
+come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.
+A node's `id` is its storage key
 and `client_node_id` is its unique wire id in the client's fixed 256-bit taxi mask. Imported nodes
-use their DBC id for both; reserved fixtures keep 509xxxx storage ids with bounded synthetic wire
+use their source id for both; reserved fixtures keep 509xxxx storage ids with bounded synthetic wire
 ids. Paths are directed edges with their fare in copper; the reverse direction exists only when the
 DBC has a second row. Path nodes keep explicit `(path_id, node_index)` order. `flags` stays the DBC's
 signed `int32` container so every raw bit survives, and `delay_ms` holds the DBC's seconds in
