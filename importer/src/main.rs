@@ -25,6 +25,7 @@ mod talent;
 mod terrain;
 mod transport;
 mod ui_transform;
+mod vmangos_profile;
 mod vmangos_spell;
 mod vmap;
 mod world_import;
@@ -128,6 +129,7 @@ where
         packages: None,
     };
     let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
+    let mut explicit_source_profile = false;
     let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
@@ -326,8 +328,11 @@ where
                 )
             }
             "--eventai-profile" => {
+                explicit_source_profile = true;
                 let profile = it.next().context("--eventai-profile <name>")?;
-                eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
+                if profile != vmangos_profile::NAME {
+                    eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
+                }
                 a.eventai_profile = profile;
             }
             "--center" => {
@@ -562,6 +567,22 @@ where
                 }
             }
         }
+    }
+    if a.source == world_source::SourceKind::Vmangos {
+        if !explicit_source_profile {
+            a.eventai_profile = vmangos_profile::NAME.into();
+        }
+        if a.eventai_profile != vmangos_profile::NAME {
+            bail!("--source vmangos requires its vmangos Source Profile");
+        }
+        if a.apply
+            && (a.source_sha.len() != 40
+                || !a.source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+        {
+            bail!("vmangos apply requires --source-sha with the actual snapshot commit");
+        }
+    } else if a.eventai_profile == vmangos_profile::NAME {
+        bail!("the vmangos Source Profile requires --source vmangos");
     }
     Ok(a)
 }
@@ -909,7 +930,7 @@ mod tests {
     #[test]
     fn command_selects_only_the_committed_eventai_source_profile() {
         let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
-            .expect("default EventAI Source Profile");
+            .expect("default Source Profile");
         assert_eq!(default.eventai_profile, eventai::SOURCE_PROFILE_NAME);
 
         let selected = parse_args_from([
@@ -918,7 +939,7 @@ mod tests {
             "--eventai-profile",
             eventai::SOURCE_PROFILE_NAME,
         ])
-        .expect("named EventAI Source Profile");
+        .expect("named Source Profile");
         assert_eq!(selected.eventai_profile, eventai::SOURCE_PROFILE_NAME);
 
         let error = parse_args_from([
@@ -930,6 +951,30 @@ mod tests {
         .err()
         .expect("unknown EventAI Source Profile");
         assert!(format!("{error:#}").contains("unknown EventAI source profile"));
+    }
+
+    #[test]
+    fn vmangos_selects_its_profile_and_apply_requires_actual_provenance() {
+        let base = [
+            "--source",
+            "vmangos",
+            "--dump",
+            "source.sqlite",
+            "--family",
+            "creature-ai",
+        ];
+        let args = parse_args_from(base).unwrap();
+        assert_eq!(args.eventai_profile, vmangos_profile::NAME);
+        assert!(parse_args_from(
+            base.into_iter()
+                .chain(["--eventai-profile", eventai::SOURCE_PROFILE_NAME])
+        )
+        .is_err());
+        assert!(parse_args_from(base.into_iter().chain(["--apply"])).is_err());
+        let actual = "0123456789012345678901234567890123456789";
+        let args =
+            parse_args_from(base.into_iter().chain(["--apply", "--source-sha", actual])).unwrap();
+        assert_eq!(args.source_sha, actual);
     }
 
     #[test]

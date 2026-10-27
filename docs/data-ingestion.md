@@ -252,9 +252,8 @@ The archive and SQLite file stay under `.import/vmangos/<commit>-<digest-prefix>
 digest and whether the accepted lock matches. For a changed commit, GitHub ancestry determines
 whether the snapshot is newer, older or diverged from the previous lock. A changed migration
 fingerprint at the same commit is reported without a direction. The lock stays unchanged unless
-`--accept-lock` is supplied. Fetch does not evaluate the Source Profile or permit apply. S6c must
-check the actual snapshot's column contract and approved values before a later CLI imports it, then
-record its actual commit. If GitHub cannot compare an unreachable accepted commit and returns
+`--accept-lock` is supplied. Fetch does not evaluate the Source Profile. The importer checks the actual snapshot's column
+contract and approved values before apply and records the supplied actual commit. If GitHub cannot compare an unreachable accepted commit and returns
 404, `--accept-lock` can replace that lock after the archive and migrations checks pass.
 
 Use the `sqlite_path` and `commit` from `current.json` as the census's `--dump` and `--source-sha`.
@@ -317,8 +316,8 @@ quest catalogue and their local quest-giver relations.
 
 ## Creature EventAI family
 
-`--family creature-ai` compiles source rows into Module-owned native definitions. The selected
-EventAI Source Profile defaults to `cmangos-classic-z2815` and is committed at
+`--family creature-ai` compiles source rows into Module-owned native definitions. On classic-db,
+the Source Profile defaults to `cmangos-classic-z2815` and is committed at
 `importer/manifests/cmangos-classic-z2815.json`. That profile pins:
 
 - CMaNGOS Classic commit `ca0775fe352fb67a0e82dc6051f0563187d569a5` and its 24-column,
@@ -612,3 +611,22 @@ The manifest counts commands in all seven delayed-script tables and names each u
 The classic reader has no general quest-start, quest-end, gossip, event, movement or gameobject
 script dispatcher to port. Its quest-end mail behavior already uses the vmangos quest reward
 columns; other commands in those tables remain unsupported.
+
+
+### The vmangos Source Profile
+
+`--source vmangos` selects `importer/manifests/vmangos-4641790.json`. Its column contract covers
+consumed columns and the primary keys used for patch and build selection. Types use SQLite's
+declared affinities. Checked row access still rejects incompatible values and numeric overflow.
+Each table is checked before it is read, including empty tables. A missing column holds back reads
+of that table; unrelated tables remain usable.
+
+The profile approves event types, script commands, target types, condition types, and flag bits.
+It checks command-specific flag fields separately, such as cast flags in command 15. Approved
+values can still be unsupported by the Module; those receive Compatibility Manifest findings.
+Unapproved values refuse dry run and apply with the table, column and values. Row counts compared
+with the accepted snapshot are informational and appear in the Source Profile report.
+
+Use the actual `commit` from fetch's `current.json` as `--source-sha`. vmangos apply requires a full
+commit id and records it in `game_import_meta`; it does not substitute the accepted profile commit.
+The profile accepts a changed snapshot when its column contract and approved values pass.

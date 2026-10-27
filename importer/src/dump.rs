@@ -494,6 +494,9 @@ pub(crate) struct ParsedDump {
 pub(crate) trait TableRows {
     fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>>;
     fn source_hash(&self) -> Result<String>;
+    fn source_profile_report(&self) -> Option<serde_json::Value> {
+        None
+    }
     // May retain extra columns; row selection and checked field access match rows().
     fn columns(
         &self,
