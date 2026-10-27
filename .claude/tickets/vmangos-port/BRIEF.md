@@ -433,6 +433,19 @@ importer's `eventai.rs` first, then `research/vmangos-schema.md` §4.
   it's a small parity fix.
 - Census, plus a test that terrain lookup still finds every map's archive files.
 
+**S7-ledger. Creature behavior vmangos doesn't hold as data** (decided by the maintainer on
+2026-10-27). Some creatures lose classic behavior on vmangos because vmangos runs them on C++ AI
+(about 146, for example the Alterac Valley lords, Lady Jaina Proudmoore 4968, The Beast 10430,
+Gahz'ranka 15114 and Alzzin 11492), or has no EventAI for them at all (about 414, mostly ambient
+speech). These are accepted and don't block the flip.
+
+- Generate a per-creature list in `unsupported.md` from the behavior-parity comparison. For each
+  creature give the entry, the name, the behavior lost (speech, casts, summons, phase or HP rules,
+  flee or help, despawn or emote, quest credit) and the cause: vmangos C++ AI (name the script),
+  no vmangos EventAI, or a refused translation.
+- Mark creatures in content that's playable today, starting with dungeons.
+- These become Feature Ledger behaviors, rebuilt later from reading vmangos's C++ and never copied.
+
 **S7a. Flip the default to vmangos in the importer.**
 
 - `importer/scripts/import-world.sh`.
