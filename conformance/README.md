@@ -137,38 +137,33 @@ Operator transport calls the same debug reducers as the wire adapter. `debug_lea
 requires the Operator, an existing Character and a storage id in `game_taxi_node`. Imported storage
 ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
 
-The seeded three-point taxi fixture is not route 6. Use your client and the pinned classic-db dump
-to prepare the actual route through the existing importer, without `--apply`. Golden Traces retain
-numeric route points. Commit no packet text, vmangos or client files, or bulk world data. The recorder
-hashes text before writing a trace. `taxi-fixture.py` selects unchanged tuples from the importer's
-output, not from a MySQL source dump.
+The tier 1 test installs the hand-written fixture in
+`module/tests/conformance/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
+its 28 vertices, and a minimal synthetic template for the scenario's flight master, entry 352.
+The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
+`TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
+no mount template or other world data is needed.
+
+`route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
+destinations exactly against vertices 1 through 27, including their wire precision. The trace
+starts at the passenger's position, which matches node 2, and omits DBC vertex 0 from its
+destinations. Vertex 0 and destination node 4 were checked against the client data; the trace
+does not independently establish those two rows. The test also checks the passenger's mount display.
 
 ```bash
-scratch="$HOME/.cache/lyracore-scratch/conformance/taxi"
-mkdir -p "$scratch"
-cargo run -p lyracore-importer -- --dbc "$LYRACORE_CLIENT_DATA" \
-  --taxi-mounts "$LYRACORE_CLASSIC_DB_SQL" > "$scratch/dbc.sql"
-cargo run -p lyracore-importer -- --dump "$LYRACORE_CLASSIC_DB_SQL" \
-  --dbc "$LYRACORE_CLIENT_DATA" --world-profile alliance-single > "$scratch/world.sql"
-python3 conformance/taxi-fixture.py "$scratch/dbc.sql" "$scratch/world.sql" \
-  > "$scratch/taxi.sql"
-export LYRACORE_TEST_TAXI_SQL="$scratch/taxi.sql"
 cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture
 ```
 
-The selection contains two taxi nodes, route 6, its 28 path nodes and creature template 352. The
-importer resolves mount creature 541 to a client display in each node, so no extra mount template
-is needed by the Module. The durable test loads these rows into its own Shard. Missing input fails
-with a setup error; it never substitutes the seeded geometry or skips a comparison. The same SQL
-can prepare a disposable Native Host for the harness's LyraCore adapter.
+This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
+Shard and fails with the full comparator report for the eight known gameplay gaps. Durable CI
+keeps the explicit `taxi_single_hop_matches_its_golden_trace` skip until those gaps are fixed.
+Remove the skip in the PR that fixes the last gap. All other conformance checks stay in CI.
+Known gaps never excuse a difference or supply a passing baseline.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
-retains the earlier conformance.3 evidence.
-The ignored taxi test still fails with the comparator report when run with imported data.
-Durable CI explicitly skips `taxi_single_hop_matches_its_golden_trace`, naming its ledger entry in
-the workflow. All other conformance checks remain in CI. This skip records an open Behavior;
-there is no known-differences baseline.
+retains the earlier conformance.3 evidence. Their imported-data setup describes those historical
+runs; tier 1 now uses the bundled fixture.
 
 ## Scoreboard
 

@@ -3,7 +3,7 @@ use std::path::Path;
 use std::process::Command;
 use toml::Value;
 
-fn agrees(pin: &str, workspace: &str) -> Result<()> {
+fn agrees(pin: &str, workspace: &str) -> Result<String> {
     let fields: Vec<_> = pin
         .lines()
         .map(|line| line.split('#').next().unwrap().trim())
@@ -36,27 +36,16 @@ fn agrees(pin: &str, workspace: &str) -> Result<()> {
             .all(|key| matches!(key.as_str(), "git" | "rev")),
         "harness dependency must use only git and rev"
     );
-    Ok(())
+    Ok(sha.to_string())
 }
 
 #[test]
 fn harness_dependency_and_smoke_pin_name_the_same_commit() {
-    agrees(
+    let revision = agrees(
         include_str!("../../.wire-harness-rev"),
         include_str!("../../Cargo.toml"),
     )
     .unwrap();
-    for source in [
-        include_str!("../Cargo.toml"),
-        include_str!("../../module/Cargo.toml"),
-    ] {
-        let manifest: Value = toml::from_str(source).unwrap();
-        assert_eq!(
-            manifest["dev-dependencies"]["wire-client"]["workspace"].as_bool(),
-            Some(true)
-        );
-        assert!(manifest["dependencies"].get("wire-client").is_none());
-    }
     let output = Command::new("cargo")
         .current_dir(Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap())
         .args(["metadata", "--locked", "--no-deps", "--format-version", "1"])
@@ -67,10 +56,12 @@ fn harness_dependency_and_smoke_pin_name_the_same_commit() {
         "{}",
         String::from_utf8_lossy(&output.stderr)
     );
-    workspace_consumers_are_dev_only(&serde_json::from_slice(&output.stdout).unwrap()).unwrap();
+    workspace_consumers_match_pin(&serde_json::from_slice(&output.stdout).unwrap(), &revision)
+        .unwrap();
 }
 
-fn workspace_consumers_are_dev_only(metadata: &serde_json::Value) -> Result<()> {
+fn workspace_consumers_match_pin(metadata: &serde_json::Value, revision: &str) -> Result<()> {
+    let expected = format!("git+https://github.com/LyraCoreProject/wire-harness?rev={revision}");
     let packages = metadata["packages"]
         .as_array()
         .context("workspace packages")?;
@@ -86,7 +77,14 @@ fn workspace_consumers_are_dev_only(metadata: &serde_json::Value) -> Result<()> 
             .as_array()
             .context("package dependencies")?
         {
-            if dependency["name"] == "wire-client" {
+            if dependency["name"] == "wire-client" || dependency["rename"] == "wire-client" {
+                ensure!(
+                    dependency["name"] == "wire-client"
+                        && dependency["source"].as_str() == Some(&expected),
+                    "{} wire-client source or rev differs from the harness pin: {}",
+                    package["name"],
+                    dependency["source"]
+                );
                 ensure!(
                     dependency["kind"] == "dev",
                     "{} has a non-dev wire-client dependency",
@@ -99,7 +97,7 @@ fn workspace_consumers_are_dev_only(metadata: &serde_json::Value) -> Result<()> 
 }
 
 #[test]
-fn every_workspace_member_rejects_non_dev_harness_dependencies() {
+fn every_workspace_member_checks_harness_source_revision_and_dev_kind() {
     use serde_json::json;
     let mut metadata = json!({
         "workspace_members": ["module", "conformance", "another_crate"],
@@ -107,14 +105,34 @@ fn every_workspace_member_rejects_non_dev_harness_dependencies() {
             {"id":"module", "name":"module", "dependencies":[]},
             {"id":"conformance", "name":"conformance", "dependencies":[]},
             {"id":"another_crate", "name":"another_crate", "dependencies":[
-                {"name":"wire-client", "rename":"renamed_harness", "kind":"dev", "target":"cfg(windows)", "optional":true}
+                {"name":"wire-client", "source":"git+https://github.com/LyraCoreProject/wire-harness?rev=abc", "rename":"renamed_harness", "kind":"dev", "target":"cfg(windows)", "optional":true}
             ]}
         ]
     });
-    assert!(workspace_consumers_are_dev_only(&metadata).is_ok());
+    assert!(workspace_consumers_match_pin(&metadata, "abc").is_ok());
+    let original = metadata.clone();
+    for source in [
+        serde_json::Value::Null,
+        json!("registry+https://github.com/rust-lang/crates.io-index"),
+        json!("git+https://github.com/elsewhere/wire-harness?rev=abc"),
+        json!("git+https://github.com/LyraCoreProject/wire-harness?rev=def"),
+        json!("git+https://github.com/LyraCoreProject/wire-harness?branch=abc"),
+        json!("git+https://github.com/LyraCoreProject/wire-harness?tag=abc"),
+    ] {
+        metadata["packages"][2]["dependencies"][0]["source"] = source;
+        assert!(workspace_consumers_match_pin(&metadata, "abc")
+            .unwrap_err()
+            .to_string()
+            .contains("another_crate"));
+    }
+    metadata = original.clone();
+    metadata["packages"][2]["dependencies"][0]["name"] = json!("other-package");
+    metadata["packages"][2]["dependencies"][0]["rename"] = json!("wire-client");
+    assert!(workspace_consumers_match_pin(&metadata, "abc").is_err());
+    metadata = original;
     for kind in [serde_json::Value::Null, json!("build")] {
         metadata["packages"][2]["dependencies"][0]["kind"] = kind;
-        assert!(workspace_consumers_are_dev_only(&metadata)
+        assert!(workspace_consumers_match_pin(&metadata, "abc")
             .unwrap_err()
             .to_string()
             .contains("another_crate"));

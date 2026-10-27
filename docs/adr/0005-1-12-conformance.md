@@ -79,15 +79,16 @@ using a separate scenario author and independent decoders.
 
 ## Two verification tiers
 
-Tier 1 runs on every core change in CI. It drives the Module through native reducers and compares
-emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
+Tier 1 runs on every core change in CI, except the taxi comparison until its known gaps are fixed.
+It drives the Module through native reducers and compares emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
 mechanism test must prove that an Operator WebSocket connection can enter the world through a
 feature-gated debug reducer, call `native_world_receive`, and subscribe to `game_native_packet`.
 The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
 CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
-pointer to `conformance/features/taxi/taxi_single_hop.toml`. It needs imported route data and has
-open rule differences. A manual run still fails with the full comparator report. Keep no
-known-differences baseline; the other conformance checks continue to run in durable CI.
+pointer to `conformance/features/taxi/taxi_single_hop.toml`. Its hand-written fixture holds path 6
+with 28 vertices, nodes 2 and 4, and a minimal flight-master template. The eight known gameplay gaps
+remain. Remove the CI skip in the same PR that fixes the last gap. A manual run still fails with
+the full comparator report. Keep no known-differences baseline; the other conformance checks continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and imported world, and the Reference Server, through the same wire scenarios.
@@ -148,8 +149,9 @@ does not stand in for recordings.
 Core pins `wire-client` to `v0.2.0-conformance.4`, commit
 `a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
-on `wire-client` in every workspace member. The ledger reads only
-`wire_client::catalogue`; every scenario must exist and name the Behavior that lists it.
+on `wire-client` in every workspace member. It also checks the source and exact revision
+of every declaration, including renamed, optional and target-specific dependencies. The ledger
+reads only `wire_client::catalogue`; every scenario must exist and name the Behavior that lists it.
 
 The core `Transport` prepares a Character with debug reducers and uses the buffered Operator
 connection. It handles delivery audiences before passing plaintext packets to `runner::run_on`.
@@ -181,4 +183,4 @@ core defects. No gameplay or Equivalence Rule changes belong to this update.
 The ledger can record `known_gaps` with a description, core source path, symbol and comparison
 evidence. These entries have no status and never participate in rule/data classification. They
 are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
-results; the durable taxi skip remains until the Behavior conforms with imported data.
+results; the durable taxi skip remains until the Behavior conforms with the bundled route fixture.
