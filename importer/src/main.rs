@@ -491,8 +491,8 @@ where
         {
             bail!("--dbc-diff needs only --source vmangos --dump <sqlite> --dbc <client Data> and optional --source-sha");
         }
-    } else if a.census.is_some() {
-        if a.source != world_source::SourceKind::Vmangos
+    } else if a.census.is_some()
+        && (a.source != world_source::SourceKind::Vmangos
             || a.dump.is_none()
             || a.dbc.is_none()
             || !matches!(
@@ -525,10 +525,9 @@ where
             || a.go_models.is_some()
             || a.spells
             || a.talents
-            || a.print_extents
-        {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|creature-ai|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
-        }
+            || a.print_extents)
+    {
+        bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family spell|spellmeta|dbc|creatures|casts|creature-ai|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
     }
     if a.source == world_source::SourceKind::Vmangos
         && (a.spells || a.spell_snapshot.is_some())
