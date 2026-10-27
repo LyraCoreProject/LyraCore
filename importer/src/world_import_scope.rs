@@ -807,18 +807,30 @@ mod tests {
 
     #[test]
     fn malformed_or_empty_scopes_are_refused() {
-        assert!(
-            BoundedMapSlice::rectangle("flat", 0, (1.0, 1.0, 0.0, 2.0), (1.0, 1.0, 0.0)).is_err()
+        assert_eq!(
+            BoundedMapSlice::rectangle("flat", 0, (1.0, 1.0, 0.0, 2.0), (1.0, 1.0, 0.0))
+                .unwrap_err()
+                .to_string(),
+            "world import bounds must have positive width and height"
         );
-        assert!(WorldImportScope::new("empty", vec![], vec![], vec![], vec![]).is_err());
-        assert!(WorldImportScope::legacy(
-            0,
-            Some((-1.0, 1.0, -1.0, 1.0)),
-            (0.0, 0.0, 0.0),
-            10.0,
-            Some((-2.0, 2.0, -2.0, 2.0)),
-            vec![]
-        )
-        .is_err());
+        assert_eq!(
+            WorldImportScope::new("empty", vec![], vec![], vec![], vec![])
+                .unwrap_err()
+                .to_string(),
+            "world import scope is empty: add a bounded slice or whole map"
+        );
+        assert_eq!(
+            WorldImportScope::legacy(
+                0,
+                Some((-1.0, 1.0, -1.0, 1.0)),
+                (0.0, 0.0, 0.0),
+                10.0,
+                Some((-2.0, 2.0, -2.0, 2.0)),
+                vec![]
+            )
+            .unwrap_err()
+            .to_string(),
+            "--exclude removes the entire --box; world import scope is empty"
+        );
     }
 }

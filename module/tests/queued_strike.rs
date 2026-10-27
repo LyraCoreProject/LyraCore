@@ -216,14 +216,14 @@ fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fir
         "the client learns the cooldown from the fired strike"
     );
     assert_eq!(raptor_strike_cooldown(&standalone).len(), 1);
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let fired_ms = spacetimedb::Timestamp::parse_from_rfc3339(&fired_row["created_at"])
         .unwrap()
-        .as_millis() as u64;
-    let regen_paused_until: u64 = after["mana_regen_paused_until_ms"].parse().unwrap();
-    assert!(
-        regen_paused_until > now_ms,
-        "spending mana must pause mana regeneration"
+        .to_micros_since_unix_epoch()
+        / 1000;
+    assert_eq!(
+        after["mana_regen_paused_until_ms"],
+        (fired_ms + 5000).to_string(),
+        "spending mana pauses mana regeneration for five seconds"
     );
 }
 

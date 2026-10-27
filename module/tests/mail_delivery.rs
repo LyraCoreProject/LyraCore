@@ -3,6 +3,7 @@ mod support;
 use std::collections::BTreeMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use lyracore_shared::mail::NOT_YOUR_MAIL;
 use support::{actor, Standalone};
 
 const TESTER: &str = "1";
@@ -60,8 +61,21 @@ fn tester_with_purse(test_name: &str) -> Standalone {
     standalone
 }
 
-fn refused(standalone: &Standalone, reducer: &str, args: &[&str]) -> bool {
-    !standalone.call(reducer, args).status.success()
+fn assert_take_refused(standalone: &Standalone, recipient: &str, mail_id: &str) {
+    let output = standalone.call("realm_mail_take_item", &[recipient, mail_id]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains(NOT_YOUR_MAIL),
+        "an undelivered item cannot be taken: {text}"
+    );
+    let attached = standalone.query_rows(&format!(
+        "SELECT item_entry FROM game_mail WHERE id = {mail_id}"
+    ));
+    assert_eq!(attached[0]["item_entry"], BLADE, "the item stays attached");
 }
 
 #[test]
@@ -103,11 +117,7 @@ fn only_an_item_sent_or_returned_to_another_account_waits_an_hour() {
         (from + HOUR_MICROS..=by + HOUR_MICROS).contains(&deliver_micros(&waits)),
         "an item to another Account waits an hour (mangoszero MailHandler.cpp:306-318): {waits:?}"
     );
-    assert!(refused(
-        &standalone,
-        "realm_mail_take_item",
-        &[&friend, &waits["id"]]
-    ));
+    assert_take_refused(&standalone, &friend, &waits["id"]);
     let (_, _, alt) = send("delivery: alt", "0", &swords[1], "true");
     assert_eq!(deliver_micros(&alt), 0, "an item to an alt arrives at once");
     let (_, _, copper) = send("delivery: copper", "100", "0", "false");
@@ -126,11 +136,7 @@ fn only_an_item_sent_or_returned_to_another_account_waits_an_hour() {
         (from + HOUR_MICROS..=by + HOUR_MICROS).contains(&deliver_micros(&back)),
         "an item returned to another Account waits an hour (cmangos Mail.cpp:241-261): {back:?}"
     );
-    assert!(refused(
-        &standalone,
-        "realm_mail_take_item",
-        &[&tester, &back["id"]]
-    ));
+    assert_take_refused(&standalone, &tester, &back["id"]);
 
     let from = now_micros();
     standalone.assert_call("realm_mail_return", &[&friend, &kept["id"], "true"]);

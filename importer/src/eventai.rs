@@ -6199,7 +6199,10 @@ mod tests {
         for action in [16, 26, 27] {
             assert_eq!(profile.expected_source_census["actions"].get(&action), None);
         }
-        assert!(source_profile("z2815").is_err());
+        assert_eq!(
+            source_profile("z2815").err(),
+            Some("unknown EventAI source profile: z2815".to_string())
+        );
     }
 
     #[test]
@@ -6868,19 +6871,14 @@ mod tests {
         assert_eq!(plan.relay_definition_rows.len(), 1);
         assert_eq!(plan.broadcast_rows.len(), 1);
         assert!(plan.broadcast_rows[0].starts_with("(901,"));
-        let relay = &plan.relay_definition_rows[0];
-        let mut relay_fields = relay.split('@');
-        let relay_id = relay_fields.next().unwrap().parse::<u32>().unwrap();
-        let relay_version = relay_fields.next().unwrap().parse::<u64>().unwrap();
-        let mut hasher = blake3::Hasher::new();
-        hasher.update(b"lyracore-relay-catalogue-v1");
-        hasher.update(&relay_id.to_le_bytes());
-        hasher.update(&relay_version.to_le_bytes());
-        let catalogue_version =
-            u64::from_le_bytes(hasher.finalize().as_bytes()[..8].try_into().unwrap());
-        assert_ne!(catalogue_version, 0);
+        assert_eq!(
+            plan.relay_definition_rows[0],
+            "1@12283814705599647113@parallel@map-or-instance@0,0,0,source>selected,talk:901"
+        );
         assert!(
-            plan.definition_rows[0].contains(&format!("start-relay:1:self:{catalogue_version}"))
+            plan.definition_rows[0].ends_with(",start-relay:1:self:16550264882709403973"),
+            "{}",
+            plan.definition_rows[0]
         );
     }
 

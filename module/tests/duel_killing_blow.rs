@@ -1,6 +1,9 @@
 mod support;
 
-use support::{number, poll_until, wait_for_event_rows, Standalone, POLL_TIMEOUT};
+use support::{
+    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, Standalone,
+    POLL_TIMEOUT,
+};
 
 const PLAYER: u64 = 1;
 const DUEL: u64 = 509_0001;
@@ -57,10 +60,13 @@ fn a_duel_ending_swing_is_no_killing_blow() {
         player["map_id"], player["instance_id"]
     ));
 
-    let events = standalone.subscribe(&[
-        &format!("SELECT * FROM game_combat_event_live WHERE attacker_guid = {PLAYER}"),
-        &format!("SELECT * FROM game_duel WHERE id = {DUEL}"),
-    ]);
+    let events = subscribe_with_fence(
+        &standalone,
+        &[
+            &format!("SELECT * FROM game_combat_event_live WHERE attacker_guid = {PLAYER}"),
+            &format!("SELECT * FROM game_duel WHERE id = {DUEL}"),
+        ],
+    );
     standalone.assert_call("debug_engage", &[&PLAYER.to_string(), &rival.to_string()]);
     // A swing may miss or be avoided, so keep making the next one due.
     assert!(
@@ -83,10 +89,15 @@ fn a_duel_ending_swing_is_no_killing_blow() {
         .remove(0);
     assert_eq!(rival_row["dead"], "false", "the Duel loser must survive");
     assert_eq!(rival_row["health"], "1");
-    let swings = wait_for_event_rows(&events, "game_combat_event_live");
-    assert!(!swings.is_empty(), "the Duel must have ended on a swing");
-    assert!(
-        swings.iter().all(|swing| swing["killing_blow"] == "false"),
+    fence_subscription(&standalone, &events);
+    let swings = event_rows(&events, "game_combat_event_live");
+    let damaging: Vec<_> = swings
+        .iter()
+        .filter(|swing| number::<u32>(swing, "damage") > 0)
+        .collect();
+    assert_eq!(damaging.len(), 1, "one swing must end the Duel: {swings:?}");
+    assert_eq!(
+        damaging[0]["killing_blow"], "false",
         "a Duel-ending swing is no killing blow: {swings:?}"
     );
 }

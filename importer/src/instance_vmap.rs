@@ -292,7 +292,9 @@ mod tests {
             convention,
             &[f32::NAN; 6]
         )
-        .is_err());
+        .unwrap_err()
+        .to_string()
+        .eq("WMO group has malformed bounds"));
 
         let map_edge = placement([origin, 0.0, -1.0]);
         let edge_selected =
@@ -304,7 +306,9 @@ mod tests {
             convention,
             &[-2.0, -1.0, -1.0, 2.0, 1.0, 1.0]
         )
-        .is_err());
+        .unwrap_err()
+        .to_string()
+        .ends_with("cannot be represented as a map cell"));
     }
 
     #[test]
@@ -363,6 +367,8 @@ mod tests {
             convention,
             &[1.0, -1.0, -1.0, -1.0, 1.0, 1.0]
         )
-        .is_err());
+        .unwrap_err()
+        .to_string()
+        .eq("WMO group has reversed bounds"));
     }
 }

@@ -1076,16 +1076,25 @@ mod tests {
     fn only_a_complete_staging_generation_can_be_verified() {
         assert!(require_staging(STAGING).is_ok());
         assert!(require_complete(2, 2).is_ok());
-        assert!(require_complete(2, 1).is_err());
-        assert!(require_staging(VERIFIED).is_err());
+        assert_eq!(
+            require_complete(2, 1),
+            Err("vmap generation has 1/2 chunks".to_string())
+        );
+        assert_eq!(
+            require_staging(VERIFIED),
+            Err("vmap generation is not staging".to_string())
+        );
     }
 
     #[test]
     fn activation_requires_verification() {
         assert!(require_verified(VERIFIED).is_ok());
-        assert!(require_verified(STAGING).is_err());
-        assert!(require_verified(ACTIVE).is_err());
-        assert!(require_verified(DISCARDED).is_err());
+        for state in [STAGING, ACTIVE, DISCARDED] {
+            assert_eq!(
+                require_verified(state),
+                Err("only a verified vmap generation can be activated".to_string())
+            );
+        }
     }
 
     #[test]
@@ -1103,23 +1112,22 @@ mod tests {
         let digest = manifest_digest(canonical);
 
         assert!(require_manifest(3, &digest, canonical).is_ok());
-        assert!(
-            require_manifest(2, &digest, canonical).is_err(),
-            "byte truncation is refused"
+        assert_eq!(
+            require_manifest(2, &digest, canonical),
+            Err("vmap generation has 3/2 manifest bytes".to_string())
         );
-        assert!(
+        let mismatch =
+            Err("vmap generation manifest digest does not match staged chunks".to_string());
+        assert_eq!(
             require_manifest(
                 3,
                 &digest,
                 [(9, 0, second.as_slice()), (7, 0, first.as_slice())]
-            )
-            .is_err(),
+            ),
+            mismatch,
             "the same chunks in a different order have a different manifest"
         );
-        assert!(
-            require_manifest(3, &[0; 32], canonical).is_err(),
-            "a different digest is refused"
-        );
+        assert_eq!(require_manifest(3, &[0; 32], canonical), mismatch);
     }
 
     #[test]

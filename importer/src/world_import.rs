@@ -4230,8 +4230,14 @@ mod tests {
 
     #[test]
     fn spell_chains_refuse_ambiguous_client_families() {
-        for links in [vec![(1, 2), (1, 3)], vec![(1, 3), (2, 3)]] {
-            assert!(build_spell_chain_sql("", &links).is_err());
+        for (links, link) in [
+            (vec![(1, 2), (1, 3)], "1 -> 3"),
+            (vec![(1, 3), (2, 3)], "2 -> 3"),
+        ] {
+            assert_eq!(
+                build_spell_chain_sql("", &links).unwrap_err().to_string(),
+                format!("ambiguous client spell rank link {link}")
+            );
         }
     }
 
@@ -4240,9 +4246,12 @@ mod tests {
         for links in [
             vec![(1, 1)],
             vec![(1, 2), (2, 1)],
-            vec![(1, 2), (2, 3), (3, 2)],
+            vec![(1, 2), (2, 3), (3, 1)],
         ] {
-            assert!(build_spell_chain_sql("", &links).is_err());
+            assert_eq!(
+                build_spell_chain_sql("", &links).unwrap_err().to_string(),
+                "client spell rank links contain a cycle"
+            );
         }
     }
 
@@ -4251,7 +4260,10 @@ mod tests {
         let mut links: Vec<_> = (1..255).map(|spell| (spell, spell + 1)).collect();
         assert!(build_spell_chain_sql("", &links).is_ok());
         links.push((255, 256));
-        assert!(build_spell_chain_sql("", &links).is_err());
+        assert_eq!(
+            build_spell_chain_sql("", &links).unwrap_err().to_string(),
+            "cyclic or oversized client spell family 1"
+        );
     }
 
     #[test]
@@ -4289,14 +4301,24 @@ mod tests {
             .unwrap()
             .join("\n");
         assert!(sql.contains("(123,20,2,4,3,8,0,0,0)"), "{sql}");
-        assert!(build_spell_proc_event_sql(dump, None).is_err());
+        assert_eq!(
+            build_spell_proc_event_sql(dump, None)
+                .unwrap_err()
+                .to_string(),
+            "spell 123 has per-effect proc masks; supply its client Spell.dbc"
+        );
     }
 
     #[test]
     fn different_active_proc_effect_masks_are_refused_instead_of_broadened() {
         let dump = "INSERT INTO `spell_proc_event` VALUES (123,4,3,8,4,4,20,2,0,0,0);";
         let effects = std::collections::HashMap::from([(123, vec![0, 1])]);
-        assert!(build_spell_proc_event_sql(dump, Some(&effects)).is_err());
+        assert_eq!(
+            build_spell_proc_event_sql(dump, Some(&effects))
+                .unwrap_err()
+                .to_string(),
+            "spell 123 needs different masks for active Proc effects; scalar overlay cannot represent it"
+        );
     }
 
     #[test]
@@ -4757,7 +4779,9 @@ mod tests {
             ]
         );
         let conditions = gossip_conditions::read(&dump);
-        use lyracore_shared::gossip::{evaluate_reference, CharacterFacts, QuestState};
+        use lyracore_shared::gossip::{
+            evaluate_reference, CharacterFacts, QuestState, Unavailable,
+        };
         let facts = CharacterFacts {
             level: 20,
             race: 1,
@@ -4767,8 +4791,14 @@ mod tests {
             |id, state| evaluate_reference(id, facts, |_| state, |id| conditions.get(&id).copied());
         assert_eq!(evaluate(501, QuestState::Complete), Ok(true));
         assert_eq!(evaluate(501, QuestState::Incomplete), Ok(false));
-        assert!(evaluate(502, QuestState::Complete).is_err());
-        assert!(evaluate(599, QuestState::Complete).is_err());
+        assert_eq!(
+            evaluate(502, QuestState::Complete),
+            Err(Unavailable::Unsupported(5))
+        );
+        assert_eq!(
+            evaluate(599, QuestState::Complete),
+            Err(Unavailable::Missing(599))
+        );
     }
 
     #[test]
@@ -5048,7 +5078,16 @@ mod tests {
             std::env::temp_dir().join(format!("lyracore-absent-packages-{}", std::process::id(),));
         assert!(!absent_root.exists());
         args.packages = Some(absent_root.to_string_lossy().into_owned());
-        assert!(run_package_stage(&args, "creature-ai").is_err());
+        let refusal = run_package_stage(&args, "creature-ai")
+            .unwrap_err()
+            .to_string();
+        assert!(
+            refusal.starts_with(&format!(
+                "enabled packages root `{}` is not a directory",
+                absent_root.display()
+            )),
+            "{refusal}"
+        );
         args.world_profile = None;
         assert!(run_package_stage(&args, "creature-ai").is_ok());
     }

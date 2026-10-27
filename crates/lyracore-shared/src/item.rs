@@ -361,27 +361,28 @@ mod tests {
 
     #[test]
     fn the_spellbook_reader_maps_the_two_passives_to_armor() {
-        use crate::constants::armor_proficiency::{MAIL_PASSIVE_SPELL_ID, PLATE_PASSIVE_SPELL_ID};
-
         let armor = |class, book: &[u32]| armor_set(spellbook(class, book));
-        for class in PLAYABLE {
-            let derived = |plate, mail| armor_set(Proficiency::derive(class, plate, mail));
-            assert_eq!(armor(class, &[]), derived(false, false));
-            assert_eq!(
-                armor(class, &[PLATE_PASSIVE_SPELL_ID]),
-                derived(true, false)
-            );
-            assert_eq!(armor(class, &[MAIL_PASSIVE_SPELL_ID]), derived(false, true));
-            assert_eq!(
-                armor(class, &[PLATE_PASSIVE_SPELL_ID, MAIL_PASSIVE_SPELL_ID]),
-                derived(true, true)
-            );
-            assert_eq!(
-                armor(class, &[7109, 8738, 674, 201, 202]),
-                derived(false, false),
-                "class {class}: only the passives move armor"
-            );
-        }
+        let warrior = vec![MISC, CLOTH, LEATHER, MAIL, SHIELD];
+        let plate_warrior = vec![MISC, CLOTH, LEATHER, MAIL, PLATE, SHIELD];
+        assert_eq!(armor(1, &[]), warrior);
+        assert_eq!(armor(1, &[750]), plate_warrior);
+        assert_eq!(armor(1, &[8737]), warrior, "mail is already a warrior's");
+        assert_eq!(armor(1, &[750, 8737]), plate_warrior);
+        assert_eq!(armor(2, &[750]), plate_warrior);
+        assert_eq!(armor(3, &[]), [MISC, CLOTH, LEATHER]);
+        assert_eq!(
+            armor(3, &[750]),
+            [MISC, CLOTH, LEATHER],
+            "no plate for a hunter"
+        );
+        assert_eq!(armor(3, &[8737]), [MISC, CLOTH, LEATHER, MAIL]);
+        assert_eq!(armor(7, &[8737]), [MISC, CLOTH, LEATHER, MAIL, SHIELD]);
+        assert_eq!(armor(8, &[750, 8737]), [MISC, CLOTH]);
+        assert_eq!(
+            armor(1, &[7109, 8738, 674, 201, 202]),
+            warrior,
+            "only the passives move armor"
+        );
     }
 
     #[test]

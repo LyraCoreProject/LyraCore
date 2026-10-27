@@ -237,7 +237,16 @@ fn creation_is_atomic_even_when_the_spell_handles_a_full_inventory() {
         .all(|item| item["random_property_id"] == PROPERTY));
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
     let refused = shard.call("debug_grant_item", &["1", ITEM, "1"]);
-    assert!(!refused.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success()
+            && text.contains(&format!("invalid property pool {POOL} for item {ITEM}")),
+        "{text}"
+    );
     assert_eq!(
         shard.query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1"),
         created

@@ -146,6 +146,7 @@ pub(super) fn resolve(row: &[String], conditions: &Conditions) -> (u32, u32, u32
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::gossip::Unavailable;
 
     #[test]
     fn compound_operands_and_reverse_flags_survive_import() {
@@ -165,14 +166,23 @@ mod tests {
     #[test]
     fn malformed_and_duplicate_source_rows_stay_unavailable() {
         let rows = read("INSERT INTO `conditions` VALUES (1,9,777,'bad'),(2,0,0,0),(2,0,0,0),(3,-3,1,0),(4,-3,2,0),(5,-3,6,0),(6,-3,5,0);");
-        for id in [1, 2, 3, 4, 5, 6] {
-            assert!(evaluate_reference(
-                id,
-                CharacterFacts::default(),
-                |_| QuestState::Absent,
-                |id| rows.get(&id).copied()
-            )
-            .is_err());
+        for (id, unavailable) in [
+            (1, Unavailable::Unsupported(i32::MIN)),
+            (2, Unavailable::Unsupported(i32::MIN)),
+            (3, Unavailable::Unsupported(i32::MIN)),
+            (4, Unavailable::Unsupported(i32::MIN)),
+            (5, Unavailable::Cycle(5)),
+            (6, Unavailable::Cycle(6)),
+        ] {
+            assert_eq!(
+                evaluate_reference(
+                    id,
+                    CharacterFacts::default(),
+                    |_| QuestState::Absent,
+                    |id| rows.get(&id).copied()
+                ),
+                Err(unavailable)
+            );
         }
     }
 }

@@ -446,14 +446,19 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         "SELECT * FROM game_creature_spline WHERE guid = {patroller} OR guid = {wanderer}"
     ));
     assert_eq!(walking.len(), 2);
+    assert!(
+        walking.iter().all(|leg| leg["facing"] == "false"),
+        "{walking:?}"
+    );
     let cast = cast_at(&shard, point);
     assert!(cast.status.success(), "{cast:?}");
-    for leg in walking {
-        assert_eq!(leg["facing"], "false", "{leg:?}");
+    for guid in [patroller, wanderer] {
+        let leg = spline(&shard, guid).expect("a distracted mover keeps a leg");
+        assert_eq!(leg["facing"], "true", "{leg:?}");
+        let stop = (number(&leg, "dx"), number(&leg, "dy"), number(&leg, "dz"));
         assert!(
-            now_ms() * 1_000
-                < number::<u64>(&leg, "start_micros") + number::<u64>(&leg, "dur_ms") * 1_000,
-            "Distract must interrupt an unfinished leg: {leg:?}"
+            support::distance(stop, (x, y, z)) > 1.0,
+            "Distract must stop {guid} short of its destination: {leg:?}"
         );
     }
     shard.assert_sql(&format!(

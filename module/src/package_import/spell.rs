@@ -252,8 +252,8 @@ fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, effect_claim, plan, some_value, spell_claim, PACKAGE_SPELL, REAL_SPELL,
-        WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+        artifact, assert_each_column_sets_its_own_field, effect_claim, plan, spell_claim,
+        PACKAGE_SPELL, REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
     };
     use super::*;
 
@@ -324,21 +324,21 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_spell_column_has_a_setter() {
-        let mut spell = blank_spell(PACKAGE_SPELL);
-        for column in ClaimTable::Spell.columns() {
-            apply_spell_field(&mut spell, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_spell_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::Spell,
+            || blank_spell(PACKAGE_SPELL),
+            apply_spell_field,
+        );
     }
 
     #[test]
-    fn every_claimable_effect_column_has_a_setter() {
-        let mut effect = blank_spell_effect(PACKAGE_SPELL, 0);
-        for column in ClaimTable::SpellEffect.columns() {
-            apply_effect_field(&mut effect, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell_effect` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_effect_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellEffect,
+            || blank_spell_effect(PACKAGE_SPELL, 0),
+            apply_effect_field,
+        );
     }
 
     #[test]

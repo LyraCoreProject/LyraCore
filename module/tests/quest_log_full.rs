@@ -132,4 +132,12 @@ fn a_failed_quest_keeps_its_slot_until_it_is_taken_again() {
         accept(&shard, &giver, FIRST_QUEST).status.success(),
         "a failed quest resets in its own slot"
     );
+    assert_eq!(quest_rows(&shard), LOG_SIZE as usize);
+    let first = shard.query_rows(&format!(
+        "SELECT failed, rewarded, deadline_micros FROM game_character_quest \
+         WHERE character_guid = {CHARACTER} AND quest_entry = {FIRST_QUEST}"
+    ));
+    assert_eq!(first.len(), 1, "{first:?}");
+    assert_eq!(first[0]["failed"], "false", "{first:?}");
+    assert_eq!(first[0]["rewarded"], "false", "{first:?}");
 }

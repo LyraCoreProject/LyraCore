@@ -1347,30 +1347,40 @@ mod tests {
         };
         assert_eq!(auction_house_sql(&reversed).unwrap().0, first);
 
-        for invalid in [
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 0, 5, 5, "missing faction")],
-            },
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 12, -1, 5, "negative deposit")],
-            },
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 12, 5, 101, "excessive cut")],
-            },
-            DbcAuctionHouse {
-                rows: vec![
+        for (rows, reason) in [
+            (
+                vec![auction_house_row(1, 0, 5, 5, "missing faction")],
+                "AuctionHouse.dbc house 1 has invalid parent faction 0",
+            ),
+            (
+                vec![auction_house_row(1, 12, -1, 5, "negative deposit")],
+                "AuctionHouse.dbc house 1 has invalid deposit rate -1 (expected 0..=100)",
+            ),
+            (
+                vec![auction_house_row(1, 12, 5, 101, "excessive cut")],
+                "AuctionHouse.dbc house 1 has invalid consignment rate 101 (expected 0..=100)",
+            ),
+            (
+                vec![
                     auction_house_row(1, 12, 5, 5, "first"),
                     auction_house_row(1, 29, 5, 5, "duplicate"),
                 ],
-            },
-            DbcAuctionHouse {
-                rows: vec![
+                "AuctionHouse.dbc contains duplicate house id 1",
+            ),
+            (
+                vec![
                     auction_house_row(1, 12, 5, 5, "first"),
                     auction_house_row(2, 12, 5, 5, "ambiguous faction"),
                 ],
-            },
+                "AuctionHouse.dbc contains duplicate parent faction 12",
+            ),
         ] {
-            assert!(auction_house_sql(&invalid).is_err());
+            assert_eq!(
+                auction_house_sql(&DbcAuctionHouse { rows })
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
         }
     }
 
@@ -1406,19 +1416,26 @@ mod tests {
         };
         assert_eq!(mail_template_sql(&reversed).unwrap().0, first);
 
-        for invalid in [
-            DbcMailTemplate { rows: vec![] },
-            DbcMailTemplate {
-                rows: vec![mail_template_row(0, "invalid id")],
-            },
-            DbcMailTemplate {
-                rows: vec![
+        for (rows, reason) in [
+            (vec![], "MailTemplate.dbc contains no rows"),
+            (
+                vec![mail_template_row(0, "invalid id")],
+                "MailTemplate.dbc contains invalid template id 0",
+            ),
+            (
+                vec![
                     mail_template_row(1, "first"),
                     mail_template_row(1, "duplicate"),
                 ],
-            },
+                "MailTemplate.dbc contains duplicate template id 1",
+            ),
         ] {
-            assert!(mail_template_sql(&invalid).is_err());
+            assert_eq!(
+                mail_template_sql(&DbcMailTemplate { rows })
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
         }
     }
 
@@ -1668,25 +1685,36 @@ mod tests {
     #[test]
     fn taxi_catalogue_refuses_unusable_template_dumps_before_returning_sql() {
         let (nodes, paths, points) = synthetic_taxi_catalogue();
-        for dump in [
-            "",
-            "INSERT INTO `creature_template` VALUES (1100,'Short row');",
-            "INSERT INTO `creature_template` VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
-            "INSERT INTO `creature_template` VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
-            "INSERT INTO `creature_template` VALUES \
-                (1100,'First','',1,1,295,0,0,0),(1100,'Duplicate','',1,1,1147,0,0,0);",
+        for (dump, reason) in [
+            ("", "taxi mount dump has no creature_template rows"),
+            (
+                "INSERT INTO `creature_template` VALUES (1100,'Short row');",
+                "taxi mount creature 1100 is missing model column 5",
+            ),
+            (
+                "INSERT INTO `creature_template` VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
+                "taxi mount creature 1100 has an invalid model",
+            ),
+            (
+                "INSERT INTO `creature_template` VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
+                "taxi mount dump has an invalid creature entry",
+            ),
+            (
+                "INSERT INTO `creature_template` VALUES \
+                    (1100,'First','',1,1,295,0,0,0),(1100,'Duplicate','',1,1,1147,0,0,0);",
+                "taxi mount dump has duplicate creature entry 1100",
+            ),
         ] {
-            assert!(
-                super::taxi_catalogue_sql(
-                    &nodes,
-                    &paths,
-                    &points,
-                    dump,
-                    &HashSet::from([295, 1147])
-                )
-                .is_err(),
-                "{dump}"
-            );
+            let refusal = super::taxi_catalogue_sql(
+                &nodes,
+                &paths,
+                &points,
+                dump,
+                &HashSet::from([295, 1147]),
+            )
+            .err()
+            .map(|error| error.to_string());
+            assert_eq!(refusal.as_deref(), Some(reason), "{dump}");
         }
     }
 
@@ -2264,7 +2292,12 @@ mod tests {
     fn spell_rank_links_reject_negative_successors() {
         let mut row = skill_ability_row(1, 26, 78, 0, 1, 0, 0, 0, 0);
         row.acquire_method = -1;
-        assert!(spell_rank_links(&DbcSkillLineAbility { rows: vec![row] }).is_err());
+        assert_eq!(
+            spell_rank_links(&DbcSkillLineAbility { rows: vec![row] })
+                .unwrap_err()
+                .to_string(),
+            "SkillLineAbility has a negative successor spell"
+        );
     }
 
     fn skill_availability_row(
@@ -2443,10 +2476,33 @@ mod tests {
             )],
         };
         let tiers = DbcSkillTiers {
-            rows: vec![skill_tiers_row(42, [75, 150, 225, 300])],
+            rows: vec![
+                skill_tiers_row(41, [1, 2, 3, 4]),
+                skill_tiers_row(42, [75, 150, 225, 300]),
+                skill_tiers_row(43, [5, 6, 7, 8]),
+            ],
         };
         let map = resolve_profession_tier_values(&availability, &tiers);
         assert_eq!(map.get(&186), Some(&[75u16, 150, 225, 300]));
+    }
+
+    #[test]
+    fn each_profession_line_reads_the_tier_row_its_availability_names() {
+        let availability = DbcSkillRaceClassInfo {
+            rows: vec![
+                skill_availability_row(1, 186, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 43),
+                skill_availability_row(2, 171, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 42),
+            ],
+        };
+        let tiers = DbcSkillTiers {
+            rows: vec![
+                skill_tiers_row(42, [75, 150, 225, 300]),
+                skill_tiers_row(43, [50, 125, 200, 275]),
+            ],
+        };
+        let map = resolve_profession_tier_values(&availability, &tiers);
+        assert_eq!(map.get(&186), Some(&[50u16, 125, 200, 275]));
+        assert_eq!(map.get(&171), Some(&[75u16, 150, 225, 300]));
     }
 
     #[test]
