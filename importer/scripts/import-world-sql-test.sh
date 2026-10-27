@@ -99,6 +99,7 @@ run_import() {
         cd "$sandbox" || exit 99
         env -i \
             HOME="$sandbox/home" \
+            TMPDIR="$sandbox" \
             PATH="$stubs:/usr/bin:/bin" \
             DUMP="$checkout/source.sqlite" \
             SOURCE_SHA="0123456789012345678901234567890123456789" \
