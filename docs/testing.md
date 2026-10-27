@@ -157,11 +157,11 @@ The independent Benilla codec checks and opcode inventory are described in
 
 ## Conformance
 
-The Milestone 1 native reducer check starts its own local Shard and bypasses WoW transport and
-SRP through a reducer gated by `conformance_test_fixture`. It proves world entry, a ping/pong
-transaction, preserved login credentials and packet delivery from a later transaction. The test
-uses a gtker decoder directly. It has no Golden Trace yet. See
-[ADR 0005](adr/0005-1-12-conformance.md) for the planned tiers and their ownership.
+Tier 1 starts a disposable local Shard and drives native reducers through an Operator WebSocket
+connection. `connection_identity` compares ping and name-query replies with the pinned harness's
+Golden Trace. The same target checks preserved login credentials and later-transaction packet
+delivery. Fixture world entry requires `conformance_test_fixture`; normal publication excludes it.
+See [ADR 0005](adr/0005-1-12-conformance.md) for repository ownership.
 
 ```bash
 export CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/conformance/target"
@@ -179,10 +179,11 @@ cargo test -p lyracore-conformance -- --nocapture
 cargo test -p lyracore-protocol --example benilla_inventory
 ```
 
-The first command checks every Behavior file and its dependencies. Scenario ids are cross-checked
-when the pinned harness supplies a catalogue. Milestone 1's pin has none, so the test prints that
-skip. The second command checks retained Rust evidence declarations in the inventory. Neither
-command establishes that a Behavior passes its required verification rungs.
+The first command checks every Behavior file, its dependencies, the harness dependency pin and
+all scenario references through `wire_client::catalogue`. Missing scenarios and mismatched
+Behavior ids fail. The second command checks retained Rust evidence declarations in the inventory.
+Neither command establishes that a Behavior passes its required verification rungs.
+The tier 1 test writes `.lyracore/conformance/tier1.json` for the scoreboard.
 
 The existing durable CI target discovery includes `native_conformance` automatically.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and

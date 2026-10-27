@@ -89,20 +89,29 @@ impl FeatureLedger {
         &self.behaviors
     }
 
-    pub fn validate_scenarios<'a>(&self, ids: impl IntoIterator<Item = &'a str>) -> Result<()> {
-        let mut catalogue = BTreeSet::new();
-        for id in ids {
+    pub fn validate_scenarios<'a>(
+        &self,
+        scenarios: impl IntoIterator<Item = (&'a str, &'a str)>,
+    ) -> Result<()> {
+        let mut catalogue = BTreeMap::new();
+        for (id, behavior) in scenarios {
             ensure!(!id.trim().is_empty(), "empty scenario id in catalogue");
             ensure!(
-                catalogue.insert(id),
+                catalogue.insert(id, behavior).is_none(),
                 "duplicate scenario id in catalogue: {id}"
             );
         }
         for behavior in &self.behaviors {
             for id in &behavior.scenarios {
                 ensure!(
-                    catalogue.contains(id.as_str()),
+                    catalogue.contains_key(id.as_str()),
                     "{} names an absent scenario: {id}",
+                    behavior.id
+                );
+                ensure!(
+                    catalogue[id.as_str()] == behavior.id,
+                    "scenario {id} names Behavior {}, but {} lists it",
+                    catalogue[id.as_str()],
                     behavior.id
                 );
             }

@@ -82,17 +82,25 @@ fn scenario_cross_check_detects_unknown_and_duplicate_ids() {
     );
     let ledger = load(&source).unwrap();
     assert!(ledger
-        .validate_scenarios(["quests/choice-reward.v1"])
+        .validate_scenarios([("quests/choice-reward.v1", "quest_reward")])
         .is_ok());
     assert!(ledger
-        .validate_scenarios(["different"])
+        .validate_scenarios([("different", "quest_reward")])
         .unwrap_err()
         .to_string()
         .contains("absent scenario"));
     assert!(ledger
-        .validate_scenarios(["quests/choice-reward.v1", "quests/choice-reward.v1"])
+        .validate_scenarios([
+            ("quests/choice-reward.v1", "quest_reward"),
+            ("quests/choice-reward.v1", "quest_reward")
+        ])
         .is_err());
-    assert!(ledger.validate_scenarios([""]).is_err());
+    assert!(ledger.validate_scenarios([("", "quest_reward")]).is_err());
+    assert!(ledger
+        .validate_scenarios([("quests/choice-reward.v1", "different_behavior")])
+        .unwrap_err()
+        .to_string()
+        .contains("but quest_reward lists it"));
 }
 
 #[test]

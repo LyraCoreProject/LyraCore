@@ -11,8 +11,8 @@ cargo test -p lyracore-protocol --example benilla_inventory
 cargo run -p lyracore-protocol --example benilla_inventory
 ```
 
-The first command checks every ledger file and, when available, its scenario references. The
-second checks retained Rust evidence declarations. The inventory command reads these same files
+The first command checks every ledger file and its scenario references. The second checks retained
+Rust evidence declarations. The inventory command reads these same files
 and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
@@ -71,16 +71,32 @@ contain no copied implementation or world data. Those references identify where 
 and record each Behavior; they are not a claim that all nine conform today. All nine real-client
 checks remain unverified and their scenario lists are empty.
 
-## Scenario catalogue integration
+## Scenario catalogue and tier 1
 
-Milestone 1 keeps `.wire-harness-rev` unchanged. Its pinned revision predates the scenario
-catalogue, so the Architecture Test prints an explicit skip for the scenario-id cross-check and
-still checks all ledger files and dependencies.
+`wire_client::catalogue` embeds the scenarios and Golden Traces at the revision in
+`.wire-harness-rev`. The workspace pins `wire-client` to that full commit SHA. The Module tests
+and ledger tests use it only as a dev-dependency. The `harness_pin` Architecture Test checks
+that both consumers inherit the same revision as `dev smoke`.
 
-The assumed catalogue path and its TOML shape live together in
-[`pinned_scenario_catalogue`](tests/ledger.rs). They are unverified until the orchestrator connects
-them to the harness's actual format in Milestone 2. For a later pin, the test requires the
-`.lyracore/wire-harness/<sha>/` checkout to match that SHA and reads the committed catalogue at that SHA. Local edits cannot change
-the scenario ids. A missing assumed catalogue prints a
-skip. A present catalogue must parse, contain unique nonempty ids, and include every scenario id
-named by the ledger. The test never fetches or edits the harness checkout.
+Every scenario reference must exist in that catalogue and name the Behavior that lists it.
+A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
+checkout is read and no catalogue check can skip.
+
+Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+`connection_identity` prepares the scenario's Character through debug reducers, then runs the
+harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
+with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
+ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
+unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
+`wait_for_packets`.
+
+The pinned v2 runner starts after `prepare`. Core consumes setup delivery instructions to establish
+AOI Grants before the first request. It does not compare setup packets. This revision cannot record
+an opening phase. T2d must adopt the harness's opening format so login packets become recorded
+observations outside comparison. Core never filters packets during the scenario or changes its
+Equivalence Rules.
+
+The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
+revision, capture time and the harness comparison. It removes the previous result before starting,
+so a setup failure leaves no old pass. Differences remain in the report and fail the test. No
+packet text enters this result. The scoreboard consumes it in T2c.
