@@ -965,26 +965,37 @@ mod tests {
             parse_args_from(["--dbc", "client/Data", "--taxi-mounts", "world.sqlite"]).unwrap();
         assert_eq!(args.taxi_mounts.as_deref(), Some("world.sqlite"));
         assert!(args.dump.is_none());
+        let refused = |args: &[&str]| {
+            parse_args_from(args.iter().copied())
+                .err()
+                .map(|error| error.to_string())
+        };
+        let standalone_only =
+            Some("--taxi-mounts is only valid with standalone --dbc catalogue import".to_string());
         for mode in ["--spells", "--talents"] {
-            assert!(parse_args_from([
+            assert_eq!(
+                refused(&[
+                    "--dbc",
+                    "client/Data",
+                    "--taxi-mounts",
+                    "world.sqlite",
+                    mode
+                ]),
+                standalone_only
+            );
+        }
+        assert_eq!(refused(&["--taxi-mounts", "world.sqlite"]), standalone_only);
+        assert_eq!(
+            refused(&[
                 "--dbc",
                 "client/Data",
                 "--taxi-mounts",
                 "world.sqlite",
-                mode
-            ])
-            .is_err());
-        }
-        assert!(parse_args_from(["--taxi-mounts", "world.sqlite"]).is_err());
-        assert!(parse_args_from([
-            "--dbc",
-            "client/Data",
-            "--taxi-mounts",
-            "world.sqlite",
-            "--dump",
-            "world.sqlite"
-        ])
-        .is_err());
+                "--dump",
+                "world.sqlite"
+            ]),
+            standalone_only
+        );
     }
 
     fn test_args() -> Args {

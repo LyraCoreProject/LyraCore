@@ -315,6 +315,11 @@ mod tests {
 
     #[test]
     fn truncated_collision_vertices_remain_an_error() {
-        assert!(parse_wmo_group(&group_with_truncated_tail(false), "synthetic.wmo").is_err());
+        let error =
+            parse_wmo_group(&group_with_truncated_tail(false), "synthetic.wmo").unwrap_err();
+        assert_eq!(
+            error.to_string(),
+            "Invalid format: Failed to parse group: failed to fill whole buffer"
+        );
     }
 }

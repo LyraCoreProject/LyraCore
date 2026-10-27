@@ -330,14 +330,10 @@ fn gameobject_spawn_edits_move_create_and_remove_the_object() {
         ],
     );
     let moved = gameobject_row(&shard, CHEST).unwrap();
-    let (grid_x, grid_y) = lyracore_shared::spatial::grid_cell(far_x, y);
     assert_eq!(number::<f32>(&moved, "x"), far_x);
-    assert_eq!(number::<i32>(&moved, "grid_x"), grid_x);
-    assert_eq!(number::<i32>(&moved, "grid_y"), grid_y);
-    assert_eq!(
-        number::<i64>(&moved, "cell"),
-        lyracore_shared::spatial::grid_cell_id(grid_x, grid_y)
-    );
+    assert_eq!(number::<i32>(&moved, "grid_x"), 517);
+    assert_eq!(number::<i32>(&moved, "grid_y"), 343);
+    assert_eq!(number::<i64>(&moved, "cell"), (517 << 32) | 343);
     assert_eq!(number::<f32>(&moved, "rotation_2"), 0.25);
 
     shard.assert_call(

@@ -183,20 +183,31 @@ mod tests {
 
     #[test]
     fn malformed_layout_strings_and_magnitudes_return_errors() {
+        let refusal = |bytes: &[u8]| read_spells(bytes).unwrap_err().to_string();
         for bytes in [vec![], vec![0; 20]] {
-            assert!(read_spells(&bytes).is_err());
+            assert_eq!(refusal(&bytes), "Spell.dbc has no WDBC header");
         }
-        for (at, value) in [
-            (4, u32::MAX),
-            (8, 172),
-            (12, 688),
-            (16, 2),
-            (20 + 120 * 4, 2),
-            (20 + 73 * 4, f32::NAN.to_bits()),
+        let layout = "Spell.dbc requires the build 5875 layout: 173 fields, 692 bytes per row";
+        let lengths = "Spell.dbc record and string lengths do not match its header";
+        for (at, value, reason) in [
+            (4, u32::MAX, lengths),
+            (8, 172, layout),
+            (12, 688, layout),
+            (16, 2, lengths),
+            (
+                20 + 120 * 4,
+                2,
+                "Spell.dbc row 0 name offset exceeds the string block",
+            ),
+            (
+                20 + 73 * 4,
+                f32::NAN.to_bits(),
+                "Spell.dbc row 0 contains a non-finite effect magnitude",
+            ),
         ] {
             let mut bytes = empty_spell();
             bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-            assert!(read_spells(&bytes).is_err(), "byte {at}");
+            assert_eq!(refusal(&bytes), reason, "byte {at}");
         }
         let mut bytes = empty_spell();
         bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
@@ -207,11 +218,11 @@ mod tests {
             .contains("no rows"));
         let mut bytes = empty_spell();
         bytes[712] = b'x';
-        assert!(read_spells(&bytes).is_err());
+        assert_eq!(refusal(&bytes), "Spell.dbc row 0 name has no terminator");
         bytes[16..20].copy_from_slice(&2u32.to_le_bytes());
         bytes[712] = 0xff;
         bytes.push(0);
-        assert!(read_spells(&bytes).is_err());
+        assert_eq!(refusal(&bytes), "Spell.dbc row 0 name is not UTF-8");
     }
 
     #[test]

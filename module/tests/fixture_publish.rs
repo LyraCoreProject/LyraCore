@@ -21,7 +21,19 @@ fn concurrent_fixtures_publish_complete_modules() {
                 } else {
                     standalone.publish_module();
                 }
-                standalone.assert_sql("SELECT COUNT(*) AS count FROM game_item_template");
+                let counted =
+                    standalone.sql_anonymous("SELECT COUNT(*) AS count FROM game_item_template");
+                let text = String::from_utf8_lossy(&counted.stdout);
+                let counts: Vec<&str> = text
+                    .lines()
+                    .map(str::trim)
+                    .filter(|line| line.parse::<u64>().is_ok())
+                    .collect();
+                assert_eq!(
+                    counts,
+                    ["10"],
+                    "init seeds six core and four fixture item templates: {text}"
+                );
             });
         }
     });

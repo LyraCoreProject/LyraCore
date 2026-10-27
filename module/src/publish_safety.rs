@@ -1,5 +1,4 @@
 use std::collections::BTreeMap;
-use std::io::Write;
 use std::path::{Path, PathBuf};
 
 use crate::test_scan::repo_root;
@@ -75,42 +74,17 @@ fn destructive_publish_lines(src: &str) -> Vec<(usize, String)> {
     out
 }
 
-fn shell_shape(src: &str) -> String {
-    src.lines()
-        .map(strip_shell_comment)
-        .collect::<Vec<_>>()
-        .join(" ")
-        .split_whitespace()
-        .collect::<Vec<_>>()
-        .join(" ")
-}
-
-const SCAN_ROOTS: &[(&str, usize)] = &[
-    ("scripts", 1),
-    ("tools", 9),
-    ("adapters", 1),
-    ("importer", 5),
-];
+const SCAN_ROOTS: &[(&str, usize)] = &[("scripts", 1), ("importer", 5)];
 
 fn scanned_roots() -> Vec<(&'static str, Vec<PathBuf>)> {
     let root = repo_root();
     let mut out = Vec::new();
     for (dir, _) in SCAN_ROOTS {
         let path = root.join(dir);
-        if !path.is_dir() {
-            assert!(
-                !crate::test_scan::is_installed(dir),
-                "the destructive-publish scan cannot find {dir}/ — the scan root is wrong, so this \
-                 test would pass by looking at nothing while a `spacetime publish -c` sat in the \
-                 repo waiting to wipe every account and character row"
-            );
-            let _ = writeln!(
-                std::io::stderr(),
-                "note: skipping the destructive-publish scan of {dir}/ — it is not present in this \
-                 checkout (the public mirror filters it out)"
-            );
-            continue;
-        }
+        assert!(
+            path.is_dir(),
+            "the destructive-publish scan cannot find {dir}/, so it would pass by looking at nothing"
+        );
         let mut files = Vec::new();
         collect_scripts(&path, &mut files);
         files.sort();
@@ -248,13 +222,6 @@ fn table_declaration_count(src: &str) -> usize {
         .filter(|line| line.trim().starts_with("#[table"))
         .count()
 }
-
-const FLAG_REJECTION_LOOP: &str = "for db in \"${dbs[@]}\"; do \
-     case \"$db\" in \
-     -*) echo \"publish-module.sh takes database NAMES, not flags (got '$db'). Refusing.\" >&2; \
-     exit 2 ;; \
-     esac \
-     done";
 
 #[cfg(test)]
 mod tests {
@@ -461,48 +428,6 @@ spacetime publish -cy lyracore
                 files.len()
             );
         }
-
-        let publish_module = repo_root().join("scripts/publish-module.sh");
-        if !publish_module.is_file() {
-            let _ = writeln!(
-                std::io::stderr(),
-                "note: skipping the publish-site floor — scripts/publish-module.sh is not installed in this checkout"
-            );
-            return;
-        }
-        let files = scanned_scripts();
-
-        let root = repo_root();
-        let mut publish_sites = 0usize;
-        let mut saw_publish_module_sh = false;
-        for file in &files {
-            let src = std::fs::read_to_string(file).unwrap_or_else(|e| {
-                panic!("cannot read {}: {e}", file.display());
-            });
-            let hits = publish_lines(&src).len();
-            publish_sites += hits;
-            if hits > 0
-                && file
-                    .strip_prefix(&root)
-                    .is_ok_and(|r| r == Path::new("scripts/publish-module.sh"))
-            {
-                saw_publish_module_sh = true;
-            }
-        }
-        assert!(
-            publish_sites >= 3,
-            "found only {publish_sites} live `spacetime publish` occurrence(s) across scripts/ + \
-             tools/ + adapters/ + importer/ — expected at least 3. Either the comment stripper is \
-             eating real code or the \
-             command spelling changed; either way the destructive-flag scan below is now guarding \
-             nothing"
-        );
-        assert!(
-            saw_publish_module_sh,
-            "the scan did not see a live `spacetime publish` in scripts/publish-module.sh, the ONE \
-             sanctioned deploy path. That file is the primary thing this tripwire exists to watch; \
-             if the scan cannot see it, it cannot catch a `-c` added to it"
-        );
     }
 
     #[test]
@@ -528,86 +453,10 @@ spacetime publish -cy lyracore
              and reputation row is destroyed, and login stays broken afterwards until the operator \
              identity is re-claimed. There is no undo and no backup in this deployment. Plain \
              `spacetime publish` already auto-migrates an additive schema change, or aborts safely \
-             if it cannot — use `bash scripts/publish-module.sh <db>...` and, if publish refuses a \
+             if it cannot. Publish through `./lyracore publish`. If publish refuses a \
              genuinely breaking change, take the wipe as a deliberate operator decision typed by \
              hand, never as a flag committed to a script. See docs/danger-zones.md §1.",
             violations.join("\n  "),
-        );
-    }
-
-    #[test]
-    fn publish_module_sh_still_refuses_flag_shaped_arguments() {
-        let path = repo_root().join("scripts/publish-module.sh");
-        if !path.is_file() {
-            let _ = writeln!(
-                std::io::stderr(),
-                "note: skipping publish-module.sh guard — wrapper is not installed in this checkout"
-            );
-            return;
-        }
-        let src = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        let shape = shell_shape(&src);
-        assert!(
-            shape.contains(FLAG_REJECTION_LOOP),
-            "scripts/publish-module.sh no longer carries its argv flag-rejection loop in the pinned \
-             shape. Without it, `bash scripts/publish-module.sh -c` forwards `-c` to `spacetime \
-             publish` and wipes the database — every account and character gone, login broken. \
-             Expected (whitespace-collapsed):\n  {FLAG_REJECTION_LOOP}\nActual file shape:\n  {shape}"
-        );
-    }
-
-    #[test]
-    fn publish_module_sh_publish_line_keeps_both_required_flags() {
-        let path = repo_root().join("scripts/publish-module.sh");
-        if !path.is_file() {
-            let _ = writeln!(
-                std::io::stderr(),
-                "note: skipping publish-module.sh publish-line check — wrapper is not installed in this checkout"
-            );
-            return;
-        }
-        let src = std::fs::read_to_string(&path)
-            .unwrap_or_else(|e| panic!("cannot read {}: {e}", path.display()));
-        let invocations: Vec<&str> = src
-            .lines()
-            .map(strip_shell_comment)
-            .filter(|code| code.contains(PUBLISH_NEEDLE))
-            .collect();
-        assert_eq!(
-            invocations.len(),
-            1,
-            "expected exactly one live `spacetime publish` invocation in scripts/publish-module.sh; \
-             found {}. A second one is either dead code or an unguarded deploy path — both need a \
-             look before this pin is widened. Got: {invocations:?}",
-            invocations.len()
-        );
-
-        let shape = invocations[0]
-            .split_whitespace()
-            .collect::<Vec<_>>()
-            .join(" ");
-        assert!(
-            shape.contains("--build-options='--features=debug_reducers'"),
-            "scripts/publish-module.sh's publish invocation lost \
-             `--build-options='--features=debug_reducers'`. The debug module is behind that Cargo \
-             feature, so a build without it does not match the deployed schema and publish \
-             FALSE-ABORTS with a bogus \"Removed table\" breaking-change error — which reads as a \
-             broken migration and tempts an operator toward the destructive `-c`. Got: {shape}"
-        );
-        assert!(
-            shape.split_whitespace().any(|t| t == "--yes"),
-            "scripts/publish-module.sh's publish invocation lost `--yes`. SpacetimeDB prompts \
-             \"All clients will be disconnected\" for ANY schema change, including an additive \
-             END-appended defaulted column; without `--yes` the prompt hits EOF on a non-tty stdin \
-             and the publish aborts, silently leaving that shard on the old schema while its \
-             siblings move on — the gateway then refuses logons on it. Got: {shape}"
-        );
-        assert!(
-            !shape.split_whitespace().any(is_destructive_flag),
-            "scripts/publish-module.sh's publish invocation carries a destructive flag. This is \
-             THE deploy path every operator and script uses: a `-c` here wipes the world database \
-             on the next routine deploy. Got: {shape}"
         );
     }
 }

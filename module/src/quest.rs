@@ -94,6 +94,26 @@ pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 
 const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
 
+#[derive(Debug, PartialEq, Eq)]
+struct QuestPayout {
+    money: u32,
+    xp: Option<u32>,
+}
+
+fn quest_payout(level: u32, xp: u32) -> QuestPayout {
+    if level >= QUEST_MAX_LEVEL_PAYOUT {
+        QuestPayout {
+            money: lyracore_shared::quest::max_level_money_reward(xp),
+            xp: None,
+        }
+    } else {
+        QuestPayout {
+            money: 0,
+            xp: Some(xp),
+        }
+    }
+}
+
 #[table(accessor = game_quest_template, public)]
 pub struct QuestTemplate {
     #[primary_key]
@@ -913,15 +933,11 @@ pub(crate) fn request_turn_in_quest(
         tmpl.reward_money_max_level,
         tmpl.quest_level,
     );
-    let xp = crate::xp::rated_xp(ctx, base_xp);
-    if player.level >= QUEST_MAX_LEVEL_PAYOUT {
-        player.money = player
-            .money
-            .saturating_add(lyracore_shared::quest::max_level_money_reward(xp));
-    }
+    let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, base_xp));
+    player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
-    if player.level < QUEST_MAX_LEVEL_PAYOUT {
+    if let Some(xp) = payout.xp {
         crate::xp::XpEvent::send(
             ctx,
             player_guid,
@@ -1770,9 +1786,9 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::{
-        eventai_credit_recipient_set, is_expired, pick_choice_reward, AreaTriggerRoute,
-        AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
-        QUEST_MAX_LEVEL_PAYOUT,
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, quest_payout,
+        AreaTriggerRoute, AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
+        QuestPayout,
     };
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
@@ -1897,8 +1913,25 @@ mod tests {
     }
 
     #[test]
-    fn quest_max_level_payout_matches_the_vanilla_cap() {
-        assert_eq!(QUEST_MAX_LEVEL_PAYOUT, 60);
+    fn a_level_59_turn_in_grants_the_quest_xp() {
+        assert_eq!(
+            quest_payout(59, 1_450),
+            QuestPayout {
+                money: 0,
+                xp: Some(1_450)
+            }
+        );
+    }
+
+    #[test]
+    fn a_level_60_turn_in_pays_six_copper_per_xp_instead() {
+        assert_eq!(
+            quest_payout(60, 1_450),
+            QuestPayout {
+                money: 8_700,
+                xp: None
+            }
+        );
     }
 
     #[test]

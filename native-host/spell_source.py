@@ -18,12 +18,12 @@ def check_spell_source_behavior(host):
                       school_mask=1, dispel_type=0, mechanic=0, max_stacks=5, aura_interrupt=0,
                       attributes=0, spell_level=0, max_level=0, is_negative='false', cast_flags=0,
                       stances=0, family_name=0, family_flags=0, proc_flags=0, proc_chance=0,
-                      proc_charges=0, custom_flags=flags, min_target_level=0, single_target_key=1)
+                      proc_charges=0, max_duration_ms=0, custom_flags=flags, min_target_level=0, single_target_key=1)
         header.update(fields)
         effect = dict(id=sid*4, spell_id=sid, effect_index=0, kind=kind, base_points=amount,
                       die_sides=0, per_level=0, period_ms=0, target=3, radius_yd=0,
                       chain_targets=0, trigger_spell=0, effect_mechanic=0, p0=0, p0_kind=0,
-                      p1=0, script_id=0, enters_combat='false', bonus_coefficient=coefficient)
+                      p1=0, script_id=0, enters_combat='false', points_per_combo=0, bonus_coefficient=coefficient)
         for table, row in [('game_spell', header), ('game_spell_effect', effect)]:
             host.restore(table, f'spell_id = {sid}')
             host.sql(f'DELETE FROM {table} WHERE spell_id = {sid}')

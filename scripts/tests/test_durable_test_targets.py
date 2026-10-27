@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import subprocess
 import sys
 import unittest
@@ -41,16 +40,12 @@ class DurableTargetTests(unittest.TestCase):
             selector.partition(targets, {}), selector.partition(reversed(targets), {})
         )
 
-    def test_measured_work_is_balanced_including_the_upgrade_baseline(self):
-        seconds = json.loads((ROOT / ".github/durable-test-seconds.json").read_text())
-        targets = sorted(path.stem for path in (ROOT / "module/tests").glob("*.rs"))
-        _, totals = selector.partition(targets, seconds)
-        previous = list(selector.JOB_SECONDS)
-        for position, target in enumerate(targets, 1):
-            previous[position % 3] += seconds.get(target, selector.DEFAULT_TARGET_SECONDS)
-        self.assertLess(max(totals), max(previous))
-        self.assertLessEqual(max(totals) - min(totals), selector.DEFAULT_TARGET_SECONDS)
-
+    def test_the_longest_target_goes_to_the_least_loaded_job_counting_its_other_work(self):
+        jobs, totals = selector.partition(
+            ["c", "a", "b"], {"a": 50, "b": 40, "c": 30}, (0, 0, 82)
+        )
+        self.assertEqual(jobs, [["a"], ["b", "c"], []])
+        self.assertEqual(totals, [50, 70, 82])
 
 if __name__ == "__main__":
     unittest.main()

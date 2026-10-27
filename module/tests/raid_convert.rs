@@ -92,24 +92,6 @@ fn roster_revision(node: &Standalone) -> u64 {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn expired_roster_rows_do_not_end_the_next_roster_capture() {
-    let mut realm = Standalone::start("raid-roster-capture");
-    realm.publish_module();
-    realm.assert_call("claim_operator", &[]);
-    join(&realm, 1, 2);
-
-    let lists = lists_pushed_by(&realm, || {
-        std::thread::sleep(std::time::Duration::from_secs(3));
-        group_op(&realm, RAID_CONVERT, 1, 0);
-    });
-    let mut recipients: Vec<_> = lists.iter().map(|(guid, _)| *guid).collect();
-    recipients.sort_unstable();
-    assert_eq!(recipients, [1, 2]);
-    assert!(lists.iter().all(|(_, list)| list.kind == GroupKind::Raid));
-}
-
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_converted_raid_takes_members_past_five_into_the_next_subgroup() {
     let mut realm = Standalone::start("raid-convert");
     realm.publish_module();

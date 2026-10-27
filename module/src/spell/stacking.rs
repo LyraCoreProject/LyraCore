@@ -219,12 +219,11 @@ pub(crate) fn buff_group_status(
         .map(|aura| AuraSummary {
             aura_id: aura.id,
             caster_guid: aura.caster_guid,
-            strength: compute_group_strength(
+            strength: stacked_group_strength(
                 rule.rank_is_comparable,
                 rank_of(ctx, aura.spell_id),
-                aura.amount
-                    .saturating_abs()
-                    .saturating_mul(i32::from(aura.stacks.max(1))),
+                aura.amount,
+                aura.stacks,
             ),
         })
         .collect();
@@ -259,8 +258,16 @@ pub(crate) fn dr_bump(
 ) -> DrWindow {
     DrWindow {
         level: (dr_pre_level(prior, now_micros) + 1).min(3),
-        window_expires_micros: expires_at_micros + DR_WINDOW_MICROS,
+        window_expires_micros: dr_window_expires(expires_at_micros),
     }
+}
+
+pub(crate) fn dr_window_expires(control_ends_micros: i64) -> i64 {
+    control_ends_micros + DR_WINDOW_MICROS
+}
+
+pub(crate) fn dr_scaled_duration_ms(duration_ms: u32, duration_scale_bp: u32) -> u32 {
+    ((duration_ms as u64) * (duration_scale_bp as u64) / 10_000) as u32
 }
 
 pub(crate) fn dr_scale_bp(pre_level: u8) -> Option<u32> {
@@ -278,6 +285,16 @@ pub(crate) fn compute_strength(rank: u8, magnitude: i32) -> i32 {
 
 pub(crate) fn compute_group_strength(rank_is_comparable: bool, rank: u8, magnitude: i32) -> i32 {
     compute_strength(if rank_is_comparable { rank } else { 0 }, magnitude)
+}
+
+fn stacked_group_strength(rank_is_comparable: bool, rank: u8, amount: i32, stacks: u8) -> i32 {
+    compute_group_strength(
+        rank_is_comparable,
+        rank,
+        amount
+            .saturating_abs()
+            .saturating_mul(i32::from(stacks.max(1))),
+    )
 }
 
 pub(crate) fn rank_of(ctx: &ReducerContext, spell_id: u32) -> u8 {
@@ -364,12 +381,11 @@ pub(crate) fn apply_group_conflict(
         .map(|a| AuraSummary {
             aura_id: a.id,
             caster_guid: a.caster_guid,
-            strength: compute_group_strength(
+            strength: stacked_group_strength(
                 rank_is_comparable,
                 rank_of(ctx, a.spell_id),
-                a.amount
-                    .saturating_abs()
-                    .saturating_mul(a.stacks.max(1) as i32),
+                a.amount,
+                a.stacks,
             ),
         })
         .collect();
@@ -460,7 +476,7 @@ pub(crate) fn dr_window_on_removal(
         .filter(&target_guid)
         .find(|r| r.category == category)
     {
-        row.window_expires_micros = removed_at_micros + DR_WINDOW_MICROS;
+        row.window_expires_micros = dr_window_expires(removed_at_micros);
         table.id().update(row);
     }
 }
@@ -543,22 +559,16 @@ mod tests {
 
     #[test]
     fn armor_debuff_strength_folds_sunders_active_stack_count() {
-        const SUNDER_PER_STACK: i32 = 450;
         const EXPOSE_5_COMBO: i32 = 2050;
-        fn armor_strength(rank: u8, amount: i32, stacks: u16) -> i32 {
-            compute_group_strength(
-                false,
-                rank,
-                amount.saturating_abs().saturating_mul(stacks.max(1) as i32),
-            )
-        }
+        let armor_strength =
+            |rank, amount, stacks| stacked_group_strength(false, rank, amount, stacks);
 
         let sunder_1_stack = AuraSummary {
             aura_id: 8,
             caster_guid: 2,
             strength: armor_strength(5, -450, 1),
         };
-        assert_eq!(sunder_1_stack.strength, SUNDER_PER_STACK);
+        assert_eq!(sunder_1_stack.strength, 450);
         assert_eq!(
             resolve_group_conflict(
                 1,
@@ -577,7 +587,7 @@ mod tests {
             caster_guid: 2,
             strength: armor_strength(5, -450, 5),
         };
-        assert_eq!(sunder_5_stack.strength, SUNDER_PER_STACK * 5);
+        assert_eq!(sunder_5_stack.strength, 2250);
         assert_eq!(
             resolve_group_conflict(
                 1,
@@ -704,7 +714,7 @@ mod tests {
         assert_eq!(dr_pre_level(Some(row_after_removal_1), t12), 1);
         let row_after_apply_2 = DrWindow {
             level: 2,
-            window_expires_micros: 17 * SECOND + DR_WINDOW_MICROS,
+            window_expires_micros: 32 * SECOND,
         };
 
         let t16 = 16 * SECOND;
@@ -719,9 +729,9 @@ mod tests {
         assert_eq!(dr_pre_level(Some(row_after_apply_2), t16), 2);
         let row_after_removal_3 = DrWindow {
             level: 3,
-            window_expires_micros: (18 * SECOND + SECOND / 2) + DR_WINDOW_MICROS,
+            window_expires_micros: dr_window_expires(18 * SECOND + SECOND / 2),
         };
-        assert_eq!(row_after_removal_3.window_expires_micros, 335 * SECOND / 10);
+        assert_eq!(row_after_removal_3.window_expires_micros, 33_500_000);
 
         let t20 = 20 * SECOND;
         let decision20 = resolve_dr(Some(row_after_removal_3), t20);
@@ -745,7 +755,7 @@ mod tests {
     }
 
     impl DrProbe {
-        fn apply(&mut self, now: i64, base_ms: i64) -> Option<i64> {
+        fn apply(&mut self, now: i64, base_ms: u32) -> Option<i64> {
             match resolve_dr(self.row, now) {
                 ApplyDecision::Refuse { reason } => {
                     assert_eq!(reason, "immune");
@@ -756,7 +766,8 @@ mod tests {
                     evict,
                 } => {
                     assert!(evict.is_empty(), "a DR decision never evicts another aura");
-                    let expires = now + base_ms * 1_000 * (duration_scale_bp as i64) / 10_000;
+                    let expires =
+                        now + i64::from(dr_scaled_duration_ms(base_ms, duration_scale_bp)) * 1_000;
                     self.row = Some(dr_bump(self.row, now, expires));
                     Some(expires)
                 }
@@ -768,14 +779,14 @@ mod tests {
                 .row
                 .as_mut()
                 .expect("a removed CC aura always has a DR row");
-            row.window_expires_micros = at + DR_WINDOW_MICROS;
+            row.window_expires_micros = dr_window_expires(at);
         }
     }
 
     #[test]
     fn player_target_dr_timeline_end_to_end_on_a_twenty_second_control() {
         const S: i64 = 1_000_000;
-        const POLY_MS: i64 = 20_000;
+        const POLY_MS: u32 = 20_000;
         let mut probe = DrProbe { row: None };
 
         let expiry_1 = probe
@@ -784,18 +795,18 @@ mod tests {
         assert_eq!(expiry_1, 20 * S);
         let row_1 = probe.row.expect("a successful application persists a row");
         assert_eq!(row_1.level, 1);
-        assert_eq!(row_1.window_expires_micros, expiry_1 + DR_WINDOW_MICROS);
+        assert_eq!(row_1.window_expires_micros, 35 * S);
 
         let expiry_2 = probe.apply(3 * S, POLY_MS).expect("level 1 still applies");
         assert_eq!(expiry_2, 13 * S);
         let row_2 = probe.row.expect("row persists");
         assert_eq!(row_2.level, 2);
-        assert_eq!(row_2.window_expires_micros, expiry_2 + DR_WINDOW_MICROS);
+        assert_eq!(row_2.window_expires_micros, 28 * S);
 
         let provisional = row_2.window_expires_micros;
         probe.remove(5 * S);
         let row_3 = probe.row.expect("row persists");
-        assert_eq!(row_3.window_expires_micros, 5 * S + DR_WINDOW_MICROS);
+        assert_eq!(row_3.window_expires_micros, 20 * S);
         assert!(row_3.window_expires_micros < provisional);
         assert_eq!(row_3.level, 2);
 
@@ -811,7 +822,7 @@ mod tests {
         assert!(removed_at >= expiry_3);
         probe.remove(removed_at);
         let row_4 = probe.row.expect("row persists");
-        assert_eq!(row_4.window_expires_micros, removed_at + DR_WINDOW_MICROS);
+        assert_eq!(row_4.window_expires_micros, 28_200_000);
         assert_eq!(row_4.level, 3);
 
         assert_eq!(probe.apply(row_4.window_expires_micros, POLY_MS), None);
@@ -872,7 +883,6 @@ mod tests {
     #[test]
     fn compute_strength_ranks_first_then_magnitude() {
         assert!(compute_strength(2, 1) > compute_strength(1, 99_999));
-        assert_eq!(compute_strength(0, 100), compute_strength(0, 100));
         assert!(compute_strength(0, 200) > compute_strength(0, 100));
         assert_eq!(compute_strength(0, -50), 0);
     }

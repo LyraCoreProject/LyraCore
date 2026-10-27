@@ -53,16 +53,16 @@ fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({FIXTURE_BOLT}, 'Fixture Bolt', 0, 0, 0, 0, 0, 30, 0, 16, 0, 0, 0, 0, 0, 0, \
-         0, true, 0, 0, 0, 0, 0, 0, 0)"
+         0, true, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {FIXTURE_BOLT}, 0, {E_DAMAGE}, 9, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false)",
+         0, 0, 0, 0, false, 0.0)",
         (FIXTURE_BOLT as u64) << 2
     ));
 

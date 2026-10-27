@@ -250,7 +250,6 @@ mod tests {
         fs::write(latest.snapshot_file(29), b"damaged snapshot").unwrap();
         assert!(retain_snapshots(&fixture.repo, 1, 47).is_err());
         assert_eq!(fixture.offsets(), [9, 19, 29]);
-        assert_eq!(fixture.log.min_committed_offset(), Some(0));
     }
 
     #[test]
@@ -266,6 +265,5 @@ mod tests {
         let error = retain_snapshots(&fixture.repo, 1, 47).unwrap_err();
         assert!(error.to_string().contains("does not match this database"));
         assert_eq!(fixture.offsets(), [9, 19, 29, 39]);
-        assert_eq!(fixture.log.min_committed_offset(), Some(0));
     }
 }

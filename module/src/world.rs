@@ -1439,8 +1439,7 @@ mod tests {
         movement_violation, persisted_gm_playtest, persisted_pending_ghost, plan_movement,
         resolve_environmental_damage, resurrection_sickness_micros, snapshot_needs_persist,
         spirit_res_vitals, zone_transition, MovementDelta, INSPECT_RANGE_SQ, MOVE_VIOLATION_SPEED,
-        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD, RESURRECTION_SICKNESS_SPELL,
-        RUN_SPEED_BP_1X,
+        MOVE_VIOLATION_TELEPORT, PERSIST_MAX_DRIFT_YD, RUN_SPEED_BP_1X,
     };
 
     const HEARTBEAT: u16 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT as u16;
@@ -1480,14 +1479,11 @@ mod tests {
 
     #[test]
     fn drift_past_the_bound_forces_the_row_write() {
-        let at = PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD;
-        assert!(!snapshot_needs_persist(HEARTBEAT, false, false, false, at));
+        assert!(!snapshot_needs_persist(
+            HEARTBEAT, false, false, false, 16.0
+        ));
         assert!(snapshot_needs_persist(
-            HEARTBEAT,
-            false,
-            false,
-            false,
-            at + 0.01
+            HEARTBEAT, false, false, false, 16.01
         ));
         const {
             assert!(
@@ -1531,7 +1527,7 @@ mod tests {
     }
 
     #[test]
-    fn plan_movement_mirrors_snapshot_needs_persist_and_never_gates_the_relay() {
+    fn plan_movement_persists_observable_changes_and_never_gates_the_relay() {
         let stationary = MovementDelta {
             old_x: 0.0,
             old_y: 0.0,
@@ -1542,24 +1538,15 @@ mod tests {
             old_move_ms: 0,
             move_time_ms: 0,
         };
-        for &(grid, flags, state, drift) in &[
-            (false, false, false, 0.0),
-            (true, false, false, 0.0),
-            (false, true, false, 0.0),
-            (false, false, true, 0.0),
-            (
-                false,
-                false,
-                false,
-                PERSIST_MAX_DRIFT_YD * PERSIST_MAX_DRIFT_YD + 1.0,
-            ),
+        for &(grid, flags, state, drift, persist) in &[
+            (false, false, false, 0.0, false),
+            (true, false, false, 0.0, true),
+            (false, true, false, 0.0, true),
+            (false, false, true, 0.0, true),
+            (false, false, false, 17.0, true),
         ] {
-            let want = snapshot_needs_persist(HEARTBEAT, grid, flags, state, drift);
             let plan = plan_movement(HEARTBEAT, grid, flags, state, drift, false, &stationary);
-            assert_eq!(
-                plan.persist_entity, want,
-                "persist_entity must mirror snapshot_needs_persist exactly"
-            );
+            assert_eq!(plan.persist_entity, persist);
             assert!(
                 plan.relay_motion,
                 "the motion relay must never be gated on the persist decision"
@@ -1595,6 +1582,43 @@ mod tests {
         assert!(!accepted(20, 20));
         assert!(!accepted(20, 19));
         assert!(accepted(20, 21));
+    }
+
+    #[test]
+    fn movement_with_a_non_finite_coordinate_is_refused() {
+        assert!(super::movement_is_accepted(10, 11, 1.0, 2.0, 3.0, 0.5));
+        assert!(!super::movement_is_accepted(
+            10,
+            11,
+            f32::NAN,
+            2.0,
+            3.0,
+            0.5
+        ));
+        assert!(!super::movement_is_accepted(
+            10,
+            11,
+            1.0,
+            f32::INFINITY,
+            3.0,
+            0.5
+        ));
+        assert!(!super::movement_is_accepted(
+            10,
+            11,
+            1.0,
+            2.0,
+            f32::NEG_INFINITY,
+            0.5
+        ));
+        assert!(!super::movement_is_accepted(
+            10,
+            11,
+            1.0,
+            2.0,
+            3.0,
+            f32::NAN
+        ));
     }
 
     #[test]
@@ -1716,7 +1740,7 @@ mod tests {
     }
 
     #[test]
-    fn spirit_healer_res_restores_half_vitals_and_seeds_the_right_sickness() {
+    fn spirit_healer_res_restores_half_vitals() {
         assert_eq!(spirit_res_vitals(200, 80), (100, 40));
         assert_eq!(spirit_res_vitals(199, 81), (99, 40));
         assert_eq!(spirit_res_vitals(1, 0), (1, 0));
@@ -1725,7 +1749,6 @@ mod tests {
             (1, 0),
             "the .max(1) floor keeps a 0-max res alive"
         );
-        assert_eq!(RESURRECTION_SICKNESS_SPELL, 15007);
     }
 
     #[test]

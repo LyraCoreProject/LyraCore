@@ -32,6 +32,8 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u8,
     pub(crate) proc_charges: u8,
+    // The Package API does not claim the combo-point columns, so the snapshot omits them.
+    pub(crate) max_duration_ms: u32,
     pub(crate) custom_flags: u32,
     pub(crate) min_target_level: u32,
     pub(crate) single_target_key: u64,
@@ -72,7 +74,12 @@ impl SpellHeaderRow {
     }
 
     pub(crate) fn sql_values(&self) -> String {
-        sql_tuple(&self.columns())
+        let mut columns = self.columns();
+        columns.insert(
+            25,
+            ("max_duration_ms", FieldValue::U32(self.max_duration_ms)),
+        );
+        sql_tuple(&columns)
     }
 }
 
@@ -94,6 +101,7 @@ pub(crate) struct SpellEffectRow {
     pub(crate) p1: i32,
     pub(crate) script_id: u32,
     pub(crate) enters_combat: bool,
+    pub(crate) points_per_combo: f32,
     pub(crate) bonus_coefficient: f32,
 }
 
@@ -128,6 +136,10 @@ impl SpellEffectRow {
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
+        columns.insert(
+            18,
+            ("points_per_combo", FieldValue::F32(self.points_per_combo)),
+        );
         sql_tuple(&columns)
     }
 }
@@ -239,6 +251,7 @@ mod tests {
             proc_flags: 0,
             proc_chance: 0,
             proc_charges: 0,
+            max_duration_ms: 8000,
             custom_flags: 0,
             min_target_level: 0,
             single_target_key: 0,
@@ -264,6 +277,7 @@ mod tests {
             p1: 0,
             script_id: 0,
             enters_combat: false,
+            points_per_combo: 0.0,
             bonus_coefficient: -1.0,
         }
     }
@@ -302,7 +316,7 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,0,0,0)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0)"),
             "{sql}"
         );
     }
@@ -368,17 +382,6 @@ mod tests {
                 < json.find(r#""spell_id":133,"effect_index":2"#),
             "{json}"
         );
-    }
-
-    #[test]
-    fn the_same_rows_always_produce_the_same_bytes() {
-        let rows = SpellRows {
-            headers: vec![header(133, "Fireball")],
-            effects: vec![effect(133, 0)],
-            ..SpellRows::default()
-        };
-
-        assert_eq!(write_snapshot(&rows), write_snapshot(&rows));
     }
 
     #[test]

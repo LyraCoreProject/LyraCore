@@ -1137,30 +1137,40 @@ mod tests {
         };
         assert_eq!(auction_house_sql(&reversed).unwrap().0, first);
 
-        for invalid in [
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 0, 5, 5, "missing faction")],
-            },
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 12, -1, 5, "negative deposit")],
-            },
-            DbcAuctionHouse {
-                rows: vec![auction_house_row(1, 12, 5, 101, "excessive cut")],
-            },
-            DbcAuctionHouse {
-                rows: vec![
+        for (rows, reason) in [
+            (
+                vec![auction_house_row(1, 0, 5, 5, "missing faction")],
+                "AuctionHouse.dbc house 1 has invalid parent faction 0",
+            ),
+            (
+                vec![auction_house_row(1, 12, -1, 5, "negative deposit")],
+                "AuctionHouse.dbc house 1 has invalid deposit rate -1 (expected 0..=100)",
+            ),
+            (
+                vec![auction_house_row(1, 12, 5, 101, "excessive cut")],
+                "AuctionHouse.dbc house 1 has invalid consignment rate 101 (expected 0..=100)",
+            ),
+            (
+                vec![
                     auction_house_row(1, 12, 5, 5, "first"),
                     auction_house_row(1, 29, 5, 5, "duplicate"),
                 ],
-            },
-            DbcAuctionHouse {
-                rows: vec![
+                "AuctionHouse.dbc contains duplicate house id 1",
+            ),
+            (
+                vec![
                     auction_house_row(1, 12, 5, 5, "first"),
                     auction_house_row(2, 12, 5, 5, "ambiguous faction"),
                 ],
-            },
+                "AuctionHouse.dbc contains duplicate parent faction 12",
+            ),
         ] {
-            assert!(auction_house_sql(&invalid).is_err());
+            assert_eq!(
+                auction_house_sql(&DbcAuctionHouse { rows })
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
         }
     }
 
@@ -1196,19 +1206,26 @@ mod tests {
         };
         assert_eq!(mail_template_sql(&reversed).unwrap().0, first);
 
-        for invalid in [
-            DbcMailTemplate { rows: vec![] },
-            DbcMailTemplate {
-                rows: vec![mail_template_row(0, "invalid id")],
-            },
-            DbcMailTemplate {
-                rows: vec![
+        for (rows, reason) in [
+            (vec![], "MailTemplate.dbc contains no rows"),
+            (
+                vec![mail_template_row(0, "invalid id")],
+                "MailTemplate.dbc contains invalid template id 0",
+            ),
+            (
+                vec![
                     mail_template_row(1, "first"),
                     mail_template_row(1, "duplicate"),
                 ],
-            },
+                "MailTemplate.dbc contains duplicate template id 1",
+            ),
         ] {
-            assert!(mail_template_sql(&invalid).is_err());
+            assert_eq!(
+                mail_template_sql(&DbcMailTemplate { rows })
+                    .unwrap_err()
+                    .to_string(),
+                reason
+            );
         }
     }
 

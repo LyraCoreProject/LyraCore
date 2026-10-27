@@ -1,4 +1,12 @@
-use lyracore_package_delta::{Column, FieldType, FieldValue};
+use std::collections::BTreeMap;
+use std::fmt::Display;
+
+use spacetimedb::sats::algebraic_value::ser::value_serialize;
+use spacetimedb::sats::{AlgebraicType, AlgebraicValue, SpacetimeType};
+use spacetimedb::spacetimedb_lib::db::raw_def::v9::RawModuleDefV9Builder;
+use spacetimedb::Serialize;
+
+use lyracore_package_delta::{Column, FieldType, FieldValue, Table as ClaimTable};
 
 use super::{ApplyPlan, ARTIFACT_SEPARATOR};
 
@@ -493,6 +501,117 @@ pub(super) fn some_value(column: Column) -> FieldValue {
         FieldType::F32 => FieldValue::F32(7.5),
         FieldType::Bool => FieldValue::Bool(true),
         FieldType::Str => FieldValue::Str("seven".to_owned()),
+    }
+}
+
+fn shown(value: &FieldValue) -> String {
+    match value {
+        FieldValue::U8(n) => n.to_string(),
+        FieldValue::U16(n) => n.to_string(),
+        FieldValue::U32(n) => n.to_string(),
+        FieldValue::U64(n) => n.to_string(),
+        FieldValue::I32(n) => n.to_string(),
+        FieldValue::F32(n) => n.to_string(),
+        FieldValue::Bool(b) => b.to_string(),
+        FieldValue::Str(text) => text.clone(),
+    }
+}
+
+fn plain(value: &AlgebraicValue) -> String {
+    match value {
+        AlgebraicValue::Bool(b) => b.to_string(),
+        AlgebraicValue::U8(n) => n.to_string(),
+        AlgebraicValue::U16(n) => n.to_string(),
+        AlgebraicValue::U32(n) => n.to_string(),
+        AlgebraicValue::U64(n) => n.to_string(),
+        AlgebraicValue::I8(n) => n.to_string(),
+        AlgebraicValue::I16(n) => n.to_string(),
+        AlgebraicValue::I32(n) => n.to_string(),
+        AlgebraicValue::I64(n) => n.to_string(),
+        AlgebraicValue::F32(n) => n.into_inner().to_string(),
+        AlgebraicValue::String(text) => text.to_string(),
+        other => format!("{other:?}"),
+    }
+}
+
+pub(super) fn fields_of<R: SpacetimeType + Serialize + 'static>(
+    row: &R,
+) -> BTreeMap<String, String> {
+    let mut types = RawModuleDefV9Builder::new();
+    let AlgebraicType::Ref(id) = types.add_type::<R>() else {
+        panic!("a table row registers as a named type");
+    };
+    let AlgebraicType::Product(columns) = &types.typespace()[id] else {
+        panic!("a table row is a product type");
+    };
+    let AlgebraicValue::Product(values) = value_serialize(row) else {
+        panic!("a table row serializes to a product value");
+    };
+    columns
+        .elements
+        .iter()
+        .zip(values.elements.iter())
+        .map(|(column, value)| {
+            let name = column.name.as_ref().expect("a named column");
+            (name.to_string(), plain(value))
+        })
+        .collect()
+}
+
+/// A whole insert row giving each claimable column a value no other column shares.
+pub(super) fn distinct_row(table: ClaimTable) -> (String, Vec<(String, String)>) {
+    let (fields, shown): (Vec<_>, Vec<_>) = table
+        .columns()
+        .iter()
+        .zip(1u32..)
+        .map(|(column, n)| {
+            let (ty, json, text) = match column.ty {
+                FieldType::U8 => ("u8", n.to_string(), n.to_string()),
+                FieldType::U16 => ("u16", (1_000 + n).to_string(), (1_000 + n).to_string()),
+                FieldType::U32 => ("u32", (100_000 + n).to_string(), (100_000 + n).to_string()),
+                FieldType::U64 => {
+                    let v = 10_000_000_000 + u64::from(n);
+                    ("u64", format!("\"{v}\""), v.to_string())
+                }
+                FieldType::I32 => ("i32", format!("-{n}"), format!("-{n}")),
+                FieldType::F32 => ("f32", format!("{n}.5"), format!("{n}.5")),
+                FieldType::Bool => ("bool", "true".to_owned(), "true".to_owned()),
+                FieldType::Str => ("string", format!("\"text {n}\""), format!("text {n}")),
+            };
+            (
+                format!(r#""{}":{{"type":"{ty}","value":{json}}}"#, column.name),
+                (column.name.to_owned(), text),
+            )
+        })
+        .unzip();
+    (format!("{{{}}}", fields.join(",")), shown)
+}
+
+/// Applies each claimable column alone to `blank` and requires that only its own field changed.
+pub(super) fn assert_each_column_sets_its_own_field<R, E>(
+    table: ClaimTable,
+    blank: impl Fn() -> R,
+    apply: impl Fn(&mut R, &str, &FieldValue) -> Result<(), E>,
+) where
+    R: SpacetimeType + Serialize + 'static,
+    E: Display,
+{
+    let before = fields_of(&blank());
+    for column in table.columns() {
+        let value = some_value(*column);
+        let mut row = blank();
+        apply(&mut row, column.name, &value)
+            .unwrap_or_else(|e| panic!("`{table}` column `{}`: {e}", column.name));
+        let changed: Vec<(String, String)> = fields_of(&row)
+            .into_iter()
+            .filter(|(name, value)| before.get(name) != Some(value))
+            .collect();
+        assert_eq!(
+            changed,
+            [(column.name.to_owned(), shown(&value))],
+            "`{table}` column `{}` must set its own field",
+            column.name
+        );
     }
 }
 

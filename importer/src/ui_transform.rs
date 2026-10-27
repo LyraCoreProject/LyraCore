@@ -382,9 +382,10 @@ mod tests {
             insert: "x".into(),
         };
         let err = compose("p", "dup dup", &[&edit]).unwrap_err().to_string();
-        assert!(err.contains("pkg-a"), "{err}");
-        assert!(err.contains('p'), "{err}");
-        assert!(err.contains("ambiguous"), "{err}");
+        assert!(
+            err.starts_with("pkg-a: p: ambiguous anchor (matches 2 times)"),
+            "{err}"
+        );
     }
 
     #[test]

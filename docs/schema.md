@@ -213,7 +213,7 @@ minutes. `game_operator` is a singleton holding the one Operator identity, captu
 Its rows remain across logout and Character deletion. Character guids are never reused, so retained
 rows are ownership tombstones. Each cleanup reads at most 4,097 rows and refuses when an Account
 already has more than 4,096; it never truncates. `game_account_fence` is a retired
-Gateway table, and nothing writes it. The playerbots test suite still opens Account Claims in
+Gateway table, and nothing writes it. Module tests and the native check still open Account Claims in
 `game_account_claim`. Operator reducers that act for a Character take a `SessionActor`; a null
 ownership refuses a Character with an active Account Claim.
 
@@ -277,8 +277,8 @@ nothing. `game_item_instance.item_text_id` is 0 for every item that is not a cop
 every item snapshot (mail, trade, auction) keeps it.
 
 `game_mail_escrow` and `game_mail_delivery` hold legacy cross-Shard Mail value. World Session mail
-uses no Escrow. A Reward Letter for a Character without a native connection still files one
-through `mail_escrow::file_reward` (`module/src/mail_reward.rs`).
+uses no Escrow, and a Reward Letter inserts its Mail directly
+(`module/src/mail_reward.rs`).
 
 ### Auctions (`module/src/auction.rs`)
 
@@ -352,6 +352,19 @@ stamps the next cooldown deadline. A refresh freezes the other columns again and
 and leaves a running cooldown alone. That is why `debug_repair_after_publish` freezes Proc profiles again: an
 aura applied before the columns existed reads as "never procs", and a permanent self-buff never
 refreshes on its own.
+
+### Combo finishers (`module/src/combo.rs`)
+
+A finisher is a Rogue or Druid spell whose `Spell.dbc` AttributesEx carries 0x0010_0000 or
+0x0040_0000. The importer marks its `game_spell.cast_flags` with `SPELL_ATTR_COMBO_FINISHER`.
+A Character cannot cast one without combo points, on the target for an enemy-targeted finisher and
+anywhere for Slice and Dice. A cast spends the points unless it misses its target.
+
+`game_spell_effect.points_per_combo` is the DBC `EffectPointsPerComboPoint`. Each effect adds it
+once per point the caster holds on the effect's target. `game_spell.max_duration_ms` is the DBC
+maximum duration. A finisher's aura grows from `duration_ms` toward it by a fifth per point.
+Physical finisher damage imports as `E_FINISHER_DAMAGE`. Eviscerate, Ferocious Bite, Rupture and Rip also add the 1.12
+attack-power share that vmangos gives them. The Package API does not claim either new column.
 
 ### `game_item_enchantment` (`module/src/items/properties.rs`)
 

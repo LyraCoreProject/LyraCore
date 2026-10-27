@@ -86,11 +86,7 @@ pub(crate) fn resolve_cast_at_typed(
 
     // Flush the cost before effects so self-heals read the charged caster row.
     if caster.is_player() && hdr.cost > 0 && !queues_next_swing(&effects) {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
-        caster.power = caster.power.saturating_sub(hdr.cost);
-        if hdr.power_type == lyracore_shared::packing::power_type::MANA {
-            caster.mana_regen_paused_until_ms = now_ms + 5000;
-        }
+        charge_spell_cost(ctx, &mut caster, &hdr);
         caster.update(ctx);
     }
 
@@ -129,6 +125,10 @@ pub(crate) fn resolve_cast_at_typed(
         .find(caster_guid)
         .map(|c| c.is_player())
         .unwrap_or(false);
+    // Spend after the effects so the last thrown weapon still strikes with its own damage.
+    if caster_is_player && is_ranged_weapon_strike(&hdr, &effects) {
+        crate::combat::spend_ranged_ammo(ctx, caster_guid);
+    }
     if caster_is_player && cast_hits_enemy {
         crate::spell::effects::arm_spell_retaliation(ctx, caster_guid, target_guid);
     }
@@ -137,27 +137,9 @@ pub(crate) fn resolve_cast_at_typed(
         start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     }
 
-    if hdr.cooldown_ms > 0 {
-        let ready_at = ctx
-            .timestamp
-            .checked_add(TimeDuration::from_micros((hdr.cooldown_ms as i64) * 1000))
-            .unwrap_or(ctx.timestamp);
-        let cds = ctx.db.game_spell_cd();
-        if let Some(mut row) = cds
-            .by_caster()
-            .filter(&caster_guid)
-            .find(|r| r.spell_id == spell_id)
-        {
-            row.ready_at = ready_at;
-            cds.id().update(row);
-        } else {
-            cds.insert(SpellCd {
-                id: 0,
-                caster_guid,
-                spell_id,
-                ready_at,
-            });
-        }
+    // A queued strike starts its cooldown when its swing fires.
+    if !queues_next_swing(&effects) {
+        start_spell_cooldown(ctx, caster_guid, spell_id, hdr.cooldown_ms);
     }
 
     crate::hooks::fire_on_cast_resolved(
@@ -201,6 +183,45 @@ impl CastOrigin {
     }
 }
 
+pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
+    caster.power = caster.power.saturating_sub(hdr.cost);
+    if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
+        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        caster.mana_regen_paused_until_ms = now_ms + 5000;
+    }
+}
+
+pub(crate) fn start_spell_cooldown(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    cooldown_ms: u32,
+) {
+    if cooldown_ms == 0 {
+        return;
+    }
+    let ready_at = ctx
+        .timestamp
+        .checked_add(TimeDuration::from_micros((cooldown_ms as i64) * 1000))
+        .unwrap_or(ctx.timestamp);
+    let cds = ctx.db.game_spell_cd();
+    if let Some(mut row) = cds
+        .by_caster()
+        .filter(&caster_guid)
+        .find(|r| r.spell_id == spell_id)
+    {
+        row.ready_at = ready_at;
+        cds.id().update(row);
+    } else {
+        cds.insert(SpellCd {
+            id: 0,
+            caster_guid,
+            spell_id,
+            ready_at,
+        });
+    }
+}
+
 // Queuing emits no GO, which would release the client ability before its swing fires.
 fn queues_next_swing(effects: &[SpellEffect]) -> bool {
     effects.iter().any(|e| e.kind == E_NEXT_SWING)
@@ -237,13 +258,24 @@ fn run_spell_effects(
     let mut total_absorbed: u32 = 0;
     let mut total_energized: u32 = 0;
     let mut energized_power_type: u8 = 0;
-    let mut primary_missed = false;
+    let mut primary_avoided = crate::combat::HIT_NORMAL;
     let mut any_crit = false;
     let mut item_grants = 0;
     let mut item_refused = false;
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
-    let rolls_hit = effects.iter().any(|e| e.kind == E_DAMAGE);
-    let mut missed_targets: std::collections::HashMap<u64, bool> = std::collections::HashMap::new();
+    let table = if effects
+        .iter()
+        .any(|e| matches!(e.kind, E_WEAPON_STRIKE | E_FINISHER_DAMAGE))
+    {
+        HitTable::Weapon {
+            ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
+        }
+    } else {
+        HitTable::Spell
+    };
+    let weapon_strike = matches!(table, HitTable::Weapon { .. });
+    let rolls_hit = weapon_strike || effects.iter().any(|e| e.kind == E_DAMAGE);
+    let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
     for e in effects {
         let points = effect_amount(
             e.base_points,
@@ -258,13 +290,17 @@ fn run_spell_effects(
             if triggered && !triggered_target_admitted(origin, caster_guid, t, is_alive(ctx, t)) {
                 continue;
             }
-            if rolls_hit
-                && t != caster_guid
-                && *missed_targets
+            let roll = if rolls_hit && t != caster_guid {
+                *target_rolls
                     .entry(t)
-                    .or_insert_with(|| super::targeting::spell_misses(ctx, level, t))
-            {
-                primary_missed |= t == target_guid;
+                    .or_insert_with(|| hit_roll(ctx, caster_guid, level, t, table))
+            } else {
+                crate::combat::HIT_NORMAL
+            };
+            if is_avoided(roll) {
+                if t == target_guid {
+                    primary_avoided = roll;
+                }
                 continue;
             }
             let hit = if e.kind == E_CREATE_ITEM && craft.is_some() {
@@ -299,6 +335,7 @@ fn run_spell_effects(
                     ..Default::default()
                 }
             } else {
+                let points = crate::combo::effect_points(ctx, hdr, e, caster_guid, t, points);
                 apply_effect(
                     ctx,
                     e,
@@ -310,6 +347,7 @@ fn run_spell_effects(
                     points,
                     dest,
                     triggered,
+                    roll == crate::combat::HIT_CRIT,
                 )
             };
             match hit.item {
@@ -330,6 +368,10 @@ fn run_spell_effects(
                 any_crit |= hit.crit;
             }
         }
+    }
+    // Spend after every effect has read the points; vmangos keeps them when a finisher misses.
+    if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 && !is_avoided(primary_avoided) {
+        crate::combo::spend_combo(ctx, caster_guid);
     }
     if !item_refused {
         if let Some(plan) = craft {
@@ -369,7 +411,7 @@ fn run_spell_effects(
             is_crit: any_crit,
             resisted: total_resisted,
             absorbed: total_absorbed,
-            miss_info: cast_miss(primary_missed, hdr.school_mask),
+            miss_info: cast_miss(primary_avoided, weapon_strike, hdr.school_mask),
             energized: total_energized,
             power_type: energized_power_type,
             cooldown_ms: hdr.cooldown_ms,
@@ -379,12 +421,66 @@ fn run_spell_effects(
     );
 }
 
-fn cast_miss(missed: bool, school_mask: u8) -> u8 {
+#[derive(Clone, Copy)]
+enum HitTable {
+    Spell,
+    Weapon { ranged: bool },
+}
+
+fn hit_roll(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    level: u8,
+    target_guid: u64,
+    table: HitTable,
+) -> u8 {
+    let HitTable::Weapon { ranged } = table else {
+        return if super::targeting::spell_misses(ctx, level, target_guid) {
+            crate::combat::HIT_MISS
+        } else {
+            crate::combat::HIT_NORMAL
+        };
+    };
+    let entities = ctx.db.game_world_entity();
+    match (
+        entities.guid().find(caster_guid),
+        entities.guid().find(target_guid),
+    ) {
+        (Some(caster), Some(target)) => {
+            let roll = crate::combat::roll_strike_outcome(ctx, &caster, &target, ranged);
+            arm_avoidance_reacts(ctx, caster_guid, target_guid, roll);
+            roll
+        }
+        _ => crate::combat::HIT_NORMAL,
+    }
+}
+
+fn arm_avoidance_reacts(ctx: &ReducerContext, caster_guid: u64, target_guid: u64, roll: u8) {
+    use crate::combat::{arm_react, ReactKind, HIT_DODGE, HIT_PARRY};
+    if roll == HIT_DODGE {
+        arm_react(ctx, caster_guid, ReactKind::Overpower);
+    }
+    if matches!(roll, HIT_DODGE | HIT_PARRY) {
+        arm_react(ctx, target_guid, ReactKind::Revenge);
+    }
+}
+
+fn is_avoided(roll: u8) -> bool {
+    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
+    matches!(roll, HIT_MISS | HIT_DODGE | HIT_PARRY)
+}
+
+fn cast_miss(roll: u8, weapon_strike: bool, school_mask: u8) -> u8 {
+    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
     const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
-    match (missed, school_mask) {
-        (false, _) => crate::spell::CAST_MISS_NONE,
-        (true, 0 | SCHOOL_MASK_PHYSICAL) => crate::spell::CAST_MISS_MISS,
-        (true, _) => crate::spell::CAST_MISS_RESIST,
+    match roll {
+        HIT_DODGE => crate::spell::CAST_MISS_DODGE,
+        HIT_PARRY => crate::spell::CAST_MISS_PARRY,
+        HIT_MISS if weapon_strike || matches!(school_mask, 0 | SCHOOL_MASK_PHYSICAL) => {
+            crate::spell::CAST_MISS_MISS
+        }
+        HIT_MISS => crate::spell::CAST_MISS_RESIST,
+        _ => crate::spell::CAST_MISS_NONE,
     }
 }
 
@@ -1216,15 +1312,17 @@ fn check_cast_gate_suffix(
         }
     }
 
+    if caster.is_player() && is_ranged_weapon_strike(hdr, effects) {
+        check_ranged_weapon(ctx, caster_guid, spell_id)?;
+    }
+
     // Creature spells such as NPC Slice and Dice share the finisher flags but hold no points.
-    let combo_points = if !caster.is_player() {
+    let combo_points = if !caster.is_player() || hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER == 0 {
         None
-    } else if effects.iter().any(|e| e.kind == E_FINISHER_DAMAGE) {
+    } else if spends_points_on_target(effects) {
         Some(crate::combo::combo_points(ctx, caster_guid, target_guid))
-    } else if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        Some(crate::combo::held_points(ctx, caster_guid))
     } else {
-        None
+        Some(crate::combo::held_points(ctx, caster_guid))
     };
     if combo_points == Some(0) {
         return Err(CastGateRefusal::other(
@@ -1243,6 +1341,41 @@ fn check_cast_gate_suffix(
     }
 
     Ok(())
+}
+
+fn is_ranged_weapon_strike(hdr: &Spell, effects: &[SpellEffect]) -> bool {
+    hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0
+        && effects.iter().any(|e| e.kind == E_WEAPON_STRIKE)
+}
+
+fn check_ranged_weapon(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+) -> Result<(), CastGateRefusal> {
+    use crate::items::weapon_subclass as ws;
+    match crate::combat::equipped_ranged_weapon(ctx, caster_guid) {
+        None | Some((_, _, _, ws::WAND)) => Err(CastGateRefusal::other(
+            CastRefusalReason::Unreported,
+            format!("spell {spell_id} needs a ranged weapon (caster {caster_guid})"),
+        )),
+        Some((_, _, _, ws::BOW | ws::GUN | ws::CROSSBOW))
+            if crate::combat::find_ammo(ctx, caster_guid).is_none() =>
+        {
+            Err(CastGateRefusal::other(
+                CastRefusalReason::NoAmmo,
+                format!("spell {spell_id} needs ammo (caster {caster_guid})"),
+            ))
+        }
+        Some(_) => Ok(()),
+    }
+}
+
+// Slice and Dice pairs a self aura with an enemy-targeted dummy, so dummies do not count.
+fn spends_points_on_target(effects: &[SpellEffect]) -> bool {
+    effects
+        .iter()
+        .any(|e| e.target == T_TARGET_ENEMY && e.kind != E_SCRIPTED)
 }
 
 fn caster_life_allows(is_player: bool, dead: bool, dead_callback: bool) -> bool {
@@ -1543,6 +1676,7 @@ mod eventai_hit_tests {
             p1: 0,
             script_id: 0,
             enters_combat: false,
+            points_per_combo: 0.0,
             bonus_coefficient: -1.0,
         }
     }
@@ -1556,6 +1690,18 @@ mod eventai_hit_tests {
         }
 
         assert_eq!(ordered, vec![20, 10, 30]);
+    }
+
+    #[test]
+    fn slice_and_dice_reads_held_points_and_kidney_shot_reads_the_target() {
+        let aimed = |kind, target| SpellEffect {
+            target,
+            ..effect(kind)
+        };
+        let slice_and_dice = [aimed(E_SCRIPTED, T_TARGET_ENEMY), aimed(A_FLAG, T_SELF)];
+        let kidney_shot = [aimed(A_CONTROL, T_TARGET_ENEMY)];
+        assert!(!spends_points_on_target(&slice_and_dice));
+        assert!(spends_points_on_target(&kidney_shot));
     }
 
     #[test]
@@ -1644,10 +1790,29 @@ mod cast_miss_tests {
     #[test]
     fn a_failed_hit_roll_misses_a_physical_spell_and_resists_a_magic_one() {
         // School masks: 0 none, 1 physical, 4 fire, 32 shadow.
-        assert_eq!(cast_miss(false, 4), crate::spell::CAST_MISS_NONE);
-        assert_eq!(cast_miss(true, 0), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(true, 1), crate::spell::CAST_MISS_MISS);
-        assert_eq!(cast_miss(true, 4), crate::spell::CAST_MISS_RESIST);
-        assert_eq!(cast_miss(true, 32), crate::spell::CAST_MISS_RESIST);
+        use crate::combat::{HIT_CRIT, HIT_MISS, HIT_NORMAL};
+        assert_eq!(
+            cast_miss(HIT_NORMAL, false, 4),
+            crate::spell::CAST_MISS_NONE
+        );
+        assert_eq!(cast_miss(HIT_CRIT, true, 1), crate::spell::CAST_MISS_NONE);
+        assert_eq!(cast_miss(HIT_MISS, false, 0), crate::spell::CAST_MISS_MISS);
+        assert_eq!(cast_miss(HIT_MISS, false, 1), crate::spell::CAST_MISS_MISS);
+        assert_eq!(
+            cast_miss(HIT_MISS, false, 4),
+            crate::spell::CAST_MISS_RESIST
+        );
+        assert_eq!(
+            cast_miss(HIT_MISS, false, 32),
+            crate::spell::CAST_MISS_RESIST
+        );
+    }
+
+    #[test]
+    fn a_weapon_spell_reports_its_physical_avoidance_whatever_its_school() {
+        use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
+        assert_eq!(cast_miss(HIT_MISS, true, 2), crate::spell::CAST_MISS_MISS);
+        assert_eq!(cast_miss(HIT_DODGE, true, 1), crate::spell::CAST_MISS_DODGE);
+        assert_eq!(cast_miss(HIT_PARRY, true, 1), crate::spell::CAST_MISS_PARRY);
     }
 }

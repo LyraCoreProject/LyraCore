@@ -397,23 +397,6 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn can_equip_into_mainhand_is_byte_identical_to_can_equip_mainhand() {
-        use equip_slot::MAINHAND;
-        assert!(can_equip_into(2, 21, MAINHAND, false));
-        assert!(can_equip_into(2, 13, MAINHAND, false));
-        assert!(can_equip_into(2, 17, MAINHAND, false));
-        assert!(!can_equip_into(0, 21, MAINHAND, false));
-        assert!(!can_equip_into(4, 21, MAINHAND, false));
-        assert!(!can_equip_into(2, 5, MAINHAND, false));
-        for &(c, it) in &[(2u8, 21u8), (2, 13), (2, 17), (0, 21), (4, 21), (2, 5)] {
-            assert_eq!(
-                can_equip_into(c, it, MAINHAND, false),
-                can_equip_mainhand(c, it)
-            );
-        }
-    }
-
-    #[test]
     fn can_equip_into_validates_armor_and_offhand_and_rejects_mismatch() {
         use equip_slot as e;
         use invtype as t;
@@ -547,26 +530,38 @@ pub(crate) mod tests {
     }
 
     #[test]
-    fn template_stat_sums_independently_per_stat_and_is_zero_for_no_gear() {
-        let sum = |pieces: &[ItemTemplate], which: EquipStat| -> i32 {
-            pieces.iter().map(|t| template_stat(t, which)).sum()
-        };
-        assert_eq!(sum(&[], EquipStat::Strength), 0);
-        assert_eq!(sum(&[], EquipStat::Armor), 0);
+    fn equipped_stats_count_worn_items_and_skip_broken_or_bagged_ones() {
+        use lyracore_shared::constants::starter_item::BACKPACK_SLOT_0;
+        use lyracore_shared::item_property::{equipped_stat, item_stat};
         let mut chest = blank_template(2001);
         chest.stat_strength = 10;
+        chest.max_durability = 80;
         let mut ring = blank_template(2002);
         ring.stat_strength = 5;
         ring.stat_agility = 20;
         ring.stat_armor = 50;
-        let worn = [chest, ring];
-        assert_eq!(sum(&worn, EquipStat::Strength), 15);
-        assert_eq!(sum(&worn, EquipStat::Agility), 20);
-        assert_eq!(sum(&worn, EquipStat::Armor), 50);
-        assert_eq!(sum(&worn, EquipStat::Crit), 0);
-        let plain = [blank_template(25), blank_template(51)];
-        assert_eq!(sum(&plain, EquipStat::Strength), 0);
-        assert_eq!(sum(&plain, EquipStat::Hit), 0);
+        let mut bracers = blank_template(2003);
+        bracers.stat_strength = 7;
+        bracers.max_durability = 30;
+        let mut belt = blank_template(2004);
+        belt.stat_strength = 3;
+        let carried = [
+            (equip_slot::CHEST, &chest, 1),
+            (equip_slot::FINGER1, &ring, 0),
+            (equip_slot::WRISTS, &bracers, 0),
+            (BACKPACK_SLOT_0, &belt, 0),
+        ];
+        let total = |which| {
+            equipped_stat(carried.iter().map(|&(slot, tmpl, durability)| {
+                let amount = item_stat(template_stat(tmpl, which), 0, 0);
+                (slot, tmpl.max_durability, durability, amount)
+            }))
+        };
+        assert_eq!(total(EquipStat::Strength), 15);
+        assert_eq!(total(EquipStat::Agility), 20);
+        assert_eq!(total(EquipStat::Armor), 50);
+        assert_eq!(total(EquipStat::Crit), 0);
+        assert_eq!(equipped_stat([]), 0);
     }
 
     #[test]

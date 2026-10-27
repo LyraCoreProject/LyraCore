@@ -26,6 +26,19 @@ fn spellbook(shard: &Standalone, guid: &str) -> Vec<String> {
         .collect()
 }
 
+fn assert_equip_lacks_proficiency(shard: &Standalone) {
+    let refused = shard.call("gw_equip_item", &[ACTOR, "23"]);
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success() && output.contains("item:no_proficiency"),
+        "{output}"
+    );
+}
+
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_warrior_equips_a_two_handed_sword_only_after_learning_the_proficiency() {
@@ -37,14 +50,7 @@ fn a_warrior_equips_a_two_handed_sword_only_after_learning_the_proficiency() {
     shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
 
     let before = shard.query_rows("SELECT * FROM game_item_instance");
-    let refused = shard.call("gw_equip_item", &[ACTOR, "23"]);
-    assert!(!refused.status.success());
-    let output = format!(
-        "{}{}",
-        String::from_utf8_lossy(&refused.stdout),
-        String::from_utf8_lossy(&refused.stderr)
-    );
-    assert!(output.contains("item:no_proficiency"), "{output}");
+    assert_equip_lacks_proficiency(&shard);
     assert_eq!(shard.query_rows("SELECT * FROM game_item_instance"), before);
 
     shard.assert_call("debug_learn_spell", &["1", TWO_HANDED_SWORDS]);
@@ -79,7 +85,7 @@ fn login_restores_a_missing_kit_weapon_proficiency() {
     let shard = fixture("weapon-proficiency-login");
     shard.assert_sql("DELETE FROM game_player_spell WHERE character_guid = 1 AND spell_id = 201");
     shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
-    assert!(!shard.call("gw_equip_item", &[ACTOR, "23"]).status.success());
+    assert_equip_lacks_proficiency(&shard);
 
     let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
     shard.assert_call(
