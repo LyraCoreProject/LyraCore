@@ -1,3 +1,6 @@
+#[path = "world_import_loot.rs"]
+mod vmangos_loot;
+
 use std::collections::HashMap;
 
 use anyhow::{bail, Context, Result};
@@ -1036,6 +1039,9 @@ struct QuestEtl {
 type ReferenceLoot = std::collections::HashMap<u64, Vec<(u64, f64, i64, u32)>>;
 
 fn parse_ref_pools(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<ReferenceLoot> {
+    if dump.kind() == SourceKind::Vmangos {
+        return Ok(Default::default());
+    }
     let mut refs: ReferenceLoot = std::collections::HashMap::new();
     for row in parse_table(dump, "reference_loot_template")?.iter() {
         let g: u64 = row.number(clt::ENTRY)?;
@@ -1066,7 +1072,7 @@ fn resolve_ref_pool(
     for &(item, chance, mincount_or_ref, maxcount) in rows {
         if mincount_or_ref < 0 {
             // Reference chance zero means always; otherwise it gates the normalized child weights.
-            let children = resolve_ref_pool((-mincount_or_ref) as u64, refs, visited);
+            let children = resolve_ref_pool(mincount_or_ref.unsigned_abs(), refs, visited);
             let gate = chance.abs();
             if gate > 0.0 {
                 let child_total: f64 = children.iter().map(|(_, c, _)| c.max(0.0)).sum();
@@ -1092,6 +1098,9 @@ fn parse_loot_family(
     table: &str,
     refs: &ReferenceLoot,
 ) -> Result<std::collections::HashMap<u64, Vec<(u64, u32, u32, u32, bool)>>> {
+    if dump.kind() == SourceKind::Vmangos {
+        return vmangos_loot::parse(dump, table);
+    }
     use std::collections::HashMap;
     // Loot chances use basis points, preserving odds below one percent.
     let bp = |pct: f64| (pct * 100.0).round() as i64;
@@ -1111,7 +1120,7 @@ fn parse_loot_family(
         let drops = drops_by_entry.entry(entry).or_default();
         if ref_or_min < 0 {
             // Each reference row needs its own recursion path to resolve shared pools.
-            let pool_id = (-ref_or_min) as u64;
+            let pool_id = ref_or_min.unsigned_abs();
             let mut visited = std::collections::HashSet::new();
             let items = resolve_ref_pool(pool_id, refs, &mut visited);
             if items.is_empty() {
@@ -1831,12 +1840,15 @@ fn build_mail_loot(
 ) -> Result<(Vec<String>, std::collections::HashSet<u64>)> {
     use std::collections::HashSet;
 
+    let forbidden = forbidden_items(dump)?;
     let mut rows: Vec<(u64, String)> = Vec::new();
     let mut item_entries: HashSet<u64> = HashSet::new();
     let mut seen_templates: HashSet<u64> = HashSet::new();
     for row in parse_table(dump, "mail_loot_template")?.iter() {
         let entry: u64 = field(row, mlt::ENTRY)?.parse().unwrap_or(0);
-        if !reward_mail_template_ids.contains(&entry) {
+        if !reward_mail_template_ids.contains(&entry)
+            || forbidden.contains(&row.number::<u64>(mlt::ITEM)?)
+        {
             continue;
         }
         if !seen_templates.insert(entry) {
@@ -3137,6 +3149,43 @@ fn push_item_statements(
     );
 }
 
+fn push_loot_statements(
+    stmts: &mut Vec<String>,
+    pickpocket_rows: &[String],
+    skinning_rows: &[String],
+    gameobject_loot_rows: &[String],
+    fishing_rows: &[String],
+) {
+    stmts.push("DELETE FROM game_pickpocket_loot WHERE id > 0".into());
+    stmts.push("DELETE FROM game_skinning_loot WHERE id > 0".into());
+    stmts.push("DELETE FROM game_gameobject_loot WHERE id > 0".into());
+    stmts.push("DELETE FROM game_fishing_loot WHERE id > 0".into());
+    push_insert(
+        stmts,
+        "game_pickpocket_loot",
+        "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
+        pickpocket_rows,
+    );
+    push_insert(
+        stmts,
+        "game_skinning_loot",
+        "id,skin_loot_id,item_entry,chance_bp,count,group_id",
+        skinning_rows,
+    );
+    push_insert(
+        stmts,
+        "game_gameobject_loot",
+        "id,loot_id,item_entry,chance_bp,count,group_id,quest_only",
+        gameobject_loot_rows,
+    );
+    push_insert(
+        stmts,
+        "game_fishing_loot",
+        "id,zone_id,item_entry,chance_bp,count,group_id",
+        fishing_rows,
+    );
+}
+
 fn push_world_content_statements(
     args: &WorldImportArgs,
     content: MappedContent,
@@ -3172,32 +3221,11 @@ fn push_world_content_statements(
     }
 
     if family_active(args, "loot") {
-        stmts.push("DELETE FROM game_pickpocket_loot WHERE id > 0".into());
-        stmts.push("DELETE FROM game_skinning_loot WHERE id > 0".into());
-        stmts.push("DELETE FROM game_gameobject_loot WHERE id > 0".into());
-        stmts.push("DELETE FROM game_fishing_loot WHERE id > 0".into());
-        push_insert(
+        push_loot_statements(
             stmts,
-            "game_pickpocket_loot",
-            "id,creature_entry,item_entry,chance_bp,count,group_id,quest_only",
             pickpocket_rows,
-        );
-        push_insert(
-            stmts,
-            "game_skinning_loot",
-            "id,skin_loot_id,item_entry,chance_bp,count,group_id",
             skinning_rows,
-        );
-        push_insert(
-            stmts,
-            "game_gameobject_loot",
-            "id,loot_id,item_entry,chance_bp,count,group_id,quest_only",
             gameobject_loot_rows,
-        );
-        push_insert(
-            stmts,
-            "game_fishing_loot",
-            "id,zone_id,item_entry,chance_bp,count,group_id",
             fishing_rows,
         );
     }
@@ -3689,7 +3717,11 @@ fn items_findings(
             }
         }
     }
-    let findings = findings.into_iter().filter(|(_, keys)| !keys.is_empty()).map(|(code, keys)| serde_json::json!({"code": code, "classification": "unsupported", "occurrences": keys.len(), "source_keys": keys})).collect::<Vec<_>>();
+    let mut findings = findings.into_iter().filter(|(_, keys)| !keys.is_empty()).map(|(code, keys)| serde_json::json!({"code": code, "classification": "unsupported", "occurrences": keys.len(), "source_keys": keys})).collect::<Vec<_>>();
+    findings.extend(loot_findings(
+        dump,
+        &["creature_loot_template", "reference_loot_template"],
+    )?);
     Ok(
         serde_json::json!({"format_version": 1, "source": "vmangos", "family": "items", "patch": crate::source_selection::PATCH, "client_build": crate::source_selection::CLIENT_BUILD, "findings": findings}),
     )
@@ -3727,9 +3759,102 @@ fn vmangos_items_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
     })
 }
 
+fn vmangos_loot_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
+    let entries = vmangos_creature_entries(dump, args)?;
+    let mut pickpocket = HashMap::new();
+    let mut skinning = HashMap::new();
+    for row in dump
+        .columns(
+            "creature_template",
+            &["entry", "pickpocket_loot_id", "skinning_loot_id"],
+        )?
+        .iter()
+    {
+        let entry = row.number("entry")?;
+        if entries.contains(&entry) {
+            for (column, ids) in [
+                ("pickpocket_loot_id", &mut pickpocket),
+                ("skinning_loot_id", &mut skinning),
+            ] {
+                let id = row.number::<u64>(column)?;
+                if id != 0 {
+                    ids.insert(entry, id);
+                }
+            }
+        }
+    }
+    let mut chest_ids = Vec::new();
+    for row in dump
+        .columns("gameobject_template", &["entry", "type", "data1"])?
+        .iter()
+    {
+        if classify_go_type(row.number("entry")?, row.number("type")?) == Some(GO_CHEST) {
+            let id = row.number::<u32>("data1")?;
+            if id != 0 {
+                chest_ids.push(id);
+            }
+        }
+    }
+    let loot = build_loot_family_rows(dump, &pickpocket, &skinning, &chest_ids)?;
+    let mut stmts = Vec::new();
+    push_loot_statements(
+        &mut stmts,
+        &loot.pickpocket_rows,
+        &loot.skinning_rows,
+        &loot.gameobject_loot_rows,
+        &loot.fishing_rows,
+    );
+    let count = insert_row_count(&stmts);
+    Ok(DumpPlan {
+        stmts,
+        stamps: vec![("loot", count)],
+        world_source_manifest: Some(serde_json::to_string_pretty(
+            &serde_json::json!({"format_version":1,"source":"vmangos","family":"loot","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":loot_findings(dump, &["creature_loot_template", "reference_loot_template", "pickpocketing_loot_template", "skinning_loot_template", "gameobject_loot_template", "fishing_loot_template", "item_loot_template", "disenchant_loot_template", "mail_loot_template"])?}),
+        )?),
+        ..Default::default()
+    })
+}
+
+fn loot_findings(dump: &impl TableRows, tables: &[&str]) -> Result<Vec<serde_json::Value>> {
+    let forbidden = forbidden_items(dump)?;
+    let mut findings = Vec::new();
+    for &table in tables {
+        let rows = dump.rows(table)?;
+        let mut conditions = 0;
+        let mut count_ranges = 0;
+        let mut quest_only = 0;
+        for row in rows.iter() {
+            let minimum = row.number::<i64>("mincountOrRef")?;
+            if minimum >= 0 && forbidden.contains(&row.number::<u64>("item")?) {
+                continue;
+            }
+            conditions += usize::from(row.number::<u32>("condition_id")? != 0);
+            let maximum = row.number::<u32>("maxcount")?;
+            count_ranges += usize::from(minimum >= 0 && minimum as u64 != u64::from(maximum));
+            if matches!(table, "skinning_loot_template" | "fishing_loot_template") {
+                quest_only += usize::from(row.number::<f64>("ChanceOrQuestChance")? < 0.0);
+            }
+        }
+        for (code, occurrences) in [
+            ("loot.condition", conditions),
+            ("loot.count-range", count_ranges),
+            ("loot.quest-only", quest_only),
+        ] {
+            if occurrences != 0 {
+                findings.push(serde_json::json!({"code":code,"classification":"unsupported","table":table,"occurrences":occurrences}));
+            }
+        }
+        if matches!(table, "item_loot_template" | "disenchant_loot_template") && !rows.is_empty() {
+            findings.push(serde_json::json!({"code":"loot.unconsumed-table","classification":"unsupported","table":table,"occurrences":rows.len()}));
+        }
+    }
+    Ok(findings)
+}
+
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
         Some("items") => vmangos_items_plan(dump, args),
+        Some("loot") => vmangos_loot_plan(dump, args),
         Some("globals") => {
             let stmts = globals_statements(dump, args.dbc.as_deref())?;
             let count = insert_row_count(&stmts);
@@ -3742,7 +3867,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
                 ..Default::default()
             })
         }
-        _ => bail!("vmangos currently supports --family globals or items"),
+        _ => bail!("vmangos currently supports --family globals, items or loot"),
     }
 }
 
@@ -3903,6 +4028,10 @@ fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> 
     }
     Ok(())
 }
+
+#[cfg(test)]
+#[path = "world_import_loot_tests.rs"]
+mod loot_tests;
 
 #[cfg(test)]
 #[path = "world_import_items_tests.rs"]
