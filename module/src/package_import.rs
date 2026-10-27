@@ -738,6 +738,14 @@ mod tests {
         assert_eq!(names.len(), unique);
     }
 
+    fn assert_foreign(result: Result<(), String>, families: &str) {
+        let refusal = result.expect_err("a row of another Import Family is refused");
+        assert!(
+            refusal.ends_with(&format!("belongs to the {families}")),
+            "{refusal}"
+        );
+    }
+
     #[test]
     fn a_spell_plan_claims_only_spell_family_tables() {
         let claims = [
@@ -765,7 +773,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Item, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Spell, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Spell, &plan.rows),
+            "`items` Import Family, not `spell`",
+        );
     }
 
     #[test]
@@ -780,7 +791,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Quest, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Item, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Item, &plan.rows),
+            "`quests` Import Family, not `items`",
+        );
     }
 
     #[test]
@@ -795,7 +809,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Loot, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Item, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Item, &plan.rows),
+            "`loot` Import Family, not `items`",
+        );
     }
 
     #[test]
@@ -810,7 +827,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Cast, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Loot, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Loot, &plan.rows),
+            "`casts` Import Family, not `loot`",
+        );
     }
 
     #[test]
@@ -825,7 +845,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Trainer, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Cast, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Cast, &plan.rows),
+            "`trainers` Import Family, not `casts`",
+        );
     }
 
     #[test]
@@ -840,7 +863,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Gossip, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Globals, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Globals, &plan.rows),
+            "`gossip` Import Family, not `globals`",
+        );
     }
 
     #[test]
@@ -855,7 +881,10 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Globals, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Gossip, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Gossip, &plan.rows),
+            "`globals` Import Family, not `gossip`",
+        );
     }
 
     #[test]
@@ -870,6 +899,9 @@ mod tests {
             check_claims_belong_to(ClaimFamily::Spellmeta, &plan.rows),
             Ok(())
         );
-        assert!(check_claims_belong_to(ClaimFamily::Spell, &plan.rows).is_err());
+        assert_foreign(
+            check_claims_belong_to(ClaimFamily::Spell, &plan.rows),
+            "`spellmeta` Import Family, not `spell`",
+        );
     }
 }

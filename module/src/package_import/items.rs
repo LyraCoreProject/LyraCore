@@ -218,7 +218,8 @@ fn built_item(row: &TracedRow) -> Result<ItemTemplate, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, item_claim, plan, some_value, PACKAGE_ITEM, REAL_ITEM, WHOLE_ITEM_ROW,
+        artifact, assert_each_column_sets_its_own_field, item_claim, plan, PACKAGE_ITEM, REAL_ITEM,
+        WHOLE_ITEM_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -271,12 +272,12 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_item_column_has_a_setter() {
-        let mut item = blank_item(PACKAGE_ITEM);
-        for column in ClaimTable::Item.columns() {
-            apply_item_field(&mut item, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_item_template` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_item_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::Item,
+            || blank_item(PACKAGE_ITEM),
+            apply_item_field,
+        );
     }
 
     #[test]

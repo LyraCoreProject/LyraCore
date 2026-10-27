@@ -443,8 +443,8 @@ fn no_such_column(table: &str, column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, class_level_stats_claim, graveyard_zone_claim, plan, some_value, PACKAGE_GLOBALS,
-        REAL_GRAVEYARD_ZONE, WHOLE_GRAVEYARD_ZONE_ROW,
+        artifact, assert_each_column_sets_its_own_field, class_level_stats_claim,
+        graveyard_zone_claim, plan, PACKAGE_GLOBALS, REAL_GRAVEYARD_ZONE, WHOLE_GRAVEYARD_ZONE_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -515,78 +515,77 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_globals_column_has_a_setter() {
-        let mut class_stats = ClassLevelStats {
-            class_level: 0,
-            class: 1,
-            level: 10,
-            base_health: 0,
-            base_mana: 0,
-        };
-        let mut level_stats = LevelStats {
-            race_class_level: 0,
-            race: 1,
-            class: 1,
-            level: 10,
-            strength: 0,
-            agility: 0,
-            stamina: 0,
-            intellect: 0,
-            spirit: 0,
-        };
-        let mut position = StartPosition {
-            race_class: 0,
-            race: 1,
-            class: 1,
-            map_id: 0,
-            zone_id: 0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            orientation: 0.0,
-            display_id: 0,
-        };
-        let mut portal = AreatriggerTeleport {
-            trigger_id: 1447,
-            target_map: 0,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            o: 0.0,
-            name: String::new(),
-        };
-        let mut zone = blank_graveyard_zone(PACKAGE_GLOBALS);
-        let mut grant = blank_createinfo_spell(PACKAGE_GLOBALS);
-        let mut button = blank_createinfo_action(PACKAGE_GLOBALS);
-
-        for column in ClaimTable::ClassLevelStats.columns() {
-            apply_class_level_stats_field(&mut class_stats, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::LevelStats.columns() {
-            apply_level_stats_field(&mut level_stats, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::StartPosition.columns() {
-            apply_start_position_field(&mut position, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::AreatriggerTeleport.columns() {
-            apply_areatrigger_teleport_field(&mut portal, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::GraveyardZone.columns() {
-            apply_graveyard_zone_field(&mut zone, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::CreateinfoSpell.columns() {
-            apply_createinfo_spell_field(&mut grant, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::CreateinfoAction.columns() {
-            apply_createinfo_action_field(&mut button, column.name, &some_value(*column))
-                .expect("setter");
-        }
+    fn every_claimable_globals_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::ClassLevelStats,
+            || ClassLevelStats {
+                class_level: 0,
+                class: 1,
+                level: 10,
+                base_health: 0,
+                base_mana: 0,
+            },
+            apply_class_level_stats_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::LevelStats,
+            || LevelStats {
+                race_class_level: 0,
+                race: 1,
+                class: 1,
+                level: 10,
+                strength: 0,
+                agility: 0,
+                stamina: 0,
+                intellect: 0,
+                spirit: 0,
+            },
+            apply_level_stats_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::StartPosition,
+            || StartPosition {
+                race_class: 0,
+                race: 1,
+                class: 1,
+                map_id: 0,
+                zone_id: 0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                orientation: 0.0,
+                display_id: 0,
+            },
+            apply_start_position_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::AreatriggerTeleport,
+            || AreatriggerTeleport {
+                trigger_id: 1447,
+                target_map: 0,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                o: 0.0,
+                name: String::new(),
+            },
+            apply_areatrigger_teleport_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GraveyardZone,
+            || blank_graveyard_zone(PACKAGE_GLOBALS),
+            apply_graveyard_zone_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreateinfoSpell,
+            || blank_createinfo_spell(PACKAGE_GLOBALS),
+            apply_createinfo_spell_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreateinfoAction,
+            || blank_createinfo_action(PACKAGE_GLOBALS),
+            apply_createinfo_action_field,
+        );
     }
 
     #[test]

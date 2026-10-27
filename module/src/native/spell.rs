@@ -38,9 +38,23 @@ pub(crate) fn cast_event(ctx: &ReducerContext, event: &SpellCastEvent) {
     if ctx.db.game_native_player().count() == 0 {
         return;
     }
-    for (audience, packet) in cast_event_messages(event) {
+    for (audience, packet) in cast_event_messages(event, projectile(ctx, event)) {
         deliver(ctx, event.caster_guid, audience, packet);
     }
+}
+
+// vmangos sets CAST_FLAG_AMMO on START and GO for every ranged-slot spell.
+fn projectile(ctx: &ReducerContext, event: &SpellCastEvent) -> Option<(u32, u32)> {
+    use crate::spell::game_spell;
+    if event.kind != SpellCastEventKind::Start as u8 && event.kind != SpellCastEventKind::Go as u8 {
+        return None;
+    }
+    ctx.db
+        .game_spell()
+        .spell_id()
+        .find(event.spell_id)
+        .filter(|spell| spell.attributes & crate::spell::SPELL_ATTR_USES_RANGED_SLOT != 0)?;
+    crate::combat::ranged_projectile(ctx, event.caster_guid)
 }
 
 pub(crate) fn spell_impact(ctx: &ReducerContext, event: &SpellImpactEvent) {
@@ -80,7 +94,10 @@ fn damage_log(row: &SpellCastEvent) -> Option<Packet> {
     })
 }
 
-fn cast_event_messages(row: &SpellCastEvent) -> Vec<(EventAudience, Packet)> {
+fn cast_event_messages(
+    row: &SpellCastEvent,
+    ammo: Option<(u32, u32)>,
+) -> Vec<(EventAudience, Packet)> {
     let mut out = Vec::new();
     let kind = match row.kind {
         1 => SpellCastEventKind::Start,
@@ -129,7 +146,7 @@ fn cast_event_messages(row: &SpellCastEvent) -> Vec<(EventAudience, Packet)> {
     }
     if kind == SpellCastEventKind::Start {
         let start =
-            codec::build_spell_start(row.caster_guid, row.spell_id, row.cast_time_ms, 0, None);
+            codec::build_spell_start(row.caster_guid, row.spell_id, row.cast_time_ms, 0, ammo);
         out.push((
             EventAudience::Everyone,
             message(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start))),
@@ -142,7 +159,7 @@ fn cast_event_messages(row: &SpellCastEvent) -> Vec<(EventAudience, Packet)> {
         EventAudience::Everyone
     };
     if !row.is_completion {
-        let start = codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, None);
+        let start = codec::build_spell_start(row.caster_guid, row.spell_id, 0, 0, ammo);
         out.push((
             launch_audience,
             message(ServerOpcodeMessage::SMSG_SPELL_START(Box::new(start))),
@@ -158,7 +175,7 @@ fn cast_event_messages(row: &SpellCastEvent) -> Vec<(EventAudience, Packet)> {
             },
         ));
     }
-    let mut go = codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, None);
+    let mut go = codec::build_spell_go(row.caster_guid, row.spell_id, row.target_guid, ammo);
     if row.is_completion && row.damage == 0 {
         use wow_world_messages::vanilla::{SpellMiss, SpellMissInfo};
         let miss_info = match row.swing_hit_info {
@@ -255,9 +272,13 @@ fn cast_miss_info(code: u8) -> Option<wow_world_messages::vanilla::SpellMissInfo
     use wow_world_messages::vanilla::SpellMissInfo;
     const CAST_MISS_MISS: u8 = 1;
     const CAST_MISS_RESIST: u8 = 2;
+    const CAST_MISS_DODGE: u8 = 3;
+    const CAST_MISS_PARRY: u8 = 4;
     match code {
         CAST_MISS_MISS => Some(SpellMissInfo::Miss),
         CAST_MISS_RESIST => Some(SpellMissInfo::Resist),
+        CAST_MISS_DODGE => Some(SpellMissInfo::Dodge),
+        CAST_MISS_PARRY => Some(SpellMissInfo::Parry),
         _ => None,
     }
 }

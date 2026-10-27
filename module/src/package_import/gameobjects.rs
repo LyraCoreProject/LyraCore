@@ -385,8 +385,9 @@ fn no_such_column(table: &str, column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, gameobject_spawn_claim, gameobject_template_claim, plan, some_value,
-        PACKAGE_GAMEOBJECT, REAL_GAMEOBJECT_SPAWN, REAL_MAP, WHOLE_GAMEOBJECT_TEMPLATE_ROW,
+        artifact, assert_each_column_sets_its_own_field, gameobject_spawn_claim,
+        gameobject_template_claim, plan, PACKAGE_GAMEOBJECT, REAL_GAMEOBJECT_SPAWN, REAL_MAP,
+        WHOLE_GAMEOBJECT_TEMPLATE_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -466,21 +467,22 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_gameobject_column_has_a_setter() {
-        let mut template = blank_template(PACKAGE_GAMEOBJECT);
-        for column in ClaimTable::GameobjectTemplate.columns() {
-            apply_template_field(&mut template, column.name, &some_value(*column)).expect("setter");
-        }
-
-        let mut trap = blank_trap(PACKAGE_GAMEOBJECT);
-        for column in ClaimTable::GameobjectTrap.columns() {
-            apply_trap_field(&mut trap, column.name, &some_value(*column)).expect("setter");
-        }
-
-        let mut spawn = blank_spawn_for_test();
-        for column in ClaimTable::GameobjectSpawn.columns() {
-            apply_spawn_field(&mut spawn, column.name, &some_value(*column)).expect("setter");
-        }
+    fn every_claimable_gameobject_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GameobjectTemplate,
+            || blank_template(PACKAGE_GAMEOBJECT),
+            apply_template_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GameobjectTrap,
+            || blank_trap(PACKAGE_GAMEOBJECT),
+            apply_trap_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GameobjectSpawn,
+            blank_spawn_for_test,
+            apply_spawn_field,
+        );
     }
 
     #[test]

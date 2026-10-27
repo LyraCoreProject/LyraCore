@@ -164,8 +164,8 @@ def check_charge_movement(host):
     client, peer = native_and_peer(host)
     guid, peer_guid = client.guid, peer.guid
     spell = 5099100
-    host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({spell * 4},{spell},0,9,0,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false)')
+    host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Native Charge',0,0,0,0,0,25,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({spell * 4},{spell},0,9,0,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)')
     for target, x in [(guid, 10), (peer_guid, 11)]:
         host.call('debug_teleport', [target, 0, x, 0, 0, 0])
     client.collect()
@@ -283,8 +283,8 @@ def check_death(host):
     assert host.rows(f'SELECT dead FROM game_world_entity WHERE guid = {guid}') == [[False]]
     assert not host.rows(f'SELECT guid FROM game_corpse WHERE guid = {corpse}')
     for spell, kind, points, target, parameter in [(51991, 14, 40, 3, 0), (51992, 38, 40, 0, 0), (51993, 181, 0, 0, 51992)]:
-        host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell},'Native resurrection',0,0,0,0,0,100,60000,1,0,0,1,0,0,0,0,false,0,0,0,0,0,0,0)")
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({spell * 4},{spell},0,{kind},{points},0,0.0,0,{target},0.0,0,0,0,{parameter},15,0,0,false)')
+        host.sql(f"INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell},'Native resurrection',0,0,0,0,0,100,60000,1,0,0,1,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({spell * 4},{spell},0,{kind},{points},0,0.0,0,{target},0.0,0,0,0,{parameter},15,0,0,false,0.0)')
     host.call('debug_learn_spell', [peer_guid, 51991])
     host.call('debug_set_health', [guid, 0])
     client.collect()
@@ -709,6 +709,7 @@ def check_guild(host):
     peer.send(0x81, b'Forbidden Guild\0')
     assert not any(op in (0x55, 0x93) for op, _ in peer.collect())
     assert not host.rows(f'SELECT guild_id FROM game_guild_member WHERE character_guid = {peer_guid}')
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     gm = host.rows("SELECT gm_level FROM game_account WHERE username = 'NATIVE'")[0][0]
     host.call('set_gm_level', ['Native', 1])
     client.send(0x81, b'Temporary Guild\0')
@@ -1338,8 +1339,8 @@ def check_duels(host):
         raise AssertionError(f'duel transition did not arrive: {duel_packets(packets)}')
 
     host.sql("INSERT INTO game_gameobject_template (entry,type_id,display_id,name,data0,data1,gather_skill_line,respawn_secs,gather_gray,lock_id,size) VALUES (5090490,16,787,'Native duel flag',0,0,0,0,0,0,1.0)")
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090173,'Native duel challenge',0,0,0,0,0,30,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360692,5090173,0,34,0,0,0.0,0,1,0.0,0,0,0,5090490,13,0,0,false)')
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090173,'Native duel challenge',0,0,0,0,0,30,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360692,5090173,0,34,0,0,0.0,0,1,0.0,0,0,0,5090490,13,0,0,false,0.0)')
     worlds = []
     for index, name in enumerate(['Duelone', 'Dueltwo', 'Duelviewer']):
         world = host.enter_world(name, cls=8, at=(0, 1000 + index, 1000, 0))
@@ -1440,6 +1441,9 @@ def check_duels(host):
     activate(flag)
     host.call('debug_teleport', [watcher_guid, 0, 2000, 1000, 0, 0])
     watcher.collect()
+    # Regeneration must not change the one-health knockout before the observation.
+    max_health = host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {second_guid}')[0][0]
+    host.sql(f'UPDATE game_world_entity SET max_health = 1 WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1])
     first.collect()
     second.collect()
@@ -1453,10 +1457,12 @@ def check_duels(host):
         time.sleep(0.05)
     completion(knocked_out, flag, 0, 'Duelone', 'Dueltwo')
     completion(second.collect(), flag, 0, 'Duelone', 'Dueltwo')
-    assert host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}') == [[1, False]]
+    remaining = host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}')
+    assert remaining == [[1, False]], remaining
     assert not host.rows(f'SELECT owner_guid FROM game_corpse WHERE owner_guid = {second_guid}')
     assert not host.rows(f'SELECT attacker_guid FROM game_melee_attack WHERE attacker_guid = {first_guid}')
     assert not duel_packets(watcher.collect())
+    host.sql(f'UPDATE game_world_entity SET max_health = {max_health} WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1000])
     host.call('debug_teleport', [watcher_guid, 0, 1002, 1000, 0, 0])
     watcher.collect()
@@ -2568,6 +2574,8 @@ def check_mail(host):
         if (0x285, bytes(4)) in first.collect():
             break
         time.sleep(0.02)
+    else:
+        raise AssertionError('the delivered copy must notify its recipient')
     copied_again = request(first, 0x246, copy_mail)
     result(copied_again, copy_mail, 2, 0, struct.pack('<II', 8383, 1))
     held_copy = host.rows(f'SELECT guid, slot FROM game_item_instance WHERE owner_guid = {first_guid} AND item_text_id = {letter}')[0]
@@ -2800,19 +2808,23 @@ def check_member_stats(host):
     host.call('debug_teleport', [peer_guid, 0, 11, 0, 0, 0])
     peer.collect(auto_ack=False)
     assert full(peer_guid) == {0: 0x21}
-    time.sleep(5.2)
+    # A loading member's tick writes nothing, so two 5 s intervals stand in for proof of one.
+    time.sleep(10.5)
     assert not changes(), 'loading members must not be reported offline'
     peer.send(0xdc)
     peer.collect()
     client.collect()
-    time.sleep(5.2)
+    host.wait_until(
+        lambda: host.rows(f'SELECT snapshots FROM game_native_member_stats WHERE owner_guid = {guid}')[0][0] == [],
+        'a member stats tick must drop the member the client now sees', timeout=12)
     assert not changes(), 'AOI members must use entity updates'
     peer.send(0x4b)
     peer.collect()
     assert not host.rows(f'SELECT id FROM game_native_member_stats WHERE owner_guid = {peer_guid}')
     assert full(peer_guid) == {0: 0}
     changed_until(lambda fields: fields == {0: 0})
-    time.sleep(5.2)
+    # The offline packet marks a tick; the next one is due 5 s later.
+    time.sleep(6)
     assert not changes(), 'offline status is sent once'
     peer.send(0x3d, struct.pack('<Q', peer_guid))
     peer.collect()
@@ -3047,6 +3059,7 @@ def check_channels(host):
     command(peer, 0x9a)
     roster = next(body for opcode, body in peer.collect() if opcode == 0x9b)
     assert struct.pack('<Q', guid) in roster and struct.pack('<Q', peer_guid) in roster
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     host.call('set_gm_level', ['Native', 1])
     say(client, 'channel line')
     assert any(opcode == 0x96 and b'channel line\0' in body for opcode, body in client.collect())
@@ -3404,6 +3417,7 @@ def check_chat(host):
     def chat(packets):
         return [packet for packet in packets if packet[0] == 0x96]
 
+    host.restore('game_account', "username = 'NATIVE'", 'gm_level')
     host.call('set_gm_level', ['Native', 1])
     send(client, 0, '  native say  ')
     expected = line(0, guid, 'native say', 7)
@@ -3987,7 +4001,7 @@ def check_inventory(host):
     assert weapon_slot >= 23
     assert item_pointer(values(unequipped, guid), 15) == 0
     assert item_pointer(values(unequipped, guid), weapon_slot) == weapon_guid
-    assert any(opcode == 0xa9 for opcode, _ in peer.collect())
+    assert values(peer.collect(), guid).get(440) == 0, 'the main-hand visible item entry clears for observers'
     client.send(0x10a, bytes([255, weapon_slot]))
     equipped = client.collect()
     assert item_pointer(values(equipped, guid), 15) == weapon_guid
@@ -4008,7 +4022,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     client.send(0x1a2, struct.pack('<QIBB', vendor, 5090050, 17, 1))
     refused = client.collect()
-    assert any(opcode == 0x1a5 for opcode, _ in refused)
+    assert (0x1a5, struct.pack('<QIB', vendor, 5090050, 8)) in refused, ('BUY_ERR_CANT_CARRY_MORE', refused)
     assert not values(refused, guid) and not creates(refused)
     assert host.rows(f'SELECT money FROM game_world_entity WHERE guid = {guid}') == [[49980]]
     assert not host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')
@@ -4094,7 +4108,7 @@ def check_inventory(host):
     assert host.rows(f'SELECT spell_id FROM game_player_spell WHERE character_guid = {guid} AND spell_id = 2050') == [[2050]]
     client.send(0x1b2, struct.pack('<QI', trainer, 2050))
     refused = client.collect()
-    assert any(opcode == 0x1b4 for opcode, _ in refused)
+    assert (0x1b4, struct.pack('<QII', trainer, 2050, 0)) in refused, 'TRAINER_BUY_FAILED Unavailable'
     assert not any(opcode in (0x12b, 0xa9) for opcode, _ in refused)
     host.call('debug_set_skill', [guid, 356, 3])
     skills = values(client.collect(), guid)
@@ -4103,9 +4117,9 @@ def check_inventory(host):
     skills = values(client.collect(), guid)
     assert any(value == 356 and skills.get(index + 1) == (5 << 16 | 4) for index, value in skills.items())
     assert not any(opcode in (0x19f, 0x1b1, 0x1b3, 0x12b, 0x1ba, 0x166) for opcode, _ in peer.collect())
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
     for index in (0, 1):
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({20360684 + index},5090171,{index},7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)')
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({20360684 + index},5090171,{index},7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)')
     host.sql('INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,5090052,1)')
     host.call('debug_learn_spell', [guid, 5090171])
     client.collect()
@@ -4127,8 +4141,8 @@ def check_inventory(host):
     assert values(crafted, food_guid)[14] == 5
     assert sum(opcode == 0x166 for opcode, _ in crafted) == 2
     assert len(host.rows(f'SELECT guid FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090050')) == 2
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090172,'Triggered product',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)")
-    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360688,5090172,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)')
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090172,'Triggered product',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)")
+    host.sql('INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360688,5090172,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)')
     host.sql('UPDATE game_spell_effect SET kind = 5, trigger_spell = 5090172 WHERE id = 20360684')
     client.send(0x12e, cast(5090171))
     nested_craft = client.collect()
@@ -4371,12 +4385,16 @@ def check_quest_items(host):
     host.call('debug_grant_quest', [guid, 50900])
     client.collect()
     # The client's toast adds the packet's count to its bags, so the packet leads the item's update.
-    for count in (3, 1):
+    # The tracker redraws only when a quest log counter changes, so the counter follows the item.
+    for count, carried in ((3, 3), (1, 4)):
         host.call('debug_grant_item', [guid, 5090052, count])
         packets = client.collect()
         opcodes = [opcode for opcode, _ in packets]
         assert (0x19a, struct.pack('<II', 5090052, count)) in packets
         assert opcodes.index(0x19a) < opcodes.index(0xa9)
+        quest_log = [index for index, packet in enumerate(packets) if 199 in values([packet], guid)]
+        assert quest_log and quest_log[-1] > opcodes.index(0xa9)
+        assert values(packets, guid)[199] >> 6 & 0x3f == carried
     jerky_slot = host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid} AND entry = 5090052')[0][0]
     used = {row[0] for row in host.rows(f'SELECT slot FROM game_item_instance WHERE owner_guid = {guid}')}
     split_slot = next(slot for slot in range(23, 39) if slot not in used)
@@ -4418,7 +4436,13 @@ def check_group_loot(host):
         awarded += client.collect()
     assert any(opcode == 0x29f for opcode, _ in awarded)
     assert any(opcode == 0x166 for opcode, _ in awarded)
-    assert any(opcode == 0x29f for opcode, _ in peer.collect())
+    peer_awarded = peer.collect()
+    for _ in range(50):
+        if any(opcode == 0x29f for opcode, _ in peer_awarded):
+            break
+        time.sleep(0.02)
+        peer_awarded += peer.collect()
+    assert any(opcode == 0x29f for opcode, _ in peer_awarded), peer_awarded
     assert not host.rows(f'SELECT id FROM game_loot_roll WHERE corpse_guid = {corpse}')
     assert not host.rows(f'SELECT id FROM game_corpse_loot WHERE corpse_guid = {corpse}')
     client.send(0x15d, struct.pack('<Q', corpse))
@@ -4476,7 +4500,7 @@ def check_auras(host):
     assert host.rows(f'SELECT id FROM game_aura WHERE target_guid = {peer_guid} AND spell_id = 168')
     peer.send(0x136, struct.pack('<I', 168))
     cancelled = peer.collect()
-    assert any(opcode == 0xa9 for opcode, _ in cancelled)
+    assert values(cancelled, peer_guid).get(47) == 0, 'cancelling the buff clears UNIT_FIELD_AURA slot 0'
     assert not host.rows(f'SELECT id FROM game_aura WHERE target_guid = {peer_guid} AND spell_id = 168')
     client.collect()
 
@@ -4575,9 +4599,13 @@ def check_casting(host):
     started = peer.collect()
     assert any(opcode == 0x131 and spell_id(body) == 133 for opcode, body in started), started
     host.sql(f'UPDATE game_world_entity SET power = 0 WHERE guid = {peer_guid}')
-    time.sleep(1.6)
-    refused = peer.collect()
-    assert [packet for packet in refused if packet[0] in (0x130, 0x132, 0x133, 0x2a6)] == interrupted, refused
+    refused, deadline = [], time.monotonic() + 5
+    while time.monotonic() < deadline:
+        refused += [packet for packet in peer.collect() if packet[0] in (0x130, 0x132, 0x133, 0x2a6)]
+        if len(refused) >= len(interrupted):
+            break
+        time.sleep(0.05)
+    assert refused == interrupted, refused
     assert not host.rows(f'SELECT * FROM game_pending_cast WHERE caster_guid = {peer_guid}')
     host.sql('UPDATE game_spell SET cost = 0 WHERE spell_id = 133')
     client.collect()
@@ -4612,7 +4640,7 @@ def check_combo_points(host):
     observer = host.enter_world('Observer', at=(0, 10, 0, 0))
     guid = rogue.guid
     host.call('debug_learn_spell', [guid, 133])
-    host.restore('game_spell', 'spell_id = 133', 'gcd_ms')
+    host.restore('game_spell', 'spell_id = 133', 'gcd_ms', 'cast_flags')
     host.restore('game_spell_effect', 'spell_id = 133', 'kind')
     host.sql('UPDATE game_spell SET gcd_ms = 0 WHERE spell_id = 133')
     first = spawn(host, guid, 51000, 5)
@@ -4623,9 +4651,11 @@ def check_combo_points(host):
 
     def effect(kind):
         host.sql(f'UPDATE game_spell_effect SET kind = {kind} WHERE spell_id = 133')
+        finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
+        host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
-    def shown():
-        seen = []
+    def shown(packets=()):
+        seen = list(packets)
         def combo():
             seen.extend(rogue.collect())
             fields = values(seen, guid)
@@ -4647,8 +4677,24 @@ def check_combo_points(host):
                     'the finisher on a target without combo points was not refused')
     assert (0x130, struct.pack('<IBB', 133, 2, 0x46)) in refused, refused
     assert host.rows(held) == [[first, 2]]
-    rogue.send(0x12e, cast(133, first))
-    assert shown() == (first, 0)
+    for _ in range(10):
+        rogue.send(0x12e, cast(133, first))
+        packets = []
+        def finished():
+            packets.extend(rogue.collect())
+            return (1222 in values(packets, guid)
+                    or any(opcode == 0x24b for opcode, _ in packets))
+        host.wait_until(finished, 'the finisher neither spent its points nor reported a miss')
+        # Client-initiated casts report avoidance through SPELLLOGMISS after their launch GO.
+        missed = [struct.unpack('<IQBIQB', body) for opcode, body in packets if opcode == 0x24b]
+        if not missed:
+            assert shown(packets) == (first, 0)
+            break
+        assert len(missed) == 1 and missed[0][:5] == (133, guid, 0, 1, first), missed
+        assert missed[0][5] in (1, 3, 4), missed
+        assert host.rows(held) == [[first, 2]], 'an avoided finisher consumed combo points'
+    else:
+        raise AssertionError('all finisher casts were avoided')
     assert not host.rows(held)
 
     effect(0x0c)
@@ -4710,9 +4756,9 @@ def check_progression(host):
     host.call('debug_set_level', [guid, 10])
     host.sql("INSERT INTO game_talent_tab (tab_id,name,class_mask,race_mask,order_index) VALUES (5090901,'Native talent',1,0,0)")
     host.sql("INSERT INTO game_talent (talent_id,name,tree_id,tier,column,max_rank,spell_id,required_talent_id,required_points_in_tree,grant_spell_id,tab_id,rank_spell_2,rank_spell_3,rank_spell_4,rank_spell_5,required_talent_rank,required_spell_id) VALUES (124,'Native talent',0,0,0,1,51990,0,0,0,5090901,0,0,0,0,0,0)")
-    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (51990,'Native passive',0,0,0,0,0,0,4294967295,1,0,0,1,0,64,0,0,false,0,0,0,0,0,0,0)")
+    host.sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (51990,'Native passive',0,0,0,0,0,0,4294967295,1,0,0,1,0,64,0,0,false,0,0,0,0,0,0,0,0)")
     for index, kind, points, param, mask in [(0, 160, 5, 0, 0), (1, 172, -5, 10, 1)]:
-        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({207960 + index},51990,{index},{kind},{points},0,0.0,0,0,0.0,0,0,0,{param},0,{mask},0,false)')
+        host.sql(f'INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({207960 + index},51990,{index},{kind},{points},0,0.0,0,0,0.0,0,0,0,{param},0,{mask},0,false,0.0)')
     client.collect()
     peer.collect()
     client.send(0x251, struct.pack('<II', 124, 0))
@@ -4815,6 +4861,9 @@ def check_progression(host):
     host.call('debug_teleport', [guid, 0, 20, 0, 0, 0])
     client.collect()
     peer.collect()
+    def connections():
+        return sorted(json.dumps(row) for row in host.rows('SELECT connection_id FROM game_native_world_connection'))
+    before_replacement = connections()
     replacement = host.connect()
     assert replacement.read()[0] == 0x1ee
     replacement.send(0x3d, struct.pack('<Q', guid))
@@ -4830,7 +4879,9 @@ def check_progression(host):
         except EOFError:
             break
     client.close()
-    time.sleep(0.05)
+    host.wait_until(
+        lambda: (now := connections()) != before_replacement and len(now) == len(before_replacement),
+        'the replaced World Session must close its connection')
     assert host.rows(f'SELECT guid FROM game_world_entity WHERE guid = {guid}')
     replacement.send(0x4b)
     replacement.send(0xee, struct.pack('<IIffffI', 0, 3000, 12, 0, 0, 0, 0))

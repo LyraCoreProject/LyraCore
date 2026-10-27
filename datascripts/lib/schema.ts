@@ -17,11 +17,12 @@ export interface Column {
   readonly defaultValue?: number | string;
 }
 
-export type SpellField = Exclude<keyof Spell, "spellId">;
+// The Package API does not claim the combo-point columns.
+export type SpellField = Exclude<keyof Spell, "spellId" | "maxDurationMs">;
 
 export type SpellEffectField = Exclude<
   keyof SpellEffect,
-  "id" | "spellId" | "effectIndex"
+  "id" | "spellId" | "effectIndex" | "pointsPerCombo"
 >;
 
 export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {

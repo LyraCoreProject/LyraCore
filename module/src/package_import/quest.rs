@@ -712,13 +712,13 @@ fn built_quest_reward_choice(row: &TracedRow) -> Result<QuestRewardChoice, Strin
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, plan, quest_claim, quest_objective_claim, quest_reward_item_claim, some_value,
-        PACKAGE_QUEST, REAL_QUEST, WHOLE_QUEST_ROW,
+        artifact, assert_each_column_sets_its_own_field, distinct_row, fields_of, plan,
+        quest_claim, quest_objective_claim, quest_reward_item_claim, PACKAGE_QUEST, REAL_QUEST,
     };
     use super::*;
 
     #[test]
-    fn tuning_a_package_quest_no_enabled_package_inserts_is_refused() {
+    fn tuning_a_package_quest_is_an_uninvented_package_row() {
         let plan = plan(&[artifact(
             "example.tuner",
             &quest_claim(
@@ -749,17 +749,19 @@ mod tests {
 
     #[test]
     fn an_inserted_quest_carries_every_claimed_value_onto_the_row() {
+        let (fields, claimed) = distinct_row(ClaimTable::Quest);
         let plan = plan(&[artifact(
             "example.bolt",
-            &quest_claim(PACKAGE_QUEST, "insert", WHOLE_QUEST_ROW),
+            &quest_claim(PACKAGE_QUEST, "insert", &fields),
         )])
         .expect("plan builds");
 
-        let quest = built_quest(&plan.rows[0]).expect("row builds");
+        let quest = fields_of(&built_quest(&plan.rows[0]).expect("row builds"));
 
-        assert_eq!(quest.entry, PACKAGE_QUEST);
-        assert_eq!(quest.title, "A Kindled Errand");
-        assert_eq!(quest.reward_money, 100);
+        assert_eq!(quest["entry"], "8000001");
+        for (column, value) in claimed {
+            assert_eq!(quest[&column], value, "{column}");
+        }
     }
 
     #[test]
@@ -777,7 +779,7 @@ mod tests {
 
         let objective = built_quest_objective(&plan.rows[0]).expect("row builds");
 
-        assert_eq!(objective.id, (u64::from(PACKAGE_QUEST) << 8) | 2);
+        assert_eq!(objective.id, 0x7a12_0102);
         assert_eq!(objective.quest_entry, PACKAGE_QUEST);
         assert_eq!(objective.obj_index, 2);
         assert_eq!(objective.target_entry, 6);
@@ -799,74 +801,64 @@ mod tests {
 
         let reward_item = built_quest_reward_item(&plan.rows[0]).expect("row builds");
 
-        assert_eq!(reward_item.id, (u64::from(PACKAGE_QUEST) << 32) | 25);
+        assert_eq!(reward_item.id, 0x007a_1201_0000_0019);
         assert_eq!(reward_item.quest_entry, PACKAGE_QUEST);
         assert_eq!(reward_item.item_entry, 25);
         assert_eq!(reward_item.count, 1);
     }
 
     #[test]
-    fn every_claimable_quest_column_has_a_setter() {
-        let mut quest = blank_quest(PACKAGE_QUEST);
-        for column in ClaimTable::Quest.columns() {
-            apply_quest_field(&mut quest, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_quest_template` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_quest_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::Quest,
+            || blank_quest(PACKAGE_QUEST),
+            apply_quest_field,
+        );
     }
 
     #[test]
-    fn every_claimable_quest_text_column_has_a_setter() {
-        let mut text = blank_quest_text(PACKAGE_QUEST);
-        for column in ClaimTable::QuestText.columns() {
-            apply_quest_text_field(&mut text, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_quest_text` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_quest_text_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestText,
+            || blank_quest_text(PACKAGE_QUEST),
+            apply_quest_text_field,
+        );
     }
 
     #[test]
-    fn every_claimable_objective_column_has_a_setter() {
-        let mut objective = blank_quest_objective(PACKAGE_QUEST, 0);
-        for column in ClaimTable::QuestObjective.columns() {
-            apply_quest_objective_field(&mut objective, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_quest_objective` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_objective_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestObjective,
+            || blank_quest_objective(PACKAGE_QUEST, 0),
+            apply_quest_objective_field,
+        );
     }
 
     #[test]
-    fn every_claimable_cast_objective_column_has_a_setter() {
-        let mut cast_objective = blank_quest_cast_objective(PACKAGE_QUEST, 0);
-        for column in ClaimTable::QuestCastObjective.columns() {
-            apply_quest_cast_objective_field(
-                &mut cast_objective,
-                column.name,
-                &some_value(*column),
-            )
-            .unwrap_or_else(|e| {
-                panic!("`game_quest_cast_objective` column `{}`: {e}", column.name)
-            });
-        }
+    fn every_claimable_cast_objective_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestCastObjective,
+            || blank_quest_cast_objective(PACKAGE_QUEST, 0),
+            apply_quest_cast_objective_field,
+        );
     }
 
     #[test]
-    fn every_claimable_reward_item_column_has_a_setter() {
-        let mut reward_item = blank_quest_reward_item(PACKAGE_QUEST, 25);
-        for column in ClaimTable::QuestRewardItem.columns() {
-            apply_quest_reward_item_field(&mut reward_item, column.name, &some_value(*column))
-                .unwrap_or_else(|e| {
-                    panic!("`game_quest_reward_item` column `{}`: {e}", column.name)
-                });
-        }
+    fn every_claimable_reward_item_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestRewardItem,
+            || blank_quest_reward_item(PACKAGE_QUEST, 25),
+            apply_quest_reward_item_field,
+        );
     }
 
     #[test]
-    fn every_claimable_reward_choice_column_has_a_setter() {
-        let mut reward_choice = blank_quest_reward_choice(PACKAGE_QUEST, 0);
-        for column in ClaimTable::QuestRewardChoice.columns() {
-            apply_quest_reward_choice_field(&mut reward_choice, column.name, &some_value(*column))
-                .unwrap_or_else(|e| {
-                    panic!("`game_quest_reward_choice` column `{}`: {e}", column.name)
-                });
-        }
+    fn every_claimable_reward_choice_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestRewardChoice,
+            || blank_quest_reward_choice(PACKAGE_QUEST, 0),
+            apply_quest_reward_choice_field,
+        );
     }
 
     #[test]

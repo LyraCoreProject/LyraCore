@@ -205,8 +205,37 @@ fn squared_distance(a: (f32, f32, f32), b: (f32, f32, f32)) -> f32 {
     dx * dx + dy * dy + dz * dz
 }
 
-fn flight_master_is_selectable(unit_flags: u32) -> bool {
-    unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE == 0
+fn flight_master_gate(player: &WorldEntity, npc: &WorldEntity) -> Result<(), TaxiGateDenied> {
+    if npc.dead || npc.health == 0 {
+        return Err(TaxiGateDenied::FlightMasterDead);
+    }
+    if npc.is_player() || npc.npc_flags & lyracore_shared::constants::npc_flags::TAXI == 0 {
+        return Err(TaxiGateDenied::NotFlightMaster);
+    }
+    if npc.unit_flags & lyracore_shared::constants::unit_flags::NOT_SELECTABLE != 0 {
+        return Err(TaxiGateDenied::NotInteractable);
+    }
+    if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
+        return Err(TaxiGateDenied::DifferentPartition);
+    }
+    if crate::helpers::dist_sq(player, npc) > TAXI_INTERACTION_RANGE_SQ {
+        return Err(TaxiGateDenied::OutOfRange);
+    }
+    Ok(())
+}
+
+fn nearest_source_node(
+    npc: &WorldEntity,
+    nodes: impl Iterator<Item = GameTaxiNode>,
+) -> Option<GameTaxiNode> {
+    nodes
+        .filter(|node| node.map_id == npc.map_id)
+        .filter_map(|node| {
+            let distance = squared_distance((npc.x, npc.y, npc.z), (node.x, node.y, node.z));
+            (distance <= TAXI_NODE_RESOLVE_RANGE_SQ).then_some((distance, node))
+        })
+        .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| a.id.cmp(&b.id)))
+        .map(|(_, node)| node)
 }
 
 fn resolve_flight_master(
@@ -227,36 +256,12 @@ fn resolve_flight_master(
         .guid()
         .find(npc_guid)
         .ok_or(TaxiGateDenied::FlightMasterMissing)?;
-    if npc.dead || npc.health == 0 {
-        return Err(TaxiGateDenied::FlightMasterDead);
-    }
-    if npc.is_player() || npc.npc_flags & lyracore_shared::constants::npc_flags::TAXI == 0 {
-        return Err(TaxiGateDenied::NotFlightMaster);
-    }
-    if !flight_master_is_selectable(npc.unit_flags) {
-        return Err(TaxiGateDenied::NotInteractable);
-    }
-    if npc.map_id != player.map_id || npc.instance_id != player.instance_id {
-        return Err(TaxiGateDenied::DifferentPartition);
-    }
-    if crate::helpers::dist_sq(&player, &npc) > TAXI_INTERACTION_RANGE_SQ {
-        return Err(TaxiGateDenied::OutOfRange);
-    }
+    flight_master_gate(&player, &npc)?;
     if crate::reputation::npc_refuses_interaction(ctx, &npc, &player) {
         return Err(TaxiGateDenied::Hostile);
     }
 
-    let source = ctx
-        .db
-        .game_taxi_node()
-        .iter()
-        .filter(|node| node.map_id == npc.map_id)
-        .filter_map(|node| {
-            let distance = squared_distance((npc.x, npc.y, npc.z), (node.x, node.y, node.z));
-            (distance <= TAXI_NODE_RESOLVE_RANGE_SQ).then_some((distance, node))
-        })
-        .min_by(|(da, a), (db, b)| da.total_cmp(db).then_with(|| a.id.cmp(&b.id)))
-        .map(|(_, node)| node)
+    let source = nearest_source_node(&npc, ctx.db.game_taxi_node().iter())
         .ok_or(TaxiGateDenied::NoSourceNode)?;
     Ok((player, source))
 }
@@ -378,17 +383,13 @@ fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
 }
 
 fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
-    if should_insert_discovery(is_known(ctx, character_guid, node_id)) {
+    if !is_known(ctx, character_guid, node_id) {
         ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
             id: 0,
             character_guid,
             node_id,
         });
     }
-}
-
-fn should_insert_discovery(already_known: bool) -> bool {
-    !already_known
 }
 
 fn route_is_supported(
@@ -529,20 +530,6 @@ fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-struct FlightPresentation {
-    mount_display_id: u32,
-    unit_flags: u32,
-    movement_flags: u32,
-}
-
-fn cleared_presentation(mut state: FlightPresentation) -> FlightPresentation {
-    state.mount_display_id = 0;
-    state.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
-    state.movement_flags = 0;
-    state
-}
-
 fn should_refresh_spline(old_grid: (i32, i32), new_grid: (i32, i32), crossed_point: bool) -> bool {
     crossed_point || old_grid != new_grid
 }
@@ -598,30 +585,33 @@ struct CtxFlightEndSink<'a> {
     character_guid: u64,
 }
 
+fn project_flight_end(
+    player: &mut WorldEntity,
+    landing: Option<LandingPosition>,
+    zone_id: Option<u32>,
+) {
+    if let Some(landing) = landing {
+        player.map_id = landing.map_id;
+        // Landing takes the destination zone below; it explores nothing.
+        player
+            .place(landing.x, landing.y, landing.z, MoveClock::Unchanged)
+            .unexplored();
+        player.orientation = landing.orientation;
+        if let Some(zone_id) = zone_id {
+            player.zone_id = zone_id;
+        }
+    }
+    player.mount_display_id = 0;
+    player.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    player.movement_flags = 0;
+}
+
 impl FlightEndSink for CtxFlightEndSink<'_> {
     fn project_world(&mut self, landing: Option<LandingPosition>, zone_id: Option<u32>) {
         let Some(mut player) = self.player.take() else {
             return;
         };
-        if let Some(landing) = landing {
-            player.map_id = landing.map_id;
-            // Landing takes the destination zone below; it explores nothing.
-            player
-                .place(landing.x, landing.y, landing.z, MoveClock::Unchanged)
-                .unexplored();
-            player.orientation = landing.orientation;
-            if let Some(zone_id) = zone_id {
-                player.zone_id = zone_id;
-            }
-        }
-        let cleared = cleared_presentation(FlightPresentation {
-            mount_display_id: player.mount_display_id,
-            unit_flags: player.unit_flags,
-            movement_flags: player.movement_flags,
-        });
-        player.mount_display_id = cleared.mount_display_id;
-        player.unit_flags = cleared.unit_flags;
-        player.movement_flags = cleared.movement_flags;
+        project_flight_end(&mut player, landing, zone_id);
         player.update(self.ctx);
     }
 
@@ -795,10 +785,6 @@ fn stale_reply_ids(replies: impl IntoIterator<Item = (u64, i64)>, now_micros: i6
         .into_iter()
         .filter_map(|(request_id, created_micros)| (created_micros <= cutoff).then_some(request_id))
         .collect()
-}
-
-fn reply_belongs_to_character(reply: &TaxiServiceReply, character_guid: u64) -> bool {
-    reply.character_guid == character_guid
 }
 
 fn write_reply(ctx: &ReducerContext, reply: TaxiServiceReply) {
@@ -1201,7 +1187,7 @@ pub fn gw_ack_taxi_reply(
         .request_id()
         .find(request_id)
         .as_ref()
-        .is_some_and(|reply| reply_belongs_to_character(reply, character_guid))
+        .is_some_and(|reply| reply.character_guid == character_guid)
     {
         replies.request_id().delete(request_id);
     }
@@ -1211,33 +1197,24 @@ pub fn gw_ack_taxi_reply(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::GameTaxiPath;
 
-    struct FakeFlightEnd {
-        world: LandingPosition,
-        presentation: FlightPresentation,
-        durable: LandingPosition,
-        pending_instance_id: u64,
-        zone_id: u32,
-        world_zone_id: u32,
-        spline: bool,
-        schedule: bool,
-        active: bool,
-        spline_deletes: u8,
-        schedule_deletes: u8,
-        active_deletes: u8,
-        pending_drops: u8,
+    #[derive(Debug, PartialEq)]
+    enum EndCall {
+        ProjectWorld(Option<LandingPosition>, Option<u32>),
+        ProjectCharacter(LandingPosition, u64, Option<u32>),
+        DropPendingMotion,
+        ClearSpline,
+        ClearSchedule,
     }
 
-    impl FlightEndSink for FakeFlightEnd {
+    struct RecordingFlightEnd {
+        active: bool,
+        calls: Vec<EndCall>,
+    }
+
+    impl FlightEndSink for RecordingFlightEnd {
         fn project_world(&mut self, landing: Option<LandingPosition>, zone_id: Option<u32>) {
-            if let Some(landing) = landing {
-                self.world = landing;
-                if let Some(zone_id) = zone_id {
-                    self.world_zone_id = zone_id;
-                }
-            }
-            self.presentation = cleared_presentation(self.presentation);
+            self.calls.push(EndCall::ProjectWorld(landing, zone_id));
         }
 
         fn project_character(
@@ -1246,59 +1223,52 @@ mod tests {
             instance_id: u64,
             zone_id: Option<u32>,
         ) {
-            self.durable = landing;
-            self.pending_instance_id = instance_id;
-            if let Some(zone_id) = zone_id {
-                self.zone_id = zone_id;
-            }
+            self.calls
+                .push(EndCall::ProjectCharacter(landing, instance_id, zone_id));
         }
 
         fn drop_pending_motion(&mut self) {
-            self.pending_drops += 1;
+            self.calls.push(EndCall::DropPendingMotion);
         }
 
         fn clear_spline(&mut self) {
-            if std::mem::take(&mut self.spline) {
-                self.spline_deletes += 1;
-            }
+            self.calls.push(EndCall::ClearSpline);
         }
 
         fn clear_schedule(&mut self) {
-            if std::mem::take(&mut self.schedule) {
-                self.schedule_deletes += 1;
-            }
+            self.calls.push(EndCall::ClearSchedule);
         }
 
         fn take_active(&mut self) -> bool {
-            if std::mem::take(&mut self.active) {
-                self.active_deletes += 1;
-                true
-            } else {
-                false
-            }
+            self.active
         }
     }
 
-    fn fake_end(position: LandingPosition) -> FakeFlightEnd {
-        FakeFlightEnd {
-            world: position,
-            presentation: FlightPresentation {
-                mount_display_id: 1147,
-                unit_flags: 0x40 | lyracore_shared::constants::unit_flags::TAXI_FLIGHT,
-                movement_flags: TAXI_MOVEMENT_FORWARD,
-            },
-            durable: position,
-            pending_instance_id: 3,
-            zone_id: 12,
-            world_zone_id: 12,
-            spline: true,
-            schedule: true,
-            active: true,
-            spline_deletes: 0,
-            schedule_deletes: 0,
-            active_deletes: 0,
-            pending_drops: 0,
-        }
+    fn end_flight(active: bool, plan: FlightEndPlan) -> Vec<EndCall> {
+        let mut sink = RecordingFlightEnd {
+            active,
+            calls: Vec::new(),
+        };
+        apply_flight_end(&mut sink, plan);
+        sink.calls
+    }
+
+    fn flying_player() -> WorldEntity {
+        let mut player = crate::helpers::tests::entity(7, 0, 0, 32, 32);
+        (player.x, player.y, player.z, player.orientation) = (-9500.0, 25.0, 60.0, 0.75);
+        player.zone_id = 12;
+        player.mount_display_id = 1147;
+        player.unit_flags = 0x0010_0040;
+        player.movement_flags = TAXI_MOVEMENT_FORWARD;
+        player
+    }
+
+    fn flight_master_and_player(npc_x: f32) -> (WorldEntity, WorldEntity) {
+        let player = crate::helpers::tests::entity(1, 0, 0, 32, 32);
+        let mut npc = crate::helpers::tests::entity(2, 0, 0, 32, 32);
+        npc.x = npc_x;
+        npc.npc_flags = 0x0000_0008;
+        (player, npc)
     }
 
     fn node(id: u32, client_node_id: u32, map_id: u32) -> GameTaxiNode {
@@ -1370,44 +1340,41 @@ mod tests {
     }
 
     #[test]
-    fn storage_and_client_node_ids_are_distinct_contracts() {
-        let source = node(5_090_100, 255, 0);
-        let path = GameTaxiPath {
-            id: 5_090_102,
-            source_node_id: source.id,
-            destination_node_id: 5_090_101,
-            fare: 25,
+    fn a_flight_master_is_in_range_up_to_exactly_ten_yards() {
+        let (player, npc) = flight_master_and_player(10.0);
+        assert_eq!(flight_master_gate(&player, &npc), Ok(()));
+        let (player, npc) = flight_master_and_player(10.01);
+        assert_eq!(
+            flight_master_gate(&player, &npc),
+            Err(TaxiGateDenied::OutOfRange)
+        );
+    }
+
+    #[test]
+    fn a_not_selectable_flight_master_is_not_interactable() {
+        let (player, mut npc) = flight_master_and_player(1.0);
+        npc.unit_flags = 0x0200_0000;
+        assert_eq!(
+            flight_master_gate(&player, &npc),
+            Err(TaxiGateDenied::NotInteractable)
+        );
+    }
+
+    #[test]
+    fn the_source_node_is_the_nearest_within_ten_yards_and_ties_go_to_the_lower_id() {
+        let (_, npc) = flight_master_and_player(0.0);
+        let at = |id, x, map_id| GameTaxiNode {
+            x,
+            ..node(id, id, map_id)
         };
-        assert_eq!(path.source_node_id, 5_090_100);
-        assert_eq!(source.client_node_id, 255);
-        assert_ne!(path.source_node_id, source.client_node_id);
-    }
-
-    #[test]
-    fn interaction_and_source_resolution_boundaries_are_inclusive() {
-        assert_eq!(
-            squared_distance((0.0, 0.0, 0.0), (10.0, 0.0, 0.0)),
-            TAXI_INTERACTION_RANGE_SQ
-        );
-        assert_eq!(TAXI_NODE_RESOLVE_RANGE_SQ, TAXI_INTERACTION_RANGE_SQ);
-    }
-
-    #[test]
-    fn not_selectable_flight_masters_are_not_interactable() {
-        assert_eq!(
-            lyracore_shared::constants::unit_flags::NOT_SELECTABLE,
-            0x0200_0000
-        );
-        assert!(flight_master_is_selectable(0));
-        assert!(!flight_master_is_selectable(
-            lyracore_shared::constants::unit_flags::NOT_SELECTABLE
-        ));
-    }
-
-    #[test]
-    fn first_discovery_inserts_and_repeated_discovery_is_idempotent() {
-        assert!(should_insert_discovery(false));
-        assert!(!should_insert_discovery(true));
+        let source = |nodes: Vec<GameTaxiNode>| {
+            nearest_source_node(&npc, nodes.into_iter()).map(|node| node.id)
+        };
+        assert_eq!(source(vec![at(1, 10.0, 0)]), Some(1));
+        assert_eq!(source(vec![at(1, 10.01, 0)]), None);
+        assert_eq!(source(vec![at(1, 2.0, 1)]), None);
+        assert_eq!(source(vec![at(1, 6.0, 0), at(2, 3.0, 0)]), Some(2));
+        assert_eq!(source(vec![at(9, -3.0, 0), at(4, 3.0, 0)]), Some(4));
     }
 
     #[test]
@@ -1429,25 +1396,6 @@ mod tests {
             (4, now),
         ];
         assert_eq!(stale_reply_ids(rows, now), vec![1, 2]);
-    }
-
-    #[test]
-    fn acknowledgement_is_operator_gated_character_checked_and_request_keyed() {
-        let row = TaxiServiceReply {
-            character_guid: 7,
-            request_id: 99,
-            operation: lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
-            npc_guid: 90,
-            accepted: true,
-            known: true,
-            source_client_node_id: 255,
-            available_client_node_ids: vec![255],
-            refusal: String::new(),
-            created_micros: 1,
-            result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
-        };
-        assert!(reply_belongs_to_character(&row, 7));
-        assert!(!reply_belongs_to_character(&row, 8));
     }
 
     #[test]
@@ -1654,102 +1602,136 @@ mod tests {
     }
 
     #[test]
-    fn presentation_cleanup_is_idempotent_and_cell_crossings_refresh_the_spline() {
-        let active = FlightPresentation {
-            mount_display_id: 1147,
-            unit_flags: 0x55 | lyracore_shared::constants::unit_flags::TAXI_FLIGHT,
-            movement_flags: TAXI_MOVEMENT_FORWARD,
-        };
-        let cleared = cleared_presentation(active);
-        assert_eq!(cleared_presentation(cleared), cleared);
-        assert_eq!(cleared.mount_display_id, 0);
-        assert_eq!(cleared.movement_flags, 0);
-        assert_eq!(
-            cleared.unit_flags & lyracore_shared::constants::unit_flags::TAXI_FLIGHT,
-            0
-        );
+    fn cell_crossings_and_route_points_refresh_the_spline() {
         assert!(should_refresh_spline((1, 1), (2, 1), false));
         assert!(should_refresh_spline((1, 1), (1, 1), true));
         assert!(!should_refresh_spline((1, 1), (1, 1), false));
     }
 
     #[test]
-    fn authority_sink_projects_exact_landing_and_cleans_each_row_once() {
-        let old = LandingPosition {
+    fn a_landing_places_the_player_at_the_destination_and_clears_the_flight_presentation() {
+        let mut player = flying_player();
+        let landing = LandingPosition {
             map_id: 0,
-            x: -1.0,
-            y: -2.0,
-            z: -3.0,
-            orientation: 0.0,
+            x: -9443.5,
+            y: 58.25,
+            z: 56.75,
+            orientation: 1.25,
         };
-        let mut destination = node(20, 256, 0);
-        (destination.x, destination.y, destination.z) = (-9443.5, 58.25, 56.75);
-        let landing = exact_landing(&destination, 1.25);
-        let plan = FlightEndPlan {
-            landing: Some(landing),
-            instance_id: 7,
-            zone_id: Some(40),
-        };
-        let mut sink = fake_end(old);
-
-        apply_flight_end(&mut sink, plan);
-        apply_flight_end(&mut sink, plan);
-
-        assert_eq!(sink.world, landing);
-        assert_eq!(sink.durable, landing);
-        assert_eq!((sink.pending_instance_id, sink.zone_id), (7, 40));
-        assert_eq!(
-            sink.world_zone_id, 40,
-            "the landing zone reaches the live entity row, not only the durable one"
-        );
-        assert_eq!(sink.presentation, cleared_presentation(sink.presentation));
+        project_flight_end(&mut player, Some(landing), Some(40));
         assert_eq!(
             (
-                sink.spline_deletes,
-                sink.schedule_deletes,
-                sink.active_deletes
+                player.map_id,
+                player.x,
+                player.y,
+                player.z,
+                player.orientation
             ),
-            (1, 1, 1)
+            (0, -9443.5, 58.25, 56.75, 1.25)
         );
-        assert_eq!(sink.pending_drops, 1);
+        assert_eq!(player.zone_id, 40);
+        assert_eq!(
+            (
+                player.mount_display_id,
+                player.unit_flags,
+                player.movement_flags
+            ),
+            (0, 0x0000_0040, 0)
+        );
     }
 
     #[test]
-    fn malformed_cancellation_preserves_last_position_and_never_grants_destination() {
-        let last = LandingPosition {
+    fn a_cancelled_flight_keeps_the_last_position_and_zone_and_clears_the_presentation() {
+        let mut player = flying_player();
+        project_flight_end(&mut player, None, Some(999));
+        assert_eq!(
+            (
+                player.map_id,
+                player.x,
+                player.y,
+                player.z,
+                player.orientation
+            ),
+            (0, -9500.0, 25.0, 60.0, 0.75)
+        );
+        assert_eq!(player.zone_id, 12);
+        assert_eq!(
+            (
+                player.mount_display_id,
+                player.unit_flags,
+                player.movement_flags
+            ),
+            (0, 0x0000_0040, 0)
+        );
+    }
+
+    #[test]
+    fn ending_an_active_flight_projects_the_landing_and_cleans_its_rows() {
+        let landing = LandingPosition {
             map_id: 0,
-            x: -9500.0,
-            y: 25.0,
-            z: 60.0,
-            orientation: 0.75,
+            x: -9443.5,
+            y: 58.25,
+            z: 56.75,
+            orientation: 1.25,
         };
-        let mut sink = fake_end(last);
-        apply_flight_end(
-            &mut sink,
+        let calls = end_flight(
+            true,
+            FlightEndPlan {
+                landing: Some(landing),
+                instance_id: 7,
+                zone_id: Some(40),
+            },
+        );
+        assert_eq!(
+            calls,
+            vec![
+                EndCall::ProjectWorld(Some(landing), Some(40)),
+                EndCall::DropPendingMotion,
+                EndCall::ProjectCharacter(landing, 7, Some(40)),
+                EndCall::ClearSpline,
+                EndCall::ClearSchedule,
+            ]
+        );
+    }
+
+    #[test]
+    fn a_cancellation_never_grants_the_destination_to_the_character() {
+        let calls = end_flight(
+            true,
             FlightEndPlan {
                 landing: None,
                 instance_id: 99,
                 zone_id: Some(999),
             },
         );
+        assert_eq!(
+            calls,
+            vec![
+                EndCall::ProjectWorld(None, Some(999)),
+                EndCall::ClearSpline,
+                EndCall::ClearSchedule,
+            ]
+        );
+    }
 
-        assert_eq!(sink.world, last);
-        assert_eq!(sink.durable, last);
-        assert_eq!((sink.pending_instance_id, sink.zone_id), (3, 12));
-        assert_eq!(
-            sink.world_zone_id, 12,
-            "a cancelled flight grants no destination zone either"
+    #[test]
+    fn ending_a_flight_that_is_no_longer_active_only_cleans_leftover_rows() {
+        let landing = LandingPosition {
+            map_id: 0,
+            x: 1.0,
+            y: 2.0,
+            z: 3.0,
+            orientation: 0.0,
+        };
+        let calls = end_flight(
+            false,
+            FlightEndPlan {
+                landing: Some(landing),
+                instance_id: 7,
+                zone_id: Some(40),
+            },
         );
-        assert_eq!(sink.presentation.mount_display_id, 0);
-        assert_eq!(
-            (
-                sink.spline_deletes,
-                sink.schedule_deletes,
-                sink.active_deletes
-            ),
-            (1, 1, 1)
-        );
-        assert_eq!(sink.pending_drops, 0);
+        assert_eq!(calls, vec![EndCall::ClearSpline, EndCall::ClearSchedule]);
     }
 
     #[test]

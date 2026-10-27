@@ -24,7 +24,7 @@ fn offer(shard: &Standalone, id: u32, spell: u32, line: u32, cap: u32) {
 fn wrapper(shard: &Standalone, wrapper: u32, target: u32) {
     let id = u64::from(wrapper) << 2;
     let kind = lyracore_shared::spell::taxonomy::E_SCRIPTED;
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({id},{wrapper},0,{kind},0,0,0.0,0,0,0.0,0,{target},0,0,0,0,0,false)"));
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({id},{wrapper},0,{kind},0,0,0.0,0,0,0.0,0,{target},0,0,0,0,0,false,0.0)"));
 }
 
 fn assert_learned(shard: &Standalone, spell: u32, line: u32, cap: u32) {

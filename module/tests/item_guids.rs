@@ -364,8 +364,8 @@ fn crafting_does_not_reuse_the_consumed_reagents_identity() {
 }
 
 fn seed_craft(shard: &Standalone) {
-    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)");
+    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090171,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)");
+    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360684,5090171,0,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)");
     shard.assert_sql("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721368,5090171,5090052,1)");
 }
 
@@ -374,7 +374,7 @@ fn seed_craft(shard: &Standalone) {
 fn a_failed_craft_keeps_reagents_without_skill_or_partial_products() {
     let shard = fixture("item-guid-craft-refund");
     seed_craft(&shard);
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false)");
+    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090050,8,0,0,false,0.0)");
     shard.assert_sql("INSERT INTO game_skill_ability (id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green) VALUES (5090171,5090171,185,0,0,0,0,0,0)");
     shard.assert_call("debug_set_skill", &["1", "185", "1"]);
     shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);

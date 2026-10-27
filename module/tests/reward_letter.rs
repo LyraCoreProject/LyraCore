@@ -68,9 +68,15 @@ fn a_turn_in_files_one_reward_letter_that_arrives_from_its_quest_giver() {
     let from = now_micros();
     assert!(turn_in(&standalone, CARD_QUEST).status.success());
     let by = now_micros();
+    let again = turn_in(&standalone, CARD_QUEST);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&again.stdout),
+        String::from_utf8_lossy(&again.stderr)
+    );
     assert!(
-        !turn_in(&standalone, CARD_QUEST).status.success(),
-        "a quest turns in once"
+        !again.status.success() && text.contains("quest already turned in"),
+        "a quest turns in once: {text}"
     );
     let mail = letter_from(&standalone, "620");
     for (column, want) in [

@@ -42,6 +42,9 @@ pub struct Spell {
     // Zero means unlimited charges.
     #[default(0u8)]
     pub proc_charges: u8,
+    // A finisher's duration grows from duration_ms toward this at five combo points.
+    #[default(0u32)]
+    pub max_duration_ms: u32,
     #[default(0u32)]
     pub custom_flags: u32,
     #[default(0u32)]
@@ -83,6 +86,8 @@ pub struct SpellEffect {
     pub script_id: u32,
     #[default(false)]
     pub enters_combat: bool,
+    #[default(0.0f32)]
+    pub points_per_combo: f32,
     #[default({ -1.0f32 })]
     pub bonus_coefficient: f32,
 }
@@ -323,6 +328,8 @@ pub const CAST_MISS_NONE: u8 = 0;
 pub const CAST_MISS_MISS: u8 = 1;
 /// Vanilla reports a magic spell's failed hit roll as a full resist.
 pub const CAST_MISS_RESIST: u8 = 2;
+pub const CAST_MISS_DODGE: u8 = 3;
+pub const CAST_MISS_PARRY: u8 = 4;
 
 impl SpellImpactEvent {
     pub(crate) fn insert(ctx: &ReducerContext, row: Self) -> Self {

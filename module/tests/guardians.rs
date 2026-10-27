@@ -46,13 +46,13 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
         "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,\
          range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,\
          attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,\
-         proc_flags,proc_chance,proc_charges) \
-         VALUES ({SPELL},'Guardian fixture',0,0,0,0,0,0,{duration_ms},1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)"
+         proc_flags,proc_chance,proc_charges,max_duration_ms) \
+         VALUES ({SPELL},'Guardian fixture',0,0,0,0,0,0,{duration_ms},1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,{duration_ms})"
     ));
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,\
-         period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) \
-         VALUES ({},{SPELL},0,39,2,1,0.0,0,0,0.0,0,0,0,51000,9,0,0,false)", u64::from(SPELL)<<2
+         period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) \
+         VALUES ({},{SPELL},0,39,2,1,0.0,0,0,0.0,0,0,0,51000,9,0,0,false,0.0)", u64::from(SPELL)<<2
     ));
     shard.assert_call(
         "debug_cast_spell_at",

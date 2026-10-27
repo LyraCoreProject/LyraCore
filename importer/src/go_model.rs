@@ -270,36 +270,11 @@ mod tests {
     }
 
     #[test]
-    fn bounding_radius_covers_every_shuffled_vertex() {
-        let tris: Vec<Tri> = cube(2.0, 5.0).into_iter().map(shuffle_tri).collect();
-        let radius = bounding_radius(&tris);
-        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-        for t in &tris {
-            for v in t {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(v[k]);
-                    hi[k] = hi[k].max(v[k]);
-                }
-            }
-        }
-        let center = [
-            (lo[0] + hi[0]) / 2.0,
-            (lo[1] + hi[1]) / 2.0,
-            (lo[2] + hi[2]) / 2.0,
-        ];
-        for t in &tris {
-            for v in t {
-                let d = ((v[0] - center[0]).powi(2)
-                    + (v[1] - center[1]).powi(2)
-                    + (v[2] - center[2]).powi(2))
-                .sqrt();
-                assert!(
-                    d <= radius + 1e-4,
-                    "vertex {v:?} lies outside radius {radius}"
-                );
-            }
-        }
-        assert!(radius > 0.0);
+    fn bounding_radius_reaches_the_farthest_vertex_from_the_box_centre() {
+        let square: Vec<Tri> = cube(2.0, 5.0).into_iter().map(shuffle_tri).collect();
+        assert!((bounding_radius(&square) - 8f32.sqrt()).abs() < 1e-6);
+        let right_triangle = shuffle_tri([[0.0, 0.0, 0.0], [6.0, 0.0, 0.0], [0.0, 0.0, 8.0]]);
+        assert_eq!(bounding_radius(&[right_triangle]), 5.0);
     }
 
     #[test]

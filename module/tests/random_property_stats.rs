@@ -69,10 +69,10 @@ fn readout(shard: &Standalone, key: &str) -> BTreeMap<String, String> {
 
 fn create_damage_spell(shard: &Standalone, spell_id: u32, school_mask: u8) {
     shard.assert_sql(&format!(
-        "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES ({spell_id},'Stat fixture damage',0,0,0,0,0,40,0,{school_mask},0,0,0,0,0,1,0,true,0,0,0,0,0,0,0)"
+        "INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES ({spell_id},'Stat fixture damage',0,0,0,0,0,40,0,{school_mask},0,0,0,0,0,1,0,true,0,0,0,0,0,0,0,0)"
     ));
     shard.assert_sql(&format!(
-        "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES ({},{spell_id},0,1,100,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false)",
+        "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES ({},{spell_id},0,1,100,0,0.0,0,1,0.0,0,0,0,0,0,0,0,false,0.0)",
         u64::from(spell_id) * 4
     ));
 }
@@ -282,8 +282,8 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
         );
     }
 
-    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090233,'Stat fixture heal',0,0,0,0,0,40,0,2,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0)");
-    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360932,5090233,0,2,100,0,0.0,0,0,0.0,0,0,0,0,0,0,0,false)");
+    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090233,'Stat fixture heal',0,0,0,0,0,40,0,2,0,0,0,0,0,1,0,false,0,0,0,0,0,0,0,0)");
+    shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360932,5090233,0,2,100,0,0.0,0,0,0.0,0,0,0,0,0,0,0,false,0.0)");
     shard
         .assert_sql("UPDATE game_world_entity SET simulation_indexed = false, health = 100, max_health = 10000 WHERE guid = 1");
     shard.assert_call("debug_cast_at", &["1", "5090233", "1"]);

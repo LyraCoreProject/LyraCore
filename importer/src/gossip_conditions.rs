@@ -125,6 +125,7 @@ pub(super) fn resolve(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::gossip::Unavailable;
 
     fn conditions(sql: &str) -> crate::world_source::WorldSource {
         crate::world_source::fixture_sql(&format!(
@@ -158,14 +159,23 @@ mod tests {
     #[test]
     fn duplicate_and_unresolvable_source_rows_stay_unavailable() {
         let rows = read(&conditions("INSERT INTO `conditions` (`condition_entry`, `type`, `value1`, `value2`) VALUES (1,99,777,0),(2,0,0,0),(2,0,0,0),(3,-3,1,0),(4,-3,2,0),(5,-3,6,0),(6,-3,5,0);")).unwrap();
-        for id in [1, 2, 3, 4, 5, 6] {
-            assert!(evaluate_reference(
-                id,
-                CharacterFacts::default(),
-                |_| QuestState::Absent,
-                |id| rows.get(&id).copied()
-            )
-            .is_err());
+        for (id, unavailable) in [
+            (1, Unavailable::Unsupported(i32::MIN)),
+            (2, Unavailable::Unsupported(i32::MIN)),
+            (3, Unavailable::Unsupported(i32::MIN)),
+            (4, Unavailable::Unsupported(i32::MIN)),
+            (5, Unavailable::Cycle(5)),
+            (6, Unavailable::Cycle(6)),
+        ] {
+            assert_eq!(
+                evaluate_reference(
+                    id,
+                    CharacterFacts::default(),
+                    |_| QuestState::Absent,
+                    |id| rows.get(&id).copied()
+                ),
+                Err(unavailable)
+            );
         }
     }
 }

@@ -111,9 +111,9 @@ fn insert_spell(
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', {power_type}, {cost}, 0, 0, {cooldown_ms}, {range_yd}, \
-         {duration_ms}, 1, 0, 0, 0, 0, 0, 22, 0, false, {cast_flags}, 0, 8, 0, 0, 0, 0)"
+         {duration_ms}, 1, 0, 0, 0, 0, 0, 22, 0, false, {cast_flags}, 0, 8, 0, 0, 0, 0, 0)"
     ));
 }
 
@@ -130,9 +130,9 @@ fn insert_effect(
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({id}, {spell_id}, 0, {kind}, {base_points}, {die_sides}, 0.0, 0, {target}, \
-         {radius_yd}, 0, 0, 0, 0, 0, 0, 0, false)"
+         {radius_yd}, 0, 0, 0, 0, 0, 0, 0, false, 0.0)"
     ));
 }
 
@@ -446,14 +446,19 @@ fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement(
         "SELECT * FROM game_creature_spline WHERE guid = {patroller} OR guid = {wanderer}"
     ));
     assert_eq!(walking.len(), 2);
+    assert!(
+        walking.iter().all(|leg| leg["facing"] == "false"),
+        "{walking:?}"
+    );
     let cast = cast_at(&shard, point);
     assert!(cast.status.success(), "{cast:?}");
-    for leg in walking {
-        assert_eq!(leg["facing"], "false", "{leg:?}");
+    for guid in [patroller, wanderer] {
+        let leg = spline(&shard, guid).expect("a distracted mover keeps a leg");
+        assert_eq!(leg["facing"], "true", "{leg:?}");
+        let stop = (number(&leg, "dx"), number(&leg, "dy"), number(&leg, "dz"));
         assert!(
-            now_ms() * 1_000
-                < number::<u64>(&leg, "start_micros") + number::<u64>(&leg, "dur_ms") * 1_000,
-            "Distract must interrupt an unfinished leg: {leg:?}"
+            support::distance(stop, (x, y, z)) > 1.0,
+            "Distract must stop {guid} short of its destination: {leg:?}"
         );
     }
     shard.assert_sql(&format!(

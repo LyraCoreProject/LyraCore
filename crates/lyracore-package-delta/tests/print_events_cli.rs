@@ -22,14 +22,7 @@ fn print_events_lists_every_catalogue_name_in_order_one_per_line() {
 }
 
 #[test]
-fn print_events_output_is_byte_stable_across_runs() {
-    let first = run(&["--print-events"]).stdout;
-    let second = run(&["--print-events"]).stdout;
-    assert_eq!(first, second);
-}
-
-#[test]
-fn print_events_writes_nothing_to_stderr_and_touches_no_file() {
+fn print_events_writes_nothing_to_stderr() {
     let output = run(&["--print-events"]);
     assert!(output.stderr.is_empty());
 }

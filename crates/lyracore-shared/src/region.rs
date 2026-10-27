@@ -228,10 +228,9 @@ mod tests {
 
     #[test]
     fn region_at_agrees_with_the_cell_math_both_tiers_already_bake() {
-        let (gx, gy) = grid_cell(-8949.95, -132.493);
-        let (m, _) = RegionMap::build([rect(0, 7, gx - 5, gy - 5)]);
+        let (m, _) = RegionMap::build([rect(0, 7, 515, 338)]);
         assert_eq!(m.region_at(0, -8949.95, -132.493), 7);
-        assert_eq!(m.region_of(0, gx, gy), 7);
+        assert_eq!(m.region_of(0, 520, 343), 7);
         assert_eq!(
             m.region_at(0, -8949.95 + 40.0 * GRID_CELL_SIZE, -132.493),
             DEFAULT_REGION

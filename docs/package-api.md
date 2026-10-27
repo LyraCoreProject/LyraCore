@@ -25,9 +25,9 @@ hook event keeps its name and its payload fields. A listed operation keeps its n
 order and its Refusal behaviour. A table accessor keeps its name.
 
 **May move with notice.** The surface grows by addition: a new hook event, a new payload field, a new
-operation. A change that breaks a Package bumps this version and is called out in `CHANGELOG.md`. An
-`_Avoid_` rename or a module split may move a path, and the lint below is what makes that visible at
-build time rather than at run time.
+operation. A change that breaks a Package bumps this version, and the pull request that bumps it
+says what broke. An `_Avoid_` rename or a module split may move a path, and the lint below is what
+makes that visible at build time rather than at run time.
 
 **Never promised.** Every `crate::` root not listed here. Row layouts of tables a Package does not
 own. The order core operations run in, beyond the ordering stated below. Anything reached through
@@ -345,7 +345,7 @@ The returned id names that completed relocation. A repeat for the same controlle
 AreaTrigger and destination returns the same id while the Character remains in that destination
 partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
 relocation unchanged. No Transfer Intent or Escrow is created. `area_trigger_route` exposes the
-source center and containment rule for Candidate movement.
+source center and containment rule for candidate movement.
 
 ### Package Config
 
@@ -372,8 +372,8 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `emit_move_spline(ctx, guid, start, destination, duration_ms, run, spline_id, map_id, instance_id, grid)` | emits a straight creature movement segment with the existing ten-argument fixture contract |
 
 The root also re-exports Core setup steps such as `grant_item`, `remove_items`, `grant_xp`,
-`learn_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and `SessionActor`;
-`module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
+`learn_spell`, `forget_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and
+`SessionActor`; `module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
 `actor::movement::inputs(ctx, map_id).imported_revision`.
 
 Name this root only from a Package file whose first non-blank line is

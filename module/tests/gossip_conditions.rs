@@ -15,17 +15,28 @@ fn xp(shard: &Standalone) -> u32 {
         .unwrap()
 }
 
-fn select(shard: &Standalone, npc: &str, row: u32, allowed: bool) {
-    select_from(shard, npc, row, 0, gossip_option::VENDOR, allowed);
+type Outcome = Result<(), &'static str>;
+
+const ALLOWED: Outcome = Ok(());
+const MENU_CHANGED: Outcome = Err("gossip menu has changed");
+const SERVICE_GONE: Outcome = Err("gossip service is no longer available");
+const NOT_IN_MENU: Outcome = Err("gossip option does not belong to this creature's active menu");
+const ACTION_CHANGED: Outcome = Err("gossip option action has changed");
+const CONDITION_FAILS: Outcome = Err("gossip option is no longer available");
+
+#[track_caller]
+fn select(shard: &Standalone, npc: &str, row: u32, outcome: Outcome) {
+    select_from(shard, npc, row, 0, gossip_option::VENDOR, outcome);
 }
 
+#[track_caller]
 fn select_from(
     shard: &Standalone,
     npc: &str,
     row: u32,
     source_menu_id: u32,
     action: u32,
-    allowed: bool,
+    outcome: Outcome,
 ) {
     let before = xp(shard);
     let result = shard.call(
@@ -39,15 +50,17 @@ fn select_from(
             &action.to_string(),
         ],
     );
-    assert_eq!(
-        result.status.success(),
-        allowed,
-        "{}",
-        String::from_utf8_lossy(&result.stderr)
-    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    match outcome {
+        Ok(()) => assert!(result.status.success(), "{stderr}"),
+        Err(reason) => assert!(
+            !result.status.success() && stderr.contains(reason),
+            "the click should refuse with {reason}: {stderr}"
+        ),
+    }
     assert_eq!(
         xp(shard),
-        before + u32::from(allowed),
+        before + u32::from(outcome.is_ok()),
         "only an eligible click may run the Runtime Script"
     );
 }
@@ -88,41 +101,56 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
     let rewarded = ConditionKind::QuestRewarded.code();
     let not = ConditionKind::Not.code();
     let (shard, npc) = fixture("gossip-conditions");
-    select(&shard, &npc, OPTION, false);
+    select(&shard, &npc, OPTION, CONDITION_FAILS);
     shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
-    select(&shard, &npc, OPTION, true);
+    select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET value2 = 2 WHERE condition_id = {CONDITION}"
     ));
-    select(&shard, &npc, OPTION, false);
+    select(&shard, &npc, OPTION, CONDITION_FAILS);
     shard.assert_sql("UPDATE game_quest_objective SET required_count = 0 WHERE id = 5090000");
-    select(&shard, &npc, OPTION, true);
+    select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_character_quest SET rewarded = true WHERE quest_entry = {QUEST}"
     ));
-    select(&shard, &npc, OPTION, false);
+    select(&shard, &npc, OPTION, CONDITION_FAILS);
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET kind = {rewarded}, value2 = 0 WHERE condition_id = {CONDITION}"
     ));
-    select(&shard, &npc, OPTION, true);
+    select(&shard, &npc, OPTION, ALLOWED);
 
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET entry = 51003 WHERE row_id = {OPTION}"
     ));
-    select(&shard, &npc, OPTION, false);
+    select(&shard, &npc, OPTION, NOT_IN_MENU);
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET entry = {VENDOR} WHERE row_id = {OPTION}"
     ));
-    select(&shard, &npc, OPTION + 1, false);
+    select(&shard, &npc, OPTION + 1, NOT_IN_MENU);
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {not}, value1 = 5099002, value2 = 0 WHERE condition_id = {CONDITION}"));
     shard.assert_sql(&format!("INSERT INTO game_gossip_condition (condition_id,kind,value1,value2,value3,value4,flags) VALUES (5099002,{},0,0,0,0,1)", ConditionKind::Unsupported(99).code()));
-    select(&shard, &npc, OPTION, false);
+    select(
+        &shard,
+        &npc,
+        OPTION,
+        Err("gossip option condition is unavailable: Unsupported(99)"),
+    );
     shard.assert_sql("DELETE FROM game_gossip_condition WHERE condition_id = 5099002");
-    select(&shard, &npc, OPTION, false);
+    select(
+        &shard,
+        &npc,
+        OPTION,
+        Err("gossip option condition is unavailable: Missing(5099002)"),
+    );
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET value1 = {CONDITION} WHERE condition_id = {CONDITION}"
     ));
-    select(&shard, &npc, OPTION, false);
+    select(
+        &shard,
+        &npc,
+        OPTION,
+        Err("gossip option condition is unavailable: Cycle(5099001)"),
+    );
 }
 
 #[test]
@@ -135,21 +163,28 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
     shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {always}, value1 = 0, value2 = 0 WHERE condition_id = {CONDITION}"));
     shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({FIRST_MENU},1),({SECOND_MENU},1)"));
     shard.assert_sql(&format!("INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({OPTION},{FIRST_MENU},0,0,'Profile supplies',3,0,0,0,0)"));
-    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, true);
+    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, ALLOWED);
 
     let entity = &shard.query_rows(&format!(
         "SELECT map_id,instance_id FROM game_world_entity WHERE guid = {npc}"
     ))[0];
     shard.assert_sql(&format!("INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({npc},{FIRST_MENU},{},{})", entity["map_id"], entity["instance_id"]));
-    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, false);
-    select_from(&shard, &npc, u32::MAX, 0, gossip_option::VENDOR, false);
+    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, MENU_CHANGED);
+    select_from(
+        &shard,
+        &npc,
+        u32::MAX,
+        0,
+        gossip_option::VENDOR,
+        MENU_CHANGED,
+    );
     select_from(
         &shard,
         &npc,
         OPTION,
         FIRST_MENU,
         gossip_option::VENDOR,
-        true,
+        ALLOWED,
     );
 
     shard.assert_sql(&format!("UPDATE game_gossip_menu_profile_option SET menu_id = {SECOND_MENU} WHERE row_id = {OPTION}"));
@@ -160,7 +195,7 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
         OPTION,
         FIRST_MENU,
         gossip_option::VENDOR,
-        false,
+        MENU_CHANGED,
     );
     select_from(
         &shard,
@@ -168,7 +203,7 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
         u32::MAX,
         FIRST_MENU,
         gossip_option::VENDOR,
-        false,
+        MENU_CHANGED,
     );
     select_from(
         &shard,
@@ -176,7 +211,7 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
         OPTION,
         SECOND_MENU,
         gossip_option::VENDOR,
-        true,
+        ALLOWED,
     );
 
     shard.assert_sql(&format!(
@@ -188,9 +223,9 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
         OPTION,
         SECOND_MENU,
         gossip_option::VENDOR,
-        false,
+        MENU_CHANGED,
     );
-    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, true);
+    select_from(&shard, &npc, OPTION, 0, gossip_option::VENDOR, ALLOWED);
 }
 
 #[test]
@@ -224,11 +259,12 @@ fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
         let kind = kind.code();
         for flags in [0, 1] {
             shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {kind}, value2 = 0, flags = {flags} WHERE condition_id = {CONDITION}"));
+            let holds = (flags == 0) == expected;
             select(
                 &shard,
                 &npc,
                 OPTION,
-                if flags == 0 { expected } else { !expected },
+                if holds { ALLOWED } else { CONDITION_FAILS },
             );
         }
     }
@@ -256,18 +292,46 @@ fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
         if source != 0 {
             shard.assert_sql(&format!("INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({npc},{MENU},{},{})", entity["map_id"], entity["instance_id"]));
         }
-        select_from(&shard, &npc, OPTION, source, gossip_option::VENDOR, true);
+        select_from(&shard, &npc, OPTION, source, gossip_option::VENDOR, ALLOWED);
         shard.assert_sql(&format!(
             "UPDATE {table} SET action = 1 WHERE row_id = {OPTION}"
         ));
-        select_from(&shard, &npc, OPTION, source, gossip_option::VENDOR, false);
-        select_from(&shard, &npc, OPTION, source, gossip_option::GOSSIP, true);
-        select_from(&shard, &npc, u32::MAX, source, gossip_option::VENDOR, true);
+        select_from(
+            &shard,
+            &npc,
+            OPTION,
+            source,
+            gossip_option::VENDOR,
+            ACTION_CHANGED,
+        );
+        select_from(&shard, &npc, OPTION, source, gossip_option::GOSSIP, ALLOWED);
+        select_from(
+            &shard,
+            &npc,
+            u32::MAX,
+            source,
+            gossip_option::VENDOR,
+            ALLOWED,
+        );
         shard.assert_sql(&format!(
             "UPDATE {table} SET action = 3, cond_type = 3 WHERE row_id = {OPTION}"
         ));
-        select_from(&shard, &npc, u32::MAX, source, gossip_option::VENDOR, false);
-        select_from(&shard, &npc, OPTION, source, gossip_option::VENDOR, false);
+        select_from(
+            &shard,
+            &npc,
+            u32::MAX,
+            source,
+            gossip_option::VENDOR,
+            SERVICE_GONE,
+        );
+        select_from(
+            &shard,
+            &npc,
+            OPTION,
+            source,
+            gossip_option::VENDOR,
+            CONDITION_FAILS,
+        );
     }
 }
 
@@ -278,37 +342,51 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
     shard.assert_sql(&format!(
         "DELETE FROM game_gossip_option WHERE row_id = {OPTION}"
     ));
-    select(&shard, &npc, u32::MAX, true);
+    select(&shard, &npc, u32::MAX, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
         npc_flags::GOSSIP
     ));
-    select(&shard, &npc, u32::MAX, false);
+    select(&shard, &npc, u32::MAX, SERVICE_GONE);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
         npc_flags::GOSSIP | npc_flags::VENDOR
     ));
-    select(&shard, &npc, u32::MAX, true);
+    select(&shard, &npc, u32::MAX, ALLOWED);
     shard.assert_sql(&format!(
         "DELETE FROM game_npc_vendor WHERE creature_entry = {VENDOR}"
     ));
-    select(&shard, &npc, u32::MAX, false);
+    select(&shard, &npc, u32::MAX, SERVICE_GONE);
     shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id,creature_entry,item_entry,slot,max_count) VALUES (5099001,{VENDOR},5099999,0,0)"));
-    select(&shard, &npc, u32::MAX, false);
+    select(&shard, &npc, u32::MAX, SERVICE_GONE);
     shard.assert_sql("UPDATE game_npc_vendor SET item_entry = 5090050 WHERE id = 5099001");
-    select(&shard, &npc, u32::MAX, true);
+    select(&shard, &npc, u32::MAX, ALLOWED);
 
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
         npc_flags::GOSSIP | npc_flags::INNKEEPER
     ));
-    select_from(&shard, &npc, u32::MAX, 0, gossip_option::INNKEEPER, true);
+    select_from(&shard, &npc, u32::MAX, 0, gossip_option::INNKEEPER, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
         npc_flags::GOSSIP
     ));
-    select_from(&shard, &npc, u32::MAX, 0, gossip_option::INNKEEPER, false);
-    select_from(&shard, &npc, u32::MAX, 0, gossip_option::GOSSIP, false);
+    select_from(
+        &shard,
+        &npc,
+        u32::MAX,
+        0,
+        gossip_option::INNKEEPER,
+        SERVICE_GONE,
+    );
+    select_from(
+        &shard,
+        &npc,
+        u32::MAX,
+        0,
+        gossip_option::GOSSIP,
+        SERVICE_GONE,
+    );
 }
 
 #[test]
@@ -355,12 +433,12 @@ fn authored_services_require_current_capability_before_the_hook() {
                 "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
                 npc_flags::GOSSIP | flag
             ));
-            select_from(&shard, &npc, OPTION, source, action, true);
+            select_from(&shard, &npc, OPTION, source, action, ALLOWED);
             shard.assert_sql(&format!(
                 "UPDATE game_world_entity SET npc_flags = {} WHERE guid = {npc}",
                 npc_flags::GOSSIP
             ));
-            select_from(&shard, &npc, OPTION, source, action, false);
+            select_from(&shard, &npc, OPTION, source, action, SERVICE_GONE);
         }
     }
 
@@ -374,7 +452,14 @@ fn authored_services_require_current_capability_before_the_hook() {
     shard.assert_sql(&format!(
         "DELETE FROM game_npc_vendor WHERE creature_entry = {VENDOR}"
     ));
-    select_from(&shard, &npc, OPTION, MENU, gossip_option::VENDOR, false);
+    select_from(
+        &shard,
+        &npc,
+        OPTION,
+        MENU,
+        gossip_option::VENDOR,
+        SERVICE_GONE,
+    );
 }
 
 #[test]
@@ -391,11 +476,18 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
     shard.assert_sql(&format!(
         "UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = {VENDOR}"
     ));
-    select_from(&shard, &npc, OPTION, 0, gossip_option::TRAINER, true);
+    select_from(&shard, &npc, OPTION, 0, gossip_option::TRAINER, ALLOWED);
     shard.assert_sql(&format!(
         "UPDATE game_creature_template SET trainer_class = 8 WHERE entry = {VENDOR}"
     ));
-    select_from(&shard, &npc, OPTION, 0, gossip_option::TRAINER, false);
+    select_from(
+        &shard,
+        &npc,
+        OPTION,
+        0,
+        gossip_option::TRAINER,
+        SERVICE_GONE,
+    );
     shard.assert_sql(&format!(
         "UPDATE game_gossip_option SET action = 16 WHERE row_id = {OPTION}"
     ));
@@ -406,12 +498,19 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         OPTION,
         0,
         gossip_option::UNLEARNTALENTS,
-        false,
+        SERVICE_GONE,
     );
     shard.assert_sql(&format!(
         "UPDATE game_creature_template SET trainer_class = 1 WHERE entry = {VENDOR}"
     ));
-    select_from(&shard, &npc, OPTION, 0, gossip_option::UNLEARNTALENTS, true);
+    select_from(
+        &shard,
+        &npc,
+        OPTION,
+        0,
+        gossip_option::UNLEARNTALENTS,
+        ALLOWED,
+    );
     for trainer_type in [1, 2, 3] {
         shard.assert_sql(&format!(
             "UPDATE game_creature_template SET trainer_type = {trainer_type} WHERE entry = {VENDOR}"
@@ -422,7 +521,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
             OPTION,
             0,
             gossip_option::UNLEARNTALENTS,
-            false,
+            SERVICE_GONE,
         );
     }
     shard.assert_sql(&format!(
@@ -435,7 +534,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
         OPTION,
         0,
         gossip_option::UNLEARNTALENTS,
-        false,
+        SERVICE_GONE,
     );
 }
 
@@ -444,7 +543,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
 fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
     let (shard, npc) = fixture("gossip-missing-quest");
     shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);
-    select(&shard, &npc, OPTION, true);
+    select(&shard, &npc, OPTION, ALLOWED);
     shard.assert_sql(&format!(
         "DELETE FROM game_quest_template WHERE entry = {QUEST}"
     ));
@@ -456,7 +555,12 @@ fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
         let kind = kind.code();
         for flags in [0, 1] {
             shard.assert_sql(&format!("UPDATE game_gossip_condition SET kind = {kind}, value2 = 0, flags = {flags} WHERE condition_id = {CONDITION}"));
-            select(&shard, &npc, OPTION, false);
+            select(
+                &shard,
+                &npc,
+                OPTION,
+                Err("gossip option condition is unavailable: MissingQuest(50900)"),
+            );
         }
     }
     shard.assert_sql(&format!(
@@ -465,5 +569,10 @@ fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
     shard.assert_sql(&format!(
         "UPDATE game_gossip_condition SET flags = 0 WHERE condition_id = {CONDITION}"
     ));
-    select(&shard, &npc, OPTION, false);
+    select(
+        &shard,
+        &npc,
+        OPTION,
+        Err("gossip option condition is unavailable: MissingQuest(50900)"),
+    );
 }

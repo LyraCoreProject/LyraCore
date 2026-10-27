@@ -129,19 +129,19 @@ test("a hand-written .lua script ships unchanged", async () => {
 });
 
 test("a script declaring no entry point is refused", async () => {
-  expect(build({ "bare.ts": `${directives()}const x = 1;\n` })).rejects.toThrow(
+  await expect(build({ "bare.ts": `${directives()}const x = 1;\n` })).rejects.toThrow(
     /typescript-to-lua refused/,
   );
 });
 
 test("the entry point takes no parameters and returns only a number or nothing", async () => {
-  expect(
+  await expect(
     build({
       "parameter.ts":
         `${directives()}function script(required: number): number { return required; }\n`,
     }),
   ).rejects.toThrow(/typescript-to-lua refused/);
-  expect(
+  await expect(
     build({
       "string.ts": `${directives()}function script(): string { return "wrong"; }\n`,
     }),
@@ -149,7 +149,7 @@ test("the entry point takes no parameters and returns only a number or nothing",
 });
 
 test("an optional entry-point parameter is refused", async () => {
-  expect(
+  await expect(
     build({
       "optional.ts": `${directives()}function script(value?: number): void {}\n`,
     }),
@@ -157,7 +157,7 @@ test("an optional entry-point parameter is refused", async () => {
 });
 
 test("a rest entry-point parameter is refused", async () => {
-  expect(
+  await expect(
     build({
       "rest.ts": `${directives()}function script(...values: number[]): void {}\n`,
     }),
@@ -165,7 +165,7 @@ test("a rest entry-point parameter is refused", async () => {
 });
 
 test("an overload cannot hide an invalid concrete entry point", async () => {
-  expect(
+  await expect(
     build({
       "overload.ts":
         `${directives()}function script(): number;\n` +
@@ -175,22 +175,22 @@ test("an overload cannot hide an invalid concrete entry point", async () => {
 });
 
 test("a missing @event or @id is refused by name", async () => {
-  expect(
+  await expect(
     build({ "no-id.ts": "// @event on_login\nfunction script(): void {}\n" }),
   ).rejects.toThrow(/`@id`/);
-  expect(build({ "no-event.ts": "// @id 100200\nfunction script(): void {}\n" })).rejects.toThrow(
+  await expect(build({ "no-event.ts": "// @id 100200\nfunction script(): void {}\n" })).rejects.toThrow(
     /`@event`/,
   );
 });
 
 test("an identifier outside the Package script band is refused", async () => {
-  expect(
+  await expect(
     build({ "low.ts": `${directives(EVENT, 42)}function script(): void {}\n` }),
   ).rejects.toThrow(/100000\.\.=999999/);
 });
 
 test("two scripts claiming one identifier are refused", async () => {
-  expect(
+  await expect(
     build({
       "a.ts": `${directives()}function script(): void {}\n`,
       "b.ts": `${directives()}function script(): void {}\n`,
@@ -201,7 +201,7 @@ test("two scripts claiming one identifier are refused", async () => {
 test("an unknown event is refused and a Package Event of the own Package is not", async () => {
   const catalogue = ["on_login", "on_death"];
 
-  expect(
+  await expect(
     build({ "sneeze.ts": `${directives("on_sneeze")}function script(): void {}\n` }, catalogue),
   ).rejects.toThrow(/on_sneeze/);
 
@@ -213,7 +213,7 @@ test("an unknown event is refused and a Package Event of the own Package is not"
 });
 
 test("a Package folder with no script sources is refused rather than writing an empty artifact", async () => {
-  expect(build({})).rejects.toThrow(/no `\.ts` or `\.lua`/);
+  await expect(build({})).rejects.toThrow(/no `\.ts` or `\.lua`/);
 });
 
 test("a failed artifact write leaves the prior artifact unchanged", async () => {

@@ -501,7 +501,10 @@ mod tests {
             ]
         );
         bytes[12..16].copy_from_slice(&688u32.to_le_bytes());
-        assert!(read_spells(&bytes).is_err());
+        assert_eq!(
+            read_spells(&bytes).unwrap_err().to_string(),
+            "Spell.dbc requires the build 5875 layout: 173 fields, 692 bytes per row"
+        );
     }
 
     fn synthetic_table<T: DbcTable>(fields: u32) -> T {
@@ -570,18 +573,32 @@ mod tests {
 
     #[test]
     fn empty_or_inconsistent_catalogues_produce_no_import_statements() {
-        for missing in 0..3 {
+        for (missing, name) in [
+            (0, "ItemRandomProperties.dbc"),
+            (1, "SpellItemEnchantment.dbc"),
+            (2, "Spell.dbc"),
+        ] {
             let (mut properties, mut enchantments, mut spells) = catalogues();
             match missing {
                 0 => properties.rows.clear(),
                 1 => enchantments.rows.clear(),
                 _ => spells.clear(),
             }
-            assert!(catalogue_rows_sql(&properties, &enchantments, &spells).is_err());
+            assert_eq!(
+                catalogue_rows_sql(&properties, &enchantments, &spells)
+                    .unwrap_err()
+                    .to_string(),
+                format!("{name} contains no rows; item catalogues were not changed")
+            );
         }
         let (mut properties, mut enchantments, spells) = catalogues();
         properties.rows[0].spell_item_enchantment[1] = 509_0099;
-        assert!(catalogue_rows_sql(&properties, &enchantments, &spells).is_err());
+        assert_eq!(
+            catalogue_rows_sql(&properties, &enchantments, &spells)
+                .unwrap_err()
+                .to_string(),
+            "Random Property 5090001 references missing enchantment 5090099"
+        );
         properties.rows[0].spell_item_enchantment[1] = 0;
         enchantments.rows[0].id.id = 7745;
         assert!(catalogue_rows_sql(&properties, &enchantments, &spells)
@@ -624,8 +641,17 @@ mod tests {
         assert_eq!(decimal_weight_at_precision("99.52", 4).unwrap(), 995200);
         assert_eq!(decimal_weight_at_precision("131.01", 4).unwrap(), 1310100);
         assert_eq!(decimal_weight_at_precision("1.2", 4).unwrap(), 12000);
-        for value in ["0", "-1", "NaN", "1.00001", "1e2"] {
-            assert!(decimal_weight_at_precision(value, 4).is_err());
+        assert_eq!(
+            decimal_weight_at_precision("0", 4).unwrap_err().to_string(),
+            "property weight must be positive"
+        );
+        for value in ["-1", "NaN", "1.00001", "1e2"] {
+            assert_eq!(
+                decimal_weight_at_precision(value, 4)
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid property weight {value}")
+            );
         }
     }
     #[test]

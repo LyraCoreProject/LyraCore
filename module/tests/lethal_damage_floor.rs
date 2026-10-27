@@ -14,6 +14,7 @@ const SOURCE_RULE_ID: u64 = 900_001;
 fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
     let mut standalone = Standalone::start("lethal-damage-floor");
     standalone.publish_module();
+    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER_GUID.to_string()]);
     let first_definition = definition("phase:1");
     install_definition(&standalone, WOLF_GUID, &first_definition);
@@ -105,6 +106,10 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
          AND target_guid = {THIRD_WOLF_GUID} AND spell_id = 75 AND is_proc_log = true"
     )]);
     standalone.assert_call(
+        "debug_set_lethal_damage_floor_health_fixture",
+        &[&THIRD_WOLF_GUID.to_string(), "5"],
+    );
+    standalone.assert_call(
         "debug_stage_ranged_lethal_damage_floor_fixture",
         &[
             &PLAYER_GUID.to_string(),
@@ -113,17 +118,20 @@ fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
             "1000",
         ],
     );
-    standalone.assert_call(
-        "debug_set_lethal_damage_floor_health_fixture",
-        &[&THIRD_WOLF_GUID.to_string(), "5"],
-    );
     assert!(
         poll_until(POLL_TIMEOUT, || {
-            event_rows(&casts, "game_spell_cast_event_live")
-                .iter()
-                .any(|row| row["damage"] == "4")
+            !event_rows(&casts, "game_spell_cast_event_live").is_empty()
         }),
-        "the ranged impact must report the four damage above the lethal floor"
+        "the ranged impact must log its damage"
+    );
+    let damage: Vec<_> = event_rows(&casts, "game_spell_cast_event_live")
+        .iter()
+        .map(|row| row["damage"].clone())
+        .collect();
+    assert_eq!(
+        damage,
+        ["4"],
+        "one ranged impact reports the four damage above the lethal floor"
     );
     assert_eq!(
         standalone.query_rows(&format!(

@@ -3,6 +3,8 @@ mod support;
 use support::{Row, Standalone};
 
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
+const CHANGED: &str = "Transfer Realm locator changed";
+const INCOMPLETE: &str = "Transfer locator identity is incomplete";
 const ZERO_IDENTITY: &str = "0x0000000000000000000000000000000000000000000000000000000000000000";
 
 fn realm(name: &str) -> Standalone {
@@ -32,12 +34,17 @@ fn begin(revision: &str) -> [&str; 10] {
     ]
 }
 
-fn assert_begin_refused(realm: &Standalone, args: &[&str]) {
+fn assert_begin_refused(realm: &Standalone, args: &[&str], reason: &str) {
     let before = locator(realm);
     let output = realm.call("begin_character_shard_transfer", args);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
     assert!(
-        !output.status.success(),
-        "the competing Transfer must be refused"
+        !output.status.success() && text.contains(reason),
+        "the Transfer must be refused with {reason}: {text}"
     );
     assert_eq!(
         locator(realm),
@@ -68,7 +75,7 @@ fn a_first_human_transfer_creates_only_a_pending_locator_and_replays_exactly() {
     let settled = locator(&realm);
     assert_eq!(settled[0]["revision"], "2");
     assert_eq!(settled[0]["transfer_pending"], "false");
-    assert_begin_refused(&realm, &begin("0"));
+    assert_begin_refused(&realm, &begin("0"), CHANGED);
 }
 
 #[test]
@@ -79,7 +86,7 @@ fn first_transfer_initialization_cannot_replace_a_competing_pending_locator() {
     for (column, value) in [(1, "0"), (2, "7"), (3, "2"), (4, "36"), (5, "7")] {
         let mut competing = begin("0");
         competing[column] = value;
-        assert_begin_refused(&realm, &competing);
+        assert_begin_refused(&realm, &competing, CHANGED);
     }
 }
 
@@ -89,21 +96,24 @@ fn first_transfer_initialization_cannot_replace_a_settled_locator() {
     let realm = realm("settled-first-transfer-locator");
     realm.assert_call("set_character_shard", &["1", "1", "0", ACTOR]);
     assert_eq!(locator(&realm)[0]["revision"], "1");
-    assert_begin_refused(&realm, &begin("0"));
+    assert_begin_refused(&realm, &begin("0"), CHANGED);
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_bot_cannot_create_a_missing_transfer_locator() {
     let realm = realm("bot-missing-transfer-locator");
-    for revision in ["0", "1"] {
+    for (revision, reason) in [
+        ("0", INCOMPLETE),
+        ("1", "Transfer source has no Realm locator"),
+    ] {
         let mut bot = begin(revision);
         bot[6] = "0x0101010101010101010101010101010101010101010101010101010101010101";
         bot[7] = "10";
         bot[8] = "4";
-        assert_begin_refused(&realm, &bot);
+        assert_begin_refused(&realm, &bot, reason);
     }
     let mut incomplete = begin("0");
     incomplete[8] = "4";
-    assert_begin_refused(&realm, &incomplete);
+    assert_begin_refused(&realm, &incomplete, INCOMPLETE);
 }

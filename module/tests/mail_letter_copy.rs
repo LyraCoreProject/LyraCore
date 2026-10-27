@@ -20,6 +20,19 @@ fn actor(guid: u64) -> String {
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
+fn assert_copy_refused(shard: &Standalone, mail_id: u64, reason: &str) {
+    let output = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert!(
+        !output.status.success() && text.contains(reason),
+        "the copy should refuse with {reason}: {text}"
+    );
+}
+
 fn seed_mail(shard: &Standalone, recipient_guid: u64, sender_guid: u64, body: &str) -> u64 {
     shard.assert_call(
         "debug_seed_mail",
@@ -165,10 +178,10 @@ fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
         ))
         .is_empty());
 
-    let refused = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
-    assert!(
-        !refused.status.success(),
-        "GRANTED must refuse a second copy even with the item gone"
+    assert_copy_refused(
+        &shard,
+        mail_id,
+        "mail: this letter was already made permanent",
     );
 
     let granted = shard.query_rows(&format!(
@@ -317,11 +330,7 @@ fn a_letter_not_yet_delivered_cannot_be_copied() {
         "UPDATE game_mail SET deliver_micros = 9999999999999999 WHERE id = {mail_id}"
     ));
 
-    let refused = shard.call("realm_mail_copy_text", &[&actor(1), &mail_id.to_string()]);
-    assert!(
-        !refused.status.success(),
-        "an undelivered letter has no text to copy yet"
-    );
+    assert_copy_refused(&shard, mail_id, "mail: not addressed to you");
 
     let mail = shard.query_rows(&format!(
         "SELECT check_flags FROM game_mail WHERE id = {mail_id}"

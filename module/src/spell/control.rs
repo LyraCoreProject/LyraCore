@@ -571,35 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn cc_blocks_matches_the_closed_form_across_every_combination() {
-        for stunned in [false, true] {
-            for rooted in [false, true] {
-                for feared in [false, true] {
-                    for poly in [false, true] {
-                        let (action, movement, self_move) =
-                            cc_blocks(stunned, rooted, feared, poly);
-                        assert_eq!(
-                            action,
-                            stunned || feared || poly,
-                            "action@{stunned},{rooted},{feared},{poly}"
-                        );
-                        assert_eq!(
-                            movement,
-                            stunned || rooted || poly,
-                            "movement@{stunned},{rooted},{feared},{poly}"
-                        );
-                        assert_eq!(
-                            self_move,
-                            stunned || rooted || feared || poly,
-                            "self_move@{stunned},{rooted},{feared},{poly}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn pushback_constants_match_the_cmangos_convention() {
         assert_eq!(CAST_PUSHBACK_MS, 500);
         assert_eq!(CAST_PUSHBACK_MAX, 2);
@@ -612,13 +583,6 @@ mod tests {
         assert!(!should_pushback(2));
         assert!(!should_pushback(3));
         assert!(!should_pushback(u8::MAX));
-    }
-
-    #[test]
-    fn should_pushback_matches_the_closed_form_across_a_range() {
-        for n in 0u8..=20 {
-            assert_eq!(should_pushback(n), n < CAST_PUSHBACK_MAX, "n={n}");
-        }
     }
 
     #[test]

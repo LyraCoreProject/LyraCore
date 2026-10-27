@@ -209,9 +209,18 @@ mod tests {
             validate_occupancy_pct(MAX_SANE_OCCUPANCY_PCT).is_ok(),
             "the boundary is accepted"
         );
-        assert!(validate_occupancy_pct(-0.1).is_err());
-        assert!(validate_occupancy_pct(f32::NAN).is_err());
-        assert!(validate_occupancy_pct(f32::INFINITY).is_err());
-        assert!(validate_occupancy_pct(MAX_SANE_OCCUPANCY_PCT + 0.1).is_err());
+        for (pct, shown) in [
+            (-0.1, "-0.1"),
+            (f32::NAN, "NaN"),
+            (f32::INFINITY, "inf"),
+            (1000.1, "1000.1"),
+        ] {
+            assert_eq!(
+                validate_occupancy_pct(pct),
+                Err(format!(
+                    "writer_occupancy_pct must be finite and within [0, 1000], got {shown}"
+                ))
+            );
+        }
     }
 }

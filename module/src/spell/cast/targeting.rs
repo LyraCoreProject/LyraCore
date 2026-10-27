@@ -279,9 +279,9 @@ pub(crate) fn aura_apply(
     } else {
         points
     };
-    let duration_ms = if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
+    let duration_ms = if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
-        crate::combo::finisher_duration_ms(hdr.duration_ms, combo)
+        crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)
     } else {
         hdr.duration_ms
     };
@@ -301,7 +301,7 @@ pub(crate) fn aura_apply(
             }
             crate::spell::stacking::ApplyDecision::Apply {
                 duration_scale_bp, ..
-            } => ((duration_ms as u64) * (duration_scale_bp as u64) / 10_000) as u32,
+            } => crate::spell::stacking::dr_scaled_duration_ms(duration_ms, duration_scale_bp),
         }
     } else {
         duration_ms
@@ -524,11 +524,6 @@ pub(crate) fn aura_apply(
         crate::mount::recompute_mount(ctx, target_guid);
     }
 
-    // Spend combo points after reading duration and successfully placing the aura.
-    if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        crate::combo::spend_combo(ctx, caster_guid);
-    }
-
     if hdr.negative() {
         let entities = ctx.db.game_world_entity();
         let caster_is_player = entities
@@ -602,6 +597,7 @@ pub(crate) fn apply_effect(
     points: i32,
     dest: Option<(f32, f32, f32)>,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
 
@@ -657,9 +653,16 @@ pub(crate) fn apply_effect(
         EffectKind::Damage
         | EffectKind::WeaponStrike
         | EffectKind::Judgement
-        | EffectKind::FinisherDamage => {
-            apply_damage_effect(ctx, e, hdr, caster_guid, target_guid, points, triggered)
-        }
+        | EffectKind::FinisherDamage => apply_damage_effect(
+            ctx,
+            e,
+            hdr,
+            caster_guid,
+            target_guid,
+            points,
+            triggered,
+            strike_crit,
+        ),
         EffectKind::Heal
         | EffectKind::HealMaxHealth
         | EffectKind::Energize
@@ -820,6 +823,7 @@ fn hit_of(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -828,6 +832,7 @@ fn apply_damage_effect(
     target_guid: u64,
     points: i32,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE => {
@@ -904,28 +909,53 @@ fn apply_damage_effect(
         }
         E_WEAPON_STRIKE => {
             let entities = ctx.db.game_world_entity();
-            if let (Some(caster), Some(target)) = (
+            let (Some(caster), Some(target)) = (
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
-            ) {
-                let (dmg, crit) = crate::combat::weapon_strike_damage(
+            ) else {
+                return EffectHit::none();
+            };
+            let strike = crate::combat::WeaponStrike {
+                bonus: points,
+                percent: e.p0.max(0) as u32,
+                normalized: e.p1 != 0,
+                ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
+            };
+            let dmg = crate::combat::weapon_strike_spell_damage(
+                ctx,
+                &caster,
+                &target,
+                strike,
+                hdr,
+                strike_crit,
+            );
+            if strike.ranged && target_guid != caster_guid {
+                // The impact emits the damage log, so this GO carries no damage.
+                crate::combat::launch_ranged_strike(
                     ctx,
                     &caster,
                     &target,
-                    points,
-                    hdr.custom_flags & custom::IGNORE_ARMOR != 0,
+                    dmg,
+                    hdr.spell_id,
+                    strike_crit,
                 );
-                // Physical crit travels in Hit; EffectHit.crit is the magic crit roll.
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg as i32,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, crit),
-                );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+                return EffectHit::none();
+            }
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
             }
         }
         E_JUDGEMENT => {
@@ -945,22 +975,37 @@ fn apply_damage_effect(
             }
         }
         E_FINISHER_DAMAGE => {
-            let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
-            let dmg = crate::combo::finisher_damage(points, combo);
-            let hit = if dmg > 0 {
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, false),
-                );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+            let entities = ctx.db.game_world_entity();
+            let (Some(caster), Some(target)) = (
+                entities.guid().find(caster_guid),
+                entities.guid().find(target_guid),
+            ) else {
+                return EffectHit::none();
             };
-            crate::combo::spend_combo(ctx, caster_guid);
-            hit
+            let dmg = crate::combat::finisher_strike_damage(
+                ctx,
+                &caster,
+                &target,
+                hdr,
+                points,
+                strike_crit,
+            );
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
+            }
         }
         _ => EffectHit::none(),
     }
@@ -1296,12 +1341,14 @@ fn apply_character_effect(
                     // Preserve byte 3, which carries the ghost visibility flag.
                     let form_id = client_form_for_stance(new_stance) << 16;
                     c.unit_bytes_1 = (c.unit_bytes_1 & 0xFF00_0000) | form_id;
-                    c.update(ctx);
+                    let c = c.update(ctx);
+                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
                 } else if form_recast_toggles_off(c.stance, new_stance) {
                     // Druid caster form uses zero; client_form_for_stance(0) is Battle Stance.
                     c.stance = 0;
                     c.unit_bytes_1 &= 0xFF00_0000;
-                    c.update(ctx);
+                    let c = c.update(ctx);
+                    crate::combat::interrupt_form_bound_queued_strike(ctx, &c);
                 }
             }
             EffectHit::none()

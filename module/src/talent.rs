@@ -625,6 +625,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     p1: 0,
                     script_id: 0,
                     enters_combat: false,
+                    points_per_combo: 0.0,
                     bonus_coefficient: -1.0,
                 });
             }
@@ -671,6 +672,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 proc_flags: 0,
                 proc_chance: 0,
                 proc_charges: 0,
+                max_duration_ms: 0,
                 custom_flags: 0,
                 min_target_level: 0,
                 single_target_key: 0,
@@ -694,6 +696,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 p1: 0,
                 script_id: 0,
                 enters_combat: false,
+                points_per_combo: 0.0,
                 bonus_coefficient: -1.0,
             });
         }
@@ -775,14 +778,22 @@ mod tests {
 
     #[test]
     fn validate_learn_gates_in_order() {
-        assert!(validate_learn(0, 5, 0, 0, 0, true).is_err());
-        assert!(validate_learn(5, 5, 10, 0, 0, true).is_err());
-        assert!(validate_learn(0, 5, 10, 5, 10, true).is_err());
+        let no_points = Err("no talent points available".to_string());
+        let max_rank = Err("talent already at max rank".to_string());
+        let tier_locked = Err("tier locked: not enough points spent in this tree".to_string());
+        let no_prereq = Err("prerequisite talent not learned".to_string());
+
+        assert_eq!(validate_learn(0, 5, 0, 0, 0, true), no_points);
+        assert_eq!(validate_learn(5, 5, 10, 0, 0, true), max_rank);
+        assert_eq!(validate_learn(0, 5, 10, 5, 10, true), tier_locked);
+        assert_eq!(validate_learn(0, 5, 10, 0, 0, false), no_prereq);
+
+        assert_eq!(validate_learn(5, 5, 0, 5, 10, false), no_points);
+        assert_eq!(validate_learn(5, 5, 10, 5, 10, false), max_rank);
+        assert_eq!(validate_learn(0, 5, 10, 5, 10, false), tier_locked);
+
         assert_eq!(validate_learn(0, 5, 10, 10, 10, true), Ok(1));
-        assert!(validate_learn(0, 5, 10, 0, 0, false).is_err());
-        assert_eq!(validate_learn(0, 5, 1, 0, 0, true), Ok(1));
         assert_eq!(validate_learn(4, 5, 1, 0, 0, true), Ok(5));
-        assert_eq!(validate_learn(0, 5, 3, 0, 0, true), Ok(1));
     }
 
     #[test]

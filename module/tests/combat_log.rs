@@ -7,8 +7,8 @@ use lyracore_shared::spell::taxonomy::{
 };
 
 use support::{
-    event_rows, number, poll_until, wait_for_event_rows, Row, Standalone, TableSubscription,
-    POLL_TIMEOUT,
+    event_rows, fence_subscription, number, poll_until, subscribe_with_fence, wait_for_event_rows,
+    Row, Standalone, TableSubscription, POLL_TIMEOUT,
 };
 
 const CHARACTER: u64 = 1;
@@ -57,9 +57,12 @@ fn damage_heal_and_energize_ticks_each_log_their_outcome() {
             "UPDATE game_aura SET eff_kind = {kind}, amount = {amount} WHERE spell_id = {spell_id}"
         ));
     }
-    let events = standalone.subscribe(&[&format!(
-        "SELECT * FROM game_spell_cast_event_live WHERE kind = {PERIODIC_LOG}"
-    )]);
+    let events = subscribe_with_fence(
+        &standalone,
+        &[&format!(
+            "SELECT * FROM game_spell_cast_event_live WHERE kind = {PERIODIC_LOG}"
+        )],
+    );
     let due = SystemTime::now()
         .duration_since(UNIX_EPOCH)
         .unwrap()
@@ -74,7 +77,15 @@ fn damage_heal_and_energize_ticks_each_log_their_outcome() {
         "every tick must leave a log, got {:?}",
         logs(&events)
     );
+    fence_subscription(&standalone, &events);
     let logs = logs(&events);
+    let mut spells: Vec<u32> = logs.iter().map(|row| number(row, "spell_id")).collect();
+    spells.sort_unstable();
+    assert_eq!(
+        spells,
+        [HOT, ENERGIZE, DOT],
+        "one log per ticking aura: {logs:?}"
+    );
     let log = |spell_id: u32| -> &Row {
         logs.iter()
             .find(|row| number::<u32>(row, "spell_id") == spell_id)
@@ -123,16 +134,16 @@ fn a_direct_energize_records_the_power_given_on_the_go() {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({SELF_ENERGIZE}, 'Fixture Energize', 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, \
-         0, false, 0, 0, 0, 0, 0, 0, 0)"
+         0, false, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {SELF_ENERGIZE}, 0, {E_ENERGIZE}, 9, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false)",
+         0, 0, 0, 0, false, 0.0)",
         (SELF_ENERGIZE as u64) << 2
     ));
     standalone.assert_sql(&format!(
@@ -170,10 +181,13 @@ fn a_direct_energize_records_the_power_given_on_the_go() {
             .expect("the Character must be live"),
         "power",
     );
-    assert!(power > 0, "the energize must fill the pool");
+    assert_eq!(
+        power, 9,
+        "base_points 9 with no die fills an empty pool by 9"
+    );
     assert_eq!(
         number::<u32>(&go, "energized"),
-        power,
+        9,
         "the GO names the power given to an empty pool"
     );
     assert_eq!(number::<u32>(&go, "power_type"), power_type);
@@ -213,17 +227,17 @@ fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({FIRE_WITH_DOT}, 'Fixture Fire', 0, 0, 0, 0, 0, 30, 12000, 4, 0, 0, 0, 0, 0, 0, \
-         0, true, 0, 0, 0, 0, 0, 0, 0)"
+         0, true, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
     for (index, kind, period_ms) in [(0u64, E_DAMAGE, 0), (1, A_PERIODIC_DAMAGE, 3000)] {
         standalone.assert_sql(&format!(
             "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, \
              die_sides, per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, \
-             effect_mechanic, p0, p0_kind, p1, script_id, enters_combat) \
+             effect_mechanic, p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
              VALUES ({}, {FIRE_WITH_DOT}, {index}, {kind}, 9, 0, 0.0, {period_ms}, \
-             {T_TARGET_ENEMY}, 0.0, 0, 0, 0, 0, 0, 0, 0, false)",
+             {T_TARGET_ENEMY}, 0.0, 0, 0, 0, 0, 0, 0, 0, false, 0.0)",
             ((FIRE_WITH_DOT as u64) << 2) | index
         ));
     }

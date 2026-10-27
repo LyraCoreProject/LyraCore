@@ -43,24 +43,29 @@ fn teardown_leaves_a_package_character_dormant_and_forgets_the_package_config() 
         &[&arg(PACKAGE), &arg("greeting"), &arg("hello"), "true"],
     );
 
-    shard.assert_call("teardown_package", &[&arg(PACKAGE)]);
-
-    for (what, query) in [
+    let owned = [
         ("live entity", format!("SELECT guid FROM game_world_entity WHERE guid = {guid}")),
         (
             "Sessionless Action Consent",
             format!("SELECT character_guid FROM game_sessionless_action_consent WHERE character_guid = {guid}"),
         ),
         (
-            "Group Intent",
-            format!("SELECT id FROM game_bot_invite_intent WHERE inviter_guid = {guid}"),
-        ),
-        (
             "Package Config",
             format!("SELECT id FROM game_package_config WHERE package_name = '{PACKAGE}'"),
         ),
-    ] {
-        assert_eq!(count(&shard, &query), 0, "teardown left the {what}");
+    ];
+    for (what, query) in &owned {
+        assert_eq!(
+            count(&shard, query),
+            1,
+            "the fixture did not create the {what}"
+        );
+    }
+
+    shard.assert_call("teardown_package", &[&arg(PACKAGE)]);
+
+    for (what, query) in &owned {
+        assert_eq!(count(&shard, query), 0, "teardown left the {what}");
     }
     let dormant = shard.query_rows(&format!(
         "SELECT online FROM game_character WHERE guid = {guid}"

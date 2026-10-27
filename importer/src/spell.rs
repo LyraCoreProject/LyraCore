@@ -28,16 +28,18 @@ use lyracore_shared::spell::taxonomy::{
     E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
     E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
     E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
-    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
+    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
-    SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_RANGED_AUTO_REPEAT,
-    SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
-    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
-    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
-    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
+    SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
+    SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
+    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE,
+    STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR,
+    STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY,
+    T_TARGET_ENEMY,
 };
 
 fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
@@ -73,7 +75,88 @@ fn form_to_stance(form_id: i32) -> Option<i32> {
 // AttributesEx1 bits 0x04 and 0x40 both mark a channeled spell.
 const ATTR_EX1_CHANNELED_MASK: u32 = 0x0000_0044;
 const ATTR_EX1_EXCLUDE_CASTER: u32 = 0x0008_0000;
+// AttributesEx1 0x0010_0000 and 0x0040_0000 mark a finishing move.
+const ATTR_EX1_FINISHER_MASK: u32 = 0x0050_0000;
 const ATTR_EX2_AUTOREPEAT: u32 = 0x0000_0020;
+// Attributes 0x04 and 0x400 both mark an on-next-swing spell.
+const ATTR_ON_NEXT_SWING_MASK: u32 = 0x0000_0404;
+
+const SCHOOL_MASK_PHYSICAL: u8 = 1;
+const EFFECT_SCHOOL_DAMAGE: i32 = 2;
+const EFFECT_WEAPON_DAMAGE_NOSCHOOL: i32 = 17;
+const EFFECT_WEAPON_DAMAGE: i32 = 58;
+const EFFECT_NORMALIZED_WEAPON_DAMAGE: i32 = 121;
+const EFFECT_WEAPON_PERCENT_DAMAGE: i32 = 31;
+const WEAPON_DAMAGE_FULL_PCT: i32 = 100;
+// vmangos adds this to the cast time of every ranged-slot spell that does not auto-repeat.
+const RANGED_SLOT_CAST_MS: u32 = 500;
+
+// Overpower carries the finisher bit for its dodge window; passive talents are never cast.
+fn is_combo_finisher(s: &Spell) -> bool {
+    s.attributes_ex1 & ATTR_EX1_FINISHER_MASK != 0
+        && s.attributes & SPELL_ATTR_PASSIVE == 0
+        && matches!(s.family_name as u8, SPELL_FAMILY_DRUID | SPELL_FAMILY_ROGUE)
+}
+
+// A queued strike is one physical weapon swing plus flat damage; any other spell stays instant.
+fn queues_on_next_swing(attributes: u32, school_mask: u8, kinds: &[u8]) -> bool {
+    attributes & ATTR_ON_NEXT_SWING_MASK != 0
+        && school_mask == SCHOOL_MASK_PHYSICAL
+        && kinds.contains(&E_WEAPON_STRIKE)
+        && kinds
+            .iter()
+            .all(|&kind| kind == E_WEAPON_STRIKE || kind == E_SCRIPTED)
+}
+
+struct WeaponStrikeRow {
+    effect_index: usize,
+    base_points: i32,
+    die_sides: i32,
+    per_level: f32,
+    percent: i32,
+    normalized: bool,
+}
+
+// vmangos EffectWeaponDmg folds every weapon effect into one strike at the last of them.
+fn weapon_strike_row(s: &Spell, resolved: &[(usize, ResolvedEffect)]) -> Option<WeaponStrikeRow> {
+    let mut row: Option<WeaponStrikeRow> = None;
+    for (i, effect) in resolved {
+        let effect_id = s.effect[*i];
+        if !is_weapon_damage_effect(effect_id, effect.kind) {
+            continue;
+        }
+        let strike = row.get_or_insert(WeaponStrikeRow {
+            effect_index: *i,
+            base_points: 0,
+            die_sides: 0,
+            per_level: 0.0,
+            percent: WEAPON_DAMAGE_FULL_PCT,
+            normalized: false,
+        });
+        strike.effect_index = *i;
+        if effect_id == EFFECT_WEAPON_PERCENT_DAMAGE {
+            strike.percent = effect.base_points;
+        } else {
+            strike.base_points += effect.base_points;
+            strike.die_sides = strike.die_sides.max(effect.die_sides);
+            strike.per_level += effect.per_level;
+            strike.normalized |= effect_id == EFFECT_NORMALIZED_WEAPON_DAMAGE;
+        }
+    }
+    row
+}
+
+fn is_weapon_damage_effect(effect_id: i32, kind: u8) -> bool {
+    kind == E_WEAPON_STRIKE || (kind == E_DAMAGE && effect_id == EFFECT_WEAPON_PERCENT_DAMAGE)
+}
+
+fn ranged_slot_cast_time(cast_time_ms: u32, attributes: u32, auto_repeat: bool) -> u32 {
+    if attributes & SPELL_ATTR_USES_RANGED_SLOT != 0 && !auto_repeat {
+        cast_time_ms + RANGED_SLOT_CAST_MS
+    } else {
+        cast_time_ms
+    }
+}
 
 const EFFECT_APPLY_AURA: i32 = 6;
 const EFFECT_PERSISTENT_AREA_AURA: i32 = 27;
@@ -133,9 +216,6 @@ fn spell_flag_attributes(name: &str) -> u32 {
     if matches!(name, "Sap" | "Pick Pocket" | "Distract") {
         bits |= SPELL_ATTR_STEALTH_SAFE;
     }
-    if name == "Slice and Dice" {
-        bits |= SPELL_ATTR_FINISHER_DURATION;
-    }
     if name == "Overpower" {
         bits |= SPELL_ATTR_REQ_OVERPOWER;
     }
@@ -176,6 +256,7 @@ fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
         p1: 0,
         script_id: 0,
         enters_combat: false,
+        points_per_combo: 0.0,
         bonus_coefficient: -1.0,
     }
 }
@@ -217,7 +298,10 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
 
 fn instant_effect_to_kind(effect_id: i32) -> u8 {
     match effect_id {
-        2 | 17 | 58 | 121 | 31 => E_DAMAGE,
+        2 | 31 => E_DAMAGE,
+        EFFECT_WEAPON_DAMAGE_NOSCHOOL | EFFECT_WEAPON_DAMAGE | EFFECT_NORMALIZED_WEAPON_DAMAGE => {
+            E_WEAPON_STRIKE
+        }
         10 => E_HEAL,
         67 => E_HEAL_MAX_HEALTH,
         30 => E_ENERGIZE,
@@ -243,12 +327,6 @@ fn instant_effect_to_kind(effect_id: i32) -> u8 {
 }
 
 fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
-    if kind == E_DAMAGE && name == "Eviscerate" {
-        return E_FINISHER_DAMAGE;
-    }
-    if kind == E_DAMAGE && matches!(name, "Heroic Strike" | "Cleave") {
-        return E_NEXT_SWING;
-    }
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
     }
@@ -857,11 +935,13 @@ fn push_spell_header_row(
     let name = s.name.clone();
     let power_type = s.power_type as u8;
     let cost = s.mana_cost;
+    let auto_repeat = is_ranged_auto_repeat(s.attributes_ex2, &name);
     let cast_time_ms = dbc
         .cast_times
         .get(SpellCastTimesKey::new(s.casting_time_index))
         .map(|r| r.base.max(0) as u32)
         .unwrap_or(0);
+    let cast_time_ms = ranged_slot_cast_time(cast_time_ms, s.attributes, auto_repeat);
     // Either spell or category recovery can carry the real cooldown.
     let cooldown_ms = s.recovery_time.max(s.category_recovery_time);
     let range_yd = dbc
@@ -870,16 +950,12 @@ fn push_spell_header_row(
         .map(|r| r.range_max.max(0.0) as u32)
         .unwrap_or(0);
     // DBC duration -1 means infinite; u32::MAX preserves that sentinel.
-    let duration_ms = dbc
-        .durations
-        .get(SpellDurationKey::new(s.duration))
-        .map(|r| {
-            if r.duration == -1 {
-                u32::MAX
-            } else {
-                r.duration.max(0) as u32
-            }
-        })
+    let duration_row = dbc.durations.get(SpellDurationKey::new(s.duration));
+    let duration_ms = duration_row
+        .map(|r| dbc_duration_ms(r.duration))
+        .unwrap_or(0);
+    let max_duration_ms = duration_row
+        .map(|r| dbc_duration_ms(r.max_duration))
         .unwrap_or(0);
     // Spell.dbc school is a Resistances.dbc index, not a mask.
     let school_mask = 1u8 << (s.school.min(6) as u8);
@@ -906,8 +982,11 @@ fn push_spell_header_row(
     if channeled {
         cast_flags |= SPELL_ATTR_CHANNELED;
     }
-    if is_ranged_auto_repeat(s.attributes_ex2, &name) {
+    if auto_repeat {
         cast_flags |= SPELL_ATTR_RANGED_AUTO_REPEAT;
+    }
+    if is_combo_finisher(s) {
+        cast_flags |= SPELL_ATTR_COMBO_FINISHER;
     }
     let stances = translate_stance_mask(s.shapeshift_mask);
     let spell_level = s.spell_level.min(255) as u8;
@@ -946,6 +1025,7 @@ fn push_spell_header_row(
         proc_flags,
         proc_chance,
         proc_charges,
+        max_duration_ms,
         custom_flags: s.custom_flags,
         min_target_level: s.min_target_level,
         single_target_key: s.single_target_key,
@@ -978,6 +1058,14 @@ fn push_spell_header_row(
         school_mask,
         is_negative,
         channeled,
+    }
+}
+
+fn dbc_duration_ms(raw: i32) -> u32 {
+    if raw == -1 {
+        u32::MAX
+    } else {
+        raw.max(0) as u32
     }
 }
 
@@ -1030,14 +1118,21 @@ fn push_spell_effect_rows(
     } = acc;
     let spell_id = s.id;
     let name = header.name.as_str();
+    let resolved: Vec<(usize, ResolvedEffect)> = (0..3)
+        .filter(|&i| s.effect[i] != 0)
+        .map(|i| (i, resolve_effect_kind(s, i, header, creature_displays, cov)))
+        .collect();
+    let effect_kinds: Vec<u8> = resolved.iter().map(|(_, effect)| effect.kind).collect();
+    let queued_strike = queues_on_next_swing(s.attributes, header.school_mask, &effect_kinds);
+    let strike = if queued_strike {
+        None
+    } else {
+        weapon_strike_row(s, &resolved)
+    };
     let mut used_slots = [false; 4];
     let mut healed_target = T_SELF;
-    #[allow(clippy::needless_range_loop)]
-    for i in 0..3 {
+    for (i, effect) in resolved {
         let effect_id = s.effect[i];
-        if effect_id == 0 {
-            continue;
-        }
         used_slots[i] = true;
         let effect_index = i as u8;
         let ResolvedEffect {
@@ -1048,7 +1143,27 @@ fn push_spell_effect_rows(
             die_sides,
             per_level,
             period_ms,
-        } = resolve_effect_kind(s, i, header, creature_displays, cov);
+        } = effect;
+        let strike_row = strike
+            .as_ref()
+            .filter(|_| is_weapon_damage_effect(effect_id, kind));
+        if strike_row.is_some_and(|row| row.effect_index != i) {
+            continue;
+        }
+        let (kind, base_points, die_sides, per_level, p0, p0_kind) = match strike_row {
+            Some(strike) => (
+                E_WEAPON_STRIKE,
+                strike.base_points,
+                strike.die_sides,
+                strike.per_level,
+                strike.percent,
+                P_RAW,
+            ),
+            None if queued_strike && kind == E_WEAPON_STRIKE => {
+                (E_NEXT_SWING, base_points, die_sides, per_level, p0, p0_kind)
+            }
+            None => (kind, base_points, die_sides, per_level, p0, p0_kind),
+        };
         let binding_entry = binding_summon_entry(
             spell_id,
             effect_id,
@@ -1097,6 +1212,8 @@ fn push_spell_effect_rows(
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
             // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
             s.effect_item_type[i] as i32
+        } else if let Some(row) = strike_row {
+            i32::from(row.normalized)
         } else {
             power_word_shield_p1_override(spell_id, name, kind, 0i32)
         };
@@ -1121,6 +1238,7 @@ fn push_spell_effect_rows(
             p1,
             script_id,
             enters_combat,
+            points_per_combo: s.effect_points_per_combo[i],
             bonus_coefficient: s.bonus_coefficient.map_or(-1.0, |c| c[i]),
         });
 
@@ -1199,6 +1317,14 @@ fn resolve_effect_kind(
         kind
     } else {
         correct_script_effect_kind(name, kind)
+    };
+    let kind = if effect_id == EFFECT_SCHOOL_DAMAGE
+        && school_mask == SCHOOL_MASK_PHYSICAL
+        && is_combo_finisher(s)
+    {
+        E_FINISHER_DAMAGE
+    } else {
+        kind
     };
     let p0 = if GOUGE_RANK_IDS.contains(&s.id) && name == "Gouge" && kind == A_CONTROL {
         M_POLY
@@ -1378,13 +1504,13 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,custom_flags,min_target_level,single_target_key",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
         &mut stmts,
         "game_spell_effect",
-        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,bonus_coefficient",
+        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient",
         &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1406,7 +1532,7 @@ fn assemble_spell_sql(
             row.row_id()
         ));
         stmts.push(format!(
-            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,bonus_coefficient) VALUES {}",
+            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient) VALUES {}",
             row.sql_values()
         ));
     }
@@ -1489,6 +1615,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_INTERRUPT => "E_INTERRUPT",
         E_REDUCE_THREAT => "E_REDUCE_THREAT",
         E_NEXT_SWING => "E_NEXT_SWING",
+        E_WEAPON_STRIKE => "E_WEAPON_STRIKE",
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
         E_SUMMON_GUARDIANS => "E_SUMMON_GUARDIANS",
@@ -1567,8 +1694,8 @@ pub(crate) fn selected_world_plan(
             !s.starts_with("INSERT INTO game_spell (")
                 && !s.starts_with("INSERT INTO game_spell_effect (")
         });
-        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
-        push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
     }
     Ok(crate::world_import::DumpPlan {
         stmts,
@@ -1731,6 +1858,33 @@ mod tests {
             durations: authored_table(4, &[&[1, 12000, 0, 12000]]),
             radii: authored_table(4, &[&[1, 7.0f32.to_bits()], &[2, 9.0f32.to_bits()]]),
         }
+    }
+
+    #[test]
+    fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
+        let source = crate::vmangos_spell::fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5 WHERE build=5875").unwrap();
+        let mut tables = fixture_tables();
+        tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
+        tables.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
+        let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
+        let header = &rows.headers[0];
+        assert_ne!(header.cast_flags & SPELL_ATTR_COMBO_FINISHER, 0);
+        assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
+        let header_sql = header.sql_values();
+        let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
+        assert_eq!(values.len(), 29);
+        assert_eq!(&values[25..28], &["21000", "1024", "7"]);
+        let effect = &rows.effects[0];
+        assert_eq!(effect.kind, E_FINISHER_DAMAGE);
+        assert_eq!(
+            (effect.points_per_combo, effect.bonus_coefficient),
+            (5.0, 0.5)
+        );
+        assert!(effect.sql_values().ends_with(",5.0,0.5)"));
     }
 
     #[test]
@@ -2274,7 +2428,9 @@ mod tests {
 
     #[test]
     fn every_pinned_location_target_uses_its_companion_unit_selection() {
-        for target_a in LOCATION_TARGET_CODES {
+        for target_a in [
+            9, 10, 17, 18, 22, 32, 39, 41, 42, 43, 44, 46, 47, 48, 49, 50, 53, 55, 63,
+        ] {
             assert_eq!(
                 resolve_target(unit_selection_from_pair(target_a, 6), true),
                 T_TARGET_ENEMY,
@@ -2390,12 +2546,68 @@ mod tests {
     }
 
     #[test]
-    fn eviscerate_damage_reclassifies_to_finisher_damage() {
-        assert_eq!(
-            correct_script_effect_kind("Eviscerate", E_DAMAGE),
-            E_FINISHER_DAMAGE
+    fn finishers_come_from_the_finishing_move_attributes() {
+        let finisher = |id, name: &str, attributes_ex1, family_name, family_flags, effect| Spell {
+            id,
+            name: name.into(),
+            attributes_ex1,
+            family_name,
+            family_flags,
+            effect,
+            implicit_target_a: [6, 1, 0],
+            duration: 1,
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        dbc.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
+        dbc.spells = vec![
+            Spell {
+                effect_die_sides: [5, 0, 0],
+                effect_points_per_combo: [5.0, 0.0, 0.0],
+                ..finisher(2098, "Eviscerate", 0x0010_0200, 8, 0x0082_0000, [2, 3, 0])
+            },
+            finisher(
+                31018,
+                "Ferocious Bite",
+                0x0010_0200,
+                7,
+                0x0080_0000,
+                [2, 0, 0],
+            ),
+            finisher(
+                5171,
+                "Slice and Dice",
+                0x0040_0400,
+                8,
+                0x0004_0000,
+                [3, 6, 0],
+            ),
+            finisher(7384, "Overpower", 0x4810_0200, 4, 0x4, [121, 0, 0]),
+            Spell {
+                attributes: 0x1d0,
+                ..finisher(14179, "Relentless Strikes", 0x0010_0000, 8, 0, [6, 0, 0])
+            },
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let header = |id| rows.headers.iter().find(|h| h.spell_id == id).unwrap();
+        let finishes = |id| header(id).cast_flags & SPELL_ATTR_COMBO_FINISHER != 0;
+        assert!(finishes(2098) && finishes(31018) && finishes(5171));
+        assert!(
+            !finishes(7384),
+            "Overpower uses the bit for its dodge window"
         );
-        assert_eq!(correct_script_effect_kind("Frostbolt", E_DAMAGE), E_DAMAGE);
+        assert!(!finishes(14179), "a passive talent is never cast");
+        let eviscerate = first_effect(&rows, 2098);
+        assert_eq!(
+            (eviscerate.kind, eviscerate.points_per_combo),
+            (E_FINISHER_DAMAGE, 5.0)
+        );
+        assert_eq!(first_effect(&rows, 31018).kind, E_FINISHER_DAMAGE);
+        assert_eq!(
+            (header(5171).duration_ms, header(5171).max_duration_ms),
+            (6000, 21000)
+        );
     }
 
     #[test]
@@ -2660,10 +2872,6 @@ mod tests {
             spell_flag_attributes("Pick Pocket"),
             SPELL_ATTR_STEALTH_SAFE
         );
-        assert_eq!(
-            spell_flag_attributes("Slice and Dice"),
-            SPELL_ATTR_FINISHER_DURATION
-        );
         assert_eq!(spell_flag_attributes("Fireball"), 0);
     }
 
@@ -2676,15 +2884,131 @@ mod tests {
         assert!(!is_ranged_auto_repeat(0x1, "Frostbolt"));
     }
 
+    fn melee_ability(id: u32, name: &str, attributes: u32, effect: [i32; 3]) -> Spell {
+        Spell {
+            id,
+            name: name.into(),
+            attributes,
+            effect,
+            effect_aura: effect.map(|id| {
+                if id == EFFECT_APPLY_AURA {
+                    AuraMod::ModStun as u32
+                } else {
+                    0
+                }
+            }),
+            implicit_target_a: [6, 6, 0],
+            ..Default::default()
+        }
+    }
+
     #[test]
-    fn on_next_swing_reclassifies_heroic_strike_and_cleave() {
+    fn the_on_next_swing_attribute_queues_every_weapon_strike() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![
+            melee_ability(78, "Heroic Strike", 0x0005_0014, [17, 0, 0]),
+            melee_ability(2973, "Raptor Strike", 0x0005_0404, [58, 0, 0]),
+            melee_ability(6807, "Maul", 0x0000_0414, [58, 0, 0]),
+            melee_ability(20666, "Cleave", 0x0004_0014, [58, 98, 0]),
+            melee_ability(14112, "Flaying Vine", 0x0004_0410, [58, 0, 0]),
+            melee_ability(3242, "Ravage", 0x0000_0014, [58, 6, 0]),
+            melee_ability(678, "zzOLDHoly Strike", 0x0000_0404, [2, 0, 0]),
+            Spell {
+                school: 1,
+                ..melee_ability(13953, "Holy Strike", 0x0005_0404, [58, 0, 0])
+            },
+            melee_ability(1752, "Sinister Strike", 0x0005_0010, [17, 0, 0]),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let kind = |id| first_effect(&rows, id).kind;
+        for queued in [78, 2973, 6807, 20666, 14112] {
+            assert_eq!(kind(queued), E_NEXT_SWING, "spell {queued}");
+            assert_eq!(first_effect(&rows, queued).target, T_TARGET_ENEMY);
+        }
         assert_eq!(
-            correct_script_effect_kind("Heroic Strike", E_DAMAGE),
-            E_NEXT_SWING
+            kind(3242),
+            E_WEAPON_STRIKE,
+            "a strike with a live aura stays instant"
         );
-        assert_eq!(correct_script_effect_kind("Cleave", E_DAMAGE), E_NEXT_SWING);
-        assert_eq!(correct_script_effect_kind("Heroic Strike", A_FLAG), A_FLAG);
-        assert_eq!(correct_script_effect_kind("Frostbolt", E_DAMAGE), E_DAMAGE);
+        assert_eq!(kind(678), E_DAMAGE, "school damage is not a weapon swing");
+        assert_eq!(
+            kind(13953),
+            E_WEAPON_STRIKE,
+            "a holy weapon strike is not a physical swing"
+        );
+        assert_eq!(kind(1752), E_WEAPON_STRIKE, "no on-next-swing attribute");
+    }
+
+    #[test]
+    fn every_weapon_effect_of_an_instant_spell_folds_into_one_strike() {
+        let mut dbc = fixture_tables();
+        dbc.spells = vec![
+            Spell {
+                effect_base_points: [9, 149, 0],
+                effect_die_sides: [1, 1, 1],
+                ..melee_ability(53, "Backstab", 0x0005_0010, [121, 31, 80])
+            },
+            Spell {
+                effect_base_points: [149, 0, 0],
+                effect_die_sides: [1, 0, 0],
+                ..melee_ability(14251, "Riposte", 0x0005_0010, [31, 6, 0])
+            },
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let strikes = |id| {
+            rows.effects
+                .iter()
+                .filter(|effect| effect.spell_id == id && effect.kind == E_WEAPON_STRIKE)
+                .map(|effect| {
+                    (
+                        effect.effect_index,
+                        effect.base_points,
+                        effect.die_sides,
+                        effect.p0,
+                        effect.p1,
+                    )
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(strikes(53), [(1, 10, 1, 150, 1)]);
+        assert!(rows
+            .effects
+            .iter()
+            .any(|effect| effect.spell_id == 53 && effect.kind == E_ADD_COMBO));
+        assert_eq!(strikes(14251), [(0, 0, 0, 150, 0)]);
+    }
+
+    #[test]
+    fn a_ranged_slot_spell_casts_for_half_a_second_more_unless_it_repeats() {
+        let mut dbc = fixture_tables();
+        dbc.cast_times = authored_table(4, &[&[1, 0, 0, 0]]);
+        dbc.spells = vec![
+            Spell {
+                casting_time_index: 1,
+                ..melee_ability(2764, "Throw", 0x0041_0012, [58, 0, 0])
+            },
+            Spell {
+                casting_time_index: 1,
+                attributes_ex2: ATTR_EX2_AUTOREPEAT,
+                ..melee_ability(75, "Auto Shot", 0x0005_0012, [58, 0, 0])
+            },
+            Spell {
+                casting_time_index: 1,
+                ..melee_ability(1752, "Sinister Strike", 0x0005_0010, [121, 0, 0])
+            },
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let cast_ms = |id| {
+            rows.headers
+                .iter()
+                .find(|header| header.spell_id == id)
+                .unwrap()
+                .cast_time_ms
+        };
+        assert_eq!((cast_ms(2764), cast_ms(75), cast_ms(1752)), (500, 0, 0));
     }
 
     #[test]
@@ -2859,8 +3183,9 @@ mod tests {
     #[test]
     fn instant_effects_map_to_real_kinds() {
         assert_eq!(instant_effect_to_kind(2), E_DAMAGE);
-        assert_eq!(instant_effect_to_kind(58), E_DAMAGE);
-        assert_eq!(instant_effect_to_kind(121), E_DAMAGE);
+        assert_eq!(instant_effect_to_kind(17), E_WEAPON_STRIKE);
+        assert_eq!(instant_effect_to_kind(58), E_WEAPON_STRIKE);
+        assert_eq!(instant_effect_to_kind(121), E_WEAPON_STRIKE);
         assert_eq!(instant_effect_to_kind(10), E_HEAL);
         assert_eq!(instant_effect_to_kind(67), E_HEAL_MAX_HEALTH);
         assert_eq!(instant_effect_to_kind(30), E_ENERGIZE);

@@ -1184,12 +1184,15 @@ fn needs_new_leg(leg: Option<&LegInFlight>, dir: (f32, f32), stop_at: (f32, f32)
 }
 
 fn stand_and_face<W: PursuitSink>(w: &mut W, tick: &TickContext, c: &Pursuit) {
+    if let Some(bearing) = stand_and_face_bearing(c) {
+        w.face(c.guid, c.at, bearing, tick.now_ms);
+    }
+}
+
+fn stand_and_face_bearing(c: &Pursuit) -> Option<f32> {
     let bearing = (c.victim_at.y - c.at.y).atan2(c.victim_at.x - c.at.x);
     let turning = angle_diff(c.orientation, bearing).abs() > FACING_EPSILON_RAD;
-    if c.leg.is_none() && !turning {
-        return;
-    }
-    w.face(c.guid, c.at, bearing, tick.now_ms);
+    (c.leg.is_some() || turning).then_some(bearing)
 }
 
 fn combat_entry<W: EngageSink>(w: &mut W, scope: &TickScope) -> usize {
@@ -1478,13 +1481,38 @@ mod facing_tests {
         assert!(angle_diff(0.5, 0.5 + TAU).abs() < 1e-4);
     }
 
+    fn standing(orientation: f32, leg: Option<LegInFlight>) -> Pursuit {
+        Pursuit {
+            guid: 1,
+            victim: 2,
+            at: Point {
+                x: 0.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            orientation,
+            victim_at: Point {
+                x: 10.0,
+                y: 0.0,
+                z: 10.0,
+            },
+            victim_orientation: 0.0,
+            victim_movement_flags: 0,
+            victim_is_character: true,
+            last_move_ms: 0,
+            routing: false,
+            leg,
+        }
+    }
+
     #[test]
-    fn the_epsilon_gate_is_silent_below_threshold_and_fires_above_it() {
-        let orientation = 0.0_f32;
-        let just_under = FACING_EPSILON_RAD - 0.01;
-        let just_over = FACING_EPSILON_RAD + 0.01;
-        assert!(angle_diff(orientation, just_under).abs() <= FACING_EPSILON_RAD);
-        assert!(angle_diff(orientation, just_over).abs() > FACING_EPSILON_RAD);
+    fn a_standing_creature_turns_only_past_the_epsilon_or_to_stop_a_leg() {
+        assert_eq!(stand_and_face_bearing(&standing(0.29, None)), None);
+        assert_eq!(stand_and_face_bearing(&standing(-0.29, None)), None);
+        assert_eq!(stand_and_face_bearing(&standing(0.31, None)), Some(0.0));
+        assert_eq!(stand_and_face_bearing(&standing(-0.31, None)), Some(0.0));
+        let leg = super::chase_leg_tests::leg_to(10.0);
+        assert_eq!(stand_and_face_bearing(&standing(0.0, Some(leg))), Some(0.0));
     }
 }
 
@@ -1495,7 +1523,7 @@ mod chase_leg_tests {
     const DIR: (f32, f32) = (1.0, 0.0);
     const STOP_AT: (f32, f32) = (19.0, 0.0);
 
-    fn leg_to(dest_x: f32) -> LegInFlight {
+    pub(super) fn leg_to(dest_x: f32) -> LegInFlight {
         LegInFlight {
             guid: 1,
             start: Point {

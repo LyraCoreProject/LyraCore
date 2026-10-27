@@ -500,8 +500,8 @@ fn built_fishing_loot(row: &TracedRow) -> Result<GameFishingLoot, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, pickpocket_loot_claim, plan, some_value, PACKAGE_LOOT, REAL_PICKPOCKET_LOOT,
-        WHOLE_PICKPOCKET_LOOT_ROW,
+        artifact, assert_each_column_sets_its_own_field, pickpocket_loot_claim, plan, PACKAGE_LOOT,
+        REAL_PICKPOCKET_LOOT, WHOLE_PICKPOCKET_LOOT_ROW,
     };
     use super::*;
 
@@ -552,39 +552,39 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_pickpocket_loot_column_has_a_setter() {
-        let mut loot = blank_pickpocket_loot(PACKAGE_LOOT);
-        for column in ClaimTable::PickpocketLoot.columns() {
-            apply_pickpocket_loot_field(&mut loot, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_pickpocket_loot` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_pickpocket_loot_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::PickpocketLoot,
+            || blank_pickpocket_loot(PACKAGE_LOOT),
+            apply_pickpocket_loot_field,
+        );
     }
 
     #[test]
-    fn every_claimable_gameobject_loot_column_has_a_setter() {
-        let mut loot = blank_gameobject_loot(PACKAGE_LOOT);
-        for column in ClaimTable::GameobjectLoot.columns() {
-            apply_gameobject_loot_field(&mut loot, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_gameobject_loot` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_gameobject_loot_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GameobjectLoot,
+            || blank_gameobject_loot(PACKAGE_LOOT),
+            apply_gameobject_loot_field,
+        );
     }
 
     #[test]
-    fn every_claimable_skinning_loot_column_has_a_setter() {
-        let mut loot = blank_skinning_loot(PACKAGE_LOOT);
-        for column in ClaimTable::SkinningLoot.columns() {
-            apply_skinning_loot_field(&mut loot, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_skinning_loot` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_skinning_loot_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SkinningLoot,
+            || blank_skinning_loot(PACKAGE_LOOT),
+            apply_skinning_loot_field,
+        );
     }
 
     #[test]
-    fn every_claimable_fishing_loot_column_has_a_setter() {
-        let mut loot = blank_fishing_loot(PACKAGE_LOOT);
-        for column in ClaimTable::FishingLoot.columns() {
-            apply_fishing_loot_field(&mut loot, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_fishing_loot` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_fishing_loot_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::FishingLoot,
+            || blank_fishing_loot(PACKAGE_LOOT),
+            apply_fishing_loot_field,
+        );
     }
 
     #[test]

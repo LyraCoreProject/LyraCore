@@ -25,11 +25,11 @@ mod tests;
 pub(crate) use cast::passive_applies_effect_kind;
 pub(crate) use cast::{
     apply_direct_heal, apply_effect, apply_spell_auras, aura_apply, begin_cast,
-    begin_cast_with_admission, cast_triggered, check_cast_start_gates, check_pending_cast_los,
-    clear_dead_callback_cast_admission, faction_target_violation, recipe_reagents, resolve_cast_at,
-    resolve_cast_at_typed, revive_amount, select_targets, start_creature_spell,
-    CreatureSpellCasterAdmission, CreatureSpellStart, CreatureSpellStartMode, CreatureSpellTarget,
-    ItemGrantOutcome,
+    begin_cast_with_admission, cast_triggered, charge_spell_cost, check_cast_start_gates,
+    check_pending_cast_los, clear_dead_callback_cast_admission, faction_target_violation,
+    recipe_reagents, resolve_cast_at, resolve_cast_at_typed, revive_amount, select_targets,
+    start_creature_spell, start_spell_cooldown, CreatureSpellCasterAdmission, CreatureSpellStart,
+    CreatureSpellStartMode, CreatureSpellTarget, ItemGrantOutcome,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use cast::{blink_forward, resolve_cast};
@@ -49,21 +49,21 @@ pub(crate) use effects::{
 };
 #[cfg(test)]
 pub(crate) use math::{
-    absorb_draw, can_afford, cast_finish_micros, int_spell_power, intellect_crit_bp,
-    spell_crit_bp_with_bonus, stance_damage_taken_pct, SPELL_CRIT_BP,
+    absorb_draw, can_afford, int_spell_power, intellect_crit_bp, spell_crit_bp_with_bonus,
+    stance_damage_taken_pct,
 };
 pub(crate) use math::{
-    add_flat_pool_bonus, apply_damage_pct, apply_resistance, apply_spell_crit, aura_moves_sheet,
-    aura_moves_vitals, auras_on, break_stealth, client_form_for_stance, combat_field_bonus,
-    combat_health_regen_pct, compose_magnitude, cost_gate_blocks, damage_taken_bonus,
-    damaged_value, detect_range_mod, dispel_category_matches, distance_3d, drain_shields,
-    effect_amount, energized_value, form_recast_toggles_off, healed_value, healing_power,
-    is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed, level_gate_blocks,
-    power_regen_rate, projectile_travel_ms, rederive_pool, remove_seal_auras, resist_magic_damage,
-    resistance_bonus, school_index, school_locked, seal_amount, seal_amount_and_spell,
-    should_arm_spell_retaliation, speed_bonus, spell_crit_bp, spell_miss_chance_bp, spell_power,
-    stance_allows, stance_damage_done_pct, stance_switch_clears_power, stance_threat_pct,
-    stat_bonus, stat_pct_bonus,
+    add_flat_pool_bonus, apply_damage_pct, apply_resistance, apply_spell_crit, apply_spell_mod,
+    aura_moves_sheet, aura_moves_vitals, auras_on, break_stealth, client_form_for_stance,
+    combat_field_bonus, combat_health_regen_pct, compose_magnitude, cost_gate_blocks,
+    damage_taken_bonus, damaged_value, detect_range_mod, dispel_category_matches, distance_3d,
+    drain_shields, effect_amount, energized_value, form_recast_toggles_off, healed_value,
+    healing_power, is_behind, is_facing, is_on_cooldown, is_ready_at, is_stealthed,
+    level_gate_blocks, power_regen_rate, projectile_travel_ms, rederive_pool, remove_seal_auras,
+    resist_magic_damage, resistance_bonus, school_index, school_locked, seal_amount,
+    seal_amount_and_spell, should_arm_spell_retaliation, speed_bonus, spell_crit_bp,
+    spell_miss_chance_bp, spell_mod, spell_power, stance_allows, stance_damage_done_pct,
+    stance_switch_clears_power, stance_threat_pct, stat_bonus, stat_pct_bonus,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use scheduler::arm_ground_area_tick;
@@ -97,7 +97,7 @@ pub use tables::{
     GroundAreaSchedule, PendingCast, PendingSpellImpact, ResurrectRequest, SchoolLockout,
     SelfResurrectOption, Spell, SpellCastEvent, SpellCd, SpellCooldown, SpellEffect,
     SpellImpactEvent, SpellProcEvent, SpellReagent, CAST_FAIL_INTERRUPTED, CAST_FAIL_NO_POWER,
-    CAST_MISS_MISS, CAST_MISS_NONE, CAST_MISS_RESIST,
+    CAST_MISS_DODGE, CAST_MISS_MISS, CAST_MISS_NONE, CAST_MISS_PARRY, CAST_MISS_RESIST,
 };
 
 pub(crate) use lyracore_shared::spell::taxonomy::{
@@ -116,11 +116,12 @@ pub(crate) use lyracore_shared::spell::taxonomy::{
     KIND_AURA_BIT, M_FEAR, M_POLY, M_ROOT, M_STUN, P_DISPLAY_ID, P_ENTRY, P_GAMEOBJECT_ENTRY,
     P_MECHANIC, P_PCT_MAX_POWER, P_POWER_TYPE, P_SPEED_KIND, RESIST_ARMOR, SPEED_MOUNTED,
     SPEED_MOVE, SPEED_SWING, SPELLMOD_OP_CASTING_TIME, SPELLMOD_OP_DAMAGE, SPELL_ATTR_CHANNELED,
-    SPELL_ATTR_FINISHER_DURATION, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
-    SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
-    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, STANCE_BEAR, STANCE_CAT, STANCE_DEFENSIVE,
-    STANCE_DIRE_BEAR, STAT_AGI, STAT_ALL, STAT_INT, STAT_SPI, STAT_STA, STAT_STR, T_AREA_ALLY,
-    T_AREA_ENEMY, T_CHAIN_ENEMY, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
+    SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE, SPELL_ATTR_REQ_BEHIND,
+    SPELL_ATTR_REQ_DAGGER, SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE,
+    SPELL_ATTR_REQ_STEALTH, SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, STANCE_BEAR,
+    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_AGI, STAT_ALL, STAT_INT, STAT_SPI,
+    STAT_STA, STAT_STR, T_AREA_ALLY, T_AREA_ENEMY, T_CHAIN_ENEMY, T_SELF, T_TARGET_ALLY,
+    T_TARGET_ANY, T_TARGET_ENEMY,
 };
 #[cfg(test)]
 pub(crate) use lyracore_shared::spell::taxonomy::{
