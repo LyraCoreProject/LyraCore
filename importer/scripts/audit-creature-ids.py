@@ -5,6 +5,23 @@ import re
 import sqlite3
 
 
+def identifier_bands(connection):
+    bands = {
+        'Fixture': (5_090_000, 5_099_999),
+        'Operator': (14_000_000, 14_999_999),
+        'Package Creature': (15_000_000, 15_999_999),
+        'Package Gameobject': (16_000_000, 16_999_999),
+        'Curated, separate key spaces': (1_000_000, 5_200_499),
+    }
+    rows = []
+    for table in ['creature', 'gameobject']:
+        guids = [row[0] for row in connection.execute(f'SELECT guid FROM {table}')]
+        for band, (low, high) in bands.items():
+            count = sum(low <= guid <= high for guid in guids)
+            rows.append(f'| {table} | {max(guids, default=0)} | {band} | {low}..{high} | {count} |')
+    return '\n'.join(rows)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('source', type=Path)
@@ -32,8 +49,11 @@ def main():
     for group, entries in groups.items():
         for entry in entries:
             print(f'| {group} | {entry} | {entry in templates} | {sum(entry in row for row in spawns)} |')
-    print('\nAll production template dependencies above exist. Summon-only templates need no placed spawn. Fixture entry 51006 and its packed guid belong to the seeded fixture, not the World Source. Synthetic test entries remain hand-authored. Rajaxx rule 1534108 and source guid 155940 remain classic-only until S6 re-derives the EventAI bindings. Template existence does not verify those script behaviors.\n')
-    print('The prior identifier-band audit found no source GUIDs in fixture 5090000..5099999, Operator 14000000..14999999, Package Creature 15000000..15999999 or Package Gameobject 16000000..16999999 ranges. Source maximums were 303722 for creatures and 3998642 for GameObjects. The 1117 GameObject GUIDs in 1000000..5200499 do not collide: those curated bounds separate Package Identifier Ranges across table key spaces. Spawn Claims check the narrower fixture band and their own encoding bounds. This reuses the audited result in the prior M3 stop handoff; it is not a runtime Package apply test.')
+    missing = sorted({entry for entries in groups.values() for entry in entries} - templates)
+    print(f'\nMissing production template dependencies: {missing}. Summon-only templates need no placed spawn. Template existence does not verify script behavior. Rajaxx bindings remain for S6.\n')
+    print('| Table | Maximum GUID | Identifier band | Bounds | Source GUIDs |\n| --- | ---: | --- | --- | ---: |')
+    print(identifier_bands(connection))
+    print('\nThe broad curated bounds separate Package Identifier Ranges across table key spaces. Spawn Claims check the narrower fixture band and their own encoding bounds. These counts audit identifiers; they do not test Package apply.')
     connection.close()
 
 

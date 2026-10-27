@@ -264,6 +264,12 @@ pub(super) fn run(
             ids(before_keys.difference(after_keys).cloned())
         )?;
     }
+    if family == "creatures" {
+        let old = &before["game_creature_waypoint"];
+        let new = &after["game_creature_waypoint"];
+        writeln!(output, "\nWaypoint points {} → {}; {} creature GUIDs removed, {} added. Source path membership and point counts differ; vmangos uses spawn paths before template paths and emits only movement type 2. Classic path selection is unchanged.",
+            old.rows, new.rows, old.keys.difference(&new.keys).count(), new.keys.difference(&old.keys).count())?;
+    }
     explain(&mut output, family, &vmangos)?;
     floors(&mut output, family, &before, &after)?;
     if family == "creatures" {
@@ -382,7 +388,7 @@ fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<(
         writeln!(output, "- Patch ranges, disabled placements and profile boundaries change spawn membership. The `id` through `id5` columns supply equal entry choices. Classic spawn groups have no source counterpart; vmangos retains pools and signed event membership.
 - Creature health, melee damage and armor come from selected class-level stats and template multipliers. Rank rates default to one in vmangos. Imported level rows prevent the Module from adding its classic rank multipliers. Client display scales resolve zero template scales; source weights select a display on each spawn.
 - The cast family joins creature spell-list links to eight slots. Its first spell supplies the cast row, with later spells using the existing rotation model. Slot target, chance, timing and script detail remain unsupported.
-- The identifier audit found zero source GUIDs in Fixture, Operator or Package spawn ranges. The 1,117 GameObject GUIDs in the broad curated interval use a different key space and do not collide.
+- `audit-creature-ids.py` reports source GUID counts in each reserved band. The broad curated interval uses a different key space from spawn GUIDs.
 - Source behavior reference: `Creature.cpp`, `CreatureDefines.h` and `World.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`. EventAI dependency closure remains due in S6.")?;
     }
     if family == "gossip" {

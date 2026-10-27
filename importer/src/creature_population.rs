@@ -365,11 +365,8 @@ fn source_choices(
                 .iter()
                 .map(|name| row.number::<u32>(name))
                 .collect::<Result<Vec<_>>>()?;
-            let entries: Vec<_> = entries
-                .into_iter()
-                .take_while(|entry| *entry != 0)
-                .collect();
-            if entries.len() > 1 {
+            let entries: Vec<_> = entries.into_iter().filter(|entry| *entry != 0).collect();
+            if entries.len() > 1 || row.number::<u32>("id")? == 0 {
                 choices.insert(row.number("guid")?, entries);
             }
         }
@@ -613,6 +610,35 @@ mod tests {
                 world_guid(10, 1)
             )]
         );
+    }
+
+    #[test]
+    fn vmangos_population_keeps_choices_after_empty_slots() {
+        for slots in ["10,0,20,0,0", "0,0,20,0,0"] {
+            let source = vmangos_source();
+            let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+                unreachable!()
+            };
+            connection.execute_batch(&format!(
+                "DELETE FROM creature; INSERT INTO creature VALUES (1,{slots},0,1,2,3,0,0,60,0,0,10)"
+            )).unwrap();
+            let plan = collect(&source, &full_scope()).unwrap();
+            let (entry, choices, referenced) = if slots.starts_with("10") {
+                (10, "10,20", HashSet::from([10, 20]))
+            } else {
+                (20, "20", HashSet::from([20]))
+            };
+            assert_eq!(plan.spawns[0].1, entry);
+            assert_eq!(plan.referenced_entries, referenced);
+            assert_eq!(
+                plan.membership_rows,
+                [format!(
+                    "({},4294967297,{},'{choices}',0,'-4')",
+                    world_guid(entry, 1),
+                    if slots.starts_with("10") { 10 } else { 0 }
+                )]
+            );
+        }
     }
 
     #[test]

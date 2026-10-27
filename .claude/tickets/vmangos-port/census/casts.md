@@ -40,7 +40,7 @@ Removed (617): 10058, 1009, 10162, 10184, 10200, 1026, 1027, 1028, 1029, 10299, 
 - Patch ranges, disabled placements and profile boundaries change spawn membership. The `id` through `id5` columns supply equal entry choices. Classic spawn groups have no source counterpart; vmangos retains pools and signed event membership.
 - Creature health, melee damage and armor come from selected class-level stats and template multipliers. Rank rates default to one in vmangos. Imported level rows prevent the Module from adding its classic rank multipliers. Client display scales resolve zero template scales; source weights select a display on each spawn.
 - The cast family joins creature spell-list links to eight slots. Its first spell supplies the cast row, with later spells using the existing rotation model. Slot target, chance, timing and script detail remain unsupported.
-- The identifier audit found zero source GUIDs in Fixture, Operator or Package spawn ranges. The 1,117 GameObject GUIDs in the broad curated interval use a different key space and do not collide.
+- `audit-creature-ids.py` reports source GUID counts in each reserved band. The broad curated interval uses a different key space from spawn GUIDs.
 - Source behavior reference: `Creature.cpp`, `CreatureDefines.h` and `World.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`. EventAI dependency closure remains due in S6.
 
 ## Consumed floors

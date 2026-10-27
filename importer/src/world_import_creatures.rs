@@ -63,13 +63,20 @@ fn scaled_stats(
     ))
 }
 
+fn extrapolated_stat(start: f32, end: f32, level: u32, last_level: u32, armor: bool) -> f32 {
+    let (start, end) = if armor {
+        (start.max(1.0), end.max(1.0))
+    } else {
+        (start, end)
+    };
+    start + (level - 1) as f32 / (last_level - 1) as f32 * (end - start)
+}
+
 fn flags(row: &Row) -> Result<(u32, u32)> {
     let static1: u32 = row.number("static_flags1")?;
     let static2: u32 = row.number("static_flags2")?;
     let mut unit = 0;
     for (source, target) in [
-        (0x20, 0x100),
-        (0x40, 0x200),
         (0x200, 0x0200_0000),
         (0x1000_0000, 0x8000),
         (0x0040_0000, 0x1000),
@@ -159,10 +166,13 @@ fn templates(
                     .get(&(class, 1))
                     .context("missing level-one creature stats")?;
                 let extrapolate = |column: &str, integral: bool| -> Result<f32> {
-                    let start = first.number::<f32>(column)?;
-                    let end = last.number::<f32>(column)?;
-                    let value =
-                        start + (level - 1) as f32 / (last_level - 1) as f32 * (end - start);
+                    let value = extrapolated_stat(
+                        first.number(column)?,
+                        last.number(column)?,
+                        level,
+                        last_level,
+                        column == "armor",
+                    );
                     Ok(if integral { value.trunc() } else { value })
                 };
                 scaled_stats(
@@ -257,6 +267,9 @@ fn templates(
         if !row.optional_text("auras")?.unwrap_or_default().is_empty() {
             finding(findings, "creatures.auras", entry);
         }
+        if row.number::<u32>("static_flags1")? & 0x60 != 0 {
+            finding(findings, "creatures.scripted-immunity", entry);
+        }
         if row.number::<u32>("static_flags1")? & !0x51e1_0270 != 0
             || row.number::<u32>("static_flags2")? & !8 != 0
         {
@@ -345,9 +358,10 @@ fn waypoints(
     }
     let mut rows = Vec::new();
     for &(guid, entry, _, _, _, _, movement, _, _) in spawns {
-        let path = paths[0]
-            .get(&guid)
-            .or_else(|| (movement == 2).then(|| paths[1].get(&entry)).flatten());
+        if movement != 2 {
+            continue;
+        }
+        let path = paths[0].get(&guid).or_else(|| paths[1].get(&entry));
         if let Some(path) = path {
             for &(x, y, z) in path.values() {
                 rows.push(format!(
@@ -614,6 +628,52 @@ mod tests {
     }
 
     #[test]
+    fn extrapolated_armor_uses_nonzero_endpoints() {
+        assert_eq!(extrapolated_stat(0.0, 0.0, 3, 2, true), 1.0);
+        assert_eq!(extrapolated_stat(0.0, 5.0, 3, 2, true), 9.0);
+        assert_eq!(extrapolated_stat(0.0, 5.0, 3, 2, false), 10.0);
+    }
+
+    #[test]
+    fn only_waypoint_movement_emits_source_paths() {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE creature_movement (id INTEGER, point INTEGER, path_id INTEGER, position_x REAL, position_y REAL, position_z REAL, script_id INTEGER, waittime INTEGER, wander_distance REAL, orientation REAL);
+            INSERT INTO creature_movement VALUES (1,1,0,10,20,30,0,0,0,0);
+            CREATE TABLE creature_movement_template (entry INTEGER, point INTEGER, path_id INTEGER, position_x REAL, position_y REAL, position_z REAL, script_id INTEGER, waittime INTEGER, wander_distance REAL, orientation REAL);
+            INSERT INTO creature_movement_template VALUES (10,1,0,40,50,60,0,0,0,0);").unwrap();
+        let source = crate::world_source::WorldSource::Vmangos(connection);
+        for movement in [0, 1, 2, 3] {
+            let spawns = [
+                (1, 10, 0.0, 0.0, 0.0, 0.0, movement, 60, 0),
+                (2, 10, 0.0, 0.0, 0.0, 0.0, movement, 60, 0),
+            ];
+            let mut statements = Vec::new();
+            waypoints(&source, &spawns, &mut statements, &mut Findings::new()).unwrap();
+            if movement == 2 {
+                assert_eq!(insert_row_count(&statements), 2);
+                let sql = statements.join("\n");
+                assert!(sql.contains(&format!("(1,{},10,20,30)", world_guid(10, 1))));
+                assert!(sql.contains(&format!("(2,{},40,50,60)", world_guid(10, 2))));
+            } else {
+                assert_eq!(insert_row_count(&statements), 0);
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_immunity_does_not_make_imported_creatures_unattackable() {
+        let row = numbers(
+            "creature_template",
+            &[
+                ("static_flags1", "96"),
+                ("static_flags2", "0"),
+                ("rank", "3"),
+            ],
+        );
+        assert_eq!(flags(&row).unwrap().0, 0x40);
+    }
+
+    #[test]
     fn invalid_stats_fail_before_sql_generation() {
         let base = numbers(
             "creature_classlevelstats",
@@ -648,7 +708,7 @@ mod tests {
                 ("rank", "1"),
             ],
         );
-        assert_eq!(flags(&row).unwrap(), (0x0200_9340, 0x7f));
+        assert_eq!(flags(&row).unwrap(), (0x0200_9040, 0x7f));
         let row = numbers(
             "creature_template",
             &[

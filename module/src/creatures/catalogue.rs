@@ -2,7 +2,7 @@ use spacetimedb::{table, ReducerContext};
 
 use super::CreatureTemplate;
 
-#[table(accessor = game_creature_level_stats, public)]
+#[table(accessor = game_creature_level_stats, public, index(accessor = by_entry, btree(columns = [entry])))]
 pub struct CreatureLevelStats {
     #[primary_key]
     pub id: u64,
@@ -29,23 +29,43 @@ pub(crate) fn level_stats(
     template: &CreatureTemplate,
     level: u32,
 ) -> Option<CreatureLevelStats> {
-    if level > 255 || template.level > 255 || template.max_level > 255 {
-        return None;
-    }
     let table = ctx.db.game_creature_level_stats();
+    // Presence preserves the imported stat convention through Package template edits.
+    table.by_entry().filter(template.entry).next()?;
     let key = |level| (u64::from(template.entry) << 8) | u64::from(level);
-    let base = table.id().find(key(template.level))?;
-    let last = table.id().find(key(template.max_level))?;
-    // A Package's template stat changes take precedence over imported level rows.
-    if base.health != template.health
-        || last.health != template.max_level_health
-        || base.damage_min != template.damage_min
-        || base.damage_max != template.damage_max
-        || base.armor != template.armor
-    {
-        return None;
+    if level <= 255 && template.level <= 255 && template.max_level <= 255 {
+        if let (Some(base), Some(last)) = (
+            table.id().find(key(template.level)),
+            table.id().find(key(template.max_level)),
+        ) {
+            if base.health == template.health
+                && last.health == template.max_level_health
+                && base.damage_min == template.damage_min
+                && base.damage_max == template.damage_max
+                && base.armor == template.armor
+            {
+                if let Some(stats) = table.id().find(key(level)) {
+                    return Some(stats);
+                }
+            }
+        }
     }
-    table.id().find(key(level))
+    let (_, health) = super::rolled_creature_stats(
+        template.level,
+        template.max_level,
+        template.health,
+        template.max_level_health,
+        level.saturating_sub(template.level),
+    );
+    Some(CreatureLevelStats {
+        id: key(level),
+        entry: template.entry,
+        level,
+        health,
+        damage_min: template.damage_min,
+        damage_max: template.damage_max,
+        armor: template.armor,
+    })
 }
 
 fn select_display(displays: &[CreatureDisplay], roll: u32) -> Option<&CreatureDisplay> {

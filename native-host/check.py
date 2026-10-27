@@ -95,9 +95,22 @@ def check_creature_catalogue(host):
     host.sql(f'INSERT INTO game_creature_display (id,entry,display_id,scale,weight) VALUES ({entry << 3},{entry},100,1,0),({(entry << 3) + 1},{entry},200,2,1)')
     guid = spawn(host, client.guid, entry, 5)
     assert host.rows(f'SELECT health,max_health,armor,display_id,scale_x FROM game_world_entity WHERE guid = {guid}') == [[152,152,50,200,2]]
-    host.sql(f'UPDATE game_creature_template SET health = 250 WHERE entry = {entry}')
-    next_guid = spawn(host, client.guid, entry, 10)
-    assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {next_guid}') == [[1000]]
+    for imported in [True, False]:
+        if not imported:
+            host.sql(f'DELETE FROM game_creature_level_stats WHERE entry = {entry}')
+        for edits, health, damage in [
+            ('damage_min = 40, damage_max = 40', 152, 40),
+            ('level = 11, max_level = 11', 152, 40),
+            ('health = 250, max_level_health = 250', 250, 40),
+        ]:
+            host.sql(f'UPDATE game_creature_template SET {edits} WHERE entry = {entry}')
+            next_guid = spawn(host, client.guid, entry, 10)
+            expected_health = health if imported else health * 4
+            expected_damage = damage if imported else damage * 5 // 2
+            assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {next_guid}') == [[expected_health]]
+            host.call('debug_compute_swing', [next_guid, client.guid])
+            assert host.rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'") == [[expected_damage, expected_damage]]
+        host.sql(f'UPDATE game_creature_template SET level = 10, max_level = 10, health = 152, max_level_health = 152 WHERE entry = {entry}')
 
 
 def check_sessionless_movement(host):

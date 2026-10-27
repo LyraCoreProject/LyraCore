@@ -396,6 +396,19 @@ Core table accessors and row types are named under `crate::tables`, for example
 checks; a Package uses the catalog path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
 of character-keyed tables.
 
+### Creature stat edits
+
+Classic creature templates store base health and melee damage, so Core applies rank scaling.
+vmangos imports store final values, including rank. The presence of imported
+`game_creature_level_stats` rows for an entry preserves that convention independently of template
+values. A Package edit to health, damage, armor or the level range never enables classic rank
+scaling for that entry. Keep these Core-owned rows when editing a template.
+
+When template endpoints still match, Core uses the imported value for the selected level.
+After an edit makes the endpoints differ, Core interpolates the template health endpoints and
+uses its damage and armor directly. Classic imports clear the level rows and keep classic scaling.
+Package-invented templates without imported level rows use the classic convention.
+
 ### Module roots
 
 A Package may name these five roots. Each operation and type is a named declaration or re-export.

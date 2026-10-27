@@ -32,7 +32,8 @@ entry menu. The Host does not decode this table, and its delivery layouts do not
 `game_creature_display` holds weighted display choices by template. Both are new tables, so an
 existing Realm migrates without changing stored template rows. A template stat change takes
 precedence over level rows when its endpoint values no longer match the imported endpoints.
-An authored display or scale change likewise takes precedence over the imported display choices.
+The entry index preserves the imported stat convention even after an edit invalidates the level
+rows; edited values never acquire classic rank multipliers. An authored display or scale change likewise takes precedence over the imported display choices.
 Classic imports without these rows keep their existing rank scaling and display behavior.
 
 ### The three migration rules that have bitten
