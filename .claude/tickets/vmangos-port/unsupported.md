@@ -149,7 +149,7 @@ Nested pools with unequal child limits remain inactive with their definitions an
 ## Scripted creature immunity, Milestone 4 ledger
 
 Decision 6 keeps unsupported scripted immunities disabled. Milestone 4 restores a static immunity
-only when a fully translated unconditional spawn rule clears it with certainty. Telonis 4500
+only when a fully translated unconditional spawn rule clears it with certainty. Overlord Mok'Morokk 4500
 regains static 0x20, unit flag 0x100, and rule 450003 clears it. His NPC immunity remains disabled.
 Every other entry below still omits static 0x20 or 0x40, unit flags 0x100 or 0x200 respectively.
 An entry in both lists loses both translations. The full-world manifest still reports 3,407
@@ -157,8 +157,11 @@ templates with at least one unsupported immunity, and alliance-single reports 1,
 
 Archaedas 2748 uses a C++ AI, so his immunity stays disabled. Arugal 4275 has a spawn rule with
 condition 16255, a source GUID condition that the Module cannot express; his immunity also stays
-disabled. Telonis supplies the tested translated-clear case. These are conservative import
-choices, not proof that the omitted immunity has no gameplay effect.
+disabled. Overlord Mok'Morokk supplies the tested translated-clear case. The Native creation packet contains
+the restored bit (flags 320), followed by a values update clearing it (flags 64). The spawn
+transaction commits without immunity, so this changes the packet sequence but creates no lasting
+server-side immunity. A real-client frame effect has not been checked. Only four templates have any EventAI immunity clear: 1840, 4275, 4500 and 10992.
+The other three fail the unconditional spawn rule. Omitting their immunity can still affect play.
 
 PC immunity, 1167 templates. Reason for every listed entry: the script that clears this immunity is not ported.
 
@@ -222,17 +225,16 @@ The [full-world census](census/creature-ai.md) and
 The [approved sets](approved-sets-m4.md) document the gate. Approval classifies source values;
 it does not promise that each command, condition or target can run in the Module.
 
-Full-world emits 4,798 of 6,179 source events. It excludes 310 rows whose template does not use
-EventAI and drops 1,071 unsupported rules. The importer drops the complete rule on its first
+Full-world emits 4,917 of 6,179 source events. It excludes 310 rows whose template does not use
+EventAI and drops 952 unsupported rules. The importer drops the complete rule on its first
 unsupported command, target, condition or dependency. The following grouped counts describe
 that first refusal, not the number of every unsupported command in the source.
 
 | Finding group | Full-world rules | Alliance-single rules |
 | --- | ---: | ---: |
-| `eventai.broadcast-dependency` | 4 | 0 |
-| `eventai.command` | 541 | 110 |
+| `eventai.command` | 437 | 89 |
 | `eventai.command-condition` | 51 | 11 |
-| `eventai.condition` | 254 | 81 |
+| `eventai.condition` | 250 | 81 |
 | `eventai.encounter` | 69 | 1 |
 | `eventai.event` | 75 | 10 |
 | `eventai.script` | 47 | 24 |
@@ -240,11 +242,12 @@ that first refusal, not the number of every unsupported command in the source.
 | `eventai.target` | 28 | 0 |
 
 The Module cannot express the refused per-command conditions, source/target swaps, several
-friend and map-event selectors, most summons, movement modes, instance states or field mutations.
+friend and map-event selectors, summons with flags, limits or scripts, movement modes,
+instance special states or field mutations.
 These refusals do not substitute a nearby unit or another target. Generic-script refusal reasons
 and unreachable script ids remain in the local Compatibility Manifest.
 
-The translated flee command retains the Module's fixed ten-second flight. The source controls
+The translated flee command emits broadcast 1150 and retains the Module's fixed ten-second flight. The source controls
 its duration through different movement state. `eventai.flee-fixed-duration` reports 1,563
 full-world rules and the alliance count shown in its census. This limitation is explicit.
 
@@ -279,14 +282,18 @@ model choice remains unsupported; no nonzero alternative was observed at this pi
 
 VanCleef's aggro and health-threshold yells, voice sounds and two attacking Blackguards passed
 against actual imported rows. His player-kill yell is imported but was not exercised. Guardian
-creator-GUID and creator-spell client fields are not represented. Zone-wide voice delivery is
-unsupported; the affected broadcast dependency refuses its event.
+creator-GUID and creator-spell client fields are not represented. Zone-wide voice reaches the
+same zone on maps 0/1 and the same map and instance elsewhere, matching the pinned source.
+Dead creatures can deliver death yells; dead players remain unable to speak.
 
-Rajaxx uses the vmangos spawn and evade rules with map condition 509. The classic spawn projection
-is retained only for classic definitions. His instance-counter events and zone-wide voice yell
-remain unsupported. The encounter translator uses vmangos instance field ids and states. It
-refuses classic field aliases, unrelated states and cross-map entries, including alternative
-spawn choices. A translated encounter notification does not install a Package encounter handler.
+Rajaxx's aggro and death rules emit the named Ruins of Ahn'Qiraj encounter notification.
+His kill yell, map-1 spawn line, map-509 spawn faction and evade yell translate. Map conditions
+use source type 33; type 15 is level and remains refused. The classic spawn projection remains
+limited to classic definitions. His enrage spell and emote also translate. The encounter translator
+uses vmangos instance field ids and states. It
+maps source state 0 to reset, and refuses classic field aliases, unrelated special states
+and cross-map entries, including alternative spawn choices. Rajaxx may also spawn on map 1;
+his encounter notifications are eligible only in a map-509 instance. A translated encounter notification does not install a Package encounter handler.
 The missing handlers and additional source C++ encounter effects remain unsupported.
 
 The source's five EventAI display commands request explicit display ids. Four belong to active
