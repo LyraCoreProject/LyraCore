@@ -102,7 +102,9 @@ All seven family censuses were regenerated for both profiles with the pinned sou
 | Durable drink behavior | 1 passed |
 | Additive migration from original M2 Module | Passed with an existing Character and reconnect |
 
-The first chest durable attempt collided with seeded GameObjects. The fixture now replaces the first batch and appends later batches, matching the normal importer path. The corrected test passed twice, including after the final Goober-field change. No unresolved test failure remains.
+The first chest durable attempt collided with seeded GameObjects. The fixture now replaces the first batch and appends later batches, matching the normal importer path. The corrected test passed twice, including after the final Goober-field change. All requested local checks pass.
+
+The final CI snapshot reported one failed `durable (2)` job on PR #814. Its `swing_error` test timed out waiting for bad-facing state 2 and observed no row. The exact test passed in a separate local run, 1 passed in 6.02 seconds. The CI failure's cause remains unverified; it is not classified as pre-existing or flaky. Other CI jobs were still running. No PR watcher or CI rerun was started. The saved job log is `.import/vmangos-m2-review/ci-814-durable-failure.log`.
 
 The new `game_native_player.gossip_root_menu_id` column is end-appended with `#[default(0u32)]`. The migration preflight contained that column addition only. The local HTTP publish used the CLI-equivalent BreakClients migration policy and its preflight token, without a data wipe. SpacetimeDB disconnected the client for the schema update. The Character survived and reconnect succeeded. No stored enum variant, reducer argument or Host delivery layout changed.
 
