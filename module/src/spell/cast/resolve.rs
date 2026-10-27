@@ -257,7 +257,9 @@ fn run_spell_effects(
     let mut item_grants = 0;
     let mut item_refused = false;
     // One hit roll per target for the whole spell (CONTEXT.md "Cast Miss"); never the caster.
-    let rolls_hit = effects.iter().any(|e| e.kind == E_DAMAGE);
+    let rolls_hit = effects
+        .iter()
+        .any(|e| matches!(e.kind, E_DAMAGE | E_WEAPON_STRIKE));
     let mut missed_targets: std::collections::HashMap<u64, bool> = std::collections::HashMap::new();
     for e in effects {
         let points = effect_amount(
