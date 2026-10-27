@@ -1,5 +1,4 @@
-//! Materialize schema defaults for legacy spell INSERTs at SQL execution boundaries.
-//! SpacetimeDB's SQL INSERT requires every column even when migration supplies a default.
+//! SQL INSERT needs explicit values even for columns with migration defaults.
 
 #[must_use]
 pub fn spell_defaults(sql: &str) -> String {
@@ -30,18 +29,17 @@ fn append_statement(output: &mut String, sql: &str) {
         output.push_str(sql);
         return;
     };
-    let defaults: &[(&str, &str)] = match rest[..open].trim() {
-        "game_spell" => &[
-            ("custom_flags", "0"),
-            ("min_target_level", "0"),
-            ("single_target_key", "0"),
-        ],
-        "game_spell_effect" => &[("bonus_coefficient", "-1.0")],
-        _ => {
-            output.push_str(sql);
-            return;
-        }
-    };
+    let table = rest[..open].trim();
+    let defaults: Vec<_> = include_str!("import_sql_defaults.txt")
+        .lines()
+        .filter_map(|line| {
+            let mut fields = line.split_whitespace();
+            let source_table = fields.next()?;
+            let column = fields.next()?;
+            let value = fields.next()?;
+            (source_table == table).then_some((column, value))
+        })
+        .collect();
     let Some(close) = rest.find(')') else {
         output.push_str(sql);
         return;

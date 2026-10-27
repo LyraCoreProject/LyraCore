@@ -35,6 +35,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
     {
         2
     } else if family == 10
+        && family_flags & (0x0a000200 | 0x10000100) == 0
         && ((family_flags & 0x20180400 != 0 && row.number::<u32>("baseLevel")? != 0)
             || (icon == 561 && row.number::<u32>("spellVisual1")? == 5652))
     {
@@ -323,6 +324,34 @@ pub(crate) fn fixture() -> crate::world_source::WorldSource {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn seals_and_blessings_do_not_displace_judgements_on_another_target() {
+        use lyracore_shared::spell_custom::single_target_conflicts;
+        let source = fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!();
+        };
+        connection.execute_batch("UPDATE spell_template SET spellFamilyName=10, spellFamilyFlags=1024, baseLevel=1, spellIconId=10").unwrap();
+        let judgement = read(&source).unwrap().0[0].single_target_key;
+        for earlier_category in [0x0a000200u64, 0x10000100] {
+            connection
+                .execute_batch(&format!(
+                    "UPDATE spell_template SET spellFamilyFlags={}, spellIconId=11",
+                    earlier_category | 1024
+                ))
+                .unwrap();
+            let key = read(&source).unwrap().0[0].single_target_key;
+            assert!(!single_target_conflicts(judgement, key));
+        }
+        connection
+            .execute_batch("UPDATE spell_template SET spellFamilyFlags=1024, spellIconId=12")
+            .unwrap();
+        assert!(single_target_conflicts(
+            judgement,
+            read(&source).unwrap().0[0].single_target_key
+        ));
+    }
 
     #[test]
     fn selected_named_spell_rows_keep_signed_values_and_report_unsupported_scripts_and_masks() {

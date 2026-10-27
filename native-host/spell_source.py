@@ -141,6 +141,36 @@ def check_spell_source_behavior(host):
             assert host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {b}') == [[before_max]], (before_max, host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {b}'))
         host.call('debug_teleport', [b, 0, 8005, 9000, 0, 0])
 
+    delayed = spell(flags=0x80, cast_time_ms=500)
+    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
+    host.call('debug_begin_cast', [a, delayed, b])
+    host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
+    host.wait_until(lambda: auras(delayed), 'completion repeated the cast-start facing check')
+
+    host.sql(f'DELETE FROM game_aura WHERE caster_guid = {a}')
+    for channeled in [0x80, 0]:
+        missile = spell(flags=0xc0, kind=2, amount=1000, coefficient=0, range_yd=1)
+        channel = spell(flags=0x80, kind=0x93, cast_flags=channeled, range_yd=10)
+        host.sql(f'UPDATE game_spell_effect SET target = 0, period_ms = 100, trigger_spell = {missile} WHERE spell_id = {channel}')
+        host.call('debug_teleport', [a, 0, 8000, 9000, 0, 0])
+        host.call('debug_begin_cast', [a, channel, b])
+        host.call('debug_teleport', [a, 0, 8000, 9000, 0, 3.14159265])
+        host.call('debug_teleport', [b, 0, 8005, 9000, 0, 3.14159265])
+        host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
+        host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}')[0][0] >= 2100,
+                        'turning stopped aura-triggered missiles')
+        assert auras(channel), 'turning ended the channel'
+        host.sql(f'DELETE FROM game_aura WHERE spell_id = {channel}')
+
+    area_channel = spell(kind=0x91, amount=1000, coefficient=0, cast_flags=0x80, range_yd=1)
+    host.sql(f'UPDATE game_spell_effect SET target = 5, radius_yd = 10, period_ms = 100 WHERE spell_id = {area_channel}')
+    host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
+    host.call('debug_begin_cast', [a, area_channel, a])
+    host.wait_until(lambda: host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}')[0][0] >= 2100,
+                    'a secondary area recipient broke the self-range channel')
+    assert any(row[1] == b for row in auras(area_channel)), auras(area_channel)
+    host.sql(f'DELETE FROM game_aura WHERE spell_id = {area_channel}')
+
     before = {row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')}
     host.call('debug_spawn_at_feet', [a, 51000, 4])
     wolf = ({row[0] for row in host.rows('SELECT guid FROM game_world_entity WHERE entry = 51000')} - before).pop()
@@ -160,7 +190,15 @@ def check_spell_source_behavior(host):
     persistent = spell(flags=0x400)
     apply(ordinary, source=wolf, target=wolf)
     apply(persistent, source=wolf, target=wolf)
+    player_buff = spell()
+    permanent_buff = spell(duration_ms=4294967295)
+    player_debuff = spell(is_negative='true')
+    for sid in [player_buff, permanent_buff, player_debuff]:
+        apply(sid, target=wolf)
     host.call('debug_engage', [wolf, a])
     host.call('debug_teleport', [a, 0, 9000, 9000, 0, 0])
     host.wait_until(lambda: not auras(ordinary), 'evade did not clear the ordinary aura')
     assert auras(persistent), 'evade cleared the preserved aura'
+    assert auras(player_buff), 'evade cleared a finite player buff'
+    assert not auras(permanent_buff), 'evade kept a permanent player buff'
+    assert not auras(player_debuff), 'evade kept a player debuff'

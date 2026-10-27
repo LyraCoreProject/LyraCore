@@ -152,7 +152,7 @@ pub struct Aura {
     // Unix microseconds; zero means no pending tick.
     #[default(0i64)]
     pub next_tick_micros: i64,
-    // Channel auras target the caster; this guid holds the missile destination.
+    // Cast target for channels; missile target for periodic triggers.
     #[default(0u64)]
     pub channel_target: u64,
     #[default(false)]

@@ -376,11 +376,12 @@ pub(crate) fn aura_apply(
         .filter(&target_guid)
         .find(|a| a.effect_id == e.id && (cross_caster_stack || a.caster_guid == caster_guid));
     let amount_remaining = if e.kind == A_ABSORB { points.max(0) } else { 0 };
-    let channel_target = if e.kind == A_PERIODIC_TRIGGER {
-        cast_target_guid
-    } else {
-        0
-    };
+    let channel_target =
+        if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+            cast_target_guid
+        } else {
+            0
+        };
     // p1 holds linked debuffs, so trigger auras freeze trigger_spell in eff_p1.
     let eff_p1 = if e.kind == A_PERIODIC_TRIGGER || e.kind == A_PROC_TRIGGER {
         e.trigger_spell as i32

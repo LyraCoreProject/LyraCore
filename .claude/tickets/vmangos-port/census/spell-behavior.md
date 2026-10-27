@@ -9,6 +9,7 @@ The Module appends `custom_flags`, `min_target_level` and `single_target_key` to
 and `bonus_coefficient` to `game_spell_effect`. Migration defaults are 0, 0, 0 and -1. The extra
 key preserves the source's family/icon comparison and its Judgement and Polymorph categories
 for single-target auras. It packs the icon in bits 0..31, family in 32..39, and category in 40..47.
+Seal and blessing classification precede Judgement, including overlapping family masks.
 No existing field moves.
 
 | Bit | Source name | Selected spells | Behavior and check |
@@ -16,14 +17,14 @@ No existing field moves.
 | 0x0001 | ALLOW_STACK_BETWEEN_CASTER | 24 | Casters share and refresh one stack. Native `spell-source-behavior` verifies two casters produce one aura with two stacks. |
 | 0x0002 | NEGATIVE | 4 | Forces debuff polarity. The native check verifies the debuff slot range. |
 | 0x0004 | POSITIVE | 5 | Forces buff polarity and wins over NEGATIVE. Unit and native checks cover both bits together. |
-| 0x0008 | CHAN_NO_DIST_LIMIT | 0 | The initial range Gate still applies. Accepted channels, including auras without periodic effects, can remain outside range. The native check compares bounded and unlimited channels. |
+| 0x0008 | CHAN_NO_DIST_LIMIT | 0 | The initial range Gate still applies. Only the channel target supplies the distance check, not other area recipients. Accepted channels, including auras without periodic effects, can remain outside range. The native check compares bounded and unlimited channels. |
 | 0x0010 | FIXED_DAMAGE | 2 | Damage and healing ignore caster bonuses, including explicit coefficients. Critical hits and target mitigation remain. Unit and native checks cover direct and periodic magnitudes. |
 | 0x0020 | IGNORE_ARMOR | 0 | Physical spell damage and weapon strikes skip armor mitigation. The native check compares fixed physical damage with and without this bit. |
-| 0x0040 | BEHIND_TARGET | 0 | The caster must be behind the target. The native check covers both orientations. |
-| 0x0080 | FACE_TARGET | 1016 | A player caster must face the target. The native check covers both orientations. |
+| 0x0040 | BEHIND_TARGET | 0 | At cast start, the caster must be behind the target. Triggered spells and channel ticks bypass this check. |
+| 0x0080 | FACE_TARGET | 1016 | At cast start, a player caster must face the target. Native tests turn during periodic triggers and verify that later missiles still heal. |
 | 0x0100 | SINGLE_TARGET_AURA | 111 | A successful application removes conflicting auras from this caster on other targets. Unit tests cover family/icon and category comparisons; the native check moves the aura between targets. |
 | 0x0200 | AURA_APPLY_BREAKS_STEALTH | 1 | Successful application removes the target's other stealth auras. The native check verifies removal. |
-| 0x0400 | NOT_REMOVED_ON_EVADE | 95 | Evade cleanup preserves the aura. The native check leashes a creature and compares ordinary and preserved auras. |
+| 0x0400 | NOT_REMOVED_ON_EVADE | 95 | Evade preserves this aura and finite positive auras cast by players. The native check compares player buffs, permanent buffs, debuffs and creature buffs. |
 | 0x0800 | SEND_CHANNEL_VISUAL | 17 | Held under decision 11. The Module has no SpellVisual channel-kit catalogue or repeating visual-kit delivery. |
 | 0x1000 | SEPARATE_AURA_PER_CASTER | 3 | Different casters get separate aura rows and slots. The native check verifies both. |
 | 0x2000 | TRIGGER_WEAPON_PROCS | 30 | Held under decision 11. The Module has no weapon-enchant/on-hit dispatcher. Its aura Proc pass does not represent the source item-trigger path. |
@@ -43,7 +44,9 @@ client result 0x2b and confirms that refusal leaves power and auras unchanged.
 
 Classic dry-run SQL keeps its prior bytes. At the SQL execution boundary, the importer fills
 only missing appended fields with their defaults because SpacetimeDB SQL requires all columns.
-The test fixtures use the same compatibility rule. Hand-running legacy SQL with the SpacetimeDB
+The importer and Rust test support call one shared rewriter. Python fixtures derive defaults from
+`crates/lyracore-shared/src/import_sql_defaults.txt`, the same list the Rust rewriter reads.
+The pinned `lyracore` CLI invokes the importer with `--apply`, so it reaches that rewriter. Hand-running legacy SQL with the SpacetimeDB
 CLI requires those appended fields. Old Package Deltas remain valid without rewriting their
 bytes. New Datascript clones carry the extra fields. The Fire Nova fixture changed only by
 adding the four defaults to its claims; its source hash and all earlier claims are unchanged.

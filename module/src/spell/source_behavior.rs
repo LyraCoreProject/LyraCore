@@ -101,10 +101,14 @@ pub(crate) fn remove_auras_on_evade(ctx: &ReducerContext, unit: u64) {
         .by_target()
         .filter(&unit)
         .filter(|a| {
-            spells
-                .spell_id()
-                .find(a.spell_id)
-                .is_none_or(|s| s.custom_flags & custom::NOT_REMOVED_ON_EVADE == 0)
+            let player_buff = a.slot < 32
+                && a.expires_at.to_micros_since_unix_epoch() != i64::MAX
+                && crate::helpers::character_by_guid(ctx, a.caster_guid).is_some();
+            !player_buff
+                && spells
+                    .spell_id()
+                    .find(a.spell_id)
+                    .is_none_or(|s| s.custom_flags & custom::NOT_REMOVED_ON_EVADE == 0)
         })
         .collect();
     shed_auras(ctx, unit, shed);
@@ -116,6 +120,13 @@ pub(crate) fn channel_target_in_range(ctx: &ReducerContext, aura: &Aura) -> bool
         return true;
     };
     if hdr.cast_flags & SPELL_ATTR_CHANNELED == 0 {
+        return true;
+    }
+    // Periodic trigger holders live on the caster and carry the channel target separately.
+    if aura.channel_target != 0
+        && aura.target_guid != aura.channel_target
+        && aura.eff_kind != A_PERIODIC_TRIGGER
+    {
         return true;
     }
     let target = if aura.channel_target != 0 {

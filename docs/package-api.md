@@ -248,6 +248,10 @@ does not fire this hook. `on_cast_resolved` keeps its effect-dispatch contract.
 owning Gate. `Other` preserves a Gate's message when no current caller needs a separate policy.
 `UnlearnedSpell` and `NoLineOfSight` identify the spellbook and targeted visibility Gates.
 
+`actor::CastRefusalKind::TargetLevelTooLow` is an additive refusal kind. It reports a target
+below the spell's `min_target_level`; callers that classify refusals should handle it or keep
+a fallback arm.
+
 `actor::cancel_cast_attempt(ctx, caster_guid, scheduled_id)` cancels only that scheduled cast.
 `actor::expire_cast_attempt(ctx, caster_guid, scheduled_id, deadline_micros)` also requires the
 caller's action deadline to have passed. They return whether they removed the cast and report

@@ -44,53 +44,12 @@ pub(crate) fn resolve_cast_at_typed(
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
 ) -> Result<(), CastGateRefusal> {
-    resolve_cast_with_range_policy(
-        ctx,
-        caster_guid,
-        spell_id,
-        level,
-        target_guid,
-        is_completion,
-        client_initiated,
-        dest,
-        false,
-    )
-}
-
-pub(crate) fn resolve_channel_tick(
-    ctx: &ReducerContext,
-    caster: u64,
-    spell: u32,
-    level: u8,
-    target: u64,
-) -> Result<(), CastGateRefusal> {
-    // The channel holder checked its own range, including custom flags and channel leeway.
-    resolve_cast_with_range_policy(ctx, caster, spell, level, target, false, false, None, true)
-}
-
-#[allow(clippy::too_many_arguments)]
-fn resolve_cast_with_range_policy(
-    ctx: &ReducerContext,
-    caster_guid: u64,
-    spell_id: u32,
-    level: u8,
-    target_guid: u64,
-    is_completion: bool,
-    client_initiated: bool,
-    dest: Option<(f32, f32, f32)>,
-    channel_range_checked: bool,
-) -> Result<(), CastGateRefusal> {
-    let mut hdr = ctx
+    let hdr = ctx
         .db
         .game_spell()
         .spell_id()
         .find(spell_id)
         .ok_or_else(|| format!("unknown spell {spell_id}"))?;
-
-    let effect_range = hdr.range_yd;
-    if channel_range_checked {
-        hdr.range_yd = 0;
-    }
 
     let mut caster = crate::helpers::live_entity(ctx, caster_guid)
         .map_err(|_| format!("caster {caster_guid} not in world"))?;
@@ -105,9 +64,8 @@ fn resolve_cast_with_range_policy(
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
-    // The trigger still needs its range for projectile timing after the channel range Gate.
-    hdr.range_yd = effect_range;
     if !is_completion {
+        check_source_cast_start_position(ctx, &caster, &hdr, target_guid)?;
         check_global_cooldown(ctx, caster_guid)?;
     }
     if effects.iter().any(|e| e.kind == E_DISTRACT) {
@@ -705,8 +663,41 @@ fn check_cast_gates_with_admission(
 ) -> Result<(), CastGateRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    check_source_cast_start_position(ctx, caster, hdr, target_guid)?;
     check_global_cooldown(ctx, caster.guid)?;
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+}
+
+fn check_source_cast_start_position(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    hdr: &Spell,
+    target_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    if target_guid == caster.guid {
+        return Ok(());
+    }
+    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return Ok(());
+    };
+    if caster.is_player()
+        && hdr.custom_flags & custom::FACE_TARGET != 0
+        && !is_facing(caster.x, caster.y, caster.orientation, target.x, target.y)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotInFront,
+            "target must be in front of caster",
+        ));
+    }
+    if hdr.custom_flags & custom::BEHIND_TARGET != 0
+        && !is_behind(caster.x, caster.y, target.x, target.y, target.orientation)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotBehind,
+            "spell must be cast from BEHIND the target",
+        ));
+    }
+    Ok(())
 }
 
 fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
@@ -1050,15 +1041,6 @@ fn check_cast_gate_suffix(
                 check_cast_range("target", dist, hdr.range_yd)?;
             }
             crate::spell::source_behavior::check_target_level(hdr.min_target_level, target.level)?;
-            if caster.is_player()
-                && hdr.custom_flags & custom::FACE_TARGET != 0
-                && !is_facing(caster.x, caster.y, caster.orientation, target.x, target.y)
-            {
-                return Err(CastGateRefusal::other(
-                    CastRefusalReason::NotInFront,
-                    "target must be in front of caster",
-                ));
-            }
         }
     }
 
@@ -1143,9 +1125,7 @@ fn check_cast_gate_suffix(
     }
 
     if target_guid != caster_guid {
-        if hdr.cast_flags & SPELL_ATTR_REQ_BEHIND != 0
-            || hdr.custom_flags & custom::BEHIND_TARGET != 0
-        {
+        if hdr.cast_flags & SPELL_ATTR_REQ_BEHIND != 0 {
             let target = crate::helpers::live_entity(ctx, target_guid)
                 .map_err(|_| format!("spell {spell_id} target {target_guid} not in world"))?;
             if !is_behind(caster.x, caster.y, target.x, target.y, target.orientation) {
