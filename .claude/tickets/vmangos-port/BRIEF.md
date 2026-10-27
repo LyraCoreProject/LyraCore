@@ -390,6 +390,15 @@ importer's `eventai.rs` first, then `research/vmangos-schema.md` §4.
   as unsupported with the reason, before S7a flips the default. Also check the Hallow's End emote
   quests 8353-8360, which lost their requirement.
 
+- **Scripted immunity** (from the Milestone 3 review). vmangos spawns some creatures immune to
+  players or NPCs (static flags 0x20 and 0x40), and scripts clear that later. Milestone 3 left those
+  flags off for parity, and listed every template in `unsupported.md`. Where the translated vmangos
+  scripts set and clear the immunity (for example through MODIFY_FLAGS or a phase change), apply
+  the static flags and let the scripts clear them. Templates with no script that clears the flag
+  stay unflagged and listed. Test with Archaedas 2748 and Arugal 4275, or similar.
+- **Held spell flags.** SEND_CHANNEL_VISUAL (0x0800, 17 spells) and TRIGGER_WEAPON_PROCS (0x2000,
+  30 spells) stay listed in `unsupported.md`. Milestone 4 doesn't own them.
+
 **Milestone 4 handoff:**
 
 - the EventAI and scripts census, compared with classic-db's (rules, subjects, relays);
