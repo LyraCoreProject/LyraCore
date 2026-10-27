@@ -634,7 +634,8 @@ The profile accepts a changed snapshot when its column contract and approved val
 ### NPC Guardians
 
 `E_SUMMON_GUARDIANS` is limited to NPC casters, template-level creatures, a caster-centered
-zero-radius destination and at most 16 creatures per cast. One template-level roll applies to every
+zero-radius destination. A caster with more than 15 Guardians of the summoned entry skips the cast;
+otherwise the full amount is summoned. One template-level roll applies to every
 Guardian in the cast. Guardians inherit their owner's faction.
 They keep their own combat target, assist their owner and attack nearby hostile units. They may
 continue fighting after the owner dies. Losing the owner or moving more than 120 yards from it ends

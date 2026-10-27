@@ -26,7 +26,6 @@ pub(crate) fn check(
         || effect.p0 <= 0
         || effect.radius_yd != 0.0
         || effect.per_level != 0.0
-        || effect.base_points > 16
         || !(0..=1).contains(&effect.die_sides)
         || effect.target != T_SELF
         || effect.p1 != 0
@@ -61,10 +60,10 @@ pub(crate) fn summon(
         .filter(caster_guid)
         .filter(|entity| entity.entry == effect.p0 as u32 && is_guardian(ctx, entity.guid))
         .count();
-    if points > 16 {
-        return Err("guardian summon count exceeds 16".into());
+    if count > 15 {
+        return Ok(());
     }
-    let summons = (points.max(1) as usize).min(16usize.saturating_sub(count));
+    let summons = points.max(1) as usize;
     let level_roll = ctx.random();
     for index in 0..summons {
         super::eventai::place_guardian(
