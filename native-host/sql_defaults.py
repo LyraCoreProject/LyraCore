@@ -9,7 +9,7 @@ for declaration in (Path(__file__).resolve().parents[1] / 'crates/lyracore-share
     DEFAULTS.setdefault(table, []).append((column, value))
 
 
-def spell_defaults(query):
+def insert_defaults(query):
     statements = re.split(r"(;)(?=(?:[^']*'[^']*')*[^']*$)", query)
     for index, statement in enumerate(statements):
         match = re.match(r'\s*INSERT INTO (\w+)\s*\(([^)]*)\)\s*VALUES', statement)

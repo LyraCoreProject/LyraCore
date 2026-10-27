@@ -1,7 +1,7 @@
 //! SQL INSERT needs explicit values even for columns with migration defaults.
 
 #[must_use]
-pub fn spell_defaults(sql: &str) -> String {
+pub fn insert_defaults(sql: &str) -> String {
     let mut output = String::with_capacity(sql.len());
     let mut quoted = false;
     let mut start = 0;
@@ -91,8 +91,8 @@ mod tests {
     #[test]
     fn legacy_batches_preserve_quoted_delimiters_and_explicit_new_values() {
         let sql = "INSERT INTO game_spell (spell_id,name,custom_flags) VALUES (1,'a); ''b',8),(2,'c',16);\nINSERT INTO game_spell_effect (id,kind) VALUES (4,2);SELECT * FROM game_spell";
-        assert_eq!(spell_defaults(sql), "INSERT INTO game_spell (spell_id,name,custom_flags,min_target_level,single_target_key) VALUES (1,'a); ''b',8,0,0),(2,'c',16,0,0);\nINSERT INTO game_spell_effect (id,kind,bonus_coefficient) VALUES (4,2,-1.0);SELECT * FROM game_spell");
-        assert_eq!(spell_defaults(&spell_defaults(sql)), spell_defaults(sql));
+        assert_eq!(insert_defaults(sql), "INSERT INTO game_spell (spell_id,name,custom_flags,min_target_level,single_target_key) VALUES (1,'a); ''b',8,0,0),(2,'c',16,0,0);\nINSERT INTO game_spell_effect (id,kind,bonus_coefficient) VALUES (4,2,-1.0);SELECT * FROM game_spell");
+        assert_eq!(insert_defaults(&insert_defaults(sql)), insert_defaults(sql));
     }
 
     #[test]
@@ -102,7 +102,7 @@ mod tests {
             "INSERT INTO game_spell_chain (spell_id) VALUES (1)",
             "SELECT ';' FROM game_spell",
         ] {
-            assert_eq!(spell_defaults(sql), sql);
+            assert_eq!(insert_defaults(sql), sql);
         }
     }
 
@@ -110,8 +110,8 @@ mod tests {
     fn older_broadcast_rows_are_silent_unless_they_supply_a_sound() {
         let silent =
             "INSERT INTO game_creature_ai_broadcast_text (id,male_text) VALUES (1,'Greeting')";
-        assert_eq!(spell_defaults(silent), "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0)");
+        assert_eq!(insert_defaults(silent), "INSERT INTO game_creature_ai_broadcast_text (id,male_text,sound_id) VALUES (1,'Greeting',0)");
         let audible = "INSERT INTO game_creature_ai_broadcast_text (id,sound_id) VALUES (1,42)";
-        assert_eq!(spell_defaults(audible), audible);
+        assert_eq!(insert_defaults(audible), audible);
     }
 }
