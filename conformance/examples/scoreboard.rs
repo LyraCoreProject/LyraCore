@@ -9,6 +9,8 @@ use lyracore_conformance::{Behavior, FeatureLedger, RealClient};
 mod counts;
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
+#[path = "scoreboard/spells.rs"]
+mod spells;
 use evidence::{Report, State};
 
 fn requests(behaviors: &[&Behavior]) -> Result<BTreeSet<u16>> {
@@ -55,6 +57,7 @@ fn main() -> Result<()> {
     let mut tier1_path = root.join(".lyracore/conformance/tier1.json");
     let mut explicit_tier1 = false;
     let mut audit_path = None;
+    let mut vmangos_path = None;
     let mut arguments = std::env::args().skip(1);
     while let Some(option) = arguments.next() {
         match option.as_str() {
@@ -67,8 +70,13 @@ fn main() -> Result<()> {
                     arguments.next().context("--audit needs a path")?,
                 ));
             }
+            "--vmangos" => {
+                vmangos_path = Some(PathBuf::from(
+                    arguments.next().context("--vmangos needs a path")?,
+                ));
+            }
             "--help" => {
-                println!("scoreboard [--tier1 RESULT.json] [--audit REPORT.json]");
+                println!("scoreboard [--tier1 RESULT.json] [--audit REPORT.json] [--vmangos mangos.sqlite]");
                 return Ok(());
             }
             _ => bail!("unknown option {option}"),
@@ -182,6 +190,7 @@ fn main() -> Result<()> {
             );
         }
     }
+    spells::print(root, vmangos_path.as_deref())?;
     println!("\nOpcode claims and source counts do not establish conformance. Other required rungs remain in the ledger.");
     Ok(())
 }

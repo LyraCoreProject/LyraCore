@@ -205,7 +205,7 @@ a separate count. System totals count shared claims once. The unavailable count 
 patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
 control receipts, tests, comments, imports and explicit empty responses for ignored requests.
 Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
-Neither opcode claims nor these source counts prove conformance. Spell counts arrive in Milestone 3.
+Neither opcode claims nor these source counts prove conformance.
 
 ### Result schema version 1
 
@@ -246,3 +246,41 @@ restores a previously removed allowance. The first committed version establishes
 A shallow checkout fails with an instruction to fetch full history; Rust CI uses `fetch-depth: 0`.
 The scanner uses `cargo metadata --locked`, which can download missing workspace dependency
 sources on a fresh checkout. It never changes the dependency lockfile.
+
+## Trainable spells
+
+The scoreboard finds `mangos.sqlite` below `$HOME/.cache/lyracore-scratch/vmangos-db/`, or accepts
+`--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and `query_only`. A missing file
+prints `Trainable spells: no data` with the expected path and leaves the rest of the scoreboard
+usable. Multiple default copies, unreadable files, malformed schemas and dangling teaching-spell
+references fail. No importer crate, importer output or vmangos rows enter this calculation or git.
+
+For each class, "trainable" is the union of:
+
+- Spells offered by class trainers, `trainer_type = 0`, using `trainer_class` from the latest
+  `creature_template.patch <= 10`, the 1.12 patch. Join direct `npc_trainer.entry` to that creature
+  and `npc_trainer_template.entry` to its `trainer_id`. Keep offers whose inclusive build range
+  contains 5875 and whose required level is at most 60. Pet and profession trainers are excluded.
+- Spells automatically learned on a class skill line, `learn_on_get_skill` 1 or 2, from the latest
+  `skill_line_ability.build <= 5875` per id. The row's `class_mask` must be zero or include that
+  class. Class lines are the three class specializations, plus Rogue poisons and lockpicking.
+  Hunter pet-training lines, weapons, professions and racials are excluded. A talent or quest-only
+  spell without either learning source is outside this denominator.
+
+Use the largest `spell_template.build <= 5875` per entry. Resolve teaching spells through each
+`LEARN_SPELL` effect, raw id 36, to its `effectTriggerSpell` before counting. Count each learned id
+once per class, keeping ranks separate. A spell must have at least one nonzero effect. Every
+nonzero effect must have a supported raw kind; each aura-bearing effect also needs a supported
+aura kind, in all three slots.
+
+`examples/scoreboard/spells.rs` maps raw kinds to the Module's compiled `EffectKind` taxonomy.
+The raw ids and class skill lines follow vmangos at
+[`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77), in
+`src/game/Spells/SpellDefines.h`, `src/game/Spells/SpellAuraDefines.h` and `src/game/SharedDefines.h`.
+The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`, with item casts in
+`module/src/native/cast.rs`, pet feeding in `module/src/creatures/pet_care.rs`, and self-resurrection in `module/src/spell/self_resurrect.rs`. Aura consumers live in
+`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. Generic dummy and script effects,
+unknown kinds, and kinds with no handling path are unsupported. Maintain these mappings when adding
+a supported kind. This is a kind-coverage count: it does not verify import mappings, parameters,
+targeting, triggered spell dependencies, quests, talents or a spell's complete behavior. Only counts
+are printed; the SQLite records stay local.
