@@ -10,8 +10,9 @@ use crate::{
     WorldEntity,
 };
 
-pub(crate) fn runs_eventai(creature: &WorldEntity) -> bool {
-    !creature.is_player() && creature.owner_guid == 0
+pub(crate) fn runs_eventai(ctx: &ReducerContext, creature: &WorldEntity) -> bool {
+    !creature.is_player()
+        && (creature.owner_guid == 0 || crate::creatures::guardian::is_guardian(ctx, creature.guid))
 }
 
 #[table(accessor = game_creature_ai_reset_deferral)]
@@ -72,7 +73,7 @@ crate::game_hook!(on_creature_spawn, fn creature_ai_on_creature_spawn(ctx, paylo
     let Some(creature) = ctx.db.game_world_entity().guid().find(payload.guid) else {
         return;
     };
-    if creature.dead || !runs_eventai(&creature) {
+    if creature.dead || !runs_eventai(ctx, &creature) {
         return;
     }
     reset_creature_lifecycle(ctx, payload.guid);
@@ -104,7 +105,7 @@ crate::game_hook!(on_creature_death, fn creature_ai_on_creature_death(ctx, paylo
 crate::game_hook!(on_death, fn creature_ai_on_unit_death(ctx, payload) {
     if payload.killer_guid != 0 {
         if let Some(killer) = ctx.db.game_world_entity().guid().find(payload.killer_guid) {
-            if runs_eventai(&killer) {
+            if runs_eventai(ctx, &killer) {
                 let mut context = edge_context(
                     ctx,
                     EventKind::OnKill,
@@ -156,7 +157,7 @@ pub(crate) fn eventai_on_spell_hit(
     school_mask: u32,
 ) {
     if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
-        if runs_eventai(&target) {
+        if runs_eventai(ctx, &target) {
             let mut context = edge_context(
                 ctx,
                 EventKind::OnSpellHit,
@@ -172,7 +173,7 @@ pub(crate) fn eventai_on_spell_hit(
         }
     }
     if let Some(caster) = ctx.db.game_world_entity().guid().find(caster_guid) {
-        if runs_eventai(&caster) {
+        if runs_eventai(ctx, &caster) {
             let mut context = edge_context(
                 ctx,
                 EventKind::OnSpellHitTarget,
@@ -198,7 +199,7 @@ pub(crate) fn eventai_on_receive_emote(
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };
-    if creature.dead || !runs_eventai(&creature) {
+    if creature.dead || !runs_eventai(ctx, &creature) {
         return;
     }
     let mut context = edge_context(
@@ -219,7 +220,7 @@ pub(crate) fn eventai_on_evade(ctx: &ReducerContext, creature_guid: u64) {
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return;
     };
-    if creature.dead || !runs_eventai(&creature) {
+    if creature.dead || !runs_eventai(ctx, &creature) {
         return;
     }
     evaluate_edge(
@@ -296,7 +297,7 @@ pub(crate) fn send_relay_ai_event(
         .game_world_entity()
         .guid()
         .find(source_guid)
-        .filter(runs_eventai)
+        .filter(|creature| runs_eventai(ctx, creature))
         .ok_or_else(|| format!("relay AI-event source {source_guid} is unavailable"))?;
     if ctx
         .db
@@ -324,7 +325,7 @@ pub(crate) fn send_relay_ai_event(
         )
         .into_iter()
         .filter(|candidate| {
-            runs_eventai(candidate)
+            runs_eventai(ctx, candidate)
                 && !candidate.dead
                 && (candidate.x - source.x).powi(2)
                     + (candidate.y - source.y).powi(2)
@@ -394,7 +395,7 @@ pub(crate) fn reset_engagement(ctx: &ReducerContext, creature_guid: u64) {
         return;
     };
     crate::creatures::presentation::clear_relay_temporary_faction(ctx, creature_guid);
-    if !runs_eventai(&creature) {
+    if !runs_eventai(ctx, &creature) {
         return;
     }
     super::movement::reset_engagement(ctx, creature_guid);

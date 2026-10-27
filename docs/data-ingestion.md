@@ -630,3 +630,20 @@ with the accepted snapshot are informational and appear in the Source Profile re
 Use the actual `commit` from fetch's `current.json` as `--source-sha`. vmangos apply requires a full
 commit id and records it in `game_import_meta`; it does not substitute the accepted profile commit.
 The profile accepts a changed snapshot when its column contract and approved values pass.
+
+### NPC Guardians
+
+`E_SUMMON_GUARDIANS` is limited to NPC casters, template-level creatures, a caster-centered
+zero-radius destination. A caster with more than 15 Guardians of the summoned entry skips the cast;
+otherwise the full amount is summoned. One template-level roll applies to every
+Guardian in the cast. Guardians inherit their owner's faction.
+They keep their own combat target, assist their owner and attack nearby hostile units. They may
+continue fighting after the owner dies. Losing the owner or moving more than 120 yards from it ends
+the summon. A positive spell duration counts down during combat; zero has no timer. Death leaves a
+non-lootable corpse for 15 seconds. EventAI action 56 removes these Guardians by entry without
+removing ordinary EventAI summons.
+
+The summon expiry table appends `guardian_faction` with a typed `None` default. A Guardian's original
+faction survives EventAI presentation changes and resets. Existing temporary summons
+retain their timer, which restarts while engaged. These rules were derived from `SpellEffects.cpp`,
+`Pet.cpp` and `PetAI.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`.

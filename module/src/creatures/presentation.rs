@@ -59,7 +59,10 @@ pub(crate) fn apply_eventai_instruction(
     let Some(entity) = entities.guid().find(creature_guid) else {
         return false;
     };
-    if entity.is_player() || entity.owner_guid != 0 || entity.dead {
+    if entity.is_player()
+        || (entity.owner_guid != 0 && !super::guardian::is_guardian(ctx, creature_guid))
+        || entity.dead
+    {
         return false;
     }
     let templates = ctx.db.game_creature_template();
@@ -434,7 +437,7 @@ fn clear_if(
     let Some(base) = ctx.db.game_creature_template().entry().find(entity.entry) else {
         return;
     };
-    restore_base(&mut entity, &base);
+    restore_base(ctx, &mut entity, &base);
     entity.update(ctx);
 }
 
@@ -447,7 +450,7 @@ fn project(
     entity.faction_template = if state.has_faction_template_override {
         state.faction_template_override
     } else {
-        base.faction_template
+        super::guardian::faction(ctx, entity.guid).unwrap_or(base.faction_template)
     };
     let display = if state.display_template_override == 0 {
         base.display_id
@@ -473,8 +476,13 @@ fn project(
     entity.unit_flags = project_unit_flags(entity.unit_flags, base.unit_flags, state);
 }
 
-fn restore_base(entity: &mut crate::WorldEntity, base: &crate::CreatureTemplate) {
-    entity.faction_template = base.faction_template;
+fn restore_base(
+    ctx: &ReducerContext,
+    entity: &mut crate::WorldEntity,
+    base: &crate::CreatureTemplate,
+) {
+    entity.faction_template =
+        super::guardian::faction(ctx, entity.guid).unwrap_or(base.faction_template);
     entity.display_id = base.display_id;
     entity.native_display_id = base.display_id;
     entity.mount_display_id = 0;

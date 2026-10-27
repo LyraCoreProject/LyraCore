@@ -28,6 +28,8 @@ pub struct CreatureAiSummonExpiry {
     // Summon guids repeat when the sequence wraps; this id distinguishes their lives.
     #[default(0u64)]
     pub life_seq: u64,
+    #[default(None::<u32>)]
+    pub guardian_faction: Option<u32>,
 }
 
 #[table(accessor = game_creature_ai_summon_origin)]
@@ -293,6 +295,18 @@ pub(crate) fn remove_guardians(
             crate::creatures::despawn_pets(ctx, summoner_guid);
         }
     }
+    let guardians: Vec<_> = ctx
+        .db
+        .game_world_entity()
+        .by_owner_guid()
+        .filter(summoner_guid)
+        .filter(|entity| creature_entry == 0 || entity.entry == creature_entry)
+        .filter(|entity| crate::creatures::guardian::is_guardian(ctx, entity.guid))
+        .map(|entity| entity.guid)
+        .collect();
+    for guid in guardians {
+        crate::creatures::despawn_creature_entity(ctx, guid);
+    }
     Ok(())
 }
 
@@ -320,7 +334,7 @@ fn applied(applied: bool) -> ActionResult {
 
 pub(crate) fn ranged_posture(ctx: &ReducerContext, creature_guid: u64) -> Option<(f32, f32)> {
     let creature = ctx.db.game_world_entity().guid().find(creature_guid)?;
-    if !super::runs_eventai(&creature) {
+    if !super::runs_eventai(ctx, &creature) {
         return None;
     }
     ctx.db
@@ -405,6 +419,7 @@ pub(super) fn claim_summon_sequence(ctx: &ReducerContext, lifetime_ms: u32) -> u
             remaining_ms: lifetime_ms,
             last_checked_ms: timestamp_ms(ctx),
             life_seq: 0,
+            guardian_faction: None,
         })
         .scheduled_id
 }
@@ -424,9 +439,23 @@ pub(super) fn place_summon(
     location: &SummonLocation,
     summoner: &EventAiUnit,
 ) {
+    place_summon_entity(ctx, sequence, guid, entry, location, summoner, None);
+}
+
+fn place_summon_entity(
+    ctx: &ReducerContext,
+    sequence: u64,
+    guid: u64,
+    entry: u32,
+    location: &SummonLocation,
+    summoner: &EventAiUnit,
+    guardian_seed: Option<u32>,
+) {
+    let guardian = guardian_seed.is_some();
     let expiry_table = ctx.db.game_creature_ai_summon_expiry();
     if let Some(mut expiry) = expiry_table.scheduled_id().find(sequence) {
         expiry.creature_guid = guid;
+        expiry.guardian_faction = guardian.then_some(summoner.faction_template);
         // Capture the claim id before re-insertion can assign a different lifetime-check id.
         expiry.life_seq = sequence;
         expiry_table.scheduled_id().update(expiry);
@@ -457,13 +486,17 @@ pub(super) fn place_summon(
         source_guid: 0,
         instance_id: summoner.instance_id,
     };
-    let entity = crate::creatures::build_creature_entity(
+    let mut entity = crate::creatures::build_creature_entity(
         ctx,
         &spawn,
         &template,
-        ctx.random(),
+        guardian_seed.unwrap_or_else(|| ctx.random()),
         summoner.instance_id,
     );
+    if guardian {
+        entity.owner_guid = summoner.guid;
+        entity.faction_template = summoner.faction_template;
+    }
     crate::creatures::insert_creature_entity(ctx, entity);
 }
 
@@ -502,6 +535,26 @@ pub(crate) fn place_temporary_summon(
     entry: u32,
     location: SummonLocation,
 ) -> Result<u64, String> {
+    place_owned_summon(ctx, caster, entry, location, None)
+}
+
+pub(crate) fn place_guardian(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    entry: u32,
+    location: SummonLocation,
+    level_roll: u32,
+) -> Result<u64, String> {
+    place_owned_summon(ctx, caster, entry, location, Some(level_roll))
+}
+
+fn place_owned_summon(
+    ctx: &ReducerContext,
+    caster: &crate::WorldEntity,
+    entry: u32,
+    location: SummonLocation,
+    guardian_seed: Option<u32>,
+) -> Result<u64, String> {
     let summoner_guid = caster.guid;
     let summoner = super::engine::unit_of(caster);
     if ctx
@@ -520,13 +573,23 @@ pub(crate) fn place_temporary_summon(
         return Err("summon location must be finite".to_string());
     }
     let sequence = claim_summon_sequence(ctx, location.lifetime_ms);
-    let guid =
-        summon_guid(entry, sequence).ok_or_else(|| "summon sequence is unavailable".to_string())?;
+    let Some(guid) = summon_guid(entry, sequence) else {
+        release_summon_sequence(ctx, sequence);
+        return Err("summon sequence is unavailable".to_string());
+    };
     if ctx.db.game_world_entity().guid().find(guid).is_some() {
         release_summon_sequence(ctx, sequence);
         return Err(format!("summon guid {guid} is already live"));
     }
-    place_summon(ctx, sequence, guid, entry, &location, &summoner);
+    place_summon_entity(
+        ctx,
+        sequence,
+        guid,
+        entry,
+        &location,
+        &summoner,
+        guardian_seed,
+    );
     super::edges::eventai_on_summoned(ctx, summoner_guid, guid, entry);
     Ok(guid)
 }
@@ -590,7 +653,25 @@ fn apply_summon_expiry(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
         crate::creatures::reset_creature_lifecycle(ctx, expiry.creature_guid);
         return;
     };
-    if creature.dead {
+    if expiry.guardian_faction.is_some()
+        && ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(creature.owner_guid)
+            .is_none_or(|owner| {
+                owner.map_id != creature.map_id
+                    || owner.instance_id != creature.instance_id
+                    || (owner.x - creature.x).powi(2)
+                        + (owner.y - creature.y).powi(2)
+                        + (owner.z - creature.z).powi(2)
+                        > 120.0 * 120.0
+            })
+    {
+        despawn_temporary_summon(ctx, expiry.creature_guid);
+        return;
+    }
+    if creature.dead && expiry.guardian_faction.is_none() {
         despawn_temporary_summon(ctx, expiry.creature_guid);
         return;
     }
@@ -599,14 +680,19 @@ fn apply_summon_expiry(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
     let elapsed_ms = now_ms
         .saturating_sub(expiry.last_checked_ms)
         .min(u64::from(u32::MAX)) as u32;
-    let engaged = crate::combat::is_engaged(ctx, expiry.creature_guid);
+    let engaged =
+        expiry.guardian_faction.is_none() && crate::combat::is_engaged(ctx, expiry.creature_guid);
     let Some(remaining_ms) =
-        summon_lifetime_after(engaged, expiry.lifetime_ms, expiry.remaining_ms, elapsed_ms)
+        (if expiry.guardian_faction.is_some() && !creature.dead && expiry.lifetime_ms == 0 {
+            Some(0)
+        } else {
+            summon_lifetime_after(engaged, expiry.lifetime_ms, expiry.remaining_ms, elapsed_ms)
+        })
     else {
         despawn_temporary_summon(ctx, expiry.creature_guid);
         return;
     };
-    let delay_ms = if engaged {
+    let delay_ms = if engaged || remaining_ms == 0 {
         SUMMON_CHECK_MS
     } else {
         next_check_ms(remaining_ms)
@@ -619,6 +705,7 @@ fn apply_summon_expiry(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
         remaining_ms,
         last_checked_ms: now_ms,
         life_seq: expiry.life_seq,
+        guardian_faction: expiry.guardian_faction,
     });
 }
 
