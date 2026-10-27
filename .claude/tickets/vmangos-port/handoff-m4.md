@@ -1,98 +1,68 @@
-# Milestone 4 review-fix handoff
+# Milestone 4 re-check handoff
 
-The 14 original slices were rebased onto `95396fa20ad9b36cad86a73f8c5330b5f8c30e56` and pushed with leases. The new top slice is [#859](https://github.com/LyraCoreProject/LyraCore/pull/859), `vmangos/s6c11-event-credit-rule-m4`. Only authorized slice and companion branches were pushed. No merge, main update, upstream post, production change or Milestone 5 work occurred. Source behavior was independently derived from individual files at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`; no upstream repository was cloned and no world-data artifact was committed or uploaded.
+The 15 Core slices are based on `e75851923fa0e9b114af16f4482f52e4238c6f24`. Each fix is in its owning slice, and later slices were rebased in order. Only the authorized `vmangos/*` branches and Packages companion branch were pushed, with leases. No main update, merge, upstream post, live Realm operation or Milestone 5 work occurred. Disposable local Realms supplied the runtime evidence.
 
-## Findings and player outcomes
+Source behavior was derived from individual vmangos files at `464179081673cfd240f7ffe7f0daf96bca0b5a70`, fetched through the GitHub API. No vmangos or cmangos repository was cloned, no source code was copied, and no world-data artifact was committed or uploaded. Import plans, SQL, source references and logs remain local under `.import/m4-recheck/`.
 
-| Finding | Owning PR | Commit | Change and evidence |
+## Findings
+
+| Finding | Owning slice | Implementation commit | Outcome |
 | --- | --- | --- | --- |
-| 1 | 859 | `a61a00a601c05bbf4c884bee06ce9a5e89307dcd` | Event gates require emitted credit; ledger and Native normal-objective fallback test. Taming use/unlock remains unsupported as detailed below. |
-| 2 | 829 | `8abfe8ae2cb1eda932240053e14319453aeb3ef2` | Broadcast 1150 accompanies flee; player-facing speech and rout test. |
-| 3 | 841 | `646c43db915b725bbde8cb109128409aad30c983` | Condition 33 maps; reader fixtures and Rajaxx import/Native checks. Zone/death speech prerequisites are in #838. |
-| 4 | 838 | `2f54243bfc0d86372dad9f77de38367a63b301d3` | SQL sound default introduced with the column; both affected durable tests passed on every #838–#843 head. |
-| 5 | 829 / 838 | `8abfe8ae2cb1eda932240053e14319453aeb3ef2 / c9e59d29b7c629f8c8055b390da97a4e141af8c9` | Plain summons, optional target handling and scoped dependencies; placement and appearance tests. |
-| 6 | 841 | `646c43db915b725bbde8cb109128409aad30c983` | State 0 emits Reset; evade notification and not-started mapping tests. Missing Package handlers are not implemented. |
-| 7 | 829 | `8abfe8ae2cb1eda932240053e14319453aeb3ef2` | Random emotes translate; each choice reaches the player-facing World Fake output. |
-| 8 | 827 / Packages 89 | `c308e85d480f096e404c620de25abe5baa441133 / f1e6106e10f17457e7ebe83bb9c136e4996bc9b0` | Exact/base/feature fallback in both repos; 5+6 branch-selection tests. Matching companion branch replaces closed #88. |
-| 9 | 840 / 848 | `960329e7081126c136d490a6e5d3065cbbe1bd8d / f4ebf4ca4de66931686a86f6d902f6d00fe8aa3d` | Correct name, counts and transient packet effect; durable and actual Native checks. |
-| 10 | 836 | `5ae80473d24d7aef91112d04be40f561b5f6a9a3` | Total Guardians capped at 16; repeated-cast durable test. |
-| 11 | 829 | `c60df40a02e839342e479586287205288e7f1072` | All 13 families listed in the error; focused error-output test. |
-| 12 | Packages 89 | `f1e6106e10f17457e7ebe83bb9c136e4996bc9b0` | Restore equip_swap display-id comment; checked against the implementation and Deadmines verifier. |
-| 13 | 827 | `0ad2d7369117fe97b07dd1ee01c7ad2d5ce73171` | Wait for missile impact and check only watched-faction field; reproduction/widened-window checks and full Native suite pass. |
+| 1: Quest gates and command 7 | #859 | `f477b2bf0efca9fb317fcb3b206f950a50ce8f3e`, `b2f04725ce2f377b5148cb63ecbf848543b8e84c`, `9fa0466943a14a56d34b4ba4b1697f41a5f2c387` | 2460 now grants credit after Shenthul receives a salute. 2608 retains its event gate and is accept-only. Distance, group credit and script speech overrides translate; runtime and Native checks pass. |
+| 1: Translation prerequisites | #841 / #844 | `8ae94521ee4a57d95ef74f0e5317ae44ace56528` / `91a948da200d29438408e4248d398e213065a1c4` | Conditions 806 and 3694 use the incomplete quest state. Model bounding radii preserve source distance checks. |
+| 2: Packages Core pin | packages#89 | `718af9160c191b9073d642501f07c658ccd8e41b` | A PR into Packages main keeps the pinned Core revision, including when its head has a paired Core branch. Pairing applies to non-main bases. Seven branch-selection tests pass. |
+| 3: Guardian threshold | #836 | `a9db041810097f26a3bbab5dbcf5a516936e80b1`, `d4f4d83170d5fab9116f4c6fe58bb4ef1d572051` | More than 15 existing Guardians prevents another cast; otherwise the full amount is summoned. Durable tests check 15→16, 15→17 and refusal after each threshold is crossed. |
+| 4: Flee text | #829 | `5fd03d2831f0830480a92f754dad0a847f103116`, `b46eaa51d97fd29ed466c2a129a4cc738df51e05` | Broadcast 1150 follows successful flee. A refused flee produces no speech. Both player-facing World Fake cases pass. |
+| 5: Stored variants and encounter map | #841 | `8ae94521ee4a57d95ef74f0e5317ae44ace56528`, `2bdbbf2860d4ac6d6afd3e851b9a214d3084ff52` | M3 stored rules survive the current Module publish, execute after reconnect, and survive restart alongside new Reset/Rajaxx variants. The map rule now accepts any entry with a spawn on the bound map; runtime notifications still require that map and instance. No Rajaxx/map-1 exception remains. |
+| 6: Summon census | #845 | `96b8d1e8c13e1d62a2713d4bab6845cdca78f2a9` | Production translation determines the count: 154 supported shapes of 197, 149 in emitted rules, 43 refused and five supported shapes without an emitted rule. The census lists every script id and zero-based step. |
+| 7: Naming and tests | #838 / #829 / #841 / #859 | `055d2a6dc51a34114f1db0cdf5789882f88ce6ec` / `5fd03d2831f0830480a92f754dad0a847f103116` / `8ae94521ee4a57d95ef74f0e5317ae44ace56528` / `fcf4fb2c95850eaa52a696baa64c51adf38b14b1` | `insert_defaults` replaces `spell_defaults`; the family test requires a separate `spell` token; Reset uses the production dispatch test, with the test-only helper removed; status and template counts live in the ledger. |
+| 8: CI | #829 / all slices | `b46eaa51d97fd29ed466c2a129a4cc738df51e05` | An intermediate #829 Clippy failure was real: the dispatcher exceeded 200 lines. A focused flee operation fixes it in that slice. The cache test failure reproduces on the feature base; current per-head checks are recorded separately below. |
 
-Plain summons: 157 of 197 command rows have supported shapes, including all 139 cases identified by review. Of these, 149 occur in emitted rules; the others have unsupported surrounding rules or excluded templates. Forty command shapes remain refused. Mor Grayhoof 16044 and Isalien 16045 can summon without a current opponent; Crystal Fang 10376, Defias Dockmaster 6846 and Shy-Rotam 10737 retain their summons. Thor 523 and Dungar Longdrink 352 retain speech and gryphon summons. Sethir 6909 remains refused because his unique-count/radius limit and flags are unsupported. Accepted corpse-lifetime differences are reported for 84 full-world and 17 alliance-single rules.
+The failed reward-request path also returned an offer screen for an incomplete quest. #859 now returns the incomplete quest screen and withholds the reward. The shared Native quest-chain check and actual imported 2460/2608 checks cover this behavior.
 
-Twenty of 21 random-emote commands appear in emitted rules. The pin has 93 targeted-emote commands, not the review's approximate 92. Their timed movement pause, facing and restoration are not represented; all remain refused.
+## Quest outcomes and recount
 
-The condition audit checked types 0, 6, 9, 24, 33 and the -1/-2/-3 boolean operators against pinned `Conditions.h`/`Conditions.cpp`. Type 15 is level and remains refused. The five actual map-condition ids pass through the SQLite reader in tests. All seven Rajaxx rules now translate. The actual-import Native check observes AQ faction 310 and the death yell and voice for both near and distant players in the same instance. World Fake tests cover his bound-map notifications and Wailing Caverns evade Reset signals. Missing Package encounter handlers remain missing: notification translation does not itself reset an implemented encounter's state.
+Quest 2460, The Shattered Salute: accept and an unrelated emote leave it incomplete. Salute 78 to Shenthul 3401 passes condition 806, emits the distance-limited command-7 credit, and allows reward. The actual-import Native test passed. The 20-yard limit includes both units' bounding radii and uses three-dimensional distance. Durable cases cover the radius boundary, an out-of-range failure, group and single-player credit, and unrestricted distance zero.
 
-Overlord Mok'Morokk (4500), not Telonis, is the only template whose unconditional translated spawn clear qualifies for restoration. Native creation sends flags 320, then a values update sends 64; the committed creature already has the immunity bit cleared. This changes the packet sequence but creates no lasting server-side immunity. A real-client frame effect was not checked. Four templates have any EventAI immunity clear: 1840, 4275, 4500 and 10992. The other three do not meet the rule. Full-world still omits at least one immunity on 3,407 templates; alliance-single on 1,022. The full-world lists contain 1,167 player-immunity and 3,264 NPC-immunity omissions.
+Quest 2608, The Touch of Zanzil: accepting and flexing cannot complete it. Condition 3694, chat overrides and command-7 distance/group fields are implemented, but the complete scene remains refused. Persistent emote state 69 and clearing state 0 need a stored animation field and client updates. The four-second move is relative to the player; moves at 14, 20 and 30 seconds require point-movement control, movement options and final orientation. These are absent systems. Consequently its command-7 credit at 33 seconds is not emitted. This is a known completion regression against classic, permitted by the task's accept-only fallback and recorded in [unsupported.md](unsupported.md). No free completion is granted.
 
-## Event-credit outcomes
+The prior ledger had 15 quests refused at command 7, rather than 14: **219, 452, 590, 648, 836, 1173, 2767, 3367, 3382, 3982, 4265, 4901, 5713, 5944, 6523**. All 15 now pass distance/group translation. Nine still have no translated dispatcher: 219, 452, 590, 1173, 3367, 3982, 4265, 4901, 6523. Other commands refuse six: command 34 for 648, 836 and 2767; command flags for 3382; command 20 for 5713; command 71 for 5944. Quest 4265 also has a separate start script without a classic dispatcher. None of these 15 gains a complete emitted grant sequence from this change alone; 2460 is the new working grant.
 
-The [per-quest ledger](event-credit-m4.md) is generated from the scoped production quest and EventAI plans plus pinned source references. Full-world has 176 normal-objective fallbacks, alliance-single 53, and neither keeps an event requirement without emitted credit. These are eligibility results; every quest's complete gameplay has not been exercised. Of the 176, 175 occur in the classic catalogue; the review's 165-playable subset was not independently established.
+The regenerated [event-credit report](event-credit-m4.md) covers 176 full-world candidates: one emitted grant, one retained unsupported gate, and 174 normal-objective fallbacks. The exclusive fallback categories are 11 refused SQL, 61 without dispatch, 39 C++ spell effects, 60 C++ scripts and three unresolved sources (3366, 6847, 6848). Alliance-single has one retained unsupported gate and 52 normal-objective fallbacks. These are production-plan classifications, not proof that all those quests can be played through.
 
-| Exclusive fallback category | Full-world quests |
-| --- | ---: |
-| Refused SQL | 22 |
-| Script without dispatcher | 52 |
-| C++ spell effect | 39 |
-| C++ script reference | 60 |
-| Grant source not located | 3 |
+## EventAI and summon census
 
-The unresolved sources are 3366, 6847 and 6848. A C++ quest constant locates a script but does not prove a reachable grant; the ledger distinguishes that evidence. The raw source has 212 event-marked quests: 35 use area-trigger objectives and 9378 has no imported giver relation, leaving 176 candidates.
+| Profile | Subjects | Rules | Instructions | Relays | Dropped rules | Excluded rules |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Full-world | 3,143 | 4,923 | 5,609 | 32 | 946 | 310 |
+| Alliance-single | 605 | 945 | 1,105 | 12 | 213 | 5,021 |
 
-The twelve Taming the Beast quests are 6061–6064, 6082–6085, 6087–6088 and 6101–6102; 6086 is Training the Beast. The committed Native check accepts imported quest 6085 as a dwarf hunter, receives and returns its supplied rod, rewards the quest and accepts 6086. Earlier prerequisites are staged. Casting the rod instead deletes the item needed for turn-in; the same failure was reproduced on pre-fix `928e3489`, and the affected item-use code is unchanged from feature base. The existing path also ignores the supplied target and does not model item charges. The C++ taming callback is unported. Reward spell 1579 teaches three spells and the existing single-spell reward importer refuses it. Successful taming and unlocking Tame Beast are therefore **not fixed or verified** by this change. The normal-objective fallback is verified.
-
-Quest 2460's Shenthul salute sequence needs condition 806 (quest-incomplete, type 9/value2 1) and command-7 credit limited to 20 yards. Neither is supported. Quest 2608's Doc Mixilpixil event 720702 needs the same incomplete-state condition 3694, then a generic script with chat override, zero-emote clearing and relative movement options. Its credit is command 7 at 33 seconds; command 0 is speech. Both quests use normal objectives now; their authored sequences remain unsupported. No partial sequence was credited as if complete.
-
-## Before and after behavior coverage
-
-The generated [action comparison](behavior-parity-m4.md) compares emitted full-world plans at `928e3489` and after these fixes. “Equivalent” means all classic action keys occur; “reduced” means some occur; “lost” means none occur. GUID rules are grouped with their template and reachable relays are expanded. This is a static inference, not verified gameplay parity: timing, chance, conditions, targets and flags are outside this comparison.
-
-| Behavior | Classic creatures | Before equivalent / reduced / lost | After equivalent / reduced / lost |
-| --- | ---: | --- | --- |
-| All behaviors | 4315 | 499 / 2100 / 1716 | 1047 / 1606 / 1662 |
-| Emotes | 66 | 10 / 9 / 47 | 18 / 10 / 38 |
-| Encounter notifications | 20 | 3 / 7 / 10 | 3 / 7 / 10 |
-| Flags and appearance | 102 | 3 / 0 / 99 | 4 / 0 / 98 |
-| Flee | 1284 | 1248 / 0 / 36 | 1248 / 0 / 36 |
-| Flee text | 1284 | 1 / 0 / 1283 | 1248 / 0 / 36 |
-| Movement and posture | 736 | 8 / 0 / 728 | 8 / 0 / 728 |
-| Other actions | 370 | 46 / 22 / 302 | 46 / 22 / 302 |
-| Phase control | 145 | 7 / 61 / 77 | 7 / 61 / 77 |
-| Quest credit | 12 | 8 / 0 / 4 | 8 / 0 / 4 |
-| Speech | 1938 | 292 / 190 / 1456 | 1513 / 105 / 320 |
-| Spells | 3556 | 637 / 797 / 2122 | 637 / 797 / 2122 |
-| Summons | 26 | 0 / 0 / 26 | 11 / 0 / 15 |
-
-The regenerated [full-world census](census/creature-ai.md) has 3,142 vmangos subjects, 4,917 rules, 7,155 instructions and 27 relays; 952 rules are dropped and 310 excluded. The [alliance-single census](census/creature-ai-alliance-single.md) has 605 subjects, 942 rules, 1,389 instructions and nine relays; 216 rules are dropped and 5,021 excluded. Before the fixes these were 3,056/4,798/5,330/27 and 585/917/1,039/9 respectively.
+The regenerated [full-world census](census/creature-ai.md) and [alliance census](census/creature-ai-alliance-single.md) contain the exact summon list. The former count of 157 wrongly classified three target-10 commands in script 1128901, steps 0, 1 and 2. Those commands were already refused by production translation; the count now uses that translator. The 154 supported shapes do not imply 154 emitted commands. Flee and its speech now form one instruction, which also changes instruction totals.
 
 ## Verification
 
-| Check | Result on corrected code |
+| Check | Current result |
 | --- | --- |
-| Importer suite | 573 passed, 18 ignored; final summon-helper tests 20 passed |
-| Core Module library with debug reducers | 1,572 passed |
-| Shared, protocol, Package delta, test support | All result lines passed; one ignored protocol test |
-| Build-script / Package API lint | 8 / 37 passed |
-| Core workspace Clippy, all targets/features, `-D warnings` | Passed |
+| Importer | 576 passed, 18 ignored |
+| Core Module library | 1,572 passed |
+| Build-script / notification tables / Package API lint | 8 / 1 / 37 passed |
+| Shared, protocol, Package-delta and test-support | Passed; one protocol test ignored |
+| Core workspace Clippy, all targets and features, `-D warnings` | Passed after the speech-parser and flee refactors |
 | Formatting and diff whitespace | Passed |
-| Release Wasm with debug reducers and Package fixtures | Built |
-| Full shared Native suite | All 52 passed with explicit Host and Wasm |
-| Intermediate sound-default durable tests | Both tests passed on all five heads #838, #839, #840, #841 and #843 |
-| Guardian cap | Durable repeated-cast test passed |
-| Scripted immunity | Durable committed-state check and actual-import Native packet check passed |
-| Actual Rajaxx | AQ faction and death speech/voice passed |
-| Actual hunter fallback | Native acceptance, supplied rod, reward and next quest passed; rod use failed as on pre-fix Module |
-| CI branch selection | Core five tests and Packages six tests passed |
-| Deadmines companion | API lint 37 passed; Deadmines choreography and persistent doors passed; release Wasm built. All-Package library: 1,691 passed, two baseline failures. |
+| Python SQL defaults and importer scripts | Passed |
+| Release Wasm with debug reducers and Package fixtures | Built for Core and with the companion Packages |
+| Shared Native suite | All 52 passed using the explicit Host and `--module` |
+| Actual imported rogue quests | 2460 accept/wrong emote/salute/reward passed; 2608 retained gate passed |
+| Affected durable tests | All 21 passed: quest credit 1, EventAI boundaries 4, full-world EventAI 3, Guardians 3, Package-delta references 10 |
+| Deadmines with packages#89 | Choreography passed; doors and completion survived restart; Package API lint 37 passed |
+| Packages branch-selection tests | Seven passed |
+| Existing-data publish | Passed from populated M3 Module to current Module, without clearing data |
 
-Native Host: `/home/computer/LyraCore/.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone`; the full command was `python3 native-host/check.py --host <host> --module <wasm>`. The verified Core Wasm SHA-256 is `8786d001f390547f2270760c47698b718ddae3702e0c89bbc861db5df1a5d308`. The missile test now distinguishes launch from impact and waits for damage from a successful missile. The watched-faction refusal check examines only field 1261, so an unrelated regeneration field update cannot fail it. A widened observation window reproduced the unrelated value update and passed the corrected assertion.
+The Native Host was `/home/computer/LyraCore/.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone`. The current Core Wasm used by the final publish check is SHA-256 `7a865ed9a38333958990eebd383f9a4218fa8c398f4d2581be36b6bf8a38fd2a`. Native protocol checks ran before the final behavior-preserving flee/speech parser refactors; the final Module library, Clippy and durable checks cover those refactors. Results at the stack tip are not separate full-suite runs at each intermediate head.
 
-The corrected Core code passed the suites above; the full importer suite and release build were rerun after the final summon-helper refactor. Intermediate test receipts identify their exact tested heads; subsequent immunity documentation edits leave executable trees unchanged. Original implementation results for all eight actual Hallow's End quests, VanCleef's source encounter and existing-data migration remain historical evidence and were not repeated as part of this review-fix run. No real build-5875 client visual verification was done. No new claim of full-world capacity is made.
+The publish check populated an M3 Realm with legacy `StoredEventAiRule` rows and a character balance. Host preflight returned an automatic migration with `BreakClients` acknowledgement required for appended variants. Publishing with that exact preflight plan retained rows and balance. Reconnected Native clients executed the stored emote rule. New Reset/Rajaxx variants then survived Host restart and another reconnect. No `publish -c`, table clearing or production Realm was used. The acknowledgement contract is documented in `docs/data-ingestion.md`.
 
-The all-Package library failures are `pkg_playerbots::goals::tests::a_despawn_takes_the_quest_log_and_the_corpse_with_it` and `tripwires::native_delivery_write_discipline::writes_maintain_simulation_aoi_and_native_delivery`. The supplied baseline logs reproduce both at Core `f60424db` with Packages `7aff766c`; the current feature base differs from that Core baseline only in BRIEF.md. The current scanner no longer lists the repaired dungeons fixture. Playerbots writes and its corpse assertion remain outside the changed files. All-Package Clippy and the historical addon failure were not rerun in this review-fix run; the green Clippy result above is Core-only.
+The all-Package library run passed 1,691 tests and reproduced two existing playerbot failures: `a_despawn_takes_the_quest_log_and_the_corpse_with_it` and `writes_maintain_simulation_aoi_and_native_delivery`. The prior handoff supplies matching baseline results at Core `f60424db` and Packages `7aff766c`. This run independently confirmed the failure names, unchanged playerbot files, and that Core `f60424db..e7585192` changes only BRIEF.md. The green Clippy result is Core-only. The companion's playerbot integration tests still refer to removed `support::gateway_binary`; branch-selection repair does not repair that separate compatibility issue.
 
 ## Classic byte parity and performance
 
@@ -102,23 +72,25 @@ The all-Package library failures are `pkg_playerbots::goals::tests::a_despawn_ta
 | Alliance-single SQL | `cdd4c4461307d230da5f2c71ae859ab668798cd18fdc9ac49e9bc50f1f2be244` |
 | All 467 reducer batches | `e950ec5870e6d6be57e2c6b83765770318360a68354538ccef18f58d81c89098` |
 
-All three freshly generated artifacts match the required baseline.
+All three freshly generated artifacts match the required hashes.
 
-| Release import | Final seconds | Final peak MiB | Limit seconds / MiB |
+| Release import | Seconds | Peak MiB | Limit seconds / MiB |
 | --- | ---: | ---: | --- |
-| Classic full-world | 9.52 | 530.051 | 14.375 / 587.5 |
-| Classic alliance-single | 8.18 | 346.422 | 12.125 / 475 |
-| vmangos creature-ai full-world | 1.37 | 34.668 | 14.375 / 587.5 |
-| vmangos creature-ai alliance-single | 2.07 | 47.781 | 12.125 / 475 |
+| Classic full-world | 9.74 | 535.414 | 14.375 / 587.5 |
+| Classic alliance-single | 8.59 | 351.426 | 12.125 / 475 |
+| vmangos creature-ai full-world | 1.21 | 34.387 | 14.375 / 587.5 |
+| vmangos creature-ai alliance-single | 1.79 | 47.859 | 12.125 / 475 |
 
-GNU `time -v` measured the final release importer after task builds finished. `/usr/bin/time` was absent, so the distribution binary was extracted under task scratch. All four final measurements pass the fixed wall-time and memory budgets. The vmangos measurements cover creature-ai, not a future all-family import.
+GNU `time -v` measured the release importer after compilation finished. All four measurements pass the fixed budgets. The vmangos measurements cover the creature-ai family. Earlier measurements during compilation exceeded the classic wall-time budget (21.91 and 16.22 seconds); both sets remain in the local logs so the changed load is explicit.
 
-Earlier measurements under memory pressure are retained in `performance.json`: corrected classic full-world took 35.24 s / 430.949 MiB and alliance-single 63.55 s / 346.754 MiB; the matched old binary took 60.59 s / 528.348 MiB and 72.14 s / 345.492 MiB. The machine was swapping with other builds active. Final measurements are in `performance-final.json`; the changed conditions explain why the earlier run was not used to certify the gate.
+## CI classification and limits
 
-## Comment review and remaining limits
+The old #844 `host-tests` failure at `compile_cache.rs:145` (5 versus 6) is a cache insertion-count assertion; its fuel assertion had already passed. The exact failure reproduced using the unchanged feature-base test source and Host lockfile dependency versions in an isolated release test crate. Another run failed at the later insertion-count assertion (8 versus 9). This establishes a pre-existing flaky test, not a new M4 fuel regression. Logs are `compile-cache-base-reproduced-exact.log` and `compile-cache-exact-repetitions.json`. The full Host suite on the base was not rerun.
 
-Comment review passed on the combined Core diff and companion changes, separately from fmt and tests. Changed and retained source/test/script/configuration comments were checked against the code; documentation pointers resolve. The policy-storage contract remains documented, opcode/default comments match their implementations, and the companion retains the equip_swap display-id constraint. Removed fixture narration carried no additional contract.
+An initial #829 Clippy failure was caused by this work and fixed in #829 before the final restack. Pending checks are not treated as passes. Current CI and review states, plus failure logs and any one-time #844 retry, are recorded in `.import/m4-recheck/checks.md` and the final response. No PR is watched.
 
-The 17 SEND_CHANNEL_VISUAL and 30 TRIGGER_WEAPON_PROCS spells remain held. Missing dispatchers, unsupported summon lifetime details, scripted immunities and encounter handlers remain in [unsupported.md](unsupported.md). The Map exception is acknowledged but its implementation belongs to Milestone 5, which has not started. No Package API stop rule was triggered. Exact CI results and review states are recorded per PR below; no PR was watched.
+No real build-5875 client visual check was performed. Missing script dispatchers, encounter handlers, targeted-emote choreography, summon lifetime differences and hunter taming/Tame Beast unlock remain documented in [unsupported.md](unsupported.md). Historical checks of the eight Hallow's End quests and actual Rajaxx speech are prior evidence, not fresh runs in this re-check. The newly executed Native and durable checks above are the verified player outcomes; broader parity remains an inference limited by the ledger.
 
-The final response and ignored `.import/m4-review/checks.md` record every check and review state at the final pushed heads. The matching Packages branch is `vmangos/s6c4-deadmines-verification-m4`, PR #89; GitHub closed #88 during its rename. Packages CI reaches the intended Core branch and its Datascripts jobs pass, but its Module jobs fail compiling playerbots test calls to the unavailable `support::gateway_binary`. Both the test calls and Core test-support source are unchanged from their feature bases. This separate compatibility failure remains unfixed; it is not the old missing GameObject/custom_flags pairing failure.
+## Comment review
+
+Passed separately from tests and formatting. The combined re-check diff and companion action/tests were reviewed with surrounding code, including added, changed and retained comments in source, tests, scripts and configuration. Retained SQL-default and classic quest-gate comments state compatibility constraints; tool annotations and the companion display-id constraint remain intact. Removed fixture comments and the test-only Reset helper carried no lost contract. Documentation pointers resolve. Later speech-parser/flee refactors and this handoff were included in the final review.
