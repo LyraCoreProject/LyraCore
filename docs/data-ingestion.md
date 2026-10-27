@@ -580,3 +580,10 @@ These policies follow `CreatureEventAI::ProcessEvent`, `ProcessAction` and
 [`4641790`](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game).
 The Rust implementation stores LyraCore policies, not source flag numbers. New persisted enum
 variants follow the existing variants, so stored classic rules retain their discriminants.
+
+The published rule stores fieldless selection and execution enums. Command-list boundaries and
+script event policies live in `game_creature_ai_script_policy`, keyed by definition revision and
+source rule id. SpacetimeDB rejects adding payloads to the existing fieldless enums because their
+stored size changes. This separate table preserves existing definitions on publish. An import
+replaces definitions and their policies in one transaction; append batches preserve both. A script
+rule with missing policy data cannot run.

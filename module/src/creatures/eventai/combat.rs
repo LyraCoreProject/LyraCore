@@ -612,7 +612,11 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
             revision: DefinitionRevision {
                 value: row.definition_revision,
             },
-            rules: row.rules,
+            rules: row
+                .rules
+                .into_iter()
+                .filter_map(|rule| rule.restore(ctx, row.definition_revision))
+                .collect(),
         });
     }
     let source_guid = ctx
@@ -641,7 +645,11 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
             revision: DefinitionRevision {
                 value: row.definition_revision,
             },
-            rules: row.rules,
+            rules: row
+                .rules
+                .into_iter()
+                .filter_map(|rule| rule.restore(ctx, row.definition_revision))
+                .collect(),
         });
     }
     EventAiDefinition::compose(creature_guid, rows)

@@ -1,7 +1,5 @@
 use spacetimedb::table;
 
-use super::EventAiRule;
-
 // Retain this flat schema for additive migration; runtime uses CreatureAiDefinition.
 #[table(
     accessor = game_creature_ai_event,
@@ -77,7 +75,7 @@ pub struct CreatureAiDefinition {
     pub creature_entry: u32,
     pub creature_guid: u64,
     pub definition_revision: u64,
-    pub rules: Vec<EventAiRule>,
+    pub rules: Vec<super::stored::StoredEventAiRule>,
 }
 
 #[table(accessor = game_creature_ai_broadcast_text)]

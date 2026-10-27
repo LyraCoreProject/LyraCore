@@ -4,6 +4,7 @@ mod loader;
 mod model;
 mod presentation;
 mod relay;
+mod stored;
 mod tables;
 
 mod combat;

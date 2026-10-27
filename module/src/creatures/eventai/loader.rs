@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use spacetimedb::{reducer, ReducerContext, Table};
 
+use super::stored::game_creature_ai_script_policy;
 use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
@@ -74,12 +75,28 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
         }
     }
     if replace {
+        for policy in ctx.db.game_creature_ai_script_policy().iter() {
+            ctx.db
+                .game_creature_ai_script_policy()
+                .id()
+                .delete(policy.id);
+        }
         for id in table.iter().map(|row| row.id).collect::<Vec<_>>() {
             table.id().delete(id);
         }
     }
     for definition in definitions {
-        table.insert(definition);
+        table.insert(CreatureAiDefinition {
+            id: 0,
+            creature_entry: definition.creature_entry,
+            creature_guid: definition.creature_guid,
+            definition_revision: definition.definition_revision,
+            rules: definition
+                .rules
+                .into_iter()
+                .map(|rule| super::stored::store(ctx, definition.definition_revision, rule))
+                .collect(),
+        });
     }
     super::relay::reap_unused_definitions(ctx);
     Ok(())
@@ -87,7 +104,7 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
 
 fn validate_relay_catalogue_pins(
     ctx: &ReducerContext,
-    definitions: &[CreatureAiDefinition],
+    definitions: &[ParsedDefinition],
 ) -> Result<(), String> {
     let current = super::relay::current_catalogue_version(ctx);
     for definition in definitions {
@@ -126,7 +143,14 @@ pub(crate) fn replace_definition_for_debug(
     load_definition_batch(ctx, packed, true)
 }
 
-fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, String> {
+struct ParsedDefinition {
+    creature_entry: u32,
+    creature_guid: u64,
+    definition_revision: u64,
+    rules: Vec<EventAiRule>,
+}
+
+fn parse_definition_batch(packed: &str) -> Result<Vec<ParsedDefinition>, String> {
     let mut subjects = HashSet::new();
     packed
         .lines()
@@ -145,7 +169,7 @@ fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, Str
         .collect()
 }
 
-fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
+fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     let mut fields = line.splitn(3, '@');
     let subject = fields.next().ok_or("definition subject is missing")?;
     let revision = parse_u64(fields.next().ok_or("definition revision is missing")?)?;
@@ -186,8 +210,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
     {
         return Err("definition rules must have unique ascending source ids".to_string());
     }
-    Ok(CreatureAiDefinition {
-        id: 0,
+    Ok(ParsedDefinition {
         creature_entry,
         creature_guid,
         definition_revision: revision,
@@ -244,14 +267,21 @@ fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRu
     if instructions.is_empty() {
         return Err("rule has no instructions".to_string());
     }
+    let selection = parse_selection(fields[5], instructions.len())?;
+    let execution = parse_execution(fields[6])?;
+    if matches!(selection, InstructionSelection::CommandLists(_))
+        != matches!(execution, ExecutionPolicy::ScriptEvent(_))
+    {
+        return Err("command lists require a script event policy".to_string());
+    }
     Ok(EventAiRule {
         source_rule_id,
         event: parse_event(fields[1])?,
         chance_pct,
         allowed_phases,
         recurrence: parse_recurrence(fields[4])?,
-        selection: parse_selection(fields[5], instructions.len())?,
-        execution: parse_execution(fields[6])?,
+        selection,
+        execution,
         posture,
         instructions,
     })
@@ -1249,11 +1279,21 @@ mod tests {
         ] {
             assert!(
                 parse_rule(&format!(
-                    "7,aggro,100,4294967295,once,{selection},ordinary,phase:1+phase:2"
+                    "7,aggro,100,4294967295,once,{selection},script:0:0:always,phase:1+phase:2"
                 ))
                 .is_err(),
                 "{selection}"
             );
+        }
+    }
+
+    #[test]
+    fn script_selection_and_execution_must_be_loaded_together() {
+        for (selection, execution) in [("all", "script:0:0:always"), ("lists:0:1:", "ordinary")] {
+            assert!(parse_rule(&format!(
+                "7,aggro,100,1,once,{selection},{execution},phase:1"
+            ))
+            .is_err());
         }
     }
 
