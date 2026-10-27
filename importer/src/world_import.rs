@@ -2749,12 +2749,8 @@ fn collect_gameobject_spawns(
     let go_meta: std::collections::HashMap<u64, GoMeta> = go_tmpls
         .iter()
         .map(|row| -> Result<_> {
-            let Ok(entry) = row.numeric_text(got::ENTRY)?.parse::<u64>() else {
-                return Ok(None);
-            };
-            let Ok(raw_type) = row.numeric_text(got::TYPE)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let entry: u64 = row.number(got::ENTRY)?;
+            let raw_type: u32 = row.number(got::TYPE)?;
             let stored_type = match classify_go_type(entry, raw_type) {
                 Some(t) => t,
                 None => {
@@ -2762,26 +2758,26 @@ fn collect_gameobject_spawns(
                     return Ok(None);
                 }
             };
-            let disp: u32 = row.numeric_text(got::DISPLAY_ID)?.parse().unwrap_or(0);
+            let disp: u32 = row.number(got::DISPLAY_ID)?;
             let name = row.text(got::NAME)?.trim().to_string();
-            let data0: u32 = row.numeric_text(got::DATA0)?.parse().unwrap_or(0);
-            let data1: u32 = row.numeric_text(got::DATA1)?.parse().unwrap_or(0);
+            let data0: u32 = row.number(got::DATA0)?;
+            let data1: u32 = row.number(got::DATA1)?;
             let trap_spell_id = if raw_type == 6 {
-                row.numeric_text(got::DATA3)?.parse().unwrap_or(0)
+                row.number(got::DATA3)?
             } else {
                 0
             };
             let trap_cooldown_secs = if raw_type == 6 {
-                row.numeric_text(got::DATA5)?.parse().unwrap_or(0)
+                row.number(got::DATA5)?
             } else {
                 0
             };
             let meeting_stone_area_id = if raw_type == u32::from(GO_MEETINGSTONE) {
-                row.numeric_text(got::DATA2)?.parse().unwrap_or(0)
+                row.number(got::DATA2)?
             } else {
                 0
             };
-            let size: f32 = row.numeric_text(got::SIZE)?.parse().unwrap_or(0.0);
+            let size: f32 = row.number(got::SIZE)?;
             Ok(Some((
                 entry,
                 GoMeta {
@@ -2810,29 +2806,30 @@ fn collect_gameobject_spawns(
     let mut go_whole_map_counts: std::collections::BTreeMap<i64, usize> =
         std::collections::BTreeMap::new();
     for row in parse_table(dump, "gameobject")?.iter() {
-        let map = row.numeric_text(go::MAP)?.parse::<i64>().unwrap_or(-1);
-        let id: u64 = row.numeric_text(go::ID)?.parse().unwrap_or(0);
+        let map = row.number::<i64>(go::MAP)?;
+        let id: u64 = row.number(go::ID)?;
         let Some(meta) = go_meta.get(&id) else {
             continue;
         };
-        let x: f64 = row.numeric_text(go::X)?.parse().unwrap_or(0.0);
-        let y: f64 = row.numeric_text(go::Y)?.parse().unwrap_or(0.0);
-        let z: f64 = row.numeric_text(go::Z)?.parse().unwrap_or(0.0);
+        let x: f64 = row.number(go::X)?;
+        let y: f64 = row.number(go::Y)?;
+        let z: f64 = row.number(go::Z)?;
         if !scope.contains(map, x, y, z) {
             continue;
         }
-        let db_guid: u32 = row.numeric_text(go::GUID)?.parse().unwrap_or(0);
-        let o: f64 = row.numeric_text(go::O)?.parse().unwrap_or(0.0);
+        let db_guid: u32 = row.number(go::GUID)?;
+        let o: f64 = row.number(go::O)?;
         // A zero quaternion is valid packed identity, not a signal to derive rotation from facing.
-        let rot0: f64 = row.numeric_text(go::ROT0)?.parse().unwrap_or(0.0);
-        let rot1: f64 = row.numeric_text(go::ROT1)?.parse().unwrap_or(0.0);
-        let rot2: f64 = row.numeric_text(go::ROT2)?.parse().unwrap_or(0.0);
-        let rot3: f64 = row.numeric_text(go::ROT3)?.parse().unwrap_or(0.0);
+        let rot0: f64 = row.number(go::ROT0)?;
+        let rot1: f64 = row.number(go::ROT1)?;
+        let rot2: f64 = row.number(go::ROT2)?;
+        let rot3: f64 = row.number(go::ROT3)?;
         let initial_state = if dump.kind() == SourceKind::Vmangos {
             if row.number::<u32>("spawn_flags")? & 2 != 0 {
                 continue;
             }
             match row.number::<u8>("state")? {
+                0 if meta.stored_type == GO_CHEST => 0,
                 0 => 1,
                 1 => 0,
                 2 => 2,

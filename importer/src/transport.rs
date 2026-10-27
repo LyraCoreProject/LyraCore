@@ -30,17 +30,8 @@ pub(crate) fn catalogue_sql(
     let template_rows = crate::dump::parse_table(dump, "gameobject_template")?;
     let templates: HashMap<u32, &crate::world_source::Row> = template_rows
         .iter()
-        .map(|row| -> anyhow::Result<_> {
-            Ok(Some((
-                match row.numeric_text(got::ENTRY)?.parse().ok() {
-                    Some(value) => value,
-                    None => return Ok(None),
-                },
-                row,
-            )))
-        })
-        .filter_map(Result::transpose)
-        .collect::<anyhow::Result<_>>()?;
+        .map(|row| Ok((row.number::<u32>(got::ENTRY)?, row)))
+        .collect::<Result<_>>()?;
     let path_ids: HashSet<u32> = paths.rows().iter().map(|row| row.id.id).collect();
     let transports = crate::dump::parse_table(dump, "transports")?;
     if transports.is_empty() {
@@ -50,12 +41,10 @@ pub(crate) fn catalogue_sql(
     let mut warnings = Vec::new();
     for transport in transports.iter() {
         let entry: u32 = transport
-            .numeric_text(tr::ENTRY)?
-            .parse()
+            .number(tr::ENTRY)
             .context("transports has an invalid entry")?;
         let period_ms: u32 = transport
-            .numeric_text(tr::PERIOD)?
-            .parse()
+            .number(tr::PERIOD)
             .with_context(|| format!("transport {entry} has an invalid period"))?;
         let Some(template) = templates.get(&entry) else {
             warnings.push(format!(
@@ -65,8 +54,7 @@ pub(crate) fn catalogue_sql(
         };
         let number = |column: &str| -> Result<u32> {
             template
-                .numeric_text(column)?
-                .parse()
+                .number(column)
                 .with_context(|| format!("transport {entry} template column {column} is invalid"))
         };
         if number(got::TYPE)? != MO_TRANSPORT {
@@ -100,8 +88,7 @@ pub(crate) fn catalogue_sql(
         }
         let map_id = nodes[0].map.id;
         let size: f32 = template
-            .numeric_text(got::SIZE)?
-            .parse()
+            .number(got::SIZE)
             .with_context(|| format!("transport {entry} has an invalid size"))?;
         rows.push(format!(
             "({entry},{},{},{size},{},{path_id},{speed},{accel},{period_ms},{map_id})",

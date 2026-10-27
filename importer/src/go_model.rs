@@ -77,12 +77,8 @@ fn door_templates(
     parse_table(dump, "gameobject_template")?
         .iter()
         .map(|row| -> anyhow::Result<_> {
-            let Ok(entry) = row.numeric_text(got::ENTRY)?.parse::<u64>() else {
-                return Ok(None);
-            };
-            let Ok(raw_type) = row.numeric_text(got::TYPE)?.parse::<u32>() else {
-                return Ok(None);
-            };
+            let entry: u64 = row.number(got::ENTRY)?;
+            let raw_type: u32 = row.number(got::TYPE)?;
             let Some(stored_type) = crate::world_import::classify_go_type(entry, raw_type) else {
                 return Ok(None);
             };
@@ -91,8 +87,8 @@ fn door_templates(
             }
             Ok(Some(DoorTemplate {
                 entry,
-                display_id: row.numeric_text(got::DISPLAY_ID)?.parse().unwrap_or(0),
-                size: row.numeric_text(got::SIZE)?.parse().unwrap_or(0.0),
+                display_id: row.number(got::DISPLAY_ID)?,
+                size: row.number(got::SIZE)?,
             }))
         })
         .filter_map(Result::transpose)

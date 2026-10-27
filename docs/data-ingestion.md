@@ -75,7 +75,8 @@ appear in the Compatibility Manifest. Item-container and disenchant tables have 
 import path; the manifest counts them as unsupported.
 
 The gameobjects import selects template patches and spawn ranges, skips disabled spawns, and
-translates source READY/ACTIVE states to the Module's closed/open states. Native packets convert
+translates source READY/ACTIVE states to the Module's closed/open states. A source ACTIVE chest
+starts lootable because vmangos tracks its loot state separately from its animation state. Native packets convert
 these back to the client's numbering. The eight authored gather entries retain their skill and
 item rules; real type-25 fishing holes remain unsupported. Game-event schedules, pool selection,
 remaining spawn flags, animation, visibility, respawn ranges and script names appear in the
