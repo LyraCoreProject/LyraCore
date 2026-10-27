@@ -76,16 +76,23 @@ jobs:
         timeout-minutes: 2
         env:
           BRANCH: ${{ github.head_ref || github.ref_name }}
+          BASE_BRANCH: ${{ github.base_ref }}
         run: |
-          if paired=$(git ls-remote --exit-code --heads https://github.com/LyraCoreProject/packages "refs/heads/$BRANCH"); then
-            echo "ref=${paired%%[[:space:]]*}" >> "$GITHUB_OUTPUT"
-          else
-            status=$?
-            if [ "$status" -ne 2 ]; then
-              exit "$status"
-            fi
-            echo "ref=main" >> "$GITHUB_OUTPUT"
+          candidates=("$BRANCH" "$BASE_BRANCH")
+          if [[ "$BRANCH" == vmangos/* ]]; then
+            candidates+=(feat/vmangos-world-data)
           fi
+          for candidate in "${candidates[@]}"; do
+            [ -n "$candidate" ] || continue
+            if paired=$(git ls-remote --exit-code --heads https://github.com/LyraCoreProject/packages "refs/heads/$candidate"); then
+              echo "ref=${paired%%[[:space:]]*}" >> "$GITHUB_OUTPUT"
+              exit 0
+            else
+              status=$?
+              [ "$status" -eq 2 ] || exit "$status"
+            fi
+          done
+          echo "ref=main" >> "$GITHUB_OUTPUT"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           repository: LyraCoreProject/packages
