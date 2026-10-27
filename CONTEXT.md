@@ -21,7 +21,7 @@ entry in both files.
 
 **D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
-**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
+**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages)
 
 **F** [Fake](CORE_TERMS.md#fake) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Foreground Action](#bots) · [Fuel Budget](#runtime-scripts)
 
@@ -43,7 +43,7 @@ entry in both files.
 
 **R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Presence](#retired-terms) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Recovery Attempt](#bots) · [Recovery Scan](#bots) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#retired-terms) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
-**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Shard Boundary](#retired-terms) · [Shard Map](#retired-terms) · [Signature](#guilds) · [Solo Target Claim](#bots) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Strategy](#bots) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Shard Boundary](#retired-terms) · [Shard Map](#retired-terms) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Solo Target Claim](#bots) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Strategy](#bots) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
 **T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Ticket](#working-method) · [Tracer](#working-method) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#retired-terms) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
@@ -83,13 +83,15 @@ creature dependencies owned by one World Import Profile. Accepted EventAI summon
 summoned templates into the scope, to a fixpoint. It decides spatial import membership for dump,
 terrain, navigation, and vmap modes.
 
-**EventAI Source Profile**:
-A named, pinned EventAI input contract. It binds exact decompressed SQL bytes, the source loader,
-source censuses, and approved compatibility results.
+**Source Profile**:
+A named input contract for a World Source. It defines the columns, types and behavior values an
+import accepts. The vmangos contract reports count changes without using them to admit an import.
+The classic-db contract also pins source bytes and counts.
+_Avoid_: EventAI Source Profile
 
 **Compatibility Manifest**:
-The complete EventAI import account for one World Import Scope. It records each source value and
-dependency path as emitted, normalized, excluded, dropped, or unapproved. An unapproved result is a
+The import account for one World Import Scope. It records source values, dependencies and omissions
+as emitted, normalized, excluded, dropped, unsupported or unapproved. An unapproved result is a
 Refusal for apply and remains visible in dry run.
 
 **Encounter Binding**:

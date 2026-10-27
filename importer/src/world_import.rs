@@ -4009,9 +4009,6 @@ fn vmangos_eventai_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result
         "id,x,y,z,orientation,lifetime_ms",
         &eventai.summon_rows,
     );
-    if args.apply {
-        bail!("vmangos creature-ai apply awaits its Source Profile gate");
-    }
     Ok(DumpPlan {
         stmts,
         stamps: vec![("creature-ai", eventai.row_count())],
@@ -4160,6 +4157,12 @@ pub(crate) fn run(
 }
 
 fn emit_plan(dump: &impl TableRows, args: &WorldImportArgs, plan: &DumpPlan) -> Result<()> {
+    if let Some(profile) = dump.source_profile_report() {
+        eprintln!(
+            "World Source Profile\n{}",
+            serde_json::to_string_pretty(&profile)?
+        );
+    }
     if let Some(manifest) = &plan.world_source_manifest {
         eprintln!("World Source Compatibility Manifest\n{manifest}");
     }

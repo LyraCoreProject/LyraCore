@@ -188,7 +188,9 @@ impl Row {
 
 pub(crate) enum WorldSource {
     ClassicDb(crate::dump::ParsedDump),
+    #[cfg(test)]
     Vmangos(Connection),
+    ProfiledVmangos(Connection, crate::vmangos_profile::SourceProfile),
 }
 
 impl WorldSource {
@@ -203,15 +205,28 @@ impl WorldSource {
                         .with_context(|| format!("open World Source {}", path.display()))?;
                 connection.pragma_update(None, "trusted_schema", false)?;
                 connection.pragma_update(None, "query_only", true)?;
-                Ok(Self::Vmangos(connection))
+                Ok(Self::ProfiledVmangos(
+                    connection,
+                    crate::vmangos_profile::SourceProfile::load()?,
+                ))
             }
+        }
+    }
+
+    fn connection(&self) -> Option<&Connection> {
+        match self {
+            Self::ClassicDb(_) => None,
+            #[cfg(test)]
+            Self::Vmangos(connection) => Some(connection),
+            Self::ProfiledVmangos(connection, _) => Some(connection),
         }
     }
 
     pub(crate) fn row_count(&self, table: &str) -> Result<usize> {
         match self {
             Self::ClassicDb(dump) => Ok(dump.rows(table)?.len()),
-            Self::Vmangos(connection) => {
+            _ => {
+                let connection = self.connection().expect("vmangos source has a connection");
                 check_table(connection, table)?;
                 connection
                     .query_row(
@@ -230,28 +245,44 @@ impl TableRows for WorldSource {
     fn kind(&self) -> SourceKind {
         match self {
             Self::ClassicDb(_) => SourceKind::ClassicDb,
-            Self::Vmangos(_) => SourceKind::Vmangos,
+            _ => SourceKind::Vmangos,
         }
     }
 
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
             Self::ClassicDb(dump) => dump.rows(table),
-            Self::Vmangos(connection) => read_rows(connection, table, None).map(Cow::Owned),
+            #[cfg(test)]
+            Self::Vmangos(connection) => read_rows(connection, table, None, None).map(Cow::Owned),
+            Self::ProfiledVmangos(connection, profile) => {
+                read_rows(connection, table, None, Some(profile)).map(Cow::Owned)
+            }
         }
     }
     fn columns(&self, table: &str, columns: &[&str]) -> Result<Cow<'_, [Row]>> {
         match self {
             Self::ClassicDb(dump) => dump.rows(table),
+            #[cfg(test)]
             Self::Vmangos(connection) => {
-                read_rows(connection, table, Some(columns)).map(Cow::Owned)
+                read_rows(connection, table, Some(columns), None).map(Cow::Owned)
+            }
+            Self::ProfiledVmangos(connection, profile) => {
+                read_rows(connection, table, Some(columns), Some(profile)).map(Cow::Owned)
             }
         }
     }
+    fn source_profile_report(&self) -> Option<serde_json::Value> {
+        match self {
+            Self::ProfiledVmangos(_, profile) => Some(profile.report()),
+            _ => None,
+        }
+    }
+
     fn source_hash(&self) -> Result<String> {
         match self {
             Self::ClassicDb(dump) => dump.source_hash(),
-            Self::Vmangos(connection) => {
+            _ => {
+                let connection = self.connection().expect("vmangos source has a connection");
                 let path = connection
                     .path()
                     .filter(|path| !path.is_empty())
@@ -262,8 +293,16 @@ impl TableRows for WorldSource {
     }
 }
 
-fn read_rows(connection: &Connection, table: &str, requested: Option<&[&str]>) -> Result<Vec<Row>> {
+fn read_rows(
+    connection: &Connection,
+    table: &str,
+    requested: Option<&[&str]>,
+    profile: Option<&crate::vmangos_profile::SourceProfile>,
+) -> Result<Vec<Row>> {
     check_table(connection, table)?;
+    if let Some(profile) = profile {
+        profile.check_table(connection, table)?;
+    }
     let mut metadata =
         connection.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY pk")?;
     let metadata = metadata
@@ -340,8 +379,12 @@ fn read_rows(connection: &Connection, table: &str, requested: Option<&[&str]>) -
     if ids.iter().all(|&id| id == 0) {
         return Ok(selected);
     }
-    let conditions =
-        crate::source_selection::static_conditions(&read_rows(connection, "conditions", None)?)?;
+    let conditions = crate::source_selection::static_conditions(&read_rows(
+        connection,
+        "conditions",
+        None,
+        profile,
+    )?)?;
     Ok(selected
         .into_iter()
         .zip(ids)
@@ -529,16 +572,21 @@ mod tests {
         connection.execute_batch("CREATE TABLE example (entry INTEGER); INSERT INTO example VALUES (42); CREATE VIEW indirect AS SELECT * FROM example;").unwrap();
         drop(connection);
         let source = WorldSource::open(&path, SourceKind::Vmangos).unwrap();
+        assert!(source
+            .rows("example")
+            .unwrap_err()
+            .to_string()
+            .contains("unapproved source table"));
+        assert!(source.rows("indirect").is_err());
+        let connection = source.connection().unwrap();
         assert_eq!(
-            source.rows("example").unwrap()[0]
-                .number::<u32>("entry")
+            connection
+                .query_row("SELECT entry FROM example", [], |row| row
+                    .get::<_, u32>("entry"))
                 .unwrap(),
             42
         );
-        assert!(source.rows("indirect").is_err());
-        if let WorldSource::Vmangos(connection) = source {
-            assert!(connection.execute("DELETE FROM example", []).is_err());
-        }
+        assert!(connection.execute("DELETE FROM example", []).is_err());
         std::fs::remove_file(path).unwrap();
     }
 
@@ -565,5 +613,19 @@ mod tests {
             .number::<u8>("number")
             .is_err());
         assert!(Cell::try_from(Value::Blob(vec![1])).is_err());
+    }
+
+    #[test]
+    fn profiled_reads_reject_unapproved_conditions_before_row_selection() {
+        let connection = Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE conditions (condition_entry INTEGER, type INTEGER, value1 INTEGER, value2 INTEGER, value3 INTEGER, value4 INTEGER, flags INTEGER); INSERT INTO conditions VALUES (1,999,0,0,0,0,0);").unwrap();
+        let source = WorldSource::ProfiledVmangos(
+            connection,
+            crate::vmangos_profile::SourceProfile::load().unwrap(),
+        );
+        let error = source.rows("conditions").unwrap_err().to_string();
+        let finding: serde_json::Value = serde_json::from_str(&error).unwrap();
+        assert_eq!(finding["table"], "conditions");
+        assert_eq!(finding["values"], serde_json::json!([999]));
     }
 }
