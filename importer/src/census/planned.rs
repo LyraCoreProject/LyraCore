@@ -15,6 +15,7 @@ struct TableCount {
     per_entry: BTreeMap<String, usize>,
     per_map: BTreeMap<u32, usize>,
     skill_offers: usize,
+    npc_flags: BTreeMap<String, u32>,
     quest_bands: [usize; 3],
 }
 type Records = BTreeMap<String, TableCount>;
@@ -53,6 +54,11 @@ fn records(statements: &[String]) -> Result<Records> {
                         .collect::<BTreeMap<_, _>>();
                     let count = output.entry(table.to_string()).or_default();
                     count.rows += 1;
+                    if table == "game_creature_template" {
+                        count
+                            .npc_flags
+                            .insert(fields["entry"].clone(), fields["npc_flags"].parse()?);
+                    }
                     if table == "game_trainer_spell"
                         && fields
                             .get("learn_skill_line")
@@ -86,6 +92,14 @@ fn records(statements: &[String]) -> Result<Records> {
 
 fn key_columns(table: &str) -> Result<&'static [&'static str]> {
     Ok(match table {
+        "game_creature_template"
+        | "game_creature_level_stats"
+        | "game_creature_display"
+        | "game_creature_spawn" => &["entry"],
+        "game_creature_waypoint" => &["creature_guid"],
+        "game_creature_population" => &["population_id"],
+        "game_creature_population_member" => &["source_guid"],
+        "game_creature_cast" | "game_creature_spell" => &["creature_entry"],
         "game_gameobject_template"
         | "game_gameobject_trap"
         | "game_meeting_stone"
@@ -161,6 +175,24 @@ pub(super) fn run(
     let after_plan = census_plan(&vmangos, args)?;
     let mut before = records(&before_plan.stmts)?;
     let mut after = records(&after_plan.stmts)?;
+    if family == "creatures" {
+        for (records, plan) in [(&mut before, &before_plan), (&mut after, &after_plan)] {
+            let count = records.entry("game_creature_spawn".into()).or_default();
+            for row in plan.spawn_batches.iter().flat_map(|batch| batch.split(';')) {
+                let fields: Vec<_> = row.split(',').collect();
+                let entry = fields[1].to_string();
+                let map = fields[2].parse()?;
+                *count.per_map.entry(map).or_default() += 1;
+                *count.per_entry.entry(entry.clone()).or_default() += 1;
+                count.keys.insert(entry);
+                count.rows += 1;
+            }
+            anyhow::ensure!(
+                count.rows == plan.spawn_row_count,
+                "creature census differs from reducer batches"
+            );
+        }
+    }
     if family == "gameobjects" {
         for (records, plan) in [(&mut before, &before_plan), (&mut after, &after_plan)] {
             let count = records.entry("game_gameobject".into()).or_default();
@@ -232,8 +264,17 @@ pub(super) fn run(
             ids(before_keys.difference(after_keys).cloned())
         )?;
     }
+    if family == "creatures" {
+        let old = &before["game_creature_waypoint"];
+        let new = &after["game_creature_waypoint"];
+        writeln!(output, "\nWaypoint points {} → {}; {} creature GUIDs removed, {} added. Source path membership and point counts differ; vmangos uses spawn paths before template paths and emits only movement type 2. Classic path selection is unchanged.",
+            old.rows, new.rows, old.keys.difference(&new.keys).count(), new.keys.difference(&old.keys).count())?;
+    }
     explain(&mut output, family, &vmangos)?;
     floors(&mut output, family, &before, &after)?;
+    if family == "creatures" {
+        creature_coverage(&mut output, &classic, &vmangos, args, &before, &after)?;
+    }
     if let Some(manifest) = after_plan.world_source_manifest {
         let mut manifest: serde_json::Value = serde_json::from_str(&manifest)?;
         if let Some(findings) = manifest["findings"].as_array_mut() {
@@ -249,8 +290,107 @@ pub(super) fn run(
     Ok(output)
 }
 
+fn creature_coverage(
+    output: &mut String,
+    classic: &WorldSource,
+    vmangos: &WorldSource,
+    args: &WorldImportArgs,
+    before: &Records,
+    after: &Records,
+) -> Result<()> {
+    writeln!(output, "\n## Spawn candidate coverage\n\nCandidates include every population choice, including inactive event and unsupported nested-pool positions. These are upper bounds on live coverage. A complete Realm import is still required to verify live floors.\n\n| Service | Floor | Classic candidates with service / flagged | vmangos candidates with service / flagged |\n| --- | ---: | ---: | ---: |")?;
+    let populations = [
+        crate::creature_population::collect(classic, &args.scope)?,
+        crate::creature_population::collect(vmangos, &args.scope)?,
+    ];
+    for (family, table, flag, floor) in [
+        ("items", "game_npc_vendor", 4, "VENDOR_COVERAGE"),
+        ("trainers", "game_trainer_spell", 16, "TRAINER_COVERAGE"),
+        ("quests", "game_creature_quest", 2, "QUESTGIVER_COVERAGE"),
+    ] {
+        let mut values = Vec::new();
+        for (index, (source, records)) in [(classic, before), (vmangos, after)]
+            .into_iter()
+            .enumerate()
+        {
+            let mut service_args = args.clone();
+            service_args.family = Some(family.into());
+            let service = records_of_service(source, &service_args, table)?;
+            let flagged: BTreeSet<_> = records["game_creature_template"]
+                .npc_flags
+                .iter()
+                .filter(|(entry, bits)| {
+                    **bits & flag != 0
+                        && populations[index]
+                            .referenced_entries
+                            .contains(&entry.parse::<u64>().unwrap())
+                })
+                .map(|(entry, _)| entry.clone())
+                .collect();
+            values.push(format!(
+                "{} / {}",
+                flagged.intersection(&service).count(),
+                flagged.len()
+            ));
+        }
+        writeln!(
+            output,
+            "| {family} | {} | {} | {} |",
+            super::floor(floor)?,
+            values[0],
+            values[1]
+        )?;
+    }
+    for (label, records) in [("Classic", before), ("vmangos", after)] {
+        let spawns = &records["game_creature_spawn"];
+        writeln!(output, "\n{label} spawn positions by map: {:?}. The Deadmines floor is {} positions; the continent floor is {}. Population limits and events reduce live counts.", spawns.per_map, super::floor("DEADMINES_CREATURE_SPAWNS")?, super::floor("CONTINENT_SPAWNS")?)?;
+    }
+    Ok(())
+}
+
+fn records_of_service(
+    source: &WorldSource,
+    args: &WorldImportArgs,
+    table: &str,
+) -> Result<BTreeSet<String>> {
+    let plan = census_plan(source, args)?;
+    Ok(records(&plan.stmts)?
+        .get(table)
+        .map_or_else(BTreeSet::new, |count| {
+            count
+                .keys
+                .iter()
+                .map(|key| key.split(':').next().unwrap().to_string())
+                .collect()
+        }))
+}
+
 fn explain(output: &mut String, family: &str, vmangos: &WorldSource) -> Result<()> {
     writeln!(output, "\n## Differences\n")?;
+    if family == "creatures" || family == "casts" {
+        for table in [
+            "creature_template",
+            "creature",
+            "creature_spells",
+            "creature_movement",
+            "creature_movement_template",
+            "pool_template",
+            "game_event_creature",
+            "creature_groups",
+        ] {
+            writeln!(
+                output,
+                "- `{table}`: {} source rows, {} selected rows.",
+                vmangos.row_count(table)?,
+                vmangos.rows(table)?.len()
+            )?;
+        }
+        writeln!(output, "- Patch ranges, disabled placements and profile boundaries change spawn membership. The `id` through `id5` columns supply equal entry choices. Classic spawn groups have no source counterpart; vmangos retains pools and signed event membership.
+- Creature health, melee damage and armor come from selected class-level stats and template multipliers. Rank rates default to one in vmangos. Imported level rows prevent the Module from adding its classic rank multipliers. Client display scales resolve zero template scales; source weights select a display on each spawn.
+- The cast family joins creature spell-list links to eight slots. Its first spell supplies the cast row, with later spells using the existing rotation model. Slot target, chance, timing and script detail remain unsupported.
+- `audit-creature-ids.py` reports source GUID counts in each reserved band. The broad curated interval uses a different key space from spawn GUIDs.
+- Source behavior reference: `Creature.cpp`, `CreatureDefines.h` and `World.cpp` at vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`. EventAI dependency closure remains due in S6.")?;
+    }
     if family == "gossip" {
         for table in [
             "broadcast_text",

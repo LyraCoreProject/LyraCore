@@ -2,9 +2,10 @@ use std::collections::{BTreeMap, BTreeSet, HashSet};
 
 use anyhow::{bail, Context, Result};
 
-use crate::dump::{cr, field, parse_table, sql_str};
+use crate::dump::{cr, parse_table, sql_str};
 use crate::world_import::{creature_row_kept_in_scope, world_guid, CreatureSpawnRow};
 use crate::world_import_scope::WorldImportScope;
+use crate::world_source::SourceKind;
 
 pub(crate) struct PopulationPlan {
     pub(crate) spawns: Vec<CreatureSpawnRow>,
@@ -13,6 +14,7 @@ pub(crate) struct PopulationPlan {
     pub(crate) referenced_entries: HashSet<u64>,
     pub(crate) conditional_spawns: usize,
     pub(crate) event_spawns: usize,
+    pub(crate) unsupported_pools: Vec<u64>,
 }
 
 impl PopulationPlan {
@@ -50,9 +52,8 @@ fn number<T: std::str::FromStr>(
     column: &str,
     table: &str,
 ) -> Result<T> {
-    field(row, column)?
-        .parse()
-        .map_err(|_| anyhow::anyhow!("{table}: invalid column {column} in row {row:?}"))
+    row.number(column)
+        .with_context(|| format!("{table}.{column}"))
 }
 
 fn source_groups(dump: &(impl crate::dump::TableRows + ?Sized)) -> Result<BTreeMap<u64, Group>> {
@@ -127,6 +128,8 @@ fn flatten_pool(
     id: u64,
     pools: &BTreeMap<u64, Pool>,
     visiting: &mut BTreeSet<u64>,
+    allow_dormant: bool,
+    dormant: &mut bool,
 ) -> Result<BTreeMap<u64, u32>> {
     let pool = pools
         .get(&id)
@@ -137,20 +140,26 @@ fn flatten_pool(
     let mut members = pool.members.clone();
     if !pool.children.is_empty() {
         if pool.limit != 1 || !members.is_empty() {
-            bail!("creature pool {id}: unsupported nested limits or direct members");
+            if !allow_dormant {
+                bail!("creature pool {id}: unsupported nested limits or direct members");
+            }
+            *dormant = true;
         }
         let mut size = None;
         for &(child, chance) in &pool.children {
             let child_pool = pools
                 .get(&child)
                 .with_context(|| format!("missing pool_template {child}"))?;
-            let leaves = flatten_pool(child, pools, visiting)?;
+            let leaves = flatten_pool(child, pools, visiting, allow_dormant, dormant)?;
             if chance != 0
                 || child_pool.limit != 1
                 || leaves.values().any(|chance| *chance != 0)
                 || size.is_some_and(|size| size != leaves.len())
             {
-                bail!("creature pool {id}: nested choices are not equal single selections");
+                if !allow_dormant {
+                    bail!("creature pool {id}: nested choices are not equal single selections");
+                }
+                *dormant = true;
             }
             size = Some(leaves.len());
             for (guid, chance) in leaves {
@@ -169,7 +178,8 @@ fn add_legacy_pools(
     groups: &mut BTreeMap<u64, Group>,
     memberships: &mut BTreeMap<u64, (u64, u32)>,
     events: &mut BTreeMap<u64, BTreeSet<i32>>,
-) -> Result<()> {
+) -> Result<Vec<u64>> {
+    let mut unsupported = Vec::new();
     let mut pools = BTreeMap::new();
     for row in parse_table(dump, "pool_template")?.iter() {
         let id = number(row, "entry", "pool_template")?;
@@ -271,7 +281,17 @@ fn add_legacy_pools(
         if object_pools.contains(&root) {
             bail!("pool {root} mixes creatures and GameObjects");
         }
-        let members = flatten_pool(root, &pools, &mut BTreeSet::new())?;
+        let mut dormant = false;
+        let members = flatten_pool(
+            root,
+            &pools,
+            &mut BTreeSet::new(),
+            dump.kind() == SourceKind::Vmangos,
+            &mut dormant,
+        )?;
+        if dormant {
+            unsupported.push(root);
+        }
         let pool = &pools[&root];
         if pool.limit == 0 {
             bail!("creature pool {root}: zero limit is unsupported");
@@ -280,7 +300,8 @@ fn add_legacy_pools(
         if map_ids.len() != 1 {
             bail!("creature pool {root} spans several maps");
         }
-        if pool.limit == 1
+        if !dormant
+            && pool.limit == 1
             && members.values().all(|chance| *chance != 0)
             && members.values().sum::<u32>() != 10_000
         {
@@ -299,7 +320,7 @@ fn add_legacy_pools(
                 population_id,
                 Group {
                     max_count: pool.limit,
-                    condition: 0,
+                    condition: if dormant { u32::MAX } else { 0 },
                     expression: 0,
                     flags: 0,
                     entries: Vec::new(),
@@ -317,38 +338,78 @@ fn add_legacy_pools(
             events.entry(guid).or_default().extend(&positive_events);
         }
     }
-    Ok(())
+    Ok(unsupported)
+}
+
+pub(crate) fn vmangos_entry_choices(row: &crate::world_source::Row) -> Result<Vec<u32>> {
+    let mut entries = Vec::new();
+    for column in ["id", "id2", "id3", "id4", "id5"] {
+        let entry = row.number(column)?;
+        if entry == 0 {
+            break;
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
+fn source_choices(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<BTreeMap<u64, Vec<u32>>> {
+    let vmangos = dump.kind() == SourceKind::Vmangos;
+    let mut choices: BTreeMap<u64, Vec<u32>> = BTreeMap::new();
+    if !vmangos {
+        for row in parse_table(dump, "creature_spawn_entry")?.iter() {
+            let guid = number(row, "guid", "creature_spawn_entry")?;
+            let entry = number(row, "entry", "creature_spawn_entry")?;
+            if entry == 0 {
+                bail!("creature_spawn_entry {guid}: entry zero");
+            }
+            choices.entry(guid).or_default().push(entry);
+        }
+        for entries in choices.values_mut() {
+            entries.sort_unstable();
+            entries.dedup();
+        }
+    } else {
+        for row in dump.rows("creature")?.iter() {
+            let entries = vmangos_entry_choices(row)?;
+            if entries.len() > 1 {
+                choices.insert(row.number("guid")?, entries);
+            }
+        }
+    }
+    Ok(choices)
 }
 
 pub(crate) fn collect(
     dump: &(impl crate::dump::TableRows + ?Sized),
     scope: &WorldImportScope,
 ) -> Result<PopulationPlan> {
-    let mut groups = source_groups(dump)?;
+    let vmangos = dump.kind() == SourceKind::Vmangos;
+    let mut groups = if vmangos {
+        BTreeMap::new()
+    } else {
+        source_groups(dump)?
+    };
     let mut memberships = BTreeMap::new();
-    for row in parse_table(dump, "spawn_group_spawn")?.iter() {
-        let id = number(row, "Id", "spawn_group_spawn")?;
-        if !groups.contains_key(&id) {
-            continue;
-        }
-        let guid: u64 = number(row, "Guid", "spawn_group_spawn")?;
-        let chance: u32 = number(row, "Chance", "spawn_group_spawn")?;
-        if chance > 100 {
-            bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
-        }
-        if memberships.insert(guid, (id, chance * 100)).is_some() {
-            bail!("creature source guid {guid} belongs to several groups");
+    if !vmangos {
+        for row in parse_table(dump, "spawn_group_spawn")?.iter() {
+            let id = number(row, "Id", "spawn_group_spawn")?;
+            if !groups.contains_key(&id) {
+                continue;
+            }
+            let guid: u64 = number(row, "Guid", "spawn_group_spawn")?;
+            let chance: u32 = number(row, "Chance", "spawn_group_spawn")?;
+            if chance > 100 {
+                bail!("spawn_group_spawn {guid}: chance {chance} exceeds 100");
+            }
+            if memberships.insert(guid, (id, chance * 100)).is_some() {
+                bail!("creature source guid {guid} belongs to several groups");
+            }
         }
     }
-    let mut choices: BTreeMap<u64, BTreeSet<u32>> = BTreeMap::new();
-    for row in parse_table(dump, "creature_spawn_entry")?.iter() {
-        let guid = number(row, "guid", "creature_spawn_entry")?;
-        let entry = number(row, "entry", "creature_spawn_entry")?;
-        if entry == 0 {
-            bail!("creature_spawn_entry {guid}: entry zero");
-        }
-        choices.entry(guid).or_default().insert(entry);
-    }
+    let choices = source_choices(dump)?;
     let mut events: BTreeMap<u64, BTreeSet<i32>> = BTreeMap::new();
     for row in parse_table(dump, "game_event_creature")?.iter() {
         let guid = number(row, "guid", "game_event_creature")?;
@@ -358,10 +419,16 @@ pub(crate) fn collect(
         }
         events.entry(guid).or_default().insert(event);
     }
-    add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
+    let unsupported_pools = add_legacy_pools(dump, &mut groups, &mut memberships, &mut events)?;
     let templates: BTreeSet<u32> = parse_table(dump, "creature_template")?
         .iter()
-        .map(|row| number(row, "Entry", "creature_template"))
+        .map(|row| {
+            number(
+                row,
+                if vmangos { "entry" } else { "Entry" },
+                "creature_template",
+            )
+        })
         .collect::<Result<_>>()?;
     let mut plan = PopulationPlan {
         spawns: Vec::new(),
@@ -370,16 +437,31 @@ pub(crate) fn collect(
         referenced_entries: HashSet::new(),
         conditional_spawns: 0,
         event_spawns: 0,
+        unsupported_pools,
     };
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
     for row in parse_table(dump, "creature")?.iter() {
+        if vmangos && (row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0)
+        {
+            continue;
+        }
         let map: i64 = number(row, cr::MAP, "creature")?;
         let x: f64 = number(row, cr::X, "creature")?;
         let y: f64 = number(row, cr::Y, "creature")?;
         let z: f64 = number(row, cr::Z, "creature")?;
         let raw_entry: u64 = number(row, cr::ID, "creature")?;
-        if !creature_row_kept_in_scope(scope, map, x, y, z, raw_entry) {
+        if !(creature_row_kept_in_scope(scope, map, x, y, z, raw_entry)
+            || vmangos
+                && scope.contains_map(map)
+                && choices
+                    .get(&row.number::<u64>("guid")?)
+                    .is_some_and(|entries| {
+                        entries
+                            .iter()
+                            .any(|entry| scope.forced_creature_entries.contains(&u64::from(*entry)))
+                    }))
+        {
             continue;
         }
         let guid: u64 = number(row, cr::GUID, "creature")?;
@@ -431,7 +513,15 @@ pub(crate) fn collect(
             y,
             z,
             orientation,
-            number(row, cr::MOVEMENT_TYPE, "creature")?,
+            number(
+                row,
+                if vmangos {
+                    "movement_type"
+                } else {
+                    cr::MOVEMENT_TYPE
+                },
+                "creature",
+            )?,
             number(row, cr::SPAWN_TIME_SECS_MIN, "creature")?,
             map,
         ));
@@ -497,6 +587,80 @@ mod tests {
     fn full_scope() -> WorldImportScope {
         WorldImportScope::canonical(crate::WorldImportProfile::parse("full-world").unwrap())
             .unwrap()
+    }
+
+    fn vmangos_source() -> crate::world_source::WorldSource {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        connection.execute_batch("CREATE TABLE creature_template (entry INTEGER, patch INTEGER, PRIMARY KEY(entry,patch));
+            INSERT INTO creature_template VALUES (10,10),(20,10);
+            CREATE TABLE creature (guid INTEGER PRIMARY KEY, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, orientation REAL, movement_type INTEGER, spawntimesecsmin INTEGER, spawn_flags INTEGER, patch_min INTEGER, patch_max INTEGER);
+            INSERT INTO creature VALUES (1,10,20,0,0,0,0,1,2,3,0,0,60,0,0,10),(2,10,0,0,0,0,0,1,2,3,0,0,60,2,0,10),(3,20,0,0,0,0,0,1,2,3,0,0,60,0,0,9);
+            CREATE TABLE game_event_creature (guid INTEGER, event INTEGER);
+            INSERT INTO game_event_creature VALUES (1,-4);
+            CREATE TABLE pool_template (entry INTEGER, max_limit INTEGER, patch_min INTEGER, patch_max INTEGER);
+            CREATE TABLE pool_creature (guid INTEGER, pool_entry INTEGER, chance REAL, patch_min INTEGER, patch_max INTEGER);
+            CREATE TABLE pool_creature_template (id INTEGER, pool_entry INTEGER, chance REAL, patch_min INTEGER, patch_max INTEGER);
+            CREATE TABLE pool_pool (pool_id INTEGER, mother_pool INTEGER, chance REAL);
+            CREATE TABLE pool_gameobject (guid INTEGER, pool_entry INTEGER, patch_min INTEGER, patch_max INTEGER);
+            CREATE TABLE pool_gameobject_template (id INTEGER, pool_entry INTEGER, patch_min INTEGER, patch_max INTEGER);").unwrap();
+        crate::world_source::WorldSource::Vmangos(connection)
+    }
+
+    #[test]
+    fn vmangos_choices_disabled_spawns_and_signed_events_reach_population_rows() {
+        let source = vmangos_source();
+        let plan = collect(&source, &full_scope()).unwrap();
+        assert_eq!(plan.spawns.len(), 1);
+        assert_eq!(plan.referenced_entries, HashSet::from([10, 20]));
+        assert_eq!(
+            plan.membership_rows,
+            [format!(
+                "({},4294967297,10,'10,20',0,'-4')",
+                world_guid(10, 1)
+            )]
+        );
+    }
+
+    #[test]
+    fn vmangos_population_stops_choices_at_the_first_empty_slot() {
+        for (slots, expected) in [("10,0,20,0,0", vec![10]), ("0,0,20,0,0", vec![])] {
+            let source = vmangos_source();
+            let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+                unreachable!()
+            };
+            connection.execute_batch(&format!(
+                "DELETE FROM creature; INSERT INTO creature VALUES (1,{slots},0,1,2,3,0,0,60,0,0,10)"
+            )).unwrap();
+            let plan = collect(&source, &full_scope()).unwrap();
+            assert_eq!(
+                plan.spawns.iter().map(|spawn| spawn.1).collect::<Vec<_>>(),
+                expected
+            );
+            assert_eq!(plan.referenced_entries, expected.into_iter().collect());
+            let members = if slots.starts_with("10") {
+                vec![format!("({},4294967297,10,'',0,'-4')", world_guid(10, 1))]
+            } else {
+                vec![]
+            };
+            assert_eq!(plan.membership_rows, members);
+        }
+    }
+
+    #[test]
+    fn unrepresentable_vmangos_nested_pool_is_retained_but_inactive() {
+        let source = vmangos_source();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("INSERT INTO pool_template VALUES (1,1,0,10),(2,2,0,10); INSERT INTO pool_pool VALUES (2,1,0); INSERT INTO pool_creature VALUES (1,2,0,0,10);").unwrap();
+        let plan = collect(&source, &full_scope()).unwrap();
+        assert_eq!(plan.spawns.len(), 1);
+        assert_eq!(plan.unsupported_pools, [1]);
+        assert_eq!(plan.conditional_spawns, 1);
+        assert_eq!(
+            plan.definition_rows,
+            ["(8589934593,1,4294967295,0,0,'',true)"]
+        );
     }
 
     #[test]

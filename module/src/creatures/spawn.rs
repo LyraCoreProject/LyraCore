@@ -463,6 +463,26 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
 }
 
 pub(crate) fn build_creature_entity(
+    ctx: &ReducerContext,
+    spawn: &CreatureSpawn,
+    tmpl: &CreatureTemplate,
+    rand: u32,
+    instance_id: u64,
+) -> WorldEntity {
+    let mut entity = build_creature_from_template(spawn, tmpl, rand, instance_id);
+    if let Some(stats) = super::catalogue::level_stats(ctx, tmpl, entity.level) {
+        entity.health = stats.health;
+        entity.max_health = stats.health;
+        entity.armor = stats.armor;
+    }
+    let (display_id, scale) = super::catalogue::display(ctx, tmpl, ctx.random());
+    entity.display_id = display_id;
+    entity.native_display_id = display_id;
+    entity.scale_x = scale;
+    entity
+}
+
+pub(crate) fn build_creature_from_template(
     spawn: &CreatureSpawn,
     tmpl: &CreatureTemplate,
     rand: u32,

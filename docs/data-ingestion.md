@@ -27,7 +27,7 @@ The full classic-db importer requires the tables listed in `importer/src/classic
 `WorldSource::ClassicDb` uses that same contract-checked reader. Family builders return reader
 errors before they emit a plan. Classic fixtures check the same numeric values and declarations.
 
-`--source vmangos --family globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
+`--source vmangos --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip` imports the selected SQLite rows for those families.
 Other families are still being ported. Both world profiles use the same globals and item catalogues.
 Vendor offers and creature loot follow the selected profile. Generate the comparison
 with both local sources and your client:
@@ -50,6 +50,42 @@ links first, then zone links when no area candidate meets its faction and destin
 follows `GetClosestGraveYard` in [ObjectMgr.cpp at vmangos commit
 464179081673cfd240f7ffe7f0daf96bca0b5a70](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L7512-L7524).
 The existing dungeon entrance and static fallbacks remain after the imported links.
+
+The `creatures` and `casts` vmangos families use selected creature templates, spawn ranges,
+entry choices, paths and spell lists. The creature plan preserves signed event membership and
+pool limits. Nested pools that the current population model cannot express stay inactive and
+appear in the Compatibility Manifest. Game-event schedules and formations remain unsupported.
+Spawn choices use the consecutive nonzero slots in `id` through `id5`, stopping at the first zero,
+as `ChooseCreatureId` does in [Creature.cpp at 4641790](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Creature.cpp#L63-L76).
+A zero `id` skips the spawn and records `creatures.spawn-entry-zero`.
+
+Creature health is rounded after the class-level health and template multiplier are multiplied.
+Melee damage uses class-level damage, its multiplier and variance; armor uses class-level armor
+and its multiplier. The importer stores every level in the template's range in
+`game_creature_level_stats`. The Module uses those final values without its classic rank scaling.
+The source's default rank rates are all one. Levels above the source stat range use the source's
+linear extrapolation from level one to its highest level. Five unplaced level-zero templates at
+the pin have no defined stat lookup and are omitted with findings. A placed level-zero template
+stops the plan.
+
+These rules follow `InitStatsForLevel` in
+[Creature.cpp](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Creature.cpp#L1791),
+`LoadCreatureClassLevelStats` in
+[ObjectMgr.cpp](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/ObjectMgr.cpp#L2090)
+and the rank-rate defaults in
+[World.cpp](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/World.cpp#L514).
+The integer Module damage columns round the two derived damage bounds. Display rows retain source
+weights and scales, resolving zero scales through CreatureDisplayInfo. Unit and client creature
+type flags are derived from the source static flags. The PC and NPC immunity bits are omitted
+until Milestone 4 can run the scripts that clear them. The Compatibility Manifest lists every
+affected template as `creatures.scripted-immunity`. Only waypoint movement, type 2, emits paths
+on the vmangos path; classic path selection is unchanged. Trainer, vendor and gossip joins retain their
+existing family ownership.
+
+The cast plan joins `creature_template.spell_list_id` to `creature_spells`. It uses the first
+available source spell as the primary cast and the existing rotation model for the remaining
+spells. Slot probability, timing, target, flags and script detail remain unsupported. S6 supplies
+EventAI dependency closure; a complete vmangos world import is still unavailable at this stage.
 
 The items import joins shared vendor offers through `creature_template.vendor_id` and removes
 selected `forbidden_items` from vendor offers and creature loot. The unused `restores_power` flag is false for vmangos; food and drink behavior comes from item

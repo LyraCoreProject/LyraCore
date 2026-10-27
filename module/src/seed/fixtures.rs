@@ -314,7 +314,7 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        crate::creatures::build_creature_entity(&spawn, &template, 0, 0),
+        crate::creatures::build_creature_entity(ctx, &spawn, &template, 0, 0),
     );
 }
 

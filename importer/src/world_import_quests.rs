@@ -64,12 +64,11 @@ fn placed_creatures(dump: &impl TableRows, scope: &WorldImportScope) -> Result<H
         ) {
             continue;
         }
-        for column in ["id", "id2", "id3", "id4", "id5"] {
-            let entry = row.number::<u64>(column)?;
-            if entry != 0 {
-                entries.insert(entry);
-            }
-        }
+        entries.extend(
+            crate::creature_population::vmangos_entry_choices(row)?
+                .into_iter()
+                .map(u64::from),
+        );
     }
     Ok(entries)
 }

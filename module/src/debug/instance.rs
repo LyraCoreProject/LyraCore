@@ -382,7 +382,7 @@ pub fn debug_assert_floor_snap(
             source_guid: 0,
             instance_id: 0,
         };
-        let entity = build_creature_entity(&spawn, &tmpl, 0, 0);
+        let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, 0);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);
         spawned_entity_guid = Some(new_guid);

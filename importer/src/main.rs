@@ -438,7 +438,15 @@ where
             || !matches!(
                 a.family.as_deref(),
                 Some(
-                    "globals" | "items" | "loot" | "gameobjects" | "trainers" | "quests" | "gossip"
+                    "globals"
+                        | "items"
+                        | "loot"
+                        | "gameobjects"
+                        | "trainers"
+                        | "quests"
+                        | "gossip"
+                        | "creatures"
+                        | "casts"
                 )
             )
             || a.apply
@@ -455,7 +463,7 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
@@ -464,6 +472,8 @@ where
                     a.family.as_deref(),
                     Some(
                         "globals"
+                            | "creatures"
+                            | "casts"
                             | "items"
                             | "loot"
                             | "gameobjects"
@@ -485,7 +495,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos needs --dump <sqlite> and --family globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
+        bail!("vmangos needs --dump <sqlite> and --family creatures|casts|globals|items|loot|gameobjects|trainers|quests|gossip, or standalone --go-models <client Data>");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
