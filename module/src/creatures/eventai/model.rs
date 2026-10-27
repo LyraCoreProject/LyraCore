@@ -848,6 +848,7 @@ pub(crate) struct BroadcastLine {
     pub chat_type: u8,
     pub language: u8,
     pub emote: u32,
+    pub sound: u32,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]

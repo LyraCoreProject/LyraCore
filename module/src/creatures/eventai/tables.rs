@@ -92,6 +92,8 @@ pub struct CreatureAiBroadcastText {
     pub emote_id_2: u32,
     pub emote_delay_3_ms: u32,
     pub emote_id_3: u32,
+    #[default(0u32)]
+    pub sound_id: u32,
 }
 
 #[table(accessor = game_creature_ai_spell_metadata)]

@@ -485,7 +485,7 @@ impl Standalone {
     }
 
     fn sql_database(&self, database: &str, query: &str) -> Output {
-        let query = lyracore_shared::import_sql::spell_defaults(query);
+        let query = lyracore_shared::import_sql::insert_defaults(query);
         let query = query.as_str();
         self.command()
             .args([

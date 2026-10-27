@@ -195,6 +195,7 @@ struct Scenario {
     eventai_rows: RefCell<Vec<CreatureAiEvent>>,
     eventai_definitions: RefCell<Vec<EventAiDefinition>>,
     eventai_text: RefCell<HashMap<u32, (String, u8, u32, u32)>>,
+    eventai_text_sounds: RefCell<HashMap<u32, u32>>,
     eventai_creature_state: RefCell<HashMap<u64, CreatureState>>,
     eventai_rule_state: RefCell<HashMap<u64, HashMap<u64, RuleState>>>,
     eventai_presentation: RefCell<
@@ -226,6 +227,7 @@ struct Scenario {
     eventai_relay_starts: RefCell<Vec<(u32, u64, u64, u64)>>,
     eventai_next_summon: Cell<u64>,
     eventai_speech: RefCell<Vec<(u64, u8, String)>>,
+    eventai_sounds: RefCell<Vec<(u64, u32, u8)>>,
     eventai_speech_targets: RefCell<Vec<(u64, u64)>>,
     eventai_emotes: RefCell<Vec<(u64, u32, u32, u64)>>,
     eventai_quest_credit_outcomes: RefCell<VecDeque<QuestCreditOutcome>>,
@@ -1609,6 +1611,12 @@ impl EventAiWorld for Scenario {
                 chat_type: *chat_type,
                 language: *language as u8,
                 emote: *emote,
+                sound: self
+                    .eventai_text_sounds
+                    .borrow()
+                    .get(&id)
+                    .copied()
+                    .unwrap_or(0),
             })
     }
 
@@ -1775,6 +1783,12 @@ impl EventAiWorld for Scenario {
             .borrow_mut()
             .push((speaker_guid, target_guid));
         true
+    }
+
+    fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8) {
+        self.eventai_sounds
+            .borrow_mut()
+            .push((source_guid, sound_id, chat_type));
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {

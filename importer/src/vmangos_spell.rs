@@ -45,6 +45,7 @@ fn source_spell(row: &Row) -> Result<Spell> {
     };
 
     let spell = Spell {
+        npc_guardian_entry: npc_guardian_entry(row)?,
         single_target_key: lyracore_shared::spell_custom::single_target_key(family, icon, category),
         custom_flags: row.number("customFlags")?,
         min_target_level: row.number("minTargetLevel")?,
@@ -124,11 +125,55 @@ fn source_spell(row: &Row) -> Result<Spell> {
     Ok(spell)
 }
 
+pub(crate) const GUARDIAN_COLUMNS: &[&str] = &[
+    "entry",
+    "script_name",
+    "effect1",
+    "effect2",
+    "effect3",
+    "effectImplicitTargetA1",
+    "effectImplicitTargetB1",
+    "effectRadiusIndex1",
+    "effectMiscValue1",
+    "effectMultipleValue1",
+    "effectBasePoints1",
+    "effectBaseDice1",
+    "effectDieSides1",
+    "effectDicePerLevel1",
+    "effectRealPointsPerLevel1",
+    "effectPointsPerComboPoint1",
+];
+
+pub(crate) fn npc_guardian_entry(row: &Row) -> Result<Option<u32>> {
+    if row.number::<u32>("entry")? != 5200 {
+        return Ok(None);
+    }
+    let entry = row.number::<u32>("effectMiscValue1")?;
+    Ok((row.text("script_name")?.is_empty()
+        && row.number::<u32>("effect1")? == 42
+        && row.number::<u32>("effect2")? == 0
+        && row.number::<u32>("effect3")? == 0
+        && row.number::<u32>("effectImplicitTargetA1")? == 32
+        && row.number::<u32>("effectImplicitTargetB1")? == 0
+        && row.number::<u32>("effectRadiusIndex1")? == 0
+        && row.number::<f32>("effectMultipleValue1")? > 0.0
+        && (0..16).contains(&row.number::<i32>("effectBasePoints1")?)
+        && row.number::<u32>("effectBaseDice1")? == 1
+        && row.number::<u32>("effectDieSides1")? == 1
+        && row.number::<f32>("effectDicePerLevel1")? == 0.0
+        && row.number::<f32>("effectRealPointsPerLevel1")? == 0.0
+        && row.number::<f32>("effectPointsPerComboPoint1")? == 0.0
+        && (1..=i32::MAX as u32).contains(&entry)
+        && !crate::eventai::fixture_id(entry))
+    .then_some(entry))
+}
+
 pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::Value)> {
     let mut scripts = Vec::new();
     let mut masks = Vec::new();
     let mut spells = Vec::new();
     let mut flags = Vec::new();
+    let mut guardian_shapes = Vec::new();
     let columns = [
         "spellIconId",
         "baseLevel",
@@ -243,6 +288,9 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     ];
     for row in source.columns("spell_template", &columns)?.iter() {
         let spell = source_spell(row)?;
+        if spell.id == 5200 && spell.npc_guardian_entry.is_none() {
+            guardian_shapes.push(spell.id);
+        }
         ensure!(
             spell.custom_flags & !lyracore_shared::spell_custom::KNOWN == 0,
             "spell {}: unknown customFlags bits",
@@ -272,7 +320,8 @@ pub(crate) fn read(source: &impl TableRows) -> Result<(Vec<Spell>, serde_json::V
     let manifest = serde_json::json!({"format_version":1,"source":"vmangos","family":"spell","patch":crate::source_selection::PATCH,"client_build":crate::source_selection::CLIENT_BUILD,"findings":[
         {"code":"spells.script","classification":"unsupported","occurrences":scripts.len(),"source_ids":scripts},
         {"code":"spells.modifier-high-mask","classification":"unsupported","occurrences":masks.len(),"source_ids":masks},
-        {"code":"spells.custom-flags","classification":"unsupported","occurrences":flags.len(),"source_ids":flags}
+        {"code":"spells.custom-flags","classification":"unsupported","occurrences":flags.len(),"source_ids":flags},
+        {"code":"spells.npc-guardian-shape","classification":"unsupported","occurrences":guardian_shapes.len(),"source_ids":guardian_shapes}
     ]});
     Ok((spells, manifest))
 }
@@ -322,8 +371,61 @@ pub(crate) fn fixture() -> crate::world_source::WorldSource {
 }
 
 #[cfg(test)]
+pub(crate) fn guardian_fixture() -> crate::world_source::WorldSource {
+    let source = fixture();
+    let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+        unreachable!()
+    };
+    connection.execute_batch("INSERT INTO spell_template (entry,build,name,effect1,effectMiscValue1,effectImplicitTargetA1,effectMultipleValue1,effectBasePoints1,effectBaseDice1,effectDieSides1,castingTimeIndex,rangeIndex,durationIndex) VALUES (5200,4222,'Guardian fixture',42,636,32,1000,1,1,1,1,1,1)").unwrap();
+    source
+}
+
+#[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn guardian_mapping_refuses_player_level_radius_and_script_variants() {
+        for update in [
+            "effectMultipleValue1=0",
+            "effectRadiusIndex1=1",
+            "script_name='fixture'",
+            "effectImplicitTargetA1=6",
+            "effect2=42",
+            "effectBasePoints1=16",
+            "effectRealPointsPerLevel1=1",
+            "effectMiscValue1=5099001",
+        ] {
+            let source = guardian_fixture();
+            let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+                unreachable!()
+            };
+            connection
+                .execute_batch(&format!(
+                    "UPDATE spell_template SET {update} WHERE entry=5200"
+                ))
+                .unwrap();
+            let (spells, manifest) = read(&source).unwrap();
+            assert!(
+                spells
+                    .iter()
+                    .find(|spell| spell.id == 5200)
+                    .unwrap()
+                    .npc_guardian_entry
+                    .is_none(),
+                "{update}"
+            );
+            assert_eq!(
+                manifest["findings"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .find(|finding| finding["code"] == "spells.npc-guardian-shape")
+                    .unwrap()["source_ids"],
+                serde_json::json!([5200])
+            );
+        }
+    }
 
     #[test]
     fn seals_and_blessings_do_not_displace_judgements_on_another_target() {

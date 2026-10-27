@@ -612,6 +612,8 @@ mod tests {
             .join(",");
         connection.execute_batch(&format!("CREATE TABLE creature_template ({columns}, name TEXT DEFAULT '', subname TEXT DEFAULT '', script_name TEXT DEFAULT '', auras TEXT DEFAULT '', PRIMARY KEY (entry,patch));
             INSERT INTO creature_template (entry,patch,unit_class,level_min,level_max,health_multiplier,damage_multiplier,armor_multiplier,display_id1,faction,rank,base_attack_time) VALUES (5090042,10,1,10,10,1,1,1,100,35,3,2000);
+            CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
+            CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
             CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
             INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
         WorldSource::Vmangos(connection)

@@ -58,6 +58,7 @@ pub(crate) struct Source {
     predicates: BTreeMap<u32, Option<String>>,
     quests: BTreeSet<u32>,
     spells: BTreeSet<u32>,
+    guardian_entries: BTreeMap<u32, u32>,
 }
 
 struct Broadcast {
@@ -124,6 +125,80 @@ fn commands(
     Ok(commands)
 }
 
+pub(crate) fn include_required_templates(
+    source: &impl TableRows,
+    entries: &mut HashSet<u64>,
+) -> Result<()> {
+    let events = source.columns(
+        "creature_ai_events",
+        &[
+            "creature_id",
+            "action1_script",
+            "action2_script",
+            "action3_script",
+        ],
+    )?;
+    let commands = source.columns(
+        "creature_ai_scripts",
+        &["id", "command", "datalong", "datalong2"],
+    )?;
+    let needs_guardians = commands
+        .iter()
+        .map(
+            |row| Ok(row.number::<u32>("command")? == 15 && row.number::<u32>("datalong")? == 5200),
+        )
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .any(|needed| needed);
+    let guardian = if needs_guardians {
+        source
+            .columns("spell_template", crate::vmangos_spell::GUARDIAN_COLUMNS)?
+            .iter()
+            .map(crate::vmangos_spell::npc_guardian_entry)
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .flatten()
+            .next()
+    } else {
+        None
+    };
+    let mut dependencies: BTreeMap<u32, BTreeSet<u64>> = BTreeMap::new();
+    for row in commands.iter() {
+        let kind = row.number::<u32>("command")?;
+        let value = row.number::<u32>("datalong")?;
+        let entry = match kind {
+            10 => Some(value),
+            23 if row.number::<u32>("datalong2")? == 0 => Some(value),
+            15 if value == 5200 => guardian,
+            _ => None,
+        };
+        if let Some(entry) = entry.filter(|entry| *entry != 0 && !super::fixture_id(*entry)) {
+            dependencies
+                .entry(row.number("id")?)
+                .or_default()
+                .insert(u64::from(entry));
+        }
+    }
+    loop {
+        let mut added = false;
+        for row in events.iter() {
+            if !entries.contains(&row.number::<u64>("creature_id")?) {
+                continue;
+            }
+            for column in ["action1_script", "action2_script", "action3_script"] {
+                if let Some(required) = dependencies.get(&row.number::<u32>(column)?) {
+                    for entry in required {
+                        added |= entries.insert(*entry);
+                    }
+                }
+            }
+        }
+        if !added {
+            return Ok(());
+        }
+    }
+}
+
 impl Source {
     pub(crate) fn read(source: &(impl TableRows + ?Sized)) -> Result<Self> {
         let mut events = Vec::new();
@@ -169,7 +244,7 @@ impl Source {
                 id,
                 Broadcast {
                     encoded: format!(
-                        "({id},{},{},{chat},{language},{},{},{},{},{},{})",
+                        "({id},{},{},{chat},{language},{},{},{},{},{},{},{sound})",
                         sql_text(row.text("male_text")?),
                         sql_text(row.text("female_text")?),
                         emotes[0].0,
@@ -180,9 +255,7 @@ impl Source {
                         emotes[2].1
                     ),
                     mode,
-                    supported: !super::fixture_id(id)
-                        && matches!(kind, 0..=4 | 6 | 7)
-                        && sound == 0,
+                    supported: !super::fixture_id(id) && matches!(kind, 0..=4 | 6 | 7),
                 },
             );
         }
@@ -210,6 +283,22 @@ impl Source {
             };
             predicates.insert(id, predicate);
         }
+        let spells = source
+            .columns("spell_template", &["entry"])?
+            .iter()
+            .map(|row| row.number("entry"))
+            .collect::<Result<BTreeSet<u32>>>()?;
+        let mut guardian_entries = BTreeMap::new();
+        if spells.contains(&5200) {
+            for row in source
+                .columns("spell_template", crate::vmangos_spell::GUARDIAN_COLUMNS)?
+                .iter()
+            {
+                if let Some(entry) = crate::vmangos_spell::npc_guardian_entry(row)? {
+                    guardian_entries.insert(row.number("entry")?, entry);
+                }
+            }
+        }
         Ok(Self {
             events,
             event_ai_entries: source
@@ -233,11 +322,8 @@ impl Source {
                 .iter()
                 .map(|r| r.number("entry"))
                 .collect::<Result<_>>()?,
-            spells: source
-                .columns("spell_template", &["entry"])?
-                .iter()
-                .map(|r| r.number("entry"))
-                .collect::<Result<_>>()?,
+            spells,
+            guardian_entries,
         })
     }
 
@@ -519,7 +605,17 @@ impl Source {
             14 if actor && b == 0 && self.spells.contains(&a) => {
                 Ok(format!("remove-aura:{a}:self"))
             }
-            15 if no_extra && b & !(1 | 2 | 32 | 256) == 0 && self.spells.contains(&a) => {
+            15 if no_extra
+                && self.spells.contains(&a)
+                && (b & !(1 | 2 | 32 | 256) == 0
+                    || (target == "self" && b == 4 && self.guardian_entries.contains_key(&a))) =>
+            {
+                if let Some(entry) = self.guardian_entries.get(&a) {
+                    if !templates.contains(&u64::from(*entry)) {
+                        return Err("guardian-template-dependency".into());
+                    }
+                    compiled.templates.insert(u64::from(*entry));
+                }
                 Ok(format!(
                     "cast:{a}:{target}:{}:{}:actor:selected:{}:0:{}:0:0",
                     u8::from(b & 1 != 0),
@@ -772,6 +868,7 @@ mod tests {
 
     pub(super) fn source() -> Source {
         Source {
+            guardian_entries: BTreeMap::new(),
             events: Vec::new(),
             event_ai_entries: BTreeSet::from([100]),
             scripts: BTreeMap::new(),
@@ -875,6 +972,47 @@ mod tests {
             rule,
             "1,aggro,100,4294967295,once,lists:1:2.3:0,script:1:1:always,phase:1+phase:2+phase:3"
         );
+    }
+
+    #[test]
+    fn scoped_templates_follow_display_summon_and_guardian_dependencies_to_closure() {
+        let source = crate::vmangos_spell::guardian_fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("CREATE TABLE creature_ai_events (creature_id INTEGER,action1_script INTEGER,action2_script INTEGER,action3_script INTEGER);
+            CREATE TABLE creature_ai_scripts (id INTEGER,command INTEGER,datalong INTEGER,datalong2 INTEGER);
+            INSERT INTO creature_ai_events VALUES (100,10,0,0),(101,11,0,0),(636,12,0,0),(999,13,0,0);
+            INSERT INTO creature_ai_scripts VALUES (10,23,101,0),(11,15,5200,4),(12,23,5099001,0),(12,10,103,0),(13,23,102,0);").unwrap();
+        let mut entries = HashSet::from([100]);
+        include_required_templates(&source, &mut entries).unwrap();
+        assert_eq!(entries, HashSet::from([100, 101, 103, 636]));
+    }
+
+    #[test]
+    fn forced_guardian_cast_keeps_normal_cast_gates_and_its_template_dependency() {
+        let mut source = source();
+        source.spells.insert(5200);
+        source.guardian_entries.insert(5200, 636);
+        let cast = Command {
+            flags: 4,
+            ..step(15, [5200, 4, 0, 0])
+        };
+        let mut compiled = Compiled::default();
+        assert_eq!(
+            source
+                .compile_command(&cast, &mut compiled, &HashSet::from([636]))
+                .unwrap(),
+            "cast:5200:self:0:direct:actor:selected:0:0:0:0:0"
+        );
+        assert_eq!(compiled.templates, BTreeSet::from([636]));
+        assert!(source
+            .compile_command(&cast, &mut Compiled::default(), &HashSet::new())
+            .is_err());
+        source.guardian_entries.clear();
+        assert!(source
+            .compile_command(&cast, &mut Compiled::default(), &HashSet::from([636]))
+            .is_err());
     }
 
     #[test]

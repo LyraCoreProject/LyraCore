@@ -62,7 +62,7 @@ impl Shard {
     // Each SQL statement commits separately; a failed sequence requires an idempotent rerun.
     pub(crate) fn run_sql_statements(&self, stmts: &[String], label: &str) -> Result<()> {
         for (n, s) in stmts.iter().enumerate() {
-            let s = lyracore_shared::import_sql::spell_defaults(s);
+            let s = lyracore_shared::import_sql::insert_defaults(s);
             eprintln!(
                 "{label} sql [{}/{}]: {}…",
                 n + 1,

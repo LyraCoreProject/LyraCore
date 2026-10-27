@@ -110,7 +110,7 @@ fn write_chat_event(
     language: u8,
     message: String,
 ) -> Result<(), String> {
-    if sender.dead {
+    if sender.dead && sender.is_player() {
         return Err("dead players cannot speak".to_string());
     }
     let text = normalized_message(&message).ok_or_else(|| "empty message".to_string())?;
