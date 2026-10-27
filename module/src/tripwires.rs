@@ -1475,9 +1475,56 @@ mod gc_reap_tripwire {
         "game_bot_transfer_intent",
     ];
 
+    // Sweep functions gc.rs calls that delete the table's rows in their own module.
+    const DELEGATED_REAPS: &[(&str, &str)] =
+        &[("game_trade_session", "crate::trade::cancel_trade_for(")];
+
     fn gc_reaps(gc_code: &str, accessor: &str) -> bool {
-        gc_code.contains(&format!("reap!({accessor})"))
-            || gc_code.contains(&format!("ctx.db.{accessor}()"))
+        if gc_code.contains(&format!("reap!({accessor})")) {
+            return true;
+        }
+        if DELEGATED_REAPS
+            .iter()
+            .any(|&(table, sweep)| table == accessor && gc_code.contains(sweep))
+        {
+            return true;
+        }
+        let handle = format!("ctx.db.{accessor}()");
+        gc_code.match_indices(&handle).any(|(at, _)| {
+            let line_start = gc_code[..at].rfind('\n').map_or(0, |i| i + 1);
+            let after = &gc_code[at + handle.len()..];
+            let binding = gc_code[line_start..at]
+                .trim()
+                .strip_prefix("let ")
+                .and_then(|rest| rest.strip_suffix('='))
+                .map(|name| name.trim().trim_start_matches("mut "));
+            match binding {
+                Some(name) => {
+                    let scope = after
+                        .find(&format!("let {name} "))
+                        .map_or(after, |end| &after[..end]);
+                    deletes_through(scope, &format!("{name}."))
+                }
+                None => after.starts_with('.') && index_delete_follows(&after[1..]),
+            }
+        })
+    }
+
+    fn deletes_through(code: &str, receiver: &str) -> bool {
+        code.match_indices(receiver).any(|(at, _)| {
+            let bounded = code[..at]
+                .chars()
+                .next_back()
+                .is_none_or(|c| !(c.is_alphanumeric() || c == '_'));
+            bounded && index_delete_follows(&code[at + receiver.len()..])
+        })
+    }
+
+    fn index_delete_follows(code: &str) -> bool {
+        let index_end = code
+            .find(|c: char| !(c.is_alphanumeric() || c == '_'))
+            .unwrap_or(code.len());
+        index_end > 0 && code[index_end..].starts_with("().delete(")
     }
 
     fn is_ttl_shaped(fields: &str) -> bool {
@@ -1545,6 +1592,37 @@ mod gc_reap_tripwire {
 
         let reaped = "fn reap(ctx: &ReducerContext) {\n    reap!(game_fixture_event);\n}\n";
         assert!(unreaped_tables(table, reaped).is_empty());
+    }
+
+    #[test]
+    fn the_scan_flags_a_ttl_table_that_gc_only_reads() {
+        let table = "#[table(accessor = game_fixture_event)]\n\
+                     pub struct FixtureEvent {\n    #[primary_key]\n    pub id: u64,\n    \
+                     pub created_at: Timestamp,\n}\n";
+        let read_only = "fn reap(ctx: &ReducerContext) {\n    \
+                         let t = ctx.db.game_fixture_event();\n    \
+                         let count = t.iter().count();\n    \
+                         let t = ctx.db.game_other_event();\n    \
+                         t.id().delete(1);\n}\n";
+        assert_eq!(
+            unreaped_tables(table, read_only),
+            vec!["game_fixture_event"]
+        );
+        let chained_read = "fn reap(ctx: &ReducerContext) {\n    \
+                            for row in ctx.db.game_fixture_event().iter() {}\n}\n";
+        assert_eq!(
+            unreaped_tables(table, chained_read),
+            vec!["game_fixture_event"]
+        );
+
+        let bound = "fn reap(ctx: &ReducerContext) {\n    \
+                     let t = ctx.db.game_fixture_event();\n    \
+                     for id in stale {\n        t.id().delete(id);\n    }\n}\n";
+        assert!(unreaped_tables(table, bound).is_empty());
+
+        let chained = "fn reap(ctx: &ReducerContext) {\n    \
+                       ctx.db.game_fixture_event().id().delete(1);\n}\n";
+        assert!(unreaped_tables(table, chained).is_empty());
     }
 
     #[test]

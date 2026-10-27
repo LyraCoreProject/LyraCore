@@ -420,10 +420,6 @@ pub struct GuidAllocator {
     pub high_water: u64,
 }
 
-fn ratchet_high_water(current: u64, floor: u64) -> u64 {
-    current.max(floor)
-}
-
 fn legacy_guid_seed(
     char_guids: impl Iterator<Item = u64>,
     owned_guids: impl Iterator<Item = u64>,
@@ -432,10 +428,6 @@ fn legacy_guid_seed(
         .max()
         .unwrap_or(0)
         .max(owned_guids.max().unwrap_or(0))
-}
-
-fn allocate_next_guid(seed: u64) -> u64 {
-    seed + 1
 }
 
 fn read_high_water(ctx: &ReducerContext) -> Option<GuidAllocator> {
@@ -472,7 +464,7 @@ pub(crate) fn next_character_guid(ctx: &ReducerContext) -> u64 {
         .as_ref()
         .map(|r| r.high_water)
         .unwrap_or_else(|| legacy_guid_seed_now(ctx));
-    let next = allocate_next_guid(seed);
+    let next = seed + 1;
     write_high_water(ctx, existing, next);
     next
 }
@@ -521,6 +513,20 @@ fn guid_batch_end(
 }
 
 // Foreign guids cannot advance an installed range; retain the legacy floor before installation.
+fn bumped_high_water(
+    range: Option<(u64, u64)>,
+    high_water: Option<u64>,
+    legacy_seed: impl FnOnce() -> u64,
+    guid: u64,
+) -> Option<u64> {
+    if range.is_some() && !in_guid_range(range, guid) {
+        return None;
+    }
+    let seed = high_water.unwrap_or_else(legacy_seed);
+    let mark = seed.max(guid);
+    (high_water.is_none() || mark != seed).then_some(mark)
+}
+
 pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
     let range = ctx
         .db
@@ -528,19 +534,11 @@ pub(crate) fn bump_guid_high_water(ctx: &ReducerContext, guid: u64) {
         .id()
         .find(0)
         .map(|row| (row.base, row.size));
-    if range.is_some() && !in_guid_range(range, guid) {
-        return;
-    }
     let existing = read_high_water(ctx);
-    let seed = existing
-        .as_ref()
-        .map(|r| r.high_water)
-        .unwrap_or_else(|| legacy_guid_seed_now(ctx));
-    let mark = ratchet_high_water(seed, guid);
-    if mark == seed && existing.is_some() {
-        return;
+    let high_water = existing.as_ref().map(|row| row.high_water);
+    if let Some(mark) = bumped_high_water(range, high_water, || legacy_guid_seed_now(ctx), guid) {
+        write_high_water(ctx, existing, mark);
     }
-    write_high_water(ctx, existing, mark);
 }
 
 // Reassignment could reissue identities still held in other Shards or Escrow.
@@ -613,16 +611,42 @@ pub fn install_guid_range(ctx: &ReducerContext, base: u64) -> Result<(), String>
 
 #[cfg(test)]
 mod guid_allocator_tests {
-    use super::{allocate_next_guid, legacy_guid_seed, ratchet_high_water};
+    use super::{bumped_high_water, legacy_guid_seed};
+
+    const RANGE: Option<(u64, u64)> = Some((1_000_000_000, 1_000_000_000));
 
     #[test]
-    fn a_guid_floor_only_ever_ratchets_upwards() {
-        assert_eq!(ratchet_high_water(0, 1_000_000_000), 1_000_000_000);
+    fn a_deleted_guid_above_the_mark_raises_it() {
         assert_eq!(
-            ratchet_high_water(2_000_000_050, 1_000_000_000),
-            2_000_000_050,
+            bumped_high_water(RANGE, Some(1_000_000_049), || 0, 1_000_000_050),
+            Some(1_000_000_050)
+        );
+    }
+
+    #[test]
+    fn a_guid_at_or_below_the_mark_leaves_the_row_unwritten() {
+        assert_eq!(
+            bumped_high_water(RANGE, Some(2_000_000_050), || 0, 1_000_000_000),
+            None,
             "a floor below the current mark rewound the allocator onto live guids"
         );
+        assert_eq!(bumped_high_water(None, Some(50), || 0, 50), None);
+    }
+
+    #[test]
+    fn a_foreign_guid_never_advances_an_installed_range() {
+        assert_eq!(
+            bumped_high_water(RANGE, Some(1_000_000_049), || 0, 2_000_000_000),
+            None
+        );
+        assert_eq!(bumped_high_water(RANGE, None, || 0, 999_999_999), None);
+    }
+
+    #[test]
+    fn without_an_allocator_row_the_first_bump_writes_the_legacy_floor() {
+        assert_eq!(bumped_high_water(None, None, || 49, 50), Some(50));
+        assert_eq!(bumped_high_water(None, None, || 49, 30), Some(49));
+        assert_eq!(bumped_high_water(None, None, || 0, 0), Some(0));
     }
 
     #[test]
@@ -688,21 +712,6 @@ mod guid_allocator_tests {
     }
 
     #[test]
-    fn ratchet_high_water_never_moves_backwards() {
-        assert_eq!(
-            ratchet_high_water(5, 3),
-            5,
-            "a lower floor must not pull the mark down"
-        );
-        assert_eq!(
-            ratchet_high_water(5, 9),
-            9,
-            "a higher floor must push the mark up"
-        );
-        assert_eq!(ratchet_high_water(0, 0), 0);
-    }
-
-    #[test]
     fn legacy_guid_seed_is_the_max_of_both_sources() {
         assert_eq!(
             legacy_guid_seed([1u64, 7, 3].into_iter(), [2u64, 4].into_iter()),
@@ -713,28 +722,6 @@ mod guid_allocator_tests {
             9
         );
         assert_eq!(legacy_guid_seed(std::iter::empty(), std::iter::empty()), 0);
-    }
-
-    #[test]
-    fn allocate_next_guid_always_advances_past_the_seed() {
-        assert_eq!(allocate_next_guid(50), 51);
-        assert_eq!(allocate_next_guid(0), 1);
-        assert_ne!(
-            allocate_next_guid(7),
-            7,
-            "must never hand out the seed itself"
-        );
-    }
-
-    #[test]
-    fn defect_1_transfer_then_create_no_longer_reissues_the_departed_guid() {
-        let chars_after_transfer = [10u64, 30, 49];
-        let seed = legacy_guid_seed(chars_after_transfer.into_iter(), std::iter::empty());
-        let allocator_mark_after_delete = ratchet_high_water(seed, 50);
-        assert_eq!(allocator_mark_after_delete, 50);
-        let reissued_guid = allocate_next_guid(allocator_mark_after_delete);
-        assert_ne!(reissued_guid, 50);
-        assert_eq!(reissued_guid, 51);
     }
 }
 

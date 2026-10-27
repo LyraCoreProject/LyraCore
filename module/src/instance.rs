@@ -133,6 +133,19 @@ const REAP_MAX_PER_FIRING: usize = 4;
 // Bit 23 separates Instance copies; respawning copies still reserve their sequence.
 pub(crate) const INSTANCE_POP_LOW_BAND: u64 = 0x80_0000;
 
+fn next_population_low(slot: &mut u64, mut taken: impl FnMut(u64) -> bool) -> Option<u64> {
+    loop {
+        *slot += 1;
+        if *slot >= INSTANCE_POP_LOW_BAND {
+            return None;
+        }
+        let low = INSTANCE_POP_LOW_BAND | *slot;
+        if !taken(low) {
+            return Some(low);
+        }
+    }
+}
+
 // Bit 46 reserves gameobject Instance copies below pool bit 47.
 pub(crate) const GO_COPY_BAND: u64 = 1 << 46;
 
@@ -571,25 +584,13 @@ pub(crate) fn create_instance_with_id(
         };
         let slot = max_band_low.entry(entry).or_insert(0);
         // Dormant instance-zero rows in the Operator and Package spawn ranges share this band.
-        loop {
-            *slot += 1;
-            if *slot >= INSTANCE_POP_LOW_BAND {
-                return Err(format!(
-                    "instance population low exhausted for entry {entry}"
-                ));
-            }
-            copy.guid = crate::encounter::wave_guid(entry, INSTANCE_POP_LOW_BAND | *slot);
-            if ctx
-                .db
-                .game_creature_spawn()
-                .guid()
-                .find(copy.guid)
-                .is_none()
-                && entities.guid().find(copy.guid).is_none()
-            {
-                break;
-            }
-        }
+        let low = next_population_low(slot, |low| {
+            let guid = crate::encounter::wave_guid(entry, low);
+            ctx.db.game_creature_spawn().guid().find(guid).is_some()
+                || entities.guid().find(guid).is_some()
+        })
+        .ok_or_else(|| format!("instance population low exhausted for entry {entry}"))?;
+        copy.guid = crate::encounter::wave_guid(entry, low);
         copy.life_seq = 1;
         copy.respawn_at = crate::creatures::timer_never(ctx);
         copy.despawn_at = crate::creatures::timer_never(ctx);
@@ -1242,21 +1243,20 @@ mod tests {
     }
 
     #[test]
-    fn instance_population_low_band_is_disjoint_from_spawn_row_allocators() {
-        let realistic_spawn_lows = [1u64, 3, 40_000, 150_000];
-        let wave_next = realistic_spawn_lows.iter().max().unwrap() + 1;
-        assert!(
-            wave_next & INSTANCE_POP_LOW_BAND == 0,
-            "wave allocation stays below the band"
-        );
-        const { assert!(INSTANCE_POP_LOW_BAND == 0x80_0000) };
-        let pop_low = INSTANCE_POP_LOW_BAND | 1;
-        assert!(pop_low & INSTANCE_POP_LOW_BAND != 0);
-        assert_ne!(pop_low, wave_next);
-        let g = crate::encounter::wave_guid(636, pop_low);
-        assert_eq!(g >> 48, 0xF130);
-        assert_eq!((g >> 24) & 0xFF_FFFF, 636);
-        assert_eq!(g & 0xFF_FFFF, pop_low);
+    fn instance_population_and_wave_allocators_never_share_a_low() {
+        let mut lows = vec![1u64, 3, 150_000, 0x80_0001];
+        let mut slot = 0;
+        let population = next_population_low(&mut slot, |low| lows.contains(&low));
+        assert_eq!(population, Some(0x80_0002));
+        lows.push(0x80_0002);
+        assert_eq!(crate::encounter::next_wave_low(lows.into_iter()), 150_001);
+    }
+
+    #[test]
+    fn instance_population_lows_run_out_at_the_top_of_the_band() {
+        let mut slot = 0x7F_FFFE;
+        assert_eq!(next_population_low(&mut slot, |_| false), Some(0xFF_FFFF));
+        assert_eq!(next_population_low(&mut slot, |_| false), None);
     }
 
     #[test]

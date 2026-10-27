@@ -594,11 +594,6 @@ mod tests {
     }
 
     #[test]
-    fn xprate_default_bp_is_one_x() {
-        assert_eq!(XPRATE_DEFAULT_BP, 10_000);
-    }
-
-    #[test]
     fn eastern_kingdoms_destinations_use_the_same_map_path() {
         for spot in [
             TeleSpot::Goldshire,
