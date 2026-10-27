@@ -8,6 +8,8 @@ use wow_dbc::DbcTable;
 use crate::dump::TableRows;
 use crate::world_source::{SourceKind, WorldSource};
 
+mod planned;
+
 type Keys = BTreeSet<Vec<u32>>;
 
 struct Count {
@@ -166,7 +168,16 @@ fn floor(name: &str) -> Result<usize> {
         .map_err(Into::into)
 }
 
-pub(crate) fn run(classic: &Path, vmangos: &Path, client: &str, commit: &str) -> Result<String> {
+pub(crate) fn run(
+    classic: &Path,
+    vmangos: &Path,
+    client: &str,
+    commit: &str,
+    args: &crate::world_import::WorldImportArgs,
+) -> Result<String> {
+    if args.family.as_deref() != Some("globals") {
+        return planned::run(classic, vmangos, commit, args);
+    }
     let sqlite_digest = crate::dump::sha256_hex(&std::fs::read(vmangos)?)?;
     let classic = WorldSource::open(classic, SourceKind::ClassicDb)?;
     let classic_digest = classic.source_hash()?;

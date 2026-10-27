@@ -59,6 +59,7 @@ struct TableStorage {
 #[derive(Clone, Debug)]
 enum StoredCell {
     Null,
+    Zero,
     Number(std::ops::Range<u32>),
     Text(std::ops::Range<u32>),
 }
@@ -156,6 +157,7 @@ impl Row {
     pub(crate) fn numeric_text(&self, column: &str) -> Result<&str> {
         match self.cell(column)? {
             StoredCell::Number(value) => Ok(self.value(value).trim()),
+            StoredCell::Zero => Ok("0"),
             _ => bail!("{}.{}: expected a number", self.columns.table, column),
         }
     }
@@ -170,6 +172,7 @@ impl Row {
     pub(crate) fn raw(&self, column: &str) -> Result<&str> {
         Ok(match self.cell(column)? {
             StoredCell::Null => "NULL",
+            StoredCell::Zero => "0",
             StoredCell::Number(value) | StoredCell::Text(value) => self.value(value).trim(),
         })
     }
@@ -226,33 +229,14 @@ impl TableRows for WorldSource {
     fn rows(&self, table: &str) -> Result<Cow<'_, [Row]>> {
         match self {
             Self::ClassicDb(dump) => dump.rows(table),
+            Self::Vmangos(connection) => read_rows(connection, table, None).map(Cow::Owned),
+        }
+    }
+    fn columns(&self, table: &str, columns: &[&str]) -> Result<Cow<'_, [Row]>> {
+        match self {
+            Self::ClassicDb(dump) => dump.rows(table),
             Self::Vmangos(connection) => {
-                check_table(connection, table)?;
-                let mut statement =
-                    connection.prepare(&format!("SELECT * FROM {}", quote_identifier(table)))?;
-                let columns: Vec<String> = statement.column_names().map(str::to_owned).collect();
-                let mut output = TableBuilder::new(table, columns.iter().cloned());
-                let mut rows = statement.query([])?;
-                while let Some(row) = rows.next()? {
-                    let cells = columns
-                        .iter()
-                        .map(|name| Cell::try_from(row.get::<_, Value>(name.as_str())?))
-                        .collect::<Result<Vec<_>>>()?;
-                    output.push(cells)?;
-                }
-                let mut metadata =
-                    connection.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY pk")?;
-                let primary_key = metadata
-                    .query_map([table], |row| {
-                        Ok((row.get::<_, String>("name")?, row.get::<_, u32>("pk")?))
-                    })?
-                    .collect::<rusqlite::Result<Vec<_>>>()?
-                    .into_iter()
-                    .filter_map(|(name, ordinal)| (ordinal > 0).then_some(name))
-                    .collect::<Vec<_>>();
-                let columns = columns.into_iter().collect::<BTreeSet<_>>();
-                crate::source_selection::select(table, &columns, &primary_key, output.finish())
-                    .map(Cow::Owned)
+                read_rows(connection, table, Some(columns)).map(Cow::Owned)
             }
         }
     }
@@ -268,6 +252,102 @@ impl TableRows for WorldSource {
             }
         }
     }
+}
+
+fn read_rows(connection: &Connection, table: &str, requested: Option<&[&str]>) -> Result<Vec<Row>> {
+    check_table(connection, table)?;
+    let mut metadata =
+        connection.prepare("SELECT name, pk FROM pragma_table_info(?1) ORDER BY pk")?;
+    let metadata = metadata
+        .query_map([table], |row| {
+            Ok((row.get::<_, String>("name")?, row.get::<_, u32>("pk")?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    let primary_key = metadata
+        .iter()
+        .filter(|(_, ordinal)| *ordinal > 0)
+        .map(|(name, _)| name.clone())
+        .collect::<Vec<_>>();
+    let available = metadata
+        .iter()
+        .map(|(name, _)| name.clone())
+        .collect::<BTreeSet<_>>();
+    let columns = if let Some(requested) = requested {
+        let mut columns = requested
+            .iter()
+            .map(|name| (*name).to_owned())
+            .collect::<BTreeSet<_>>();
+        columns.extend(primary_key.iter().cloned());
+        columns.extend(
+            crate::source_selection::required_columns(table)
+                .iter()
+                .map(|name| (*name).to_owned()),
+        );
+        for name in [
+            "patch",
+            "build",
+            "patch_min",
+            "patch_max",
+            "build_min",
+            "build_max",
+            "condition_id",
+        ] {
+            if available.contains(name) {
+                columns.insert(name.to_owned());
+            }
+        }
+        for name in &columns {
+            anyhow::ensure!(available.contains(name), "{table}.{name}: missing column");
+        }
+        columns
+    } else {
+        available
+    };
+    let projection = columns
+        .iter()
+        .map(|name| quote_identifier(name))
+        .collect::<Vec<_>>()
+        .join(",");
+    let mut statement = connection.prepare(&format!(
+        "SELECT {projection} FROM {}",
+        quote_identifier(table)
+    ))?;
+    let mut output = TableBuilder::new(table, columns.iter().cloned());
+    let mut rows = statement.query([])?;
+    while let Some(row) = rows.next()? {
+        let cells = columns
+            .iter()
+            .map(|name| Cell::try_from(row.get::<_, Value>(name.as_str())?))
+            .collect::<Result<Vec<_>>>()?;
+        output.push(cells)?;
+    }
+    let selected = crate::source_selection::select(table, &columns, &primary_key, output.finish())?;
+    if !crate::source_selection::condition_is_static(table) || selected.is_empty() {
+        return Ok(selected);
+    }
+    let ids = selected
+        .iter()
+        .map(|row| row.number::<u32>("condition_id"))
+        .collect::<Result<Vec<_>>>()?;
+    if ids.iter().all(|&id| id == 0) {
+        return Ok(selected);
+    }
+    let conditions =
+        crate::source_selection::static_conditions(&read_rows(connection, "conditions", None)?)?;
+    Ok(selected
+        .into_iter()
+        .zip(ids)
+        .filter_map(
+            |(mut row, id)| match conditions.get(&id).copied().flatten() {
+                Some(false) => None,
+                Some(true) => {
+                    row.cells[row.columns.indices["condition_id"]] = StoredCell::Zero;
+                    Some(row)
+                }
+                None => Some(row),
+            },
+        )
+        .collect())
 }
 
 fn check_table(connection: &Connection, table: &str) -> Result<()> {
@@ -402,6 +482,33 @@ mod tests {
         let rows = source.rows("item_template").unwrap();
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text("name").unwrap(), "current");
+    }
+
+    #[test]
+    fn projection_keeps_selection_keys_and_refuses_missing_columns() {
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "item_template",
+            columns: &[("entry", "INTEGER"), ("patch", "INTEGER"), ("name", "TEXT")],
+            key: &["entry", "patch"],
+            rows: &[
+                &[
+                    ("entry", Value::Integer(4)),
+                    ("patch", Value::Integer(9)),
+                    ("name", Value::Text("old".into())),
+                ],
+                &[
+                    ("entry", Value::Integer(4)),
+                    ("patch", Value::Integer(10)),
+                    ("name", Value::Text("selected".into())),
+                ],
+            ],
+        }])
+        .unwrap();
+        let rows = source.columns("item_template", &["name"]).unwrap();
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0].text("name").unwrap(), "selected");
+        assert_eq!(rows[0].number::<u32>("entry").unwrap(), 4);
+        assert!(source.columns("item_template", &["missing"]).is_err());
     }
 
     #[test]

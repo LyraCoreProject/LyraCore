@@ -210,6 +210,52 @@ pub(crate) mod it {
     pub const MAX_DURABILITY: &str = "MaxDurability";
     pub const BAG_FAMILY: &str = "BagFamily";
     pub const FOOD_TYPE: &str = "FoodType";
+
+    pub(crate) fn column(kind: crate::world_source::SourceKind, column: &str) -> &str {
+        if kind == crate::world_source::SourceKind::Vmangos {
+            match column {
+                DISPLAY_ID => "display_id",
+                QUALITY => "quality",
+                FLAGS => "flags",
+                BUY_COUNT => "buy_count",
+                BUY_PRICE => "buy_price",
+                SELL_PRICE => "sell_price",
+                INVENTORY_TYPE => "inventory_type",
+                ALLOWED_CLASS => "allowable_class",
+                ALLOWED_RACE => "allowable_race",
+                REQUIRED_SKILL => "required_skill",
+                REQUIRED_SKILL_RANK => "required_skill_rank",
+                REQUIRED_REPUTATION_FACTION => "required_reputation_faction",
+                REQUIRED_REPUTATION_RANK => "required_reputation_rank",
+                MAX_COUNT => "max_count",
+                ITEM_LEVEL => "item_level",
+                REQUIRED_LEVEL => "required_level",
+                CONTAINER_SLOTS => "container_slots",
+                PAGE_TEXT => "page_text",
+                START_QUEST => "start_quest",
+                RANDOM_PROPERTY => "random_property",
+                MAX_DURABILITY => "max_durability",
+                BAG_FAMILY => "bag_family",
+                FOOD_TYPE => "food_type",
+                other => other,
+            }
+        } else {
+            column
+        }
+    }
+
+    pub(crate) fn read<'a>(
+        row: &'a crate::world_source::Row,
+        kind: crate::world_source::SourceKind,
+        column: &str,
+    ) -> anyhow::Result<&'a str> {
+        let name = self::column(kind, column);
+        if column == NAME {
+            row.text(name).map(str::trim)
+        } else {
+            row.numeric_text(name)
+        }
+    }
 }
 
 pub(crate) mod clt {
@@ -448,6 +494,14 @@ pub(crate) struct ParsedDump {
 pub(crate) trait TableRows {
     fn rows(&self, table: &str) -> Result<Cow<'_, [crate::world_source::Row]>>;
     fn source_hash(&self) -> Result<String>;
+    // May retain extra columns; row selection and checked field access match rows().
+    fn columns(
+        &self,
+        table: &str,
+        _columns: &[&str],
+    ) -> Result<Cow<'_, [crate::world_source::Row]>> {
+        self.rows(table)
+    }
     fn kind(&self) -> crate::world_source::SourceKind {
         crate::world_source::SourceKind::ClassicDb
     }

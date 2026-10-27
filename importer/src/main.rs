@@ -435,7 +435,7 @@ where
         if a.source != world_source::SourceKind::Vmangos
             || a.dump.is_none()
             || a.dbc.is_none()
-            || a.family.as_deref() != Some("globals")
+            || !matches!(a.family.as_deref(), Some("globals" | "items"))
             || a.apply
             || a.pack_client.is_some()
             || a.pack_out.is_some()
@@ -450,11 +450,11 @@ where
             || a.talents
             || a.print_extents
         {
-            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals, without --apply");
+            bail!("--census needs --source vmangos --dump <sqlite> --dbc <client Data> --family globals|items, without --apply");
         }
     } else if a.source == world_source::SourceKind::Vmangos
         && (a.dump.is_none()
-            || a.family.as_deref() != Some("globals")
+            || !matches!(a.family.as_deref(), Some("globals" | "items"))
             || a.pack_client.is_some()
             || a.pack_out.is_some()
             || a.terrain.is_some()
@@ -468,7 +468,7 @@ where
             || a.talents
             || a.print_extents)
     {
-        bail!("vmangos currently supports --dump <sqlite> --family globals");
+        bail!("vmangos currently supports --dump <sqlite> --family globals|items");
     }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
@@ -544,6 +544,7 @@ fn main() -> Result<()> {
                 std::path::Path::new(args.dump.as_deref().context("missing census source")?),
                 args.dbc.as_deref().context("missing census client")?,
                 &args.source_sha,
+                &args.world_import_args()?,
             )?
         );
         return Ok(());
