@@ -20,8 +20,6 @@ pub struct Behavior {
     pub deliberate_deviations: Vec<DeliberateDeviation>,
     #[serde(default)]
     pub known_gaps: Vec<KnownGap>,
-    #[serde(default)]
-    pub data_fields: Vec<DataDependentField>,
     pub real_client: RealClient,
     pub prerequisites: Vec<String>,
     pub tests: Vec<TestEvidence>,
@@ -51,40 +49,6 @@ pub struct KnownGap {
     pub path: String,
     pub symbol: String,
     pub evidence: String,
-}
-
-#[derive(Debug, Deserialize, Serialize)]
-#[serde(deny_unknown_fields)]
-pub struct DataDependentField {
-    pub scenario: String,
-    pub checkpoint: String,
-    pub stream: DataStream,
-    pub opcode: u16,
-    pub field_path: Vec<String>,
-    pub value_type: DataValueType,
-    pub reason: String,
-    pub source: SourceReference,
-}
-
-#[derive(Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
-#[serde(
-    tag = "kind",
-    content = "id",
-    rename_all = "snake_case",
-    deny_unknown_fields
-)]
-pub enum DataStream {
-    Reply(String),
-    Broadcast(String),
-}
-
-#[derive(Debug, Clone, Copy, Deserialize, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum DataValueType {
-    Unsigned,
-    Signed,
-    Float,
-    TextSha256,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -173,7 +137,6 @@ impl Behavior {
             nonempty(&gap.symbol, "known gap symbol")?;
             nonempty(&gap.evidence, "known gap evidence")?;
         }
-        self.validate_data_fields()?;
         self.real_client.validate()?;
         for prerequisite in &self.prerequisites {
             nonempty(prerequisite, "prerequisite")?;
@@ -192,53 +155,6 @@ impl Behavior {
                 matches!(test.rung, Rung::Unit | Rung::Codec | Rung::DurableModule),
                 "Rust source evidence must use unit, codec or durable_module"
             );
-        }
-        Ok(())
-    }
-
-    fn validate_data_fields(&self) -> Result<()> {
-        let mut fields = BTreeSet::new();
-        for field in &self.data_fields {
-            ensure!(
-                self.scenarios.contains(&field.scenario),
-                "data field names an unlisted scenario"
-            );
-            identifier(&field.checkpoint)?;
-            ensure!(
-                field.checkpoint != "opening",
-                "opening fields are not compared"
-            );
-            let (DataStream::Reply(stream) | DataStream::Broadcast(stream)) = &field.stream;
-            identifier(stream)?;
-            ensure!(
-                self.replies.contains(&format!("0x{:04X}", field.opcode)),
-                "data field names an unclaimed reply opcode"
-            );
-            ensure!(
-                !field.field_path.is_empty(),
-                "data field needs an exact field path"
-            );
-            for part in &field.field_path {
-                if part
-                    .parse::<usize>()
-                    .is_ok_and(|index| index.to_string() == *part)
-                {
-                    continue;
-                }
-                identifier(part)?;
-            }
-            ensure!(
-                fields.insert((
-                    &field.scenario,
-                    &field.checkpoint,
-                    &field.stream,
-                    field.opcode,
-                    &field.field_path
-                )),
-                "duplicate data field"
-            );
-            nonempty(&field.reason, "data field reason")?;
-            field.source.validate()?;
         }
         Ok(())
     }

@@ -3,105 +3,153 @@ use std::path::Path;
 use std::process::{Command, Stdio};
 
 use anyhow::{ensure, Context, Result};
-use lyracore_shared::spell::taxonomy::EffectKind;
+use lyracore_shared::spell::taxonomy::*;
+use wow_world_base::vanilla::AuraMod;
 
-// Read conformance/README.md#trainable-spells before changing these raw-kind mappings.
-const EFFECTS: &[(u32, EffectKind)] = &[
-    (2, EffectKind::Damage),
-    (5, EffectKind::Blink),
-    (6, EffectKind::AuraFlag),
-    (10, EffectKind::Heal),
-    (17, EffectKind::WeaponStrike),
-    (18, EffectKind::Resurrect),
-    (24, EffectKind::CreateItem),
-    (27, EffectKind::PersistentArea),
-    (29, EffectKind::Blink),
-    (30, EffectKind::Energize),
-    (31, EffectKind::WeaponStrike),
-    (33, EffectKind::OpenLock),
-    (35, EffectKind::AuraFlag),
-    (38, EffectKind::Dispel),
-    (53, EffectKind::EnchantItem),
-    (54, EffectKind::EnchantItem),
-    (55, EffectKind::TameCreature),
-    (56, EffectKind::SummonPet),
-    (58, EffectKind::WeaponStrike),
-    (62, EffectKind::PowerBurn),
-    (64, EffectKind::Trigger),
-    (67, EffectKind::HealMaxHealth),
-    (68, EffectKind::Interrupt),
-    (69, EffectKind::Distract),
-    (71, EffectKind::Pickpocket),
-    (80, EffectKind::AddCombo),
-    (83, EffectKind::Duel),
-    (94, EffectKind::SelfResurrect),
-    (96, EffectKind::Charge),
-    (99, EffectKind::Disenchant),
-    (101, EffectKind::FeedPet),
-    (112, EffectKind::SummonHostile),
-    (113, EffectKind::Resurrect),
-    (114, EffectKind::Taunt),
-    (121, EffectKind::WeaponStrike),
-    (125, EffectKind::ReduceThreat),
-];
+// Re-derive these mappings after the vmangos port; see conformance/README.md#trainable-spells.
+fn instant_effect_to_kind(effect_id: i32) -> u8 {
+    match effect_id {
+        2 | 17 | 58 | 121 | 31 => E_DAMAGE,
+        10 => E_HEAL,
+        67 => E_HEAL_MAX_HEALTH,
+        30 => E_ENERGIZE,
+        38 => E_DISPEL,
+        64 => E_TRIGGER,
+        63 | 91 => E_TAUNT,
+        114 => E_TAUNT,
+        24 => E_CREATE_ITEM,
+        68 => E_INTERRUPT,
+        55 => E_TAME_CREATURE,
+        101 => E_FEED_PET,
+        56 => E_SUMMON_PET,
+        62 => E_POWER_BURN,
+        83 => E_DUEL,
+        69 => E_DISTRACT,
+        33 | 59 => E_OPEN_LOCK,
+        99 => E_DISENCHANT,
+        80 => E_ADD_COMBO,
+        94 => E_SELF_RESURRECT,
+        18 | 113 => E_RESURRECT,
+        _ => E_SCRIPTED,
+    }
+}
 
-const AURAS: &[(u32, EffectKind)] = &[
-    (3, EffectKind::AuraPeriodicDamage),
-    (7, EffectKind::AuraControl),
-    (8, EffectKind::AuraPeriodicHeal),
-    (9, EffectKind::AuraModSpeed),
-    (10, EffectKind::AuraModCombat),
-    (12, EffectKind::AuraControl),
-    (13, EffectKind::AuraModCombat),
-    (14, EffectKind::AuraModDamageTaken),
-    (15, EffectKind::AuraRetaliate),
-    (16, EffectKind::AuraStealth),
-    (22, EffectKind::AuraModResistance),
-    (23, EffectKind::AuraPeriodicTrigger),
-    (24, EffectKind::AuraPeriodicEnergize),
-    (26, EffectKind::AuraControl),
-    (27, EffectKind::AuraFlag),
-    (29, EffectKind::AuraModStat),
-    (31, EffectKind::AuraModSpeed),
-    (32, EffectKind::AuraModSpeed),
-    (33, EffectKind::AuraModSpeed),
-    (34, EffectKind::AuraModHealthPower),
-    (35, EffectKind::AuraModHealthPower),
-    (36, EffectKind::SetStance),
-    (39, EffectKind::AuraImmunity),
-    (42, EffectKind::AuraProcTrigger),
-    (43, EffectKind::AuraProcDamage),
-    (47, EffectKind::AuraModCombat),
-    (49, EffectKind::AuraModCombat),
-    (51, EffectKind::AuraModCombat),
-    (52, EffectKind::AuraModCombat),
-    (54, EffectKind::AuraModCombat),
-    (55, EffectKind::AuraModCombat),
-    (56, EffectKind::AuraTransform),
-    (57, EffectKind::AuraModCombat),
-    (58, EffectKind::AuraModSpeed),
-    (65, EffectKind::AuraModSpeed),
-    (67, EffectKind::AuraDisarm),
-    (69, EffectKind::AuraAbsorb),
-    (77, EffectKind::AuraImmunity),
-    (78, EffectKind::AuraMounted),
-    (80, EffectKind::AuraModStatPct),
-    (87, EffectKind::AuraModDamageTaken),
-    (91, EffectKind::AuraModDetectRange),
-    (99, EffectKind::AuraModCombat),
-    (104, EffectKind::AuraFlag),
-    (105, EffectKind::AuraFlag),
-    (106, EffectKind::AuraFlag),
-    (107, EffectKind::AuraSpellmodFlat),
-    (108, EffectKind::AuraSpellmodPct),
-    (110, EffectKind::AuraModPowerRegenPct),
-    (124, EffectKind::AuraModCombat),
-    (129, EffectKind::AuraModSpeed),
-    (130, EffectKind::AuraModSpeed),
-    (140, EffectKind::AuraModSpeed),
-    (141, EffectKind::AuraModSpeed),
-    (161, EffectKind::AuraCombatHealthRegenPct),
-];
+fn aura_mod_to_kind(aura: AuraMod) -> u8 {
+    use AuraMod::*;
+    match aura {
+        PeriodicDamage | PeriodicLeech | PeriodicDamagePercent => A_PERIODIC_DAMAGE,
+        PeriodicHeal => A_PERIODIC_HEAL,
+        PeriodicEnergize | PeriodicManaLeech | PowerBurnMana => A_PERIODIC_ENERGIZE,
+        PeriodicTriggerSpell => E_TRIGGER,
+        ProcTriggerSpell => A_PROC_TRIGGER,
+        ProcTriggerDamage => A_PROC_DAMAGE,
+
+        AddFlatModifier => A_SPELLMOD_FLAT,
+        AddPctModifier => A_SPELLMOD_PCT,
+
+        ModStat => A_MOD_STAT,
+        ModPercentStat | ModTotalStatPercentage => A_MOD_STAT_PCT,
+
+        ModResistance
+        | ModBaseResistance
+        | ModResistancePct
+        | ModBaseResistancePct
+        | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
+
+        SchoolAbsorb | DamageShield | ManaShield => A_ABSORB,
+
+        ModAttackPower
+        | ModRangedAttackPower
+        | ModMeleeAttackPowerVersus
+        | ModRangedAttackPowerVersus
+        | ModAttackPowerPct
+        | ModRangedAttackPowerPct => A_MOD_COMBAT,
+        ModCritPercent | ModSpellCritChance | ModSpellCritChanceSchool | ModCritPercentVersus => {
+            A_MOD_COMBAT
+        }
+        ModHitChance | ModSpellHitChance => A_MOD_COMBAT,
+        ModDamageDone | ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => {
+            A_MOD_COMBAT
+        }
+        ModHealing | ModHealingDone => A_MOD_COMBAT,
+        ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
+
+        ModIncreaseSpeed | ModDecreaseSpeed | ModSpeedAlways | ModSpeedNotStack => A_MOD_SPEED,
+        ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => A_MOD_SPEED,
+        ModIncreaseSwimSpeed => A_MOD_SPEED,
+        ModAttackspeed
+        | ModMeleeHaste
+        | ModRangedHaste
+        | ModRangedAmmoHaste
+        | ModCastingSpeedNotStack => A_MOD_SPEED,
+
+        ModDamagePercentTaken => A_MOD_DAMAGE_TAKEN,
+
+        ModIncreaseHealth | ModIncreaseEnergy | ObsModHealth | ObsModMana => A_MOD_HEALTH_POWER,
+
+        ModStun => A_CONTROL,
+        ModRoot => A_CONTROL,
+        ModFear => A_CONTROL,
+        ModConfuse | ModCharm | ModPossess | ModPacify | ModPacifySilence | AoeCharm => A_CONTROL,
+
+        SchoolImmunity | DamageImmunity | EffectImmunity | StateImmunity | MechanicImmunity
+        | MechanicImmunityMask => A_IMMUNITY,
+
+        ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
+
+        ModRegen => A_PERIODIC_HEAL,
+        ModPowerRegen => A_PERIODIC_ENERGIZE,
+        ModPowerRegenPercent => A_MOD_POWER_REGEN_PCT,
+
+        ModDisarm => A_DISARM,
+        Mounted => A_MOUNTED,
+        Transform => A_TRANSFORM,
+        ModDetectRange => A_MOD_DETECT_RANGE,
+
+        Dummy
+        | BindSight
+        | ModTaunt
+        | ModStealth
+        | ModStealthDetect
+        | ModInvisibility
+        | ModInvisibilityDetection
+        | ModShapeshift
+        | DispelImmunity
+        | TrackCreatures
+        | TrackResources
+        | ModScale
+        | ModStalked
+        | ModLanguage
+        | FarSight
+        | WaterBreathing
+        | ModHealthRegenPercent
+        | PreventsFleeing
+        | ModUnattackable
+        | InterruptRegen
+        | Ghost
+        | AurasVisible
+        | WaterWalk
+        | FeatherFall
+        | Hover
+        | SharePetTracking
+        | Untrackable
+        | SafeFall
+        | Persuaded
+        | RetainComboPoints
+        | ResistPushback
+        | TrackStealthed
+        | ModWaterBreathing
+        | NoPvpCredit
+        | ModAoeAvoidance
+        | FeignDeath
+        | ModSilence
+        | SpiritOfRedemption
+        | AllowChampionSpells
+        | UseNormalMovementSpeed => A_FLAG,
+
+        _ => E_SCRIPTED,
+    }
+}
 
 pub fn print(root: &Path, path: Option<&Path>) -> Result<()> {
     let mut command = Command::new("python3");
@@ -115,8 +163,8 @@ pub fn print(root: &Path, path: Option<&Path>) -> Result<()> {
         .stderr(Stdio::piped())
         .spawn()?;
     let capabilities = serde_json::json!({
-        "effects": EFFECTS.iter().map(|(raw, _)| raw).collect::<Vec<_>>(),
-        "auras": AURAS.iter().map(|(raw, _)| raw).collect::<Vec<_>>(),
+        "effects": (0..256).filter(|raw| instant_effect_to_kind(*raw) != E_SCRIPTED).collect::<Vec<_>>(),
+        "auras": (0..256).filter(|raw| AuraMod::from_int(*raw).is_ok_and(|aura| aura_mod_to_kind(aura) != E_SCRIPTED)).collect::<Vec<_>>(),
     });
     child
         .stdin
@@ -156,4 +204,26 @@ fn sqlite_counts_follow_learning_data_and_build_boundaries() {
         String::from_utf8_lossy(&output.stdout),
         String::from_utf8_lossy(&output.stderr)
     );
+}
+
+#[test]
+fn supported_mappings_match_the_importer() {
+    let importer = syn::parse_file(include_str!("../../../importer/src/spell.rs")).unwrap();
+    let scoreboard = syn::parse_file(include_str!("spells.rs")).unwrap();
+    for name in ["instant_effect_to_kind", "aura_mod_to_kind"] {
+        let find = |file: syn::File| {
+            file.items
+                .into_iter()
+                .find_map(|item| match item {
+                    syn::Item::Fn(function) if function.sig.ident == name => Some(function),
+                    _ => None,
+                })
+                .unwrap()
+        };
+        assert_eq!(
+            find(importer.clone()),
+            find(scoreboard.clone()),
+            "re-derive spell support after importer mapping changes: {name}"
+        );
+    }
 }
