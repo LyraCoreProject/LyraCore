@@ -1137,13 +1137,12 @@ _Avoid_: feature (when meaning one interaction)
 
 **Conformance Audit**:
 A dated comparison of LyraCore and the Reference Server through the same wire scenarios. It
-separates rule differences from data differences using typed, sourced field declarations in the
-Feature Ledger.
+separates rule differences from data differences using the comparator's classification tags.
 _Avoid_: compatibility audit
 
 **Data-dependent field**:
-An exact packet field declared in the Feature Ledger with its value type, world-data dependency and
-pinned source. Only matching scalar value differences count as data in a Conformance Audit.
+A packet field declared in a harness scenario with its opcode, field path and reason. The comparator
+classifies changed data values separately while preserving presence, shape and protocol checks.
 
 **Reference Server**:
 The vmangos server whose observable results define 1.12.1 behavior for conformance checks.

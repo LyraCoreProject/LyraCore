@@ -41,6 +41,20 @@ Match ceremony to size:
 - **Small** (one pass): one implement agent in an isolated worktree; PR via the `file-pr` skill.
 - **Epic**: the `fan-out` skill. Tickets in `.claude/tickets/issue-<N>/`, committed on the feature branch so every agent can read them. Tracer runs alone on the strongest tier. Parallel slices get **explicit file ownership** in their briefs and push separate branches (`<epic>-tN`); an integrate step merges them before any slice that must see the union; the integration slice runs last and files **one PR**.
 
+For conformance Behavior work, assign the scenario author and core implementer to different agents
+or people. Record both assignments in the brief. The author writes and records the scenario in a
+harness PR; the implementer's brief names that PR and the pinned recording, then asks them to make
+tier 1 pass in core. Keep these assignments separate for that Behavior. Route suspected scenario
+defects back to its author. The implementer must not edit a scenario, Golden Trace or Equivalence
+Rule to obtain a pass.
+
+Keep `native-host/check.py` work scoped to Host and transport properties: TCP, Login Queue,
+crash recovery, slow readers and World Session replacement. Move gameplay checks into recorded
+conformance scenarios one Behavior at a time as the Behavior enters the Feature Ledger. Remove
+the corresponding Python check once its recorded replacement covers it. Existing checks stay
+until replaced; do not dispatch a bulk migration. See
+[testing](../../../docs/testing.md#conformance) and [ADR 0005](../../../docs/adr/0005-1-12-conformance.md).
+
 Every dispatch prompt carries the boilerplate in [AGENT-BRIEFING.md](AGENT-BRIEFING.md).
 
 Model tiers: sonnet for checks, pattern-copy slices, and small fixes; opus for tracers, integration, specs, and privileged or production-adjacent paths. Record the tier on each ticket's `Model:` line.
