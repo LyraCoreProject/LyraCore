@@ -108,27 +108,29 @@ fn guardians_attack_players_survive_owner_death_and_expire_in_combat() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn fifteen_guardians_allow_a_full_cast_and_sixteen_prevent_another() {
-    let (shard, owner) = stage(0);
-    shard.assert_sql(
-        "UPDATE game_world_entity SET health = 100000, max_health = 100000 WHERE guid = 1",
-    );
-    for (amount, expected) in [(13, 15), (2, 17), (2, 17)] {
-        shard.assert_sql(&format!(
-            "UPDATE game_spell_effect SET base_points = {amount} WHERE spell_id = {SPELL}"
-        ));
-        shard.assert_call(
-            "debug_cast_spell_at",
-            &[&owner, &SPELL.to_string(), &owner, "0", "0", "0"],
+fn fifteen_guardians_allow_a_full_cast_and_more_than_fifteen_prevent_another() {
+    for (amount, total) in [(1, 16), (2, 17)] {
+        let (shard, owner) = stage(0);
+        shard.assert_sql(
+            "UPDATE game_world_entity SET health = 100000, max_health = 100000 WHERE guid = 1",
         );
-        assert_eq!(
-            shard
-                .query_rows(&format!(
-                    "SELECT guid FROM game_world_entity WHERE owner_guid = {owner}"
-                ))
-                .len(),
-            expected,
-        );
+        for (amount, expected) in [(13, 15), (amount, total), (2, total)] {
+            shard.assert_sql(&format!(
+                "UPDATE game_spell_effect SET base_points = {amount} WHERE spell_id = {SPELL}"
+            ));
+            shard.assert_call(
+                "debug_cast_spell_at",
+                &[&owner, &SPELL.to_string(), &owner, "0", "0", "0"],
+            );
+            assert_eq!(
+                shard
+                    .query_rows(&format!(
+                        "SELECT guid FROM game_world_entity WHERE owner_guid = {owner}"
+                    ))
+                    .len(),
+                expected,
+            );
+        }
     }
 }
 
