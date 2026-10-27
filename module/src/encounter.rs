@@ -152,19 +152,6 @@ fn package_handler_for(
     Ok(Some(handler))
 }
 
-#[cfg(test)]
-fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
-    match signal {
-        EncounterSignal::Reset => Some(ENCOUNTER_NOT_STARTED),
-        EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
-        EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
-        EncounterSignal::Complete => Some(ENCOUNTER_DONE),
-        EncounterSignal::BreakAlzzinCrumbleWall
-        | EncounterSignal::InterruptAvatarSuppression
-        | EncounterSignal::SendMandokirDownstairs => None,
-    }
-}
-
 pub const ENCOUNTER_NOT_STARTED: u8 = 0;
 #[allow(dead_code, reason = "Packages select the encounter states they need")]
 pub const ENCOUNTER_IN_PROGRESS: u8 = 1;
@@ -793,16 +780,6 @@ mod tests {
         assert_eq!(ENCOUNTER_DONE, 2);
         assert_eq!(ENCOUNTER_FAILED, 3);
         const { assert!(HP_FIRED_NONE > 100) };
-    }
-
-    #[test]
-    fn named_source_states_translate_to_the_internal_encounter_contract() {
-        assert_eq!(encounter_state_for_signal(EncounterSignal::Reset), Some(0));
-        assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
-        assert_eq!(
-            encounter_state_for_signal(EncounterSignal::Complete),
-            Some(2)
-        );
     }
 
     #[test]

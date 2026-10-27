@@ -101,7 +101,7 @@ an encounter-bound definition depends on is refused, and the refusal names the c
 binding.
 
 **Encounter Signal**:
-A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
+A named Reset, Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
 Binding. Source numeric states do not cross this boundary.
 
 **Relay Definition**:

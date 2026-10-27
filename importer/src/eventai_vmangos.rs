@@ -239,6 +239,13 @@ fn predicates(source: &(impl TableRows + ?Sized)) -> Result<BTreeMap<u32, Option
         let flags: u32 = row.number("flags")?;
         let predicate = if static_conditions.get(&id) == Some(&Some(true)) {
             Some("always".into())
+        } else if flags == 0
+            && kind == 9
+            && values[1] == 1
+            && values[2..] == [0, 0]
+            && (1..=i64::from(u32::MAX)).contains(&values[0])
+        {
+            Some(format!("quest-incomplete.{}", values[0]))
         } else if flags == 0 && values[1..].iter().all(|v| *v == 0) {
             match (kind, values[0]) {
                 (6, 469) => Some("alliance".into()),
@@ -620,10 +627,11 @@ impl Source {
             (15341, 2) => (509, "ruins-of-ahnqiraj-rajaxx"),
             _ => return Err(format!("encounter-binding:{entry}:{field}")),
         };
-        if self.source_maps.get(&entry).is_some_and(|maps| {
-            maps.iter()
-                .any(|id| *id != map && !(entry == 15341 && *id == 1))
-        }) {
+        if self
+            .source_maps
+            .get(&entry)
+            .is_some_and(|maps| !maps.contains(&map))
+        {
             return Err(format!("encounter-cross-map:{entry}:{field}"));
         }
         let signal = match state {
@@ -1055,7 +1063,7 @@ mod tests {
         assert_eq!(predicates[&16].as_deref(), Some("alliance"));
         assert_eq!(predicates[&17].as_deref(), Some("horde"));
         assert_eq!(predicates[&18].as_deref(), Some("quest-taken.41"));
-        assert_eq!(predicates[&19], None);
+        assert_eq!(predicates[&19].as_deref(), Some("quest-incomplete.41"));
         for id in [20, 21, 22, 23, 25] {
             assert_eq!(predicates[&id].as_deref(), Some("always"));
         }
@@ -1487,12 +1495,19 @@ mod tests {
                 .encounter_command(entry, &step(37, [field, state, 0, 0]))
                 .is_err());
         }
-        source.source_maps.insert(4832, BTreeSet::from([48, 0]));
+        source.source_maps.insert(4832, BTreeSet::from([0]));
         assert_eq!(
             source
                 .encounter_command(4832, &step(37, [10, 3, 0, 0]))
                 .unwrap_err(),
             "encounter-cross-map:4832:10"
+        );
+        source.source_maps.insert(4832, BTreeSet::from([48, 0]));
+        assert_eq!(
+            source
+                .encounter_command(4832, &step(37, [10, 3, 0, 0]))
+                .unwrap(),
+            "notify-encounter:blackfathom-deeps-kelris:complete"
         );
     }
 

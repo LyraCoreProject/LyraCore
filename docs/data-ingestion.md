@@ -634,8 +634,8 @@ install an encounter Package handler.
 
 These fields and effects were checked in the
 [vmangos instance scripts at the pin](https://github.com/vmangos/core/tree/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/scripts).
-The importer refuses a binding when a selected source spawn puts that creature on another map,
-except Rajaxx's known map-1 appearance. His encounter notification is eligible only in a map-509
+The importer accepts a binding when the creature has a selected spawn on the bound map.
+Additional appearances on other maps do not change the binding. His encounter notification is eligible only in a map-509
 instance. His map-1 spawn line, map-509 spawn faction and evade yell use source map predicates.
 The classic Rajaxx client
 projection remains restricted to its original rule and spawn GUID; vmangos entry rules cannot
@@ -643,7 +643,8 @@ request it. Display-template dependencies come from each accepted command rather
 allowlist. Fixture identifiers remain unavailable as subjects, broadcasts and display dependencies.
 
 The condition reader follows `Conditions.h` at the pinned source: 33 is map, 15 is level,
-6 is team, and 9 is quest-taken with state 0 only. Level and quest states 1/2 remain unsupported.
+6 is team, and 9 is quest-taken. State 0 accepts active quests and state 1 requires incomplete
+objectives. Level and quest state 2 remain unsupported.
 Static conditions use 0 (always), 24 (patch), -1 (and), -2 (or), and -3 (not); these numbers also
 match that header. Flagged runtime conditions remain unsupported.
 

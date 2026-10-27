@@ -541,6 +541,9 @@ fn parse_event_predicate(encoded: &str) -> Result<EventPredicate, String> {
         "always" => Ok(EventPredicate::Always),
         "alliance" => Ok(EventPredicate::Alliance),
         "horde" => Ok(EventPredicate::Horde),
+        value if value.starts_with("quest-incomplete.") => {
+            nonzero_u32(&value[17..], "quest").map(EventPredicate::QuestIncomplete)
+        }
         value if value.starts_with("map.") => parse_u32(&value[4..]).map(EventPredicate::Map),
         value => value
             .strip_prefix("quest-taken.")

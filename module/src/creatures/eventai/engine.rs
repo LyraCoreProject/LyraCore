@@ -1237,6 +1237,15 @@ impl EventAiWorld for DatabaseWorld<'_> {
             EventPredicate::QuestTaken(quest) => {
                 crate::quest::quest_is_taken(self.ctx, guid, quest.quest_entry)
             }
+            EventPredicate::QuestIncomplete(quest_entry) => {
+                crate::quest::character_quest_row(self.ctx, guid, quest_entry).is_some_and(
+                    |quest| {
+                        !quest.rewarded
+                            && !quest.failed
+                            && !crate::quest::quest_is_complete(self.ctx, &quest)
+                    },
+                )
+            }
             EventPredicate::Map(map_id) => self
                 .eventai_unit(guid)
                 .is_some_and(|unit| unit.map_id == map_id),
