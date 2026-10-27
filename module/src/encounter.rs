@@ -533,7 +533,7 @@ pub(crate) fn spawn_wave(
             instance_id,
         };
         let entity =
-            crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);
+            crate::creatures::build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), instance_id);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);
         ctx.db.game_encounter_spawn().insert(EncounterSpawn {

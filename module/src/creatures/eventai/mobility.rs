@@ -464,6 +464,7 @@ pub(super) fn place_summon(
         instance_id: summoner.instance_id,
     };
     let entity = crate::creatures::build_creature_entity(
+        ctx,
         &spawn,
         &template,
         ctx.random(),

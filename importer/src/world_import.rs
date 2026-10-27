@@ -1,5 +1,7 @@
 #[path = "world_import_trainers.rs"]
 mod trainers;
+#[path = "world_import_creatures.rs"]
+mod vmangos_creatures;
 #[path = "world_import_gossip.rs"]
 mod vmangos_gossip;
 #[path = "world_import_loot.rs"]
@@ -1894,6 +1896,7 @@ pub(crate) fn creature_row_kept_in_scope(
             || scope.contains(map, x, y, z))
 }
 
+#[derive(Clone)]
 pub(crate) struct WorldImportArgs {
     pub(crate) source: SourceKind,
     pub(crate) dbc: Option<String>,
@@ -3670,18 +3673,22 @@ fn vmangos_creature_entries(
         .copied()
         .collect::<std::collections::HashSet<_>>();
     for row in dump.rows("creature")?.iter() {
+        if row.number::<u32>("spawn_flags")? & 2 != 0 {
+            continue;
+        }
         let choices = ["id", "id2", "id3", "id4", "id5"]
             .iter()
             .map(|column| row.number::<u64>(column))
             .collect::<Result<Vec<_>>>()?;
-        if args.scope.contains(
-            row.number("map")?,
-            row.number("position_x")?,
-            row.number("position_y")?,
-            row.number("position_z")?,
-        ) || choices
-            .iter()
-            .any(|entry| args.scope.forced_creature_entries.contains(entry))
+        if args.scope.contains_map(row.number("map")?)
+            && (args.scope.contains(
+                row.number("map")?,
+                row.number("position_x")?,
+                row.number("position_y")?,
+                row.number("position_z")?,
+            ) || choices
+                .iter()
+                .any(|entry| args.scope.forced_creature_entries.contains(entry)))
         {
             entries.extend(choices.into_iter().filter(|entry| *entry != 0));
         }
@@ -3974,6 +3981,7 @@ fn gameobject_findings(dump: &impl TableRows, args: &WorldImportArgs) -> Result<
 
 fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<DumpPlan> {
     match args.family.as_deref() {
+        Some("creatures" | "casts") => vmangos_creatures::plan(dump, args),
         Some("items") => vmangos_items_plan(dump, args),
         Some("loot") => vmangos_loot_plan(dump, args),
         Some("gameobjects") => vmangos_gameobjects_plan(dump, args),
@@ -3993,7 +4001,7 @@ fn build_vmangos_plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<D
             })
         }
         _ => bail!(
-            "vmangos currently supports --family globals, items, loot, gameobjects, trainers, quests or gossip"
+            "vmangos currently supports --family creatures, casts, globals, items, loot, gameobjects, trainers, quests or gossip"
         ),
     }
 }

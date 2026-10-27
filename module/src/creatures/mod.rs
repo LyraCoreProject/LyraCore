@@ -1,4 +1,5 @@
 mod ai;
+pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
 mod eventai;

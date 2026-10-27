@@ -28,6 +28,13 @@ entry menu. Submenu selections keep this root so a Runtime Script menu replaceme
 the open menu. SpacetimeDB disconnects clients for this schema update; reconnect starts at the
 entry menu. The Host does not decode this table, and its delivery layouts do not change.
 
+`game_creature_level_stats` holds final health, damage and armor by template and level.
+`game_creature_display` holds weighted display choices by template. Both are new tables, so an
+existing Realm migrates without changing stored template rows. A template stat change takes
+precedence over level rows when its endpoint values no longer match the imported endpoints.
+An authored display or scale change likewise takes precedence over the imported display choices.
+Classic imports without these rows keep their existing rank scaling and display behavior.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`

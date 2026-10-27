@@ -290,17 +290,21 @@ pub(crate) fn update_template_from_relay(
         template.max_level_health,
         ctx.random(),
     );
-    let max_health = crate::creatures::scale_health_for_rank(base_health, template.rank).max(1);
+    let stats = super::catalogue::level_stats(ctx, &template, level);
+    let max_health = stats
+        .as_ref()
+        .map_or_else(
+            || crate::creatures::scale_health_for_rank(base_health, template.rank),
+            |stats| stats.health,
+        )
+        .max(1);
+    let (display_id, scale) = super::catalogue::display(ctx, &template, ctx.random());
     let health = health_after_template_update(old_health, old_max_health, max_health);
     let in_combat = entity.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT;
     entity.entry = entry;
-    entity.scale_x = if template.scale > 0.0 {
-        template.scale
-    } else {
-        1.0
-    };
-    entity.display_id = template.display_id;
-    entity.native_display_id = template.display_id;
+    entity.scale_x = if scale > 0.0 { scale } else { 1.0 };
+    entity.display_id = display_id;
+    entity.native_display_id = display_id;
     entity.level = level;
     entity.health = health;
     entity.max_health = max_health;
@@ -308,7 +312,7 @@ pub(crate) fn update_template_from_relay(
     entity.npc_flags = template.npc_flags;
     entity.unit_flags = template.unit_flags | in_combat;
     entity.base_attack_time_ms = template.base_attack_time_ms;
-    entity.armor = template.armor;
+    entity.armor = stats.map_or(template.armor, |stats| stats.armor);
     entity.update(ctx);
     let _ = crate::creatures::set_creature_gossip_menu(ctx, creature_guid, None);
     Ok(())

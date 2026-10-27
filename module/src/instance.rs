@@ -594,7 +594,7 @@ pub(crate) fn create_instance_with_id(
         copy.respawn_at = crate::creatures::timer_never(ctx);
         copy.despawn_at = crate::creatures::timer_never(ctx);
         let entity =
-            crate::creatures::build_creature_entity(&copy, &tmpl, ctx.random(), instance_id);
+            crate::creatures::build_creature_entity(ctx, &copy, &tmpl, ctx.random(), instance_id);
         let copied_guid = copy.guid;
         ctx.db.game_creature_spawn().insert(copy);
         copy_spawn_waypoints(ctx, spawn.guid, copied_guid, &mut next_waypoint_id)?;

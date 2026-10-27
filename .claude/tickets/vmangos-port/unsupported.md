@@ -123,3 +123,25 @@ Payment and text-input options would stay unavailable; neither occurs at this pi
 conditions remain unsupported. Compiling patch predicates and owning condition kinds does not
 add a condition field to the portal catalogue. Script delivery and the complete Source Profile
 gate remain for S6.
+
+Creature and cast findings count selected templates, source paths, or retained placements as indicated by the finding. The census includes all source IDs in the local manifest.
+
+| Finding | Full-world | Alliance-single |
+| --- | ---: | ---: |
+| `creatures.alternate-path` | 2 | 2 |
+| `creatures.auras` | 610 | 81 |
+| `creatures.formation` | 5781 | 5781 |
+| `creatures.game-event` | 2907 | 2907 |
+| `creatures.level-zero` | 5 | 0 |
+| `creatures.nested-pool` | 2 | 2 |
+| `creatures.respawn-range` | 18662 | 3448 |
+| `creatures.script` | 664 | 49 |
+| `creatures.spawn-distance` | 41935 | 8784 |
+| `creatures.spawn-flags` | 349 | 23 |
+| `creatures.spawn-resources` | 48456 | 10391 |
+| `creatures.static-behavior` | 8681 | 1841 |
+| `creatures.spell-slot-detail` | 4577 | 610 |
+| `creatures.template-behavior` | 5338 | 1354 |
+| `creatures.waypoint-detail` | 60222 | 60222 |
+
+Nested pools with unequal child limits remain inactive with their definitions and placements retained. The five unplaced level-zero templates have no defined class-level stat lookup and are omitted. The cast model keeps the first spell and an existing secondary rotation; source slot probabilities, target parameters, flags, initial/repeat delays and scripts remain unsupported. Formations and scheduled game events have no runtime. Waypoint orientation, delay, wander radius and scripts remain unrepresented, as do alternate paths. Spawn resource percentages, respawn ranges, active/random flags and per-spawn distances remain unsupported. Source template auras, scripts, immunities, extra flags and static behavior beyond the translated client flags remain unsupported. These limits are not evidence that the Source Profile gate passes; S6 owns that gate.

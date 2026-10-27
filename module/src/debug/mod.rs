@@ -259,7 +259,7 @@ pub fn debug_spawn_at_feet(
         source_guid: 0,
         instance_id: player.instance_id,
     };
-    let entity = build_creature_entity(&spawn, &tmpl, 0, player.instance_id);
+    let entity = build_creature_entity(ctx, &spawn, &tmpl, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::creatures::insert_creature_entity(ctx, entity);
     log::info!(

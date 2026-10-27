@@ -315,7 +315,17 @@ pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (
                 }
                 _ => (base_min, base_max),
             };
-        let rank = tmpl.map(|t| t.rank).unwrap_or(0);
+        let stats = tmpl
+            .as_ref()
+            .and_then(|t| crate::creatures::catalogue::level_stats(ctx, t, attacker.level));
+        let derived = stats.is_some()
+            || tmpl.as_ref().is_some_and(|t| {
+                crate::creatures::catalogue::level_stats(ctx, t, t.level).is_some()
+            });
+        let (base_min, base_max) = stats.map_or((base_min, base_max), |stats| {
+            (stats.damage_min, stats.damage_max)
+        });
+        let rank = tmpl.filter(|_| !derived).map(|t| t.rank).unwrap_or(0);
         let (min, max) = scale_swing_for_rank(base_min, base_max, rank);
         if disarmed {
             let pct = crate::spell::DISARM_SWING_RETAINED_PCT;

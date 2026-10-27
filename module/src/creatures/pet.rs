@@ -198,7 +198,7 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
         source_guid: 0,
         instance_id: owner.instance_id,
     };
-    let mut pet = build_creature_entity(&spawn, &tmpl, ctx.random(), owner.instance_id);
+    let mut pet = build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), owner.instance_id);
     pet.owner_guid = owner.guid;
     Some(pet)
 }

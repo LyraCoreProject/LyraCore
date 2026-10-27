@@ -85,6 +85,21 @@ def acknowledge_controls(host, client, peer, packets):
     raise AssertionError(('missing movement receipt Relay', expected, [hex(opcode) for opcode, _ in observed]))
 
 
+def check_creature_catalogue(host):
+    client = host.enter_world('Catalogue', at=(0, 8000, 8000, 0))
+    entry = 5090042
+    for table in ['game_creature_template', 'game_creature_level_stats', 'game_creature_display']:
+        host.restore(table, f'entry = {entry}')
+    host.sql(f"INSERT INTO game_creature_template (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) VALUES ({entry},'Catalogue fixture','',100,10,152,35,0,0,1,0,0,3,1,2000,0,0,10,152,0,20,30,50,0,0,0,0)")
+    host.sql(f'INSERT INTO game_creature_level_stats (id,entry,level,health,damage_min,damage_max,armor) VALUES ({(entry << 8) | 10},{entry},10,152,20,30,50)')
+    host.sql(f'INSERT INTO game_creature_display (id,entry,display_id,scale,weight) VALUES ({entry << 3},{entry},100,1,0),({(entry << 3) + 1},{entry},200,2,1)')
+    guid = spawn(host, client.guid, entry, 5)
+    assert host.rows(f'SELECT health,max_health,armor,display_id,scale_x FROM game_world_entity WHERE guid = {guid}') == [[152,152,50,200,2]]
+    host.sql(f'UPDATE game_creature_template SET health = 250 WHERE entry = {entry}')
+    next_guid = spawn(host, client.guid, entry, 10)
+    assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {next_guid}') == [[1000]]
+
+
 def check_sessionless_movement(host):
     guid = TESTER
     host.call('debug_spawn_player_entity', [guid])
@@ -4894,7 +4909,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_creature_catalogue, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,

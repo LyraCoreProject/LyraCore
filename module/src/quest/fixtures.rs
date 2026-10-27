@@ -1145,7 +1145,7 @@ pub fn debug_verify_raid_quest_credit_fixture(ctx: &ReducerContext) -> Result<()
         instance_id: player.instance_id,
     };
     let wolf_entity =
-        crate::creatures::build_creature_entity(&spawn, &wolf_template, 0, player.instance_id);
+        crate::creatures::build_creature_entity(ctx, &spawn, &wolf_template, 0, player.instance_id);
     ctx.db.game_creature_spawn().insert(spawn);
     crate::creatures::insert_creature_entity(ctx, wolf_entity);
     if !crate::loot::tag::record_first_threat(ctx, RQC_WOLF_GUID, RQC_PLAYER) {
