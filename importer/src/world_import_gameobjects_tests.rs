@@ -26,7 +26,16 @@ fn gameobject_source() -> WorldSource {
             ("displayId", N(1)),
             ("name", Text(name.into())),
             ("data0", N(0)),
-            ("data1", N(if entry == 5090042 { 5090042 } else { 0 })),
+            (
+                "data1",
+                N(if entry == 5090042 {
+                    5090042
+                } else if kind == 10 {
+                    -1
+                } else {
+                    0
+                }),
+            ),
             ("data2", N(0)),
             ("data3", N(0)),
             ("data5", N(0)),
@@ -105,6 +114,7 @@ fn gameobject_source() -> WorldSource {
                 &template(8, 10, 25, "Fishing hole"),
                 &template(1731, 10, 3, "Copper node"),
                 &template(5090042, 10, 3, "Fixture mug"),
+                &template(5090043, 10, 10, "Fixture goober"),
             ],
         },
         FixtureTable {
@@ -163,6 +173,7 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
     let sql = plan.stmts.join(";");
     assert!(!sql.contains("Old door"));
     assert!(!sql.contains("Fishing hole"));
+    assert!(sql.contains("(5090043,10,1,'Fixture goober',0,0,0,0,0,0,1)"));
     assert!(sql.contains("(1731,25,1,'Copper node',2770,1,186,300,100,0,1)"));
 }
 
@@ -179,9 +190,13 @@ fn imported_open_chest_can_be_looted() {
     for statement in plan.stmts {
         shard.assert_sql(&statement);
     }
-    for batch in plan.go_batches {
+    for (index, batch) in plan.go_batches.into_iter().enumerate() {
         shard.assert_call(
-            "import_gameobjects_append",
+            if index == 0 {
+                "import_gameobjects"
+            } else {
+                "import_gameobjects_append"
+            },
             &[&serde_json::to_string(&batch).unwrap()],
         );
     }

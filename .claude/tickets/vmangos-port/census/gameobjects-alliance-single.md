@@ -69,7 +69,7 @@ Removed (0): none.
 - `gameobject`: patch/build selection keeps 56626 of 56639 source rows.
 - `transports`: patch/build selection keeps 9 of 14 source rows.
 - Template differences are selected catalogue membership, with real type-25 fishing holes omitted because the Module uses 25 for authored gather nodes. Trap and meeting-stone rows follow those selected templates.
-- Spawn differences follow source placements, profile coordinates, patch ranges, disabled flags and omitted fishing-hole templates. Source ready state maps to Module closed state; active maps to open and alternative-active stays 2. The Module converts its closed/open values back to client READY/ACTIVE states when sending packets.
+- Spawn differences follow source placements, profile coordinates, patch ranges, disabled flags and omitted fishing-hole templates. Source ready state maps to Module closed state. Active chests also map to closed so their loot remains usable; active doors map to open. Alternative-active stays 2. The Module converts its closed/open values back to client READY/ACTIVE states when sending packets.
 - The eight gather entries still use the authored skill, item and threshold rules. The source's additional loot is unsupported.
 - Transport counts include the production transport catalogue builder for both sources. Classic-db runs it in the client catalogue pass; vmangos runs it with gameobjects. Model counts use the separate `--go-models` builder with the same client meshes; empty meshes are omitted. Routes use unchanged client TaxiPath and TaxiPathNode tables; the first path node supplies the initial map.
 - Spawn entry keys identify templates with placed spawns, not source spawn GUIDs. No Realm was modified.

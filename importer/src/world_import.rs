@@ -2761,7 +2761,14 @@ fn collect_gameobject_spawns(
             let disp: u32 = row.number(got::DISPLAY_ID)?;
             let name = row.text(got::NAME)?.trim().to_string();
             let data0: u32 = row.number(got::DATA0)?;
-            let data1: u32 = row.number(got::DATA1)?;
+            let data1 = if matches!(
+                stored_type,
+                GO_CHEST | GO_DOOR | GO_BUTTON | GO_MEETINGSTONE | 8
+            ) {
+                row.number(got::DATA1)?
+            } else {
+                0
+            };
             let trap_spell_id = if raw_type == 6 {
                 row.number(got::DATA3)?
             } else {
