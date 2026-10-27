@@ -87,5 +87,5 @@ fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
         );
         return;
     }
-    panic!("ten finishers against a level-matched wolf must land at least once");
+    panic!("ten finishers must land at least once");
 }

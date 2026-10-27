@@ -128,16 +128,16 @@ fn stage_strike(
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, {range_yd}, 0, 1, 0, 0, 0, 0, {attributes}, \
-         0, 0, true, 0, 0, 0, 0, 0, 0, 0)"
+         0, 0, true, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_WEAPON_STRIKE}, {bonus}, 0, 0.0, 0, {T_TARGET_ENEMY}, \
-         0.0, 0, 0, 0, 100, 255, 0, 0, false)",
+         0.0, 0, 0, 0, 100, 255, 0, 0, false, 0.0)",
         (spell_id as u64) << 2
     ));
 }
