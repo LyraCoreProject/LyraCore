@@ -1,4 +1,14 @@
-# Package API, version 4
+# Package API, version 5
+
+Version 5 is an unreleased draft for the vmangos World Source switch. No collection tag
+has been created for it.
+
+Imported creature and GameObject spawn identifiers now come from vmangos. A Package Delta
+that names a classic-db `spawn_id` must be rebuilt against the vmangos import. The same
+number can identify a different placement; it is not safe to reuse a Spatial Claim because
+its numeric key still exists. Recheck the entry, map and position, then rebuild the Delta
+and its evidence against the new Import Revision. Package and Operator
+identifier ranges keep their values.
 
 The Package API is the part of the Module a Package may name. A Package compiles into the Module
 wasm and can reach any `crate::` path the compiler resolves. This document says which of those paths

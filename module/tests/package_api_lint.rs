@@ -16,7 +16,7 @@ fn contract() -> Contract {
 fn the_documented_version_and_roots_match_the_lint() {
     let document = std::fs::read_to_string(manifest_dir().join("../docs/package-api.md"))
         .expect("read the Package API contract");
-    assert_eq!(document.lines().next(), Some("# Package API, version 4"));
+    assert_eq!(document.lines().next(), Some("# Package API, version 5"));
     let roots = document
         .split_once("### Module roots")
         .expect("the contract documents Module roots")
