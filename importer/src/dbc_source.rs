@@ -187,7 +187,7 @@ pub(super) fn taxi_nodes(source: &(impl TableRows + ?Sized)) -> Result<DbcTaxiNo
     Ok(DbcTaxiNodes { rows })
 }
 
-fn findings(source: &impl TableRows) -> Result<serde_json::Value> {
+pub(crate) fn findings(source: &impl TableRows) -> Result<serde_json::Value> {
     let mut findings = Vec::new();
     for (column, code) in [
         ("cooldown", "dbc.trigger-cooldown"),

@@ -1,6 +1,6 @@
 #[path = "dbc_source.rs"]
 mod source;
-pub(crate) use source::world_plan as replacement_plan;
+pub(crate) use source::{findings, world_plan as replacement_plan};
 
 use std::collections::{HashMap, HashSet};
 use std::fs;
