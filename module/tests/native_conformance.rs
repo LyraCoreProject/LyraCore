@@ -9,7 +9,7 @@ use wow_world_messages::vanilla::{ClientMessage, CMSG_AUTH_SESSION};
 
 #[path = "conformance/taxi.rs"]
 mod taxi;
-#[path = "conformance/taxi_route.rs"]
+#[path = "../../conformance/support/taxi_route.rs"]
 mod taxi_route;
 #[path = "conformance/tier1.rs"]
 mod tier1;

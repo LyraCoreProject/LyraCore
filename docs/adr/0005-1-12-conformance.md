@@ -36,7 +36,7 @@ using a separate scenario author and independent decoders.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -44,10 +44,11 @@ using a separate scenario author and independent decoders.
     LyraCore uses debug reducers. vmangos uses a GM Account and GM commands such as `.levelup`,
     `.additem`, `.learn`, `.npc add` and `.tele`.
 11. Scenarios spawn their fixtures and assert rules. Audit reports separate rule differences from
-    data differences. Only rule differences count against conformance. A data difference must match
-    a typed data-dependent field in the Feature Ledger, with a pinned source and reason. The
-    scoreboard re-derives classification and rejects reports it cannot classify from those
-    declarations. Counted Deliberate Deviations remain rule differences.
+    data differences. Only rule differences count against conformance. Data-dependent fields belong
+    to the harness scenario and its hash.
+    The comparator emits tagged records. The scoreboard derives classification from those tags
+    and rejects summaries whose classification, signatures or raw counts disagree. Counted Deliberate
+    Deviations remain rule differences.
 12. The harness is a Rust library as well as a Headless Client. Its scenario model, independent
     decoders and comparator serve the tier 1 runner through a git dev-dependency. Pin it to the
     same SHA as `.wire-harness-rev`. The harness never depends on a LyraCore crate or shares a
@@ -80,19 +81,22 @@ using a separate scenario author and independent decoders.
 ## Two verification tiers
 
 Tier 1 runs on every core change in CI, except the taxi comparison until its known gaps are fixed.
-It drives the Module through native reducers and compares emitted packets with Golden Traces. It bypasses WoW TCP, SRP and the header cipher. The initial
-mechanism test must prove that an Operator WebSocket connection can enter the world through a
-feature-gated debug reducer, call `native_world_receive`, and subscribe to `game_native_packet`.
+It drives the Module through native reducers and compares emitted packets with Golden Traces.
+It bypasses WoW TCP, SRP and the header cipher. The initial mechanism test must prove that an
+Operator WebSocket connection can enter the world through a feature-gated debug reducer,
+call `native_world_receive`, and subscribe to `game_native_packet`.
 The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
 CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
 pointer to `conformance/features/taxi/taxi_single_hop.toml`. Its hand-written fixture holds path 6
 with 28 vertices, nodes 2 and 4, and a minimal flight-master template. The eight known gameplay gaps
 remain. Remove the CI skip in the same PR that fixes the last gap. A manual run still fails with
-the full comparator report. Keep no known-differences baseline; the other conformance checks continue to run in durable CI.
+the full comparator report. Keep no known-differences baseline; the other conformance checks
+continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
-its Native Host and imported world, and the Reference Server, through the same wire scenarios.
-Run it before feature batches and at milestones. It writes a dated report and never gates CI.
+its Native Host and the content its scenarios require, and the Reference Server, through the same
+wire scenarios. Run it before feature batches and at milestones. It writes a dated report and never
+gates CI.
 
 The harness repository owns scenarios, Fixture Verbs, Golden Traces, general Equivalence Rules,
 the comparator and Reference Server adapter. Core's `conformance/` owns the Feature Ledger,
@@ -146,8 +150,8 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.4`, commit
-`a8c67b49f3aecf2651fd63966d77e53fb2e4f3ca`, through a git dev-dependency at the full SHA in
+Core pins `wire-client` to `v0.2.0-conformance.5`, commit
+`bc83d81cc1992fd1b522cab38c2ea048b5c6db23`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
 on `wire-client` in every workspace member. It also checks the source and exact revision
 of every declaration, including renamed, optional and target-specific dependencies. The ledger
@@ -169,8 +173,8 @@ T2c adds `conformance/scoreboard`. It joins the ledger with local tier 1 evidenc
 JSON audit report, keeping real-client checks in their own column. It derives opcode and unavailable
 request counts from core's dependency source and `unavailable.rs`. Missing, stale and malformed
 evidence cannot become a pass. A matching dirty-tree run is unverified and adds no system pass.
-Audit data classifications require exact scalar field locations and matching value types in the
-ledger. Packet structure, ordering, missing fields, timing and identity differences remain rules.
+Both tiers use comparator tags for rule and data classification. Packet structure, ordering,
+missing fields, timing and identity differences remain rules.
 [The scoreboard contract](../../conformance/README.md#scoreboard)
 defines the counts and the report format for the Milestone 3 audit producer.
 
@@ -184,3 +188,17 @@ The ledger can record `known_gaps` with a description, core source path, symbol 
 evidence. These entries have no status and never participate in rule/data classification. They
 are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
 results; the durable taxi skip remains until the Behavior conforms with the bundled route fixture.
+
+## Milestone 3 audit
+
+`conformance/audit` starts an owned local Native Host with the shared hand-written taxi fixture and
+starts the pinned Reference Server through a `newgrp docker` heredoc. Every embedded catalogue
+scenario runs over TCP on both servers, and both candidates compare with their Golden Traces.
+The command writes a dated Markdown report and schema-2 JSON evidence, then stops both servers.
+The Reference Server comparison and recorded provenance establish reference stability separately.
+
+The Rust audit example and scoreboard share evidence validation. Both count differences by
+`(rule, checkpoint, stream, opcode, field_path)` and show raw counts. Fixed and regressed sets use
+these signatures. The first audit has no baseline. A report-only descendant commit remains current;
+any other core change makes it stale. See the [audit command](../../conformance/README.md#conformance-audit)
+for prerequisites, cleanup and the report contract.

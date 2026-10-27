@@ -1,5 +1,3 @@
-use lyracore_test_support::Standalone;
-
 // Client build 5875 route 6; see conformance/README.md#taxi-data for the Golden Trace check.
 const POINTS: [(u32, [f64; 3]); 28] = [
     (35, [-8851.658203125, 498.5517578125, 111.25601959228516]),
@@ -94,32 +92,35 @@ const NODES: [(u32, [f64; 3]); 2] = [
 ];
 const MOUNT_DISPLAY: u32 = 6852;
 
-pub fn install(shard: &Standalone) {
+pub fn statements() -> Vec<String> {
+    let mut statements = Vec::new();
     for (id, [x, y, z]) in NODES {
-        shard.assert_sql(&format!(
+        statements.push(format!(
             "INSERT INTO game_taxi_node \
              (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) \
              VALUES ({id},{id},0,{x},{y},{z},'Route fixture',0,{MOUNT_DISPLAY})"
         ));
     }
-    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (6,2,4,110)");
+    statements.push("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (6,2,4,110)".into());
     let rows = POINTS
         .iter()
         .enumerate()
         .map(|(index, (id, [x, y, z]))| format!("({id},6,{index},0,{x},{y},{z},0,0)"))
         .collect::<Vec<_>>()
         .join(",");
-    shard.assert_sql(&format!(
+    statements.push(format!(
         "INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES {rows}"
     ));
-    shard.assert_sql(
+    statements.push(
         "INSERT INTO game_creature_template \
          (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
           creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
           money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
           pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
-         VALUES (352,'Flight fixture','',1,1,100,35,8,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
+         VALUES (352,'Flight fixture','',1,1,100,35,8,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)"
+            .into(),
     );
+    statements
 }
 
 #[test]

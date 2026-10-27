@@ -27,7 +27,8 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard
+cargo test -p lyracore-conformance --example scoreboard --example audit
+python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
@@ -170,7 +171,7 @@ The independent Benilla codec checks and opcode inventory are described in
 
 Tier 1 starts a disposable local Shard and drives native reducers through an Operator WebSocket
 connection. `connection_identity` compares ping and name-query replies with the pinned harness's
-Golden Trace. `taxi_single_hop` uses imported route data as described in the
+Golden Trace. `taxi_single_hop` uses the bundled route fixture described in the
 [conformance data setup](../conformance/README.md#taxi-data). The same target checks preserved login
 credentials, later-transaction packet delivery and the known-flight-node debug reducer. Fixture
 world entry requires `conformance_test_fixture`; normal publication excludes it.
@@ -189,7 +190,8 @@ The [Feature Ledger](../conformance/README.md) has its own Architecture Test:
 
 ```bash
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard
+cargo test -p lyracore-conformance --example scoreboard --example audit
+python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 ```
 
@@ -197,7 +199,8 @@ The first command checks every Behavior file, its dependencies, the harness depe
 all scenario references through `wire_client::catalogue`. Missing scenarios and mismatched
 Behavior ids fail. The inventory command checks retained Rust evidence declarations.
 These checks do not establish that a Behavior passes its required verification rungs.
-The tier 1 test writes `.lyracore/conformance/tier1.json`. Run `./conformance/scoreboard` to join it
+The tier 1 test writes `.lyracore/conformance/tier1.json`. Run the manual
+[Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over TCP on both servers. Run `./conformance/scoreboard` to join it
 with the Feature Ledger and the latest Conformance Audit report. The scoreboard's example tests
 check counts, evidence freshness and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
