@@ -3218,6 +3218,7 @@ fn push_world_content_statements(
     if family_active(args, "creatures") {
         stmts.push("DELETE FROM game_creature_waypoint WHERE id > 0".into());
         stmts.push("DELETE FROM game_creature_template WHERE entry > 0".into());
+        stmts.push("DELETE FROM game_creature_level_stats WHERE id > 0".into());
         push_insert(stmts, "game_creature_template", "entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class", templates);
         push_insert(
             stmts,
@@ -3673,24 +3674,23 @@ fn vmangos_creature_entries(
         .copied()
         .collect::<std::collections::HashSet<_>>();
     for row in dump.rows("creature")?.iter() {
-        if row.number::<u32>("spawn_flags")? & 2 != 0 {
+        if row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0 {
             continue;
         }
-        let choices = ["id", "id2", "id3", "id4", "id5"]
-            .iter()
-            .map(|column| row.number::<u64>(column))
-            .collect::<Result<Vec<_>>>()?;
+        let choices = creature_population::vmangos_entry_choices(row)?;
         if args.scope.contains_map(row.number("map")?)
             && (args.scope.contains(
                 row.number("map")?,
                 row.number("position_x")?,
                 row.number("position_y")?,
                 row.number("position_z")?,
-            ) || choices
-                .iter()
-                .any(|entry| args.scope.forced_creature_entries.contains(entry)))
+            ) || choices.iter().any(|entry| {
+                args.scope
+                    .forced_creature_entries
+                    .contains(&u64::from(*entry))
+            }))
         {
-            entries.extend(choices.into_iter().filter(|entry| *entry != 0));
+            entries.extend(choices.into_iter().map(u64::from));
         }
     }
     entries.extend([416, 1860, 1863, 5676, 5677, 12861]);

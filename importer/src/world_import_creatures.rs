@@ -501,6 +501,9 @@ pub(super) fn plan(dump: &impl TableRows, args: &WorldImportArgs) -> Result<Dump
             .collect::<HashSet<_>>();
         for row in dump.rows("creature")?.iter() {
             let guid: u64 = row.number("guid")?;
+            if row.number::<u32>("id")? == 0 {
+                finding(&mut findings, "creatures.spawn-entry-zero", guid);
+            }
             if !retained.contains(&guid) {
                 continue;
             }
@@ -597,6 +600,155 @@ mod tests {
             )
             .unwrap();
         builder.finish().remove(0)
+    }
+
+    fn template_source() -> WorldSource {
+        let connection = rusqlite::Connection::open_in_memory().unwrap();
+        let fields = "entry patch unit_class level_min level_max health_multiplier damage_multiplier armor_multiplier damage_variance static_flags1 static_flags2 display_total_probability display_id1 display_probability1 display_scale1 display_id2 display_probability2 display_scale2 display_id3 display_probability3 display_scale3 display_id4 display_probability4 display_scale4 faction npc_flags type pet_family rank base_attack_time gold_min gold_max pickpocket_loot_id skinning_loot_id trainer_type trainer_class spawn_spell_id totem_spell_id immunity_flags mechanic_immune_mask school_immune_mask flags_extra";
+        let columns = fields
+            .split_whitespace()
+            .map(|name| format!("{name} INTEGER DEFAULT 0"))
+            .collect::<Vec<_>>()
+            .join(",");
+        connection.execute_batch(&format!("CREATE TABLE creature_template ({columns}, name TEXT DEFAULT '', subname TEXT DEFAULT '', script_name TEXT DEFAULT '', auras TEXT DEFAULT '', PRIMARY KEY (entry,patch));
+            INSERT INTO creature_template (entry,patch,unit_class,level_min,level_max,health_multiplier,damage_multiplier,armor_multiplier,display_id1,faction,rank,base_attack_time) VALUES (5090042,10,1,10,10,1,1,1,100,35,3,2000);
+            CREATE TABLE creature_classlevelstats (class INTEGER, level INTEGER, health REAL, melee_damage REAL, armor REAL);
+            INSERT INTO creature_classlevelstats VALUES (1,10,100,20,50);")).unwrap();
+        WorldSource::Vmangos(connection)
+    }
+
+    #[test]
+    #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+    fn classic_reimport_restores_rank_health_and_melee_damage() {
+        let mut statements = Vec::new();
+        templates(
+            &template_source(),
+            &HashSet::from([5090042]),
+            &HashSet::new(),
+            None,
+            &mut statements,
+            &mut Findings::new(),
+        )
+        .unwrap();
+        let mut node = crate::standalone_support::Standalone::start("classic-creature-reimport");
+        node.publish_module();
+        node.assert_call("claim_operator", &[]);
+        node.assert_call("install_guid_range", &["0"]);
+        node.assert_call("debug_seed_scenario_fixtures", &[]);
+        node.assert_call("debug_spawn_player_entity", &["1"]);
+        for statement in &statements {
+            node.assert_sql(statement);
+        }
+        let classic = "INSERT INTO `creature_template` (`Entry`,`Name`,`MinLevel`,`MaxLevel`,`MinLevelHealth`,`MaxLevelHealth`,`MinMeleeDmg`,`MaxMeleeDmg`,`Rank`,`Faction`,`ModelId1`,`Scale`,`MeleeBaseAttackTime`) VALUES (5090042,'Classic fixture',10,10,100,100,20,20,3,35,100,1,2000);";
+        let args = crate::parse_args_from([
+            "--dump",
+            "fixture.sql",
+            "--family",
+            "creatures",
+            "--world-profile",
+            "full-world",
+        ])
+        .unwrap()
+        .world_import_args()
+        .unwrap();
+        for (reimport, health, damage) in [(false, 100, 20), (true, 400, 50)] {
+            if reimport {
+                let plan = build_dump_plan(classic, &args, &None, &None).unwrap();
+                for statement in plan.stmts {
+                    node.assert_sql(&statement);
+                }
+                assert!(node
+                    .query_rows("SELECT id FROM game_creature_level_stats WHERE entry = 5090042")
+                    .is_empty());
+            }
+            node.assert_call("debug_spawn_at_feet", &["1", "5090042", "5"]);
+            let rows =
+                node.query_rows("SELECT guid,health FROM game_world_entity WHERE entry = 5090042");
+            let creature = rows
+                .iter()
+                .find(|row| row["health"] == health.to_string())
+                .unwrap();
+            node.assert_call("debug_compute_swing", &[&creature["guid"], "1"]);
+            let swing = node
+                .query_rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'");
+            assert_eq!(swing[0]["base_min"], damage.to_string());
+            assert_eq!(swing[0]["base_max"], damage.to_string());
+        }
+    }
+
+    #[test]
+    fn vmangos_spawn_choices_and_dependencies_stop_at_the_first_zero() {
+        let source = template_source();
+        let WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, position_x REAL, position_y REAL, position_z REAL, patch_min INTEGER, patch_max INTEGER);
+            INSERT INTO creature VALUES (1,5090042,0,5090043,0,0,0,0,1,2,3,0,10),(2,0,5090044,0,0,0,0,0,1,2,3,0,10);").unwrap();
+        let args = crate::parse_args_from([
+            "--dump",
+            "fixture.sqlite",
+            "--map",
+            "1",
+            "--include-map",
+            "0",
+        ])
+        .unwrap()
+        .world_import_args()
+        .unwrap();
+        let entries = vmangos_creature_entries(&source, &args).unwrap();
+        assert!(entries.contains(&5090042));
+        assert!(!entries.contains(&5090043));
+        assert!(!entries.contains(&5090044));
+    }
+
+    #[test]
+    fn zero_primary_entry_skips_the_spawn_and_reports_its_guid() {
+        let source = template_source();
+        let WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("CREATE TABLE creature (guid INTEGER, id INTEGER, id2 INTEGER, id3 INTEGER, id4 INTEGER, id5 INTEGER, spawn_flags INTEGER, map INTEGER, patch_min INTEGER, patch_max INTEGER);
+            INSERT INTO creature VALUES (42,0,5090042,0,0,0,0,0,0,10);").unwrap();
+        for table in [
+            "game_event_creature",
+            "pool_template",
+            "pool_creature",
+            "pool_creature_template",
+            "pool_pool",
+            "pool_gameobject",
+            "pool_gameobject_template",
+            "creature_movement",
+            "creature_movement_template",
+            "creature_groups",
+        ] {
+            connection
+                .execute_batch(&format!(
+                    "CREATE TABLE {table} (id INTEGER, patch_min INTEGER, patch_max INTEGER)"
+                ))
+                .unwrap();
+        }
+        let args = crate::parse_args_from([
+            "--dump",
+            "fixture.sqlite",
+            "--family",
+            "creatures",
+            "--world-profile",
+            "full-world",
+        ])
+        .unwrap()
+        .world_import_args()
+        .unwrap();
+        let imported = plan(&source, &args).unwrap();
+        assert_eq!(imported.spawn_row_count, 0);
+        assert!(imported.spawn_batches.is_empty());
+        let manifest: serde_json::Value =
+            serde_json::from_str(imported.world_source_manifest.as_ref().unwrap()).unwrap();
+        assert!(manifest["findings"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|finding| finding["code"] == "creatures.spawn-entry-zero"
+                && finding["source_ids"] == serde_json::json!(["42"])));
     }
 
     #[test]

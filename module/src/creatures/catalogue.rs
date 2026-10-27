@@ -32,6 +32,9 @@ pub(crate) fn level_stats(
     let table = ctx.db.game_creature_level_stats();
     // Presence preserves the imported stat convention through Package template edits.
     table.by_entry().filter(template.entry).next()?;
+    if level < template.level || level > template.max_level.max(template.level) {
+        return None;
+    }
     let key = |level| (u64::from(template.entry) << 8) | u64::from(level);
     if level <= 255 && template.level <= 255 && template.max_level <= 255 {
         if let (Some(base), Some(last)) = (
@@ -44,9 +47,7 @@ pub(crate) fn level_stats(
                 && base.damage_max == template.damage_max
                 && base.armor == template.armor
             {
-                if let Some(stats) = table.id().find(key(level)) {
-                    return Some(stats);
-                }
+                return table.id().find(key(level));
             }
         }
     }

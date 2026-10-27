@@ -341,6 +341,18 @@ fn add_legacy_pools(
     Ok(unsupported)
 }
 
+pub(crate) fn vmangos_entry_choices(row: &crate::world_source::Row) -> Result<Vec<u32>> {
+    let mut entries = Vec::new();
+    for column in ["id", "id2", "id3", "id4", "id5"] {
+        let entry = row.number(column)?;
+        if entry == 0 {
+            break;
+        }
+        entries.push(entry);
+    }
+    Ok(entries)
+}
+
 fn source_choices(
     dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<BTreeMap<u64, Vec<u32>>> {
@@ -361,12 +373,8 @@ fn source_choices(
         }
     } else {
         for row in dump.rows("creature")?.iter() {
-            let entries = ["id", "id2", "id3", "id4", "id5"]
-                .iter()
-                .map(|name| row.number::<u32>(name))
-                .collect::<Result<Vec<_>>>()?;
-            let entries: Vec<_> = entries.into_iter().filter(|entry| *entry != 0).collect();
-            if entries.len() > 1 || row.number::<u32>("id")? == 0 {
+            let entries = vmangos_entry_choices(row)?;
+            if entries.len() > 1 {
                 choices.insert(row.number("guid")?, entries);
             }
         }
@@ -434,7 +442,8 @@ pub(crate) fn collect(
     let mut used_groups = BTreeSet::new();
     let mut seen_guids = BTreeSet::new();
     for row in parse_table(dump, "creature")?.iter() {
-        if vmangos && row.number::<u32>("spawn_flags")? & 2 != 0 {
+        if vmangos && (row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0)
+        {
             continue;
         }
         let map: i64 = number(row, cr::MAP, "creature")?;
@@ -613,8 +622,8 @@ mod tests {
     }
 
     #[test]
-    fn vmangos_population_keeps_choices_after_empty_slots() {
-        for slots in ["10,0,20,0,0", "0,0,20,0,0"] {
+    fn vmangos_population_stops_choices_at_the_first_empty_slot() {
+        for (slots, expected) in [("10,0,20,0,0", vec![10]), ("0,0,20,0,0", vec![])] {
             let source = vmangos_source();
             let crate::world_source::WorldSource::Vmangos(connection) = &source else {
                 unreachable!()
@@ -623,21 +632,17 @@ mod tests {
                 "DELETE FROM creature; INSERT INTO creature VALUES (1,{slots},0,1,2,3,0,0,60,0,0,10)"
             )).unwrap();
             let plan = collect(&source, &full_scope()).unwrap();
-            let (entry, choices, referenced) = if slots.starts_with("10") {
-                (10, "10,20", HashSet::from([10, 20]))
-            } else {
-                (20, "20", HashSet::from([20]))
-            };
-            assert_eq!(plan.spawns[0].1, entry);
-            assert_eq!(plan.referenced_entries, referenced);
             assert_eq!(
-                plan.membership_rows,
-                [format!(
-                    "({},4294967297,{},'{choices}',0,'-4')",
-                    world_guid(entry, 1),
-                    if slots.starts_with("10") { 10 } else { 0 }
-                )]
+                plan.spawns.iter().map(|spawn| spawn.1).collect::<Vec<_>>(),
+                expected
             );
+            assert_eq!(plan.referenced_entries, expected.into_iter().collect());
+            let members = if slots.starts_with("10") {
+                vec![format!("({},4294967297,10,'',0,'-4')", world_guid(10, 1))]
+            } else {
+                vec![]
+            };
+            assert_eq!(plan.membership_rows, members);
         }
     }
 

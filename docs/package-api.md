@@ -406,7 +406,9 @@ scaling for that entry. Keep these Core-owned rows when editing a template.
 
 When template endpoints still match, Core uses the imported value for the selected level.
 After an edit makes the endpoints differ, Core interpolates the template health endpoints and
-uses its damage and armor directly. Classic imports clear the level rows and keep classic scaling.
+uses its damage and armor directly. Outside the template level range, hunter pets keep their level
+scaling without a classic rank multiplier. Classic imports clear the level rows and keep classic
+scaling.
 Package-invented templates without imported level rows use the classic convention.
 
 ### Module roots

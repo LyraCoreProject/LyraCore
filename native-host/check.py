@@ -101,6 +101,7 @@ def check_creature_catalogue(host):
         for edits, health, damage in [
             ('damage_min = 40, damage_max = 40', 152, 40),
             ('level = 11, max_level = 11', 152, 40),
+            ('max_level = 0', 152, 40),
             ('health = 250, max_level_health = 250', 250, 40),
         ]:
             host.sql(f'UPDATE game_creature_template SET {edits} WHERE entry = {entry}')
@@ -111,6 +112,30 @@ def check_creature_catalogue(host):
             host.call('debug_compute_swing', [next_guid, client.guid])
             assert host.rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'") == [[expected_damage, expected_damage]]
         host.sql(f'UPDATE game_creature_template SET level = 10, max_level = 10, health = 152, max_level_health = 152 WHERE entry = {entry}')
+
+
+def check_pet_level_scaling(host):
+    entry = 51006
+    host.restore('game_creature_template', f'entry = {entry}')
+    host.restore('game_creature_level_stats', f'entry = {entry}')
+    host.sql(f'UPDATE game_creature_template SET creature_family = 5, level = 10, max_level = 10, health = 100, max_level_health = 100, npc_flags = 0, rank = 3, damage_min = 20, damage_max = 30 WHERE entry = {entry}')
+    for source, name, expected in [('vmangos', 'Petimport', (22, 33)), ('classic-db', 'Petclassic', (55, 82))]:
+        host.sql(f'DELETE FROM game_creature_level_stats WHERE entry = {entry}')
+        if source == 'vmangos':
+            host.sql(f'INSERT INTO game_creature_level_stats (id,entry,level,health,damage_min,damage_max,armor) VALUES ({(entry << 8) | 10},{entry},10,100,20,30,0)')
+        owner = host.enter_world(name, 3, 3, at=(0, 8000, 8000, 0))
+        host.call('debug_set_level', [owner.guid, 11])
+        wild = spawn(host, owner.guid, entry, 5)
+        host.call('debug_force_cast_at', [owner.guid, 50300, wild])
+        pet, threshold = host.rows(f'SELECT live_pet_guid,next_level_xp FROM game_hunter_pet_protocol WHERE owner_guid = {owner.guid}')[0]
+        host.sql(f'UPDATE game_hunter_pet SET pet_xp = {threshold - 1} WHERE owner_guid = {owner.guid}')
+        prey = spawn(host, owner.guid, 51000, 5)
+        host.sql(f'UPDATE game_world_entity SET level = 11 WHERE guid = {prey}')
+        host.call('debug_apply_damage', [prey, 1, owner.guid])
+        host.call('debug_kill_creature', [owner.guid, prey])
+        assert host.rows(f'SELECT level FROM game_world_entity WHERE guid = {pet}') == [[11]], (source, host.rows(f'SELECT level,pet_xp FROM game_hunter_pet WHERE owner_guid = {owner.guid}'))
+        host.call('debug_compute_swing', [pet, owner.guid])
+        assert host.rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'") == [list(expected)], source
 
 
 def check_sessionless_movement(host):
@@ -4922,7 +4947,7 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_creature_catalogue, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,

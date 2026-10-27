@@ -295,7 +295,7 @@ fn local_givers_use_selected_enabled_spawn_choices_inside_the_profile() {
             ("id", N(guid * 100)),
             ("id2", N(guid * 100 + 1)),
             ("id3", N(0)),
-            ("id4", N(0)),
+            ("id4", N(guid * 100 + 4)),
             ("id5", N(0)),
             ("map", N(0)),
             ("position_x", N(x)),

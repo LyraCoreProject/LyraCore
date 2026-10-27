@@ -55,6 +55,9 @@ The `creatures` and `casts` vmangos families use selected creature templates, sp
 entry choices, paths and spell lists. The creature plan preserves signed event membership and
 pool limits. Nested pools that the current population model cannot express stay inactive and
 appear in the Compatibility Manifest. Game-event schedules and formations remain unsupported.
+Spawn choices use the consecutive nonzero slots in `id` through `id5`, stopping at the first zero,
+as `ChooseCreatureId` does in [Creature.cpp at 4641790](https://github.com/vmangos/core/blob/464179081673cfd240f7ffe7f0daf96bca0b5a70/src/game/Objects/Creature.cpp#L63-L76).
+A zero `id` skips the spawn and records `creatures.spawn-entry-zero`.
 
 Creature health is rounded after the class-level health and template multiplier are multiplied.
 Melee damage uses class-level damage, its multiplier and variance; armor uses class-level armor
