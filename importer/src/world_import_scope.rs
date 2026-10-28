@@ -398,7 +398,7 @@ impl WorldImportScope {
                 .any(|slice| slice.map_id == map_id)
     }
 
-    /// Planned maps plus every in-scope map that holds a source creature or GameObject row.
+    /// Planned maps plus every in-scope map that holds a kept source creature or GameObject row.
     pub(crate) fn source_maps(
         &self,
         source: &(impl crate::dump::TableRows + ?Sized),
@@ -409,14 +409,16 @@ impl WorldImportScope {
             .copied()
             .chain(self.bounded_slices.iter().map(|slice| slice.map_id))
             .collect();
-        for table in ["creature", "gameobject"] {
-            for row in source.rows(table)?.iter() {
-                let map = row.number::<i64>("map")?;
-                if self.contains_map(map) {
-                    maps.insert(map);
-                }
+        for row in source.rows("creature")?.iter() {
+            if row.number::<u32>("spawn_flags")? & 2 != 0 || row.number::<u32>("id")? == 0 {
+                continue;
             }
+            maps.insert(row.number::<i64>("map")?);
         }
+        for row in source.rows("gameobject")?.iter() {
+            maps.insert(row.number::<i64>("map")?);
+        }
+        maps.retain(|map| self.contains_map(*map));
         Ok(maps)
     }
 }
@@ -704,12 +706,13 @@ mod tests {
     }
 
     #[test]
-    fn source_maps_follow_the_source_only_for_the_all_maps_profile() {
+    fn source_maps_follow_kept_source_rows_only_for_the_all_maps_profile() {
         let source = crate::world_source::fixture_sql(
-            "CREATE TABLE creature (guid INTEGER PRIMARY KEY, map INTEGER,
-                patch_min INTEGER DEFAULT 0, patch_max INTEGER DEFAULT 10);
+            "CREATE TABLE creature (guid INTEGER PRIMARY KEY, map INTEGER, id INTEGER DEFAULT 1,
+                spawn_flags INTEGER DEFAULT 0, patch_min INTEGER DEFAULT 0,
+                patch_max INTEGER DEFAULT 10);
             INSERT INTO creature (guid,map) VALUES (1,0),(2,269),(3,451),(4,1);
-            INSERT INTO creature VALUES (5,77,11,11);
+            INSERT INTO creature VALUES (5,77,1,0,11,11),(6,78,0,0,0,10),(7,79,1,2,0,10);
             CREATE TABLE gameobject (guid INTEGER PRIMARY KEY, map INTEGER,
                 patch_min INTEGER DEFAULT 0, patch_max INTEGER DEFAULT 10);
             INSERT INTO gameobject (guid,map) VALUES (1,13),(2,-1);",

@@ -253,19 +253,29 @@ full_world_source_maps="0 1 36 269 451"
 : >"$stub_log"
 STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_MAP_IDS="0 1 269 451" \
     STUB_SCOPE_MAPS="$full_world_source_maps" run_import
-check "full-world accepts source maps outside the supported list" not_contains "$out" 'cross-continent contamination'
-check "full-world does not add source maps to its supported maps" \
-    bash -c '! grep -E "planned maps:.* (269|451) " "$0"' "$out"
+check "full-world accepts source maps outside the supported list" not_contains "$out" '[world] ABORT'
+check "  ...in the final map ownership assertion" \
+    contains "$out" 'ok    one continent per database: spatial rows only on map(s) 0 1 269 36 451 '
 : >"$stub_log"
 STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_MAP_IDS="0 1 269 451 13" \
     STUB_SCOPE_MAPS="$full_world_source_maps" ALLOW_MAP_SWITCH=1 run_import
 check "full-world rejects a map the source does not select" \
-    contains "$out" 'cross-continent contamination: '"'lyracore'"' holds spatial rows for map(s) 13 '
+    contains "$out" 'cross-continent contamination: '"'lyracore'"' holds spatial rows for map(s) 13 after importing'
 check "  ...and fails the run" test "$code" -ne 0
+for scope_mode in fail empty; do
+    : >"$stub_log"
+    if [ "$scope_mode" = fail ]; then
+        STUB_MODE=succeed WORLD_PROFILE=full-world STUB_SCOPE_MODE=fail run_import
+    else
+        STUB_MODE=succeed WORLD_PROFILE=full-world STUB_SCOPE_MAPS=" " run_import
+    fi
+    check "a $scope_mode map scope aborts the run" contains "$out" "[world] ABORT — could not read this run's map scope"
+    check "  ...before any import is applied" not_contains "$stub_log" '--apply'
+done
 : >"$stub_log"
-STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_SCOPE_MODE=fail run_import
-check "an unreadable map scope aborts the run" contains "$out" "[world] ABORT — could not read this run's map scope"
-check "  ...before any import is applied" not_contains "$stub_log" '--apply'
+STUB_MODE=succeed STUB_ROW_COUNT=150 run_import
+check "a legacy run reads its map scope with its slice flags" \
+    grep -q -- 'lyracore-importer --dump .* --map 0 --box -11400,-8000,-3100,2000 --include-map 36 .*--print-scope-maps$' "$stub_log"
 
 echo
 echo "import-world.sh — python3 absent from PATH"
