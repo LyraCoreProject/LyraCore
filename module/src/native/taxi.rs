@@ -2,14 +2,14 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        Vector3d,
+        DismountResult, MountResult, Vector3d, SMSG_DISMOUNTRESULT, SMSG_MOUNTRESULT,
     },
     world::Packet,
 };
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{game_native_player, Rollback};
 use crate::taxi::{game_taxi_passenger_spline, TaxiPassengerSpline};
 use crate::Refusal;
 
@@ -43,6 +43,30 @@ fn spline_packet(row: &TaxiPassengerSpline) -> Option<Packet> {
 pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
     if let Some(packet) = spline_packet(row) {
         super::visibility::broadcast(ctx, row.character_guid, packet.opcode, packet.body, false);
+    }
+}
+
+pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(character_guid)
+    else {
+        return;
+    };
+    let messages = [
+        ServerOpcodeMessage::SMSG_DISMOUNTRESULT(SMSG_DISMOUNTRESULT {
+            result: DismountResult::Ok,
+        }),
+        ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+    ];
+    for message in messages {
+        if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
+            spacetimedb::log::error!("taxi landing delivery failed for {character_guid}: {error}");
+            super::disconnect(ctx, owner.connection_id);
+            break;
+        }
     }
 }
 
@@ -121,6 +145,15 @@ pub(super) fn receive(
                 c.destination_node,
                 0,
             );
+            let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
+            if accepted {
+                super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+                    false,
+                )?;
+            }
             super::send(
                 ctx,
                 connection,
@@ -132,7 +165,15 @@ pub(super) fn receive(
                 false,
             )?;
             // The ordered feed must deliver the paid reply before the first flight spline.
-            if reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK {
+            if accepted {
+                super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_MOUNTRESULT(SMSG_MOUNTRESULT {
+                        result: MountResult::Ok,
+                    }),
+                    false,
+                )?;
                 crate::taxi::arm_taxi_flight(ctx, guid);
             }
             Ok(())

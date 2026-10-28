@@ -26,22 +26,10 @@ symbol = "segment_micros; route_duration_micros"
 evidence = "conformance/reports/2026-10-27-t2g.md: wire records 3, 84 and 87, duration and landing passenger_update_delivery."
 
 [[known_gaps]]
-description = "Takeoff omits SMSG_CANCEL_COMBAT and SMSG_MOUNTRESULT; landing omits SMSG_DISMOUNTRESULT and SMSG_CANCEL_COMBAT."
-path = "module/src/taxi.rs"
-symbol = "arm_taxi_flight; finish_flight"
-evidence = "conformance/reports/2026-10-27-t2g.md: wire records 1, 2, 7 and 8, missing_packet for combat and mount result replies; activation delivery is in module/src/native/taxi.rs::receive."
-
-[[known_gaps]]
 description = "Landing sends no MSG_MOVE_TELEPORT_ACK correction."
 path = "module/src/taxi.rs"
 symbol = "finish_flight"
 evidence = "conformance/reports/2026-10-27-t2g.md: wire record 9, missing_packet for MSG_MOVE_TELEPORT_ACK."
-
-[[known_gaps]]
-description = "Takeoff unit flags omit bit 0x4."
-path = "module/src/taxi.rs"
-symbol = "arm_taxi_flight"
-evidence = "conformance/reports/2026-10-27-t2g.md: wire record 86, passenger field_46 exact_field: 1048584 instead of 1048588."
 
 [[known_gaps]]
 description = "Flight movement keeps the old zone and omits the Elwynn and Westfall world-state and weather packets."
