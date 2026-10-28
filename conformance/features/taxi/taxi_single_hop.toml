@@ -20,22 +20,10 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The first passenger spline starts at DBC vertex 0 instead of the Character position."
-path = "module/src/taxi.rs"
-symbol = "arm_taxi_flight"
-evidence = "conformance/reports/2026-10-27-t2g.md: wire records 4-6, SMSG_MONSTER_MOVE position.x/y/z exact_field."
-
-[[known_gaps]]
 description = "Straight-segment timing makes the advertised duration about one second short and clears the landing presentation early."
 path = "module/src/taxi.rs"
 symbol = "segment_micros; route_duration_micros"
 evidence = "conformance/reports/2026-10-27-t2g.md: wire records 3, 84 and 87, duration and landing passenger_update_delivery."
-
-[[known_gaps]]
-description = "Crossing a route vertex or grid cell sends another spline to the passenger."
-path = "module/src/taxi.rs"
-symbol = "should_refresh_spline; advance_taxi_flight"
-evidence = "conformance/reports/2026-10-27-t2g.md: wire records 10-83, extra_packet for SMSG_MONSTER_MOVE."
 
 [[known_gaps]]
 description = "Takeoff omits SMSG_CANCEL_COMBAT and SMSG_MOUNTRESULT; landing omits SMSG_DISMOUNTRESULT and SMSG_CANCEL_COMBAT."

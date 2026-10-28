@@ -19,45 +19,6 @@
           "rule": "exact_field",
           "checkpoint": "flight",
           "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": [
-            "position",
-            "x"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": [
-            "position",
-            "y"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": [
-            "position",
-            "z"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "checkpoint": "flight",
-          "stream": {
             "kind": "broadcast",
             "id": "values"
           },
@@ -68,16 +29,6 @@
             "values",
             "field_46"
           ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": []
         },
         {
           "rule": "missing_packet",

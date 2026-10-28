@@ -525,7 +525,6 @@ fn remaining_spline(
 }
 
 fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
-    crate::native::taxi_spline_changed(ctx, &row);
     let splines = ctx.db.game_taxi_passenger_spline();
     if splines.character_guid().find(row.character_guid).is_some() {
         splines.character_guid().update(row);
@@ -1077,12 +1076,19 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
     player.movement_flags = TAXI_MOVEMENT_FORWARD;
     let start = route_position(&points, 0).expect("validated route has a start");
+    let start = RoutePosition {
+        x: player.x,
+        y: player.y,
+        z: player.z,
+        ..start
+    };
     let spline = remaining_spline(&flight, &player, &points, start, 0);
     ctx.db
         .game_active_taxi_flight()
         .character_guid()
         .update(flight);
     player.update(ctx);
+    crate::native::taxi_spline_changed(ctx, &spline);
     write_passenger_spline(ctx, spline);
     ctx.db
         .game_taxi_flight_schedule()
@@ -1172,7 +1178,7 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     ctx.db
         .game_active_taxi_flight()
         .character_guid()
-        .update(flight.clone());
+        .update(flight);
     if let Some(spline) = spline {
         write_passenger_spline(ctx, spline);
     }
