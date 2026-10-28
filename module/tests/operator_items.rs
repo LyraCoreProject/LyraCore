@@ -263,3 +263,28 @@ fn item_edits_survive_plain_publish() {
     apply(&shard, json!([{"createItem": {"fields": fields(&shard)}}]));
     assert!(item(&shard, FIRST_ITEM + 1).is_some());
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn an_update_keeps_an_imported_spell_reference_the_realm_lacks() {
+    let shard = realm("operator-items-held-spell");
+    let mut fields = fields(&shard);
+    apply(&shard, json!([{"createItem": {"fields": fields}}]));
+    // An imported row may name a spell the realm never imported.
+    shard.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_2 = 4000000000 WHERE entry = {FIRST_ITEM}"
+    ));
+    fields["spellid_2"] = json!(4_000_000_000u32);
+    fields["name"] = json!("Renamed");
+    apply(
+        &shard,
+        json!([{"updateItem": {"entry": FIRST_ITEM, "fields": fields}}]),
+    );
+    assert_eq!(item(&shard, FIRST_ITEM).unwrap()["name"], "Renamed");
+    fields["spellid_3"] = json!(4_000_000_001u32);
+    refusal(
+        &shard,
+        json!([{"updateItem": {"entry": FIRST_ITEM, "fields": fields}}]),
+        "spell 4000000001 does not exist",
+    );
+}

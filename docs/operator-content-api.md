@@ -402,6 +402,10 @@ Vendor replacement refuses a missing creature template, a missing item, or dupli
 Vendor rows are not Package-claimable; offers may refer to Package or Fixture-Reserved items.
 A missing nonzero spell in any of the five spell slots is a Refusal. Range exhaustion is a Refusal.
 
+An update checks only the values it changes. A value the row already holds passes, for example an
+imported spell id the Realm does not have, so an edit of one column is not refused for another. A
+create checks every value.
+
 The item Gates use the same vanilla enum types as the item-query encoder:
 
 | Field | Accepted values |

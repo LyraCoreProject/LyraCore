@@ -33,6 +33,10 @@ macro_rules! item_fields {
                 ItemTemplate { entry, $($field: self.$field,)* }
             }
 
+            fn of_template(template: &ItemTemplate) -> Self {
+                ItemFields { $($field: template.$field.clone(),)* }
+            }
+
             fn changes(&self, old: Option<&ItemTemplate>) -> String {
                 let mut changes = Vec::new();
                 $(if old.is_none_or(|old| old.$field != self.$field) {
@@ -252,7 +256,7 @@ fn apply(
 ) -> Result<String, String> {
     match edit {
         ItemEdit::CreateItem(create) => {
-            check_fields(ctx, &create.fields)?;
+            check_fields(ctx, &create.fields, None)?;
             let entry = ids.next_item(ctx)?;
             let changes = create.fields.changes(None);
             ctx.db
@@ -276,7 +280,7 @@ fn apply(
                 .entry()
                 .find(entry)
                 .ok_or_else(|| format!("item {entry} does not exist"))?;
-            check_fields(ctx, &update.fields)?;
+            check_fields(ctx, &update.fields, Some(&ItemFields::of_template(&old)))?;
             let changes = update.fields.changes(Some(&old));
             ctx.db
                 .game_item_template()
@@ -362,28 +366,50 @@ fn replace_vendor(
     ))
 }
 
-fn check_fields(ctx: &ReducerContext, fields: &ItemFields) -> Result<(), String> {
-    check_values(fields)?;
-    for spell in [
-        fields.spellid_1,
-        fields.spellid_2,
-        fields.spellid_3,
-        fields.spellid_4,
-        fields.spellid_5,
-    ] {
-        if spell != 0 && ctx.db.game_spell().spell_id().find(spell).is_none() {
+/// Refuses a value an edit introduces. A value the row already holds passes, so an edit of one column
+/// is not refused for an imported value elsewhere in the row.
+fn check_fields(
+    ctx: &ReducerContext,
+    fields: &ItemFields,
+    old: Option<&ItemFields>,
+) -> Result<(), String> {
+    let held = old.map(violations).unwrap_or_default();
+    if let Some(violation) = violations(fields)
+        .into_iter()
+        .find(|violation| !held.contains(violation))
+    {
+        return Err(violation);
+    }
+    let spells = |fields: &ItemFields| {
+        [
+            fields.spellid_1,
+            fields.spellid_2,
+            fields.spellid_3,
+            fields.spellid_4,
+            fields.spellid_5,
+        ]
+    };
+    let held = old.map(spells).unwrap_or_default();
+    for (spell, held) in spells(fields).into_iter().zip(held) {
+        if spell != 0 && spell != held && ctx.db.game_spell().spell_id().find(spell).is_none() {
             return Err(format!("spell {spell} does not exist"));
         }
     }
     Ok(())
 }
 
+#[cfg(test)]
 fn check_values(fields: &ItemFields) -> Result<(), String> {
+    violations(fields).into_iter().next().map_or(Ok(()), Err)
+}
+
+fn violations(fields: &ItemFields) -> Vec<String> {
+    let mut out = Vec::new();
     if fields.name.trim().is_empty()
         || fields.name.len() > MAX_ITEM_NAME_BYTES
         || fields.name.contains('\0')
     {
-        return Err(format!(
+        out.push(format!(
             "name must contain text, no NUL, and at most {MAX_ITEM_NAME_BYTES} UTF-8 bytes"
         ));
     }
@@ -392,12 +418,12 @@ fn check_values(fields: &ItemFields) -> Result<(), String> {
         || fields.damage_min < 0.0
         || fields.damage_min > fields.damage_max
     {
-        return Err("damage must be finite with 0 <= damage_min <= damage_max".into());
+        out.push("damage must be finite with 0 <= damage_min <= damage_max".into());
     }
     if ItemClassAndSubClass::try_from((u64::from(fields.subclass) << 32) | u64::from(fields.class))
         .is_err()
     {
-        return Err(format!(
+        out.push(format!(
             "unsupported class/subclass {}/{}",
             fields.class, fields.subclass
         ));
@@ -425,7 +451,7 @@ fn check_values(fields: &ItemFields) -> Result<(), String> {
         ("buy_count", fields.buy_count > 0),
     ] {
         if !valid {
-            return Err(format!("unsupported {name}"));
+            out.push(format!("unsupported {name}"));
         }
     }
     for (index, trigger) in [
@@ -439,10 +465,10 @@ fn check_values(fields: &ItemFields) -> Result<(), String> {
     .enumerate()
     {
         if SpellTriggerType::try_from(u32::from(trigger)).is_err() {
-            return Err(format!("unsupported spelltrigger_{}: {trigger}", index + 1));
+            out.push(format!("unsupported spelltrigger_{}: {trigger}", index + 1));
         }
     }
-    Ok(())
+    out
 }
 
 #[cfg(test)]
@@ -545,6 +571,25 @@ mod tests {
         for fields in cases {
             assert!(check_values(&fields).is_err());
         }
+    }
+
+    #[test]
+    fn a_value_the_row_already_holds_is_not_a_new_violation() {
+        let imported = ItemFields {
+            sheath: 8,
+            ..fields()
+        };
+        let renamed = ItemFields {
+            name: "Renamed".into(),
+            ..imported.clone()
+        };
+        let held = violations(&imported);
+        assert!(violations(&renamed).iter().all(|v| held.contains(v)));
+        let broken = ItemFields {
+            quality: 8,
+            ..renamed
+        };
+        assert!(violations(&broken).iter().any(|v| !held.contains(v)));
     }
 
     #[test]
