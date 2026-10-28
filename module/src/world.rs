@@ -1407,29 +1407,19 @@ pub(crate) fn apply_gossip_select(
     ctx: &ReducerContext,
     character_guid: u64,
     npc_guid: u64,
-    option_id: u32,
-    option_row_id: u32,
-    source_menu_id: u32,
-    selected_action: u32,
-) -> Result<(), String> {
-    crate::gossip::select_gate(
-        ctx,
-        character_guid,
-        npc_guid,
-        option_row_id,
-        source_menu_id,
-        selected_action,
-    )?;
+    selection: crate::gossip::Selection,
+) -> Result<u32, String> {
+    let target_menu = crate::gossip::select_gate(ctx, character_guid, npc_guid, &selection)?;
     crate::hooks::fire_on_gossip_select(
         ctx,
         &crate::hooks::GossipSelectPayload {
             character_guid,
             npc_guid,
-            option_id,
-            option_row_id,
+            option_id: selection.option_id,
+            option_row_id: selection.row_id,
         },
     );
-    Ok(())
+    Ok(target_menu)
 }
 
 #[reducer(client_disconnected)]

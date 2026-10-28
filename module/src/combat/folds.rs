@@ -389,7 +389,17 @@ fn melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bool) -
                 }
                 _ => (base_min, base_max),
             };
-        let rank = tmpl.map(|t| t.rank).unwrap_or(0);
+        let stats = tmpl
+            .as_ref()
+            .and_then(|t| crate::creatures::catalogue::level_stats(ctx, t, attacker.level));
+        let derived = stats.is_some()
+            || tmpl.as_ref().is_some_and(|t| {
+                crate::creatures::catalogue::level_stats(ctx, t, t.level).is_some()
+            });
+        let (base_min, base_max) = stats.map_or((base_min, base_max), |stats| {
+            (stats.damage_min, stats.damage_max)
+        });
+        let rank = tmpl.filter(|_| !derived).map(|t| t.rank).unwrap_or(0);
         let (min, max) = scale_swing_for_rank(base_min, base_max, rank);
         if disarmed {
             let pct = crate::spell::DISARM_SWING_RETAINED_PCT;
@@ -486,7 +496,9 @@ pub(crate) fn weapon_strike_spell_damage(
     let (min, max) = strike_weapon_range(ctx, attacker, strike);
     let weapon = min + ctx.random::<u32>() % (max.saturating_sub(min) + 1);
     let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
-    let mit_pct = if spell.school_mask == SCHOOL_MASK_PHYSICAL {
+    let mit_pct = if spell.school_mask == SCHOOL_MASK_PHYSICAL
+        && spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR == 0
+    {
         armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
     } else {
         0
@@ -504,7 +516,11 @@ pub(crate) fn finisher_strike_damage(
     crit: bool,
 ) -> u32 {
     let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
-    let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
+    let mit_pct = if spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR != 0 {
+        0
+    } else {
+        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
+    };
     strike_amount(0, amount, 100, mods, crit, mit_pct)
 }
 

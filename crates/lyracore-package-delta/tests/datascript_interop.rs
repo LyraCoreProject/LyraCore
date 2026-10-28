@@ -200,3 +200,25 @@ fn an_insert_that_does_not_carry_the_whole_row_is_refused_by_the_parser_too() {
         other => panic!("expected an incomplete insert, got {other:?}"),
     }
 }
+
+#[test]
+fn legacy_spell_inserts_keep_their_bytes_when_new_defaulted_columns_are_absent() {
+    let mut legacy: serde_json::Value =
+        serde_json::from_str(&fixture("fire-nova.expected.json")).unwrap();
+    for claim in legacy["claims"].as_array_mut().unwrap() {
+        let fields = claim["fields"].as_object_mut().unwrap();
+        for name in [
+            "custom_flags",
+            "min_target_level",
+            "single_target_key",
+            "bonus_coefficient",
+        ] {
+            fields.remove(name);
+        }
+    }
+    let delta = PackageDelta::parse(&legacy.to_string())
+        .expect("old spell inserts retain migration defaults");
+    assert_eq!(delta.claim_counts().inserted_spells, 5);
+    assert_eq!(delta.claim_counts().inserted_effects, 10);
+    assert!(!delta.to_canonical_json().contains("bonus_coefficient"));
+}

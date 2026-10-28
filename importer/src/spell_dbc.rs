@@ -46,13 +46,18 @@ pub(crate) struct Spell {
     pub(crate) effect_amplitude: [u32; 3],
     pub(crate) effect_multiple_values: [f32; 3],
     pub(crate) effect_chain_target: [u32; 3],
-    pub(crate) effect_item_type: [i32; 3],
+    pub(crate) effect_item_type: [u64; 3],
     pub(crate) effect_misc_value: [u32; 3],
     pub(crate) effect_trigger_spell: [u32; 3],
     pub(crate) effect_points_per_combo: [f32; 3],
     pub(crate) name: String,
     pub(crate) family_name: u32,
     pub(crate) family_flags: u64,
+    pub(crate) custom_flags: u32,
+    pub(crate) min_target_level: u32,
+    pub(crate) single_target_key: u64,
+    pub(crate) bonus_coefficient: Option<[f32; 3]>,
+    pub(crate) npc_guardian_entry: Option<u32>,
 }
 
 pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
@@ -94,6 +99,11 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
             let name = std::str::from_utf8(&name[..end])
                 .with_context(|| format!("Spell.dbc row {id} name is not UTF-8"))?;
             let spell = Spell {
+                custom_flags: 0,
+                min_target_level: 0,
+                single_target_key: 0,
+                bonus_coefficient: None,
+                npc_guardian_entry: None,
                 id: column(0),
                 school: column(1),
                 dispel_type: column(4),
@@ -135,7 +145,7 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 effect_amplitude: array(94),
                 effect_multiple_values: array(97).map(f32::from_bits),
                 effect_chain_target: array(100),
-                effect_item_type: array(103).map(|n| n as i32),
+                effect_item_type: array(103).map(u64::from),
                 effect_misc_value: array(106),
                 effect_trigger_spell: array(109),
                 effect_points_per_combo: array(112).map(f32::from_bits),

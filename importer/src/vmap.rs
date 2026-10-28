@@ -1208,25 +1208,11 @@ fn instance_map_source(
         .with_context(|| format!("reading {map_dbc_path}"))?;
     let maps = ClientMap::read(&mut Cursor::new(&map_dbc))
         .context("parsing Map.dbc for Instance Vmap Slice")?;
-    let mut rows = maps.rows.iter().filter(|row| row.id.id == map_id);
-    let row = rows
-        .next()
-        .with_context(|| format!("Map.dbc has no map {map_id}"))?;
-    if rows.next().is_some() {
-        bail!("Map.dbc has more than one map {map_id}");
-    }
-    if row.internal_name.is_empty()
-        || !row
-            .internal_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        bail!(
-            "Map.dbc map {map_id} has unsafe internal name {:?}",
-            row.internal_name
-        );
-    }
-    let map_name = row.internal_name.clone();
+    let names = crate::map_catalogue::archive_names(&maps)?;
+    let map_name = names
+        .get(&map_id)
+        .with_context(|| format!("Map.dbc has no map {map_id}"))?
+        .to_string();
     let wdt_path = format!("World\\Maps\\{map_name}\\{map_name}.wdt");
     let wdt = chain
         .read_file(&wdt_path)
@@ -1323,6 +1309,25 @@ fn placement_key(placement: &Placement) -> String {
 
 fn apply_plan(shard: &Shard, plan: &VmapPlan) -> Result<()> {
     let generation_id = plan.generation_id.to_string();
+    let output = shard.query_json(
+        "vmap",
+        &format!(
+            "SELECT state, map_id, expected_chunks, accepted_chunks, expected_bytes, manifest_digest, source_identity, selection_identity FROM game_vmap_generation WHERE id = {generation_id}"
+        ),
+    )?;
+    let existing = serde_json::from_str(&output).context("parse existing vmap generation")?;
+    match matching_generation_state(&existing, plan)? {
+        Some(ACTIVE) => {
+            println!("vmap: generation {generation_id} is already active and matches the plan");
+            return Ok(());
+        }
+        Some(VERIFIED) => {
+            shard.call_reducer_args("activate_vmap_generation", &[&generation_id])?;
+            return Ok(());
+        }
+        Some(0) | None => {}
+        Some(state) => bail!("vmap generation {generation_id} cannot resume from state {state}"),
+    }
     let map_id = plan.map_id.to_string();
     let expected_chunks = plan.shard_rows.to_string();
     let expected_bytes = plan.total_bytes.to_string();
@@ -1378,6 +1383,44 @@ fn apply_plan(shard: &Shard, plan: &VmapPlan) -> Result<()> {
     shard.call_reducer_args("activate_vmap_generation", &[&generation_id])?;
     println!("vmap: activated generation {generation_id} after {batches} batch(es), skipping {skipped} already-accepted shard row(s)");
     Ok(())
+}
+
+fn matching_generation_state(existing: &serde_json::Value, plan: &VmapPlan) -> Result<Option<u64>> {
+    let rows = sql_column_rows(
+        existing,
+        &[
+            "state",
+            "map_id",
+            "expected_chunks",
+            "accepted_chunks",
+            "expected_bytes",
+            "manifest_digest",
+            "source_identity",
+            "selection_identity",
+        ],
+    );
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let state = row[0].as_u64().context("invalid vmap generation state")?;
+    anyhow::ensure!(
+        row[1].as_u64() == Some(u64::from(plan.map_id))
+            && row[2].as_u64() == Some(plan.shard_rows as u64)
+            && row[4].as_u64() == Some(plan.total_bytes as u64)
+            && row[5].as_str() == Some(plan.manifest.as_str())
+            && row[6].as_str() == Some(plan.source_identity.as_str())
+            && row[7].as_str() == Some(plan.selection_identity.as_str()),
+        "vmap generation {} has different metadata from the import plan",
+        plan.generation_id
+    );
+    if matches!(state, VERIFIED | ACTIVE) {
+        anyhow::ensure!(
+            row[3].as_u64() == Some(plan.shard_rows as u64),
+            "vmap generation {} is complete but has missing chunks",
+            plan.generation_id
+        );
+    }
+    Ok(Some(state))
 }
 
 const BATCH_BYTES: usize = 28_000;
@@ -1688,6 +1731,89 @@ mod tests {
     }
 
     #[test]
+    fn completed_generation_reuse_requires_matching_metadata_and_all_chunks() {
+        let plan = VmapPlan {
+            map_id: 78,
+            ownership: VmapOwnership::Spatial,
+            source_identity: "client fixture".into(),
+            selection_identity: "map=78;fixture".into(),
+            spool: VmapSpool::new(78).unwrap(),
+            keys: vec![],
+            total_bytes: 123,
+            shard_rows: 2,
+            manifest: "0123".into(),
+            generation_id: 456,
+            world_tris: 0,
+            wmo_tris: 0,
+            route_evidence: None,
+        };
+        let columns = [
+            "state",
+            "map_id",
+            "expected_chunks",
+            "accepted_chunks",
+            "expected_bytes",
+            "manifest_digest",
+            "source_identity",
+            "selection_identity",
+        ];
+        let response = |rows| {
+            serde_json::json!([{
+                "schema": {"elements": columns.map(|name| serde_json::json!({"name":{"some":name}}))},
+                "rows": rows,
+            }])
+        };
+        assert_eq!(
+            matching_generation_state(&response(serde_json::json!([])), &plan).unwrap(),
+            None
+        );
+        for state in [VERIFIED, ACTIVE] {
+            let row = serde_json::json!([
+                state,
+                78,
+                2,
+                2,
+                123,
+                "0123",
+                "client fixture",
+                "map=78;fixture"
+            ]);
+            assert_eq!(
+                matching_generation_state(&response(serde_json::json!([row])), &plan).unwrap(),
+                Some(state)
+            );
+            for (index, wrong) in [
+                (1, serde_json::json!(79)),
+                (2, serde_json::json!(3)),
+                (3, serde_json::json!(1)),
+                (4, serde_json::json!(124)),
+                (5, serde_json::json!("different digest")),
+                (6, serde_json::json!("another client")),
+                (7, serde_json::json!("another scope")),
+            ] {
+                let mut changed = row.clone();
+                changed[index] = wrong;
+                assert_eq!(
+                    matching_generation_state(&response(serde_json::json!([changed])), &plan)
+                        .unwrap_err()
+                        .to_string(),
+                    if index == 3 {
+                        format!(
+                            "vmap generation {} is complete but has missing chunks",
+                            plan.generation_id
+                        )
+                    } else {
+                        format!(
+                            "vmap generation {} has different metadata from the import plan",
+                            plan.generation_id
+                        )
+                    }
+                );
+            }
+        }
+    }
+
+    #[test]
     fn placement_key_deduplicates_an_overlap_without_merging_distinct_placements() {
         let placement = Placement {
             name: "World\\wmo\\test.wmo".to_owned(),
@@ -1729,7 +1855,10 @@ mod tests {
         assert!(sql_owns_instance_pool(owned).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("true", "false")).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("[0,true]", "[1,true]")).unwrap());
-        assert!(sql_owns_instance_pool("not json").is_err());
+        assert_eq!(
+            sql_owns_instance_pool("not json").unwrap_err().to_string(),
+            "parse JSON SQL Instance Pool response"
+        );
     }
 
     fn wmo_tri(verts: [[f32; 3]; 3]) -> VmapTri {

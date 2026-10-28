@@ -17,48 +17,53 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 44b04878 and the SpacetimeDB 2.7.1 CLI"]
+#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.7.1 CLI"]
 fn populated_old_module_upgrades_without_clearing() {
     let baseline_path = std::env::var_os("LYRACORE_TEST_BASELINE_WASM")
-        .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 44b04878f2050936faa61d6f087f3aa1a7a78a46 with debug_reducers,package_test_fixture");
+        .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 859c7257c74d2c371dea8ed743cfbccd596cac11 with debug_reducers,package_test_fixture");
     let baseline = fs::read(baseline_path).expect("read the baseline Module Wasm");
     assert!(baseline.starts_with(b"\0asm"), "baseline is not Wasm");
     let current = module_bytes();
     let mut shard = populated_old_module(&baseline);
     let character_before = character(&shard);
     let entity_before = entity(&shard);
-    for column in [
-        "simulation_indexed",
-        "regeneration_pending",
-        "combat_active",
-    ] {
+    let spell_before = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
+    let effect_before = shard.query_rows("SELECT * FROM game_spell_effect WHERE id = 20360400");
+    for column in ["custom_flags", "min_target_level", "single_target_key"] {
         assert!(
-            !entity_before.contains_key(column),
+            !spell_before[0].contains_key(column),
             "the baseline already has {column}"
         );
     }
+    assert!(!effect_before[0].contains_key("bonus_coefficient"));
     let legacy_emotes = shard.query_rows("SELECT * FROM game_emote_event WHERE sender_guid = 1");
-    assert_eq!(legacy_emotes.len(), 1);
+    assert!(legacy_emotes.is_empty(), "main emits only live emotes");
     let old_schema = shard.describe();
 
     shard.publish_module_bytes(current);
 
     assert_eq!(character(&shard), character_before);
-    let mut upgraded = entity(&shard);
-    for column in [
-        "simulation_indexed",
-        "regeneration_pending",
-        "combat_active",
-    ] {
+    assert_eq!(entity(&shard), entity_before);
+    let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
+    for column in ["custom_flags", "min_target_level", "single_target_key"] {
         assert_eq!(
-            upgraded.remove(column).as_deref(),
-            Some("false"),
+            spell_after[0].remove(column).as_deref(),
+            Some("0"),
             "{column}"
         );
     }
     assert_eq!(
-        upgraded, entity_before,
-        "old WorldEntity columns must survive"
+        spell_after, spell_before,
+        "published spell columns must survive"
+    );
+    let mut effect_after = shard.query_rows("SELECT * FROM game_spell_effect WHERE id = 20360400");
+    assert_eq!(
+        effect_after[0].remove("bonus_coefficient").as_deref(),
+        Some("-1")
+    );
+    assert_eq!(
+        effect_after, effect_before,
+        "published effect columns must survive"
     );
     assert_eq!(
         shard.query_rows("SELECT * FROM game_emote_event WHERE sender_guid = 1"),
@@ -121,9 +126,25 @@ fn populated_old_module(baseline: &[u8]) -> Standalone {
     let in_combat = lyracore_shared::constants::unit_flags::IN_COMBAT;
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET health = 17, max_health = 100, power = 0, max_power = 0, \
+         simulation_indexed = false, regeneration_pending = false, combat_active = false, \
          unit_flags = {in_combat}, combat_until_ms = {} WHERE guid = 1",
         u64::MAX
     ));
+    shard.assert_sql_exact(
+        "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
+         cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
+         aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
+         VALUES (5090100, 'Upgrade fixture', 0, 5, 0, 0, 0, 30, 3000, 1, 0, 0, 0, 0, \
+         0, 1, 0, false, 0, 0, 0, 0, 0, 0, 0, 18000)",
+    );
+    shard.assert_sql_exact(
+        "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
+         per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
+         VALUES (20360400, 5090100, 0, 1, 10, 0, 0.0, 0, 0, 0.0, 0, 0, 0, \
+         0, 0, 0, 0, false, 2.5)",
+    );
     send_emote(&shard, 34);
     shard
 }

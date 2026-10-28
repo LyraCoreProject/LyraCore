@@ -240,7 +240,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        build_creature_entity(&chicken_spawn, &chicken_tmpl, 0, 0),
+        build_creature_entity(ctx, &chicken_spawn, &chicken_tmpl, 0, 0),
     );
 
     for (wx, wy) in [(hw::X + 15.0, hw::Y), (hw::X + 15.0, hw::Y + 8.0)] {
@@ -316,7 +316,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        build_creature_entity(&wolf_spawn, &wolf_tmpl, 0, 0),
+        build_creature_entity(ctx, &wolf_spawn, &wolf_tmpl, 0, 0),
     );
 
     let trainer_tmpl = ctx
@@ -342,7 +342,7 @@ fn seed_map0_demo_content(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        build_creature_entity(&trainer_spawn, &trainer_tmpl, 0, 0),
+        build_creature_entity(ctx, &trainer_spawn, &trainer_tmpl, 0, 0),
     );
 
     ctx.db.game_item_template().insert(ItemTemplate {
@@ -637,6 +637,9 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             proc_chance: 0,
             proc_charges: 0,
             max_duration_ms: 0,
+            custom_flags: 0,
+            min_target_level: 0,
+            single_target_key: 0,
         });
     };
     let effect = |spell_id: u32,
@@ -667,6 +670,7 @@ fn seed_spell_registry(ctx: &ReducerContext) {
             script_id: 0,
             enters_combat: false,
             points_per_combo: 0.0,
+            bonus_coefficient: -1.0,
         });
     };
     spell(

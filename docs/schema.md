@@ -23,6 +23,27 @@ say: invariants, why a column exists and ordering rules.
   `#[default(...)]`. Ordering-sensitive data uses explicit sequence or timestamp columns, never
   auto-inc ordering.
 
+`game_native_player.gossip_root_menu_id` is an end-appended column with default 0, the creature
+entry menu. Submenu selections keep this root so a Runtime Script menu replacement invalidates
+the open menu. SpacetimeDB disconnects clients for this schema update; reconnect starts at the
+entry menu. The Host does not decode this table, and its delivery layouts do not change.
+
+`game_creature_level_stats` holds final health, damage and armor by template and level.
+`game_creature_display` holds weighted display choices by template. Both are new tables, so an
+existing Realm migrates without changing stored template rows. A template stat change takes
+precedence over level rows when its endpoint values no longer match the imported endpoints.
+The presence of level rows for an entry preserves the imported stat convention even after an edit
+changes the template endpoints; edited values never acquire classic rank multipliers. An authored
+display or scale change likewise takes precedence over the imported display choices.
+vmangos imports replace the level rows with selected source class-level stats.
+
+EventAI keeps the published rule's policy enums fieldless. The new private
+`game_creature_ai_script_policy` table holds command-list boundaries and event admission policies,
+keyed by definition revision and source rule id. Imports replace rules and policies together.
+`game_creature_ai_relay_run.failure_policy` is an end-appended optional enum with a typed `None`
+default, so old relay runs keep their failure behavior. See [command lists](data-ingestion.md#command-lists-in-eventai)
+for execution and failure rules.
+
 ### The three migration rules that have bitten
 
 1. **A default must be END-appended and explicitly typed.** A bare `#[default(0)]` on a `u64`
@@ -88,12 +109,22 @@ Two shapes recur:
 
 ## 3. Tables with rules the struct cannot show
 
+### Map catalogue (`module/src/config.rs`)
+
+`game_map` stores selected vmangos `map_template` rows. `internal_name` alone comes from the
+client's `Map.dbc`, joined by map id, and names the WDT/ADT archive directory. Missing client
+maps refuse the import. The gameplay fields are `map_type`, `linked_zone`, `parent`, `name`,
+`player_limit`, `reset_delay`, and `ghost_entrance_map/x/y`. A ghost map of -1 means
+no entrance. Instance admission, reset schedules and ghost routing do not yet consume these fields.
+This is a new table, so publishing it adds an empty catalogue without changing existing rows.
+
 ### Taxi catalogue (`module/src/config.rs`)
 
-`game_taxi_node`, `game_taxi_path` and `game_taxi_path_node` are public rows imported from the
-Operator's `TaxiNodes.dbc`, `TaxiPath.dbc` and `TaxiPathNode.dbc`. A node's `id` is its storage key
+`game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`
+come from the Operator's `TaxiPath.dbc` and `TaxiPathNode.dbc`. These rows are public.
+A node's `id` is its storage key
 and `client_node_id` is its unique wire id in the client's fixed 256-bit taxi mask. Imported nodes
-use their DBC id for both; reserved fixtures keep 509xxxx storage ids with bounded synthetic wire
+use their source id for both; reserved fixtures keep 509xxxx storage ids with bounded synthetic wire
 ids. Paths are directed edges with their fare in copper; the reverse direction exists only when the
 DBC has a second row. Path nodes keep explicit `(path_id, node_index)` order. `flags` stays the DBC's
 signed `int32` container so every raw bit survives, and `delay_ms` holds the DBC's seconds in
@@ -302,10 +333,10 @@ trainer NPC declares itself with `trainer_type::MOUNTS`.
 A Proc is an aura that fires off a combat event. Its rules live in three places: two are static
 data the importer writes, the third is a per-aura snapshot.
 
-`game_spell` carries what `Spell.dbc` knows: `proc_flags` (the vanilla `procFlags` bitmask, with
-no translation table), `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
+`game_spell` carries the selected vmangos `spell_template` fields: `proc_flags`, the vanilla
+`procFlags` bitmask with no translation table, `proc_chance` (a whole percent) and `proc_charges` (0 means unlimited).
 
-`game_spell_proc_event` is the classic-db overlay for what `Spell.dbc` has no column for: `ppm_rate`,
+`game_spell_proc_event` carries the source proc-event overlay: `ppm_rate`,
 `icd_ms`, `proc_ex` (the normal-hit and critical-hit rule), the `school_mask`, `family_name` and
 `family_flags` filter on triggering spells, a `proc_flags` override and a `custom_chance`. It is
 keyed by spell id, private, and absent for most spells; an absent row means "use the header's

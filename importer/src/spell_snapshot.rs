@@ -32,8 +32,10 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u8,
     pub(crate) proc_charges: u8,
-    // The Package API does not claim the combo-point columns, so the snapshot omits them.
     pub(crate) max_duration_ms: u32,
+    pub(crate) custom_flags: u32,
+    pub(crate) min_target_level: u32,
+    pub(crate) single_target_key: u64,
 }
 
 impl SpellHeaderRow {
@@ -64,12 +66,23 @@ impl SpellHeaderRow {
             ("proc_flags", FieldValue::U32(self.proc_flags)),
             ("proc_chance", FieldValue::U8(self.proc_chance)),
             ("proc_charges", FieldValue::U8(self.proc_charges)),
+            ("custom_flags", FieldValue::U32(self.custom_flags)),
+            ("min_target_level", FieldValue::U32(self.min_target_level)),
+            ("single_target_key", FieldValue::U64(self.single_target_key)),
         ]
     }
 
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
-        columns.push(("max_duration_ms", FieldValue::U32(self.max_duration_ms)));
+        // SQL retains combo scaling in published order; the Base Snapshot omits it.
+        let position = columns
+            .iter()
+            .position(|(name, _)| *name == "custom_flags")
+            .expect("spell headers contain custom_flags");
+        columns.insert(
+            position,
+            ("max_duration_ms", FieldValue::U32(self.max_duration_ms)),
+        );
         sql_tuple(&columns)
     }
 }
@@ -93,6 +106,7 @@ pub(crate) struct SpellEffectRow {
     pub(crate) script_id: u32,
     pub(crate) enters_combat: bool,
     pub(crate) points_per_combo: f32,
+    pub(crate) bonus_coefficient: f32,
 }
 
 impl SpellEffectRow {
@@ -119,13 +133,21 @@ impl SpellEffectRow {
             ("p1", FieldValue::I32(self.p1)),
             ("script_id", FieldValue::U32(self.script_id)),
             ("enters_combat", FieldValue::Bool(self.enters_combat)),
+            ("bonus_coefficient", FieldValue::F32(self.bonus_coefficient)),
         ]
     }
 
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
-        columns.push(("points_per_combo", FieldValue::F32(self.points_per_combo)));
+        let position = columns
+            .iter()
+            .position(|(name, _)| *name == "bonus_coefficient")
+            .expect("spell effects contain bonus_coefficient");
+        columns.insert(
+            position,
+            ("points_per_combo", FieldValue::F32(self.points_per_combo)),
+        );
         sql_tuple(&columns)
     }
 }
@@ -150,7 +172,7 @@ fn sql_tuple(columns: &[(&'static str, FieldValue)]) -> String {
 pub(crate) struct SpellRows {
     pub(crate) headers: Vec<SpellHeaderRow>,
     pub(crate) effects: Vec<SpellEffectRow>,
-    // Fishing markers replace DBC effects at the same key after the bulk insert.
+    // Fishing markers replace source effects at the same key after the bulk insert.
     pub(crate) fishing: Vec<SpellEffectRow>,
     pub(crate) reagents: Vec<String>,
     pub(crate) eventai_metadata: Vec<String>,
@@ -238,6 +260,9 @@ mod tests {
             proc_chance: 0,
             proc_charges: 0,
             max_duration_ms: 8000,
+            custom_flags: 0,
+            min_target_level: 0,
+            single_target_key: 0,
         }
     }
 
@@ -261,6 +286,7 @@ mod tests {
             script_id: 0,
             enters_combat: false,
             points_per_combo: 0.0,
+            bonus_coefficient: -1.0,
         }
     }
 
@@ -298,9 +324,24 @@ mod tests {
         assert!(sql.starts_with("(133,'Fireball',0,30,"), "{sql}");
         assert!(sql.contains(",18446744073709551615,"), "{sql}");
         assert!(
-            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000)"),
+            sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0)"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn sql_keeps_combo_scaling_before_the_vmangos_columns() {
+        let mut spell = header(133, "Fireball");
+        spell.max_duration_ms = 13000;
+        spell.custom_flags = 64;
+        spell.min_target_level = 12;
+        spell.single_target_key = 99;
+        assert!(spell.sql_values().ends_with(",13000,64,12,99)"));
+
+        let mut effect = effect(133, 0);
+        effect.points_per_combo = 3.5;
+        effect.bonus_coefficient = 0.75;
+        assert!(effect.sql_values().ends_with(",3.5,0.75)"));
     }
 
     #[test]

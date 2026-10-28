@@ -39,3 +39,7 @@ pub mod item_property;
 
 pub mod spell;
 pub mod talent;
+
+pub mod spell_custom;
+
+pub mod import_sql;

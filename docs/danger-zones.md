@@ -62,6 +62,14 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
    budget only for a realm-wide or partition-managing read, with a one-line reason. A budget
    larger than the real count fails its own test.
 
+### Changing the World Source
+
+A classic-db to vmangos re-import replaces world content and changes spawn guids. Rebuild Package
+Spatial Claims against the new Import Revision and recreate Instances. Classic-only quest, item
+and credit ids can disappear while Character records still refer to them. Follow
+[the source migration procedure](native-operations.md#move-an-existing-realm-from-classic-db-to-vmangos),
+including a restored-copy rehearsal and the order of world import before Package apply.
+
 ### After every publish
 
 Call `debug_repair_after_publish` as the Operator on the Shard. `init` does not run again on an

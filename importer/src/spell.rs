@@ -1,6 +1,8 @@
 use std::collections::BTreeMap;
 
-use crate::spell_dbc::{read_spells, Spell};
+#[cfg(test)]
+use crate::spell_dbc::read_spells;
+use crate::spell_dbc::Spell;
 use anyhow::{Context, Result};
 use wow_dbc::vanilla_tables::spell_cast_times::{SpellCastTimes, SpellCastTimesKey};
 use wow_dbc::vanilla_tables::spell_duration::{SpellDuration, SpellDurationKey};
@@ -11,10 +13,7 @@ use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
 use crate::dump::push_insert;
-use crate::package_delta;
-use crate::shard::Shard;
 use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
-use crate::world_import_scope::WorldImportScope;
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
@@ -28,11 +27,11 @@ use lyracore_shared::spell::taxonomy::{
     E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE,
     E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
     E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_HOSTILE,
-    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
-    M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
-    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
-    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
+    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
+    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
+    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
+    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
     SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
@@ -258,6 +257,7 @@ fn blank_effect(spell_id: u32, effect_index: u8) -> SpellEffectRow {
         script_id: 0,
         enters_combat: false,
         points_per_combo: 0.0,
+        bonus_coefficient: -1.0,
     }
 }
 
@@ -273,7 +273,7 @@ fn synthetic_seal_effect(spell_id: u32, name: &str, used_index: u8) -> Option<Sp
     })
 }
 
-// Bandage spells omit their Recently Bandaged debuff from the DBC row.
+// Bandage effects omit their linked Recently Bandaged debuff.
 fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<SpellEffectRow> {
     (s.mechanic == MECHANIC_BANDAGE).then(|| SpellEffectRow {
         kind: E_TRIGGER,
@@ -283,7 +283,7 @@ fn recently_bandaged_effect(s: &Spell, target: u8, used_index: u8) -> Option<Spe
     })
 }
 
-// Power Word: Shield omits its linked Weakened Soul debuff from the DBC row.
+// Power Word: Shield effects omit their linked Weakened Soul debuff.
 fn power_word_shield_p1_override(spell_id: u32, name: &str, kind: u8, p1: i32) -> i32 {
     if spell_id == 17 && name == "Power Word: Shield" && kind == A_ABSORB {
         return 6788;
@@ -619,7 +619,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         E_ENERGIZE => ((misc & 0xFF) as i32, P_POWER_TYPE),
         E_DISPEL => ((misc & 0x7F) as i32, P_SCHOOL_MASK),
         E_CREATE_ITEM => (item_type, P_ITEM_ENTRY),
-        E_SUMMON_PET => (misc as i32, P_ENTRY),
+        E_SUMMON_PET | E_SUMMON_GUARDIANS => (misc as i32, P_ENTRY),
         E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
         E_SELF_RESURRECT => (misc as i32, P_FLAT_MANA),
         _ => (0, P_NONE),
@@ -735,16 +735,20 @@ pub(crate) struct Coverage {
     unmapped_effect: BTreeMap<i32, usize>,
 }
 
+#[cfg(test)]
 fn build_spell_rows(
     data_dir: &Path,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
-    derive_spell_rows(&open_spell_tables(data_dir)?, only, trainers)
+    let path = std::env::var("LYRACORE_VMANGOS_SQLITE").context("set LYRACORE_VMANGOS_SQLITE")?;
+    let source = crate::world_source::WorldSource::open(Path::new(&path))?;
+    let (spells, _) = crate::vmangos_spell::read(&source)?;
+    derive_spell_rows(&open_spell_tables(data_dir, spells)?, only, trainers)
 }
 
 fn derive_spell_rows(
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
 ) -> Result<(SpellRows, Coverage, Vec<String>)> {
@@ -795,9 +799,42 @@ pub(crate) struct SpellCatalogue {
     pub(crate) proc_effects: std::collections::HashMap<u32, Vec<usize>>,
 }
 
-pub(crate) fn read_catalogue(data_dir: &str) -> Result<SpellCatalogue> {
-    let mut chain = open_chain(Path::new(data_dir))?;
-    let spells = read_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
+pub(crate) fn source_catalogue(source: &impl crate::dump::TableRows) -> Result<SpellCatalogue> {
+    let rows = source.columns(
+        "spell_template",
+        &[
+            "entry",
+            "effect1",
+            "effect2",
+            "effect3",
+            "effectApplyAuraName1",
+            "effectApplyAuraName2",
+            "effectApplyAuraName3",
+        ],
+    )?;
+    let spells = rows
+        .iter()
+        .map(|row| {
+            Ok(Spell {
+                id: row.number("entry")?,
+                effect: [
+                    row.number("effect1")?,
+                    row.number("effect2")?,
+                    row.number("effect3")?,
+                ],
+                effect_aura: [
+                    row.number("effectApplyAuraName1")?,
+                    row.number("effectApplyAuraName2")?,
+                    row.number("effectApplyAuraName3")?,
+                ],
+                ..Default::default()
+            })
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(catalogue(&spells))
+}
+
+fn catalogue(spells: &[Spell]) -> SpellCatalogue {
     let ids = spells.iter().map(|spell| u64::from(spell.id)).collect();
     let proc_effects = spells
         .iter()
@@ -814,10 +851,10 @@ pub(crate) fn read_catalogue(data_dir: &str) -> Result<SpellCatalogue> {
             (spell.id, effects)
         })
         .collect();
-    Ok(SpellCatalogue { ids, proc_effects })
+    SpellCatalogue { ids, proc_effects }
 }
 
-struct SpellDbc {
+struct SpellTables {
     spells: Vec<Spell>,
     cast_times: SpellCastTimes,
     ranges: SpellRange,
@@ -825,11 +862,10 @@ struct SpellDbc {
     radii: SpellRadius,
 }
 
-fn open_spell_tables(data_dir: &Path) -> Result<SpellDbc> {
+fn open_spell_tables(data_dir: &Path, spells: Vec<Spell>) -> Result<SpellTables> {
     let mut chain = open_chain(data_dir)?;
     eprintln!("spells: opened MPQ chain from {}", data_dir.display());
 
-    let spells = read_spells(&chain.read_file("DBFilesClient\\Spell.dbc")?)?;
     let cast_times: SpellCastTimes = read_table(&mut chain)?;
     let ranges: SpellRange = read_table(&mut chain)?;
     let durations: SpellDuration = read_table(&mut chain)?;
@@ -843,7 +879,7 @@ fn open_spell_tables(data_dir: &Path) -> Result<SpellDbc> {
         radii.rows().len(),
     );
 
-    Ok(SpellDbc {
+    Ok(SpellTables {
         spells,
         cast_times,
         ranges,
@@ -883,7 +919,7 @@ struct ResolvedEffect {
 
 fn push_spell_header_row(
     s: &Spell,
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     allow: &std::collections::HashSet<u32>,
     acc: &mut SpellAccumulator,
 ) -> SpellHeader {
@@ -956,7 +992,8 @@ fn push_spell_header_row(
     let spell_level = s.spell_level.min(255) as u8;
     spell_levels.insert(spell_id, spell_level);
     let max_level = s.max_level.min(255) as u8;
-    let is_negative = spell_is_negative(s);
+    let is_negative =
+        lyracore_shared::spell_custom::is_negative(s.custom_flags, spell_is_negative(s));
 
     let family_name = s.family_name as u8;
     let family_flags = s.family_flags;
@@ -989,6 +1026,9 @@ fn push_spell_header_row(
         proc_chance,
         proc_charges,
         max_duration_ms,
+        custom_flags: s.custom_flags,
+        min_target_level: s.min_target_level,
+        single_target_key: s.single_target_key,
     });
     if binding_summon_entry(
         spell_id,
@@ -1064,7 +1104,7 @@ fn spell_is_negative(s: &Spell) -> bool {
 fn push_spell_effect_rows(
     s: &Spell,
     header: &SpellHeader,
-    dbc: &SpellDbc,
+    dbc: &SpellTables,
     creature_displays: &BTreeMap<u32, u32>,
     allow: &std::collections::HashSet<u32>,
     acc: &mut SpellAccumulator,
@@ -1170,7 +1210,8 @@ fn push_spell_effect_rows(
         } else if kind == E_POWER_BURN {
             power_burn_ratio_bp(s.effect_multiple_values[i])
         } else if kind == A_SPELLMOD_FLAT || kind == A_SPELLMOD_PCT {
-            s.effect_item_type[i]
+            // The Module's p1 mask holds 32 bits; wider source masks have a manifest finding.
+            s.effect_item_type[i] as i32
         } else if let Some(row) = strike_row {
             i32::from(row.normalized)
         } else {
@@ -1198,6 +1239,7 @@ fn push_spell_effect_rows(
             script_id,
             enters_combat,
             points_per_combo: s.effect_points_per_combo[i],
+            bonus_coefficient: s.bonus_coefficient.map_or(-1.0, |c| c[i]),
         });
 
         cov.effects += 1;
@@ -1256,7 +1298,9 @@ fn resolve_effect_kind(
         }
         (k, resolve_aura_params(k, aura, s.effect_misc_value[i]))
     } else {
-        let k = if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
+        let k = if i == 0 && s.npc_guardian_entry.is_some() {
+            E_SUMMON_GUARDIANS
+        } else if effect_id == 5 && (s.implicit_target_a[i] == 9 || s.implicit_target_b[i] == 9) {
             E_RECALL_HOME
         } else {
             instant_effect_to_kind(effect_id)
@@ -1266,7 +1310,7 @@ fn resolve_effect_kind(
         }
         (
             k,
-            resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i]),
+            resolve_instant_params(k, s.effect_misc_value[i], s.effect_item_type[i] as i32),
         )
     };
     let kind = if name == "Stealth" && aura != AuraMod::ModStealth {
@@ -1378,7 +1422,7 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
         E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE
-        | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
+        | E_SUMMON_GUARDIANS | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
@@ -1460,13 +1504,13 @@ fn assemble_spell_sql(
     push_insert(
         &mut stmts,
         "game_spell",
-        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms",
+        "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key",
         &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
         &mut stmts,
         "game_spell_effect",
-        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo",
+        "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient",
         &rows.effects.iter().map(SpellEffectRow::sql_values).collect::<Vec<_>>(),
     );
     push_insert(
@@ -1488,7 +1532,7 @@ fn assemble_spell_sql(
             row.row_id()
         ));
         stmts.push(format!(
-            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES {}",
+            "INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient) VALUES {}",
             row.sql_values()
         ));
     }
@@ -1509,16 +1553,6 @@ fn assemble_spell_sql(
     }
 
     stmts
-}
-
-pub(crate) fn build_spell_sql(
-    data_dir: &Path,
-    only: &[u32],
-    trainers: &[(u32, Vec<u32>)],
-) -> Result<(Vec<String>, Coverage, Vec<String>)> {
-    let (rows, cov, samples) = build_spell_rows(data_dir, only, trainers)?;
-    let sql = assemble_spell_sql(&rows, only, !trainers.is_empty());
-    Ok((sql, cov, samples))
 }
 
 const CURATED_TRAINER_ID_BASE: u64 = 5_200_000;
@@ -1584,6 +1618,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_WEAPON_STRIKE => "E_WEAPON_STRIKE",
         E_SET_STANCE => "E_SET_STANCE",
         E_SUMMON_PET => "E_SUMMON_PET",
+        E_SUMMON_GUARDIANS => "E_SUMMON_GUARDIANS",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -1615,74 +1650,63 @@ fn kind_name(kind: u8) -> &'static str {
     }
 }
 
-fn print_coverage(cov: &Coverage) {
-    let pct = |n: usize, d: usize| {
-        if d == 0 {
-            0.0
-        } else {
-            100.0 * n as f64 / d as f64
-        }
-    };
-    println!("\n=== SPELL TAXONOMY COVERAGE REPORT ===");
-
-    println!("Total spells imported: {}", cov.spells);
-    println!("Total effect rows:     {}", cov.effects);
-    println!(
-        "  Real kinds (mapped): {} ({:.1}%)",
-        cov.real,
-        pct(cov.real, cov.effects)
+pub(crate) fn run_vmangos_snapshot(source: &str, data_dir: &str, path: &str) -> Result<()> {
+    let source = crate::world_source::WorldSource::open(Path::new(source))?;
+    let (spells, manifest) = crate::vmangos_spell::read(&source)?;
+    let (rows, cov, _) =
+        derive_spell_rows(&open_spell_tables(Path::new(data_dir), spells)?, &[], &[])?;
+    eprintln!(
+        "World Source Compatibility Manifest\n{}",
+        serde_json::to_string_pretty(&manifest)?
     );
-    println!(
-        "  E_SCRIPTED (no-op):  {} ({:.1}%)",
-        cov.scripted,
-        pct(cov.scripted, cov.effects)
-    );
-
-    let proc_trigger = cov.by_kind.get(&A_PROC_TRIGGER).copied().unwrap_or(0);
-    let proc_damage = cov.by_kind.get(&A_PROC_DAMAGE).copied().unwrap_or(0);
-    println!(
-        "  proc auras: {} (42: {proc_trigger}, 43: {proc_damage})",
-        proc_trigger + proc_damage
-    );
-
-    println!("\nBreakdown by kind (descending):");
-    let mut kinds: Vec<(u8, usize)> = cov.by_kind.iter().map(|(&k, &n)| (k, n)).collect();
-    kinds.sort_by(|a, b| b.1.cmp(&a.1));
-    for (k, n) in kinds {
-        println!(
-            "  0x{k:02X} {:<20} {:>6} ({:.1}%)",
-            kind_name(k),
-            n,
-            pct(n, cov.effects)
-        );
-    }
-
-    println!("\nTop 15 unmapped AuraMod variants (→ E_SCRIPTED):");
-    let mut auras: Vec<(&String, usize)> = cov.unmapped_aura.iter().map(|(k, &n)| (k, n)).collect();
-    auras.sort_by(|a, b| b.1.cmp(&a.1));
-    if auras.is_empty() {
-        println!("  (none)");
-    }
-    for (name, n) in auras.into_iter().take(15) {
-        println!("  {name:<32} {n:>6}");
-    }
-
-    println!("\nTop 15 unmapped instant SpellEffect ids (→ E_SCRIPTED):");
-    let mut effects: Vec<(i32, usize)> =
-        cov.unmapped_effect.iter().map(|(&k, &n)| (k, n)).collect();
-    effects.sort_by(|a, b| b.1.cmp(&a.1));
-    if effects.is_empty() {
-        println!("  (none)");
-    }
-    for (id, n) in effects.into_iter().take(15) {
-        println!("  effect_id {id:<5} {n:>6}");
-    }
-    println!("======================================\n");
+    save_snapshot(&rows, &cov, path)
 }
 
-pub fn run_spell_snapshot(data_dir: &str, path: &str) -> Result<()> {
-    let (rows, cov, _) = build_spell_rows(Path::new(data_dir), &[], &[])?;
-    let json = write_snapshot(&rows);
+pub(crate) fn world_plan(
+    source: &impl crate::dump::TableRows,
+    data_dir: &str,
+) -> Result<crate::world_import::DumpPlan> {
+    selected_world_plan(source, data_dir, &[], &[])
+}
+
+pub(crate) fn selected_world_plan(
+    source: &impl crate::dump::TableRows,
+    data_dir: &str,
+    only: &[u32],
+    trainers: &[(u32, Vec<u32>)],
+) -> Result<crate::world_import::DumpPlan> {
+    let (spells, manifest) = {
+        let (spells, manifest) = crate::vmangos_spell::read(source)?;
+        (spells, Some(serde_json::to_string_pretty(&manifest)?))
+    };
+    let (mut rows, cov, _) = derive_spell_rows(
+        &open_spell_tables(Path::new(data_dir), spells)?,
+        only,
+        trainers,
+    )?;
+    let replaced: std::collections::HashSet<_> =
+        rows.fishing.iter().map(SpellEffectRow::row_id).collect();
+    rows.effects
+        .retain(|effect| !replaced.contains(&effect.row_id()));
+    let mut stmts = assemble_spell_sql(&rows, only, !trainers.is_empty());
+    {
+        stmts.retain(|s| {
+            !s.starts_with("INSERT INTO game_spell (")
+                && !s.starts_with("INSERT INTO game_spell_effect (")
+        });
+        push_insert(&mut stmts, "game_spell", "spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms,custom_flags,min_target_level,single_target_key", &rows.headers.iter().map(SpellHeaderRow::sql_values).collect::<Vec<_>>());
+        push_insert(&mut stmts, "game_spell_effect", "id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo,bonus_coefficient", &rows.effects.iter().chain(&rows.fishing).map(SpellEffectRow::sql_values).collect::<Vec<_>>());
+    }
+    Ok(crate::world_import::DumpPlan {
+        stmts,
+        stamps: vec![("spell", cov.spells as u64)],
+        world_source_manifest: manifest,
+        ..Default::default()
+    })
+}
+
+fn save_snapshot(rows: &SpellRows, cov: &Coverage, path: &str) -> Result<()> {
+    let json = write_snapshot(rows);
 
     if let Some(parent) = Path::new(path).parent() {
         if !parent.as_os_str().is_empty() {
@@ -1698,120 +1722,6 @@ pub fn run_spell_snapshot(data_dir: &str, path: &str) -> Result<()> {
         cov.effects,
         json.len(),
     );
-    Ok(())
-}
-
-pub(crate) struct SpellArgs {
-    pub(crate) only: Vec<u32>,
-    pub(crate) trainers: Vec<(u32, Vec<u32>)>,
-    pub(crate) source_sha: String,
-    pub(crate) packages: Option<String>,
-    pub(crate) scope: WorldImportScope,
-    pub(crate) apply: bool,
-    pub(crate) shard: Shard,
-}
-
-pub fn run_spells(data_dir: &str, args: &SpellArgs) -> Result<()> {
-    let (stmts, cov, samples) = build_spell_sql(Path::new(data_dir), &args.only, &args.trainers)?;
-
-    if !args.only.is_empty() && cov.spells != args.only.len() {
-        eprintln!(
-            "spells: WARNING — --only requested {} ids but matched {} in Spell.dbc (some id not found).",
-            args.only.len(),
-            cov.spells,
-        );
-    }
-
-    if args.apply {
-        args.shard.run_sql_statements(&stmts, "spells")?;
-        eprintln!(
-            "spells: imported {} spells, {} effects ({:.1}% real kinds, {:.1}% E_SCRIPTED){}.",
-            cov.spells,
-            cov.effects,
-            if cov.effects == 0 {
-                0.0
-            } else {
-                100.0 * cov.real as f64 / cov.effects as f64
-            },
-            if cov.effects == 0 {
-                0.0
-            } else {
-                100.0 * cov.scripted as f64 / cov.effects as f64
-            },
-            if args.only.is_empty() {
-                ""
-            } else {
-                " [additive allowlist]"
-            },
-        );
-        args.shard
-            .stamp_family("spell", &args.source_sha, "", cov.spells as u64)
-            .context("stamp_import_meta(spell)")?;
-    } else if !args.only.is_empty() {
-        println!(
-            "-- DRY RUN (additive allowlist, {} ids): {} surgical SQL statements, write NOTHING.\n",
-            args.only.len(),
-            stmts.len(),
-        );
-        for line in &samples {
-            println!("{line}");
-        }
-        eprintln!("\nspells: dry-run — re-run with --apply to load this kit additively.");
-    } else {
-        println!(
-            "-- DRY RUN: {} SQL statements (clear+reload game_spell + game_spell_effect), write NOTHING.",
-            stmts.len()
-        );
-        for s in stmts.iter().take(2) {
-            println!("{s};");
-        }
-        for s in stmts.iter().skip(2) {
-            if s.starts_with("INSERT INTO game_spell ") {
-                println!("{}… ;", &s[..s.len().min(120)]);
-                break;
-            }
-        }
-        for s in stmts.iter().skip(2) {
-            if s.starts_with("INSERT INTO game_spell_effect ") {
-                println!("{}… ;", &s[..s.len().min(120)]);
-                break;
-            }
-        }
-        if !samples.is_empty() {
-            println!("\nSample mapped effects:");
-            for line in &samples {
-                println!("{line}");
-            }
-        }
-        eprintln!("spells: dry-run — re-run with --apply to load.");
-    }
-
-    match &args.packages {
-        Some(root) => package_delta::reapply(&args.scope, args.apply, &args.shard, "spell", root)?,
-        None => package_delta::warn_not_reapplied("spell"),
-    }
-
-    if !args.trainers.is_empty() {
-        println!("\n=== TRAINER OFFERINGS (game_trainer_spell) ===");
-        let mut total = 0usize;
-        for (entry, _ids) in &args.trainers {
-            let needle = format!("(0,{entry},");
-            let n: usize = stmts
-                .iter()
-                .filter(|s| s.starts_with("INSERT INTO game_trainer_spell"))
-                .map(|s| s.matches(&needle).count())
-                .sum();
-            println!("  trainer_entry {entry:<6} → {n:>3} offerings");
-            total += n;
-        }
-        println!(
-            "  TOTAL: {total} offerings across {} trainer(s)",
-            args.trainers.len()
-        );
-        println!("===============================================\n");
-    }
-
-    print_coverage(&cov);
     Ok(())
 }
 
@@ -1940,8 +1850,8 @@ mod tests {
         T::read(&mut std::io::Cursor::new(bytes)).unwrap()
     }
 
-    fn fixture_tables() -> SpellDbc {
-        SpellDbc {
+    fn fixture_tables() -> SpellTables {
+        SpellTables {
             spells: read_spells(&source_spell_fixture()).unwrap(),
             cast_times: authored_table(4, &[&[1, 1500, 0, 1500]]),
             ranges: authored_table(22, &[&[1, 0, 35.0f32.to_bits()]]),
@@ -1951,10 +1861,88 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    fn vmangos_finishers_keep_combo_scaling_and_source_flags_in_sql() {
+        let source = crate::vmangos_spell::fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch("UPDATE spell_template SET school=0, attributesEx=1049088, spellFamilyName=8, effect2=0, effectPointsPerComboPoint1=5, customFlags=1024, minTargetLevel=7, effectBonusCoefficient1=0.5 WHERE build=5875").unwrap();
+        let mut tables = fixture_tables();
+        tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
+        tables.durations = authored_table(4, &[&[1, 6000, 0, 21000]]);
+        let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
+        let header = &rows.headers[0];
+        assert_ne!(header.cast_flags & SPELL_ATTR_COMBO_FINISHER, 0);
+        assert_eq!((header.duration_ms, header.max_duration_ms), (6000, 21000));
+        let header_sql = header.sql_values();
+        let values: Vec<_> = header_sql.trim_matches(['(', ')']).split(',').collect();
+        assert_eq!(values.len(), 29);
+        assert_eq!(&values[25..28], &["21000", "1024", "7"]);
+        let effect = &rows.effects[0];
+        assert_eq!(effect.kind, E_FINISHER_DAMAGE);
+        assert_eq!(
+            (effect.points_per_combo, effect.bonus_coefficient),
+            (5.0, 0.5)
+        );
+        assert!(effect.sql_values().ends_with(",5.0,0.5)"));
+    }
+
+    #[test]
+    fn vmangos_guardians_use_the_same_effect_in_catalogue_and_snapshot() {
+        let mut tables = fixture_tables();
+        tables.spells = crate::vmangos_spell::read(&crate::vmangos_spell::guardian_fixture())
+            .unwrap()
+            .0;
+        let (rows, _, _) = derive_spell_rows(&tables, &[5200], &[]).unwrap();
+        assert_eq!(rows.effects.len(), 1);
+        let effect = &rows.effects[0];
+        assert_eq!(
+            (
+                effect.kind,
+                effect.base_points,
+                effect.die_sides,
+                effect.target,
+                effect.p0,
+                effect.p0_kind
+            ),
+            (E_SUMMON_GUARDIANS, 2, 1, T_SELF, 636, P_ENTRY)
+        );
+        let snapshot: serde_json::Value = serde_json::from_str(&write_snapshot(&rows)).unwrap();
+        assert_eq!(snapshot["game_spell_effect"][0]["kind"], 39);
+        assert_eq!(snapshot["game_spell_effect"][0]["p0"], 636);
+        tables
+            .spells
+            .iter_mut()
+            .for_each(|spell| spell.npc_guardian_entry = None);
+        let (classic, _, _) = derive_spell_rows(&tables, &[5200], &[]).unwrap();
+        assert_eq!(classic.effects[0].kind, E_SCRIPTED);
+    }
+
+    #[test]
+    fn vmangos_catalogue_and_snapshot_derive_the_same_selected_spell() {
+        let (spells, _) = crate::vmangos_spell::read(&crate::vmangos_spell::fixture()).unwrap();
+        let mut tables = fixture_tables();
+        tables.spells = spells;
+        let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
+        let snapshot: serde_json::Value = serde_json::from_str(&write_snapshot(&rows)).unwrap();
+        assert_eq!(snapshot["game_spell"][0]["name"], "Selected");
+        assert_eq!(snapshot["game_spell"][0]["cast_time_ms"], 1500);
+        assert_eq!(snapshot["game_spell_effect"][0]["base_points"], 20);
+        assert_eq!(snapshot["game_spell_effect"][0]["per_level"], 1.25);
+        let sql = assemble_spell_sql(&rows, &[], false).join("\n");
+        assert!(sql.contains("'Selected'"));
+        assert!(sql.contains("(80,10,123,2)"));
+        assert!(sql.contains(&rows.effects[0].sql_values()));
+    }
+
+    #[test]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_spell_import_keeps_restored_effects_and_curated_rules() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
-        let source = open_spell_tables(Path::new(&dir)).unwrap();
+        let sqlite = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
+        let world = crate::world_source::WorldSource::open(Path::new(&sqlite)).unwrap();
+        let (spells, _) = crate::vmangos_spell::read(&world).unwrap();
+        let source = open_spell_tables(Path::new(&dir), spells).unwrap();
         let new_location_companions = source
             .spells
             .iter()
@@ -2105,7 +2093,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_target_none_uses_flags_defaults_and_scripted_fallback() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) =
@@ -2128,7 +2116,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_distract_imports_one_ground_area_effect_and_a_stealth_safe_header() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &[1725], &[]).unwrap();
@@ -2163,7 +2151,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_adrenaline_rush_doubles_energy_regeneration() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &[13750], &[]).unwrap();
@@ -2201,7 +2189,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC, SpacetimeDB 2.7.1 and the Wasm toolchain"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_friendly_spells_affect_the_selected_ally() {
         use crate::standalone_support::poll_until;
         use std::time::Duration;
@@ -2230,7 +2218,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC, SpacetimeDB 2.7.1 and the Wasm toolchain"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_gouge_control_ends_on_damage() {
         let (shard, _, wolf) = imported_spell_fixture(&[1776]);
         shard.assert_sql("DELETE FROM game_aura_schedule");
@@ -2256,7 +2244,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC, SpacetimeDB 2.7.1 and the Wasm toolchain"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_stealth_uses_its_third_source_effect() {
         let (shard, _, _) = imported_spell_fixture(&[1784]);
         shard.assert_call("debug_cast_at", &["1", "1784", "1"]);
@@ -3361,7 +3349,7 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "requires LYRACORE_TEST_DBC with the owned build 5875 client"]
+    #[ignore = "requires LYRACORE_VMANGOS_SQLITE and LYRACORE_TEST_DBC"]
     fn actual_ghost_and_wisp_import_keep_vanilla_speed_and_transform() {
         let dir = std::env::var("LYRACORE_TEST_DBC").expect("set LYRACORE_TEST_DBC");
         let (rows, _, _) = build_spell_rows(Path::new(&dir), &[8326, 20584], &[]).unwrap();
@@ -3678,7 +3666,7 @@ mod binding_tests {
     fn binding_source_events_import_one_hostile_summon_and_keep_the_focus() {
         for (spell_id, event, entry) in [(7728, 1131, 5676), (8674, 1134, 5677)] {
             let row = source_spell(spell_id, event);
-            let dbc = SpellDbc {
+            let dbc = SpellTables {
                 spells: vec![],
                 cast_times: SpellCastTimes {
                     rows: vec![SpellCastTimesRow {

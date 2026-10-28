@@ -31,6 +31,7 @@ pub enum RelaySubject {
     NearbyCreature(RelayNearby),
     NearbyGameObject(RelayNearby),
     AllNearbyCreatures(RelayNearby),
+    OptionalSelected,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
@@ -49,6 +50,32 @@ pub struct RelayNearby {
 pub struct RelayTalk {
     pub broadcast_ids: Vec<u32>,
 }
+impl RelayTalk {
+    fn parse(ids: &str) -> Result<Self, String> {
+        Ok(Self {
+            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
+        })
+    }
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
+pub struct RelayTalkOverride {
+    pub talk: RelayTalk,
+    pub chat_type: u8,
+}
+impl RelayTalkOverride {
+    fn parse(chat_type: &str, ids: &str) -> Result<Self, String> {
+        let chat_type = parse_u8(chat_type)?;
+        if !crate::chat::is_supported_chat_type(chat_type) {
+            return Err("unsupported script chat type".into());
+        }
+        Ok(Self {
+            talk: RelayTalk::parse(ids)?,
+            chat_type,
+        })
+    }
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub struct RelayEmote {
     pub emote_ids: Vec<u32>,
@@ -136,7 +163,7 @@ pub enum RelayFactionRestoration {
 pub struct RelayStandState {
     pub stand_state: u8,
 }
-#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, PartialEq)]
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
 pub struct RelayFlagChange {
     pub flags: u32,
     pub operation: RelayFlagOperation,
@@ -202,6 +229,17 @@ pub struct RelayTerminate {
     pub when: RelayTerminateWhen,
 }
 
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub enum RelayFailurePolicy {
+    Continue,
+    Abort,
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
+pub struct RelayChoices {
+    pub relay_ids: Vec<u32>,
+}
+
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
 pub enum RelayInstruction {
     Talk(RelayTalk),
@@ -230,6 +268,11 @@ pub enum RelayInstruction {
     SetGossipMenu(RelayGossipMenu),
     SetWorldState(RelayWorldState),
     StartRelay(RelayStart),
+    SetFailurePolicy(RelayFailurePolicy),
+    StartChoices(RelayChoices),
+    CastWithOptions(super::CastInstruction),
+    CreatureControl(super::relay_control::RelayCreatureControl),
+    TalkAs(RelayTalkOverride),
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq)]
@@ -285,6 +328,8 @@ pub struct RelayRun {
     pub parent_run_id: u64,
     #[default(0u64)]
     pub source_life_seq: u64,
+    #[default(None::<RelayFailurePolicy>)]
+    pub failure_policy: Option<RelayFailurePolicy>,
 }
 
 #[table(
@@ -418,6 +463,35 @@ pub(crate) fn replace_relays_for_debug(
     current_catalogue_version(ctx).ok_or_else(|| "relay catalogue has no current version".into())
 }
 
+#[cfg(feature = "debug_reducers")]
+pub(crate) fn stage_script_failure_policies_for_debug(
+    ctx: &ReducerContext,
+    first: u64,
+    second: u64,
+) -> Result<(), String> {
+    let specs = [
+        (90_101, "0,0,0,source>source,failure-policy:continue~0,0,1,source>selected,attack-start~0,0,2,source>source,creature-control:phase:30~0,0,3,source>source,creature-control:phase-inc:3~500,0,4,source>source,set-stand-state:3"),
+        (90_102, "0,0,0,source>source,failure-policy:continue~0,0,1,source>source,start-choices:90103.90103~500,0,2,source>source,failure-policy:abort~500,0,3,source>selected,attack-start~2000,0,4,source>source,set-stand-state:4"),
+        (90_103, "3000,0,0,source>source,set-stand-state:8"),
+    ];
+    let packed = specs
+        .into_iter()
+        .map(|(id, steps)| {
+            let version =
+                encoded_definition_version(&id.to_string(), "parallel", "map-or-instance", steps);
+            format!("{id}@{version}@parallel@map-or-instance@{steps}")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    load_definition_catalogue(ctx, &packed)?;
+    let version = current_catalogue_version(ctx).ok_or("script fixture catalogue is empty")?;
+    start_imported_relay(ctx, 90_101, first, 0, 1, version)?;
+    for seed in [1, 2] {
+        start_imported_relay(ctx, 90_102, second, 0, seed, version)?;
+    }
+    Ok(())
+}
+
 fn validate_definition_dependencies(
     ctx: &ReducerContext,
     definitions: &[RelayDefinition],
@@ -425,7 +499,8 @@ fn validate_definition_dependencies(
     for definition in definitions {
         for step in &definition.steps {
             match &step.instruction {
-                RelayInstruction::Talk(talk) => {
+                RelayInstruction::Talk(talk)
+                | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. }) => {
                     for broadcast_id in &talk.broadcast_ids {
                         if ctx
                             .db
@@ -442,6 +517,11 @@ fn validate_definition_dependencies(
                             ));
                         }
                     }
+                }
+                RelayInstruction::CastWithOptions(cast)
+                    if ctx.db.game_spell().spell_id().find(cast.spell_id).is_none() =>
+                {
+                    return Err(missing_dependency(definition, step, "spell", cast.spell_id));
                 }
                 RelayInstruction::SpawnCreature(spawn)
                     if ctx
@@ -690,14 +770,23 @@ fn validate_definition_graph(
             if *scheduled_count > 2_048 {
                 return Err("relay graph exceeds the 2048 scheduled-work budget".to_string());
             }
-            let dependency = match &step.instruction {
-                RelayInstruction::StartRelay(start) => Some(start.relay_id),
-                RelayInstruction::MoveDynamic(movement) => {
-                    (movement.arrival_relay_id != 0).then_some(movement.arrival_relay_id)
-                }
-                _ => None,
+            let dependencies = match &step.instruction {
+                RelayInstruction::StartRelay(start) => vec![start.relay_id],
+                RelayInstruction::StartChoices(choices) => choices
+                    .relay_ids
+                    .iter()
+                    .copied()
+                    .filter(|id| *id != 0)
+                    .collect::<std::collections::BTreeSet<_>>()
+                    .into_iter()
+                    .collect(),
+                RelayInstruction::MoveDynamic(movement) => (movement.arrival_relay_id != 0)
+                    .then_some(movement.arrival_relay_id)
+                    .into_iter()
+                    .collect(),
+                _ => Vec::new(),
             };
-            if let Some(dependency) = dependency {
+            for dependency in dependencies {
                 visit(graph, dependency, path, step_count, scheduled_count)?;
             }
         }
@@ -731,7 +820,15 @@ fn validate_step_capability(relay_id: u32, step: &RelayStep) -> Result<(), Strin
         ));
     }
     match &step.instruction {
-        RelayInstruction::Talk(talk)
+        RelayInstruction::StartChoices(choices)
+            if choices.relay_ids.is_empty() || choices.relay_ids.len() > 100 =>
+        {
+            Err(format!(
+                "relay {relay_id} step {} needs 1..=100 script choices",
+                step.source_order
+            ))
+        }
+        RelayInstruction::Talk(talk) | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. })
             if talk.broadcast_ids.is_empty() || talk.broadcast_ids.contains(&0) =>
         {
             Err(format!(
@@ -873,6 +970,7 @@ fn parse_subject(encoded: &str) -> Result<RelaySubject, String> {
     match fields.as_slice() {
         ["source"] => Ok(RelaySubject::Source),
         ["selected"] => Ok(RelaySubject::Selected),
+        ["optional-selected"] => Ok(RelaySubject::OptionalSelected),
         ["creature-guid", guid] => Ok(RelaySubject::CreatureGuid(parse_u64(guid)?)),
         ["gameobject-guid", guid] => Ok(RelaySubject::GameObjectGuid(parse_u64(guid)?)),
         ["nearby-creature", entry, radius] => Ok(RelaySubject::NearbyCreature(RelayNearby {
@@ -918,9 +1016,13 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
     }
     let fields = encoded.split(':').collect::<Vec<_>>();
     match fields.as_slice() {
-        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk {
-            broadcast_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
-        })),
+        ["creature-control", rest @ ..] => Ok(RelayInstruction::CreatureControl(
+            super::relay_control::RelayCreatureControl::parse(rest)?,
+        )),
+        ["talk-as", chat_type, ids] => Ok(RelayInstruction::TalkAs(RelayTalkOverride::parse(
+            chat_type, ids,
+        )?)),
+        ["talk", ids] => Ok(RelayInstruction::Talk(RelayTalk::parse(ids)?)),
         ["emote", ids] => Ok(RelayInstruction::Emote(RelayEmote {
             emote_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),
@@ -1066,6 +1168,34 @@ fn parse_instruction(encoded: &str) -> Result<RelayInstruction, String> {
         ["set-world-state", id, value] => Ok(RelayInstruction::SetWorldState(RelayWorldState {
             world_state_id: parse_i32(id)?,
             value: parse_i32(value)?,
+        })),
+        ["cast-options", spell, triggered, interrupt, absent, casting] => {
+            Ok(RelayInstruction::CastWithOptions(super::CastInstruction {
+                spell_id: parse_u32(spell)?,
+                target: super::InstructionTarget::ProvidedTarget,
+                interrupt_previous: parse_bool(interrupt)?,
+                start_mode: if parse_bool(triggered)? {
+                    super::SpellStartMode::Triggered
+                } else {
+                    super::SpellStartMode::Direct
+                },
+                caster_role: super::SpellCasterRole::Actor,
+                target_role: super::SpellTargetRole::Selected,
+                aura_absent: parse_bool(absent)?,
+                character_only: false,
+                target_must_be_casting: parse_bool(casting)?,
+                main_spell: false,
+                distance_after_start: false,
+            }))
+        }
+        ["failure-policy", "continue"] => Ok(RelayInstruction::SetFailurePolicy(
+            RelayFailurePolicy::Continue,
+        )),
+        ["failure-policy", "abort"] => Ok(RelayInstruction::SetFailurePolicy(
+            RelayFailurePolicy::Abort,
+        )),
+        ["start-choices", ids] => Ok(RelayInstruction::StartChoices(RelayChoices {
+            relay_ids: ids.split('.').map(parse_u32).collect::<Result<_, _>>()?,
         })),
         ["start-relay", relay] => Ok(RelayInstruction::StartRelay(RelayStart {
             relay_id: parse_u32(relay)?,
@@ -1247,6 +1377,7 @@ fn start_relay(
         lifetime: definition.lifetime,
         parent_run_id,
         source_life_seq: crate::creatures::current_life_seq(ctx, source_guid),
+        failure_policy: None,
     });
     if let Err(error) = advance_run(ctx, run.id) {
         cancel_run_tree(ctx, run.id);
@@ -1295,6 +1426,15 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
         runs.id().update(run);
         let outcome = (|| -> Result<(), String> {
             match &step.instruction {
+                RelayInstruction::SetFailurePolicy(policy) => {
+                    let mut fresh = runs
+                        .id()
+                        .find(run_id)
+                        .ok_or_else(|| format!("relay run {run_id} disappeared"))?;
+                    fresh.failure_policy = Some(*policy);
+                    runs.id().update(fresh);
+                    Ok(())
+                }
                 RelayInstruction::TerminateInvocation(terminate) => {
                     let fresh = runs
                         .id()
@@ -1308,11 +1448,22 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
                     }
                     Ok(())
                 }
-                RelayInstruction::StartRelay(start) => {
+                RelayInstruction::StartRelay(_) | RelayInstruction::StartChoices(_) => {
                     let mut fresh = runs
                         .id()
                         .find(run_id)
                         .ok_or_else(|| format!("relay run {run_id} disappeared"))?;
+                    let relay_id = match &step.instruction {
+                        RelayInstruction::StartRelay(start) => start.relay_id,
+                        RelayInstruction::StartChoices(choices) => {
+                            choose(&choices.relay_ids, &mut fresh.saved_random_state)
+                        }
+                        _ => unreachable!(),
+                    };
+                    if relay_id == 0 {
+                        runs.id().update(fresh);
+                        return Err("script choice has no selected script".into());
+                    }
                     let participants = resolve_participants(ctx, &fresh, step.participants)?;
                     let [(nested_source, nested_target)] = participants.as_slice() else {
                         return Err(format!(
@@ -1326,7 +1477,7 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
                     runs.id().update(fresh);
                     start_relay(
                         ctx,
-                        start.relay_id,
+                        relay_id,
                         *nested_source,
                         *nested_target,
                         child_state,
@@ -1349,11 +1500,20 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
             }
         })();
         if let Err(error) = outcome {
-            cancel_run_tree(ctx, run_id);
-            return Err(format!(
-                "relay run {run_id} failed at source step {}: {error}",
-                step.source_order
-            ));
+            match runs.id().find(run_id) {
+                Some(failed) if failed.failure_policy == Some(RelayFailurePolicy::Continue) => {}
+                Some(failed) if failed.failure_policy == Some(RelayFailurePolicy::Abort) => {
+                    abort_script_runs(ctx, &failed);
+                    return Ok(());
+                }
+                _ => {
+                    cancel_run_tree(ctx, run_id);
+                    return Err(format!(
+                        "relay run {run_id} failed at source step {}: {error}",
+                        step.source_order
+                    ));
+                }
+            }
         }
         let Some(fresh) = runs.id().find(run_id) else {
             return Ok(());
@@ -1387,7 +1547,7 @@ fn apply_leaf_for_pair(
     instruction: &RelayInstruction,
 ) -> Result<(), String> {
     match instruction {
-        RelayInstruction::Talk(talk) => {
+        RelayInstruction::Talk(talk) | RelayInstruction::TalkAs(RelayTalkOverride { talk, .. }) => {
             if talk.broadcast_ids.is_empty() {
                 return Err("relay talk has no broadcast text".to_string());
             }
@@ -1404,13 +1564,20 @@ fn apply_leaf_for_pair(
                 .guid()
                 .find(guid)
                 .ok_or_else(|| format!("relay talk subject {guid} is missing"))?;
+            let gender = crate::creatures::catalogue::display_gender(ctx, source.display_id);
+            let message = line.text_for_gender(gender).to_owned();
+            let chat_type = match instruction {
+                RelayInstruction::TalkAs(overridden) => overridden.chat_type,
+                _ => line.chat_type,
+            };
+            crate::native::creature_sound(ctx, guid, line.sound_id, chat_type);
             crate::chat::apply_send_chat_to(
                 ctx,
                 source,
                 target_guid,
-                line.chat_type,
+                chat_type,
                 line.language_id,
-                line.male_text,
+                message,
             )
         }
         RelayInstruction::Emote(emote) => {
@@ -1466,6 +1633,63 @@ fn apply_leaf_for_pair(
             spawn.run_by_default,
         )
         .map(|_| ()),
+        RelayInstruction::CreatureControl(control) => {
+            let source = live_unit_in_run(ctx, run, guid)?;
+            if source.is_player() {
+                return Err("script control source must be a creature".into());
+            }
+            let context = super::EventContext {
+                current_target_guid: (target_guid != 0).then_some(target_guid),
+                invoker_guid: (target_guid != 0).then_some(target_guid),
+                ..super::EventContext::empty(
+                    super::EventKind::OnSpawn,
+                    guid,
+                    ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                )
+            };
+            if super::engine::execute_instruction(
+                &mut super::engine::DatabaseWorld::new(ctx),
+                &context,
+                &control.instruction(),
+                0,
+            ) == super::ActionResult::Applied
+            {
+                Ok(())
+            } else {
+                Err("script creature control was refused".into())
+            }
+        }
+        RelayInstruction::CastWithOptions(cast) => {
+            let source = live_unit_in_run(ctx, run, guid)?;
+            if source.is_player() {
+                return Err("script spell source must be a creature".into());
+            }
+            live_unit_in_run(ctx, run, target_guid)?;
+            let context = super::EventContext {
+                current_target_guid: Some(target_guid),
+                invoker_guid: Some(target_guid),
+                ..super::EventContext::empty(
+                    if source.dead {
+                        super::EventKind::OnDeath
+                    } else {
+                        super::EventKind::OnSpawn
+                    },
+                    guid,
+                    ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                )
+            };
+            let result = super::combat::cast(
+                &mut super::engine::DatabaseWorld::new(ctx),
+                &context,
+                cast,
+                super::SpellCastTarget::Unit(target_guid),
+            );
+            if result == super::ActionResult::Applied {
+                Ok(())
+            } else {
+                Err(format!("script cast {} was refused", cast.spell_id))
+            }
+        }
         RelayInstruction::CastSpell(cast) => {
             let spell_id = choose(&cast.spell_ids, &mut run.saved_random_state);
             let caster = ctx
@@ -1645,7 +1869,10 @@ fn apply_leaf_for_pair(
             world_state.world_state_id,
             world_state.value,
         ),
-        RelayInstruction::TerminateInvocation(_) | RelayInstruction::StartRelay(_) => {
+        RelayInstruction::TerminateInvocation(_)
+        | RelayInstruction::StartRelay(_)
+        | RelayInstruction::SetFailurePolicy(_)
+        | RelayInstruction::StartChoices(_) => {
             Err("relay control instruction reached leaf dispatch".to_string())
         }
     }
@@ -1848,6 +2075,15 @@ fn resolve_subject(
     subject: RelaySubject,
 ) -> Result<Vec<u64>, String> {
     match subject {
+        RelaySubject::OptionalSelected => {
+            Ok(vec![
+                if live_participant_in_run(ctx, run, run.selected_guid).is_ok() {
+                    run.selected_guid
+                } else {
+                    0
+                },
+            ])
+        }
         RelaySubject::Source => {
             live_unit_in_run(ctx, run, run.source_guid).map(|_| vec![run.source_guid])
         }
@@ -2076,6 +2312,21 @@ fn remove_run(ctx: &ReducerContext, run_id: u64) {
         continuations.scheduled_id().delete(row.scheduled_id);
     }
     ctx.db.game_creature_ai_relay_run().id().delete(run_id);
+}
+
+fn abort_script_runs(ctx: &ReducerContext, failed: &RelayRun) {
+    let ids = ctx
+        .db
+        .game_creature_ai_relay_run()
+        .by_source()
+        .filter(&failed.source_guid)
+        .filter(|run| run.relay_id == failed.relay_id && run.selected_guid == failed.selected_guid)
+        .map(|run| run.id)
+        .collect::<Vec<_>>();
+    for id in ids {
+        remove_run(ctx, id);
+    }
+    reap_unused_definitions(ctx);
 }
 
 fn cancel_run_tree(ctx: &ReducerContext, run_id: u64) {
@@ -2326,6 +2577,79 @@ mod tests {
             lifetime: RelayLifetime::MapOrInstance,
             steps: vec![emote(0)],
         }
+    }
+
+    #[test]
+    fn weighted_script_dependencies_are_checked_once_per_distinct_choice() {
+        let choices = step(
+            0,
+            RelayInstruction::StartChoices(RelayChoices {
+                relay_ids: vec![2, 2, 0],
+            }),
+        );
+        let graph =
+            std::collections::BTreeMap::from([(1, vec![choices.clone()]), (2, vec![emote(0)])]);
+        validate_definition_graph(&graph).unwrap();
+        assert!(
+            validate_definition_graph(&std::collections::BTreeMap::from([(1, vec![choices])]))
+                .unwrap_err()
+                .contains("dependency 2 is missing")
+        );
+        let cycle = std::collections::BTreeMap::from([(
+            1,
+            vec![step(
+                0,
+                RelayInstruction::StartChoices(RelayChoices {
+                    relay_ids: vec![0, 1],
+                }),
+            )],
+        )]);
+        assert!(validate_definition_graph(&cycle)
+            .unwrap_err()
+            .contains("cycle"));
+    }
+
+    #[test]
+    fn weighted_scripts_keep_the_existing_depth_and_work_budgets() {
+        let mut graph = std::collections::BTreeMap::new();
+        for id in 1..=17 {
+            graph.insert(
+                id,
+                if id == 17 {
+                    vec![emote(0)]
+                } else {
+                    vec![step(
+                        0,
+                        RelayInstruction::StartChoices(RelayChoices {
+                            relay_ids: vec![id + 1],
+                        }),
+                    )]
+                },
+            );
+        }
+        assert!(validate_definition_graph(&graph)
+            .unwrap_err()
+            .contains("depth exceeds 16"));
+        graph = std::collections::BTreeMap::from([(1, vec![emote(0); 4097])]);
+        assert!(validate_definition_graph(&graph)
+            .unwrap_err()
+            .contains("4096-step"));
+        graph = std::collections::BTreeMap::from([(1, vec![emote(1); 2049])]);
+        assert!(validate_definition_graph(&graph)
+            .unwrap_err()
+            .contains("2048 scheduled-work"));
+        graph = std::collections::BTreeMap::from([(
+            1,
+            vec![step(
+                0,
+                RelayInstruction::StartChoices(RelayChoices {
+                    relay_ids: vec![0; 101],
+                }),
+            )],
+        )]);
+        assert!(validate_definition_graph(&graph)
+            .unwrap_err()
+            .contains("1..=100"));
     }
 
     #[test]

@@ -14,6 +14,7 @@ pub enum CastRefusalKind {
     UnlearnedSpell,
     NoLineOfSight,
     BadTargets,
+    TargetLevelTooLow,
 }
 
 #[derive(spacetimedb::SpacetimeType, Clone, Debug, PartialEq, Eq)]
@@ -72,6 +73,7 @@ pub(crate) enum CastRefusalReason {
     MountInCombat,
     MountIndoors,
     MountInDeepWater,
+    TargetLevelTooLow,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]

@@ -27,7 +27,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_pet_command());
 
 // Match CMSG_PET_ACTION.data and SMSG_PET_SPELLS command numbering.
 pub(crate) const CMD_STAY: u8 = 0;
-const CMD_FOLLOW: u8 = 1;
+pub(crate) const CMD_FOLLOW: u8 = 1;
 pub(crate) const CMD_ATTACK: u8 = 2;
 const CMD_DISMISS: u8 = 3;
 pub(crate) const REACT_PASSIVE: u8 = 0;
@@ -78,6 +78,14 @@ fn is_valid_pet_target(
     }
     match ctx.db.game_world_entity().guid().find(target_guid) {
         Some(t) => {
+            if super::guardian::is_guardian(ctx, pet_guid) {
+                return !t.dead
+                    && t.map_id == owner.map_id
+                    && t.instance_id == owner.instance_id
+                    // UNIT_FLAG_NON_ATTACKABLE and UNIT_FLAG_IMMUNE_TO_NPC block guardians.
+                    && t.unit_flags & 0x0000_0202 == 0
+                    && crate::combat::is_hostile_target(ctx, owner, &t);
+            }
             !t.dead
                 && !t.is_player()
                 && !crate::faction::is_friendly(ctx, owner.faction_template, t.faction_template)
@@ -92,14 +100,17 @@ fn nearest_hostile_near(
     pet: &WorldEntity,
 ) -> Option<u64> {
     let mut best: Option<(u64, f32)> = None;
+    let guardian = super::guardian::is_guardian(ctx, pet.guid);
     for e in ctx.db.game_world_entity().iter() {
-        if e.guid == pet.guid || e.owner_guid != 0 || e.is_player() || e.dead {
+        if e.guid == pet.guid || (!guardian && (e.owner_guid != 0 || e.is_player())) || e.dead {
             continue;
         }
         if e.map_id != pet.map_id || e.instance_id != pet.instance_id {
             continue;
         }
-        if crate::faction::is_friendly(ctx, owner.faction_template, e.faction_template) {
+        if (guardian && !is_valid_pet_target(ctx, owner, pet.guid, e.guid))
+            || crate::faction::is_friendly(ctx, owner.faction_template, e.faction_template)
+        {
             continue;
         }
         let (dx, dy, dz) = (e.x - pet.x, e.y - pet.y, e.z - pet.z);
@@ -198,7 +209,7 @@ fn build_pet_entity(ctx: &ReducerContext, owner: &WorldEntity, entry: u32) -> Op
         source_guid: 0,
         instance_id: owner.instance_id,
     };
-    let mut pet = build_creature_entity(&spawn, &tmpl, ctx.random(), owner.instance_id);
+    let mut pet = build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), owner.instance_id);
     pet.owner_guid = owner.guid;
     Some(pet)
 }
@@ -270,6 +281,10 @@ pub(crate) fn despawn_pet(ctx: &ReducerContext, pet_guid: u64) {
     let Some(pet) = ctx.db.game_world_entity().guid().find(pet_guid) else {
         return;
     };
+    if super::guardian::is_guardian(ctx, pet_guid) {
+        super::despawn_creature_entity(ctx, pet_guid);
+        return;
+    }
     if pet.owner_guid == 0 || pet.guid != pet_guid_for(pet.owner_guid) {
         spacetimedb::log::info!("despawn_pet: refusing malformed pet row guid={pet_guid}");
         return;

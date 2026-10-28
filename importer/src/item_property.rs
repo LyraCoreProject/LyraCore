@@ -282,11 +282,11 @@ fn insert_effect(rows: &mut BTreeMap<u64, String>, enchant_id: u32, effect: Effe
     Ok(())
 }
 
-fn decimal_weight(value: &str) -> Result<u32> {
+fn decimal_weight_at_precision(value: &str, precision: u32) -> Result<u32> {
     let (whole, fraction) = value.split_once('.').unwrap_or((value, ""));
     if whole.is_empty()
         || !whole.bytes().all(|b| b.is_ascii_digit())
-        || fraction.len() > 2
+        || fraction.len() > precision as usize
         || !fraction.bytes().all(|b| b.is_ascii_digit())
     {
         bail!("invalid property weight {value}");
@@ -295,10 +295,10 @@ fn decimal_weight(value: &str) -> Result<u32> {
     let fraction: u32 = if fraction.is_empty() {
         0
     } else {
-        fraction.parse::<u32>()? * if fraction.len() == 1 { 10 } else { 1 }
+        fraction.parse::<u32>()? * 10_u32.pow(precision - fraction.len() as u32)
     };
     let weight = whole
-        .checked_mul(100)
+        .checked_mul(10_u32.pow(precision))
         .and_then(|n| n.checked_add(fraction))
         .context("property weight overflows")?;
     if weight == 0 {
@@ -307,22 +307,52 @@ fn decimal_weight(value: &str) -> Result<u32> {
     Ok(weight)
 }
 
-pub(crate) fn template_pool(row: &[String]) -> Result<u32> {
-    field(row, crate::dump::it::RANDOM_PROPERTY)
+pub(crate) fn template_pool(row: &crate::world_source::Row) -> Result<u32> {
+    let entry = field(row, crate::dump::it::ENTRY)?;
+    crate::dump::it::read(row, crate::dump::it::RANDOM_PROPERTY)?
         .parse::<u32>()
-        .with_context(|| {
-            format!(
-                "item {} has an invalid Property Pool ID",
-                field(row, crate::dump::it::ENTRY)
-            )
-        })
+        .with_context(|| format!("item {entry} has an invalid Property Pool ID"))
 }
 
-pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>, u64)> {
-    let raw = parse_table(dump, "item_enchantment_template");
-    let required: BTreeSet<u32> = parse_table(dump, "item_template")
+fn property_weights(
+    raw: &[crate::world_source::Row],
+    properties: &BTreeSet<u32>,
+) -> Result<(BTreeMap<u64, String>, BTreeSet<u32>)> {
+    let mut rows = BTreeMap::new();
+    let mut pools = BTreeSet::new();
+    for row in raw.iter() {
+        let pool: u32 = field(row, "entry")?
+            .parse()
+            .context("invalid Property Pool ID")?;
+        let property: u32 = field(row, "ench")?
+            .parse()
+            .context("invalid Random Property ID")?;
+        if pool == 0 || !properties.contains(&property) {
+            bail!("pool {pool} references missing Random Property {property}");
+        }
+        let weight = decimal_weight_at_precision(row.numeric_text("chance")?, 4)?;
+        let id = (u64::from(pool) << 32) | u64::from(property);
+        if rows
+            .insert(id, format!("({id},{pool},{property},{weight})"))
+            .is_some()
+        {
+            bail!("duplicate property {property} in pool {pool}");
+        }
+        pools.insert(pool);
+    }
+    Ok((rows, pools))
+}
+
+pub(crate) fn dump_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    dbc_dir: Option<&str>,
+) -> Result<(Vec<String>, u64)> {
+    let raw = parse_table(dump, "item_enchantment_template")?;
+    let property_column = "random_property";
+    let required: BTreeSet<u32> = dump
+        .columns("item_template", &["entry", property_column])?
         .iter()
-        .map(|row| template_pool(row))
+        .map(template_pool)
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .filter(|id| *id != 0)
@@ -335,26 +365,7 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>
     )?;
     let mut chain = dbc::open_chain(std::path::Path::new(dir))?;
     let (mut sql, properties, catalogue_row_count) = catalogue_sql(&mut chain)?;
-    let mut rows = BTreeMap::new();
-    let mut pools = BTreeSet::new();
-    for row in raw {
-        let pool: u32 = field(&row, 0).parse().context("invalid Property Pool ID")?;
-        let property: u32 = field(&row, 1)
-            .parse()
-            .context("invalid Random Property ID")?;
-        if pool == 0 || !properties.contains(&property) {
-            bail!("pool {pool} references missing Random Property {property}");
-        }
-        let weight = decimal_weight(field(&row, 2))?;
-        let id = (u64::from(pool) << 32) | u64::from(property);
-        if rows
-            .insert(id, format!("({id},{pool},{property},{weight})"))
-            .is_some()
-        {
-            bail!("duplicate property {property} in pool {pool}");
-        }
-        pools.insert(pool);
-    }
+    let (rows, pools) = property_weights(&raw, &properties)?;
     if let Some(pool) = required.difference(&pools).next() {
         bail!("item template references missing Property Pool {pool}");
     }
@@ -377,6 +388,58 @@ pub(crate) fn dump_sql(dump: &str, dbc_dir: Option<&str>) -> Result<(Vec<String>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn vmangos_pool_weights_preserve_four_decimal_places_after_patch_selection() {
+        use crate::dump::TableRows;
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::{Integer as N, Real as F};
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "item_enchantment_template",
+            columns: &[
+                ("chance", "REAL"),
+                ("entry", "INTEGER"),
+                ("ench", "INTEGER"),
+                ("patch_min", "INTEGER"),
+                ("patch_max", "INTEGER"),
+            ],
+            key: &["entry", "ench", "patch_min", "patch_max"],
+            rows: &[
+                &[
+                    ("entry", N(1)),
+                    ("ench", N(2)),
+                    ("chance", F(0.1234)),
+                    ("patch_min", N(10)),
+                    ("patch_max", N(10)),
+                ],
+                &[
+                    ("entry", N(1)),
+                    ("ench", N(3)),
+                    ("chance", F(99.8766)),
+                    ("patch_min", N(10)),
+                    ("patch_max", N(10)),
+                ],
+                &[
+                    ("entry", N(1)),
+                    ("ench", N(4)),
+                    ("chance", F(100.0)),
+                    ("patch_min", N(0)),
+                    ("patch_max", N(9)),
+                ],
+            ],
+        }])
+        .unwrap();
+        let (rows, pools) = property_weights(
+            &source.rows("item_enchantment_template").unwrap(),
+            &BTreeSet::from([2, 3]),
+        )
+        .unwrap();
+        assert_eq!(pools, BTreeSet::from([1]));
+        assert_eq!(
+            rows.into_values().collect::<Vec<_>>(),
+            ["(4294967298,1,2,1234)", "(4294967299,1,3,998766)"]
+        );
+    }
 
     #[test]
     fn spell_columns_keep_equipment_masks_out_of_all_three_effect_slots() {
@@ -495,7 +558,6 @@ mod tests {
         properties.rows[0].suffix.en_gb = "of the 'Fixture'),(another);".to_owned();
         let (_, _, row_count) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
         assert_eq!(row_count, 6);
-        assert_eq!(dump_sql("", None).unwrap(), (Vec::new(), 0));
     }
 
     #[test]
@@ -574,18 +636,20 @@ mod tests {
     }
 
     #[test]
-    fn decimal_weights_keep_exact_hundredths() {
-        assert_eq!(decimal_weight("0.01").unwrap(), 1);
-        assert_eq!(decimal_weight("99.52").unwrap(), 9952);
-        assert_eq!(decimal_weight("131.01").unwrap(), 13101);
-        assert_eq!(decimal_weight("1.2").unwrap(), 120);
+    fn decimal_weights_keep_four_decimal_places() {
+        assert_eq!(decimal_weight_at_precision("0.01", 4).unwrap(), 100);
+        assert_eq!(decimal_weight_at_precision("99.52", 4).unwrap(), 995200);
+        assert_eq!(decimal_weight_at_precision("131.01", 4).unwrap(), 1310100);
+        assert_eq!(decimal_weight_at_precision("1.2", 4).unwrap(), 12000);
         assert_eq!(
-            decimal_weight("0").unwrap_err().to_string(),
+            decimal_weight_at_precision("0", 4).unwrap_err().to_string(),
             "property weight must be positive"
         );
-        for value in ["-1", "NaN", "1.001", "1e2"] {
+        for value in ["-1", "NaN", "1.00001", "1e2"] {
             assert_eq!(
-                decimal_weight(value).unwrap_err().to_string(),
+                decimal_weight_at_precision(value, 4)
+                    .unwrap_err()
+                    .to_string(),
                 format!("invalid property weight {value}")
             );
         }

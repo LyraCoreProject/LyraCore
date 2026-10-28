@@ -14,6 +14,7 @@ export type FieldType =
 export interface Column {
   readonly column: string;
   readonly type: FieldType;
+  readonly defaultValue?: number | string;
 }
 
 // The Package API does not claim the combo-point columns.
@@ -49,6 +50,9 @@ export const SPELL_COLUMNS: { readonly [K in SpellField]: Column } = {
   procFlags: { column: "proc_flags", type: "u32" },
   procChance: { column: "proc_chance", type: "u8" },
   procCharges: { column: "proc_charges", type: "u8" },
+  customFlags: { column: "custom_flags", type: "u32", defaultValue: 0 },
+  minTargetLevel: { column: "min_target_level", type: "u32", defaultValue: 0 },
+  singleTargetKey: { column: "single_target_key", type: "u64", defaultValue: "0" },
 };
 
 export const SPELL_EFFECT_COLUMNS: {
@@ -69,6 +73,7 @@ export const SPELL_EFFECT_COLUMNS: {
   p1: { column: "p1", type: "i32" },
   scriptId: { column: "script_id", type: "u32" },
   entersCombat: { column: "enters_combat", type: "bool" },
+  bonusCoefficient: { column: "bonus_coefficient", type: "f32", defaultValue: -1 },
 };
 
 export const SPELL_TABLE = "game_spell";

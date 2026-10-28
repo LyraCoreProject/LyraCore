@@ -1,3 +1,4 @@
+use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
 
 use crate::{game_creature_template, game_world_entity, WorldEntity};
@@ -63,6 +64,7 @@ pub(crate) fn resolve_cast_at_typed(
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
+    check_source_cast_position(ctx, &caster, &hdr, target_guid)?;
     if !is_completion {
         check_global_cooldown(ctx, caster_guid)?;
     }
@@ -537,6 +539,13 @@ fn cast_triggered_with_origin(
         .filter(&spell_id)
         .collect();
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
+    let caster = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(caster_guid)
+        .ok_or_else(|| format!("caster {caster_guid} not in world"))?;
+    check_faction_target(ctx, &caster, &effects, target_guid, spell_id).map_err(String::from)?;
     run_spell_effects(
         ctx,
         &hdr,
@@ -757,8 +766,77 @@ fn check_cast_gates_with_admission(
 ) -> Result<(), CastGateRefusal> {
     check_cast_gate_prefix(ctx, caster, effects, target_guid, allow_dead_creature)?;
     crate::mount::check_mount_cast(ctx, caster, effects, spell_id)?;
+    check_source_cast_position(ctx, caster, hdr, target_guid)?;
     check_global_cooldown(ctx, caster.guid)?;
     check_cast_gate_suffix(ctx, caster, hdr, effects, target_guid, spell_id, level)
+}
+
+fn check_faction_target(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    effects: &[SpellEffect],
+    target_guid: u64,
+    spell_id: u32,
+) -> Result<(), CastGateRefusal> {
+    // Target kinds determine faction eligibility; is_negative only describes aura polarity.
+    if target_guid != caster.guid {
+        // Inert DBC markers can name ally targets even when the spell is hostile.
+        let hits_enemy = effects.iter().any(|e| {
+            e.kind != A_FLAG
+                && e.kind != E_DUEL
+                && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
+        });
+        let hits_ally = effects.iter().any(|e| {
+            e.kind != A_FLAG && e.kind != E_DUEL && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
+        });
+        if hits_enemy || hits_ally {
+            if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
+                let friendly = !crate::combat::may_harm(ctx, caster, &target);
+                let hostile = !crate::combat::may_help(ctx, caster, &target);
+                if let Some(class) =
+                    faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
+                {
+                    return Err(CastGateRefusal::other(CastRefusalReason::BadTargets, format!(
+                        "spell {spell_id} targets {class}, so it cannot be cast on unit {target_guid}"
+                    )));
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
+fn check_source_cast_position(
+    ctx: &ReducerContext,
+    caster: &WorldEntity,
+    hdr: &Spell,
+    target_guid: u64,
+) -> Result<(), CastGateRefusal> {
+    if target_guid == caster.guid {
+        return Ok(());
+    }
+    let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) else {
+        return Ok(());
+    };
+    if caster.is_player()
+        && hdr.custom_flags & custom::FACE_TARGET != 0
+        && !is_facing(caster.x, caster.y, caster.orientation, target.x, target.y)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotInFront,
+            "target must be in front of caster",
+        ));
+    }
+    if hdr.custom_flags & custom::BEHIND_TARGET != 0
+        && !is_behind(caster.x, caster.y, target.x, target.y, target.orientation)
+    {
+        return Err(CastGateRefusal::other(
+            CastRefusalReason::NotBehind,
+            "spell must be cast from BEHIND the target",
+        ));
+    }
+    Ok(())
 }
 
 fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
@@ -999,6 +1077,13 @@ fn check_cast_gate_suffix(
         crate::creatures::check_hostile_summon(ctx, caster, hdr, effect)?;
     }
 
+    for effect in effects
+        .iter()
+        .filter(|effect| effect.kind == E_SUMMON_GUARDIANS)
+    {
+        crate::creatures::guardian::check(ctx, caster, effect)?;
+    }
+
     if level_gate_blocks(caster.is_player(), hdr.spell_level, level) {
         return Err(CastGateRefusal::other(
             CastRefusalReason::LevelTooLow,
@@ -1084,7 +1169,7 @@ fn check_cast_gate_suffix(
         }
     }
 
-    if hdr.range_yd > 0 && target_guid != caster_guid {
+    if target_guid != caster_guid {
         if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
             // World coordinates are meaningful only within the same map and instance.
             if caster.map_id != target.map_id || caster.instance_id != target.instance_id {
@@ -1098,35 +1183,18 @@ fn check_cast_gate_suffix(
                 ));
             }
             let dist = distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
-            check_cast_range("target", dist, hdr.range_yd)?;
+            if hdr.range_yd > 0 {
+                check_cast_range("target", dist, hdr.range_yd)?;
+            }
+            crate::spell::source_behavior::check_target_level(hdr.min_target_level, target.level)?;
         }
     }
 
-    // Target kinds determine faction eligibility; is_negative only describes aura polarity.
-    if target_guid != caster_guid {
-        // Inert DBC markers can name ally targets even when the spell is hostile.
-        let hits_enemy = effects.iter().any(|e| {
-            e.kind != A_FLAG
-                && e.kind != E_DUEL
-                && matches!(e.target, T_TARGET_ENEMY | T_AREA_ENEMY | T_CHAIN_ENEMY)
-        });
-        let hits_ally = effects.iter().any(|e| {
-            e.kind != A_FLAG && e.kind != E_DUEL && matches!(e.target, T_TARGET_ALLY | T_AREA_ALLY)
-        });
-        if hits_enemy || hits_ally {
-            if let Some(target) = ctx.db.game_world_entity().guid().find(target_guid) {
-                let friendly = !crate::combat::may_harm(ctx, caster, &target);
-                let hostile = !crate::combat::may_help(ctx, caster, &target);
-                if let Some(class) =
-                    faction_target_violation(hits_enemy, hits_ally, friendly, hostile)
-                {
-                    return Err(CastGateRefusal::other(CastRefusalReason::BadTargets, format!(
-                        "spell {spell_id} targets {class} — cannot be cast on this unit ({target_guid})"
-                    )));
-                }
-            }
-        }
+    if target_guid == caster_guid {
+        crate::spell::source_behavior::check_target_level(hdr.min_target_level, caster.level)?;
     }
+
+    check_faction_target(ctx, caster, effects, target_guid, spell_id)?;
 
     if let Some(e) = effects.iter().find(|e| {
         e.kind & KIND_AURA_BIT != 0 && e.p1 != 0 && has_aura(ctx, target_guid, e.p1 as u32)
@@ -1609,6 +1677,7 @@ mod eventai_hit_tests {
             script_id: 0,
             enters_combat: false,
             points_per_combo: 0.0,
+            bonus_coefficient: -1.0,
         }
     }
 

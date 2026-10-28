@@ -11,11 +11,13 @@ import time
 import traceback
 
 import admission
+from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
                       spell_go_misses, spell_id, teleport_ack, values)
 from host import MODULE, Host
 import reload
 import retention
+from spell_source import check_spell_source_behavior
 
 # The guid of the seeded Character Tester, on the TEST Account.
 TESTER = 1
@@ -83,6 +85,59 @@ def acknowledge_controls(host, client, peer, packets):
             return observed
         time.sleep(0.01)
     raise AssertionError(('missing movement receipt Relay', expected, [hex(opcode) for opcode, _ in observed]))
+
+
+def check_creature_catalogue(host):
+    client = host.enter_world('Catalogue', at=(0, 8000, 8000, 0))
+    entry = 5090042
+    for table in ['game_creature_template', 'game_creature_level_stats', 'game_creature_display']:
+        host.restore(table, f'entry = {entry}')
+    host.sql(f"INSERT INTO game_creature_template (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) VALUES ({entry},'Catalogue fixture','',100,10,152,35,0,0,1,0,0,3,1,2000,0,0,10,152,0,20,30,50,0,0,0,0)")
+    host.sql(f'INSERT INTO game_creature_level_stats (id,entry,level,health,damage_min,damage_max,armor) VALUES ({(entry << 8) | 10},{entry},10,152,20,30,50)')
+    host.sql(f'INSERT INTO game_creature_display (id,entry,display_id,scale,weight) VALUES ({entry << 3},{entry},100,1,0),({(entry << 3) + 1},{entry},200,2,1)')
+    guid = spawn(host, client.guid, entry, 5)
+    assert host.rows(f'SELECT health,max_health,armor,display_id,scale_x FROM game_world_entity WHERE guid = {guid}') == [[152,152,50,200,2]]
+    for imported in [True, False]:
+        if not imported:
+            host.sql(f'DELETE FROM game_creature_level_stats WHERE entry = {entry}')
+        for edits, health, damage in [
+            ('damage_min = 40, damage_max = 40', 152, 40),
+            ('level = 11, max_level = 11', 152, 40),
+            ('max_level = 0', 152, 40),
+            ('health = 250, max_level_health = 250', 250, 40),
+        ]:
+            host.sql(f'UPDATE game_creature_template SET {edits} WHERE entry = {entry}')
+            next_guid = spawn(host, client.guid, entry, 10)
+            expected_health = health if imported else health * 4
+            expected_damage = damage if imported else damage * 5 // 2
+            assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {next_guid}') == [[expected_health]]
+            host.call('debug_compute_swing', [next_guid, client.guid])
+            assert host.rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'") == [[expected_damage, expected_damage]]
+        host.sql(f'UPDATE game_creature_template SET level = 10, max_level = 10, health = 152, max_level_health = 152 WHERE entry = {entry}')
+
+
+def check_pet_level_scaling(host):
+    entry = 51006
+    host.restore('game_creature_template', f'entry = {entry}')
+    host.restore('game_creature_level_stats', f'entry = {entry}')
+    host.sql(f'UPDATE game_creature_template SET creature_family = 5, level = 10, max_level = 10, health = 100, max_level_health = 100, npc_flags = 0, rank = 3, damage_min = 20, damage_max = 30 WHERE entry = {entry}')
+    for source, name, expected in [('vmangos', 'Petimport', (22, 33)), ('classic-db', 'Petclassic', (55, 82))]:
+        host.sql(f'DELETE FROM game_creature_level_stats WHERE entry = {entry}')
+        if source == 'vmangos':
+            host.sql(f'INSERT INTO game_creature_level_stats (id,entry,level,health,damage_min,damage_max,armor) VALUES ({(entry << 8) | 10},{entry},10,100,20,30,0)')
+        owner = host.enter_world(name, 3, 3, at=(0, 8000, 8000, 0))
+        host.call('debug_set_level', [owner.guid, 11])
+        wild = spawn(host, owner.guid, entry, 5)
+        host.call('debug_force_cast_at', [owner.guid, 50300, wild])
+        pet, threshold = host.rows(f'SELECT live_pet_guid,next_level_xp FROM game_hunter_pet_protocol WHERE owner_guid = {owner.guid}')[0]
+        host.sql(f'UPDATE game_hunter_pet SET pet_xp = {threshold - 1} WHERE owner_guid = {owner.guid}')
+        prey = spawn(host, owner.guid, 51000, 5)
+        host.sql(f'UPDATE game_world_entity SET level = 11 WHERE guid = {prey}')
+        host.call('debug_apply_damage', [prey, 1, owner.guid])
+        host.call('debug_kill_creature', [owner.guid, prey])
+        assert host.rows(f'SELECT level FROM game_world_entity WHERE guid = {pet}') == [[11]], (source, host.rows(f'SELECT level,pet_xp FROM game_hunter_pet WHERE owner_guid = {owner.guid}'))
+        host.call('debug_compute_swing', [pet, owner.guid])
+        assert host.rows("SELECT base_min,base_max FROM game_debug_readout WHERE key = 'swing'") == [list(expected)], source
 
 
 def check_sessionless_movement(host):
@@ -1386,6 +1441,9 @@ def check_duels(host):
     activate(flag)
     host.call('debug_teleport', [watcher_guid, 0, 2000, 1000, 0, 0])
     watcher.collect()
+    # Regeneration must not change the one-health knockout before the observation.
+    max_health = host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {second_guid}')[0][0]
+    host.sql(f'UPDATE game_world_entity SET max_health = 1 WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1])
     first.collect()
     second.collect()
@@ -1399,10 +1457,12 @@ def check_duels(host):
         time.sleep(0.05)
     completion(knocked_out, flag, 0, 'Duelone', 'Dueltwo')
     completion(second.collect(), flag, 0, 'Duelone', 'Dueltwo')
-    assert host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}') == [[1, False]]
+    remaining = host.rows(f'SELECT health, dead FROM game_world_entity WHERE guid = {second_guid}')
+    assert remaining == [[1, False]], remaining
     assert not host.rows(f'SELECT owner_guid FROM game_corpse WHERE owner_guid = {second_guid}')
     assert not host.rows(f'SELECT attacker_guid FROM game_melee_attack WHERE attacker_guid = {first_guid}')
     assert not duel_packets(watcher.collect())
+    host.sql(f'UPDATE game_world_entity SET max_health = {max_health} WHERE guid = {second_guid}')
     host.call('debug_set_health', [second_guid, 1000])
     host.call('debug_teleport', [watcher_guid, 0, 1002, 1000, 0, 0])
     watcher.collect()
@@ -1507,28 +1567,30 @@ def check_world_objects(host):
     host.call('debug_spawn_gameobject', [door_entry, 0, 259, 0, 0, 3002, 1000, 0, 0, 0, 0, 0])
     spawned = outside.collect()
     assert door in creates(spawned)
+    assert values(spawned, door, create=True)[14] == 1
     assert [values(spawned, door)[i] for i in range(10, 14)] == [0, 0, 0, 0x3f800000]
     assert door not in creates(first.collect() + second.collect())
     grant = host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}')[0][0]
     outside.send(0xb1, struct.pack('<Q', door))
     toggled = outside.collect()
-    assert values(toggled, door)[14] == 1 and door not in creates(toggled)
+    assert values(toggled, door)[14] == 0 and door not in creates(toggled)
     assert host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}') == [[grant]]
     assert not values(first.collect() + second.collect(), door)
     host.sql(f'UPDATE game_gameobject SET rotation_0 = 0.5, rotation_1 = 0.5, rotation_2 = 0.5, rotation_3 = 0.5 WHERE guid = {door}')
     outside.send(0xb1, struct.pack('<Q', door))
     closed = outside.collect()
-    assert values(closed, door)[14] == 0
+    assert values(closed, door)[14] == 1
     assert [values(closed, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     opened = outside.collect()
-    assert values(opened, door)[14] == 1 and door not in creates(opened)
+    assert values(opened, door)[14] == 0 and door not in creates(opened)
     assert [values(opened, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     assert not values(outside.collect(), door)
     host.call('debug_enter_instance', [first_guid, 0])
     joined = first.collect()
     assert door in creates(joined)
+    assert values(joined, door, create=True)[14] == 0
     assert [values(joined, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     create_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == door)
     rotation_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] == 0 and packed_guid(body[6:]) == door)
@@ -4178,6 +4240,74 @@ def check_inventory(host):
     assert not host.rows(f'SELECT id FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = 50900')
 
 
+def check_gossip_submenus(host):
+    client = host.enter_world('Gossip', at=(0, 0, 0, 0))
+    guid = client.guid
+    host.call('debug_set_level', [guid, 60])
+    trainer = spawn(host, guid, 51001, 2)
+    host.restore('game_creature_template', 'entry = 51001', 'trainer_type', 'trainer_class')
+    host.sql('UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = 51001')
+    host.sql(f'UPDATE game_world_entity SET npc_flags = 17 WHERE guid = {trainer}')
+    host.restore('game_gossip_option', 'row_id = 5090920')
+    host.sql("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES (5090920,51001,0,0,'I wish to unlearn my talents.',1,5090920,0,0,0)")
+    for menu, text in [(5090920, 16777215), (5090921, 70)]:
+        host.restore('game_gossip_menu_profile', f'menu_id = {menu}')
+        host.sql(f'INSERT INTO game_gossip_menu_profile (menu_id,text_id) VALUES ({menu},{text})')
+    for row, menu, index, text, action, target, condition in [
+        (5090920, 5090920, 0, 'Yes. I do.', 16, 0, 0),
+        (5090921, 5090920, 1, 'Hidden answer', 1, 0, 3),
+        (5090922, 5090920, 2, 'More', 1, 5090921, 0),
+        (5090923, 5090921, 0, 'Back', 1, 5090920, 0),
+    ]:
+        host.restore('game_gossip_menu_profile_option', f'row_id = {row}')
+        host.sql(f"INSERT INTO game_gossip_menu_profile_option (row_id,menu_id,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({row},{menu},{index},0,'{text}',{action},{target},{condition},0,0)")
+
+    def click(index):
+        client.send(0x17c, struct.pack('<QI', trainer, index))
+        return client.collect()
+
+    def submenu():
+        client.send(0x17b, struct.pack('<Q', trainer))
+        root = next(body for opcode, body in client.collect() if opcode == 0x17d)
+        assert b'I wish to unlearn my talents.\0' in root
+        packets = click(0)
+        assert not any(opcode == 0x17e for opcode, _ in packets)
+        return next(body for opcode, body in packets if opcode == 0x17d)
+
+    menu = submenu()
+    assert struct.unpack_from('<II', menu, 8) == (16777215, 2)
+    assert b'Yes. I do.\0' in menu and b'Hidden answer\0' not in menu
+    nested = next(body for opcode, body in click(1) if opcode == 0x17d)
+    assert struct.unpack_from('<II', nested, 8) == (70, 1) and b'Back\0' in nested
+    assert any(opcode == 0x17d for opcode, _ in click(0))
+    host.sql('UPDATE game_gossip_menu_profile_option SET cond_type = 3 WHERE row_id = 5090920')
+    refused = click(0)
+    assert (0x17e, b'') in refused and not any(opcode == 0x2aa for opcode, _ in refused)
+    host.sql('UPDATE game_gossip_menu_profile_option SET cond_type = 0 WHERE row_id = 5090920')
+    submenu()
+    assert (0x2aa, struct.pack('<QI', trainer, 10000)) in click(0)
+
+    for trainer_type, trainer_class in [(1, 1), (2, 1), (3, 1), (0, 8)]:
+        host.sql(f'UPDATE game_creature_template SET trainer_type = {trainer_type}, trainer_class = {trainer_class} WHERE entry = 51001')
+        menu = submenu()
+        assert b'Yes. I do.\0' not in menu and struct.unpack_from('<I', menu, 12)[0] == 1
+    host.sql('UPDATE game_creature_template SET trainer_type = 0, trainer_class = 1 WHERE entry = 51001')
+    submenu()
+    host.restore('game_creature_gossip_menu_override', f'creature_guid = {trainer}')
+    host.sql(f'INSERT INTO game_creature_gossip_menu_override (creature_guid,menu_id,map_id,instance_id) VALUES ({trainer},5090921,0,0)')
+    refused = click(0)
+    assert (0x17e, b'') in refused and not any(opcode == 0x2aa for opcode, _ in refused)
+    host.sql(f'DELETE FROM game_creature_gossip_menu_override WHERE creature_guid = {trainer}')
+    host.sql('UPDATE game_gossip_option SET action_menu_id = 5090929 WHERE row_id = 5090920')
+    client.send(0x17b, struct.pack('<Q', trainer))
+    assert any(opcode == 0x17d for opcode, _ in client.collect())
+    assert (0x17e, b'') in click(0)
+    host.sql('UPDATE game_gossip_option SET action = 16, action_menu_id = 0 WHERE row_id = 5090920')
+    client.send(0x17b, struct.pack('<Q', trainer))
+    assert any(opcode == 0x17d for opcode, _ in client.collect())
+    assert (0x2aa, struct.pack('<QI', trainer, 10000)) in click(0)
+
+
 def check_enchantments(host):
     client, peer = native_and_peer(host)
     guid = client.guid
@@ -4223,6 +4353,16 @@ def check_quest_chain(host):
         host.sql(f'INSERT INTO game_creature_quest (id,creature_entry,quest_entry,role) VALUES ({relation},51003,{entry},{role})')
     giver = spawn(host, guid, 51003, 2)
     host.call('debug_grant_quest', [guid, first])
+    host.restore('game_quest_event_requirement', f'id = {first}')
+    host.restore('game_character_quest_event_credit', f'id = {first}')
+    host.sql(f'INSERT INTO game_quest_event_requirement (id,quest_entry) VALUES ({first},{first})')
+    client.collect()
+    client.send(0x18e, struct.pack('<QII', giver, first, 0))
+    pending = client.collect()
+    assert any(opcode == 0x18b for opcode, _ in pending), pending
+    assert not any(opcode in (0x18d, 0x191) for opcode, _ in pending), pending
+    assert host.rows(f'SELECT rewarded FROM game_character_quest WHERE character_guid = {guid} AND quest_entry = {first}') == [[False]]
+    host.sql(f'INSERT INTO game_character_quest_event_credit (id,character_guid,quest_entry) VALUES ({first},{guid},{first})')
     client.collect()
     client.send(0x18e, struct.pack('<QII', giver, first, 0))
     turned_in = [(opcode, body) for opcode, body in client.collect() if opcode in (0x191, 0x188)]
@@ -4514,8 +4654,8 @@ def check_combo_points(host):
         finisher = 0x08 if kind == 0x0d else 0  # SPELL_ATTR_COMBO_FINISHER.
         host.sql(f'UPDATE game_spell SET cast_flags = {finisher} WHERE spell_id = 133')
 
-    def shown():
-        seen = []
+    def shown(packets=()):
+        seen = list(packets)
         def combo():
             seen.extend(rogue.collect())
             fields = values(seen, guid)
@@ -4537,8 +4677,24 @@ def check_combo_points(host):
                     'the finisher on a target without combo points was not refused')
     assert (0x130, struct.pack('<IBB', 133, 2, 0x46)) in refused, refused
     assert host.rows(held) == [[first, 2]]
-    rogue.send(0x12e, cast(133, first))
-    assert shown() == (first, 0)
+    for _ in range(10):
+        rogue.send(0x12e, cast(133, first))
+        packets = []
+        def finished():
+            packets.extend(rogue.collect())
+            return (1222 in values(packets, guid)
+                    or any(opcode == 0x24b for opcode, _ in packets))
+        host.wait_until(finished, 'the finisher neither spent its points nor reported a miss')
+        # Client-initiated casts report avoidance through SPELLLOGMISS after their launch GO.
+        missed = [struct.unpack('<IQBIQB', body) for opcode, body in packets if opcode == 0x24b]
+        if not missed:
+            assert shown(packets) == (first, 0)
+            break
+        assert len(missed) == 1 and missed[0][:5] == (133, guid, 0, 1, first), missed
+        assert missed[0][5] in (1, 3, 4), missed
+        assert host.rows(held) == [[first, 2]], 'an avoided finisher consumed combo points'
+    else:
+        raise AssertionError('all finisher casts were avoided')
     assert not host.rows(held)
 
     effect(0x0c)
@@ -4592,7 +4748,7 @@ def check_progression(host):
     client.send(0x318, struct.pack('<i', 64))
     refused = client.collect()
     assert any(opcode == 0x96 for opcode, _ in refused)
-    assert not values(refused, guid)
+    assert 1261 not in values(refused, guid)
     assert host.rows(f'SELECT watched_faction_index FROM game_character WHERE guid = {guid}') == [[62]]
     client.send(0x125, struct.pack('<IB', 0xffffffff, 1))
     assert any(opcode == 0x96 for opcode, _ in client.collect())
@@ -4854,11 +5010,11 @@ def named(*checks):
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
     check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
-    check_inventory, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
+    check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
     check_member_stats, check_guild, check_petitions, check_trade, check_duels, check_meeting_stones, check_mail,
-    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat,
+    check_auctions, check_pets, check_areatriggers, check_world_objects, check_transports, check_transport_crossings, check_addon, check_chat, check_eventai_speech,
     check_sessionless_movement, check_charge_movement, check_logon_limits, check_decoder_bounds,
     check_session_expiry, check_gm_commands, check_who_bounds, check_session_revocation, check_combo_points,
 ) | {'admission': admission.run}

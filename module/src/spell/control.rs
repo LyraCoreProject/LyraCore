@@ -408,15 +408,18 @@ pub(crate) fn expire_cast_attempt(
 
 pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let auras = ctx.db.game_aura();
-    let ids: Vec<u64> = auras
+    let removed: Vec<Aura> = auras
         .by_caster()
         .filter(&caster_guid)
         .filter(|aura| is_channel_aura(ctx, aura))
-        .map(|a| a.id)
         .collect();
-    let broke_channel = !ids.is_empty();
-    for id in ids {
-        crate::Aura::delete(ctx, id);
+    let broke_channel = !removed.is_empty();
+    let mut targets = std::collections::BTreeMap::<u64, Vec<Aura>>::new();
+    for aura in removed {
+        targets.entry(aura.target_guid).or_default().push(aura);
+    }
+    for (target, auras) in targets {
+        shed_auras(ctx, target, auras);
     }
     let broke_cast = interrupt_cast(ctx, caster_guid);
     if broke_channel {

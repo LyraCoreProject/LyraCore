@@ -292,6 +292,18 @@ impl Table {
         }
     }
 
+    /// Old Package Deltas may omit columns appended with these migration defaults.
+    #[must_use]
+    pub fn column_has_default(self, name: &str) -> bool {
+        matches!(
+            (self, name),
+            (
+                Self::Spell,
+                "custom_flags" | "min_target_level" | "single_target_key"
+            ) | (Self::SpellEffect, "bonus_coefficient")
+        )
+    }
+
     #[must_use]
     pub fn column_type(self, name: &str) -> Option<FieldType> {
         self.columns()
@@ -342,6 +354,9 @@ const SPELL_COLUMNS: &[Column] = &[
     column("proc_flags", FieldType::U32),
     column("proc_chance", FieldType::U8),
     column("proc_charges", FieldType::U8),
+    column("custom_flags", FieldType::U32),
+    column("min_target_level", FieldType::U32),
+    column("single_target_key", FieldType::U64),
 ];
 
 const SPELL_EFFECT_COLUMNS: &[Column] = &[
@@ -360,6 +375,7 @@ const SPELL_EFFECT_COLUMNS: &[Column] = &[
     column("p1", FieldType::I32),
     column("script_id", FieldType::U32),
     column("enters_combat", FieldType::Bool),
+    column("bonus_coefficient", FieldType::F32),
 ];
 
 const ITEM_COLUMNS: &[Column] = &[

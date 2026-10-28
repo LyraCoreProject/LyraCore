@@ -1,7 +1,5 @@
 use spacetimedb::table;
 
-use super::EventAiRule;
-
 // Retain this flat schema for additive migration; runtime uses CreatureAiDefinition.
 #[table(
     accessor = game_creature_ai_event,
@@ -77,7 +75,7 @@ pub struct CreatureAiDefinition {
     pub creature_entry: u32,
     pub creature_guid: u64,
     pub definition_revision: u64,
-    pub rules: Vec<EventAiRule>,
+    pub rules: Vec<super::stored::StoredEventAiRule>,
 }
 
 #[table(accessor = game_creature_ai_broadcast_text)]
@@ -94,6 +92,18 @@ pub struct CreatureAiBroadcastText {
     pub emote_id_2: u32,
     pub emote_delay_3_ms: u32,
     pub emote_id_3: u32,
+    #[default(0u32)]
+    pub sound_id: u32,
+}
+
+impl CreatureAiBroadcastText {
+    pub(super) fn text_for_gender(&self, gender: u8) -> &str {
+        if matches!(gender, 1 | 2) && !self.female_text.is_empty() {
+            &self.female_text
+        } else {
+            &self.male_text
+        }
+    }
 }
 
 #[table(accessor = game_creature_ai_spell_metadata)]
@@ -163,4 +173,36 @@ pub struct CreatureAiSummon {
     pub z: f32,
     pub orientation: f32,
     pub lifetime_ms: u32,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn creature_broadcast_uses_female_text_for_female_or_unspecified_gender() {
+        let mut text = CreatureAiBroadcastText {
+            id: 1,
+            male_text: "male".into(),
+            female_text: "female".into(),
+            chat_type: 0,
+            language_id: 0,
+            emote_delay_1_ms: 0,
+            emote_id_1: 0,
+            emote_delay_2_ms: 0,
+            emote_id_2: 0,
+            emote_delay_3_ms: 0,
+            emote_id_3: 0,
+            sound_id: 0,
+        };
+        assert_eq!(text.text_for_gender(0), "male");
+        assert_eq!(text.text_for_gender(1), "female");
+        assert_eq!(text.text_for_gender(2), "female");
+        text.female_text.clear();
+        assert_eq!(text.text_for_gender(1), "male");
+        text.female_text = "female".into();
+        text.male_text.clear();
+        assert_eq!(text.text_for_gender(0), "");
+        assert_eq!(text.text_for_gender(1), "female");
+    }
 }

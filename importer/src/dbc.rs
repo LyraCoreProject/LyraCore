@@ -1,3 +1,7 @@
+#[path = "dbc_source.rs"]
+mod source;
+pub(crate) use source::{findings, world_plan as replacement_plan};
+
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::io::Cursor;
@@ -5,22 +9,16 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{bail, Context, Result};
 use lyracore_package_delta::packed_race_class_id;
-use wow_dbc::vanilla_tables::area_table::AreaTable as DbcAreaTable;
-use wow_dbc::vanilla_tables::area_trigger::AreaTrigger as DbcAreaTrigger;
 use wow_dbc::vanilla_tables::auction_house::AuctionHouse as DbcAuctionHouse;
 use wow_dbc::vanilla_tables::char_base_info::CharBaseInfo as DbcCharBaseInfo;
 use wow_dbc::vanilla_tables::char_start_outfit::CharStartOutfit as DbcCharStartOutfit;
 use wow_dbc::vanilla_tables::chr_races::{ChrRaces, ChrRacesKey};
 use wow_dbc::vanilla_tables::creature_display_info::{CreatureDisplayInfo, CreatureDisplayInfoKey};
 use wow_dbc::vanilla_tables::creature_family::CreatureFamily as DbcCreatureFamily;
-use wow_dbc::vanilla_tables::faction::Faction as DbcFaction;
-use wow_dbc::vanilla_tables::faction_template::FactionTemplate as DbcFactionTemplate;
 use wow_dbc::vanilla_tables::lock::Lock as DbcLock;
 use wow_dbc::vanilla_tables::mail_template::MailTemplate as DbcMailTemplate;
 use wow_dbc::vanilla_tables::skill_line::SkillLine as DbcSkillLine;
-use wow_dbc::vanilla_tables::skill_line_ability::SkillLineAbility as DbcSkillLineAbility;
 use wow_dbc::vanilla_tables::skill_race_class_info::SkillRaceClassInfo as DbcSkillRaceClassInfo;
-use wow_dbc::vanilla_tables::skill_tiers::SkillTiers as DbcSkillTiers;
 use wow_dbc::vanilla_tables::taxi_nodes::TaxiNodes as DbcTaxiNodes;
 use wow_dbc::vanilla_tables::taxi_path::TaxiPath as DbcTaxiPath;
 use wow_dbc::vanilla_tables::taxi_path_node::TaxiPathNode as DbcTaxiPathNode;
@@ -116,16 +114,9 @@ pub(crate) fn read_table<T: DbcTable>(chain: &mut PatchChain) -> Result<T> {
     })
 }
 
-pub fn run(data_dir: &str, taxi_mounts: Option<&str>, apply: bool, shard: &Shard) -> Result<()> {
-    let mount_dump = crate::dump::read_dump(taxi_mounts.context(
-        "standalone --dbc requires --taxi-mounts <classic-db .sql[.gz]> to resolve taxi mount displays and transports",
-    )?)?;
-    run_from_dump(data_dir, &mount_dump, apply, shard)
-}
-
 pub(crate) fn run_from_dump(
     data_dir: &str,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     apply: bool,
     shard: &Shard,
 ) -> Result<()> {
@@ -145,7 +136,10 @@ pub(crate) fn run_from_dump(
     Ok(())
 }
 
-pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<Vec<String>> {
+pub(crate) fn catalogue_statements(
+    data_dir: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
     let dir = Path::new(data_dir);
     let mut chain = open_chain(dir)?;
     eprintln!("dbc: opened MPQ chain from {}", dir.display());
@@ -175,8 +169,9 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
 
     eprintln!("dbc: toolchain OK — read + parsed real client DBCs, wrote no .dbc to the tree.");
 
-    let (faction_stmts, fn_count) = faction_template_sql(&mut chain)?;
-    let (gf_stmts, gf_count) = faction_sql(&mut chain)?;
+    let (faction_stmts, fn_count) = source::faction_template(mount_dump)?;
+    let (gf_stmts, gf_count) = source::faction(mount_dump)?;
+    let map_stmts = crate::map_catalogue::statements(mount_dump, &read_table(&mut chain)?)?.0;
     let auction_houses: DbcAuctionHouse = read_table(&mut chain)?;
     let (auction_house_stmts, auction_house_count) = auction_house_sql(&auction_houses)?;
     let mail_templates: DbcMailTemplate = read_table(&mut chain)?;
@@ -186,10 +181,8 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
     let (si_stmts, si_count) = start_item_sql(&mut chain)?;
     let (property_stmts, _, _) = crate::item_property::catalogue_sql(&mut chain)?;
 
-    let area_table: DbcAreaTable = read_table(&mut chain)?;
-    let (area_stmts, area_count) = area_sql(&area_table);
-    let area_triggers: DbcAreaTrigger = read_table(&mut chain)?;
-    let (trigger_stmts, trigger_count) = area_trigger_sql(&area_triggers);
+    let (area_stmts, area_count) = source::area(mount_dump)?;
+    let (trigger_stmts, trigger_count) = source::area_trigger(mount_dump)?;
     let safe_locs: DbcWorldSafeLocs = read_table(&mut chain)?;
     let (graveyard_stmts, graveyard_count) = graveyard_sql(&safe_locs);
 
@@ -204,7 +197,7 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
     let locks: DbcLock = read_table(&mut chain)?;
     let (lock_stmts, lock_count, lock_unmapped) = lock_sql(&locks);
 
-    let taxi_nodes: DbcTaxiNodes = read_table(&mut chain)?;
+    let taxi_nodes: DbcTaxiNodes = source::taxi_nodes(mount_dump)?;
     let taxi_paths: DbcTaxiPath = read_table(&mut chain)?;
     let taxi_path_nodes: DbcTaxiPathNode = read_table(&mut chain)?;
     let TaxiCatalogueSql {
@@ -227,16 +220,19 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
     }
 
     let skill_lines: DbcSkillLine = read_table(&mut chain)?;
-    let skill_abilities: DbcSkillLineAbility = read_table(&mut chain)?;
     let skill_availability: DbcSkillRaceClassInfo = read_table(&mut chain)?;
-    let autolearn_count = skill_abilities
-        .rows()
-        .iter()
-        // wow_dbc misnames the real AcquireMethod column.
-        .filter(|r| r.trivial_skill_line_rank_high == AUTOLEARN_ACQUIRE_METHOD)
-        .count();
     let (sl_stmts, sl_count) = skill_line_sql(&skill_lines);
-    let (sa_stmts, sa_count) = skill_ability_sql(&skill_abilities);
+    let ((sa_stmts, sa_count), autolearn_count) = {
+        let count = mount_dump
+            .rows("skill_line_ability")?
+            .iter()
+            .map(|row| row.number::<i32>("learn_on_get_skill"))
+            .collect::<Result<Vec<_>>>()?
+            .into_iter()
+            .filter(|method| *method == AUTOLEARN_ACQUIRE_METHOD)
+            .count();
+        (source::skill_ability(mount_dump)?, count)
+    };
     let (sav_stmts, sav_count) = skill_availability_sql(&skill_availability);
 
     println!("FactionTemplate: {fn_count} templates; Faction: {gf_count} factions");
@@ -266,6 +262,7 @@ pub(crate) fn catalogue_statements(data_dir: &str, mount_dump: &str) -> Result<V
     );
     println!("Transports: {} single-map routes", transports.count);
     Ok([
+        map_stmts,
         property_stmts,
         faction_stmts,
         gf_stmts,
@@ -378,29 +375,6 @@ fn mail_template_sql(table: &DbcMailTemplate) -> Result<(Vec<String>, usize)> {
     Ok((stmts, count))
 }
 
-fn faction_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
-    let factions: DbcFaction = read_table(chain)?;
-    let rows: Vec<String> = factions
-        .rows()
-        .iter()
-        .map(|r| {
-            format!(
-                "({},{},{})",
-                r.id.id, r.reputation_index as i32, r.reputation_base[0] as i32
-            )
-        })
-        .collect();
-    let n = rows.len();
-    let mut stmts = vec!["DELETE FROM game_faction WHERE faction_id >= 0".to_string()];
-    for chunk in rows.chunks(500) {
-        stmts.push(format!(
-            "INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES {}",
-            chunk.join(",")
-        ));
-    }
-    Ok((stmts, n))
-}
-
 fn char_base_info_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     let cbi: DbcCharBaseInfo = read_table(chain)?;
     let rows: Vec<String> = cbi
@@ -477,9 +451,6 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
 
 const AUTOLEARN_ACQUIRE_METHOD: i32 = 1;
 
-const PROFESSION_SKILL_LINES: &[u32] =
-    &[186, 182, 393, 185, 129, 171, 164, 197, 165, 202, 333, 356];
-
 fn skill_line_sql(table: &DbcSkillLine) -> (Vec<String>, usize) {
     let rows: Vec<String> = table
         .rows()
@@ -502,58 +473,6 @@ fn skill_line_sql(table: &DbcSkillLine) -> (Vec<String>, usize) {
         &rows,
     );
     (stmts, n)
-}
-
-fn skill_ability_sql(table: &DbcSkillLineAbility) -> (Vec<String>, usize) {
-    let rows: Vec<String> = table
-        .rows()
-        .iter()
-        .enumerate()
-        .map(|(i, r)| {
-            let min_skill = r.superseded_by.id; // Real MinSkillLineRank.
-            let acquire_method = r.trivial_skill_line_rank_high; // Real AcquireMethod.
-            let gray = r.trivial_skill_line_rank_low; // Real TrivialSkillLineRankHigh.
-            let green = r.character_points[0]; // Real TrivialSkillLineRankLow.
-            format!(
-                "({},{},{},{},{},{},{},{},{})",
-                i as u64 + 1,
-                r.spell.id,
-                r.skill_line.id,
-                r.race_mask.id,
-                r.class_mask.id,
-                min_skill,
-                acquire_method,
-                gray,
-                green,
-            )
-        })
-        .collect();
-    let n = rows.len();
-    let mut stmts = vec!["DELETE FROM game_skill_ability WHERE id >= 0".to_string()];
-    push_insert(
-        &mut stmts,
-        "game_skill_ability",
-        "id,spell_id,skill_line,race_mask,class_mask,min_skill,acquire_method,gray,green",
-        &rows,
-    );
-    (stmts, n)
-}
-
-// The pinned reader calls vanilla SupercededBySpell acquire_method.
-pub(crate) fn read_spell_rank_links(data_dir: &str) -> Result<Vec<(u32, u32)>> {
-    let mut chain = open_chain(Path::new(data_dir))?;
-    let abilities: DbcSkillLineAbility = read_table(&mut chain)?;
-    spell_rank_links(&abilities)
-}
-
-fn spell_rank_links(abilities: &DbcSkillLineAbility) -> Result<Vec<(u32, u32)>> {
-    let mut links = Vec::new();
-    for row in abilities.rows() {
-        let next = u32::try_from(row.acquire_method)
-            .context("SkillLineAbility has a negative successor spell")?;
-        links.push((row.spell.id, next));
-    }
-    Ok(links)
 }
 
 fn skill_availability_sql(table: &DbcSkillRaceClassInfo) -> (Vec<String>, usize) {
@@ -607,101 +526,6 @@ fn race_info_sql(races: &ChrRaces) -> (Vec<String>, usize) {
     (stmts, n)
 }
 
-fn faction_template_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
-    let ft: DbcFactionTemplate = read_table(chain)?;
-    let rows: Vec<String> = ft
-        .rows()
-        .iter()
-        .map(|r| {
-            format!(
-                "({},{},{},{},{},{},{},{},{},{},{},{},{})",
-                r.id.id,
-                r.faction.id,
-                r.faction_group.id,
-                r.friend_group.id,
-                r.enemy_group.id,
-                r.enemies[0],
-                r.enemies[1],
-                r.enemies[2],
-                r.enemies[3],
-                r.friends[0],
-                r.friends[1],
-                r.friends[2],
-                r.friends[3],
-            )
-        })
-        .collect();
-    let n = rows.len();
-    let mut stmts = vec!["DELETE FROM game_faction_template WHERE id >= 0".to_string()];
-    for chunk in rows.chunks(500) {
-        stmts.push(format!(
-            "INSERT INTO game_faction_template (id,faction,faction_group,friend_group,enemy_group,enemy_0,enemy_1,enemy_2,enemy_3,friend_0,friend_1,friend_2,friend_3) VALUES {}",
-            chunk.join(",")
-        ));
-    }
-    Ok((stmts, n))
-}
-
-fn area_sql(table: &DbcAreaTable) -> (Vec<String>, usize) {
-    let rows: Vec<String> = table
-        .rows()
-        .iter()
-        .map(|r| {
-            format!(
-                "({},{},{},{},{},{},{},{})",
-                r.id.id,
-                r.map.id,
-                r.parent_area_table.id,
-                r.area_bit,
-                r.flags.as_int() as u32,
-                r.exploration_level,
-                r.faction_group.id,
-                sql_text(&r.area_name.en_gb),
-            )
-        })
-        .collect();
-    let n = rows.len();
-    let mut stmts = vec!["DELETE FROM game_area WHERE id >= 0".to_string()];
-    push_insert(
-        &mut stmts,
-        "game_area",
-        "id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name",
-        &rows,
-    );
-    (stmts, n)
-}
-
-fn area_trigger_sql(table: &DbcAreaTrigger) -> (Vec<String>, usize) {
-    let rows: Vec<String> = table
-        .rows()
-        .iter()
-        .map(|r| {
-            format!(
-                "({},{},{},{},{},{},{},{},{},{})",
-                r.id.id,
-                r.map.id,
-                r.location_x,
-                r.location_y,
-                r.location_z,
-                r.radius,
-                r.box_length,
-                r.box_width,
-                r.box_height,
-                r.box_yaw,
-            )
-        })
-        .collect();
-    let n = rows.len();
-    let mut stmts = vec!["DELETE FROM game_area_trigger WHERE id >= 0".to_string()];
-    push_insert(
-        &mut stmts,
-        "game_area_trigger",
-        "id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw",
-        &rows,
-    );
-    (stmts, n)
-}
-
 fn graveyard_sql(table: &DbcWorldSafeLocs) -> (Vec<String>, usize) {
     let rows: Vec<String> = table
         .rows()
@@ -744,26 +568,28 @@ struct TaxiCatalogueSql {
     warnings: Vec<String>,
 }
 
-fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap<u32, u32>> {
-    let rows = crate::dump::parse_complete_table(dump, "creature_template")?;
-    if rows.is_empty() {
-        bail!("taxi mount dump has no creature_template rows");
-    }
-    let mut mounts = HashMap::with_capacity(rows.len());
-    for row in rows {
-        let entry: u32 = crate::dump::field(&row, crate::dump::ct::ENTRY)
-            .parse()
-            .context("taxi mount dump has an invalid creature entry")?;
+fn taxi_mount_displays(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    display_ids: &HashSet<u32>,
+) -> Result<HashMap<u32, u32>> {
+    let mut mounts = HashMap::new();
+    for row in dump
+        .columns(
+            "creature_template",
+            &[
+                "entry",
+                "display_id1",
+                "display_id2",
+                "display_id3",
+                "display_id4",
+            ],
+        )?
+        .iter()
+    {
+        let entry: u32 = row.number("entry")?;
         let mut display = 0;
-        for index in crate::dump::ct::MODEL_ID1..crate::dump::ct::MODEL_ID1 + 4 {
-            let model: u32 = row
-                .get(index)
-                .with_context(|| {
-                    format!("taxi mount creature {entry} is missing model column {index}")
-                })?
-                .trim()
-                .parse()
-                .with_context(|| format!("taxi mount creature {entry} has an invalid model"))?;
+        for column in ["display_id1", "display_id2", "display_id3", "display_id4"] {
+            let model = row.number::<u32>(column)?;
             if display == 0 {
                 display = model;
             }
@@ -771,9 +597,10 @@ fn taxi_mount_displays(dump: &str, display_ids: &HashSet<u32>) -> Result<HashMap
         if !display_ids.contains(&display) {
             display = 0;
         }
-        if mounts.insert(entry, display).is_some() {
-            bail!("taxi mount dump has duplicate creature entry {entry}");
-        }
+        anyhow::ensure!(
+            mounts.insert(entry, display).is_none(),
+            "duplicate taxi mount creature {entry}"
+        );
     }
     Ok(mounts)
 }
@@ -783,7 +610,7 @@ fn taxi_catalogue_sql(
     nodes: &DbcTaxiNodes,
     paths: &DbcTaxiPath,
     path_nodes: &DbcTaxiPathNode,
-    mount_dump: &str,
+    mount_dump: &(impl crate::dump::TableRows + ?Sized),
     display_ids: &HashSet<u32>,
 ) -> Result<TaxiCatalogueSql> {
     use lyracore_shared::constants::taxi_fixture as fixture;
@@ -1185,71 +1012,34 @@ pub fn load_display_scales(data_dir: &str) -> Result<HashMap<u32, f32>> {
     Ok(scales)
 }
 
-pub fn profession_tier_values(data_dir: &str) -> Result<HashMap<u32, [u16; 4]>> {
-    let mut chain = open_chain(Path::new(data_dir))?;
-    let availability: DbcSkillRaceClassInfo = read_table(&mut chain)?;
-    let tiers: DbcSkillTiers = read_table(&mut chain)?;
-    Ok(resolve_profession_tier_values(&availability, &tiers))
-}
-
-fn resolve_profession_tier_values(
-    availability: &DbcSkillRaceClassInfo,
-    tiers: &DbcSkillTiers,
-) -> HashMap<u32, [u16; 4]> {
-    let mut out = HashMap::new();
-    for &line in PROFESSION_SKILL_LINES {
-        let Some(tier) = availability
-            .rows()
-            .iter()
-            .filter(|r| r.skill_line.id == line)
-            .find_map(|r| tiers.get(r.skill_tier))
-        else {
-            continue;
-        };
-        let mut caps = [0u16; 4];
-        for (i, slot) in caps.iter_mut().enumerate() {
-            *slot = tier.value[i].max(0) as u16;
-        }
-        out.insert(line, caps);
-    }
-    out
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use wow_dbc::vanilla_tables::area_table::{AreaTableKey, AreaTableRow};
-    use wow_dbc::vanilla_tables::area_trigger::{AreaTriggerKey, AreaTriggerRow};
+
     use wow_dbc::vanilla_tables::auction_house::{AuctionHouseKey, AuctionHouseRow};
     use wow_dbc::vanilla_tables::chr_classes::ChrClassesKey;
     use wow_dbc::vanilla_tables::chr_races::ChrRacesKey as SkillChrRacesKey;
     use wow_dbc::vanilla_tables::creature_family::{CreatureFamilyKey, CreatureFamilyRow};
-    use wow_dbc::vanilla_tables::faction_group::FactionGroupKey;
-    use wow_dbc::vanilla_tables::light::LightKey;
-    use wow_dbc::vanilla_tables::liquid_type::LiquidTypeKey;
+
     use wow_dbc::vanilla_tables::lock::{LockKey, LockRow};
     use wow_dbc::vanilla_tables::mail_template::{MailTemplateKey, MailTemplateRow};
     use wow_dbc::vanilla_tables::map::MapKey;
     use wow_dbc::vanilla_tables::skill_costs_data::SkillCostsDataKey;
     use wow_dbc::vanilla_tables::skill_line::{SkillLineKey, SkillLineRow};
-    use wow_dbc::vanilla_tables::skill_line_ability::{SkillLineAbilityKey, SkillLineAbilityRow};
+
     use wow_dbc::vanilla_tables::skill_line_category::SkillLineCategoryKey;
     use wow_dbc::vanilla_tables::skill_race_class_info::{
         SkillRaceClassInfoKey, SkillRaceClassInfoRow,
     };
-    use wow_dbc::vanilla_tables::skill_tiers::{SkillTiersKey, SkillTiersRow};
-    use wow_dbc::vanilla_tables::sound_ambience::SoundAmbienceKey;
-    use wow_dbc::vanilla_tables::sound_provider_preferences::SoundProviderPreferencesKey;
-    use wow_dbc::vanilla_tables::spell::SpellKey;
+    use wow_dbc::vanilla_tables::skill_tiers::SkillTiersKey;
+
     use wow_dbc::vanilla_tables::spell_icon::SpellIconKey;
     use wow_dbc::vanilla_tables::taxi_nodes::{TaxiNodesKey, TaxiNodesRow};
     use wow_dbc::vanilla_tables::taxi_path::{TaxiPathKey, TaxiPathRow};
     use wow_dbc::vanilla_tables::taxi_path_node::{TaxiPathNodeKey, TaxiPathNodeRow};
     use wow_dbc::vanilla_tables::world_safe_locs::{WorldSafeLocsKey, WorldSafeLocsRow};
-    use wow_dbc::vanilla_tables::zone_intro_music_table::ZoneIntroMusicTableKey;
-    use wow_dbc::vanilla_tables::zone_music::ZoneMusicKey;
+
     use wow_dbc::LocalizedString;
-    use wow_world_base::vanilla::AreaFlags;
 
     fn placeholder_data_dir(tag: &str, names: &[&str]) -> PathBuf {
         let dir =
@@ -1439,68 +1229,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn area_table_row(
-        id: u32,
-        map: u32,
-        parent: u32,
-        area_bit: i32,
-        flags: AreaFlags,
-        exploration_level: i32,
-        faction_group: u32,
-        name: &str,
-    ) -> AreaTableRow {
-        AreaTableRow {
-            id: AreaTableKey::new(id),
-            map: MapKey::new(map),
-            parent_area_table: AreaTableKey::new(parent),
-            area_bit,
-            flags,
-            sound_preferences: SoundProviderPreferencesKey::new(0),
-            sound_preferences_underwater: SoundProviderPreferencesKey::new(0),
-            sound_ambience: SoundAmbienceKey::new(0),
-            zone_music: ZoneMusicKey::new(0),
-            zone_music_intro: ZoneIntroMusicTableKey::new(0),
-            exploration_level,
-            area_name: LocalizedString {
-                en_gb: name.to_string(),
-                ..Default::default()
-            },
-            faction_group: FactionGroupKey::new(faction_group),
-            liquid_type: LiquidTypeKey::new(0),
-            min_elevation: 0,
-            ambient_multiplier: 0.0,
-            light: LightKey::new(0),
-        }
-    }
-
-    #[allow(clippy::too_many_arguments)]
-    fn area_trigger_row(
-        id: u32,
-        map: u32,
-        x: f32,
-        y: f32,
-        z: f32,
-        radius: f32,
-        box_length: f32,
-        box_width: f32,
-        box_height: f32,
-        box_yaw: f32,
-    ) -> AreaTriggerRow {
-        AreaTriggerRow {
-            id: AreaTriggerKey::new(id),
-            map: MapKey::new(map),
-            location_x: x,
-            location_y: y,
-            location_z: z,
-            radius,
-            box_length,
-            box_width,
-            box_height,
-            box_yaw,
-        }
-    }
-
     fn world_safe_locs_row(
         id: u32,
         map: u32,
@@ -1567,6 +1295,14 @@ mod tests {
         }
     }
 
+    fn mount_source(rows: &str) -> crate::world_source::WorldSource {
+        crate::world_source::fixture_sql(&format!(
+            "CREATE TABLE creature_template (entry INTEGER PRIMARY KEY, patch INTEGER DEFAULT 10,
+                display_id1 INTEGER, display_id2 INTEGER, display_id3 INTEGER, display_id4 INTEGER);
+             INSERT INTO creature_template (entry,display_id1,display_id2,display_id3,display_id4) VALUES {rows};"
+        ))
+    }
+
     fn catalogue_with_mounts(
         nodes: &DbcTaxiNodes,
         paths: &DbcTaxiPath,
@@ -1576,11 +1312,7 @@ mod tests {
             nodes,
             paths,
             points,
-            "INSERT INTO `creature_template` VALUES \
-                (1100,'Horde mount','',1,1,295,0,0,0),
-                (1101,'Alliance mount','',1,1,1147,0,0,0),
-                (2200,'Other Horde mount','',1,1,295,0,0,0),
-                (2201,'Other Alliance mount','',1,1,1147,0,0,0);",
+            &mount_source("(1100,295,0,0,0),(1101,1147,0,0,0),(2200,295,0,0,0),(2201,1147,0,0,0)"),
             &HashSet::from([295, 1147]),
         )
     }
@@ -1643,9 +1375,7 @@ mod tests {
             &nodes,
             &paths,
             &points,
-            "INSERT INTO `creature_template` VALUES \
-                (1100,'Horde mount','',1,1, 0, 295, 1147, 0),
-                (1101,'Alliance mount','',1,1,0,0,0,1147);",
+            &mount_source("(1100,0,295,1147,0),(1101,0,0,0,1147)"),
             &HashSet::from([295, 1147]),
         )
         .unwrap();
@@ -1662,9 +1392,7 @@ mod tests {
             &nodes,
             &paths,
             &points,
-            "INSERT INTO `creature_template` VALUES \
-                (1100,'Unknown model','',1,1,9999,0,0,0),
-                (1101,'No model','',1,1,0,0,0,0);",
+            &mount_source("(1100,9999,0,0,0),(1101,0,0,0,0)"),
             &HashSet::from([295, 1147]),
         )
         .unwrap();
@@ -1680,63 +1408,6 @@ mod tests {
             .warnings
             .iter()
             .any(|warning| warning.contains("creature 1101")));
-    }
-
-    #[test]
-    fn taxi_catalogue_refuses_unusable_template_dumps_before_returning_sql() {
-        let (nodes, paths, points) = synthetic_taxi_catalogue();
-        for (dump, reason) in [
-            ("", "taxi mount dump has no creature_template rows"),
-            (
-                "INSERT INTO `creature_template` VALUES (1100,'Short row');",
-                "taxi mount creature 1100 is missing model column 5",
-            ),
-            (
-                "INSERT INTO `creature_template` VALUES (1100,'Bad model','',1,1,'bad',0,0,0);",
-                "taxi mount creature 1100 has an invalid model",
-            ),
-            (
-                "INSERT INTO `creature_template` VALUES ('bad','Bad entry','',1,1,295,0,0,0);",
-                "taxi mount dump has an invalid creature entry",
-            ),
-            (
-                "INSERT INTO `creature_template` VALUES \
-                    (1100,'First','',1,1,295,0,0,0),(1100,'Duplicate','',1,1,1147,0,0,0);",
-                "taxi mount dump has duplicate creature entry 1100",
-            ),
-        ] {
-            let refusal = super::taxi_catalogue_sql(
-                &nodes,
-                &paths,
-                &points,
-                dump,
-                &HashSet::from([295, 1147]),
-            )
-            .err()
-            .map(|error| error.to_string());
-            assert_eq!(refusal.as_deref(), Some(reason), "{dump}");
-        }
-    }
-
-    #[test]
-    fn taxi_catalogue_refuses_truncated_template_inserts() {
-        let (nodes, paths, points) = synthetic_taxi_catalogue();
-        for tail in [",(1101,'Unfinished", ",(1101,'Mount',1", ""] {
-            let dump = format!(
-                "INSERT INTO `creature_template` VALUES (1100,'Mount','',1,1,295,0,0,0){tail}"
-            );
-            let error = super::taxi_catalogue_sql(
-                &nodes,
-                &paths,
-                &points,
-                &dump,
-                &HashSet::from([295, 1147]),
-            )
-            .unwrap_err();
-            assert!(error
-                .to_string()
-                .contains("unterminated creature_template INSERT"));
-        }
     }
 
     #[test]
@@ -2034,57 +1705,6 @@ mod tests {
     }
 
     #[test]
-    fn area_sql_shape_and_escaping() {
-        let table = DbcAreaTable {
-            rows: vec![
-                area_table_row(12, 0, 0, 4479, AreaFlags::new(0x40), 1, 1, "Elwynn Forest"),
-                area_table_row(9, 0, 12, 4480, AreaFlags::new(0), 1, 1, "Goldshire"),
-                area_table_row(999, 0, 0, 1, AreaFlags::new(0), 0, 0, "O'Ryan's Rest"),
-            ],
-        };
-        let (stmts, n) = area_sql(&table);
-        assert_eq!(n, 3);
-        assert_eq!(stmts[0], "DELETE FROM game_area WHERE id >= 0");
-        let insert = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_area "))
-            .unwrap();
-        assert!(
-            insert.contains("(12,0,0,4479,64,1,1,'Elwynn Forest')"),
-            "{insert}"
-        );
-        assert!(
-            insert.contains("(9,0,12,4480,0,1,1,'Goldshire')"),
-            "{insert}"
-        );
-        assert!(
-            insert.contains("(999,0,0,1,0,0,0,'O''Ryan''s Rest')"),
-            "{insert}"
-        );
-    }
-
-    #[test]
-    fn area_trigger_sql_shape_goldshire_inn_fixture() {
-        let table = DbcAreaTrigger {
-            rows: vec![area_trigger_row(
-                1524, 0, -9454.5, 39.8, 64.0, 0.0, 6.0, 4.0, 6.0, 1.55,
-            )],
-        };
-        let (stmts, n) = area_trigger_sql(&table);
-        assert_eq!(n, 1);
-        assert_eq!(stmts[0], "DELETE FROM game_area_trigger WHERE id >= 0");
-        let insert = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_area_trigger "))
-            .unwrap();
-        let expected = format!(
-            "({},{},{},{},{},{},{},{},{},{})",
-            1524, 0, -9454.5f32, 39.8f32, 64.0f32, 0.0f32, 6.0f32, 4.0f32, 6.0f32, 1.55f32,
-        );
-        assert!(insert.contains(&expected), "{insert}");
-    }
-
-    #[test]
     fn graveyard_sql_shape() {
         let table = DbcWorldSafeLocs {
             rows: vec![
@@ -2250,56 +1870,6 @@ mod tests {
         }
     }
 
-    #[allow(clippy::too_many_arguments)]
-    fn skill_ability_row(
-        id: u32,
-        skill_line: u32,
-        spell: u32,
-        race_mask: u32,
-        class_mask: u32,
-        min_skill: u32,
-        acquire_method: i32,
-        gray: i32,
-        green: i32,
-    ) -> SkillLineAbilityRow {
-        SkillLineAbilityRow {
-            id: SkillLineAbilityKey::new(id),
-            skill_line: SkillLineKey::new(skill_line),
-            spell: SpellKey::new(spell),
-            race_mask: SkillChrRacesKey::new(race_mask),
-            class_mask: ChrClassesKey::new(class_mask),
-            exclude_race: SkillChrRacesKey::new(0),
-            exclude_class: ChrClassesKey::new(0),
-            superseded_by: SpellKey::new(min_skill),
-            acquire_method: 0,
-            trivial_skill_line_rank_high: acquire_method,
-            trivial_skill_line_rank_low: gray,
-            character_points: [green, 0],
-            num_skills_up: 1,
-            unknown_padding: 0,
-        }
-    }
-
-    #[test]
-    fn spell_rank_links_read_the_successor_column() {
-        let mut row = skill_ability_row(1, 26, 78, 0, 1, 75, 2, 100, 50);
-        row.acquire_method = 284;
-        let table = DbcSkillLineAbility { rows: vec![row] };
-        assert_eq!(spell_rank_links(&table).unwrap(), vec![(78, 284)]);
-    }
-
-    #[test]
-    fn spell_rank_links_reject_negative_successors() {
-        let mut row = skill_ability_row(1, 26, 78, 0, 1, 0, 0, 0, 0);
-        row.acquire_method = -1;
-        assert_eq!(
-            spell_rank_links(&DbcSkillLineAbility { rows: vec![row] })
-                .unwrap_err()
-                .to_string(),
-            "SkillLineAbility has a negative successor spell"
-        );
-    }
-
     fn skill_availability_row(
         id: u32,
         skill_line: u32,
@@ -2318,16 +1888,6 @@ mod tests {
             min_level,
             skill_tier: SkillTiersKey::new(skill_tier),
             skill_cost: SkillCostsDataKey::new(0),
-        }
-    }
-
-    fn skill_tiers_row(id: u32, values: [i32; 4]) -> SkillTiersRow {
-        let mut value = [0i32; 16];
-        value[..4].copy_from_slice(&values);
-        SkillTiersRow {
-            id: SkillTiersKey::new(id),
-            cost: [0; 16],
-            value,
         }
     }
 
@@ -2356,88 +1916,6 @@ mod tests {
     }
 
     #[test]
-    fn skill_ability_sql_remaps_off_by_one_dbc_fields() {
-        let table = DbcSkillLineAbility {
-            rows: vec![
-                skill_ability_row(1, 185, 2550, 0xFFFF_FFFF, 0xFFFF_FFFF, 25, 0, 75, 30),
-                skill_ability_row(2, 333, 13262, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 0, 0),
-            ],
-        };
-        let (stmts, n) = skill_ability_sql(&table);
-        assert_eq!(n, 2);
-        assert_eq!(stmts[0], "DELETE FROM game_skill_ability WHERE id >= 0");
-        let insert = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_skill_ability "))
-            .unwrap();
-        assert!(
-            insert.contains("(1,2550,185,4294967295,4294967295,25,0,75,30)"),
-            "{insert}"
-        );
-        assert!(
-            insert.contains("(2,13262,333,4294967295,4294967295,0,1,0,0)"),
-            "{insert}"
-        );
-        let autolearn = table
-            .rows()
-            .iter()
-            .filter(|r| r.trivial_skill_line_rank_high == AUTOLEARN_ACQUIRE_METHOD)
-            .count();
-        assert_eq!(autolearn, 1);
-    }
-
-    #[test]
-    fn skill_ability_sql_pairs_riding_mount_spells_with_the_skill_line_and_tiers() {
-        const RIDING_SKILL_LINE: u32 = 762;
-        const RACE_HUMAN: u32 = 0x1;
-        const CLASS_ALL: u32 = 0xFFFF_FFFF;
-        let table = DbcSkillLineAbility {
-            rows: vec![
-                skill_ability_row(
-                    1,
-                    RIDING_SKILL_LINE,
-                    458,
-                    RACE_HUMAN,
-                    CLASS_ALL,
-                    75,
-                    0,
-                    0,
-                    0,
-                ),
-                skill_ability_row(
-                    2,
-                    RIDING_SKILL_LINE,
-                    6648,
-                    0xFFFF_FFFF,
-                    CLASS_ALL,
-                    150,
-                    0,
-                    0,
-                    0,
-                ),
-            ],
-        };
-        let (stmts, n) = skill_ability_sql(&table);
-        assert_eq!(n, 2);
-        let insert = stmts
-            .iter()
-            .find(|s| s.starts_with("INSERT INTO game_skill_ability "))
-            .unwrap();
-        assert!(
-            insert.contains(&format!(
-                "(1,458,{RIDING_SKILL_LINE},1,{CLASS_ALL},75,0,0,0)"
-            )),
-            "{insert}"
-        );
-        assert!(
-            insert.contains(&format!(
-                "(2,6648,{RIDING_SKILL_LINE},4294967295,{CLASS_ALL},150,0,0,0)"
-            )),
-            "{insert}"
-        );
-    }
-
-    #[test]
     fn skill_availability_sql_shape() {
         let table = DbcSkillRaceClassInfo {
             rows: vec![
@@ -2460,121 +1938,5 @@ mod tests {
             "{insert}"
         );
         assert!(insert.contains("(2,44,1,1,0,1)"), "{insert}");
-    }
-
-    #[test]
-    fn profession_tier_values_resolves_apprentice_through_artisan() {
-        let availability = DbcSkillRaceClassInfo {
-            rows: vec![skill_availability_row(
-                1,
-                186,
-                0xFFFF_FFFF,
-                0xFFFF_FFFF,
-                0,
-                1,
-                42,
-            )],
-        };
-        let tiers = DbcSkillTiers {
-            rows: vec![
-                skill_tiers_row(41, [1, 2, 3, 4]),
-                skill_tiers_row(42, [75, 150, 225, 300]),
-                skill_tiers_row(43, [5, 6, 7, 8]),
-            ],
-        };
-        let map = resolve_profession_tier_values(&availability, &tiers);
-        assert_eq!(map.get(&186), Some(&[75u16, 150, 225, 300]));
-    }
-
-    #[test]
-    fn each_profession_line_reads_the_tier_row_its_availability_names() {
-        let availability = DbcSkillRaceClassInfo {
-            rows: vec![
-                skill_availability_row(1, 186, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 43),
-                skill_availability_row(2, 171, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 42),
-            ],
-        };
-        let tiers = DbcSkillTiers {
-            rows: vec![
-                skill_tiers_row(42, [75, 150, 225, 300]),
-                skill_tiers_row(43, [50, 125, 200, 275]),
-            ],
-        };
-        let map = resolve_profession_tier_values(&availability, &tiers);
-        assert_eq!(map.get(&186), Some(&[50u16, 125, 200, 275]));
-        assert_eq!(map.get(&171), Some(&[75u16, 150, 225, 300]));
-    }
-
-    #[test]
-    fn profession_tier_values_skips_past_a_non_tier_variant_row_to_the_resolving_one() {
-        let availability = DbcSkillRaceClassInfo {
-            rows: vec![
-                skill_availability_row(1, 186, 0x1, 0x1, 0, 1, 0),
-                skill_availability_row(2, 186, 0xFFFF_FFFF, 0xFFFF_FFFF, 0, 1, 42),
-            ],
-        };
-        let tiers = DbcSkillTiers {
-            rows: vec![skill_tiers_row(42, [75, 150, 225, 300])],
-        };
-        let map = resolve_profession_tier_values(&availability, &tiers);
-        assert_eq!(map.get(&186), Some(&[75u16, 150, 225, 300]));
-    }
-
-    #[test]
-    fn profession_tier_values_skips_an_unresolvable_line() {
-        let availability = DbcSkillRaceClassInfo { rows: vec![] };
-        let tiers = DbcSkillTiers { rows: vec![] };
-        let map = resolve_profession_tier_values(&availability, &tiers);
-        assert!(map.is_empty());
-    }
-
-    #[test]
-    fn profession_tier_values_matches_the_legacy_literals_for_every_profession_learn_line() {
-        let mut availability_rows = Vec::new();
-        let mut tier_rows = Vec::new();
-        for (i, &line) in PROFESSION_SKILL_LINES.iter().enumerate() {
-            let tier_id = 100 + i as u32;
-            availability_rows.push(skill_availability_row(
-                i as u32 + 1,
-                line,
-                0xFFFF_FFFF,
-                0xFFFF_FFFF,
-                0,
-                1,
-                tier_id,
-            ));
-            tier_rows.push(skill_tiers_row(tier_id, [75, 150, 225, 300]));
-        }
-        let availability = DbcSkillRaceClassInfo {
-            rows: availability_rows,
-        };
-        let tiers = DbcSkillTiers { rows: tier_rows };
-        let map = resolve_profession_tier_values(&availability, &tiers);
-
-        assert_eq!(map.len(), PROFESSION_SKILL_LINES.len());
-        for &(line, entries) in crate::world_import::PROFESSION_LEARN {
-            let caps = map
-                .get(&line)
-                .unwrap_or_else(|| panic!("no resolved tier caps for line {line}"));
-            for &(_, tier_index, _) in entries {
-                assert_eq!(
-                    caps[tier_index as usize] as u32,
-                    crate::world_import::LEGACY_TIER_CAPS[tier_index as usize],
-                    "line {line} tier {tier_index}"
-                );
-            }
-        }
-        crate::world_import::assert_profession_tier_parity(&map)
-            .expect("fixture data must satisfy the parity guard");
-    }
-
-    #[test]
-    fn standalone_dbc_requires_mount_templates_before_opening_inputs() {
-        let shard = Shard {
-            server: "local".into(),
-            db: "lyracore".into(),
-        };
-        let error = run("/nonexistent/client/Data", None, false, &shard).unwrap_err();
-        assert!(error.to_string().contains("--taxi-mounts"));
     }
 }

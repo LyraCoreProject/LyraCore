@@ -9,8 +9,8 @@ export SLICE=0
 { [ "$MAP" != 0 ] || [ -n "${BOX:-}" ]; } && export SLICE=1
 # shellcheck source=importer/scripts/import-manifest.sh
 source importer/scripts/import-manifest.sh
-# shellcheck source=importer/scripts/classic-db.lock
-source importer/scripts/classic-db.lock
+# shellcheck source=importer/scripts/vmangos-source.sh
+source importer/scripts/vmangos-source.sh || exit 1
 
 PROFILE_FLAGS=()
 PROFILE_MAPS=""
@@ -32,9 +32,8 @@ if [ -n "$WORLD_PROFILE" ]; then
   echo "[world] canonical profile $WORLD_PROFILE (planned maps: $PROFILE_MAPS) → ${DB:-lyracore}"
 fi
 
-DUMP="${DUMP:-.import/classic-db-full.sql}"
 DBC="${DBC:-../wowclient/Data}"
-EVENTAI_PROFILE="${EVENTAI_PROFILE:-cmangos-classic-z2815}"
+EVENTAI_PROFILE="${EVENTAI_PROFILE:-vmangos-4641790}"
 [ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && BOX="${BOX:--11400,-8000,-3100,2000}"
 [ -z "$WORLD_PROFILE" ] && [ "$MAP" = 0 ] && INCLUDE_CREATURES="${INCLUDE_CREATURES-344,11406,266,415,1343,6966,5165,6166,6569,5149}"
 INCLUDE_CREATURES="${INCLUDE_CREATURES-}"
@@ -185,7 +184,7 @@ run_checked_step "world content for $WORLD_PROFILE into $DB" \
   "filter:|mapped|applied|error|abort|WARNING" 12 \
   ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" \
   --dump "$DUMP" --dbc "$DBC" "${SCOPE_FLAGS[@]}" \
-  --eventai-profile "$EVENTAI_PROFILE" --source-sha "$CLASSIC_DB_SHA" --apply || exit 1
+  --eventai-profile "$EVENTAI_PROFILE" --source-sha "$SOURCE_SHA" --apply || exit 1
 # Map 36 has stacked floors that a single terrain height cannot represent.
 if { [ "$WORLD_PROFILE" = instances ] || [ "$WORLD_PROFILE" = full-instances ]; }; then
   echo "[world] terrain heightmap ETL SKIPPED — map 36 needs a floor-preserving representation"
@@ -212,7 +211,7 @@ case "$WORLD_PROFILE" in
   *)
     echo "[world] character-creation + faction DBC tables"
     run_checked_step "standalone DBC catalogue import" "dbc: loaded|error|abort" 6 \
-      ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --taxi-mounts "$DUMP" --apply || exit 1
+      ./target/debug/lyracore-importer --db "$DB" --server "$SPACETIME_SERVER" --dbc "$DBC" --taxi-mounts "$DUMP" --source-sha "$SOURCE_SHA" --apply || exit 1
     ;;
 esac
 echo "[world] real talent trees (TalentTab.dbc + Talent.dbc → game_talent)"
@@ -502,19 +501,19 @@ chk0 "Sentinel Hill vendor spawned (Quartermaster Lewis 491)" "$FLOOR_SENTINEL_H
 chk "Human start-items (all 6 classes)"   "$FLOOR_START_ITEMS_CLASSES" \
     "$(q_list "SELECT race_class FROM game_start_item WHERE race_class=257 OR race_class=258 OR race_class=260 OR race_class=261 OR race_class=264 OR race_class=265" | sort -u | wc -l)"
 chk "caster-mob cast rows"               "$FLOOR_CASTER_CAST_ROWS" "$(n "SELECT creature_entry FROM game_creature_cast")"
-chk "total game_spell rows (full Spell.dbc import)" "$FLOOR_SPELL_TOTAL" "$(n "SELECT spell_id FROM game_spell")"
+chk "total game_spell rows (vmangos spell catalogue)" "$FLOOR_SPELL_TOTAL" "$(n "SELECT spell_id FROM game_spell")"
 chk "spell chain rows (game_spell_chain) [V]"            "$FLOOR_SPELL_CHAIN" "$(n "SELECT spell_id FROM game_spell_chain")"
 chk "spell auto-learn dependents (game_spell_learn) [V]" "$FLOOR_SPELL_LEARN" "$(n "SELECT id FROM game_spell_learn")"
 chk "proc overlay rows (game_spell_proc_event) [V]"      "$FLOOR_SPELL_PROC_EVENT" "$(n "SELECT spell_id FROM game_spell_proc_event")"
-chk "476 Geomancer cast spell present"    "$FLOOR_GEOMANCER_CAST_SPELL" "$(n "SELECT spell_id FROM game_spell WHERE spell_id=133")"
+chk "476 Geomancer cast spell present"    "$FLOOR_GEOMANCER_CAST_SPELL" "$(n "SELECT spell_id FROM game_spell WHERE spell_id=20793")"
 chk "474 Rogue Wizard cast spell present" "$FLOOR_ROGUE_WIZARD_CAST_SPELL" "$(n "SELECT spell_id FROM game_spell WHERE spell_id=13322")"
 chk0 "Imp(416) Firebolt cast row"         "$FLOOR_IMP_FIREBOLT_CAST_ROW" "$(n "SELECT spell_id FROM game_creature_cast WHERE creature_entry=416")"
 chk "Imp Firebolt(3110) in game_spell"    "$FLOOR_IMP_FIREBOLT_SPELL" "$(n "SELECT spell_id FROM game_spell WHERE spell_id=3110")"
-chk0 "Defias caster cast row (Pillager 589?/Conjurer 449? [V])" "$FLOOR_DEFIAS_CASTER_CAST_ROW" \
-    "$(n "SELECT creature_entry FROM game_creature_cast WHERE creature_entry=589 OR creature_entry=449")"
+chk0 "Defias Pillager Fireball cast row" "$FLOOR_DEFIAS_CASTER_CAST_ROW" \
+    "$(n "SELECT creature_entry FROM game_creature_cast WHERE creature_entry=589 AND spell_id=19816")"
 chk0 "rotation rows (game_creature_spell)" "$FLOOR_ROTATION_ROWS" "$(n "SELECT id FROM game_creature_spell")"
-chk0 "476 Geomancer rotation nuke row"     "$FLOOR_GEOMANCER_ROTATION_NUKE" "$(n "SELECT id FROM game_creature_spell WHERE creature_entry=476 AND condition=0")"
-chk0 "474/476 Frost Armor rotation row"    "$FLOOR_FROST_ARMOR_ROTATION" "$(n "SELECT id FROM game_creature_spell WHERE spell_id=12544")"
+chk0 "476 Geomancer Fireball cast row"     "$FLOOR_GEOMANCER_CAST_ROW" "$(n "SELECT spell_id FROM game_creature_cast WHERE creature_entry=476 AND spell_id=20793")"
+chk0 "449 Knuckleduster Pummel rotation row"    "$FLOOR_KNUCKLEDUSTER_ROTATION" "$(n "SELECT id FROM game_creature_spell WHERE creature_entry=449 AND spell_id=12555")"
 verify_caster_spell_catalogue
 verify_eventai_catalogue
 
@@ -522,7 +521,7 @@ chk "areas imported (game_area) [V]"                 "$FLOOR_AREAS" "$(n "SELECT
 chk "area triggers imported (game_area_trigger) [V]"  "$FLOOR_AREA_TRIGGERS" "$(n "SELECT id FROM game_area_trigger")"
 chk "graveyards imported (game_graveyard) [V]"         "$FLOOR_GRAVEYARDS" "$(n "SELECT id FROM game_graveyard")"
 # IDs at or above 5090000 belong to the reserved taxi fixture.
-chk "taxi nodes imported from TaxiNodes.dbc"            "$FLOOR_TAXI_NODES" "$(n "SELECT id FROM game_taxi_node WHERE id < 5090000")"
+chk "taxi nodes imported from vmangos"            "$FLOOR_TAXI_NODES" "$(n "SELECT id FROM game_taxi_node WHERE id < 5090000")"
 chk "directed taxi paths imported from TaxiPath.dbc"    "$FLOOR_TAXI_PATHS" "$(n "SELECT id FROM game_taxi_path WHERE id < 5090000")"
 chk "taxi path points imported from TaxiPathNode.dbc"   "$FLOOR_TAXI_PATH_NODES" "$(n "SELECT id FROM game_taxi_path_node WHERE id < 5090000")"
 if [ -n "$GRAVEYARD_ZONE" ]; then
@@ -550,7 +549,7 @@ chk36 "Deadmines gameobjects (doors/cannon/chests, map 36) [V]" "$FLOOR_DEADMINE
     "$(n "SELECT guid FROM game_gameobject WHERE map_id = 36" '[0-9]')"
 chk36 "Deadmines bosses spawned (>=6 distinct placed entries) [V]" "$FLOOR_DEADMINES_BOSSES" \
     "$(q_list "SELECT entry FROM game_creature_spawn WHERE map_id = 36 AND (entry=644 OR entry=643 OR entry=642 OR entry=1763 OR entry=646 OR entry=647 OR entry=639)" | sort -u | wc -l)"
-chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Mighty Hammer ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
+chk36 "Deadmines named drops (Cruel Barb ~5191 + Smite's Reaver ~5196) [V]" "$FLOOR_DEADMINES_NAMED_LOOT" \
     "$(q_list "SELECT item_entry FROM game_creature_loot WHERE item_entry=5191 OR item_entry=5196" | sort -u | wc -l)"
 
 chk "pickpocket loot rows (game_pickpocket_loot) [V]"   "$FLOOR_PICKPOCKET_LOOT" "$(n "SELECT id FROM game_pickpocket_loot")"

@@ -26,13 +26,14 @@ pub enum EncounterBinding {
     WailingCavernsSerpentis,
     WailingCavernsMutanus,
     ZulGurubOhgan,
+    RuinsOfAhnQirajRajaxx,
 }
 
 pub(crate) type EncounterPackageHandler =
     fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
 
 impl EncounterBinding {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::BlackfathomDeepsKelris,
         Self::BlackrockDepthsTombOfSeven,
         Self::DireMaulAlzzin,
@@ -47,6 +48,7 @@ impl EncounterBinding {
         Self::WailingCavernsSerpentis,
         Self::WailingCavernsMutanus,
         Self::ZulGurubOhgan,
+        Self::RuinsOfAhnQirajRajaxx,
     ];
 
     pub(crate) fn map_id(self) -> u32 {
@@ -65,6 +67,7 @@ impl EncounterBinding {
             | Self::WailingCavernsSerpentis
             | Self::WailingCavernsMutanus => 43,
             Self::ZulGurubOhgan => 309,
+            Self::RuinsOfAhnQirajRajaxx => 509,
         }
     }
 }
@@ -77,6 +80,7 @@ pub enum EncounterSignal {
     BreakAlzzinCrumbleWall,
     InterruptAvatarSuppression,
     SendMandokirDownstairs,
+    Reset,
 }
 
 pub(crate) fn notify_from_eventai(
@@ -146,18 +150,6 @@ fn package_handler_for(
         ));
     }
     Ok(Some(handler))
-}
-
-#[cfg(test)]
-fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
-    match signal {
-        EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
-        EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
-        EncounterSignal::Complete => Some(ENCOUNTER_DONE),
-        EncounterSignal::BreakAlzzinCrumbleWall
-        | EncounterSignal::InterruptAvatarSuppression
-        | EncounterSignal::SendMandokirDownstairs => None,
-    }
 }
 
 pub const ENCOUNTER_NOT_STARTED: u8 = 0;
@@ -539,7 +531,7 @@ pub(crate) fn spawn_wave(
             instance_id,
         };
         let entity =
-            crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);
+            crate::creatures::build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), instance_id);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);
         ctx.db.game_encounter_spawn().insert(EncounterSpawn {
@@ -785,15 +777,6 @@ mod tests {
         assert!(!is_reserved_encounter_id(1));
         assert!(!is_reserved_encounter_id(0x7FFF_FFFF));
         assert_ne!(hp_fired_key(639), hp_fired_key(646));
-    }
-
-    #[test]
-    fn named_source_states_translate_to_the_internal_encounter_contract() {
-        assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
-        assert_eq!(
-            encounter_state_for_signal(EncounterSignal::Complete),
-            Some(2)
-        );
     }
 
     #[test]

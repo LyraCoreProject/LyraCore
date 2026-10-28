@@ -1,19 +1,21 @@
 mod collision;
 mod creature_population;
 mod dbc;
+mod dbc_diff;
 mod dump;
 mod eventai;
-mod eventai_presentation;
 mod extents;
 mod go_model;
 mod gossip_conditions;
 mod instance_vmap;
 mod item_property;
 mod m2_collision;
+mod map_catalogue;
 mod nav;
 mod pack_client;
 mod package_delta;
 mod shard;
+mod source_selection;
 mod spell;
 mod spell_dbc;
 mod spell_snapshot;
@@ -21,9 +23,12 @@ mod talent;
 mod terrain;
 mod transport;
 mod ui_transform;
+mod vmangos_profile;
+mod vmangos_spell;
 mod vmap;
 mod world_import;
 mod world_import_scope;
+mod world_source;
 
 #[cfg(test)]
 use lyracore_test_support as standalone_support;
@@ -34,6 +39,7 @@ use world_import::FAMILIES;
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 struct Args {
+    dbc_diff: bool,
     taxi_mounts: Option<String>,
     dump: Option<String>,
     dbc: Option<String>,
@@ -79,6 +85,7 @@ where
     S: Into<String>,
 {
     let mut a = Args {
+        dbc_diff: false,
         dump: None,
         taxi_mounts: None,
         dbc: None,
@@ -112,13 +119,14 @@ where
         apply: false,
         family: None,
         source_sha: String::new(),
-        eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
+        eventai_profile: vmangos_profile::NAME.to_string(),
         packages: None,
     };
     let mut legacy_spatial_args: Vec<&'static str> = Vec::new();
     let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--dbc-diff" => a.dbc_diff = true,
             "--taxi-mounts" => {
                 a.taxi_mounts = Some(it.next().context("--taxi-mounts needs a dump path")?)
             }
@@ -279,9 +287,9 @@ where
             "--apply" => a.apply = true,
             "--family" => {
                 let v = it.next().context("--family <name>")?;
-                if !FAMILIES.contains(&v.as_str()) {
+                if !FAMILIES.contains(&v.as_str()) && !matches!(v.as_str(), "spell" | "dbc") {
                     bail!(
-                        "--family {v}: unknown family (valid: {})",
+                        "--family {v}: unknown family (valid: {}, spell, dbc)",
                         FAMILIES.join(", ")
                     );
                 }
@@ -302,7 +310,12 @@ where
             }
             "--eventai-profile" => {
                 let profile = it.next().context("--eventai-profile <name>")?;
-                eventai::source_profile(&profile).map_err(anyhow::Error::msg)?;
+                if profile != vmangos_profile::NAME {
+                    bail!(
+                        "unknown Source Profile {profile:?}; expected {}",
+                        vmangos_profile::NAME
+                    );
+                }
                 a.eventai_profile = profile;
             }
             "--center" => {
@@ -365,7 +378,7 @@ where
         && a.vmap_prepare_coverage.is_none()
         && a.go_models.is_none()
     {
-        bail!("need an input: --dump <classic-db .sql[.gz]>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, --pack-client <client Data/ dir>, or --pack-out <dir>");
+        bail!("need an input: --dump <vmangos.sqlite>, --dbc <client Data/ dir>, --terrain <client Data/ dir>, --pack-client <client Data/ dir>, or --pack-out <dir>");
     }
     if a.pack_out.is_some() && a.apply {
         bail!("--pack-out writes its output directory directly and takes no --apply (--apply guards the operator's own client, which --pack-out never touches)");
@@ -377,16 +390,30 @@ where
         bail!("--go-models needs --dump too (gameobject_template is the template source)");
     }
     if a.print_extents && a.dump.is_none() {
-        bail!("--print-extents is only valid with --dump (it reads the cmangos creature table)");
+        bail!("--print-extents is only valid with --dump (it reads the source creature table)");
     }
     if !a.only.is_empty() && !a.spells {
-        bail!("--only is only valid with --spells (the additive Spell.dbc allowlist)");
+        bail!("--only is only valid with --spells (the additive spell allowlist)");
     }
     if a.spell_snapshot.is_some() {
-        if a.dbc.is_none() || a.dump.is_some() {
+        if a.dbc.is_none() {
             bail!("--spell-snapshot needs --dbc <client Data/ dir> and nothing else");
         }
-        if a.spells || a.talents || a.apply {
+        if a.spells
+            || a.talents
+            || a.apply
+            || a.family.is_some()
+            || a.go_models.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.print_extents
+        {
             bail!(
                 "--spell-snapshot writes the Base Snapshot and touches no database; run it on its \
                  own, then run the import separately"
@@ -394,14 +421,29 @@ where
         }
     }
     if !a.include_creatures.is_empty() && a.dump.is_none() {
-        bail!("--include-creatures is only valid with --dump (it force-imports cmangos creature rows)");
+        bail!(
+            "--include-creatures is only valid with --dump (it force-imports source creature rows)"
+        );
     }
     if a.family.is_some() && a.dump.is_none() {
-        bail!("--family is only valid with --dump (it names one of the cmangos-dump ETL families)");
+        bail!(
+            "--family is only valid with --dump (it names one of the World Source import families)"
+        );
+    }
+    if a.family.is_some()
+        && (a.spells
+            || a.talents
+            || a.go_models.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.print_extents)
+    {
+        bail!("--family cannot run with another import mode");
     }
     if !a.include_maps.is_empty() {
         if a.dump.is_none() {
-            bail!("--include-map is only valid with --dump (it widens the cmangos content slice)");
+            bail!("--include-map is only valid with --dump (it widens the world content slice)");
         }
         if a.include_maps.contains(&a.map) {
             bail!(
@@ -411,11 +453,37 @@ where
             );
         }
     }
+    if a.dbc_diff
+        && (a.dump.is_none()
+            || a.dbc.is_none()
+            || a.apply
+            || a.family.is_some()
+            || a.spells
+            || a.spell_snapshot.is_some()
+            || a.talents
+            || a.go_models.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.dump_collision.is_some()
+            || a.print_extents)
+    {
+        bail!(
+            "--dbc-diff needs only --dump <sqlite> --dbc <client Data> and optional --source-sha"
+        );
+    }
+    if (a.spells || a.spell_snapshot.is_some()) && a.dump.is_none() {
+        bail!("spells require --dump <sqlite> and --dbc <client Data>");
+    }
     a.world_import_scope()?;
     if !a.trainers.is_empty() {
         if !a.spells {
             bail!(
-                "--trainer is only valid with --spells (it derives required_level from Spell.dbc)"
+                "--trainer is only valid with --spells (it derives required_level from source spells)"
             );
         }
         for (_entry, ids) in &a.trainers {
@@ -425,6 +493,12 @@ where
                 }
             }
         }
+    }
+    if a.apply
+        && (a.dump.is_some() || a.taxi_mounts.is_some())
+        && (a.source_sha.len() != 40 || !a.source_sha.bytes().all(|byte| byte.is_ascii_hexdigit()))
+    {
+        bail!("apply requires --source-sha with the actual snapshot commit");
     }
     Ok(a)
 }
@@ -453,21 +527,8 @@ impl Args {
             world_profile: self.world_profile,
             scope: self.world_import_scope()?,
             include_creatures: self.include_creatures.clone(),
-            eventai_profile: self.eventai_profile.clone(),
             packages: self.packages.clone(),
             source_sha: self.source_sha.clone(),
-            apply: self.apply,
-            shard: self.shard.clone(),
-        })
-    }
-
-    fn spell_args(&self) -> Result<spell::SpellArgs> {
-        Ok(spell::SpellArgs {
-            only: self.only.clone(),
-            trainers: self.trainers.clone(),
-            source_sha: self.source_sha.clone(),
-            packages: self.packages.clone(),
-            scope: self.world_import_scope()?,
             apply: self.apply,
             shard: self.shard.clone(),
         })
@@ -476,6 +537,17 @@ impl Args {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    if args.dbc_diff {
+        print!(
+            "{}",
+            dbc_diff::run(
+                std::path::Path::new(args.dump.as_deref().context("missing source")?),
+                std::path::Path::new(args.dbc.as_deref().context("missing client")?),
+                &args.source_sha
+            )?
+        );
+        return Ok(());
+    }
 
     if let Some(dir) = args.pack_client.clone() {
         return pack_client::run(&dir, args.apply);
@@ -524,13 +596,12 @@ fn main() -> Result<()> {
         if args.talents {
             return talent::run_talents(&dir, args.apply, &args.shard);
         }
-        if let Some(path) = args.spell_snapshot.clone() {
-            return spell::run_spell_snapshot(&dir, &path);
-        }
-        if args.spells {
-            return spell::run_spells(&dir, &args.spell_args()?);
-        }
-        return dbc::run(&dir, args.taxi_mounts.as_deref(), args.apply, &args.shard);
+        let path = args
+            .taxi_mounts
+            .as_deref()
+            .context("standalone --dbc requires --taxi-mounts <sqlite>")?;
+        let source = world_source::WorldSource::open(std::path::Path::new(path))?;
+        return dbc::run_from_dump(&dir, &source, args.apply, &args.shard);
     }
 
     let dump_path = args
@@ -538,11 +609,31 @@ fn main() -> Result<()> {
         .clone()
         .expect("parse_args guarantees --dump here");
 
+    if let Some(path) = &args.spell_snapshot {
+        return spell::run_vmangos_snapshot(
+            &dump_path,
+            args.dbc.as_deref().context("missing client")?,
+            path,
+        );
+    }
+
     if args.print_extents {
         return extents::print_extents(&dump_path, args.map, args.bbox);
     }
 
-    world_import::run(&dump_path, &args.world_import_args()?, &args.spell_args()?)
+    if args.spells {
+        let source = world_source::WorldSource::open(std::path::Path::new(&dump_path))?;
+        let plan = spell::selected_world_plan(
+            &source,
+            args.dbc.as_deref().context("spells require --dbc")?,
+            &args.only,
+            &args.trainers,
+        )?;
+        let mut world = args.world_import_args()?;
+        world.family = Some("spell".into());
+        return world_import::emit_plan(&source, &world, &plan);
+    }
+    world_import::run(&dump_path, &args.world_import_args()?)
 }
 
 #[cfg(test)]
@@ -550,12 +641,47 @@ mod tests {
     use super::*;
 
     #[test]
+    fn vmangos_snapshot_accepts_its_source_and_refuses_mutating_or_competing_modes() {
+        let args = [
+            "--dump",
+            "source.sqlite",
+            "--dbc",
+            "client",
+            "--spell-snapshot",
+            "out.json",
+        ];
+        assert!(parse_args_from(args).is_ok());
+        for extra in [
+            vec!["--apply"],
+            vec!["--go-models", "client"],
+            vec!["--family", "spell"],
+        ] {
+            let error = parse_args_from(args.into_iter().chain(extra))
+                .err()
+                .expect("competing snapshot mode must be refused");
+            assert_eq!(
+                error.to_string(),
+                "--spell-snapshot writes the Base Snapshot and touches no database; run it on its \
+                 own, then run the import separately"
+            );
+        }
+    }
+
+    #[test]
     fn the_enabled_packages_root_is_absent_until_the_operator_names_it() {
-        let unnamed = parse_args_from(["--dbc", "/path/need-not-exist", "--spells"])
-            .expect("the spell importer parses without a packages root");
+        let unnamed = parse_args_from([
+            "--dump",
+            "source.sqlite",
+            "--dbc",
+            "/path/need-not-exist",
+            "--spells",
+        ])
+        .expect("the spell importer parses without a packages root");
         assert_eq!(unnamed.packages, None);
 
         let named = parse_args_from([
+            "--dump",
+            "source.sqlite",
             "--dbc",
             "/path/need-not-exist",
             "--spells",
@@ -569,6 +695,8 @@ mod tests {
     #[test]
     fn the_base_snapshot_mode_is_standalone() {
         let alone = parse_args_from([
+            "--dump",
+            "source.sqlite",
             "--dbc",
             "/path/need-not-exist",
             "--spell-snapshot",
@@ -667,27 +795,55 @@ mod tests {
     #[test]
     fn command_selects_only_the_committed_eventai_source_profile() {
         let default = parse_args_from(["--dump", "/path/need-not-exist.sql"])
-            .expect("default EventAI Source Profile");
-        assert_eq!(default.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+            .expect("default Source Profile");
+        assert_eq!(default.eventai_profile, vmangos_profile::NAME);
 
         let selected = parse_args_from([
             "--dump",
             "/path/need-not-exist.sql",
             "--eventai-profile",
-            eventai::SOURCE_PROFILE_NAME,
+            vmangos_profile::NAME,
         ])
-        .expect("named EventAI Source Profile");
-        assert_eq!(selected.eventai_profile, eventai::SOURCE_PROFILE_NAME);
+        .expect("named Source Profile");
+        assert_eq!(selected.eventai_profile, vmangos_profile::NAME);
 
         let error = parse_args_from([
             "--dump",
             "/definitely/not/read.sql",
             "--eventai-profile",
-            "cmangos-classic-z2815-moving-target",
+            "unknown-profile",
         ])
         .err()
-        .expect("unknown EventAI Source Profile");
-        assert!(format!("{error:#}").contains("unknown EventAI source profile"));
+        .expect("unknown Source Profile");
+        assert!(format!("{error:#}").contains("unknown Source Profile"));
+    }
+
+    #[test]
+    fn vmangos_selects_its_profile_and_apply_requires_actual_provenance() {
+        let base = ["--dump", "source.sqlite", "--family", "creature-ai"];
+        let args = parse_args_from(base).unwrap();
+        assert_eq!(args.eventai_profile, vmangos_profile::NAME);
+        assert_eq!(
+            parse_args_from(
+                base.into_iter()
+                    .chain(["--eventai-profile", "unknown-profile"])
+            )
+            .err()
+            .expect("input must be refused")
+            .to_string(),
+            "unknown Source Profile \"unknown-profile\"; expected vmangos-4641790"
+        );
+        assert_eq!(
+            parse_args_from(base.into_iter().chain(["--apply"]))
+                .err()
+                .expect("input must be refused")
+                .to_string(),
+            "apply requires --source-sha with the actual snapshot commit"
+        );
+        let actual = "0123456789012345678901234567890123456789";
+        let args =
+            parse_args_from(base.into_iter().chain(["--apply", "--source-sha", actual])).unwrap();
+        assert_eq!(args.source_sha, actual);
     }
 
     #[test]
@@ -824,8 +980,8 @@ mod tests {
     #[test]
     fn taxi_mount_dump_belongs_to_standalone_dbc_mode() {
         let args =
-            parse_args_from(["--dbc", "client/Data", "--taxi-mounts", "world.sql.gz"]).unwrap();
-        assert_eq!(args.taxi_mounts.as_deref(), Some("world.sql.gz"));
+            parse_args_from(["--dbc", "client/Data", "--taxi-mounts", "world.sqlite"]).unwrap();
+        assert_eq!(args.taxi_mounts.as_deref(), Some("world.sqlite"));
         assert!(args.dump.is_none());
         let refused = |args: &[&str]| {
             parse_args_from(args.iter().copied())
@@ -836,19 +992,25 @@ mod tests {
             Some("--taxi-mounts is only valid with standalone --dbc catalogue import".to_string());
         for mode in ["--spells", "--talents"] {
             assert_eq!(
-                refused(&["--dbc", "client/Data", "--taxi-mounts", "world.sql", mode]),
+                refused(&[
+                    "--dbc",
+                    "client/Data",
+                    "--taxi-mounts",
+                    "world.sqlite",
+                    mode
+                ]),
                 standalone_only
             );
         }
-        assert_eq!(refused(&["--taxi-mounts", "world.sql"]), standalone_only);
+        assert_eq!(refused(&["--taxi-mounts", "world.sqlite"]), standalone_only);
         assert_eq!(
             refused(&[
                 "--dbc",
                 "client/Data",
                 "--taxi-mounts",
-                "world.sql",
+                "world.sqlite",
                 "--dump",
-                "world.sql"
+                "world.sqlite"
             ]),
             standalone_only
         );
@@ -856,6 +1018,7 @@ mod tests {
 
     fn test_args() -> Args {
         Args {
+            dbc_diff: false,
             dump: None,
             taxi_mounts: None,
             dbc: None,
@@ -890,7 +1053,7 @@ mod tests {
             apply: false,
             family: None,
             source_sha: String::new(),
-            eventai_profile: eventai::SOURCE_PROFILE_NAME.to_string(),
+            eventai_profile: vmangos_profile::NAME.to_string(),
         }
     }
 

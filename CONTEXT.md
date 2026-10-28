@@ -21,11 +21,11 @@ entry in both files.
 
 **D** [Datascript](#packages) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
-**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages) · [EventAI Source Profile](#realm-topology)
+**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Escrow](#retired-terms) · [Event Binding](#packages)
 
 **F** [Fake](CORE_TERMS.md#fake) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Fuel Budget](#runtime-scripts)
 
-**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
+**G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
 **H** [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
@@ -43,7 +43,7 @@ entry in both files.
 
 **R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
-**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
+**S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
 **T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#retired-terms) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
@@ -51,7 +51,7 @@ entry in both files.
 
 **V** [Verification](CORE_TERMS.md#verification)
 
-**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms)
+**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms) · [World Source](#realm-topology)
 
 **Z** [Zone Weather](#world-clock-and-weather)
 
@@ -62,6 +62,11 @@ entry in both files.
 Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 [Development reload](CORE_TERMS.md#development-reload), [Realm](CORE_TERMS.md#realm),
 [Shard](CORE_TERMS.md#shard), [Module](CORE_TERMS.md#module), [Operator](CORE_TERMS.md#operator).
+
+**World Source**:
+The external world database an Operator supplies to an import. vmangos owns the source identifiers,
+content revisions and server spell catalogue. The Operator's client supplies the remaining client
+data and archive names for Map lookup.
 
 **World Import Profile**:
 A named import plan that selects the maps and content one world import loads into a Shard.
@@ -76,16 +81,18 @@ _Avoid_: import done flag, content ready flag
 **World Import Scope**:
 The authoritative union of Bounded Map Slices, Instance Vmap Slices, whole maps, and forced
 creature dependencies owned by one World Import Profile. Accepted EventAI summons force their
-summoned templates into the scope, to a fixpoint. It decides spatial import membership for dump,
-terrain, navigation, and vmap modes.
+summoned templates into the scope, to a fixpoint. It decides spatial import membership for
+World Source, terrain, navigation, and vmap modes.
 
-**EventAI Source Profile**:
-A named, pinned EventAI input contract. It binds exact decompressed SQL bytes, the source loader,
-source censuses, and approved compatibility results.
+**Source Profile**:
+A named input contract for a World Source. It defines the columns, types and behavior values an
+import accepts. Count changes are reported without deciding admission. The accepted snapshot
+provides the comparison baseline; an admitted import records the actual source commit.
+_Avoid_: EventAI Source Profile
 
 **Compatibility Manifest**:
-The complete EventAI import account for one World Import Scope. It records each source value and
-dependency path as emitted, normalized, excluded, dropped, or unapproved. An unapproved result is a
+The import account for one World Import Scope. It records source values, dependencies and omissions
+as emitted, normalized, excluded, dropped, unsupported or unapproved. An unapproved result is a
 Refusal for apply and remains visible in dry run.
 
 **Encounter Binding**:
@@ -95,7 +102,7 @@ an encounter-bound definition depends on is refused, and the refusal names the c
 binding.
 
 **Encounter Signal**:
-A named Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
+A named Reset, Begin, Fail, Complete, or encounter-specific notification delivered through an Encounter
 Binding. Source numeric states do not cross this boundary.
 
 **Relay Definition**:
@@ -495,7 +502,9 @@ The unit on the other side of the hit that fired a Proc: the victim of a dealt e
 _Avoid_: other unit, opponent
 
 **Triggered Cast**:
-The cast a fired Proc starts. It runs the cast core's effect loop and nothing else: no Gate, no cost, no cooldown, no stealth break. Its own hits fire no further Procs.
+A cast started by a Proc, a periodic aura or another triggered effect. It checks faction targeting
+and target life, then runs the cast core's effect loop without cast-start position, range, line of
+sight, power cost, cooldown or stealth-break checks. Its own hits fire no further Procs.
 _Avoid_: proc cast, internal cast, free cast
 
 **Spell Cast Event Kind**:
@@ -551,6 +560,11 @@ retain this identity until the cast finishes or an explicit cancellation removes
 The import family that loads the EventAI catalogue: event rows, broadcast texts, and summon
 locations. No table in it names a map, so its Claims apply whatever the World Import Scope, exactly
 as the family's own base import writes it.
+
+**Guardian**:
+A spell-summoned creature owned by another unit. It uses its template level and its owner's
+faction, attacks hostile units, and has its own lifetime. Its timer continues during combat.
+An NPC-owned Guardian can keep fighting after its owner dies.
 
 **Engagement**:
 One creature's fight, from the aggro that starts it until the creature is freed, however that

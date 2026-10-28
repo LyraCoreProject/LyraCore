@@ -153,7 +153,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
         if let Some(tmpl) = templates.entry().find(spawn.entry) {
             super::spawn::insert_creature_entity(
                 ctx,
-                build_creature_entity(&spawn, &tmpl, ctx.random(), spawn.instance_id),
+                build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), spawn.instance_id),
             );
         }
     }

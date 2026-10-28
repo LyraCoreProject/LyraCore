@@ -599,32 +599,11 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
         |spell_id: u32, name: &str, kind: u8, per_rank: i32, p0: i32, p0_kind: u8| {
             if ctx.db.game_spell().spell_id().find(spell_id).is_none() {
                 ctx.db.game_spell().insert(Spell {
-                    spell_id,
-                    family_name: 0,
-                    family_flags: 0,
-                    name: name.to_string(),
-                    power_type: 0,
-                    cost: 0,
-                    cast_time_ms: 0,
-                    gcd_ms: 0,
-                    cooldown_ms: 0,
-                    range_yd: 0,
                     duration_ms: TALENT_DURATION_MS,
                     school_mask: 1,
-                    dispel_type: 0,
-                    mechanic: 0,
                     max_stacks: 1,
-                    aura_interrupt: 0,
                     attributes: crate::spell::SPELL_ATTR_PASSIVE,
-                    spell_level: 0,
-                    max_level: 0,
-                    is_negative: false,
-                    cast_flags: 0,
-                    stances: 0,
-                    proc_flags: 0,
-                    proc_chance: 0,
-                    proc_charges: 0,
-                    max_duration_ms: 0,
+                    ..crate::seed::base_spell(spell_id, name)
                 });
                 let effect_index: u8 = 0;
                 ctx.db.game_spell_effect().insert(SpellEffect {
@@ -647,6 +626,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                     script_id: 0,
                     enters_combat: false,
                     points_per_combo: 0.0,
+                    bonus_coefficient: -1.0,
                 });
             }
         };
@@ -693,6 +673,9 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 proc_chance: 0,
                 proc_charges: 0,
                 max_duration_ms: 0,
+                custom_flags: 0,
+                min_target_level: 0,
+                single_target_key: 0,
             });
             ctx.db.game_spell_effect().insert(SpellEffect {
                 id: packed_spell_effect_id(spell_id, 0),
@@ -714,6 +697,7 @@ pub(crate) fn seed_talents(ctx: &ReducerContext) {
                 script_id: 0,
                 enters_combat: false,
                 points_per_combo: 0.0,
+                bonus_coefficient: -1.0,
             });
         }
     };

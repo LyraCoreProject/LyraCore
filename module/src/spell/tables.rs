@@ -45,6 +45,18 @@ pub struct Spell {
     // A finisher's duration grows from duration_ms toward this at five combo points.
     #[default(0u32)]
     pub max_duration_ms: u32,
+    #[default(0u32)]
+    pub custom_flags: u32,
+    #[default(0u32)]
+    pub min_target_level: u32,
+    #[default(0u64)]
+    pub single_target_key: u64,
+}
+
+impl Spell {
+    pub(crate) fn negative(&self) -> bool {
+        lyracore_shared::spell_custom::is_negative(self.custom_flags, self.is_negative)
+    }
 }
 
 #[table(
@@ -76,6 +88,8 @@ pub struct SpellEffect {
     pub enters_combat: bool,
     #[default(0.0f32)]
     pub points_per_combo: f32,
+    #[default({ -1.0f32 })]
+    pub bonus_coefficient: f32,
 }
 
 #[table(accessor = game_spell_reagent, index(accessor = by_spell, btree(columns = [spell_id])))]
@@ -143,7 +157,7 @@ pub struct Aura {
     // Unix microseconds; zero means no pending tick.
     #[default(0i64)]
     pub next_tick_micros: i64,
-    // Channel auras target the caster; this guid holds the missile destination.
+    // Cast target for channels; missile target for periodic triggers.
     #[default(0u64)]
     pub channel_target: u64,
     #[default(false)]
