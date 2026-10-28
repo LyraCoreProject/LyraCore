@@ -171,9 +171,9 @@ The client object that draws a ground spell effect. It has its own GUID, map, In
 The ground area's timer removes the DynamicObject when the effect expires.
 
 **Operator Content API**:
-The `operator_*` reducers that edit creature and gameobject spawns, item templates and vendor offers
-on a running Realm. Only the Operator can call them. Edits apply in one transaction and refresh
-connected clients where needed. A later import of the same Import Family replaces the rows.
+The `operator_*` reducers that edit creature and gameobject spawns, item and creature templates,
+vendor offers, creature displays, loot and spells on a running Realm. Only the Operator can call
+them. Edits apply in one transaction and refresh connected clients where needed. A later import of the same Import Family replaces the rows.
 `docs/operator-content-api.md` gives the contracts.
 _Avoid_: editor API, world editor reducers
 
@@ -187,7 +187,7 @@ Package spawn uses it. `docs/operator-content-api.md` gives the band.
 
 **Operator Template Range**:
 Template entries 5,200,500 through 5,999,999, reserved for allocation by the Operator Content API.
-Imports and Packages must not insert templates here. Item creation uses this range; creature,
+Imports and Packages must not insert templates here. Item and creature creation use this range;
 gameobject and quest template creation can use it later. It fits the creature-entry 24-bit limit.
 
 ### Accounts, characters and sessions

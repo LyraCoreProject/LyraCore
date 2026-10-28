@@ -102,6 +102,29 @@ pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(
     Ok(())
 }
 
+pub(crate) fn broadcast_creature_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
+    let response =
+        creature(ctx, entry).ok_or_else(|| format!("creature {entry} does not exist"))?;
+    let packet = lyracore_protocol::world::encode(response)
+        .map_err(|reason| format!("creature {entry} query response: {reason}"))?;
+    for connection in ctx.db.game_native_world_connection().iter() {
+        if matches!(
+            connection.state,
+            super::NativeWorldState::CharacterSelection { .. }
+                | super::NativeWorldState::InWorld(_)
+        ) {
+            super::send_raw(
+                ctx,
+                connection.connection_id,
+                packet.opcode,
+                packet.body.clone(),
+                false,
+            );
+        }
+    }
+    Ok(())
+}
+
 pub(super) fn npc_text(ctx: &ReducerContext, text_id: u32) -> ServerOpcodeMessage {
     let view = ctx.db.game_npc_text().text_id().find(text_id).map(|base| {
         let mut view = codec::NpcTextView::default();

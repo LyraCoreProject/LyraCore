@@ -20,7 +20,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [data-ingestion.md](./data-ingestion.md) | How-to | You run importer stages or read a dry run |
 | [vmangos behavior gaps](../conformance/unsupported-vmangos.md) | Reference | You assess omitted source behavior or plan conformance work |
 | [World Source port census](../conformance/vmangos-port-census/README.md) | Evidence | You compare the accepted snapshot with the previous import |
-| [operator-content-api.md](./operator-content-api.md) | Reference | A world editor edits spawns, item templates or vendor offers on a running Realm |
+| [operator-content-api.md](./operator-content-api.md) | Reference | A world editor edits spawns, templates, vendor offers or creature lists on a running Realm |
 | [migrating-to-native-host.md](./migrating-to-native-host.md) | How-to | You port a Gateway-era branch, Package or local Realm |
 | [package-api.md](./package-api.md) | Reference, authority | You write or review a Package |
 | [package-delta-format.md](./package-delta-format.md) | Reference | You read or produce a Package Delta |

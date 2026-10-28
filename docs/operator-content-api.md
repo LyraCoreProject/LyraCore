@@ -1,12 +1,14 @@
 # Operator Content API
 
-The Operator Content API edits creature and gameobject spawns, item templates and vendor offers on
-a running Realm. A world editor such as Meld calls it with the Owner Token. Spawn edits despawn the
-old live entity and let the respawn pass make the new one. Item edits refresh connected wearers and
-send new item query answers to clients.
+The Operator Content API edits creature and gameobject spawns, item and creature templates,
+vendor offers, creature displays, loot and spells on a running Realm. A world editor such as Meld
+calls it with the Owner Token. Spawn edits despawn the old live entity and let the respawn pass
+make the new one. Item edits refresh connected wearers and send new item query answers to clients.
 
 The source is `module/src/operator_content.rs` and `module/src/operator_content/items.rs`. The
 durable tests are in `module/tests/operator_content.rs` and `module/tests/operator_items.rs`.
+`module/src/operator_content/creatures.rs` and `module/tests/operator_creatures.rs` cover creature edits.
+`native-host/operator_creatures.py` checks their packets and respawns.
 `native-host/operator_items.py` checks item edits with the Headless Client.
 
 ## Which database
@@ -455,3 +457,191 @@ Family clears and reloads `game_item_template` and `game_npc_vendor`, so it wipe
 including Operator-created items. Save authored content outside the Realm before that import.
 Item instances can remain after their template disappears. This API adds no import reconciliation
 and no item deletion or reference repair.
+
+## Creature templates
+
+`operator_apply_creature_edits(edits: Vec<CreatureEdit>) -> Result<(), String>` edits NPC
+creature templates and their display, loot and spell lists. It calls `require_operator` first.
+Edits apply in order in one transaction. A Refusal rolls back the entire batch, including rows,
+despawns and queued packets. Edit Refusals start with `creature edit N:`, where N is zero-based.
+An authority Refusal has no edit index.
+
+| Variant | Payload | Effect |
+| --- | --- | --- |
+| `createCreature` | `fields: CreatureFields` | Allocates a creature entry in the Operator Template Range. |
+| `updateCreature` | `entry: u32, fields: CreatureFields` | Replaces every template column except entry. |
+| `setCreatureDisplays` | `entry: u32, displays: Vec<CreatureDisplay>` | Replaces displays and copies the first display's id and scale to the template. |
+| `setCreatureLoot` | `creature_entry: u32, rows: Vec<LootRow>` | Replaces death loot for the entry. |
+| `setPickpocketLoot` | `creature_entry: u32, rows: Vec<LootRow>` | Replaces pickpocket loot for the entry. |
+| `setSkinningLoot` | `skin_loot_id: u32, rows: Vec<SkinRow>` | Replaces the shared skinning list. |
+| `setCreatureSpells` | `creature_entry: u32, spells: Vec<CreatureSpell>` | Replaces the AI spell list. |
+| `setCreatureCast` | `creature_entry: u32, spell_id: Option<u32>` | Sets the fallback cast; `{"some":133}` sets a spell, `null` removes it. |
+
+The JSON variant names use camelCase; payload fields use snake_case. Send the array as the
+reducer's sole argument. All fields are required, including zero values. The examples below are
+complete JSON payloads. Use a faction template, items and spells present in the target Realm.
+
+### Types and examples
+
+`CreatureFields` contains every `game_creature_template` column except `entry`.
+
+| Type | Fields |
+| --- | --- |
+| `String` | `name`, `subname` |
+| `f32` | `scale` |
+| `u8` | `creature_type`, `creature_family`, `rank`, `trainer_type`, `trainer_class` |
+| `u32` | `display_id`, `level`, `health`, `faction_template`, `npc_flags`, `unit_flags`, `type_flags`, `base_attack_time_ms`, `money_min`, `money_max`, `max_level`, `max_level_health`, `aggro_range`, `damage_min`, `damage_max`, `armor`, `pickpocket_loot_id`, `skin_loot_id` |
+
+Create a template:
+
+```json
+[{"createCreature":{"fields":{"name":"Meld scout","subname":"Watchkeeper","display_id":100,"level":10,"health":250,"faction_template":35,"npc_flags":1,"unit_flags":0,"creature_type":7,"creature_family":0,"type_flags":0,"rank":0,"scale":1.0,"base_attack_time_ms":2000,"money_min":0,"money_max":10,"max_level":10,"max_level_health":250,"aggro_range":0,"damage_min":5,"damage_max":10,"armor":50,"pickpocket_loot_id":0,"skin_loot_id":0,"trainer_type":0,"trainer_class":0}}}]
+```
+
+The first empty-range allocation is 5,200,500. Later allocations use the highest existing creature
+entry in 5,200,500 through 5,999,999 plus one. Item entries have their own high-water mark. Read
+`game_creature_template` to get the created entry; reducers do not return it.
+
+Update that template:
+
+```json
+[{"updateCreature":{"entry":5200500,"fields":{"name":"Meld captain","subname":"Watchkeeper","display_id":200,"level":10,"health":300,"faction_template":35,"npc_flags":129,"unit_flags":0,"creature_type":7,"creature_family":0,"type_flags":0,"rank":0,"scale":1.0,"base_attack_time_ms":2000,"money_min":0,"money_max":10,"max_level":10,"max_level_health":300,"aggro_range":0,"damage_min":5,"damage_max":10,"armor":50,"pickpocket_loot_id":0,"skin_loot_id":0,"trainer_type":0,"trainer_class":0}}}]
+```
+
+The published input types are `OperatorCreatureDisplay` and `OperatorCreatureSpell`, distinct
+from the table row types. In the reducer source they are `CreatureDisplay` and `CreatureSpell`.
+
+`CreatureDisplay` has `display_id: u32`, `scale: f32`, `weight: u32`, `gender: u8`, and
+`bounding_radius: f32`. Weights are relative selection weights. Zero disables a row; a nonempty
+list needs total weight from 1 through 4,294,967,295 to fit the selector's 32-bit roll. The first row may have zero weight. Its display and
+scale still become the template's fallback, because the catalogue uses the list only when its
+first row agrees with those template fields. An empty list removes the alternatives and keeps
+the current template fallback. Later template display or scale edits can disable the list until
+it is set again. No client display catalogue is required in the Realm; display ids must be
+nonzero, but the Operator must choose models that the client has. Gender and bounding radius
+lookups use the display id across entries, so keep metadata for the same model consistent.
+
+```json
+[{"setCreatureDisplays":{"entry":5200500,"displays":[{"display_id":100,"scale":1.0,"weight":1,"gender":0,"bounding_radius":0.389},{"display_id":200,"scale":1.5,"weight":3,"gender":1,"bounding_radius":0.5}]}}]
+```
+
+`LootRow` has `item_entry: u32`, `chance_bp: u32`, `count: u32`, `group_id: u32`, and
+`quest_only: bool`. `SkinRow` has the same fields except `quest_only`.
+For `group_id = 0`, each row gets an independent roll in 0 through 9,999; 10,000 always drops
+and zero never drops. A nonzero group gets one roll over cumulative weights on that same
+10,000-point scale. At most one row wins. Group weights are not normalized: a total of 7,500
+leaves a 25% chance of no drop. A total above 10,000 is refused so later rows remain reachable.
+Counts must be positive. Empty lists remove all rows.
+
+```json
+[{"setCreatureLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":7500,"count":1,"group_id":1,"quest_only":false}]}}]
+```
+
+Pickpocket lists are keyed by creature entry. `pickpocket_loot_id` records the import source's
+identifier; the importer resolves it before storing rows. Editing that template field does not
+select a different pickpocket list.
+
+```json
+[{"setPickpocketLoot":{"creature_entry":5200500,"rows":[{"item_entry":25,"chance_bp":10000,"count":1,"group_id":0,"quest_only":false}]}}]
+```
+
+Skinning lists use a nonzero `skin_loot_id`, shared by every template that names it. This variant
+can create a list before a template refers to it. Set the template's `skin_loot_id` separately. When a skinning roll produces no winner, the
+existing profession logic grants one Light Leather, item 2318. Removing the list preserves that
+fallback.
+
+```json
+[{"setSkinningLoot":{"skin_loot_id":42,"rows":[{"item_entry":25,"chance_bp":10000,"count":1,"group_id":0}]}}]
+```
+
+`CreatureSpell` has `spell_id: u32`, `priority: u8`, `condition: u8`, and `condition_value: u8`.
+Condition 0 is always, 1 is self health below the given percent from 0 through 100, 2 is target
+missing this spell's aura, and 3 is self missing this spell's aura. Higher priorities run first. Only condition 1 reads
+`condition_value`. The AI reads both spell tables fresh when choosing a cast. Authored Casting
+can suppress these lists. Existing casts and cooldowns remain.
+
+```json
+[{"setCreatureSpells":{"creature_entry":5200500,"spells":[{"spell_id":133,"priority":7,"condition":1,"condition_value":25}]}}]
+```
+
+```json
+[{"setCreatureCast":{"creature_entry":5200500,"spell_id":{"some":133}}}]
+```
+
+To remove the fallback cast:
+
+```json
+[{"setCreatureCast":{"creature_entry":5200500,"spell_id":null}}]
+```
+
+### World effects and limits
+
+After template or display edits, the reducer finds entities through `game_world_entity.by_entry`.
+It despawns creatures with an instance-zero Authored Spawn and rearms each spawn for the current
+time. The normal respawn pass creates the new life with the edited display, scale, stats and NPC
+flags. Each affected entry is handled once per batch. This resets combat and life state; normal
+despawn cleanup applies. Running Instance copies, population copies, Package spawns, pets,
+guardians and summons stay in place. Their copied fields change at their next creation.
+Instance-map source rows remain dormant. Loot and spell edits do not cause a respawn.
+
+A batch may respawn at most **256 creatures**. This matches `pass_respawn`'s 256-spawn tick budget,
+so one edit batch adds at most one pass's worth of respawn work. Other due spawns may delay the
+new lives. A batch over the cap is refused in full before any despawn. Narrow the edit scope or
+wait until fewer matching Authored Spawns are live.
+
+Creature level-stat rows stay unchanged. The catalogue uses stored stats only while their
+endpoints agree with the template; otherwise it synthesizes stats from the edited template.
+The presence of imported level-stat rows continues to select the imported stat convention.
+Death, pickpocket and skinning rolls read their lists fresh. Already-rolled `game_corpse_loot`
+rows stay unchanged by list replacement.
+
+Create, update and display replacement send one fresh `SMSG_CREATURE_QUERY_RESPONSE` per affected
+entry to each authenticated native World Session, including Character selection. Multiple edits
+to an entry send its final state once. Respawned entities reach clients through normal entity
+updates. Headless Client coverage checks packet delivery and destroy/create updates. Real build
+5875 client cache replacement and visual presentation remain unverified.
+
+Limits are 64 edits, 128 rows per replacement list, and 512 replacement rows across a batch.
+Names and subnames have a 255 UTF-8 byte limit and cannot contain NUL; names must contain text.
+Creation checks every field. Updates check only changed fields; a cross-field rule runs if any
+of its participating fields changes. Unchanged imported values pass even if they would fail on
+creation. Other Gates require:
+
+- Creature entries in 1 through 16,777,215, outside the Package Creature Range and Fixture-Reserved
+  creature bands. The target must exist for every entry-based variant except creation.
+- A present faction template; nonzero display id; finite positive scale; levels satisfying
+  `1 <= level <= max_level <= 255`; positive health, max-level health and attack time;
+  ordered damage and money bounds.
+- Creature type 1 through 10, a protocol-supported creature family, rank 0 through 4,
+  trainer type 0 through 3, and trainer class zero or a protocol-supported Character class.
+- Display gender 0 through 2 and finite nonnegative bounding radius.
+- Existing item and spell references, valid loot chances and groups, and AI conditions as above.
+
+Every list replacement allocates explicit nonzero ids before deleting old rows. It starts above
+the highest existing id outside that table's protected bands, then advances a transaction-local
+cursor. Allocation skips the general fixture band 5,090,000 through 5,099,999. Pickpocket and
+skinning ids also skip the Package Loot Range 9,000,000 through 9,999,999. Spell row ids skip the
+Package Cast Range 10,000,000 through 10,999,999. Creature-loot rows are not Package-claimable;
+displays use their entry's ownership. Exhausted ids refuse the batch. Replacement refuses a list
+that contains protected rows, so it cannot delete someone else's rows to make space. Fallback
+cast keys in the Package Cast Range are also refused. Imported explicit ids never require an
+`auto_inc` reset.
+
+One `info` line per edit records the caller and old -> new values after the entire batch succeeds.
+Template lines list only changed columns. Text is escaped so names cannot add log lines. A refused
+batch writes no successful edit log.
+
+### Durability
+
+Plain publish preserves these rows. Operator edits do not survive a `lyracore import` of the
+owning Import Family:
+
+| Import Family | Replaced rows |
+| --- | --- |
+| `creatures` | Templates, level stats and displays |
+| `items` | Creature death loot |
+| `loot` | Pickpocket and skinning loot |
+| `casts` | Creature casts and spell lists |
+
+The creature importer refuses source templates in the Operator Template Range. That reservation
+prevents source allocation conflicts; it does not preserve Operator rows across an import.
