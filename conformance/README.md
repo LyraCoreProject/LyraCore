@@ -4,6 +4,8 @@ Each `features/<system>/<behavior>.toml` describes one Behavior's 1.12.1 scope a
 requirements. `lyracore-conformance` loads all entries together and refuses malformed fields,
 unknown fields, mismatched paths, duplicate ids, unknown dependencies and dependency cycles.
 [ADR 0005](../docs/adr/0005-1-12-conformance.md) defines repository ownership and verification tiers.
+Use [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) for the separate implementation
+and scenario-author loops.
 
 ```bash
 cargo test -p lyracore-conformance -- --nocapture
@@ -106,6 +108,47 @@ checkout is read and no catalogue check can skip. The pinned harness enables
 values. Core needs no feature override.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
+and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
+opcode and field path. It holds no reason or packet values. The durable test checks provenance and
+requires exact set equality, including when a difference disappears. After both tier 1 tests run,
+use `./conformance/baseline` to regenerate it from `.lyracore/conformance/tier1.json`. The command
+checks the core commit, harness revision and scenario hashes, then rewrites the canonical file.
+Review the changed signatures with the behavior change. This baseline does not change comparator
+tags, scoreboard pass/fail or the Conformance Audit.
+
+### Run one scenario
+
+From the repo root, run `./conformance/run taxi_single_hop` or
+`./conformance/run taxi_single_hop --json`. The command runs only that scenario's tier 1 durable
+test through a disposable Shard. It captures the comparator result in an isolated scratch file,
+then prints differences grouped by signature. Each record shows the expected and actual scrubbed
+values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
+the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
+exact signature and provenance equality. The command exits with code 1 when the baseline differs
+and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
+case it prints the test diagnostic. Code 0 means the run completed and the Tier 1 baseline matches.
+Taxi can exit successfully while its known rule differences remain visible.
+
+`--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
+with `scenario`, `error.kind = "setup_failed"`, and `error.diagnostic` from the test output.
+Groups sort rule before data, then by signature. Records retain comparator order. The fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
+| `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
+| `conforms` | True when the comparator reports no rule differences |
+| `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
+| `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
+| `groups[]` | `classification` (`rule` or `data`), `signature` and `records` |
+| `groups[].signature` | `rule`, `checkpoint`, `stream`, `opcode`, `field_path` |
+| `groups[].records[]` | `packet_index`, rule `reason`, `expected` and `actual` values from the comparator |
+
+Expected and actual values use the harness's tagged field JSON and may be null. The text view
+prints the same information, including every signature that regeneration would add or remove.
+
 The runner prepares the scenario's Character through debug reducers, then runs the
 harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
@@ -121,8 +164,10 @@ filters packets during the scenario or changes its Equivalence Rules.
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
 revision, capture time and the harness comparison. It removes the scenario's previous result before
 setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
-and preserve other scenarios from the same revision. Both difference classes remain in the report. Only rule records fail the
-test. No packet text enters this result. The scoreboard consumes it.
+and preserve other scenarios from the same revision. Both difference classes remain in the report.
+The comparator marks a Behavior as nonconforming when it finds rule records. The tier 1 baseline
+check fails when either signature set changes or provenance differs, regardless of that result.
+No packet text enters this result. The scoreboard consumes it.
 
 ## Taxi data
 
@@ -150,10 +195,9 @@ cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ign
 ```
 
 This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
-Shard and fails with the full comparator report for the eight known gameplay gaps. Durable CI
-keeps the explicit `taxi_single_hop_matches_its_golden_trace` skip until those gaps are fixed.
-Remove the skip in the PR that fixes the last gap. All other conformance checks stay in CI.
-Known gaps never excuse a difference or supply a passing baseline.
+Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
+baseline. The eight known gameplay gaps remain comparator differences. Known gaps never excuse a
+difference or supply a passing result.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
@@ -166,6 +210,7 @@ From the repo root:
 
 ```bash
 ./conformance/scoreboard
+./conformance/scoreboard --json
 cargo test -p lyracore-conformance --example scoreboard
 ```
 
@@ -173,6 +218,51 @@ The script runs the Rust example `scoreboard`. It reads the Feature Ledger and p
 and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
 It does not infer a pass from a test declaration or claim overall completion from these columns.
 The ledger's other required rungs remain obligations.
+
+The system table counts Behaviors with and without scenarios. The open-work list includes every
+Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
+pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
+an entry with one when its evidence still points to implementation work. If tier 1 passes, or a
+stale audit measured no rule signatures and the ledger has no known gaps, an entry with a missing,
+stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
+`./conformance/audit`.
+Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
+command. The scenario-author command opens the ledger entry. An implementer normally runs the first
+listed scenario; further scenarios are in the Behavior's `scenarios` field.
+Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
+when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
+differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
+the tier 1 fixture misses something; a scenario author can fix that fixture.
+Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
+matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
+After an improvement, run both tier 1 tests and `./conformance/baseline`, then review the changed
+signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
+`prerequisites`. The command chooses an unused report name; audit history is append-only.
+
+Within those groups, the list sorts by descending number of other Behaviors that directly depend
+on the entry, then descending measured rule-signature count, then descending number of distinct
+claimed request opcodes, then ascending Behavior id. It uses the committed audit's signature count
+when available, otherwise tier 1's count. If neither measured the Behavior, it uses the number of
+distinct known gaps. Repeating a known gap does not increase priority. Dependency edits change the
+ranking and receive review as such in their PRs. The formula uses no assigned priority or tier 1
+baseline.
+
+`--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
+keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
+`tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
+the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
+Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
+`real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
+`scenarios`, `dependencies`, `required_rungs`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
+`unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
+measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
+`unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
+record counts. Spell counts give build, source path or missing expected path, and per-class
+trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
+`kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
+`scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
+is the measured signature count or the distinct-gap fallback. Counts and state names have the same
+meaning as the text scoreboard.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
@@ -246,8 +336,8 @@ Each LyraCore candidate's bytes must match `capture.sha256`, and its core commit
 must match the audit run. At the pinned harness revision, the candidate header has no slot for
 those three provenance values; it records only the adapter and scenario metadata. The report
 binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is corroborated by
-the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
-its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
+the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison runs in
+durable CI against its signature baseline. Its rule differences still prevent a passing result.
 
 `audit.previous_report` is the JSON filename of the newest `conformance_audit` report in
 `conformance/reports/` with a strictly earlier `recorded_at_unix_ms`, or null when none exists.
@@ -265,8 +355,9 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 ## Conformance Audit
 
 Prepare the pinned Reference Server once with the harness's
-[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/adapters/vmangos/README.md).
-Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md).
+Stop it before the audit. The runner requires a clean core working tree and free Reference Server
+ports 13724 and 18085.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
 The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 

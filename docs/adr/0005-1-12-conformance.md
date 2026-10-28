@@ -36,7 +36,7 @@ using a separate scenario author and independent decoders.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -79,18 +79,17 @@ using a separate scenario author and independent decoders.
 
 ## Two verification tiers
 
-Tier 1 runs on every core change in CI, except the taxi comparison until its known gaps are fixed.
+Tier 1 runs on every core change in CI, including the taxi comparison.
 It drives the Module through native reducers and compares emitted packets with Golden Traces.
 It bypasses WoW TCP, SRP and the header cipher. The initial mechanism test must prove that an
 Operator WebSocket connection can enter the world through a feature-gated debug reducer,
 call `native_world_receive`, and subscribe to `game_native_packet`.
 The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
-CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
-pointer to `conformance/features/taxi/taxi_single_hop.toml`. Its hand-written fixture holds path 6
-with 28 vertices, nodes 2 and 4, and a minimal flight-master template. The eight known gameplay gaps
-remain. Remove the CI skip in the same PR that fixes the last gap. A manual run still fails with
-the full comparator report. Keep no known-differences baseline; the other conformance checks
-continue to run in durable CI.
+Its hand-written fixture holds path 6 with 28 vertices, nodes 2 and 4, and a minimal flight-master
+template. The eight known gameplay gaps remain. Each scenario's rule and data signature sets must
+equal the committed tier 1 baseline. A changed set requires regeneration from the comparator
+result in the same PR. The baseline does not change classification, scoreboard status or audit
+findings.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and the vmangos world loaded by `lyracore import`, and the Reference Server,
@@ -149,8 +148,8 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.6`, commit
-`1c111d4d983f76838c7e075319ca0e901a17c57b`, through a git dev-dependency at the full SHA in
+Core pins `wire-client` to `v0.2.0-conformance.7`, commit
+`ad27050ef5c91a1f5ba7337dce29d5d31233898b`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
 on `wire-client` in every workspace member. It also checks the source and exact revision
 of every declaration, including renamed, optional and target-specific dependencies. The ledger
@@ -186,7 +185,7 @@ core defects. No gameplay or Equivalence Rule changes belong to this update.
 The ledger can record `known_gaps` with a description, core source path, symbol and comparison
 evidence. These entries have no status and never participate in rule/data classification. They
 are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
-results; the durable taxi skip remains until the Behavior conforms with the bundled route fixture.
+results; the durable taxi comparison uses the bundled route fixture and signature baseline.
 
 ## Milestone 3 audit
 

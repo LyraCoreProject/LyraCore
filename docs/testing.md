@@ -27,7 +27,7 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard --example audit
+cargo test -p lyracore-conformance --example scoreboard --example audit --example run
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v
@@ -72,11 +72,9 @@ cargo test -p lyracore-module --test weather -- --ignored
 ```
 
 CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`.
-The Deadmines targets need the separately installed dungeons Package. CI also skips
-`taxi_single_hop_matches_its_golden_trace`;
-the [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) has eight known gaps. The
-bundled route fixture removes its imported-data requirement. Remove the skip with the last gap fix.
-Running that test by hand still fails with the full comparator report.
+The Deadmines targets need the separately installed dungeons Package. CI runs the
+[taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) against its committed tier 1
+signature baseline. The bundled route fixture removes its imported-data requirement.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
 `859c7257c74d2c371dea8ed743cfbccd596cac11`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
@@ -187,7 +185,7 @@ export CARGO_TARGET_DIR="$HOME/.cache/lyracore-scratch/conformance/target"
 export TMPDIR="$HOME/.cache/lyracore-scratch/conformance/tmp"
 mkdir -p "$TMPDIR"
 cargo test -p lyracore-module --test native_debug_gate
-cargo test -p lyracore-module --test native_conformance -- --ignored --skip taxi_single_hop_matches_its_golden_trace
+cargo test -p lyracore-module --test native_conformance -- --ignored
 cargo test -p lyracore-module --test native_debug_gate -- --ignored
 ```
 
@@ -204,10 +202,19 @@ The first command checks every Behavior file, its dependencies, the harness depe
 all scenario references through `wire_client::catalogue`. Missing scenarios and mismatched
 Behavior ids fail. The inventory command checks retained Rust evidence declarations.
 These checks do not establish that a Behavior passes its required verification rungs.
-The tier 1 test writes `.lyracore/conformance/tier1.json`. Run the manual
-[Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over TCP on both servers. Run `./conformance/scoreboard` to join it
-with the Feature Ledger and the latest Conformance Audit report. The scoreboard's example tests
-check counts, evidence freshness and failure handling. See the
+The tier 1 test writes `.lyracore/conformance/tier1.json` and requires each scenario's harness
+revision, scenario hash, and rule and data signature sets to equal
+`conformance/tier1-baseline.json`. New and removed signatures fail.
+After running both tier 1 tests, regenerate the baseline from that comparator output with
+`./conformance/baseline`. Review its diff in the same PR as the behavior change. The baseline does
+not affect comparator classification or the scoreboard's pass/fail.
+Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
+machine-readable differences and baseline changes. It runs only the named durable test. See the
+[run output contract](../conformance/README.md#run-one-scenario).
+Run the manual [Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over
+TCP on both servers. Run `./conformance/scoreboard` to join it with the Feature Ledger and the
+latest Conformance Audit report. The scoreboard's example tests check counts, evidence freshness
+and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
 
 For each new or changed Behavior, assign two different people or agents. The scenario author
@@ -216,8 +223,8 @@ Record both assignments and the harness PR in the implementation brief. An imple
 suspected scenario defects to the author; implementation work never edits the scenario, Golden
 Trace or Equivalence Rules to obtain a pass. See [ADR 0005](adr/0005-1-12-conformance.md).
 
-The durable CI target discovery includes `native_conformance` automatically and skips only its
-taxi Golden Trace test. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
+The durable CI target discovery includes `native_conformance` automatically and runs both tier 1
+scenarios. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.
 `native_debug_gate` checks that native fixture entry stays behind `conformance_test_fixture` and
 that the check detects a missing or ineffective feature gate. Its durable test builds with only
 `debug_reducers`, the feature set used by `lyracore publish`, and checks that the Module does not

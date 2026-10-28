@@ -15,6 +15,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [Conformance Audit baseline](../conformance/reports/2026-10-28-c5.md) | Verification | You check measured rule and data signatures and reference stability |
 | [T2d taxi comparison](../conformance/reports/2026-10-27-t2d.md) | Verification | You investigate the first taxi conformance differences |
 | [Feature Ledger](../conformance/README.md) | Reference | You add or assess a conformance Behavior and its evidence requirements |
+| [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) | Agent skill | You implement a ranked Behavior or author its scenario |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
 | [benilla-compatibility.md](./benilla-compatibility.md) | Reference | You change packet layouts or the opcode inventory |
 | [native-operations.md](./native-operations.md) | Runbook | An Operator updates a deployed Realm |
