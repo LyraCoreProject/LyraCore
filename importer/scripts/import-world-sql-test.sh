@@ -39,6 +39,13 @@ under_test="$checkout/importer/scripts/import-world.sh"
 cat >"$checkout/target/debug/lyracore-importer" <<'STUB'
 #!/bin/sh
 echo "lyracore-importer $*" >>"$STUB_LOG"
+case " $* " in
+    *" --print-scope-maps "*)
+        [ "${STUB_SCOPE_MODE:-succeed}" = fail ] && exit 1
+        for map_id in ${STUB_SCOPE_MAPS:-0}; do echo "$map_id"; done
+        exit 0
+        ;;
+esac
 echo "mapped 1 applied 1"
 exit 0
 STUB
@@ -107,6 +114,8 @@ run_import() {
             STUB_MODE="${STUB_MODE:-succeed}" \
             STUB_ROW_COUNT="${STUB_ROW_COUNT:-20}" \
             STUB_MAP_IDS="${STUB_MAP_IDS:-0}" \
+            STUB_SCOPE_MAPS="${STUB_SCOPE_MAPS:-0}" \
+            STUB_SCOPE_MODE="${STUB_SCOPE_MODE:-succeed}" \
             SPACETIME_SERVER="${SPACETIME_SERVER:-}" \
             WORLD_PROFILE="${WORLD_PROFILE:-}" \
             ALLOW_MAP_SWITCH="${ALLOW_MAP_SWITCH:-}" \
@@ -156,7 +165,7 @@ check "an overridden SPACETIME_SERVER reaches spacetime verbatim" \
 echo
 echo "import-world.sh — canonical profile argument"
 : >"$stub_log"
-STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single run_import
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-single STUB_SCOPE_MAPS="0 1 36 369" run_import
 check "the profile run reaches the assertion stage" not_contains "$out" '[world] ABORT'
 check "the profile is displayed with all of its planned maps" \
     contains "$out" 'canonical profile alliance-single (planned maps: 0 1 36 369)'
@@ -170,17 +179,17 @@ plain_spell_passes="$(count_matches "$stub_log" '^lyracore-importer .*--spells -
 check "the profile skips the duplicate standalone spell catalogue pass" test "$plain_spell_passes" -eq 0
 check "the dump ETL does not recreate a profile as legacy spatial flags" \
     bash -c '! grep "lyracore-importer .*--world-profile alliance-single" "$0" | grep -qE -- "--map|--box|--include-map|--include-creatures"' "$stub_log"
-unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -vc -- '--server http://127.0.0.1:3000' || true)"
+unserved_importers="$(grep '^lyracore-importer ' "$stub_log" | grep -v -- '--print-scope-maps' | grep -vc -- '--server http://127.0.0.1:3000' || true)"
 check "every profile importer invocation names the loopback server" \
     test "${unserved_importers:-0}" -eq 0
 : >"$stub_log"
-STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-eastern run_import
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-eastern STUB_SCOPE_MAPS="0 369" run_import
 check "the eastern profile runs its Dun Morogh named check" \
     contains "$out" 'Dun Morogh start correct-map quest-giver spawn'
 check "the eastern profile runs its Loch Modan named check" \
     contains "$out" 'Loch Modan follow-on correct-map quest-giver spawn'
 : >"$stub_log"
-STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-kalimdor ALLOW_MAP_SWITCH=1 run_import
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=alliance-kalimdor STUB_SCOPE_MAPS=1 ALLOW_MAP_SWITCH=1 run_import
 check "the Kalimdor profile runs its Teldrassil named check" \
     contains "$out" 'Teldrassil start correct-map quest-giver spawn'
 check "the Kalimdor profile runs its Darkshore named check" \
@@ -190,19 +199,21 @@ echo
 echo "import-world.sh: full profile ownership and catalogue passes"
 for profile in full-world full-eastern full-kalimdor full-instances; do
     case "$profile" in
-        full-world) owned_maps="0 1 30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 289 309 329 349 369 389 409 429 449 450 469 489 509 529 531 533" ;;
+        full-world) owned_maps="0 1 30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 269 289 309 329 349 369 389 409 429 449 450 451 469 489 509 529 531 533" ;;
         full-eastern) owned_maps="0 369 449" ;;
         full-kalimdor) owned_maps="1 450" ;;
         full-instances) owned_maps="30 33 34 36 43 47 48 70 90 109 129 189 209 229 230 249 289 309 329 349 389 409 429 469 489 509 529 531 533" ;;
     esac
     : >"$stub_log"
-    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$owned_maps" run_import
+    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$owned_maps" STUB_SCOPE_MAPS="$owned_maps" run_import
     check "$profile accepts all of its spatial maps" not_contains "$out" '[world] ABORT'
     check "$profile retains the final map ownership assertion" contains "$out" 'ok    one continent per database: spatial rows only on map(s)'
     check "$profile does not report its own maps as contamination" not_contains "$out" 'cross-continent contamination'
+    check "$profile reads its map scope from the source" \
+        grep -q -- "lyracore-importer --dump .*--world-profile $profile --print-scope-maps$" "$stub_log"
     check "$profile passes the name to the dump importer" \
-        grep -q -- "lyracore-importer .*--dump .*--world-profile $profile " "$stub_log"
-    dump_passes="$(count_matches "$stub_log" "^lyracore-importer .*--dump .*--world-profile $profile " )"
+        grep -q -- "lyracore-importer .*--dump .*--world-profile $profile .*--apply" "$stub_log"
+    dump_passes="$(grep -v -- '--print-scope-maps' "$stub_log" | grep -c -- "^lyracore-importer .*--dump .*--world-profile $profile ")"
     check "$profile runs exactly one dump and client catalogue pass" test "$dump_passes" -eq 1
     check "$profile reads client catalogues during that dump pass" \
         grep -q -- "lyracore-importer .*--dump .*--dbc .*--world-profile $profile " "$stub_log"
@@ -225,15 +236,36 @@ done
 
 for profile in full-eastern full-kalimdor full-instances; do
     case "$profile" in
-        full-eastern) foreign_map=1 ;;
-        full-kalimdor) foreign_map=0 ;;
-        full-instances) foreign_map=1 ;;
+        full-eastern) foreign_map=1 scope_maps="0 369 449" ;;
+        full-kalimdor) foreign_map=0 scope_maps="1 450" ;;
+        full-instances) foreign_map=1 scope_maps="36" ;;
     esac
     : >"$stub_log"
-    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$foreign_map" run_import
+    STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE="$profile" STUB_MAP_IDS="$foreign_map" \
+        STUB_SCOPE_MAPS="$scope_maps" run_import
     check "$profile stops before importing over a foreign map" test "$code" -ne 0
-    check "$profile does not call the importer after an ownership failure" not_contains "$stub_log" 'lyracore-importer '
+    check "$profile does not call the importer after an ownership failure" not_contains "$stub_log" '--apply'
 done
+
+echo
+echo "import-world.sh: full-world map scope comes from the source"
+full_world_source_maps="0 1 36 269 451"
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_MAP_IDS="0 1 269 451" \
+    STUB_SCOPE_MAPS="$full_world_source_maps" run_import
+check "full-world accepts source maps outside the supported list" not_contains "$out" 'cross-continent contamination'
+check "full-world does not add source maps to its supported maps" \
+    bash -c '! grep -E "planned maps:.* (269|451) " "$0"' "$out"
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_MAP_IDS="0 1 269 451 13" \
+    STUB_SCOPE_MAPS="$full_world_source_maps" ALLOW_MAP_SWITCH=1 run_import
+check "full-world rejects a map the source does not select" \
+    contains "$out" 'cross-continent contamination: '"'lyracore'"' holds spatial rows for map(s) 13 '
+check "  ...and fails the run" test "$code" -ne 0
+: >"$stub_log"
+STUB_MODE=succeed STUB_ROW_COUNT=150 WORLD_PROFILE=full-world STUB_SCOPE_MODE=fail run_import
+check "an unreadable map scope aborts the run" contains "$out" "[world] ABORT — could not read this run's map scope"
+check "  ...before any import is applied" not_contains "$stub_log" '--apply'
 
 echo
 echo "import-world.sh — python3 absent from PATH"
