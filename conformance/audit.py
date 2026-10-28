@@ -176,20 +176,24 @@ def prepare_imported_world(work, token):
 
     def sql(query):
         request = urllib.request.Request(base + '/sql', query.encode(),
-                                         dict(auth, **{'Content-Type': 'text/plain'}), method='POST')
+                                         {**auth, 'Content-Type': 'text/plain'}, method='POST')
         with urllib.request.urlopen(request) as response:
             return json.load(response)[0]['rows']
 
     def reducer(name, args):
         request = urllib.request.Request(base + '/call/' + name, json.dumps(args).encode(),
-                                         dict(auth, **{'Content-Type': 'application/json'}), method='POST')
+                                         {**auth, 'Content-Type': 'application/json'}, method='POST')
         with urllib.request.urlopen(request):
             pass
 
     names = {scenario['character'] for scenario in json.loads((work / 'catalogue.json').read_text())}
-    for guid, name in sql('SELECT guid,name FROM game_character'):
-        if name in names:
-            reducer('debug_delete_character', [guid])
+    accounts = sql("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")
+    if len(accounts) > 1:
+        raise RuntimeError('multiple audit Accounts exist')
+    if accounts:
+        for guid, name in sql(f'SELECT guid,name FROM game_character WHERE account_id = {accounts[0][0]}'):
+            if name in names:
+                reducer('debug_delete_character', [guid])
 
     # The imported flight master overlaps the taxi scenario's fixture spawn.
     spawns = sql('SELECT entry,x,y FROM game_creature_spawn WHERE map_id = 0 '
