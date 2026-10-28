@@ -16,6 +16,15 @@ mod ratchet;
 
 static REPORT: Mutex<()> = Mutex::new(());
 
+fn harness_revision() -> Result<&'static str> {
+    include_str!("../../../.wire-harness-rev")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .flat_map(str::split_whitespace)
+        .nth(1)
+        .context("harness SHA")
+}
+
 fn git(arguments: &[&str]) -> Result<String> {
     let output = Command::new("git")
         .args(arguments)
@@ -32,13 +41,7 @@ fn update_result(
     now: u64,
 ) -> Result<()> {
     let _lock = REPORT.lock().unwrap();
-    let pin = include_str!("../../../.wire-harness-rev");
-    let revision = pin
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")?;
+    let revision = harness_revision()?;
     let mut result = json!({
         "schema_version": 2,
         "tier": "tier1",
@@ -131,6 +134,8 @@ fn run_scenario(
     baseline.check(&ratchet::ScenarioBaseline::from_comparison(
         id,
         &golden.scenario().behavior,
+        harness_revision()?,
+        &golden.trace().header.scenario_sha256,
         &comparison,
     ))?;
     Ok(())

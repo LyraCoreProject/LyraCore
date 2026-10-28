@@ -106,11 +106,11 @@ checkout is read and no catalogue check can skip. The pinned harness enables
 values. Core needs no feature override.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
-The committed `tier1-baseline.json` contains sorted rule and data signature sets for every
-catalogue scenario. A signature is the rule, checkpoint, stream, opcode and field path. It holds no
-reason or packet values. The durable test recomputes the comparator result and requires exact set
-equality, including when a difference disappears. After running both tier 1 tests, use
-`./conformance/baseline` to regenerate it from `.lyracore/conformance/tier1.json`. The command
+The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
+and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
+opcode and field path. It holds no reason or packet values. The durable test checks provenance and
+requires exact set equality, including when a difference disappears. After both tier 1 tests run,
+use `./conformance/baseline` to regenerate it from `.lyracore/conformance/tier1.json`. The command
 checks the core commit, harness revision and scenario hashes, then rewrites the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
@@ -159,8 +159,10 @@ filters packets during the scenario or changes its Equivalence Rules.
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
 revision, capture time and the harness comparison. It removes the scenario's previous result before
 setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
-and preserve other scenarios from the same revision. Both difference classes remain in the report. Only rule records fail the
-test. No packet text enters this result. The scoreboard consumes it.
+and preserve other scenarios from the same revision. Both difference classes remain in the report.
+The comparator marks a Behavior as nonconforming when it finds rule records. The tier 1 baseline
+check fails when either signature set changes or provenance differs, regardless of that result.
+No packet text enters this result. The scoreboard consumes it.
 
 ## Taxi data
 

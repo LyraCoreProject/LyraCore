@@ -5,6 +5,7 @@ use anyhow::{ensure, Context, Result};
 use serde::{Deserialize, Serialize};
 use wire_client::compare::{Comparison, Difference, DifferenceClass};
 use wire_client::scenario::Stream;
+use wire_client::trace::Sha256Digest;
 
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -33,12 +34,20 @@ impl From<&Difference> for Signature {
 pub struct ScenarioBaseline {
     pub scenario: String,
     pub behavior: String,
+    pub harness_revision: String,
+    pub scenario_sha256: Sha256Digest,
     pub rule: Vec<Signature>,
     pub data: Vec<Signature>,
 }
 
 impl ScenarioBaseline {
-    pub fn from_comparison(scenario: &str, behavior: &str, comparison: &Comparison) -> Self {
+    pub fn from_comparison(
+        scenario: &str,
+        behavior: &str,
+        harness_revision: &str,
+        scenario_sha256: &Sha256Digest,
+        comparison: &Comparison,
+    ) -> Self {
         let signatures = |class| {
             comparison
                 .differences
@@ -52,6 +61,8 @@ impl ScenarioBaseline {
         Self {
             scenario: scenario.into(),
             behavior: behavior.into(),
+            harness_revision: harness_revision.into(),
+            scenario_sha256: scenario_sha256.clone(),
             rule: signatures(DifferenceClass::Rule),
             data: signatures(DifferenceClass::Data),
         }
@@ -149,6 +160,17 @@ impl Baseline {
     }
 
     pub fn check(&self, current: &ScenarioBaseline) -> Result<()> {
+        let committed = self
+            .scenarios
+            .iter()
+            .find(|entry| entry.scenario == current.scenario)
+            .with_context(|| format!("no tier 1 baseline for {}", current.scenario))?;
+        ensure!(
+            committed.harness_revision == current.harness_revision
+                && committed.scenario_sha256 == current.scenario_sha256,
+            "{} tier 1 baseline provenance differs; regenerate with ./conformance/baseline",
+            current.scenario
+        );
         let changes = self.changes(current)?;
         ensure!(
             changes.is_empty(),
@@ -166,6 +188,20 @@ impl Baseline {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn scenario_baseline(
+        scenario: &str,
+        behavior: &str,
+        comparison: &Comparison,
+    ) -> ScenarioBaseline {
+        ScenarioBaseline::from_comparison(
+            scenario,
+            behavior,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
+            comparison,
+        )
+    }
 
     fn difference(rule: &str) -> Difference {
         Difference {
@@ -185,7 +221,7 @@ mod tests {
 
     #[test]
     fn new_signature_fails_until_regeneration() -> Result<()> {
-        let original = ScenarioBaseline::from_comparison(
+        let original = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -196,7 +232,7 @@ mod tests {
             schema_version: 1,
             scenarios: vec![original],
         };
-        let changed = ScenarioBaseline::from_comparison(
+        let changed = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -213,7 +249,7 @@ mod tests {
 
     #[test]
     fn removed_signature_fails_until_regeneration() -> Result<()> {
-        let original = ScenarioBaseline::from_comparison(
+        let original = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -224,7 +260,7 @@ mod tests {
             schema_version: 1,
             scenarios: vec![original],
         };
-        let removed = ScenarioBaseline::from_comparison(
+        let removed = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -239,7 +275,7 @@ mod tests {
     fn data_signature_change_fails() {
         let baseline = Baseline {
             schema_version: 1,
-            scenarios: vec![ScenarioBaseline::from_comparison(
+            scenarios: vec![scenario_baseline(
                 "scenario",
                 "behavior",
                 &Comparison {
@@ -249,7 +285,7 @@ mod tests {
         };
         let mut data_difference = difference("data_field");
         data_difference.classification = DifferenceClass::Data;
-        let current = ScenarioBaseline::from_comparison(
+        let current = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -261,8 +297,39 @@ mod tests {
     }
 
     #[test]
+    fn provenance_change_fails_until_regeneration() -> Result<()> {
+        let original = scenario_baseline(
+            "scenario",
+            "behavior",
+            &Comparison {
+                differences: vec![difference("same")],
+            },
+        );
+        for changed in [
+            ScenarioBaseline {
+                harness_revision: "new revision".into(),
+                ..original.clone()
+            },
+            ScenarioBaseline {
+                scenario_sha256: Sha256Digest::of(b"changed scenario"),
+                ..original.clone()
+            },
+        ] {
+            let mut baseline = Baseline {
+                schema_version: 1,
+                scenarios: vec![original.clone()],
+            };
+            let error = baseline.check(&changed).unwrap_err().to_string();
+            assert!(error.contains("regenerate with ./conformance/baseline"));
+            baseline.scenarios[0] = changed.clone();
+            Baseline::parse(&baseline.canonical_bytes()?)?.check(&changed)?;
+        }
+        Ok(())
+    }
+
+    #[test]
     fn hand_edited_baseline_fails() -> Result<()> {
-        let current = ScenarioBaseline::from_comparison(
+        let current = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {
@@ -285,7 +352,7 @@ mod tests {
 
     #[test]
     fn unsorted_baseline_fails() -> Result<()> {
-        let current = ScenarioBaseline::from_comparison(
+        let current = scenario_baseline(
             "scenario",
             "behavior",
             &Comparison {

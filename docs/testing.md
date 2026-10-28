@@ -202,8 +202,9 @@ The first command checks every Behavior file, its dependencies, the harness depe
 all scenario references through `wire_client::catalogue`. Missing scenarios and mismatched
 Behavior ids fail. The inventory command checks retained Rust evidence declarations.
 These checks do not establish that a Behavior passes its required verification rungs.
-The tier 1 test writes `.lyracore/conformance/tier1.json` and requires each scenario's rule and
-data signature sets to equal `conformance/tier1-baseline.json`. New and removed signatures fail.
+The tier 1 test writes `.lyracore/conformance/tier1.json` and requires each scenario's harness
+revision, scenario hash, and rule and data signature sets to equal
+`conformance/tier1-baseline.json`. New and removed signatures fail.
 After running both tier 1 tests, regenerate the baseline from that comparator output with
 `./conformance/baseline`. Review its diff in the same PR as the behavior change. The baseline does
 not affect comparator classification or the scoreboard's pass/fail.

@@ -53,6 +53,8 @@ fn baseline_from_result(result: Tier1Result, current_commit: &str) -> Result<rat
         scenarios.push(ratchet::ScenarioBaseline::from_comparison(
             &entry.id,
             &entry.behavior,
+            &result.harness_revision,
+            &entry.scenario_sha256,
             &entry.comparison,
         ));
     }
