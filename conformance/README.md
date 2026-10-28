@@ -4,6 +4,8 @@ Each `features/<system>/<behavior>.toml` describes one Behavior's 1.12.1 scope a
 requirements. `lyracore-conformance` loads all entries together and refuses malformed fields,
 unknown fields, mismatched paths, duplicate ids, unknown dependencies and dependency cycles.
 [ADR 0005](../docs/adr/0005-1-12-conformance.md) defines repository ownership and verification tiers.
+Use [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) for the separate implementation
+and scenario-author loops.
 
 ```bash
 cargo test -p lyracore-conformance -- --nocapture
@@ -354,7 +356,8 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md).
-Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
+Stop it before the audit. The runner requires a clean core working tree and free Reference Server
+ports 13724 and 18085.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
 The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 

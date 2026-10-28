@@ -139,9 +139,11 @@ fn open_work(
         };
         let prerequisites = if reproduce_with == Some("audit") {
             vec![
+                "Clean core working tree; commit changes before the audit",
                 "Existing 1.12.1 client Data directory; replace /path/to/client/Data",
                 "Prepared pinned Reference Server and Docker group access; stop the Reference Server before running",
                 "Free loopback ports 3000, 3724 and 8085; maintainer access for the disposable Realm",
+                "Free loopback Reference Server ports 13724 and 18085",
             ]
         } else {
             Vec::new()
@@ -699,7 +701,15 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
     assert!(connection
         .next_command
         .ends_with(" --client-data /path/to/client/Data"));
-    assert_eq!(connection.prerequisites.len(), 3);
+    assert_eq!(connection.prerequisites.len(), 5);
+    assert!(connection
+        .prerequisites
+        .iter()
+        .any(|item| item.contains("Clean core working tree")));
+    assert!(connection
+        .prerequisites
+        .iter()
+        .any(|item| item.contains("13724 and 18085")));
     assert_eq!(taxi.kind, "implementer");
     assert_eq!(taxi.next_command, "./conformance/run taxi_single_hop");
     assert_eq!(taxi.open_signatures_or_gaps, 24);
@@ -769,7 +779,15 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
     assert_eq!(taxi.kind, "implementer");
     assert_eq!(taxi.reproduce_with, Some("audit"));
     assert!(taxi.next_command.starts_with("./conformance/audit --date "));
-    assert_eq!(taxi.prerequisites.len(), 3);
+    assert_eq!(taxi.prerequisites.len(), 5);
+    assert!(taxi
+        .prerequisites
+        .iter()
+        .any(|item| item.contains("Clean core working tree")));
+    assert!(taxi
+        .prerequisites
+        .iter()
+        .any(|item| item.contains("13724 and 18085")));
     assert_eq!(serde_json::to_value(taxi)?["reproduce_with"], "audit");
     Ok(())
 }
