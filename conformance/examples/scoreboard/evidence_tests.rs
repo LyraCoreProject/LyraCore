@@ -251,17 +251,17 @@ fn fixed_and_regressed_sets_are_checked_against_the_named_report() {
     .unwrap();
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .is_ok());
     current["audit"]["behaviors"]["taxi_single_hop"]["changes"]["rule"]["fixed"] = json!([]);
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .is_err());
     current["audit"]["previous_report"] = json!("../previous.json");
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .is_err());
 }
 
@@ -280,7 +280,7 @@ fn missing_predecessor_link_fails_when_an_earlier_audit_exists() {
     current["recorded_at_unix_ms"] = json!(2);
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .is_err());
 }
 
@@ -294,7 +294,7 @@ fn older_predecessor_link_fails_when_a_newer_audit_exists() {
     current["audit"]["previous_report"] = json!("older.json");
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .is_err());
 }
 
@@ -306,7 +306,7 @@ fn first_audit_has_no_predecessor_link() {
     current["recorded_at_unix_ms"] = json!(2);
     parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .unwrap();
 }
 
@@ -320,8 +320,52 @@ fn newest_earlier_audit_is_the_predecessor() {
     current["audit"]["previous_report"] = json!("newer.json");
     parse(&current, &ledger)
         .unwrap()
-        .validate_changes_in(&directory.join("current.json"), &directory)
+        .validate_changes_in(&directory)
         .unwrap();
+}
+
+#[test]
+fn equal_timestamp_audit_is_not_a_predecessor() {
+    let directory = scratch::Scratch::new("equal-time-audit-test").unwrap();
+    write_audit(&directory, "equal.json", 2);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(2);
+    parse(&current, &ledger)
+        .unwrap()
+        .validate_changes_in(&directory)
+        .unwrap();
+}
+
+#[test]
+fn report_cannot_select_itself_as_predecessor() {
+    let directory = scratch::Scratch::new("self-audit-test").unwrap();
+    write_audit(&directory, "current.json", 2);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(2);
+    current["audit"]["previous_report"] = json!("current.json");
+    assert!(parse(&current, &ledger)
+        .unwrap()
+        .validate_changes_in(&directory)
+        .is_err());
+}
+
+#[test]
+fn equal_earlier_timestamps_use_filename_tie_break() {
+    let directory = scratch::Scratch::new("audit-tie-test").unwrap();
+    write_audit(&directory, "a.json", 1);
+    write_audit(&directory, "z.json", 1);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(2);
+    current["audit"]["previous_report"] = json!("z.json");
+    parse(&current, &ledger)
+        .unwrap()
+        .validate_changes_in(&directory)
+        .unwrap();
+    current["audit"]["previous_report"] = json!("a.json");
+    assert!(parse(&current, &ledger)
+        .unwrap()
+        .validate_changes_in(&directory)
+        .is_err());
 }
 
 #[test]
@@ -335,7 +379,7 @@ fn every_committed_audit_validates_its_predecessor() -> Result<()> {
         {
             let report = Report::load_structure(&path, "conformance_audit")?;
             report
-                .validate_changes(&path)
+                .validate_changes()
                 .with_context(|| path.display().to_string())?;
         }
     }
@@ -361,14 +405,14 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
         serde_json::to_vec(&value).unwrap(),
     )
     .unwrap();
-    latest_audit(&directory, None, None)
+    latest_audit(&directory, None)
         .unwrap()
         .unwrap()
         .1
         .validate("conformance_audit", &ledger)
         .unwrap();
     assert_eq!(
-        latest_audit(&directory, None, None)
+        latest_audit(&directory, None)
             .unwrap()
             .unwrap()
             .0
@@ -376,31 +420,12 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
             .unwrap(),
         "a.json"
     );
-    std::fs::write(directory.join("a.json"), b"{}").unwrap();
-    assert!(latest_audit(&directory, None, None).is_err());
-}
-
-#[test]
-fn latest_audit_excludes_regenerated_report_before_selecting_predecessor() {
-    let directory = scratch::Scratch::new("scoreboard-test").unwrap();
-    let (_, mut report) = audit_example();
-    report["recorded_at_unix_ms"] = json!(1);
     std::fs::write(
-        directory.join("2026-10-28.json"),
-        serde_json::to_vec(&report).unwrap(),
+        directory.join("a.json"),
+        serde_json::to_vec(&example().1).unwrap(),
     )
     .unwrap();
-    report["recorded_at_unix_ms"] = json!(2);
-    std::fs::write(
-        directory.join("2026-10-28-c5.json"),
-        serde_json::to_vec(&report).unwrap(),
-    )
-    .unwrap();
-
-    let (path, _) = latest_audit(&directory, Some("2026-10-28-c5"), Some(2))
-        .unwrap()
-        .unwrap();
-    assert_eq!(path.file_name().unwrap(), "2026-10-28.json");
+    assert!(latest_audit(&directory, None).is_err());
 }
 
 #[test]
@@ -615,7 +640,7 @@ fn fixed_and_regressed_cannot_trust_an_edited_previous_comparison() -> Result<()
             previous_path.with_extension("md"),
             markdown(previous, "previous")?,
         )?;
-        current.validate_changes_in(&current_path, &directory)
+        current.validate_changes_in(&directory)
     };
     check_previous(&previous, &mut current)?;
     let mut changed = previous;

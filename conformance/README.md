@@ -249,8 +249,10 @@ binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is
 the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
 its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
 
-`audit.previous_report` is the JSON filename of the newest audit captured earlier than this one,
-or null when no earlier audit exists. Each Behavior's
+`audit.previous_report` is the JSON filename of the newest `conformance_audit` report in
+`conformance/reports/` with a strictly earlier `recorded_at_unix_ms`, or null when none exists.
+Equal earlier timestamps use filename order; the report being checked is never excluded by name.
+Each Behavior's
 `changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no
 earlier audit exists or the harness revision or any scenario hash for that Behavior differs. In the
 latter case the report says comparison is not possible. Multiplicity and values cannot fix or
@@ -299,14 +301,14 @@ disposable Reference Server. Every scenario produces both a LyraCore and vmangos
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
 
-The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`, refusing
-existing outputs. The trace directory contains only LyraCore candidates. Reference Server
-candidates stay in the audit's scratch directory and are deleted with it at exit; the report keeps
-their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report destination. To replace the single
-baseline, capture with the same date into scratch and replace all three outputs together. A report
-with that same filename is not used as its own previous report. Rule differences are audit findings
-and do not make the command fail; missing captures, infrastructure errors and invalid evidence do. A
-failed run cannot write a partial success report. No scenario is skipped, including taxi.
+The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
+history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
+command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
+Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
+keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
+destination. Rule differences are audit findings and do not make the command fail; missing
+captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
+success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
 The runner stops both servers on exit, including capture failures and normal interrupts. Credentials

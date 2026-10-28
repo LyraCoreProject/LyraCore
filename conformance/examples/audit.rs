@@ -158,7 +158,7 @@ fn write_report(directory: &Path, output: &Path, date: &str) -> Result<()> {
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let run: Run = serde_json::from_slice(&std::fs::read(directory.join("run.json"))?)?;
     let history = root.join("reports");
-    let previous_name = evidence::expected_predecessor(&history, run.recorded_at_unix_ms, date)?;
+    let previous_name = evidence::expected_predecessor(&history, run.recorded_at_unix_ms)?;
     let previous = previous_name
         .as_ref()
         .map(|name| Report::load_structure(&history.join(name), "conformance_audit"))
@@ -184,11 +184,11 @@ fn write_report(directory: &Path, output: &Path, date: &str) -> Result<()> {
     );
     let json = output.join(format!("{date}.json"));
     let md = output.join(format!("{date}.md"));
-    report.validate_changes(&json)?;
+    report.validate_changes()?;
     std::fs::create_dir_all(output)?;
     ensure!(
         !json.exists() && !md.exists(),
-        "report already exists; use a new date or archive the old report"
+        "report already exists; use a new date or suffix"
     );
     let rendered = evidence::markdown(&report, date)?;
     let traces = json.with_extension("traces");
@@ -281,14 +281,14 @@ mod tests {
     }
 
     #[test]
-    fn replacing_committed_date_selects_earlier_predecessor() -> Result<()> {
+    fn new_report_links_committed_c5_audit() -> Result<()> {
         let root = Path::new(env!("CARGO_MANIFEST_DIR"));
         let committed = Report::load_structure(
             &root.join("reports/2026-10-28-c5.json"),
             "conformance_audit",
         )?;
         let audit = committed.audit.as_ref().context("audit")?;
-        let directory = scratch::Scratch::new("replace-audit-test")?;
+        let directory = scratch::Scratch::new("new-audit-test")?;
         let input = directory.join("input");
         let output = directory.join("output");
         std::fs::create_dir(&input)?;
@@ -325,8 +325,8 @@ mod tests {
                 serde_json::to_vec(&reference)?,
             )?;
         }
-        write_report(&input, &output, "2026-10-28-c5")?;
-        let path = output.join("2026-10-28-c5.json");
+        write_report(&input, &output, "2026-10-28-c6")?;
+        let path = output.join("2026-10-28-c6.json");
         let ledger = FeatureLedger::load(&root.join("features"))?;
         let report = Report::load(&path, "conformance_audit", &ledger)?;
         assert_eq!(
@@ -336,9 +336,9 @@ mod tests {
                 .context("audit")?
                 .previous_report
                 .as_deref(),
-            Some("2026-10-28.json")
+            Some("2026-10-28-c5.json")
         );
-        report.validate_changes(&path)?;
+        report.validate_changes()?;
         report.verify_capture(&path)
     }
 }

@@ -196,7 +196,8 @@ Reference Server through a `newgrp docker` heredoc. The audit retains imported c
 the taxi scenario spawns flight master entry 523. Tier 1 derives its synthetic flight master
 template entry from that pinned scenario. Every embedded catalogue
 scenario runs over TCP on both servers, and both candidates compare with their Golden Traces.
-The command writes a dated Markdown report and schema-2 JSON evidence, then stops both servers.
+The command appends a dated Markdown report and schema-2 JSON evidence under a new filename,
+then stops both servers. Earlier audit reports remain in canonical history.
 The Reference Server comparison and recorded provenance establish reference stability separately.
 
 The Rust audit example and scoreboard share evidence validation. Both count differences by

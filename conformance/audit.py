@@ -272,7 +272,7 @@ def main():
     if calendar_date.isoformat() != args.date[:10]:
         parser.error('--date is not a calendar date')
     if any((args.output / f'{args.date}.{suffix}').exists() for suffix in ['md', 'json', 'traces']):
-        parser.error('report already exists; choose a new date or archive it first')
+        parser.error('report already exists; choose a new date or suffix')
     if args.client_data is None:
         config = ROOT / '.lyracore/config.json'
         if config.is_file():

@@ -449,19 +449,15 @@ impl Report {
         )
     }
 
-    pub fn validate_changes(&self, path: &Path) -> Result<()> {
-        self.validate_changes_in(path, &Path::new(env!("CARGO_MANIFEST_DIR")).join("reports"))
+    pub fn validate_changes(&self) -> Result<()> {
+        self.validate_changes_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("reports"))
     }
 
-    fn validate_changes_in(&self, path: &Path, history: &Path) -> Result<()> {
+    fn validate_changes_in(&self, history: &Path) -> Result<()> {
         let Some(audit) = &self.audit else {
             return Ok(());
         };
-        let own_stem = path
-            .file_stem()
-            .and_then(|stem| stem.to_str())
-            .context("report filename")?;
-        let expected = expected_predecessor(history, self.recorded_at_unix_ms, own_stem)?;
+        let expected = expected_predecessor(history, self.recorded_at_unix_ms)?;
         ensure!(
             audit.previous_report == expected,
             "previous report must be the newest earlier audit: {expected:?}"
@@ -583,7 +579,6 @@ pub fn same_core(root: &Path, measured: &str, head: &str) -> Result<bool> {
 
 pub fn latest_audit(
     directory: &Path,
-    excluded_stem: Option<&str>,
     before_unix_ms: Option<u64>,
 ) -> Result<Option<(PathBuf, Report)>> {
     if !directory.exists() {
@@ -592,11 +587,6 @@ pub fn latest_audit(
     let mut latest: Option<(PathBuf, Report)> = None;
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
-        if excluded_stem.is_some_and(|excluded| {
-            path.file_stem().and_then(|stem| stem.to_str()) == Some(excluded)
-        }) {
-            continue;
-        }
         if path.extension().is_some_and(|ext| ext == "json") {
             let report = Report::load_structure(&path, "conformance_audit")?;
             if before_unix_ms.is_some_and(|before| report.recorded_at_unix_ms >= before) {
@@ -612,12 +602,8 @@ pub fn latest_audit(
     Ok(latest)
 }
 
-pub fn expected_predecessor(
-    history: &Path,
-    recorded_at_unix_ms: u64,
-    own_stem: &str,
-) -> Result<Option<String>> {
-    latest_audit(history, Some(own_stem), Some(recorded_at_unix_ms))?
+pub fn expected_predecessor(history: &Path, recorded_at_unix_ms: u64) -> Result<Option<String>> {
+    latest_audit(history, Some(recorded_at_unix_ms))?
         .map(|(path, _)| {
             path.file_name()
                 .and_then(|name| name.to_str())
