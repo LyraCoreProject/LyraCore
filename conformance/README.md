@@ -166,6 +166,7 @@ From the repo root:
 
 ```bash
 ./conformance/scoreboard
+./conformance/scoreboard --json
 cargo test -p lyracore-conformance --example scoreboard
 ```
 
@@ -173,6 +174,33 @@ The script runs the Rust example `scoreboard`. It reads the Feature Ledger and p
 and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
 It does not infer a pass from a test declaration or claim overall completion from these columns.
 The ledger's other required rungs remain obligations.
+
+The system table counts Behaviors with and without scenarios. The open-work list includes every
+Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
+pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
+an entry with one. Each entry gives a next command. The scenario-author command opens the ledger
+entry; the implementer command runs the first listed scenario. Further scenarios are in the
+Behavior's `scenarios` field.
+
+The list sorts by descending number of other Behaviors that directly depend on the entry, then
+descending audited rule-signature count plus ledger known-gap count, then descending number of
+distinct claimed request opcodes, then ascending Behavior id. Missing audit evidence contributes
+zero signatures. The formula uses no assigned priority or tier 1 baseline.
+
+`--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
+keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
+`tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
+the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
+Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
+`real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
+`scenarios`, `dependencies`, `required_rungs`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
+`unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
+measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
+`unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
+record counts. Spell counts give build, source path or missing expected path, and per-class
+trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
+`kind`, `next_command` and the three numeric ranking inputs. `kind` is `scenario_author` or
+`implementer`. Counts and state names have the same meaning as the text scoreboard.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
