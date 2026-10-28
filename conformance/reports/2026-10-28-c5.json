@@ -1,10 +1,10 @@
 {
   "schema_version": 2,
   "tier": "conformance_audit",
-  "core_commit": "2b7e2930d4c28bf6c4c1abc8ca6e5a8d0c826a97",
+  "core_commit": "b017eed089cdac2c63eedf1865c3f3e71c6c86e5",
   "working_tree_dirty": false,
   "harness_revision": "1c111d4d983f76838c7e075319ca0e901a17c57b",
-  "recorded_at_unix_ms": 1793186727546,
+  "recorded_at_unix_ms": 1793190797133,
   "scenarios": [
     {
       "id": "connection_identity",
@@ -17,12 +17,12 @@
         "differences": []
       },
       "capture": {
-        "sha256": "cb2625e564d66e9a835469044dee2928d36dbed03d9fab491047b14fa45c1baa",
-        "core_commit": "2b7e2930d4c28bf6c4c1abc8ca6e5a8d0c826a97",
-        "native_host_sha256": "532d0848926c4c894121e2a8e8beeccc15973d4378fa0364c8cb2fbeaea7b7ba",
-        "module_sha256": "0deaaaa9f8220248194af4c2274537b2b63c75158efd6a0d6413f6cfc59a9326"
+        "sha256": "98fef253c85f27df62e2a9f6330b64a1879d173df8999ed06258b44ea1b6bb03",
+        "core_commit": "b017eed089cdac2c63eedf1865c3f3e71c6c86e5",
+        "native_host_sha256": "1a3d68f778d674d8e260024bbfff0a5d17585c63d3f9b7aad4dead0ae062308e",
+        "module_sha256": "9df5a37ac499042cf6d3b7cc1457d5a1ec0e6a6284248e3fa537bcfcdf5df06b"
       },
-      "reference_sha256": "ef1378b2101b0d3cd1908d65ae2ef67911acd744930072920d572845820ee22c"
+      "reference_sha256": "0b15b702428c150d9236b01cbd8da8d6603fd50d137f11ddfed12a3a34baeb28"
     },
     {
       "id": "taxi_single_hop",
@@ -36,7 +36,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 538,
+            "packet_index": 542,
             "field_path": [],
             "opcode": 308,
             "deviations": [],
@@ -54,7 +54,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 541,
+            "packet_index": 545,
             "field_path": [],
             "opcode": 308,
             "deviations": [],
@@ -72,7 +72,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 546,
+            "packet_index": 550,
             "field_path": [],
             "opcode": 308,
             "deviations": [],
@@ -90,7 +90,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 547,
+            "packet_index": 551,
             "field_path": [],
             "opcode": 308,
             "deviations": [],
@@ -108,7 +108,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 548,
+            "packet_index": 552,
             "field_path": [],
             "opcode": 308,
             "deviations": [],
@@ -126,7 +126,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 576,
+            "packet_index": 583,
             "field_path": [],
             "opcode": 150,
             "deviations": [],
@@ -144,7 +144,7 @@
             "stream": {
               "kind": "unexpected"
             },
-            "packet_index": 580,
+            "packet_index": 585,
             "field_path": [],
             "opcode": 150,
             "deviations": [],
@@ -1784,14 +1784,14 @@
             },
             "packet_index": 1,
             "field_path": [],
-            "opcode": 323,
+            "opcode": 324,
             "deviations": [],
             "rule": "extra_packet",
             "reason": "packets must align by opcode and mapped subject GUID in stream order",
             "expected": null,
             "actual": {
               "type": "unsigned",
-              "value": 323
+              "value": 324
             }
           },
           {
@@ -1917,14 +1917,14 @@
             },
             "packet_index": 8,
             "field_path": [],
-            "opcode": 324,
+            "opcode": 323,
             "deviations": [],
             "rule": "extra_packet",
             "reason": "packets must align by opcode and mapped subject GUID in stream order",
             "expected": null,
             "actual": {
               "type": "unsigned",
-              "value": 324
+              "value": 323
             }
           },
           {
@@ -1974,14 +1974,14 @@
             },
             "packet_index": 11,
             "field_path": [],
-            "opcode": 323,
+            "opcode": 324,
             "deviations": [],
             "rule": "extra_packet",
             "reason": "packets must align by opcode and mapped subject GUID in stream order",
             "expected": null,
             "actual": {
               "type": "unsigned",
-              "value": 323
+              "value": 324
             }
           },
           {
@@ -1993,14 +1993,14 @@
             },
             "packet_index": 12,
             "field_path": [],
-            "opcode": 324,
+            "opcode": 323,
             "deviations": [],
             "rule": "extra_packet",
             "reason": "packets must align by opcode and mapped subject GUID in stream order",
             "expected": null,
             "actual": {
               "type": "unsigned",
-              "value": 324
+              "value": 323
             }
           },
           {
@@ -2103,7 +2103,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72553
+              "value": 72554
             }
           },
           {
@@ -2229,7 +2229,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72553
+              "value": 74787
             }
           },
           {
@@ -4468,7 +4468,7 @@
             },
             "actual": {
               "type": "time_ms",
-              "value": 72553
+              "value": 72554
             }
           },
           {
@@ -4501,17 +4501,17 @@
         "differences": []
       },
       "capture": {
-        "sha256": "f4726a9dbd2df473d438989c0a70735f905b3ec853702a2414fe1fd8c31c483f",
-        "core_commit": "2b7e2930d4c28bf6c4c1abc8ca6e5a8d0c826a97",
-        "native_host_sha256": "532d0848926c4c894121e2a8e8beeccc15973d4378fa0364c8cb2fbeaea7b7ba",
-        "module_sha256": "0deaaaa9f8220248194af4c2274537b2b63c75158efd6a0d6413f6cfc59a9326"
+        "sha256": "d6ba28e23948829fcfb63a6e4b1a9528b896c8374c1bff517b9e475ef2bb7974",
+        "core_commit": "b017eed089cdac2c63eedf1865c3f3e71c6c86e5",
+        "native_host_sha256": "1a3d68f778d674d8e260024bbfff0a5d17585c63d3f9b7aad4dead0ae062308e",
+        "module_sha256": "9df5a37ac499042cf6d3b7cc1457d5a1ec0e6a6284248e3fa537bcfcdf5df06b"
       },
-      "reference_sha256": "cfcbccd6481c9119152be1754f11f35be5eba983cd3c148ac14332ab5884d675"
+      "reference_sha256": "af63514b946dde37d9b5aac176a8cd4b8a9acb84c1d599408cf1418919c87bcc"
     }
   ],
   "audit": {
-    "native_host_sha256": "532d0848926c4c894121e2a8e8beeccc15973d4378fa0364c8cb2fbeaea7b7ba",
-    "module_sha256": "0deaaaa9f8220248194af4c2274537b2b63c75158efd6a0d6413f6cfc59a9326",
+    "native_host_sha256": "1a3d68f778d674d8e260024bbfff0a5d17585c63d3f9b7aad4dead0ae062308e",
+    "module_sha256": "9df5a37ac499042cf6d3b7cc1457d5a1ec0e6a6284248e3fa537bcfcdf5df06b",
     "content": "lyracore import alliance-single, vmangos db_latest 464179081673cfd240f7ffe7f0daf96bca0b5a70, client data from the supplied path; imported creature spawns retained",
     "reference": {
       "server": "vmangos",
@@ -4520,7 +4520,7 @@
       "source_commit": "d9173eca3ea08dd985c52dabbcc826898d1d0b77",
       "database_commit": "464179081673cfd240f7ffe7f0daf96bca0b5a70"
     },
-    "previous_report": null,
+    "previous_report": "2026-10-28.json",
     "behaviors": {
       "connection_identity": {
         "candidate": {

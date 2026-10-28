@@ -5,7 +5,7 @@
     "scenario": "connection_identity",
     "behavior": "connection_identity",
     "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
-    "recorded_at_unix_ms": 1793186640489,
+    "recorded_at_unix_ms": 1793190710138,
     "origin": {
       "kind": "candidate",
       "adapter": "lyracore"
@@ -1561,7 +1561,7 @@
               "value": {
                 "guid": {
                   "type": "guid",
-                  "value": 2287828610704387048
+                  "value": 2287828610704232776
                 },
                 "kind": {
                   "type": "unsigned",
@@ -1576,28 +1576,28 @@
                     },
                     "orientation": {
                       "type": "float",
-                      "value": 1.016115427017212
+                      "value": 2.8190784454345703
                     },
                     "position": {
                       "type": "object",
                       "value": {
                         "x": {
                           "type": "float",
-                          "value": -12470.0810546875
+                          "value": -14277.7451171875
                         },
                         "y": {
                           "type": "float",
-                          "value": 221.03941345214844
+                          "value": 582.8661499023438
                         },
                         "z": {
                           "type": "float",
-                          "value": 49.81312942504883
+                          "value": 0.0
                         }
                       }
                     },
                     "transport_time": {
                       "type": "unsigned",
-                      "value": 103362
+                      "value": 289934
                     },
                     "update_flags": {
                       "type": "unsigned",
@@ -1614,7 +1614,7 @@
                   "value": {
                     "field_0": {
                       "type": "unsigned",
-                      "value": 175080
+                      "value": 20808
                     },
                     "field_1": {
                       "type": "unsigned",
@@ -1626,19 +1626,19 @@
                     },
                     "field_15": {
                       "type": "unsigned",
-                      "value": 3326269523
+                      "value": 3328120571
                     },
                     "field_16": {
                       "type": "unsigned",
-                      "value": 1130170903
+                      "value": 1142011759
                     },
                     "field_17": {
                       "type": "unsigned",
-                      "value": 1111965861
+                      "value": 0
                     },
                     "field_18": {
                       "type": "unsigned",
-                      "value": 1065488402
+                      "value": 1077177288
                     },
                     "field_2": {
                       "type": "unsigned",
@@ -1654,7 +1654,7 @@
                     },
                     "field_3": {
                       "type": "unsigned",
-                      "value": 175080
+                      "value": 20808
                     },
                     "field_4": {
                       "type": "unsigned",
@@ -1662,7 +1662,277 @@
                     },
                     "field_8": {
                       "type": "unsigned",
-                      "value": 3031
+                      "value": 3015
+                    },
+                    "field_9": {
+                      "type": "unsigned",
+                      "value": 40
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "received_after_ms": null,
+      "checkpoint": "opening",
+      "stream": {
+        "kind": "opening"
+      },
+      "opcode": 169,
+      "fields": {
+        "has_transport": {
+          "type": "unsigned",
+          "value": 1
+        },
+        "objects": {
+          "type": "list",
+          "value": [
+            {
+              "type": "object",
+              "value": {
+                "guid": {
+                  "type": "guid",
+                  "value": 2287828610704388199
+                },
+                "kind": {
+                  "type": "unsigned",
+                  "value": 3
+                },
+                "movement": {
+                  "type": "object",
+                  "value": {
+                    "all": {
+                      "type": "unsigned",
+                      "value": 1
+                    },
+                    "orientation": {
+                      "type": "float",
+                      "value": 3.6038999557495117
+                    },
+                    "position": {
+                      "type": "object",
+                      "value": {
+                        "x": {
+                          "type": "float",
+                          "value": -3905.224853515625
+                        },
+                        "y": {
+                          "type": "float",
+                          "value": -585.8084716796875
+                        },
+                        "z": {
+                          "type": "float",
+                          "value": 0.0
+                        }
+                      }
+                    },
+                    "transport_time": {
+                      "type": "unsigned",
+                      "value": 84813
+                    },
+                    "update_flags": {
+                      "type": "unsigned",
+                      "value": 82
+                    }
+                  }
+                },
+                "object_type": {
+                  "type": "unsigned",
+                  "value": 5
+                },
+                "values": {
+                  "type": "object",
+                  "value": {
+                    "field_0": {
+                      "type": "unsigned",
+                      "value": 176231
+                    },
+                    "field_1": {
+                      "type": "unsigned",
+                      "value": 532676608
+                    },
+                    "field_14": {
+                      "type": "unsigned",
+                      "value": 1
+                    },
+                    "field_15": {
+                      "type": "unsigned",
+                      "value": 3312718745
+                    },
+                    "field_16": {
+                      "type": "unsigned",
+                      "value": 3289543614
+                    },
+                    "field_17": {
+                      "type": "unsigned",
+                      "value": 0
+                    },
+                    "field_18": {
+                      "type": "unsigned",
+                      "value": 1080469068
+                    },
+                    "field_2": {
+                      "type": "unsigned",
+                      "value": 33
+                    },
+                    "field_21": {
+                      "type": "unsigned",
+                      "value": 15
+                    },
+                    "field_24": {
+                      "type": "unsigned",
+                      "value": 100
+                    },
+                    "field_3": {
+                      "type": "unsigned",
+                      "value": 176231
+                    },
+                    "field_4": {
+                      "type": "unsigned",
+                      "value": 1065353216
+                    },
+                    "field_8": {
+                      "type": "unsigned",
+                      "value": 3015
+                    },
+                    "field_9": {
+                      "type": "unsigned",
+                      "value": 40
+                    }
+                  }
+                }
+              }
+            }
+          ]
+        }
+      }
+    },
+    {
+      "received_after_ms": null,
+      "checkpoint": "opening",
+      "stream": {
+        "kind": "opening"
+      },
+      "opcode": 169,
+      "fields": {
+        "has_transport": {
+          "type": "unsigned",
+          "value": 1
+        },
+        "objects": {
+          "type": "list",
+          "value": [
+            {
+              "type": "object",
+              "value": {
+                "guid": {
+                  "type": "guid",
+                  "value": 2287828610704388278
+                },
+                "kind": {
+                  "type": "unsigned",
+                  "value": 3
+                },
+                "movement": {
+                  "type": "object",
+                  "value": {
+                    "all": {
+                      "type": "unsigned",
+                      "value": 1
+                    },
+                    "orientation": {
+                      "type": "float",
+                      "value": 5.106393814086914
+                    },
+                    "position": {
+                      "type": "object",
+                      "value": {
+                        "x": {
+                          "type": "float",
+                          "value": -3728.822998046875
+                        },
+                        "y": {
+                          "type": "float",
+                          "value": -537.6004028320312
+                        },
+                        "z": {
+                          "type": "float",
+                          "value": 0.0
+                        }
+                      }
+                    },
+                    "transport_time": {
+                      "type": "unsigned",
+                      "value": 112929
+                    },
+                    "update_flags": {
+                      "type": "unsigned",
+                      "value": 82
+                    }
+                  }
+                },
+                "object_type": {
+                  "type": "unsigned",
+                  "value": 5
+                },
+                "values": {
+                  "type": "object",
+                  "value": {
+                    "field_0": {
+                      "type": "unsigned",
+                      "value": 176310
+                    },
+                    "field_1": {
+                      "type": "unsigned",
+                      "value": 532676608
+                    },
+                    "field_14": {
+                      "type": "unsigned",
+                      "value": 1
+                    },
+                    "field_15": {
+                      "type": "unsigned",
+                      "value": 3311996203
+                    },
+                    "field_16": {
+                      "type": "unsigned",
+                      "value": 3288753773
+                    },
+                    "field_17": {
+                      "type": "unsigned",
+                      "value": 0
+                    },
+                    "field_18": {
+                      "type": "unsigned",
+                      "value": 1084450708
+                    },
+                    "field_2": {
+                      "type": "unsigned",
+                      "value": 33
+                    },
+                    "field_21": {
+                      "type": "unsigned",
+                      "value": 15
+                    },
+                    "field_24": {
+                      "type": "unsigned",
+                      "value": 100
+                    },
+                    "field_3": {
+                      "type": "unsigned",
+                      "value": 176310
+                    },
+                    "field_4": {
+                      "type": "unsigned",
+                      "value": 1065353216
+                    },
+                    "field_8": {
+                      "type": "unsigned",
+                      "value": 3015
                     },
                     "field_9": {
                       "type": "unsigned",
@@ -1711,28 +1981,28 @@
                     },
                     "orientation": {
                       "type": "float",
-                      "value": 2.2169017791748047
+                      "value": 5.507288932800293
                     },
                     "position": {
                       "type": "object",
                       "value": {
                         "x": {
                           "type": "float",
-                          "value": -12218.3017578125
+                          "value": 2130.803466796875
                         },
                         "y": {
                           "type": "float",
-                          "value": -217.84375
+                          "value": 200.39659118652344
                         },
                         "z": {
                           "type": "float",
-                          "value": 152.6715087890625
+                          "value": 118.40866088867188
                         }
                       }
                     },
                     "transport_time": {
                       "type": "unsigned",
-                      "value": 145224
+                      "value": 218344
                     },
                     "update_flags": {
                       "type": "unsigned",
@@ -1761,19 +2031,19 @@
                     },
                     "field_15": {
                       "type": "unsigned",
-                      "value": 3326011701
+                      "value": 1157967067
                     },
                     "field_16": {
                       "type": "unsigned",
-                      "value": 3277445120
+                      "value": 1128818055
                     },
                     "field_17": {
                       "type": "unsigned",
-                      "value": 1125690344
+                      "value": 1122816316
                     },
                     "field_18": {
                       "type": "unsigned",
-                      "value": 1074651576
+                      "value": 1085291446
                     },
                     "field_2": {
                       "type": "unsigned",
@@ -1846,18 +2116,18 @@
                     },
                     "orientation": {
                       "type": "float",
-                      "value": 5.8311052322387695
+                      "value": 3.5080251693725586
                     },
                     "position": {
                       "type": "object",
                       "value": {
                         "x": {
                           "type": "float",
-                          "value": 3011.53515625
+                          "value": 3242.503662109375
                         },
                         "y": {
                           "type": "float",
-                          "value": -3825.5654296875
+                          "value": -3301.979248046875
                         },
                         "z": {
                           "type": "float",
@@ -1867,7 +2137,7 @@
                     },
                     "transport_time": {
                       "type": "unsigned",
-                      "value": 994764
+                      "value": 232356
                     },
                     "update_flags": {
                       "type": "unsigned",
@@ -1896,11 +2166,11 @@
                     },
                     "field_15": {
                       "type": "unsigned",
-                      "value": 1161574544
+                      "value": 1162520591
                     },
                     "field_16": {
                       "type": "unsigned",
-                      "value": 3312392460
+                      "value": 3310247851
                     },
                     "field_17": {
                       "type": "unsigned",
@@ -1908,7 +2178,7 @@
                     },
                     "field_18": {
                       "type": "unsigned",
-                      "value": 1085970538
+                      "value": 1080066940
                     },
                     "field_2": {
                       "type": "unsigned",
@@ -10347,11 +10617,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 4626
+                      "value": 328
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 4626
+                      "value": 328
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -10721,11 +10991,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -10908,11 +11178,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -11095,11 +11365,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 4626
+                      "value": 328
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 4626
+                      "value": 328
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -11282,11 +11552,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 328
+                      "value": 4626
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -13339,11 +13609,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 3258
+                      "value": 3257
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 3258
+                      "value": 3257
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -13371,11 +13641,11 @@
                     },
                     "field_22": {
                       "type": "unsigned",
-                      "value": 1124
+                      "value": 1302
                     },
                     "field_28": {
                       "type": "unsigned",
-                      "value": 1124
+                      "value": 1302
                     },
                     "field_3": {
                       "type": "unsigned",
@@ -13383,7 +13653,7 @@
                     },
                     "field_34": {
                       "type": "unsigned",
-                      "value": 22
+                      "value": 24
                     },
                     "field_35": {
                       "type": "unsigned",
@@ -13526,11 +13796,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 3257
+                      "value": 3167
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 3257
+                      "value": 3167
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -13713,11 +13983,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -14087,11 +14357,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -14648,11 +14918,11 @@
                     },
                     "field_131": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_132": {
                       "type": "unsigned",
-                      "value": 3167
+                      "value": 3257
                     },
                     "field_143": {
                       "type": "unsigned",
@@ -20611,7 +20881,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185278540
+          "value": 2189347895
         }
       }
     },
@@ -20679,7 +20949,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185278540
+          "value": 2189347895
         }
       }
     },
@@ -20747,7 +21017,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -20815,7 +21085,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -20883,7 +21153,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -20951,7 +21221,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -21019,7 +21289,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -21087,7 +21357,7 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
@@ -21155,12 +21425,12 @@
         },
         "spline_id": {
           "type": "unsigned",
-          "value": 2185279039
+          "value": 2189348395
         }
       }
     },
     {
-      "received_after_ms": 45,
+      "received_after_ms": 51,
       "checkpoint": "ping",
       "stream": {
         "kind": "reply",
@@ -21175,7 +21445,25 @@
       }
     },
     {
-      "received_after_ms": 51,
+      "received_after_ms": 196,
+      "checkpoint": "ping",
+      "stream": {
+        "kind": "unexpected"
+      },
+      "opcode": 221,
+      "fields": {}
+    },
+    {
+      "received_after_ms": 196,
+      "checkpoint": "ping",
+      "stream": {
+        "kind": "unexpected"
+      },
+      "opcode": 221,
+      "fields": {}
+    },
+    {
+      "received_after_ms": 55,
       "checkpoint": "name",
       "stream": {
         "kind": "reply",
@@ -21208,24 +21496,6 @@
           "value": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         }
       }
-    },
-    {
-      "received_after_ms": 241,
-      "checkpoint": "name",
-      "stream": {
-        "kind": "unexpected"
-      },
-      "opcode": 221,
-      "fields": {}
-    },
-    {
-      "received_after_ms": 241,
-      "checkpoint": "name",
-      "stream": {
-        "kind": "unexpected"
-      },
-      "opcode": 221,
-      "fields": {}
     }
   ]
 }
