@@ -133,7 +133,8 @@ ids equal client node ids. Learning is idempotent and sends no packets or flight
 
 The tier 1 test installs the hand-written fixture in
 `conformance/support/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
-its 28 vertices, and a minimal synthetic template for the scenario's flight master, entry 352.
+its 28 vertices, and a minimal synthetic template for the scenario's flight master. The template
+entry comes from the pinned scenario's Creature Fixture Verb, currently 523.
 The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
 no mount template or other world data is needed.

@@ -92,7 +92,15 @@ const NODES: [(u32, [f64; 3]); 2] = [
 ];
 const MOUNT_DISPLAY: u32 = 6852;
 
-pub fn statements() -> Vec<String> {
+pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<Vec<String>> {
+    use anyhow::Context;
+    use wire_client::scenario::FixtureVerb;
+
+    let flight_master = scenario.fixtures.iter().find_map(|fixture| match fixture {
+        FixtureVerb::Creature { id, entry, .. } if id == "flight_master" => Some(entry),
+        _ => None,
+    });
+    let flight_master = flight_master.context("taxi scenario flight master fixture")?;
     let mut statements = Vec::new();
     for (id, [x, y, z]) in NODES {
         statements.push(format!(
@@ -112,15 +120,14 @@ pub fn statements() -> Vec<String> {
         "INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES {rows}"
     ));
     statements.push(
-        "INSERT INTO game_creature_template \
+        format!("INSERT INTO game_creature_template \
          (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
           creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
           money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
           pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
-         VALUES (352,'Flight fixture','',1,1,100,35,8,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)"
-            .into(),
+         VALUES ({flight_master},'Flight fixture','',1,1,100,35,8,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)"),
     );
-    statements
+    Ok(statements)
 }
 
 #[test]
@@ -129,6 +136,10 @@ fn route_fixture_matches_every_recorded_route_point_and_mount() -> anyhow::Resul
     use wire_client::trace::RecordedField;
 
     let golden = wire_client::catalogue::get("taxi_single_hop")?;
+    let fixture = statements(golden.scenario())?;
+    assert!(fixture
+        .iter()
+        .any(|statement| statement.contains("VALUES (523,'Flight fixture'")));
     let spline = golden
         .trace()
         .packets

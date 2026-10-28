@@ -279,6 +279,7 @@ def main():
             args.client_data = json.loads(config.read_text()).get('client_data')
     if not args.client_data or not Path(args.client_data).is_dir():
         parser.error('pass --client-data with an existing 1.12.1 client Data directory')
+    args.client_data = Path(args.client_data).resolve()
     SCRATCH.mkdir(parents=True, exist_ok=True)
     temporary = SCRATCH / 'tmp'
     temporary.mkdir(exist_ok=True)
