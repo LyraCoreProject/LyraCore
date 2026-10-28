@@ -20,12 +20,6 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Straight-segment timing makes the advertised duration about one second short and clears the landing presentation early."
-path = "module/src/taxi.rs"
-symbol = "segment_micros; route_duration_micros"
-evidence = "conformance/reports/2026-10-27-t2g.md: wire records 3, 84 and 87, duration and landing passenger_update_delivery."
-
-[[known_gaps]]
 description = "Landing sends no MSG_MOVE_TELEPORT_ACK correction."
 path = "module/src/taxi.rs"
 symbol = "finish_flight"

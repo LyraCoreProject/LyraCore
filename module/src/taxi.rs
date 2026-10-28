@@ -33,6 +33,14 @@ pub struct ActiveTaxiFlight {
     pub fare: u32,
     pub current_node_index: u32,
     pub started_micros: i64,
+    #[default(0.0f32)]
+    pub origin_x: f32,
+    #[default(0.0f32)]
+    pub origin_y: f32,
+    #[default(0.0f32)]
+    pub origin_z: f32,
+    #[default(false)]
+    pub origin_recorded: bool,
 }
 
 #[table(accessor = game_taxi_flight_schedule, scheduled(advance_taxi_flight))]
@@ -414,7 +422,7 @@ fn route_is_supported(
 }
 
 const TAXI_SPEED_YARDS_PER_SECOND: f64 = 32.0;
-const TAXI_TICK_MICROS: i64 = 250_000;
+const TAXI_TICK_MICROS: i64 = 100_000;
 const TAXI_MOVEMENT_FORWARD: u32 = 0x0000_0001;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -427,26 +435,101 @@ struct RoutePosition {
     complete: bool,
 }
 
-fn segment_micros(a: &GameTaxiPathNode, b: &GameTaxiPathNode) -> i64 {
-    let dx = f64::from(b.x - a.x);
-    let dy = f64::from(b.y - a.y);
-    let dz = f64::from(b.z - a.z);
-    let travel = ((dx * dx + dy * dy + dz * dz).sqrt() / TAXI_SPEED_YARDS_PER_SECOND * 1_000_000.0)
-        .round() as i64;
-    travel.max(1)
+fn flight_route(
+    flight: &ActiveTaxiFlight,
+    mut points: Vec<GameTaxiPathNode>,
+) -> Vec<GameTaxiPathNode> {
+    if flight.origin_recorded {
+        points[0].x = flight.origin_x;
+        points[0].y = flight.origin_y;
+        points[0].z = flight.origin_z;
+    }
+    points
 }
 
-fn route_duration_micros(points: &[GameTaxiPathNode]) -> Option<i64> {
-    (points.len() >= 2).then(|| {
-        points
-            .windows(2)
-            .map(|pair| segment_micros(&pair[0], &pair[1]))
-            .fold(0i64, i64::saturating_add)
+fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f64; 3]; 4] {
+    let coords =
+        |point: &GameTaxiPathNode| [f64::from(point.x), f64::from(point.y), f64::from(point.z)];
+    let current = coords(&points[index]);
+    let next = coords(&points[index + 1]);
+    let prior = if index == 0 {
+        std::array::from_fn(|axis| 2.0 * current[axis] - next[axis])
+    } else {
+        coords(&points[index - 1])
+    };
+    let after = points.get(index + 2).map_or(next, coords);
+    [prior, current, next, after]
+}
+
+fn spline_position(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let weights = [
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2,
+    ];
+    std::array::from_fn(|axis| {
+        controls
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[axis] * weight)
+            .sum()
     })
 }
 
+fn spline_direction(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
+    let t2 = t * t;
+    let weights = [
+        -1.5 * t2 + 2.0 * t - 0.5,
+        4.5 * t2 - 5.0 * t,
+        -4.5 * t2 + 4.0 * t + 0.5,
+        1.5 * t2 - t,
+    ];
+    std::array::from_fn(|axis| {
+        controls
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[axis] * weight)
+            .sum()
+    })
+}
+
+fn route_timestamps_micros(points: &[GameTaxiPathNode]) -> Option<Vec<i64>> {
+    (points.len() >= 2).then(|| {
+        // The Reference Server starts at 1 ms and truncates each segment before adding it.
+        let mut elapsed_ms = 1i64;
+        let mut times = vec![0];
+        for index in 0..points.len() - 1 {
+            let controls = spline_controls(points, index);
+            let mut previous = controls[1];
+            let mut length = 0.0;
+            for step in 1..=3 {
+                let current = spline_position(&controls, f64::from(step) / 3.0);
+                let delta: [f64; 3] = std::array::from_fn(|axis| current[axis] - previous[axis]);
+                length += delta
+                    .iter()
+                    .map(|component| component * component)
+                    .sum::<f64>()
+                    .sqrt();
+                previous = current;
+            }
+            elapsed_ms =
+                elapsed_ms.saturating_add((length * 1_000.0 / TAXI_SPEED_YARDS_PER_SECOND) as i64);
+            times.push(elapsed_ms.saturating_mul(1_000));
+        }
+        times
+    })
+}
+
+fn route_duration_micros(points: &[GameTaxiPathNode]) -> Option<i64> {
+    route_timestamps_micros(points).and_then(|times| times.last().copied())
+}
+
 fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<RoutePosition> {
-    let total = route_duration_micros(points)?;
+    let times = route_timestamps_micros(points)?;
+    let total = *times.last()?;
     let elapsed = elapsed_micros.max(0);
     if elapsed >= total {
         let last = points.last()?;
@@ -461,22 +544,22 @@ fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<Ro
         });
     }
 
-    let mut segment_start = 0i64;
-    for (index, pair) in points.windows(2).enumerate() {
-        let duration = segment_micros(&pair[0], &pair[1]);
-        if elapsed < segment_start.saturating_add(duration) {
-            let travel_elapsed = elapsed.saturating_sub(segment_start);
-            let t = (travel_elapsed as f64 / duration as f64).clamp(0.0, 1.0) as f32;
+    for index in 0..points.len() - 1 {
+        if elapsed < times[index + 1] {
+            let duration = times[index + 1] - times[index];
+            let t = ((elapsed - times[index]) as f64 / duration as f64).clamp(0.0, 1.0);
+            let controls = spline_controls(points, index);
+            let position = spline_position(&controls, t);
+            let direction = spline_direction(&controls, t);
             return Some(RoutePosition {
                 point_index: index,
-                x: pair[0].x + (pair[1].x - pair[0].x) * t,
-                y: pair[0].y + (pair[1].y - pair[0].y) * t,
-                z: pair[0].z + (pair[1].z - pair[0].z) * t,
-                orientation: (pair[1].y - pair[0].y).atan2(pair[1].x - pair[0].x),
+                x: position[0] as f32,
+                y: position[1] as f32,
+                z: position[2] as f32,
+                orientation: direction[1].atan2(direction[0]) as f32,
                 complete: false,
             });
         }
-        segment_start = segment_start.saturating_add(duration);
     }
     None
 }
@@ -1024,6 +1107,10 @@ pub(crate) fn activate_taxi(
             current_node_index: 0,
             // Queue the paid reply before arming motion so movement cannot overtake it.
             started_micros: 0,
+            origin_x: player.x,
+            origin_y: player.y,
+            origin_z: player.z,
+            origin_recorded: true,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
         player.money = player_state.money;
@@ -1060,6 +1147,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         clear_flight(ctx, player);
         return;
     };
+    let points = flight_route(&flight, points);
     let Some(destination) = ctx
         .db
         .game_taxi_node()
@@ -1139,6 +1227,7 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
         clear_flight(ctx, player);
         return;
     };
+    let points = flight_route(&flight, points);
     let elapsed = ctx
         .timestamp
         .to_micros_since_unix_epoch()
@@ -1564,8 +1653,9 @@ mod tests {
     #[test]
     fn authoritative_route_clock_covers_start_progress_and_exact_landing() {
         let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0), point(3, 99, 2, 0)];
-        let first_leg = segment_micros(&points[0], &points[1]);
+        let first_leg = route_timestamps_micros(&points).unwrap()[1];
         let total = route_duration_micros(&points).unwrap();
+        assert_eq!(total, 63_000);
 
         let start = route_position(&points, 0).unwrap();
         assert_eq!(
@@ -1596,6 +1686,32 @@ mod tests {
             ),
             (0, -9443.5, 58.25, 56.75, 1.25)
         );
+    }
+
+    #[test]
+    fn a_recorded_departure_replaces_the_first_route_point() {
+        let mut flight = ActiveTaxiFlight {
+            character_guid: 1,
+            path_id: 99,
+            source_node_id: 2,
+            destination_node_id: 4,
+            mount_display_id: 6852,
+            fare: 110,
+            current_node_index: 0,
+            started_micros: 1,
+            origin_x: 10.0,
+            origin_y: 20.0,
+            origin_z: 30.0,
+            origin_recorded: false,
+        };
+
+        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
+        assert_eq!(flight_route(&flight, points)[0].x, 0.0);
+        flight.origin_recorded = true;
+        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
+        let route = flight_route(&flight, points);
+        assert_eq!((route[0].x, route[0].y, route[0].z), (10.0, 20.0, 30.0));
+        assert_eq!((route[1].x, route[1].y, route[1].z), (1.0, 0.0, 0.0));
     }
 
     #[test]
