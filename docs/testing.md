@@ -71,9 +71,9 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines --skip
-lethal_floor`. The Deadmines targets need the separately installed dungeons Package, and the
-`lethal_floor` ranged phase is flaky. CI also skips `taxi_single_hop_matches_its_golden_trace`;
+CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`.
+The Deadmines targets need the separately installed dungeons Package. CI also skips
+`taxi_single_hop_matches_its_golden_trace`;
 the [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) has eight known gaps. The
 bundled route fixture removes its imported-data requirement. Remove the skip with the last gap fix.
 Running that test by hand still fails with the full comparator report.

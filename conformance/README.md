@@ -260,31 +260,35 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 ## Conformance Audit
 
 Prepare the pinned Reference Server once with the harness's
-[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/adapters/vmangos/README.md).
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/adapters/vmangos/README.md).
 Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
-Set the client Data path with `./lyracore config set client-data PATH` before the audit.
-Then run:
+Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
+The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 
 ```bash
-./conformance/audit --date 2026-10-28
+./conformance/audit --date 2026-10-28-c5 --client-data /path/to/client/Data
 ./conformance/scoreboard
 ```
 
-The Python command manages the local Realm through `lyracore dev`. The Rust
-`audit` example exports catalogue scenarios, compares candidates through the pinned library, and
+The Python command creates a disposable Git worktree under
+`$HOME/.cache/lyracore-scratch/conformance/` and manages its own Realm through `lyracore dev`.
+It refuses a changed CLI pin until the isolation contract has been reviewed. The worktree owns
+its `.lyracore/native-data`, JWT keys and Operator token; the audit stops its Native Host and
+deletes the worktree after capture. Its loopback ports 3000, 3724 and 8085 must be free.
+The Rust `audit` example exports catalogue scenarios, compares candidates through the pinned library, and
 writes the reports. It shares counting and evidence validation with the scoreboard. Neither core
 command reads scenarios or Golden Traces from a harness checkout. Cargo metadata locates the
 pinned checkout only to build `vanilla-wire` and run its server adapters.
 
 The command builds `vanilla-wire` and the audit example. It starts an owned local Realm with
-`lyracore dev up`, runs `lyracore import --accept` using the client path from `lyracore config`,
+`lyracore dev up`, runs `lyracore import --accept` using the supplied client path,
 and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
 under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
 and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
-The audit removes prior catalogue Characters from its Account and retires entry 352 spawns in
-the taxi fixture's 50-yard cell. The imported flight master there would otherwise be mistaken
-for the scenario's own spawn. The report records this adjustment. Tier 1 still uses the bundled
-route fixture.
+The audit starts with an empty Shard and retains imported creature spawns. The taxi scenario uses
+flight-master entry 523 because an imported entry 352 in the same cell could be mistaken for its
+fixture spawn during setup. Tier 1 still uses the bundled route
+fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
 pins and provenance, starts its compose services, and resets only the catalogue Characters on the

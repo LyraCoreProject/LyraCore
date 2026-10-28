@@ -12,16 +12,15 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [danger-zones.md](./danger-zones.md) | Reference, authority | You change a schema, publish, or touch a §1 trap |
 | [architecture.md](./architecture.md) | Reference | You need to know where a responsibility lives |
 | [schema.md](./schema.md) | Reference | You add or change a table |
-| [First Conformance Audit](../conformance/reports/2026-10-27.md) | Verification | You check measured rule and data signatures and reference stability |
+| [Conformance Audit baseline](../conformance/reports/2026-10-28-c5.md) | Verification | You check measured rule and data signatures and reference stability |
 | [T2d taxi comparison](../conformance/reports/2026-10-27-t2d.md) | Verification | You investigate the first taxi conformance differences |
-| [Feature Ledger](../conformance/README.md) | Reference | You add or validate a conformance Behavior and its evidence requirements |
+| [Feature Ledger](../conformance/README.md) | Reference | You add or assess a conformance Behavior and its evidence requirements |
 | [testing.md](./testing.md) | Reference | You run CI checks locally or choose a verification rung |
 | [benilla-compatibility.md](./benilla-compatibility.md) | Reference | You change packet layouts or the opcode inventory |
 | [native-operations.md](./native-operations.md) | Runbook | An Operator updates a deployed Realm |
 | [operations/disk-policy.md](./operations/disk-policy.md) | Runbook | An Operator installs pruning and disk monitoring |
 | [operations/vmap-rollout.md](./operations/vmap-rollout.md) | Runbook | A maintainer enables exact collision on a Realm |
 | [data-ingestion.md](./data-ingestion.md) | How-to | You run importer stages or read a dry run |
-| [Feature Ledger](../conformance/README.md) | Reference | You assess 1.12 Behavior evidence or vmangos gaps |
 | [World Source port census](../conformance/vmangos-port-census/README.md) | Evidence | You compare the accepted snapshot with the previous import |
 | [operator-content-api.md](./operator-content-api.md) | Reference | A world editor edits spawns on a running Realm |
 | [migrating-to-native-host.md](./migrating-to-native-host.md) | How-to | You port a Gateway-era branch, Package or local Realm |

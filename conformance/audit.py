@@ -6,6 +6,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import re
 import secrets
 import shlex
 import shutil
@@ -16,7 +17,6 @@ import sys
 import tempfile
 import time
 import tomllib
-import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path.home() / '.cache/lyracore-scratch/conformance'
@@ -170,88 +170,71 @@ def delete_reference_character(wire, name, password, env):
             print('Retrying Reference Server cleanup after an SRP proof rejection.', flush=True)
 
 
-def prepare_imported_world(work, token):
-    auth = {'Authorization': 'Bearer ' + token.read_text().strip()}
-    base = 'http://127.0.0.1:3000/v1/database/lyracore'
-
-    def sql(query):
-        request = urllib.request.Request(base + '/sql', query.encode(),
-                                         {**auth, 'Content-Type': 'text/plain'}, method='POST')
-        with urllib.request.urlopen(request) as response:
-            return json.load(response)[0]['rows']
-
-    def reducer(name, args):
-        request = urllib.request.Request(base + '/call/' + name, json.dumps(args).encode(),
-                                         {**auth, 'Content-Type': 'application/json'}, method='POST')
-        with urllib.request.urlopen(request):
-            pass
-
-    names = {scenario['character'] for scenario in json.loads((work / 'catalogue.json').read_text())}
-    accounts = sql("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")
-    if len(accounts) > 1:
-        raise RuntimeError('multiple audit Accounts exist')
-    if accounts:
-        for guid, name in sql(f'SELECT guid,name FROM game_character WHERE account_id = {accounts[0][0]}'):
-            if name in names:
-                reducer('debug_delete_character', [guid])
-
-    # The imported flight master overlaps the taxi scenario's fixture spawn.
-    spawns = sql('SELECT entry,x,y FROM game_creature_spawn WHERE map_id = 0 '
-                 'AND x > -8883.334 AND x < -8833.334 AND y > 466.666 AND y < 516.666')
-    if not spawns or any(entry != 352 for entry, _, _ in spawns):
-        raise RuntimeError('taxi fixture cell contains unexpected creature spawns')
-    reducer('debug_retire_region_creatures', [0, 518, 518, 331, 331])
-    print(f'Retired {len(spawns)} flight-master spawn(s) in the taxi fixture cell.', flush=True)
-
-
 @contextmanager
-def local_realm(work):
-    cli = ROOT / 'lyracore'
-    status = run([cli, 'dev', 'status'], capture_output=True, text=True).stdout
-    if 'Native Host: Stopped' not in status:
-        raise RuntimeError('local Realm is already running; this audit only owns servers it starts')
+def local_realm(work, client_data):
+    if git('status', '--porcelain', '--untracked-files=normal'):
+        raise RuntimeError('commit core changes before starting an isolated audit Realm')
+    revision = (ROOT / '.lyracore-cli-rev').read_text().strip()
+    if revision != '9a00763234f82830a6266b9561a607523f67c2b1':
+        raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
     for port in [3000, 3724, 8085]:
         with socket.socket() as listener:
             listener.bind(('127.0.0.1', port))
     spacetime = shutil.which('spacetime')
     if spacetime is None:
         raise RuntimeError('spacetime CLI is missing')
-    bin_dir = work / 'bin'
-    bin_dir.mkdir()
-    isolated = bin_dir / 'spacetime'
-    isolated.write_text('#!/bin/sh\n'
-                        'if [ "$1" = login ] && [ "$2" = show ] && [ "$3" = --token ]; then\n'
-                        '    exit 1\n'
-                        'fi\n'
-                        'exec ' + shlex.quote(spacetime) + ' "$@"\n')
-    isolated.chmod(0o700)
-    cli_env = dict(os.environ)
-    cli_env.pop('CARGO_TARGET_DIR', None)
-    cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
+    realm_root = work / 'core'
+    run(['git', 'worktree', 'add', '--detach', realm_root, 'HEAD'], cwd=ROOT,
+        stdout=subprocess.DEVNULL)
     try:
-        run([cli, 'dev', 'up', '--single'], env=cli_env)
-        run([cli, 'import', '--accept'], env=cli_env)
-        token = ROOT / '.lyracore/native-owner-token'
-        if not token.is_file():
-            raise RuntimeError('local Realm has no Operator token')
-        prepare_imported_world(work, token)
-        password = secrets.token_hex(8)
-        run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
-            input=(password + '\n').encode(), env=cli_env)
-        copied_token = work / 'operator-token'
-        copied_token.write_bytes(token.read_bytes())
-        copied_token.chmod(0o600)
-        host = ROOT / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
-        module = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
-        yield password, copied_token, host, module
+        if (realm_root / '.lyracore').exists():
+            raise RuntimeError('new audit worktree already has Realm state')
+        (realm_root / 'target').symlink_to(SCRATCH / 'target', target_is_directory=True)
+        cli = realm_root / 'lyracore'
+        bin_dir = work / 'bin'
+        bin_dir.mkdir()
+        isolated = bin_dir / 'spacetime'
+        isolated.write_text('#!/bin/sh\n'
+                            'if [ "$1" = login ] && [ "$2" = show ] && [ "$3" = --token ]; then\n'
+                            '    exit 1\n'
+                            'fi\n'
+                            'exec ' + shlex.quote(spacetime) + ' "$@"\n')
+        isolated.chmod(0o700)
+        cli_env = dict(os.environ)
+        cli_env.pop('CARGO_TARGET_DIR', None)
+        cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
+    except BaseException:
+        run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
+            stdout=subprocess.DEVNULL)
+        raise
+    try:
+        try:
+            run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root)
+            run([cli, 'import', '--accept', '--client-data', client_data],
+                env=cli_env, cwd=realm_root)
+            token = realm_root / '.lyracore/native-owner-token'
+            if not token.is_file():
+                raise RuntimeError('isolated Realm has no Operator token')
+            password = secrets.token_hex(8)
+            run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
+                input=(password + '\n').encode(), env=cli_env, cwd=realm_root)
+            copied_token = work / 'operator-token'
+            copied_token.write_bytes(token.read_bytes())
+            copied_token.chmod(0o600)
+            host = realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
+            module = realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
+            yield password, copied_token, host, module, realm_root
+        finally:
+            run([cli, 'dev', 'down'], env=cli_env, cwd=realm_root)
     finally:
-        run([cli, 'dev', 'down'], env=cli_env)
+        run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
+            stdout=subprocess.DEVNULL)
 
 
-def capture_servers(harness, wire, work):
+def capture_servers(harness, wire, work, client_data):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     scenarios = json.loads((work / 'catalogue.json').read_text())
-    with local_realm(work) as (password, token, host, module):
+    with local_realm(work, client_data) as (password, token, host, module, realm_root):
         host_hash = digest(host)
         module_hash = digest(module)
         with reference_server(harness) as provenance:
@@ -268,9 +251,9 @@ def capture_servers(harness, wire, work):
                     (password + '\n').encode(), env)
         if digest(host) != host_hash or digest(module) != module_hash:
             raise RuntimeError('local Realm binaries changed during capture')
-        snapshot = json.loads((ROOT / '.import/vmangos/current.json').read_text())
+        snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
         content = (f"lyracore import alliance-single, vmangos db_latest {snapshot['commit']}, "
-                   'client data from lyracore config; flight-master spawns in the taxi fixture cell retired')
+                   'client data from the supplied path; imported creature spawns retained')
         return provenance, host_hash, module_hash, content
 
 
@@ -278,11 +261,24 @@ def main():
     parser = argparse.ArgumentParser(description='Run every catalogue scenario on two owned local servers.')
     parser.add_argument('--date', default=datetime.date.today().isoformat())
     parser.add_argument('--output', type=Path, default=ROOT / 'conformance/reports')
+    parser.add_argument('--client-data', type=Path)
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
-    if datetime.date.fromisoformat(args.date).isoformat() != args.date:
-        parser.error('--date must be YYYY-MM-DD')
+    if not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:-[a-z0-9]+)?', args.date):
+        parser.error('--date must be YYYY-MM-DD or YYYY-MM-DD-suffix')
+    try:
+        calendar_date = datetime.date.fromisoformat(args.date[:10])
+    except ValueError:
+        parser.error('--date is not a calendar date')
+    if calendar_date.isoformat() != args.date[:10]:
+        parser.error('--date is not a calendar date')
     if any((args.output / f'{args.date}.{suffix}').exists() for suffix in ['md', 'json', 'traces']):
         parser.error('report already exists; choose a new date or archive it first')
+    if args.client_data is None:
+        config = ROOT / '.lyracore/config.json'
+        if config.is_file():
+            args.client_data = json.loads(config.read_text()).get('client_data')
+    if not args.client_data or not Path(args.client_data).is_dir():
+        parser.error('pass --client-data with an existing 1.12.1 client Data directory')
     SCRATCH.mkdir(parents=True, exist_ok=True)
     temporary = SCRATCH / 'tmp'
     temporary.mkdir(exist_ok=True)
@@ -311,7 +307,7 @@ def main():
         os.environ['TMPDIR'] = str(work)
         run([audit, 'export', work])
         provenance, host_hash, module_hash, content = capture_servers(
-            harness, target / 'debug/vanilla-wire', work)
+            harness, target / 'debug/vanilla-wire', work, str(args.client_data))
         if core_commit != git('rev-parse', 'HEAD') or dirty != git('status', '--porcelain', '--untracked-files=normal'):
             raise RuntimeError('core changed during capture; rerun the audit')
         (work / 'run.json').write_text(json.dumps(dict(
