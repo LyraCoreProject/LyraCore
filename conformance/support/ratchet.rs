@@ -65,6 +65,27 @@ pub struct Baseline {
     pub scenarios: Vec<ScenarioBaseline>,
 }
 
+#[derive(Debug, Serialize)]
+pub struct SignatureChanges {
+    pub added: Vec<Signature>,
+    pub removed: Vec<Signature>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct BaselineChanges {
+    pub rule: SignatureChanges,
+    pub data: SignatureChanges,
+}
+
+impl BaselineChanges {
+    pub fn is_empty(&self) -> bool {
+        self.rule.added.is_empty()
+            && self.rule.removed.is_empty()
+            && self.data.added.is_empty()
+            && self.data.removed.is_empty()
+    }
+}
+
 impl Baseline {
     pub fn read(path: &Path) -> Result<Self> {
         let bytes = std::fs::read(path).with_context(|| format!("read {}", path.display()))?;
@@ -106,7 +127,7 @@ impl Baseline {
         Ok(bytes)
     }
 
-    pub fn check(&self, current: &ScenarioBaseline) -> Result<()> {
+    pub fn changes(&self, current: &ScenarioBaseline) -> Result<BaselineChanges> {
         let committed = self
             .scenarios
             .iter()
@@ -117,30 +138,26 @@ impl Baseline {
             "Behavior changed for {}",
             current.scenario
         );
-        let added_rule: BTreeSet<_> = current
-            .rule
-            .iter()
-            .filter(|s| !committed.rule.contains(s))
-            .collect();
-        let removed_rule: BTreeSet<_> = committed
-            .rule
-            .iter()
-            .filter(|s| !current.rule.contains(s))
-            .collect();
-        let added_data: BTreeSet<_> = current
-            .data
-            .iter()
-            .filter(|s| !committed.data.contains(s))
-            .collect();
-        let removed_data: BTreeSet<_> = committed
-            .data
-            .iter()
-            .filter(|s| !current.data.contains(s))
-            .collect();
+        let class_changes = |old: &[Signature], new: &[Signature]| SignatureChanges {
+            added: new.iter().filter(|s| !old.contains(s)).cloned().collect(),
+            removed: old.iter().filter(|s| !new.contains(s)).cloned().collect(),
+        };
+        Ok(BaselineChanges {
+            rule: class_changes(&committed.rule, &current.rule),
+            data: class_changes(&committed.data, &current.data),
+        })
+    }
+
+    pub fn check(&self, current: &ScenarioBaseline) -> Result<()> {
+        let changes = self.changes(current)?;
         ensure!(
-            added_rule.is_empty() && removed_rule.is_empty() && added_data.is_empty() && removed_data.is_empty(),
-            "{} tier 1 baseline differs; rule added {added_rule:?}, removed {removed_rule:?}; data added {added_data:?}, removed {removed_data:?}. Regenerate with ./conformance/baseline",
-            current.scenario
+            changes.is_empty(),
+            "{} tier 1 baseline differs; rule added {:?}, removed {:?}; data added {:?}, removed {:?}. Regenerate with ./conformance/baseline",
+            current.scenario,
+            changes.rule.added,
+            changes.rule.removed,
+            changes.data.added,
+            changes.data.removed
         );
         Ok(())
     }

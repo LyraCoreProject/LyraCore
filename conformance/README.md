@@ -115,6 +115,35 @@ checks the core commit, harness revision and scenario hashes, then rewrites the 
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
 
+### Run one scenario
+
+From the repo root, run `./conformance/run taxi_single_hop` or
+`./conformance/run taxi_single_hop --json`. The command runs only that scenario's tier 1 durable
+test through a disposable Shard. It captures the comparator result in an isolated scratch file,
+then prints differences grouped by signature. Each record shows the expected and actual scrubbed
+values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
+the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
+exact signature equality. The command exits with a failure when the baseline differs. Taxi can
+therefore exit successfully while its known rule differences remain visible.
+
+`--json` writes one schema version 1 object to stdout. Groups sort rule before data, then by
+signature; records retain comparator order. The fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
+| `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
+| `conforms` | True when the comparator reports no rule differences |
+| `baseline.matches` | True when the current rule and data signature sets equal the Tier 1 baseline |
+| `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
+| `groups[]` | `classification` (`rule` or `data`), `signature` and `records` |
+| `groups[].signature` | `rule`, `checkpoint`, `stream`, `opcode`, `field_path` |
+| `groups[].records[]` | `packet_index`, rule `reason`, `expected` and `actual` values from the comparator |
+
+Expected and actual values use the harness's tagged field JSON and may be null. The text view
+prints the same information, including every signature that regeneration would add or remove.
+
 The runner prepares the scenario's Character through debug reducers, then runs the
 harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's

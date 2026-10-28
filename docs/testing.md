@@ -207,10 +207,13 @@ data signature sets to equal `conformance/tier1-baseline.json`. New and removed 
 After running both tier 1 tests, regenerate the baseline from that comparator output with
 `./conformance/baseline`. Review its diff in the same PR as the behavior change. The baseline does
 not affect comparator classification or the scoreboard's pass/fail.
-Run the manual
-[Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over TCP on both servers. Run `./conformance/scoreboard` to join it
-with the Feature Ledger and the latest Conformance Audit report. The scoreboard's example tests
-check counts, evidence freshness and failure handling. See the
+Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
+machine-readable differences and baseline changes. It runs only the named durable test. See the
+[run output contract](../conformance/README.md#run-one-scenario).
+Run the manual [Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over
+TCP on both servers. Run `./conformance/scoreboard` to join it with the Feature Ledger and the
+latest Conformance Audit report. The scoreboard's example tests check counts, evidence freshness
+and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
 
 For each new or changed Behavior, assign two different people or agents. The scenario author
