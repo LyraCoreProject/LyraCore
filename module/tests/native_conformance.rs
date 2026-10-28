@@ -239,3 +239,90 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     );
     assert!(connection.drain_packets().is_empty());
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_new_viewer_receives_the_current_taxi_spline() {
+    use wire_client::decode::Field;
+
+    let (shard, passenger, _) = fixture("taxi-new-viewer");
+    let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
+    shard.assert_call(
+        "provision_account",
+        &["\"OBSERVER\"", &credentials, &credentials],
+    );
+    let account = shard.query_rows("SELECT id FROM game_account WHERE username = 'OBSERVER'")[0]
+        ["id"]
+        .clone();
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Observer\"",
+            "1",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let observer: u64 = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Observer'")
+        [0]["guid"]
+        .parse()
+        .unwrap();
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 200 WHERE guid = {observer}"
+    ));
+    shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
+    let mut viewer = enter(&shard, observer);
+    viewer.drain_packets();
+    assert!(shard
+        .query_rows(&format!(
+            "SELECT * FROM game_aoi_grant WHERE viewer_guid = {observer} AND entity_guid = {passenger}"
+        ))
+        .is_empty());
+
+    shard.assert_sql("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,200,0,0,'End',0,1147)");
+    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
+    shard.assert_sql("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,200,0,0,0,0)");
+    shard.assert_sql(&format!(
+        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0)"
+    ));
+    shard.assert_call(
+        "gw_arm_taxi_flight",
+        &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
+    );
+
+    let mut spline = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(6);
+    while spline.is_none() && std::time::Instant::now() < deadline {
+        for row in viewer.wait_for_packets(Duration::from_secs(1)).unwrap() {
+            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if audience == 0 && option == 0 && opcode.get() == "221" {
+                spline = Some(packet(&row, viewer.connection_id(), 0x00dd));
+                break;
+            }
+        }
+    }
+    let spline = spline.expect("observer did not receive a taxi spline");
+    assert_eq!(spline.fields["guid"], Field::Guid(passenger));
+    let Field::Object(position) = &spline.fields["position"] else {
+        panic!("taxi spline has no start position");
+    };
+    let Field::Float(x) = position["x"] else {
+        panic!("taxi spline has no x coordinate");
+    };
+    assert!((66.0..200.0).contains(&x), "obsolete spline start: {x}");
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT * FROM game_aoi_grant WHERE viewer_guid = {observer} AND entity_guid = {passenger}"
+            ))
+            .len(),
+        1
+    );
+}

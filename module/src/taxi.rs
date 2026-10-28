@@ -1179,14 +1179,14 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     flight.current_node_index = position.point_index as u32;
     let spline = should_refresh_spline(previous_cell, (grid_x, grid_y), crossed_point)
         .then(|| remaining_spline(&flight, &player, &points, position, elapsed));
+    if let Some(spline) = spline {
+        write_passenger_spline(ctx, spline);
+    }
     player.update(ctx);
     ctx.db
         .game_active_taxi_flight()
         .character_guid()
         .update(flight);
-    if let Some(spline) = spline {
-        write_passenger_spline(ctx, spline);
-    }
 }
 
 #[spacetimedb::reducer]
