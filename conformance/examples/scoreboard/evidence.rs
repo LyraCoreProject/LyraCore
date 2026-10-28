@@ -453,24 +453,21 @@ impl Report {
         let Some(audit) = &self.audit else {
             return Ok(());
         };
-        let Some(name) = &audit.previous_report else {
+        let previous = latest_audit(directory, None, Some(self.recorded_at_unix_ms))?;
+        let expected = previous
+            .as_ref()
+            .and_then(|(path, _)| path.file_name())
+            .and_then(|name| name.to_str());
+        ensure!(
+            audit.previous_report.as_deref() == expected,
+            "previous report must be the newest earlier audit: {expected:?}"
+        );
+        let Some((previous_path, previous)) = previous else {
             return Ok(());
         };
-        let path = Path::new(name);
-        ensure!(
-            path.file_name().and_then(|name| name.to_str()) == Some(name.as_str())
-                && path.extension().is_some_and(|ext| ext == "json"),
-            "previous report must be a JSON filename"
-        );
-        let previous_path = directory.join(path);
-        let previous = Self::load_structure(&previous_path, "conformance_audit")?;
         if previous.harness_revision == harness_revision() {
             previous.verify_capture(&previous_path)?;
         }
-        ensure!(
-            previous.recorded_at_unix_ms < self.recorded_at_unix_ms,
-            "previous report must be earlier"
-        );
         for (behavior, result) in &audit.behaviors {
             ensure!(
                 result.changes == self.changes_since(&previous, behavior),
@@ -581,6 +578,7 @@ pub fn same_core(root: &Path, measured: &str, head: &str) -> Result<bool> {
 pub fn latest_audit(
     directory: &Path,
     excluded_stem: Option<&str>,
+    before_unix_ms: Option<u64>,
 ) -> Result<Option<(PathBuf, Report)>> {
     if !directory.exists() {
         return Ok(None);
@@ -595,6 +593,9 @@ pub fn latest_audit(
         }
         if path.extension().is_some_and(|ext| ext == "json") {
             let report = Report::load_structure(&path, "conformance_audit")?;
+            if before_unix_ms.is_some_and(|before| report.recorded_at_unix_ms >= before) {
+                continue;
+            }
             if latest.as_ref().is_none_or(|(old_path, old)| {
                 (report.recorded_at_unix_ms, &path) > (old.recorded_at_unix_ms, old_path)
             }) {

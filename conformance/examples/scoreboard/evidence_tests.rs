@@ -265,6 +265,83 @@ fn fixed_and_regressed_sets_are_checked_against_the_named_report() {
         .is_err());
 }
 
+fn write_audit(directory: &Path, name: &str, recorded_at_unix_ms: u64) {
+    let (_, mut value) = audit_example();
+    value["recorded_at_unix_ms"] = json!(recorded_at_unix_ms);
+    value["harness_revision"] = json!("2".repeat(40));
+    std::fs::write(directory.join(name), serde_json::to_vec(&value).unwrap()).unwrap();
+}
+
+#[test]
+fn missing_predecessor_link_fails_when_an_earlier_audit_exists() {
+    let directory = scratch::Scratch::new("missing-predecessor-test").unwrap();
+    write_audit(&directory, "earlier.json", 1);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(2);
+    assert!(parse(&current, &ledger)
+        .unwrap()
+        .validate_changes(&directory)
+        .is_err());
+}
+
+#[test]
+fn older_predecessor_link_fails_when_a_newer_audit_exists() {
+    let directory = scratch::Scratch::new("older-predecessor-test").unwrap();
+    write_audit(&directory, "older.json", 1);
+    write_audit(&directory, "newer.json", 2);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(3);
+    current["audit"]["previous_report"] = json!("older.json");
+    assert!(parse(&current, &ledger)
+        .unwrap()
+        .validate_changes(&directory)
+        .is_err());
+}
+
+#[test]
+fn first_audit_has_no_predecessor_link() {
+    let directory = scratch::Scratch::new("first-audit-test").unwrap();
+    write_audit(&directory, "future.json", 3);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(2);
+    parse(&current, &ledger)
+        .unwrap()
+        .validate_changes(&directory)
+        .unwrap();
+}
+
+#[test]
+fn newest_earlier_audit_is_the_predecessor() {
+    let directory = scratch::Scratch::new("newest-predecessor-test").unwrap();
+    write_audit(&directory, "older.json", 1);
+    write_audit(&directory, "newer.json", 2);
+    let (ledger, mut current) = audit_example();
+    current["recorded_at_unix_ms"] = json!(3);
+    current["audit"]["previous_report"] = json!("newer.json");
+    parse(&current, &ledger)
+        .unwrap()
+        .validate_changes(&directory)
+        .unwrap();
+}
+
+#[test]
+fn every_committed_audit_validates_its_predecessor() -> Result<()> {
+    let directory = Path::new(env!("CARGO_MANIFEST_DIR")).join("reports");
+    for entry in std::fs::read_dir(&directory)? {
+        let path = entry?.path();
+        if path
+            .extension()
+            .is_some_and(|extension| extension == "json")
+        {
+            let report = Report::load_structure(&path, "conformance_audit")?;
+            report
+                .validate_changes(&directory)
+                .with_context(|| path.display().to_string())?;
+        }
+    }
+    Ok(())
+}
+
 #[test]
 fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
     let directory = scratch::Scratch::new("scoreboard-test").unwrap();
@@ -284,14 +361,14 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
         serde_json::to_vec(&value).unwrap(),
     )
     .unwrap();
-    latest_audit(&directory, None)
+    latest_audit(&directory, None, None)
         .unwrap()
         .unwrap()
         .1
         .validate("conformance_audit", &ledger)
         .unwrap();
     assert_eq!(
-        latest_audit(&directory, None)
+        latest_audit(&directory, None, None)
             .unwrap()
             .unwrap()
             .0
@@ -300,7 +377,7 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
         "a.json"
     );
     std::fs::write(directory.join("a.json"), b"{}").unwrap();
-    assert!(latest_audit(&directory, None).is_err());
+    assert!(latest_audit(&directory, None, None).is_err());
 }
 
 #[test]
@@ -320,7 +397,7 @@ fn latest_audit_excludes_regenerated_report_before_selecting_predecessor() {
     )
     .unwrap();
 
-    let (path, _) = latest_audit(&directory, Some("2026-10-28-c5"))
+    let (path, _) = latest_audit(&directory, Some("2026-10-28-c5"), Some(2))
         .unwrap()
         .unwrap();
     assert_eq!(path.file_name().unwrap(), "2026-10-28.json");

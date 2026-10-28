@@ -52,9 +52,9 @@ fn export(directory: &Path) -> Result<()> {
 fn compare_run(
     directory: &Path,
     ledger: &FeatureLedger,
+    run: Run,
     previous: Option<&Report>,
 ) -> Result<Report> {
-    let run: Run = serde_json::from_slice(&std::fs::read(directory.join("run.json"))?)?;
     let pin = include_str!("../../.wire-harness-rev")
         .lines()
         .find(|line| !line.starts_with('#'))
@@ -160,8 +160,9 @@ fn main() -> Result<()> {
         [mode, directory, output, date] if mode == "report" => {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"));
             let ledger = FeatureLedger::load(&root.join("features"))?;
-            let previous = evidence::latest_audit(&root.join("reports"), Some(date))?;
-            let mut report = compare_run(Path::new(directory), &ledger, previous.as_ref().map(|(_, report)| report))?;
+            let run: Run = serde_json::from_slice(&std::fs::read(Path::new(directory).join("run.json"))?)?;
+            let previous = evidence::latest_audit(&root.join("reports"), Some(date), Some(run.recorded_at_unix_ms))?;
+            let mut report = compare_run(Path::new(directory), &ledger, run, previous.as_ref().map(|(_, report)| report))?;
             if let Some((path, _)) = &previous {
                 report.audit.as_mut().unwrap().previous_report = Some(path.file_name().context("report filename")?.to_string_lossy().into());
             }
@@ -231,21 +232,26 @@ mod tests {
                 )?;
             }
         }
-        let report = compare_run(&directory, &ledger, None)?;
+        let load_run = || -> Result<Run> {
+            Ok(serde_json::from_slice(&std::fs::read(
+                directory.join("run.json"),
+            )?)?)
+        };
+        let report = compare_run(&directory, &ledger, load_run()?, None)?;
         assert_eq!(report.scenarios.len(), catalogue::ENTRIES.len());
         for result in report.audit.as_ref().unwrap().behaviors.values() {
             assert_eq!(result.candidate, Summary::default());
             assert_eq!(result.reference, Summary::default());
             assert!(result.changes.is_none());
         }
-        let repeated = compare_run(&directory, &ledger, Some(&report))?;
+        let repeated = compare_run(&directory, &ledger, load_run()?, Some(&report))?;
         for result in repeated.audit.as_ref().unwrap().behaviors.values() {
             let changes = result.changes.as_ref().unwrap();
             assert!(changes.rule.fixed.is_empty() && changes.rule.regressed.is_empty());
             assert!(changes.data.fixed.is_empty() && changes.data.regressed.is_empty());
         }
         std::fs::remove_file(directory.join("taxi_single_hop-vmangos.json"))?;
-        assert!(compare_run(&directory, &ledger, None).is_err());
+        assert!(compare_run(&directory, &ledger, load_run()?, None).is_err());
         Ok(())
     }
 }

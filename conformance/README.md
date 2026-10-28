@@ -249,11 +249,13 @@ binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is
 the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
 its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
 
-`audit.previous_report` is the preceding JSON filename, or null on the first audit. Each Behavior's
+`audit.previous_report` is the JSON filename of the newest audit captured earlier than this one,
+or null when no earlier audit exists. Each Behavior's
 `changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no
 earlier audit exists or the harness revision or any scenario hash for that Behavior differs. In the
 latter case the report says comparison is not possible. Multiplicity and values cannot fix or
-regress a signature. The scoreboard checks these sets against the named earlier report. It also
+regress a signature. The scoreboard derives the predecessor from the reports directory and checks
+these sets against it. It also
 replays that earlier report's LyraCore candidates when its harness revision matches the current pin.
 Older reports receive structure checks; the newest report receives current ledger checks, so a
 Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
