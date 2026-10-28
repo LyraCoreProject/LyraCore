@@ -837,7 +837,10 @@ mod tests {
                     ("damage_variance", variance),
                 ],
             );
-            assert!(derived_stats(&template, &base).is_err());
+            assert_eq!(
+                derived_stats(&template, &base).unwrap_err().to_string(),
+                "creature_template 10: invalid stat multiplier"
+            );
         }
     }
 

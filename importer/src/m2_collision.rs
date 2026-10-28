@@ -97,7 +97,12 @@ mod tests {
     #[test]
     fn valid_collision_survives_unreadable_rendering_records() {
         let bytes = collision_with_unreadable_particle_records();
-        assert!(wow_m2::parse_m2(&mut Cursor::new(&bytes)).is_err());
+        assert_eq!(
+            wow_m2::parse_m2(&mut Cursor::new(&bytes))
+                .unwrap_err()
+                .to_string(),
+            "I/O error: failed to fill whole buffer"
+        );
         assert_eq!(
             triangles(&bytes).unwrap(),
             vec![[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]

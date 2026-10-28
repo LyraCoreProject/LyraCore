@@ -20,7 +20,7 @@ items censuses include these counts. The loot audit below includes source condit
 The loot audit covers all nine selected source tables, before profile-specific owner filtering.
 These counts are source rows after patch and static-condition selection.
 The items manifest also reports findings from creature and reference loot. Quest mail uses the
-single-item, unconditional validation added in S3f.
+single-item, unconditional loot check. Other mail-loot shapes remain unsupported.
 
 | Finding | Occurrences | Current limit |
 | --- | ---: | --- |
@@ -144,16 +144,26 @@ Creature and cast findings count selected templates, source paths, or retained p
 | `creatures.template-behavior` | 5338 | 1354 |
 | `creatures.waypoint-detail` | 60222 | 60222 |
 
-Nested pools with unequal child limits remain inactive with their definitions and placements retained. The five unplaced level-zero templates have no defined class-level stat lookup and are omitted. The cast model keeps the first spell and an existing secondary rotation; source slot probabilities, target parameters, flags, initial/repeat delays and scripts remain unsupported. Formations and scheduled game events have no runtime. Waypoint orientation, delay, wander radius and scripts remain unrepresented, as do alternate paths. Spawn resource percentages, respawn ranges, active/random flags and per-spawn distances remain unsupported. Source template auras, scripts, immunities, extra flags and static behavior beyond the translated client flags remain unsupported. These limits are not evidence that the Source Profile gate passes; S6 owns that gate.
+Nested pools with unequal child limits remain inactive with their definitions and placements
+retained. The five unplaced level-zero templates have no defined class-level stat lookup and are
+omitted. The cast model keeps the first spell and an existing secondary rotation; source slot
+probabilities, target parameters, flags, initial/repeat delays and scripts remain unsupported.
+Formations and scheduled game events have no runtime. Waypoint orientation, delay, wander radius
+and scripts remain unrepresented, as do alternate paths. Spawn resource percentages, respawn
+ranges, active/random flags and per-spawn distances remain unsupported. Source template auras,
+scripts, immunities, extra flags and static behavior beyond the translated client flags remain
+unsupported. The Source Profile separately checks the column contract and approved values before
+import.
 
-## Scripted creature immunity, Milestone 4 ledger
+## Scripted creature immunity
 
-Decision 6 keeps unsupported scripted immunities disabled. Milestone 4 restores a static immunity
-only when a fully translated unconditional spawn rule clears it with certainty. Overlord Mok'Morokk 4500
-regains static 0x20, unit flag 0x100, and rule 450003 clears it. His NPC immunity remains disabled.
-Every other entry below still omits static 0x20 or 0x40, unit flags 0x100 or 0x200 respectively.
-An entry in both lists loses both translations. The full-world manifest still reports 3,407
-templates with at least one unsupported immunity, and alliance-single reports 1,022.
+Unsupported scripted immunities stay disabled so creatures remain attackable. A static immunity
+is restored only when a fully translated unconditional spawn rule clears it with certainty.
+Overlord Mok'Morokk 4500 regains static 0x20, unit flag 0x100, and rule 450003 clears it. His
+NPC immunity remains disabled. Every other entry below still omits static 0x20 or 0x40, unit
+flags 0x100 or 0x200 respectively. An entry in both lists loses both translations. The
+full-world manifest still reports 3,407 templates with at least one unsupported immunity, and
+alliance-single reports 1,022.
 
 Archaedas 2748 uses a C++ AI, so his immunity stays disabled. Arugal 4275 has a spawn rule with
 condition 16255, a source GUID condition that the Module cannot express; his immunity also stays
@@ -179,12 +189,13 @@ The spell catalogue reports the same findings in both profiles. Source scripts a
 spell entries. The `spells.script` finding lists those entries. `spells.modifier-high-mask` lists
 34 effect slots whose source mask exceeds the Module's 32-bit modifier parameter. The low mask
 bits retain their existing meaning; high-bit matching and override-class-script behavior remain
-unsupported. S5d implements coefficients and minimum target level; two custom flags remain held as described below.
+unsupported. Coefficients and minimum target level are implemented. Two custom flags remain held
+as described below.
 
 The full Base Snapshot includes the core synthetic effect at slot 3 on spell 21082. Datascripts
 can load the Snapshot and author other spells. Opening spell 21082 is refused because the Package
-API permits only slots 0 through 2. The baseline Snapshot parser failed on this row before any
-Datascript ran; S5b confines the Refusal to that spell without changing Package Identifier Ranges.
+API permits only slots 0 through 2. The Refusal applies only to that spell. Package Identifier
+Ranges are unchanged.
 
 Spell metadata has two inactive learn links, `17002:24867` and `24866:24864`. The Module has no
 activation flag on a learn link, so it retains them and reports `spellmeta.inactive-learn`.
@@ -194,13 +205,14 @@ same findings. The selected proc overlays have no conflicting active-effect mask
 with distinct active masks would remain unloaded and report `spellmeta.proc-mask`, because the
 Module stores one family mask per spell.
 
-S5d implements the extra spell columns. `spells.custom-flags` reports 47 selected spells in each
-profile. Seventeen use `SEND_CHANNEL_VISUAL`, bit 0x800, which needs a SpellVisual channel-kit
-catalogue and repeating visual delivery. Thirty use `TRIGGER_WEAPON_PROCS`, bit 0x2000, which
-needs weapon-enchant and item-on-hit dispatch. These two bits are held under decision 11; all
-other defined custom bits have gameplay checks. The catalogue retains the held flags. The
-spell-behavior report lists every bit and the tests. The existing script and high-mask findings
-remain. Automatic negative-coefficient fallbacks retain the Module's prior formulas.
+The extra spell columns are implemented. `spells.custom-flags` reports 47 selected spells in
+each profile. Seventeen use `SEND_CHANNEL_VISUAL`, bit 0x800, which needs a SpellVisual
+channel-kit catalogue and repeating visual delivery. Thirty use `TRIGGER_WEAPON_PROCS`, bit
+0x2000, which needs weapon-enchant and item-on-hit dispatch. Those dependencies are absent, so
+these two bits remain unsupported. All other defined custom bits have gameplay checks. The
+catalogue retains the held flags. The spell-behavior report lists every bit and the tests. The
+existing script and high-mask findings remain. Automatic negative-coefficient fallbacks retain
+the Module's prior formulas.
 
 The six replacement catalogues keep the Module's current column projection. Trigger geometry
 comes from vmangos, but these extra behaviors have no Module fields. Both profiles select the
@@ -214,13 +226,16 @@ complete catalogues and report the same counts.
 | `dbc.trigger-script-name` | 53 | Source named trigger scripts are unsupported. |
 
 The Map catalogue stores vmangos player limits, reset delays and ghost entrances. The Module
-still uses its current Instance admission, reset and ghost-routing rules. `dbc.map-player-limit`,
-`dbc.map-reset-delay` and `dbc.map-ghost-entrance` report nondefault source values whose gameplay
-meaning is not implemented. The current pin has 30 limits, seven reset delays and 25 valid ghost entrances. Named map scripts remain unsupported on 24 maps, reported as `dbc.map-script-name`. Raid lockouts remain tracked in issue #533. The client supplies only
-`internal_name`, the archive directory. This is the named Map exception to decision 11.
+still uses its current Instance admission, reset and ghost-routing rules.
+`dbc.map-player-limit`, `dbc.map-reset-delay` and `dbc.map-ghost-entrance` report nondefault
+source values whose gameplay meaning is not implemented. The current pin has 30 limits, seven
+reset delays and 25 valid ghost entrances. Named map scripts remain unsupported on 24 maps,
+reported as `dbc.map-script-name`. Raid lockouts remain unsupported. The client
+supplies only `internal_name`, the archive directory used for WDT and ADT lookup. Every Map
+gameplay column comes from vmangos.
 
 
-## EventAI and scripts, Milestone 4
+## EventAI and scripts
 
 The [full-world census](vmangos-port-census/creature-ai.md) and
 [alliance-single census](vmangos-port-census/creature-ai-alliance-single.md) report every finding code and count.
@@ -338,11 +353,12 @@ with authored fixtures. Guardian 636 is included through spell 5200's dependency
 The checked source tables contain no ids in that band.
 
 The 17 SEND_CHANNEL_VISUAL spells and 30 TRIGGER_WEAPON_PROCS spells remain held as documented
-above. M4 changes neither flag's implementation.
+above. Neither flag has runtime support.
 
 ## Creature behavior lost from the imported program
 
-Generated by `importer/scripts/creature-behavior-ledger.py` from the M4 production plans and vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`, patch 10. The inputs stay local.
+Generated by `importer/scripts/creature-behavior-ledger.py` from the production import plans and
+vmangos `464179081673cfd240f7ffe7f0daf96bca0b5a70`, patch 10. The inputs stay local.
 
 This comparison reports behavior categories present in the previous imported EventAI and its reachable relays but absent from the vmangos program. Source spell lists count as casts. Equal categories do not prove equivalent spells, speech, timing or targets; partial losses within a retained category need later conformance checks. A source script name identifies C++ behavior that this importer does not load. Refusal codes identify dropped rules, without asserting that they implement every missing classic action.
 

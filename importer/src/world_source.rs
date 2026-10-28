@@ -513,9 +513,18 @@ mod tests {
         let row = &sqlite_rows[0];
         assert_eq!(row.number::<u32>("entry").unwrap(), 42);
         assert_eq!(row.text("name").unwrap(), "O'Brien");
-        assert!(row.number::<u32>("name").is_err());
-        assert!(row.text("entry").is_err());
-        assert!(row.number::<u32>("optional").is_err());
+        assert_eq!(
+            row.number::<u32>("name").unwrap_err().to_string(),
+            "example.name: expected a number"
+        );
+        assert_eq!(
+            row.text("entry").unwrap_err().to_string(),
+            "example.entry: expected text"
+        );
+        assert_eq!(
+            row.number::<u32>("optional").unwrap_err().to_string(),
+            "example.optional: expected a number"
+        );
         assert!(row
             .number::<u32>("missing")
             .unwrap_err()
@@ -551,8 +560,17 @@ mod tests {
             "selected"
         );
         assert_eq!(cached.rows("creature_template").unwrap().len(), 1);
-        assert!(cached.columns("creature_template", &["missing"]).is_err());
-        assert!(cached.rows("missing").is_err());
+        assert_eq!(
+            cached
+                .columns("creature_template", &["missing"])
+                .unwrap_err()
+                .to_string(),
+            "creature_template.missing: missing column"
+        );
+        assert_eq!(
+            cached.rows("missing").unwrap_err().to_string(),
+            "missing source table missing"
+        );
     }
 
     #[test]
@@ -604,14 +622,33 @@ mod tests {
         assert_eq!(rows.len(), 1);
         assert_eq!(rows[0].text("name").unwrap(), "selected");
         assert_eq!(rows[0].number::<u32>("entry").unwrap(), 4);
-        assert!(source.columns("item_template", &["missing"]).is_err());
+        assert_eq!(
+            source
+                .columns("item_template", &["missing"])
+                .unwrap_err()
+                .to_string(),
+            "item_template.missing: missing column"
+        );
     }
 
     #[test]
     fn sqlite_file_is_read_only_and_does_not_create_a_missing_file() {
         let path = std::env::temp_dir().join(format!("world-source-{}.sqlite", std::process::id()));
         let _ = std::fs::remove_file(&path);
-        assert!(WorldSource::open(&path).is_err());
+        let error = WorldSource::open(&path)
+            .err()
+            .expect("missing World Source must fail to open");
+        assert_eq!(
+            error.to_string(),
+            format!("open World Source {}", path.display())
+        );
+        assert_eq!(
+            error
+                .downcast_ref::<rusqlite::Error>()
+                .unwrap()
+                .sqlite_error_code(),
+            Some(rusqlite::ErrorCode::CannotOpen)
+        );
         assert!(!path.exists());
         let connection = Connection::open(&path).unwrap();
         connection.execute_batch("CREATE TABLE example (entry INTEGER); INSERT INTO example VALUES (42); CREATE VIEW indirect AS SELECT * FROM example;").unwrap();
@@ -622,7 +659,10 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("unapproved source table"));
-        assert!(source.rows("indirect").is_err());
+        assert_eq!(
+            source.rows("indirect").unwrap_err().to_string(),
+            "indirect: expected a source table, got view"
+        );
         let connection = source.connection();
         assert_eq!(
             connection
@@ -631,7 +671,13 @@ mod tests {
                 .unwrap(),
             42
         );
-        assert!(connection.execute("DELETE FROM example", []).is_err());
+        assert_eq!(
+            connection
+                .execute("DELETE FROM example", [])
+                .unwrap_err()
+                .to_string(),
+            "attempt to write a readonly database"
+        );
         std::fs::remove_file(path).unwrap();
     }
 
@@ -644,9 +690,13 @@ mod tests {
             rows: &[&[("number", Value::Real(1.5))]],
         }])
         .unwrap();
-        assert!(source.rows("example").unwrap()[0]
-            .number::<u32>("number")
-            .is_err());
+        assert_eq!(
+            source.rows("example").unwrap()[0]
+                .number::<u32>("number")
+                .unwrap_err()
+                .to_string(),
+            "example.number: invalid u32"
+        );
         let source = sqlite_fixture(&[FixtureTable {
             name: "example",
             columns: &[("number", "INTEGER")],
@@ -654,10 +704,19 @@ mod tests {
             rows: &[&[("number", Value::Integer(256))]],
         }])
         .unwrap();
-        assert!(source.rows("example").unwrap()[0]
-            .number::<u8>("number")
-            .is_err());
-        assert!(Cell::try_from(Value::Blob(vec![1])).is_err());
+        assert_eq!(
+            source.rows("example").unwrap()[0]
+                .number::<u8>("number")
+                .unwrap_err()
+                .to_string(),
+            "example.number: invalid u8"
+        );
+        assert_eq!(
+            Cell::try_from(Value::Blob(vec![1]))
+                .unwrap_err()
+                .to_string(),
+            "unsupported World Source value type"
+        );
     }
 
     #[test]

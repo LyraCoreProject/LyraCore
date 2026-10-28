@@ -304,7 +304,12 @@ mod tests {
     #[test]
     fn truncated_rendering_colors_preserve_complete_collision_geometry() {
         let bytes = group_with_truncated_tail(true);
-        assert!(wow_wmo::parse_wmo(&mut Cursor::new(&bytes)).is_err());
+        assert_eq!(
+            wow_wmo::parse_wmo(&mut Cursor::new(&bytes))
+                .unwrap_err()
+                .to_string(),
+            "Invalid format: Failed to parse group: failed to fill whole buffer"
+        );
         let group = parse_wmo_group(&bytes, "synthetic.wmo").unwrap();
         assert_eq!(group.vertex_indices, [0, 1, 2]);
         assert_eq!(group.vertex_positions.len(), 3);

@@ -286,7 +286,10 @@ fn patch_constants_and_unsupported_predicates_keep_boolean_gates() {
     assert_eq!(evaluate(2), Ok(false));
     assert_eq!(evaluate(3), Ok(true));
     for id in [4, 5, 6] {
-        assert!(evaluate(id).is_err());
+        assert_eq!(
+            evaluate(id),
+            Err(lyracore_shared::gossip::Unavailable::Unsupported(i32::MIN))
+        );
     }
     assert_eq!(conditions[&7].kind, ConditionKind::QuestTaken);
     assert_eq!(evaluate(7), Ok(true));

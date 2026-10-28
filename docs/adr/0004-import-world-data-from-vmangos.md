@@ -39,7 +39,8 @@ tables. The Operator's client supplies the other tables and geometry. Each table
 with one exception: `map_template` supplies Map gameplay columns, while `Map.dbc` supplies only
 `internal_name`, joined by map id, for WDT and ADT archive lookup. A missing client Map row refuses
 the whole Map catalogue before any rows are replaced. This keeps a missing archive name from
-silently removing a map during a re-import. Stored player limits, reset delays and ghost entrances await gameplay support.
+silently removing a map during a re-import. Stored player limits, reset delays and ghost entrances
+await gameplay support.
 
 The spell Base Snapshot uses the same selected vmangos rows as the server import. Package spells
 still reach the client through the player's own `Spell.dbc`. Source condition numbers translate

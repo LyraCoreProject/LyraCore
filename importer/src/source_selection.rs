@@ -324,8 +324,18 @@ mod tests {
             .unwrap_err()
             .to_string()
             .contains("item_template.patch"));
-        assert!(selected("creature", &[], &[&[("patch_min", 0)]]).is_err());
-        assert!(selected("npc_trainer", &[], &[&[("build_max", 5875)]]).is_err());
+        assert_eq!(
+            selected("creature", &[], &[&[("patch_min", 0)]])
+                .unwrap_err()
+                .to_string(),
+            "creature.patch_max: missing selection column"
+        );
+        assert_eq!(
+            selected("npc_trainer", &[], &[&[("build_max", 5875)]])
+                .unwrap_err()
+                .to_string(),
+            "npc_trainer.build_min: missing selection column"
+        );
     }
 
     #[test]
@@ -387,7 +397,12 @@ mod tests {
                 .collect::<Vec<_>>(),
             [1, 2]
         );
-        assert!(selected("taxi_path_transitions", &[], &[&[("in_path", 1)]]).is_err());
+        assert_eq!(
+            selected("taxi_path_transitions", &[], &[&[("in_path", 1)]])
+                .unwrap_err()
+                .to_string(),
+            "taxi_path_transitions.build_min: missing selection column"
+        );
     }
 
     #[test]
@@ -441,7 +456,12 @@ mod tests {
             )
             .unwrap();
             assert_eq!(rows.len(), 2);
-            assert!(selected(table, &[], &[&[(lower, value + 1), (upper, value)]]).is_err());
+            assert_eq!(
+                selected(table, &[], &[&[(lower, value + 1), (upper, value)]])
+                    .unwrap_err()
+                    .to_string(),
+                format!("invalid {lower}..{upper} range {}..{value}", value + 1)
+            );
         }
         assert_eq!(
             selected(
@@ -481,12 +501,16 @@ mod tests {
                 .collect::<Vec<_>>(),
             [9, 10, 10, 11]
         );
-        assert!(selected(
-            "forbidden_items",
-            &[],
-            &[&[("patch", 10), ("after_or_before", 2)]]
-        )
-        .is_err());
+        assert_eq!(
+            selected(
+                "forbidden_items",
+                &[],
+                &[&[("patch", 10), ("after_or_before", 2)]]
+            )
+            .unwrap_err()
+            .to_string(),
+            "forbidden_items.after_or_before: unknown value 2"
+        );
     }
 
     #[test]
@@ -501,8 +525,14 @@ mod tests {
         ] {
             assert_eq!(wow_patch(value, comparison).unwrap(), result);
         }
-        assert!(wow_patch(11, 0).is_err());
-        assert!(wow_patch(10, 3).is_err());
+        assert_eq!(
+            wow_patch(11, 0).unwrap_err().to_string(),
+            "WOW_PATCH value 11 is outside 0..=10"
+        );
+        assert_eq!(
+            wow_patch(10, 3).unwrap_err().to_string(),
+            "WOW_PATCH comparison 3 is outside 0..=2"
+        );
         let conditions = selected(
             "conditions",
             &[],
@@ -541,7 +571,17 @@ mod tests {
             &[("entry", 1), ("patch", 10)],
             &[("entry", 1), ("patch", 10)],
         ];
-        assert!(selected("item_template", &["entry", "patch"], rows).is_err());
-        assert!(selected("item_template", &["patch"], &rows[..1]).is_err());
+        assert_eq!(
+            selected("item_template", &["entry", "patch"], rows)
+                .unwrap_err()
+                .to_string(),
+            "item_template: duplicate patch revision 10"
+        );
+        assert_eq!(
+            selected("item_template", &["patch"], &rows[..1])
+                .unwrap_err()
+                .to_string(),
+            "item_template: versioned rows need a primary key besides patch"
+        );
     }
 }

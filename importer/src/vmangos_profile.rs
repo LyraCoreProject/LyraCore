@@ -272,14 +272,25 @@ mod tests {
         database
             .execute("INSERT INTO scripts VALUES (15,4)", [])
             .unwrap();
-        assert!(check_values(
+        let error = check_values(
             &database,
             "scripts",
             "datalong2",
             &[("command", 15)],
-            |value| value & !3 == 0
+            |value| value & !3 == 0,
         )
-        .is_err());
+        .unwrap_err();
+        assert_eq!(
+            serde_json::from_str::<Value>(&error.to_string()).unwrap(),
+            json!({
+                "classification": "unapproved",
+                "column": "datalong2",
+                "filters": {"command": 15},
+                "source_profile": "vmangos-4641790",
+                "table": "scripts",
+                "values": [4],
+            })
+        );
     }
 
     #[test]

@@ -81,8 +81,8 @@ _Avoid_: import done flag, content ready flag
 **World Import Scope**:
 The authoritative union of Bounded Map Slices, Instance Vmap Slices, whole maps, and forced
 creature dependencies owned by one World Import Profile. Accepted EventAI summons force their
-summoned templates into the scope, to a fixpoint. It decides spatial import membership for World Source,
-terrain, navigation, and vmap modes.
+summoned templates into the scope, to a fixpoint. It decides spatial import membership for
+World Source, terrain, navigation, and vmap modes.
 
 **Source Profile**:
 A named input contract for a World Source. It defines the columns, types and behavior values an
