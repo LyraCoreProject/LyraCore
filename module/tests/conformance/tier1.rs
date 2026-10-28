@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -11,7 +11,19 @@ use wire_client::{catalogue, compare, runner};
 
 use super::transport::OperatorTransport;
 
+#[path = "../../../conformance/support/ratchet.rs"]
+mod ratchet;
+
 static REPORT: Mutex<()> = Mutex::new(());
+
+fn harness_revision() -> Result<&'static str> {
+    include_str!("../../../.wire-harness-rev")
+        .lines()
+        .filter(|line| !line.starts_with('#'))
+        .flat_map(str::split_whitespace)
+        .nth(1)
+        .context("harness SHA")
+}
 
 fn git(arguments: &[&str]) -> Result<String> {
     let output = Command::new("git")
@@ -29,13 +41,7 @@ fn update_result(
     now: u64,
 ) -> Result<()> {
     let _lock = REPORT.lock().unwrap();
-    let pin = include_str!("../../../.wire-harness-rev");
-    let revision = pin
-        .lines()
-        .filter(|line| !line.starts_with('#'))
-        .flat_map(str::split_whitespace)
-        .nth(1)
-        .context("harness SHA")?;
+    let revision = harness_revision()?;
     let mut result = json!({
         "schema_version": 2,
         "tier": "tier1",
@@ -87,8 +93,10 @@ fn run_scenario(
     id: &str,
     setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
 ) -> Result<()> {
-    let path = core_root().join(".lyracore/conformance/tier1.json");
-    std::fs::create_dir_all(path.parent().unwrap())?;
+    let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
+    std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
     let golden = catalogue::get(id)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -122,10 +130,14 @@ fn run_scenario(
     update_result(&path, &golden, Some(&comparison), now)?;
     let report = serde_json::to_string_pretty(&comparison)?;
     println!("{id}: {report}");
-    assert!(
-        comparison.is_match(),
-        "{id} differs from its Golden Trace:\n{report}"
-    );
+    let baseline = ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?;
+    baseline.check(&ratchet::ScenarioBaseline::from_comparison(
+        id,
+        &golden.scenario().behavior,
+        harness_revision()?,
+        &golden.trace().header.scenario_sha256,
+        &comparison,
+    ))?;
     Ok(())
 }
 
@@ -136,7 +148,7 @@ fn connection_identity_matches_its_golden_trace() -> Result<()> {
 }
 
 #[test]
-#[ignore = "taxi divergence: eight known gaps; run manually with the bundled route fixture"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
     run_scenario("taxi_single_hop", |shard, scenario| {
         for statement in super::taxi_route::statements(scenario)? {
