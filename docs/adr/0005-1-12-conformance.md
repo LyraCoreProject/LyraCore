@@ -193,7 +193,8 @@ results; the durable taxi skip remains until the Behavior conforms with the bund
 
 `conformance/audit` starts an owned local Realm through `lyracore dev up`, imports the vmangos
 world through `lyracore import`, and starts the pinned Reference Server through a `newgrp docker`
-heredoc. The tier 1 taxi route fixture stays in tier 1. Every embedded catalogue
+heredoc. Before capture it retires entry 352 spawns in the taxi fixture's cell so the harness
+binds the scenario's own flight master. The tier 1 taxi route fixture stays in tier 1. Every embedded catalogue
 scenario runs over TCP on both servers, and both candidates compare with their Golden Traces.
 The command writes a dated Markdown report and schema-2 JSON evidence, then stops both servers.
 The Reference Server comparison and recorded provenance establish reference stability separately.

@@ -281,7 +281,9 @@ The command builds `vanilla-wire` and the audit example. It starts an owned loca
 and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
 under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
 and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
-Tier 1 still uses the bundled route fixture.
+The audit removes any prior catalogue Characters and retires entry 352 spawns in the taxi fixture's
+50-yard cell. The imported flight master there would otherwise be mistaken for the scenario's
+own spawn. The report records this adjustment. Tier 1 still uses the bundled route fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
 pins and provenance, starts its compose services, and resets only the catalogue Characters on the

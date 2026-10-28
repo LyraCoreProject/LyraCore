@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 import tomllib
+import urllib.request
 
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path.home() / '.cache/lyracore-scratch/conformance'
@@ -169,6 +170,36 @@ def delete_reference_character(wire, name, password, env):
             print('Retrying Reference Server cleanup after an SRP proof rejection.', flush=True)
 
 
+def prepare_imported_world(work, token):
+    auth = {'Authorization': 'Bearer ' + token.read_text().strip()}
+    base = 'http://127.0.0.1:3000/v1/database/lyracore'
+
+    def sql(query):
+        request = urllib.request.Request(base + '/sql', query.encode(),
+                                         dict(auth, **{'Content-Type': 'text/plain'}), method='POST')
+        with urllib.request.urlopen(request) as response:
+            return json.load(response)[0]['rows']
+
+    def reducer(name, args):
+        request = urllib.request.Request(base + '/call/' + name, json.dumps(args).encode(),
+                                         dict(auth, **{'Content-Type': 'application/json'}), method='POST')
+        with urllib.request.urlopen(request):
+            pass
+
+    names = {scenario['character'] for scenario in json.loads((work / 'catalogue.json').read_text())}
+    for guid, name in sql('SELECT guid,name FROM game_character'):
+        if name in names:
+            reducer('debug_delete_character', [guid])
+
+    # The imported flight master overlaps the taxi scenario's fixture spawn.
+    spawns = sql('SELECT entry,x,y FROM game_creature_spawn WHERE map_id = 0 '
+                 'AND x > -8883.334 AND x < -8833.334 AND y > 466.666 AND y < 516.666')
+    if not spawns or any(entry != 352 for entry, _, _ in spawns):
+        raise RuntimeError('taxi fixture cell contains unexpected creature spawns')
+    reducer('debug_retire_region_creatures', [0, 518, 518, 331, 331])
+    print(f'Retired {len(spawns)} flight-master spawn(s) in the taxi fixture cell.', flush=True)
+
+
 @contextmanager
 def local_realm(work):
     cli = ROOT / 'lyracore'
@@ -196,12 +227,13 @@ def local_realm(work):
     try:
         run([cli, 'dev', 'up', '--single'], env=cli_env)
         run([cli, 'import', '--accept'], env=cli_env)
-        password = secrets.token_hex(8)
-        run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
-            input=(password + '\n').encode(), env=cli_env)
         token = ROOT / '.lyracore/native-owner-token'
         if not token.is_file():
             raise RuntimeError('local Realm has no Operator token')
+        prepare_imported_world(work, token)
+        password = secrets.token_hex(8)
+        run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
+            input=(password + '\n').encode(), env=cli_env)
         copied_token = work / 'operator-token'
         copied_token.write_bytes(token.read_bytes())
         copied_token.chmod(0o600)
@@ -233,7 +265,8 @@ def capture_servers(harness, wire, work):
         if digest(host) != host_hash or digest(module) != module_hash:
             raise RuntimeError('local Realm binaries changed during capture')
         snapshot = json.loads((ROOT / '.import/vmangos/current.json').read_text())
-        content = f"lyracore import alliance-single, vmangos db_latest {snapshot['commit']}, client data from lyracore config"
+        content = (f"lyracore import alliance-single, vmangos db_latest {snapshot['commit']}, "
+                   'client data from lyracore config; flight-master spawns in the taxi fixture cell retired')
         return provenance, host_hash, module_hash, content
 
 

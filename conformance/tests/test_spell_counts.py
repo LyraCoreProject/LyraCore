@@ -1,4 +1,5 @@
 import importlib.util
+from contextlib import closing
 from pathlib import Path
 import sqlite3
 import tempfile
@@ -107,7 +108,7 @@ class SpellCountsTests(unittest.TestCase):
             self.assertFalse(missing.exists())
             path = root / 'nested/mangos.sqlite'
             path.parent.mkdir()
-            with sqlite3.connect(path) as target:
+            with closing(sqlite3.connect(path)) as target:
                 self.connection.backup(target)
             (root / 'current.json').write_text('{"sqlite_path": ".import/vmangos/nested/mangos.sqlite"}')
             self.assertEqual(spells.locate(None, root)[0], path)
