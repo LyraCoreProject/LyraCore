@@ -81,10 +81,18 @@ fn assemble<'a>(
     scenario: &'a str,
     behavior: &'a str,
     vmangos: &'a SourceReference,
+    harness_revision: &str,
+    scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
     baseline: &ratchet::Baseline,
 ) -> Result<RunOutput<'a>> {
-    let current = ratchet::ScenarioBaseline::from_comparison(scenario, behavior, comparison);
+    let current = ratchet::ScenarioBaseline::from_comparison(
+        scenario,
+        behavior,
+        harness_revision,
+        scenario_sha256,
+        comparison,
+    );
     let regeneration = baseline.changes(&current)?;
     let matches = baseline.check(&current).is_ok();
     let mut grouped = BTreeMap::<(GroupClass, ratchet::Signature), Vec<Record>>::new();
@@ -285,6 +293,8 @@ fn main() -> Result<()> {
         &scenario,
         &behavior.id,
         &behavior.vmangos,
+        &result.harness_revision,
+        &entry.scenario_sha256,
         &entry.comparison,
         &baseline,
     )?;
@@ -330,6 +340,8 @@ mod tests {
             scenarios: vec![ratchet::ScenarioBaseline::from_comparison(
                 "taxi_single_hop",
                 "taxi_single_hop",
+                "revision",
+                &Sha256Digest::of(b"scenario"),
                 &comparison,
             )],
         };
@@ -346,6 +358,8 @@ mod tests {
             "taxi_single_hop",
             "taxi_single_hop",
             &source,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
         )?;
@@ -369,6 +383,8 @@ mod tests {
             "taxi_single_hop",
             "taxi_single_hop",
             &source,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
         )?;
@@ -417,6 +433,8 @@ mod tests {
             "taxi_single_hop",
             "taxi_single_hop",
             &source,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
         )?;

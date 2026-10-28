@@ -27,7 +27,7 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard --example audit
+cargo test -p lyracore-conformance --example scoreboard --example audit --example run
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v

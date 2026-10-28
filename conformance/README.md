@@ -123,11 +123,13 @@ test through a disposable Shard. It captures the comparator result in an isolate
 then prints differences grouped by signature. Each record shows the expected and actual scrubbed
 values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
 the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
-exact signature equality. The command exits with a failure when the baseline differs. Taxi can
-therefore exit successfully while its known rule differences remain visible.
+exact signature and provenance equality. The command exits with code 1 when the baseline differs
+and code 2 when the test produces no completed comparison. In the latter case it prints the test
+diagnostic. Taxi can exit successfully while its known rule differences remain visible.
 
-`--json` writes one schema version 1 object to stdout. Groups sort rule before data, then by
-signature; records retain comparator order. The fields are:
+`--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
+with `scenario`, `error.kind = "setup_failed"`, and `error.diagnostic` from the test output.
+Groups sort rule before data, then by signature. Records retain comparator order. The fields are:
 
 | Field | Meaning |
 | --- | --- |
@@ -135,7 +137,7 @@ signature; records retain comparator order. The fields are:
 | `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
 | `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
 | `conforms` | True when the comparator reports no rule differences |
-| `baseline.matches` | True when the current rule and data signature sets equal the Tier 1 baseline |
+| `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
 | `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
 | `groups[]` | `classification` (`rule` or `data`), `signature` and `records` |
 | `groups[].signature` | `rule`, `checkpoint`, `stream`, `opcode`, `field_path` |
