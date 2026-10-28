@@ -1,0 +1,87 @@
+#!/usr/bin/env python3
+import argparse
+import json
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+
+SETUP_FAILURE_EXIT = 2
+
+
+def setup_failure(scenario, json_mode, diagnostic):
+    if json_mode:
+        print(json.dumps({
+            "schema_version": 1,
+            "scenario": scenario,
+            "error": {"kind": "setup_failed", "diagnostic": diagnostic},
+        }))
+    else:
+        sys.stderr.write(diagnostic + "\n")
+    return SETUP_FAILURE_EXIT
+
+
+def has_completed_comparison(path, scenario):
+    try:
+        result = json.loads(path.read_text())
+    except (OSError, UnicodeError, ValueError):
+        return False
+    if not isinstance(result, dict):
+        return False
+    scenarios = result.get("scenarios")
+    return (isinstance(scenarios, list) and len(scenarios) == 1
+            and isinstance(scenarios[0], dict)
+            and scenarios[0].get("id") == scenario
+            and isinstance(scenarios[0].get("comparison"), dict)
+            and isinstance(scenarios[0]["comparison"].get("differences"), list))
+
+
+def main():
+    parser = argparse.ArgumentParser(prog="./conformance/run")
+    parser.add_argument("scenario")
+    parser.add_argument("--json", action="store_true")
+    args = parser.parse_args()
+
+    root = Path(__file__).resolve().parent.parent
+    scratch = Path(os.environ.get(
+        "LYRACORE_CONFORMANCE_SCRATCH",
+        Path.home() / ".cache/lyracore-scratch/conformance-run",
+    ))
+    scratch.mkdir(parents=True, exist_ok=True)
+    with tempfile.TemporaryDirectory(prefix="tier1-", dir=scratch) as directory:
+        result = Path(directory) / "result.json"
+        environment = os.environ.copy()
+        environment["TMPDIR"] = str(scratch)
+        environment["LYRACORE_CONFORMANCE_RESULT"] = str(result)
+        try:
+            test = subprocess.run(
+                ["cargo", "test", "--quiet", "--locked", "-p", "lyracore-module",
+                 "--test", "native_conformance",
+                 f"tier1::{args.scenario}_matches_its_golden_trace", "--",
+                 "--ignored", "--exact", "--test-threads=1"],
+                cwd=root, env=environment, capture_output=True, text=True, check=False,
+            )
+        except OSError as error:
+            return setup_failure(args.scenario, args.json, f"could not start cargo: {error}")
+        if not has_completed_comparison(result, args.scenario):
+            diagnostic = (test.stdout + test.stderr).strip()
+            diagnostic = f"{diagnostic}\nno completed tier 1 comparison for {args.scenario}".strip()
+            return setup_failure(args.scenario, args.json, diagnostic)
+
+        command = ["cargo", "run", "--quiet", "--locked", "-p", "lyracore-conformance",
+                   "--example", "run", "--", args.scenario]
+        if args.json:
+            command.append("--json")
+        try:
+            rendered = subprocess.run(command, cwd=root, env=environment, check=False)
+        except OSError as error:
+            return setup_failure(args.scenario, args.json, f"could not start cargo: {error}")
+        if test.returncode and not rendered.returncode:
+            sys.stderr.write(test.stdout + test.stderr)
+        return rendered.returncode or test.returncode
+
+
+if __name__ == "__main__":
+    sys.exit(main())

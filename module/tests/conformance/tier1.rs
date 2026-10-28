@@ -1,4 +1,4 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -93,8 +93,10 @@ fn run_scenario(
     id: &str,
     setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
 ) -> Result<()> {
-    let path = core_root().join(".lyracore/conformance/tier1.json");
-    std::fs::create_dir_all(path.parent().unwrap())?;
+    let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
+    std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
     let golden = catalogue::get(id)?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
