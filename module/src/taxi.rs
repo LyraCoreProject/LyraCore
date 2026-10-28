@@ -382,14 +382,18 @@ fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
         .any(|row| row.node_id == node_id)
 }
 
-fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
-    if !is_known(ctx, character_guid, node_id) {
+pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
+    if should_insert_discovery(is_known(ctx, character_guid, node_id)) {
         ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
             id: 0,
             character_guid,
             node_id,
         });
     }
+}
+
+fn should_insert_discovery(already_known: bool) -> bool {
+    !already_known
 }
 
 fn route_is_supported(

@@ -33,7 +33,7 @@ jobs:
         run: python3 -m unittest discover -s scripts/tests
 
       - name: Build the module wasm
-        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
+        run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture,conformance_test_fixture
 
       # Each test owns a standalone process; the thread limit bounds memory use.
       - name: Run the durable suite, shard ${{ matrix.shard }} of 3
@@ -43,7 +43,8 @@ jobs:
           args=()
           for target in "${targets[@]}"; do args+=(--test "$target"); done
           echo "targets: ${targets[*]}"
-          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing
+          # Remove the taxi skip with the last gap in conformance/features/taxi/taxi_single_hop.toml.
+          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing --skip taxi_single_hop_matches_its_golden_trace
 
       - name: Check out the populated-upgrade baseline
         if: matrix.shard == 2

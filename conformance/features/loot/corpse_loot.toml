@@ -1,0 +1,20 @@
+schema_version = 1
+id = "corpse_loot"
+system = "loot"
+scope = "A Character opens an eligible creature corpse and takes its money and items. Group loot policies are separate Behaviors."
+requests = ["0x015D", "0x015E", "0x0108"]
+replies = ["0x0160"]
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = ["Creature loot rows and item templates are imported."]
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/LootHandler.cpp"
+symbol = "WorldSession::HandleLootOpcode"
+
+[real_client]
+status = "unverified"

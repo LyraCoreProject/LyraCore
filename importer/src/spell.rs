@@ -14,24 +14,26 @@ use wow_world_base::vanilla::AuraMod;
 use crate::dbc::{open_chain, read_table};
 use crate::dump::push_insert;
 use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
+use lyracore_importer::spell_kind::{
+    aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, instant_effect_to_kind,
+};
 use std::path::Path;
 
 use lyracore_shared::spell::taxonomy::{
-    A_ABSORB, A_COMBAT_HEALTH_REGEN_PCT, A_CONTROL, A_DISARM, A_FLAG, A_IMMUNITY, A_MOD_COMBAT,
-    A_MOD_DAMAGE_TAKEN, A_MOD_DETECT_RANGE, A_MOD_HEALTH_POWER, A_MOD_POWER_REGEN_PCT,
-    A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED, A_PERIODIC_DAMAGE,
-    A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE, A_PROC_TRIGGER,
-    A_RETALIATE, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_STEALTH, A_TRANSFORM,
+    A_ABSORB, A_CONTROL, A_FLAG, A_IMMUNITY, A_MOD_COMBAT, A_MOD_DAMAGE_TAKEN, A_MOD_HEALTH_POWER,
+    A_MOD_POWER_REGEN_PCT, A_MOD_RESISTANCE, A_MOD_SPEED, A_MOD_STAT, A_MOD_STAT_PCT, A_MOUNTED,
+    A_PERIODIC_DAMAGE, A_PERIODIC_ENERGIZE, A_PERIODIC_HEAL, A_PERIODIC_TRIGGER, A_PROC_DAMAGE,
+    A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
     COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
     COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO, E_BLINK, E_CHARGE, E_CONVERT_RESOURCE,
-    E_CREATE_ITEM, E_DAMAGE, E_DISENCHANT, E_DISMOUNT, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE,
-    E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
-    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE, E_FEED_PET,
+    E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING,
+    E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT,
+    E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE,
+    E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT,
+    M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
     SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
@@ -83,8 +85,6 @@ const ATTR_ON_NEXT_SWING_MASK: u32 = 0x0000_0404;
 
 const SCHOOL_MASK_PHYSICAL: u8 = 1;
 const EFFECT_SCHOOL_DAMAGE: i32 = 2;
-const EFFECT_WEAPON_DAMAGE_NOSCHOOL: i32 = 17;
-const EFFECT_WEAPON_DAMAGE: i32 = 58;
 const EFFECT_NORMALIZED_WEAPON_DAMAGE: i32 = 121;
 const EFFECT_WEAPON_PERCENT_DAMAGE: i32 = 31;
 const WEAPON_DAMAGE_FULL_PCT: i32 = 100;
@@ -173,18 +173,8 @@ fn is_aura_effect(effect_id: i32) -> bool {
     )
 }
 
-const EFFECT_DISPEL_MECHANIC: i32 = 108;
-const MECHANIC_MOUNT: u32 = 21;
 const MECHANIC_BANDAGE: u32 = 16;
 const RECENTLY_BANDAGED: u32 = 11196;
-
-fn dismount_effect_kind(effect_id: i32, misc: u32) -> Option<u8> {
-    if effect_id == EFFECT_DISPEL_MECHANIC && misc == MECHANIC_MOUNT {
-        Some(E_DISMOUNT)
-    } else {
-        None
-    }
-}
 
 // EffectBasePoints stores the nominal integer amount minus one.
 fn dbc_flat_amount(raw: i32) -> i32 {
@@ -296,69 +286,6 @@ fn power_burn_ratio_bp(multiple: f32) -> i32 {
     (multiple * 100.0).round() as i32
 }
 
-fn instant_effect_to_kind(effect_id: i32) -> u8 {
-    match effect_id {
-        2 | 31 => E_DAMAGE,
-        EFFECT_WEAPON_DAMAGE_NOSCHOOL | EFFECT_WEAPON_DAMAGE | EFFECT_NORMALIZED_WEAPON_DAMAGE => {
-            E_WEAPON_STRIKE
-        }
-        10 => E_HEAL,
-        67 => E_HEAL_MAX_HEALTH,
-        30 => E_ENERGIZE,
-        38 => E_DISPEL,
-        64 => E_TRIGGER,
-        63 | 91 => E_TAUNT,
-        114 => E_TAUNT,
-        24 => E_CREATE_ITEM,
-        68 => E_INTERRUPT,
-        55 => E_TAME_CREATURE,
-        101 => E_FEED_PET,
-        56 => E_SUMMON_PET,
-        62 => E_POWER_BURN,
-        83 => E_DUEL,     // Duel p0 carries the duel-flag GameObject entry.
-        69 => E_DISTRACT, // Distract effect amounts use seconds.
-        33 | 59 => E_OPEN_LOCK,
-        99 => E_DISENCHANT,
-        80 => E_ADD_COMBO,
-        94 => E_SELF_RESURRECT,
-        18 | 113 => E_RESURRECT,
-        _ => E_SCRIPTED,
-    }
-}
-
-fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
-    if kind == E_TAUNT && name == "Feint" {
-        return E_REDUCE_THREAT;
-    }
-    if kind != E_SCRIPTED && kind != A_FLAG {
-        return kind;
-    }
-    match name {
-        "Holy Light" | "Flash of Light" => E_HEAL,
-        "Life Tap" => E_CONVERT_RESOURCE,
-        "Charge" => E_CHARGE,
-        "Blink" => E_BLINK,
-        "Seal of Righteousness" => A_SEAL,
-        "Stealth" => A_STEALTH,
-        "Retaliation" => A_RETALIATE,
-
-        "Battle Stance" | "Defensive Stance" | "Berserker Stance" | "Bear Form"
-        | "Dire Bear Form" | "Cat Form" => E_SET_STANCE,
-        "Judgement" => E_JUDGEMENT,
-        "Sinister Strike" | "Backstab" | "Gouge" | "Garrote" => E_ADD_COMBO,
-
-        "Resurrection" | "Redemption" | "Rebirth" | "Ancestral Spirit" => E_RESURRECT,
-        "Pick Pocket" => E_PICKPOCKET,
-        "Create Healthstone"
-        | "Create Healthstone (Minor)"
-        | "Create Healthstone (Lesser)"
-        | "Create Healthstone (Greater)"
-        | "Create Healthstone (Major)" => E_CREATE_ITEM,
-        "Soulstone Resurrection" => A_SELF_RESURRECT,
-        _ => kind,
-    }
-}
-
 fn soulstone_option_spell(aura_spell_id: u32) -> Option<i32> {
     match aura_spell_id {
         20707 => Some(3026),
@@ -408,123 +335,6 @@ fn proc_damage_school_p0(kind: u8, p0: i32, p0_kind: u8, school_mask: u8) -> (i3
         (school_mask as i32, P_SCHOOL_MASK)
     } else {
         (p0, p0_kind)
-    }
-}
-
-fn aura_mod_to_kind(aura: AuraMod) -> u8 {
-    use AuraMod::*;
-    match aura {
-        PeriodicDamage | PeriodicLeech | PeriodicDamagePercent => A_PERIODIC_DAMAGE,
-        PeriodicHeal => A_PERIODIC_HEAL,
-        PeriodicEnergize | PeriodicManaLeech | PowerBurnMana => A_PERIODIC_ENERGIZE,
-        PeriodicTriggerSpell => E_TRIGGER,
-        ProcTriggerSpell => A_PROC_TRIGGER,
-        ProcTriggerDamage => A_PROC_DAMAGE,
-
-        AddFlatModifier => A_SPELLMOD_FLAT,
-        AddPctModifier => A_SPELLMOD_PCT,
-
-        ModStat => A_MOD_STAT,
-        ModPercentStat | ModTotalStatPercentage => A_MOD_STAT_PCT,
-
-        ModResistance
-        | ModBaseResistance
-        | ModResistancePct
-        | ModBaseResistancePct
-        | ModResistanceOfStatPercent => A_MOD_RESISTANCE,
-
-        SchoolAbsorb | DamageShield | ManaShield => A_ABSORB,
-
-        ModAttackPower
-        | ModRangedAttackPower
-        | ModMeleeAttackPowerVersus
-        | ModRangedAttackPowerVersus
-        | ModAttackPowerPct
-        | ModRangedAttackPowerPct => A_MOD_COMBAT,
-        ModCritPercent | ModSpellCritChance | ModSpellCritChanceSchool | ModCritPercentVersus => {
-            A_MOD_COMBAT
-        }
-        ModHitChance | ModSpellHitChance => A_MOD_COMBAT,
-        ModDamageDone | ModDamagePercentDone | ModDamageDoneCreature | ModDamageDoneVersus => {
-            A_MOD_COMBAT
-        }
-        ModHealing | ModHealingDone => A_MOD_COMBAT,
-        ModDodgePercent | ModTotalThreat | ModThreat => A_MOD_COMBAT,
-
-        ModIncreaseSpeed | ModDecreaseSpeed | ModSpeedAlways | ModSpeedNotStack => A_MOD_SPEED,
-        ModIncreaseMountedSpeed | ModMountedSpeedAlways | ModMountedSpeedNotStack => A_MOD_SPEED,
-        ModIncreaseSwimSpeed => A_MOD_SPEED,
-        ModAttackspeed
-        | ModMeleeHaste
-        | ModRangedHaste
-        | ModRangedAmmoHaste
-        | ModCastingSpeedNotStack => A_MOD_SPEED,
-
-        ModDamagePercentTaken => A_MOD_DAMAGE_TAKEN,
-
-        ModIncreaseHealth | ModIncreaseEnergy | ObsModHealth | ObsModMana => A_MOD_HEALTH_POWER,
-
-        ModStun => A_CONTROL,
-        ModRoot => A_CONTROL,
-        ModFear => A_CONTROL,
-        ModConfuse | ModCharm | ModPossess | ModPacify | ModPacifySilence | AoeCharm => A_CONTROL,
-
-        SchoolImmunity | DamageImmunity | EffectImmunity | StateImmunity | MechanicImmunity
-        | MechanicImmunityMask => A_IMMUNITY,
-
-        ModRegenDuringCombat | ModHealthRegenInCombat => A_COMBAT_HEALTH_REGEN_PCT,
-
-        ModRegen => A_PERIODIC_HEAL,
-        ModPowerRegen => A_PERIODIC_ENERGIZE,
-        ModPowerRegenPercent => A_MOD_POWER_REGEN_PCT,
-
-        ModDisarm => A_DISARM,
-        Mounted => A_MOUNTED,
-        Transform => A_TRANSFORM,
-        ModDetectRange => A_MOD_DETECT_RANGE,
-
-        Dummy
-        | BindSight
-        | ModTaunt
-        | ModStealth
-        | ModStealthDetect
-        | ModInvisibility
-        | ModInvisibilityDetection
-        | ModShapeshift
-        | DispelImmunity
-        | TrackCreatures
-        | TrackResources
-        | ModScale
-        | ModStalked
-        | ModLanguage
-        | FarSight
-        | WaterBreathing
-        | ModHealthRegenPercent
-        | PreventsFleeing
-        | ModUnattackable
-        | InterruptRegen
-        | Ghost
-        | AurasVisible
-        | WaterWalk
-        | FeatherFall
-        | Hover
-        | SharePetTracking
-        | Untrackable
-        | SafeFall
-        | Persuaded
-        | RetainComboPoints
-        | ResistPushback
-        | TrackStealthed
-        | ModWaterBreathing
-        | NoPvpCredit
-        | ModAoeAvoidance
-        | FeignDeath
-        | ModSilence
-        | SpiritOfRedemption
-        | AllowChampionSpells
-        | UseNormalMovementSpeed => A_FLAG,
-
-        _ => E_SCRIPTED,
     }
 }
 
@@ -1728,6 +1538,7 @@ fn save_snapshot(rows: &SpellRows, cov: &Coverage, path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::{A_STEALTH, E_DISMOUNT};
 
     fn source_spell_fixture() -> Vec<u8> {
         let mut bytes = b"WDBC".to_vec();

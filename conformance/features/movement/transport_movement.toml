@@ -1,0 +1,24 @@
+schema_version = 1
+id = "transport_movement"
+system = "movement"
+scope = "Movement while aboard a Transport preserves its guid and relative position in the movement sent to observers. Transport route simulation is outside this Behavior."
+requests = ["0x00B5", "0x00EE"]
+replies = ["0x00B5", "0x00EE"]
+dependencies = []
+required_rungs = ["codec", "tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = ["World entry and AOI Grants are active."]
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/MovementHandler.cpp"
+symbol = "WorldSession::HandleMovementOpcodes"
+
+[real_client]
+status = "unverified"
+
+[[tests]]
+path = "crates/lyracore-protocol/tests/benilla_movement.rs"
+function = "benilla_transport_movement_survives_decode_and_relay"
+rung = "codec"

@@ -1,0 +1,104 @@
+schema_version = 1
+id = "creature_script_behavior"
+system = "creatures"
+scope = "A creature follows its source event, condition, command and script program."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/AI/CreatureAI.cpp"
+symbol = "CreatureAI::UpdateAI"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "eventai.command full-world 467, alliance-single 107: source commands cannot be translated"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.command; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.command-condition full-world 51, alliance-single 11: command predicates cannot be translated"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.command-condition; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.condition full-world 213, alliance-single 59: source predicates cannot be translated"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.condition; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.encounter full-world 69, alliance-single 1: encounter notification is absent"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.encounter; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.event full-world 75, alliance-single 10: source event triggers cannot be translated"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.event; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.flee-fixed-duration: source fixed flee duration is absent"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.flee-fixed-duration; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.script full-world 48, alliance-single 25: source script dispatch is absent"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.script; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.start-script-source-target-swap full-world 2, alliance-single 0: source and target swap in start scripts is absent"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.start-script-source-target-swap; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.summon-corpse-lifetime: summon corpse lifetime is absent"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.summon-corpse-lifetime; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "eventai.target full-world 28, alliance-single 0: source target selection cannot be translated"
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "Compatibility Manifest eventai.target; conformance/vmangos-port-census/creature-ai.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Targeted source emotes remain refused because the Module cannot pause movement, face the target, delay animation and restore orientation as one command."
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_command"
+evidence = "conformance/vmangos-port-census/creature-ai.md: 93 targeted-emote rows at the pin."
+
+[[known_gaps]]
+description = "Guardian creator GUID and creator spell fields are absent from client packets."
+path = "module/src/creatures/eventai/mobility.rs"
+symbol = "summon_guid"
+evidence = "conformance/vmangos-port-census/creature-ai.md: guardian presentation."
+
+[[known_gaps]]
+description = "C++ encounter handlers and their additional effects are absent even where an EventAI encounter notification translates."
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_event"
+evidence = "conformance/vmangos-port-census/creature-ai.md: encounter notifications do not install Package handlers."
+
+[[known_gaps]]
+description = "Four active EventAI display commands are refused; they do not emit a display-template instruction."
+path = "importer/src/eventai_vmangos.rs"
+symbol = "compile_command"
+evidence = "conformance/vmangos-port-census/creature-ai.md: source display commands."

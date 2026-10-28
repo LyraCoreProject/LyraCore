@@ -1,0 +1,44 @@
+schema_version = 1
+id = "spell_cast_kinds"
+system = "spells"
+scope = "A cast applies its source effect and custom flag behavior."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Spells/Spell.cpp"
+symbol = "Spell::cast"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "spells.custom-flags: SEND_CHANNEL_VISUAL is held on 17 spells; TRIGGER_WEAPON_PROCS is held on 30 spells."
+path = "importer/src/vmangos_spell.rs"
+symbol = "read"
+evidence = "Compatibility Manifest spells.custom-flags; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "spells.modifier-high-mask: Modifier masks above 32 bits lose their high bits."
+path = "importer/src/vmangos_spell.rs"
+symbol = "read"
+evidence = "Compatibility Manifest spells.modifier-high-mask; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "spells.script: Selected source script names have no Module dispatcher."
+path = "importer/src/vmangos_spell.rs"
+symbol = "read"
+evidence = "Compatibility Manifest spells.script; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Opening spell 21082 from the Base Snapshot is refused because its core synthetic fourth effect is outside Package API slots 0 through 2."
+path = "importer/src/spell.rs"
+symbol = "push_spell_effect_rows"
+evidence = "conformance/vmangos-port-census/spell.md: spell 21082 snapshot and Package API bound."

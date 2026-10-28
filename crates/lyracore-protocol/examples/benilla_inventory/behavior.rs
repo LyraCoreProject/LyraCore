@@ -2,19 +2,14 @@
 
 use anyhow::{bail, Context, Result};
 use serde_json::{json, Value};
-use std::collections::BTreeSet;
 use std::path::Path;
 use syn::visit::{self, Visit};
 
 pub fn inventory(root: &Path) -> Result<Value> {
-    let mut behaviors: Value = serde_json::from_str(include_str!("behaviors.json"))?;
+    let ledger = lyracore_conformance::FeatureLedger::load(&root.join("conformance/features"))?;
+    let mut behaviors = serde_json::to_value(ledger.behaviors())?;
     let rows = behaviors.as_array_mut().context("behavior list")?;
-    let mut ids = BTreeSet::new();
     for behavior in rows {
-        let id = behavior["id"].as_str().context("behavior id")?;
-        if !ids.insert(id.to_owned()) {
-            bail!("duplicate behavior id: {id}");
-        }
         for test in behavior["tests"].as_array_mut().context("behavior tests")? {
             let path = test["path"].as_str().context("test path")?;
             let name = test["function"].as_str().context("test function")?;
@@ -84,6 +79,13 @@ fn test_evidence(source: &str, name: &str) -> Result<bool> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn feature_ledger_evidence_names_retained_rust_tests() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let behaviors = inventory(&root).unwrap();
+        assert!(!behaviors.as_array().unwrap().is_empty());
+    }
 
     #[test]
     fn evidence_requires_a_test_declaration() {

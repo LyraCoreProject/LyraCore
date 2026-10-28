@@ -78,7 +78,8 @@ update its native Relay and any world-entry replay that restores it.
 - Add reusable builders in `crates/lyracore-protocol/src/codec/combat.rs`.
 - Call them from `module/src/native/spell.rs` or the owning native Protocol Family.
 - Test exact packet bytes, recipient selection and the client's acknowledgement when applicable.
-- Add a native request scenario to `native-host/check.py` for behavior that crosses those paths.
+- Ask a separate scenario author to record the gameplay Behavior, then make its tier 1 comparison
+  pass in core. [Testing](../testing.md#conformance) defines the roles and the `check.py` boundary.
 
 ## 9. Write the durable test
 
