@@ -205,12 +205,17 @@ These checks do not establish that a Behavior passes its required verification r
 The tier 1 test writes `.lyracore/conformance/tier1.json` and requires each scenario's harness
 revision, scenario hash, and rule and data signature sets to equal
 `conformance/tier1-baseline.json`. New and removed signatures fail.
-After running both tier 1 tests, regenerate the baseline from that comparator output with
-`./conformance/baseline`. Review its diff in the same PR as the behavior change. The baseline does
-not affect comparator classification or the scoreboard's pass/fail.
+After changing one scenario's signatures, run `./conformance/baseline <scenario>`. It runs that
+scenario's durable test and replaces only its entry from the new comparison. To regenerate every
+entry, run both tier 1 tests, then `./conformance/baseline`. Review the baseline diff in the same PR
+as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
 Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
 machine-readable differences and baseline changes. It runs only the named durable test. See the
 [run output contract](../conformance/README.md#run-one-scenario).
+For a local implementer check, run the changed scenario and `cargo fmt --all -- --check`. Run
+`cargo clippy -p <crate> --all-targets --all-features -- -D warnings` for each changed crate. If the
+Module changed, run `cargo test -p lyracore-module --lib --features=debug_reducers`. CI runs all
+tier 1 scenarios and the full suite.
 Run the manual [Conformance Audit](../conformance/README.md#conformance-audit) for comparisons over
 TCP on both servers. Run `./conformance/scoreboard` to join it with the Feature Ledger and the
 latest Conformance Audit report. The scoreboard's example tests check counts, evidence freshness
