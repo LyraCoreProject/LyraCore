@@ -353,7 +353,7 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 ## Conformance Audit
 
 Prepare the pinned Reference Server once with the harness's
-[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/adapters/vmangos/README.md).
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md).
 Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
 The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
