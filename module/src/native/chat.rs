@@ -7,7 +7,7 @@ use lyracore_protocol::{
     },
 };
 use lyracore_shared::chat::{broadcast_chat, chat_kind, chat_tag_for, language, ChatRefusal};
-use spacetimedb::{ConnectionId, ReducerContext};
+use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, NativeWorldConnection, Rollback};
 use crate::{
@@ -479,6 +479,47 @@ pub(crate) fn text_emote(ctx: &ReducerContext, speaker: &WorldEntity, event: &Em
         }
         if let Some(animation) = &animation {
             deliver(ctx, listener.guid, animation);
+        }
+    }
+}
+
+pub(crate) fn creature_sound(ctx: &ReducerContext, source_guid: u64, sound_id: u32, chat_type: u8) {
+    if sound_id == 0 {
+        return;
+    }
+    let packet = packet(ServerOpcodeMessage::SMSG_PLAY_SOUND(
+        lyracore_protocol::messages::vanilla::SMSG_PLAY_SOUND { sound_id },
+    ));
+    if !broadcast_chat::is_zone_wide(chat_type) {
+        return super::visibility::broadcast(ctx, source_guid, packet.opcode, packet.body, false);
+    }
+    let Some(source) = ctx.db.game_world_entity().guid().find(source_guid) else {
+        return;
+    };
+    let zone = if matches!(source.map_id, 0 | 1) {
+        let Some(zone) = crate::terrain::zone_id_at(ctx, source.map_id, source.x, source.y)
+            .filter(|zone| *zone != 0)
+        else {
+            return;
+        };
+        Some(zone)
+    } else {
+        None
+    };
+    for owner in ctx.db.game_native_player().iter() {
+        if zone.is_some_and(|zone| zone != owner.zone_id) {
+            continue;
+        }
+        if ctx
+            .db
+            .game_world_entity()
+            .guid()
+            .find(owner.character_guid)
+            .is_some_and(|target| {
+                crate::helpers::in_same_partition(&target, source.map_id, source.instance_id)
+            })
+        {
+            deliver(ctx, owner.character_guid, &packet);
         }
     }
 }

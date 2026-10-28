@@ -1,4 +1,14 @@
-# Package API, version 4
+# Package API, version 5
+
+Version 5 is an unreleased draft for the vmangos World Source switch. No collection tag
+has been created for it.
+
+Imported creature and GameObject spawn identifiers now come from vmangos. A Package Delta
+that names a classic-db `spawn_id` must be rebuilt against the vmangos import. The same
+number can identify a different placement; it is not safe to reuse a Spatial Claim because
+its numeric key still exists. Recheck the entry, map and position, then rebuild the Delta
+and its evidence against the new Import Revision. Package and Operator
+identifier ranges keep their values.
 
 The Package API is the part of the Module a Package may name. A Package compiles into the Module
 wasm and can reach any `crate::` path the compiler resolves. This document says which of those paths
@@ -15,9 +25,9 @@ hook event keeps its name and its payload fields. A listed operation keeps its n
 order and its Refusal behaviour. A table accessor keeps its name.
 
 **May move with notice.** The surface grows by addition: a new hook event, a new payload field, a new
-operation. A change that breaks a Package bumps this version and is called out in `CHANGELOG.md`. An
-`_Avoid_` rename or a module split may move a path, and the lint below is what makes that visible at
-build time rather than at run time.
+operation. A change that breaks a Package bumps this version, and the pull request that bumps it
+says what broke. An `_Avoid_` rename or a module split may move a path, and the lint below is what
+makes that visible at build time rather than at run time.
 
 **Never promised.** Every `crate::` root not listed here. Row layouts of tables a Package does not
 own. The order core operations run in, beyond the ordering stated below. Anything reached through
@@ -143,6 +153,10 @@ with: `get_encounter_state`, `set_encounter_state`, `get_encounter_data`, `set_e
 `encounter_reset`, `encounter_reset_full`, and the four `ENCOUNTER_*` state constants. Core ships no
 encounter content; the kernel exists for Packages.
 
+`EncounterSignal::Reset` requests the not-started state after an evade. It does not install a
+handler or reset Package state on its own. Encounter handlers must handle added signals with a
+wildcard arm, as with effect kinds.
+
 `move_to_point` sends the creature on one leg from the point the client draws it at. The creature's
 stored position follows the leg and reaches the destination when the leg lands, so a Package that
 needs the arrival schedules it from the leg, as a relay arrival does, and does not read the
@@ -248,6 +262,10 @@ does not fire this hook. `on_cast_resolved` keeps its effect-dispatch contract.
 owning Gate. `Other` preserves a Gate's message when no current caller needs a separate policy.
 `UnlearnedSpell` and `NoLineOfSight` identify the spellbook and targeted visibility Gates.
 
+`actor::CastRefusalKind::TargetLevelTooLow` is an additive refusal kind. It reports a target
+below the spell's `min_target_level`; callers that classify refusals should handle it or keep
+a fallback arm.
+
 `actor::cancel_cast_attempt(ctx, caster_guid, scheduled_id)` cancels only that scheduled cast.
 `actor::expire_cast_attempt(ctx, caster_guid, scheduled_id, deadline_micros)` also requires the
 caller's action deadline to have passed. They return whether they removed the cast and report
@@ -327,7 +345,7 @@ The returned id names that completed relocation. A repeat for the same controlle
 AreaTrigger and destination returns the same id while the Character remains in that destination
 partition. Only the latest relocation remains. A Refusal leaves the Character, Instance binding and
 relocation unchanged. No Transfer Intent or Escrow is created. `area_trigger_route` exposes the
-source center and containment rule for Candidate movement.
+source center and containment rule for candidate movement.
 
 ### Package Config
 
@@ -354,8 +372,8 @@ observation steps a Package's own debug fixtures need. A release build has no su
 | `emit_move_spline(ctx, guid, start, destination, duration_ms, run, spline_id, map_id, instance_id, grid)` | emits a straight creature movement segment with the existing ten-argument fixture contract |
 
 The root also re-exports Core setup steps such as `grant_item`, `remove_items`, `grant_xp`,
-`learn_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and `SessionActor`;
-`module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
+`learn_spell`, `forget_spell`, `apply_hit`, `kill_creature`, `sync_group_mirror` and
+`SessionActor`; `module/src/package_fixture.rs` lists them. A fixture reads the navigation revision through
 `actor::movement::inputs(ctx, map_id).imported_revision`.
 
 Name this root only from a Package file whose first non-blank line is
@@ -395,6 +413,17 @@ Core table accessors and row types are named under `crate::tables`, for example
 `module/src/tables.rs` lists them explicitly. Crate-root row aliases remain for Core and schema
 checks; a Package uses the catalog path. `crate::CHARACTER_OWNED_TABLES` is the generated manifest
 of character-keyed tables.
+
+### Creature stat edits
+
+Imported creature stats include rank. Core uses `game_creature_level_stats` for the selected
+level while the template endpoints match those rows. Keep these Core-owned rows when editing a
+template. When an edit changes the endpoints, Core interpolates template health and uses template
+damage and armor directly, without another rank multiplier. Hunter pets outside the template's
+level range retain level scaling without another rank multiplier.
+
+Templates without imported level rows, including Package-invented templates, supply base health
+and melee damage. Core applies its rank multiplier to those values.
 
 ### Module roots
 

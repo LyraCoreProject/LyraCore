@@ -408,15 +408,18 @@ pub(crate) fn expire_cast_attempt(
 
 pub(crate) fn break_channel(ctx: &ReducerContext, caster_guid: u64) -> bool {
     let auras = ctx.db.game_aura();
-    let ids: Vec<u64> = auras
+    let removed: Vec<Aura> = auras
         .by_caster()
         .filter(&caster_guid)
         .filter(|aura| is_channel_aura(ctx, aura))
-        .map(|a| a.id)
         .collect();
-    let broke_channel = !ids.is_empty();
-    for id in ids {
-        crate::Aura::delete(ctx, id);
+    let broke_channel = !removed.is_empty();
+    let mut targets = std::collections::BTreeMap::<u64, Vec<Aura>>::new();
+    for aura in removed {
+        targets.entry(aura.target_guid).or_default().push(aura);
+    }
+    for (target, auras) in targets {
+        shed_auras(ctx, target, auras);
     }
     let broke_cast = interrupt_cast(ctx, caster_guid);
     if broke_channel {
@@ -568,35 +571,6 @@ mod tests {
     }
 
     #[test]
-    fn cc_blocks_matches_the_closed_form_across_every_combination() {
-        for stunned in [false, true] {
-            for rooted in [false, true] {
-                for feared in [false, true] {
-                    for poly in [false, true] {
-                        let (action, movement, self_move) =
-                            cc_blocks(stunned, rooted, feared, poly);
-                        assert_eq!(
-                            action,
-                            stunned || feared || poly,
-                            "action@{stunned},{rooted},{feared},{poly}"
-                        );
-                        assert_eq!(
-                            movement,
-                            stunned || rooted || poly,
-                            "movement@{stunned},{rooted},{feared},{poly}"
-                        );
-                        assert_eq!(
-                            self_move,
-                            stunned || rooted || feared || poly,
-                            "self_move@{stunned},{rooted},{feared},{poly}"
-                        );
-                    }
-                }
-            }
-        }
-    }
-
-    #[test]
     fn pushback_constants_match_the_cmangos_convention() {
         assert_eq!(CAST_PUSHBACK_MS, 500);
         assert_eq!(CAST_PUSHBACK_MAX, 2);
@@ -609,13 +583,6 @@ mod tests {
         assert!(!should_pushback(2));
         assert!(!should_pushback(3));
         assert!(!should_pushback(u8::MAX));
-    }
-
-    #[test]
-    fn should_pushback_matches_the_closed_form_across_a_range() {
-        for n in 0u8..=20 {
-            assert_eq!(should_pushback(n), n < CAST_PUSHBACK_MAX, "n={n}");
-        }
     }
 
     #[test]

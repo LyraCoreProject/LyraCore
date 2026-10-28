@@ -112,6 +112,37 @@ Host and Module reducer arguments and delivery layouts must match. A change to t
 a maintenance interval: keep native client listeners closed until the matching Module is published.
 Do not run old and new Host binaries against the same data directory.
 
+## Move an existing Realm from classic-db to vmangos
+
+Treat this as a world replacement during a maintenance interval. Publishing the Module preserves
+Character state, but `lyracore import` replaces imported world content. Source spawn guids change.
+A numeric spawn id can name a different creature or GameObject placement. Existing Package Spatial
+Claims are stale and must be rebuilt against the new Import Revision, checking entry, map and
+position. Package and Operator identifier ranges do not change.
+
+Classic-only quest, item and credit ids can disappear. Before the update, compare the source census
+with active Character quests, inventory and recorded credit on a restored copy. Decide how to
+handle missing ids before reopening clients. This import supplies no automatic conversion for
+those Character records. The unsupported behavior ledger lists the accepted quest and script gaps.
+
+1. Follow the backup and restored-copy verification above. Record the old `game_import_meta`
+   rows and Package revisions. Keep native client listeners closed during the replacement.
+2. Move Characters out of Instances and let the existing Instances be removed through the
+   [Instance lifecycle](instance-lifecycle.md). Confirm no old `game_instance` leases remain.
+   Instances copy spawn rows and routes, so they must be recreated from the new import. A Module
+   publish or spell-only Package apply does not rebuild them.
+3. Publish the reviewed Module and call `debug_repair_after_publish` as described above.
+4. Run `./lyracore import` with the intended profile and the Operator's client data. Complete all
+   world families and `./lyracore import check` before applying Packages. Do not use
+   `lyracore packages apply` as the source migration: it can reimport spells without replacing
+   the world. Spell apply and its `--check` mode refuse world provenance that differs from the
+   selected vmangos snapshot.
+5. Rebuild the Package artifacts and Spatial Claims against the new Import Revision, then run
+   `./lyracore packages apply --check` followed by `./lyracore packages apply`. Verify Package
+   placement and behavior on the restored copy before repeating the procedure on the target.
+6. Recreate Instances through fresh entry and verify Character reconnect, quests, inventory,
+   credits and the imported content census. Reopen clients only after those checks pass.
+
 ## Verify the result
 
 Record the new PID, executable hash, start time, restart count and listener ownership. HTTP health

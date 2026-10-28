@@ -888,7 +888,7 @@ fn insert_fixture_entity(
         source_guid: 0,
         instance_id: 0,
     };
-    let mut entity = crate::creatures::build_creature_entity(&spawn, template, 0, 0);
+    let mut entity = crate::creatures::build_creature_entity(ctx, &spawn, template, 0, 0);
     entity.owner_guid = owner_guid;
     if is_character {
         entity.type_mask = lyracore_shared::constants::type_mask::PLAYER;

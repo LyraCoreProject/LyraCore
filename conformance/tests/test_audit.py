@@ -1,6 +1,8 @@
 import importlib.util
 import json
+import os
 from pathlib import Path
+import shutil
 import tempfile
 import unittest
 from unittest.mock import MagicMock, patch
@@ -91,6 +93,67 @@ class WorldReadiness(unittest.TestCase):
                 patch.object(audit.time, 'sleep'):
             audit.wait_port(18085, world=True)
         self.assertEqual(connect.call_count, 2)
+
+
+class LocalRealmLifetime(unittest.TestCase):
+    def test_import_failure_stops_the_realm_started_by_the_audit(self):
+        calls = []
+
+        def run(args, **_):
+            calls.append([str(arg) for arg in args])
+            if args[:3] == ['git', 'worktree', 'add']:
+                args[4].mkdir()
+            if args[1:3] == ['import', '--accept']:
+                raise RuntimeError('import failed')
+            if args[:3] == ['git', 'worktree', 'remove']:
+                shutil.rmtree(args[4])
+
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory, \
+                patch.object(audit, 'ROOT', Path(directory)), patch.object(audit, 'git', return_value=''), \
+                patch.object(audit, 'run', run), patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime'), \
+                patch.object(audit.socket, 'socket'):
+            work = Path(directory)
+            (work / '.lyracore-cli-rev').write_text('9a00763234f82830a6266b9561a607523f67c2b1')
+            with self.assertRaisesRegex(RuntimeError, 'import failed'):
+                with audit.local_realm(work, work / 'client/Data'):
+                    self.fail('capture must not start')
+            self.assertFalse((work / 'core').exists())
+        self.assertEqual([call[1:3] for call in calls],
+                         [['worktree', 'add'], ['dev', 'up'], ['import', '--accept'],
+                          ['dev', 'down'], ['worktree', 'remove']])
+        self.assertEqual(calls[2][-2:], ['--client-data', str(work / 'client/Data')])
+
+
+class ClientDataPath(unittest.TestCase):
+    def test_relative_client_data_is_resolved_before_the_audit_changes_directory(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            client_data = Path(directory) / 'client/Data'
+            client_data.mkdir(parents=True)
+            relative = os.path.relpath(client_data, Path.cwd())
+            arguments = ['--date', '2099-01-01', '--output', str(Path(directory) / 'reports'),
+                         '--client-data', relative]
+            captured = []
+
+            def capture_servers(_harness, _wire, _work, path):
+                captured.append(path)
+                return {}, 'host', 'module', 'content'
+
+            def run(args, **_):
+                return type('Result', (), {'stdout': '{}'})()
+
+            original_cwd = Path.cwd()
+            self.addCleanup(os.chdir, original_cwd)
+            original_tempdir = tempfile.tempdir
+            self.addCleanup(setattr, tempfile, 'tempdir', original_tempdir)
+            with patch.dict(audit.os.environ, LYRACORE_AUDIT_ARGS=json.dumps(arguments)), \
+                    patch.object(audit, 'git', side_effect=lambda *args: 'core' if args[0] == 'rev-parse' else ''), \
+                    patch.object(audit, 'run', run), patch.object(audit, 'check_cargo_config'), \
+                    patch.object(audit, 'pinned_harness', return_value=Path(directory)), \
+                    patch.object(audit, 'capture_servers', side_effect=capture_servers):
+                audit.main()
+            self.assertEqual(captured, [str(client_data.resolve())])
 
 
 class CleanupAuthentication(unittest.TestCase):

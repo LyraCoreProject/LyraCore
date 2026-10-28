@@ -1,7 +1,7 @@
 import importlib.util
+from contextlib import closing
 from pathlib import Path
 import sqlite3
-import re
 import tempfile
 import unittest
 
@@ -34,8 +34,8 @@ class SpellCountsTests(unittest.TestCase):
                                 (entry, build, name, effect, aura, trigger, second))
 
     def totals(self):
-        return {row['class']: (row['supported'], row['trainable'])
-                for row in spells.counts(self.connection, {2, 6, 10}, {3, 8})}
+        return {row['class']: {spell['id']: spell for spell in row['spells']}
+                for row in spells.counts(self.connection)}
 
     def test_trainers_resolve_teaching_spells_and_deduplicate_class_skill_learning(self):
         self.spell(1)
@@ -47,9 +47,9 @@ class SpellCountsTests(unittest.TestCase):
             INSERT INTO npc_trainer_template VALUES (200,2,1,0,5875), (201,4,1,0,5875);
             INSERT INTO skill_line_ability VALUES (1,5875,6,1,128,2);
         ''')
-        self.assertEqual(self.totals()['Mage'], (1, 1))
-        self.assertEqual(self.totals()['Warrior'], (1, 1))
-        self.assertEqual(self.totals()['Hunter'], (0, 0))
+        self.assertEqual(set(self.totals()['Mage']), {1})
+        self.assertEqual(set(self.totals()['Warrior']), {4})
+        self.assertEqual(self.totals()['Hunter'], {})
 
     def test_latest_build_and_every_effect_and_aura_slot_determine_support(self):
         self.spell(1, build=4000)
@@ -60,7 +60,8 @@ class SpellCountsTests(unittest.TestCase):
         self.spell(4, effect=6, aura=3)
         self.connection.executemany('INSERT INTO npc_trainer VALUES (100,?,1,0,5875)',
                                     [(entry,) for entry in range(1, 5)])
-        self.assertEqual(self.totals()['Mage'], (1, 4))
+        self.assertEqual(set(self.totals()['Mage']), {1, 2, 3, 4})
+        self.assertEqual(len(self.totals()['Mage'][1]['slots']), 2)
 
     def test_build_ranges_class_masks_skill_lines_and_learning_flags_limit_trainability(self):
         for entry in range(1, 9):
@@ -72,8 +73,8 @@ class SpellCountsTests(unittest.TestCase):
                 (4,4000,6,7,128,2), (4,5875,6,7,128,0), (4,6000,6,7,128,2),
                 (5,5875,6,8,0,1);
         ''')
-        self.assertEqual(self.totals()['Mage'], (1, 1))
-        self.assertEqual(self.totals()['Warrior'], (0, 0))
+        self.assertEqual(set(self.totals()['Mage']), {8})
+        self.assertEqual(self.totals()['Warrior'], {})
 
     def test_latest_creature_patch_supplies_the_trainer_class(self):
         self.spell(1)
@@ -81,8 +82,8 @@ class SpellCountsTests(unittest.TestCase):
             INSERT INTO creature_template VALUES (100,1,0,1,200), (100,11,0,1,200);
             INSERT INTO npc_trainer_template VALUES (200,1,1,0,5875);
         ''')
-        self.assertEqual(self.totals()['Mage'], (1, 1))
-        self.assertEqual(self.totals()['Warrior'], (0, 0))
+        self.assertEqual(set(self.totals()['Mage']), {1})
+        self.assertEqual(self.totals()['Warrior'], {})
 
     def test_missing_and_cyclic_teaching_spells_fail(self):
         self.spell(1, effect=36, trigger=2)
@@ -97,48 +98,23 @@ class SpellCountsTests(unittest.TestCase):
         scratch = Path.home() / '.cache/lyracore-scratch/conformance'
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
-            root = Path(directory)
-            self.assertEqual(spells.locate(None, root), (None, str(root / '**/mangos.sqlite')))
+            root = Path(directory) / '.import/vmangos'
+            root.mkdir(parents=True)
+            self.assertEqual(spells.locate(None, root), (None, str(root / 'current.json')))
             missing = root / 'missing.sqlite'
             self.assertEqual(spells.locate(missing, root), (None, str(missing)))
             with self.assertRaises(sqlite3.OperationalError):
-                spells.read(missing, set(), set())
+                spells.read(missing)
             self.assertFalse(missing.exists())
             path = root / 'nested/mangos.sqlite'
             path.parent.mkdir()
-            with sqlite3.connect(path) as target:
+            with closing(sqlite3.connect(path)) as target:
                 self.connection.backup(target)
+            (root / 'current.json').write_text('{"sqlite_path": ".import/vmangos/nested/mangos.sqlite"}')
             self.assertEqual(spells.locate(None, root)[0], path)
             before = path.read_bytes()
-            self.assertEqual(len(spells.read(path, {2}, {3})), 9)
+            self.assertEqual(len(spells.read(path)), 9)
             self.assertEqual(path.read_bytes(), before)
-            (root / 'mangos.sqlite').touch()
-            with self.assertRaisesRegex(ValueError, 'multiple'):
+            (root / 'current.json').write_text('{"sqlite_path": "/outside/mangos.sqlite"}')
+            with self.assertRaisesRegex(ValueError, 'outside'):
                 spells.locate(None, root)
-
-
-class ImporterMappingTests(unittest.TestCase):
-    def test_name_corrections_match_the_importer_table(self):
-        source = (Path(__file__).parents[2] / 'importer/src/spell.rs').read_text()
-        function = source.split('fn correct_script_effect_kind(', 1)[1].split('\nfn ', 1)[0]
-        table = function.split('match name {', 1)[1]
-        names = set(re.findall(r'"([^"\n]+)"', table))
-        self.assertEqual(names, spells.SCRIPT_NAMES | {'Stealth'})
-        self.assertIn('if name == "Stealth" && aura != AuraMod::ModStealth', source)
-
-    def test_name_dependent_effects_and_importer_special_cases(self):
-        def supported(name, effect, aura=0, a=0, b=0, misc=0):
-            return spells.effect_supported(name, effect, aura, a, b, misc,
-                                            {2, 59, 63, 91}, {3, 16})
-        for effect, name in [(5, 'Blink'), (29, 'Blink'), (96, 'Charge')]:
-            self.assertFalse(supported('Other', effect))
-            self.assertTrue(supported(name, effect))
-        for effect in [59, 63, 91]:
-            self.assertTrue(supported('Other', effect))
-        self.assertTrue(supported('Home', 5, b=9))
-        self.assertFalse(supported('Stealth', 3))
-        self.assertTrue(supported('Stealth', 6, aura=16))
-        self.assertTrue(supported('Other', 108, misc=21))
-        self.assertFalse(supported('Other', 108, misc=1))
-        self.assertFalse(supported('Other', 2, aura=999))
-        self.assertTrue(supported('Life Tap', 3))

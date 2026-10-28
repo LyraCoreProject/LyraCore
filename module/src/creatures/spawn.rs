@@ -1,8 +1,6 @@
 use lyracore_shared::{constants, packing, spatial};
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-#[cfg(feature = "debug_reducers")]
-use crate::creatures::tick::game_creature_spline;
 use crate::{game_active_taxi_flight, game_race_info, game_world_entity, Character, WorldEntity};
 
 #[table(
@@ -277,43 +275,6 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
     Ok(())
 }
 
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_retire_region_creatures(
-    ctx: &ReducerContext,
-    map_id: u32,
-    gx_min: i32,
-    gx_max: i32,
-    gy_min: i32,
-    gy_max: i32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let spawns = ctx.db.game_creature_spawn();
-    let splines = ctx.db.game_creature_spline();
-    let doomed: Vec<u64> = spawns
-        .iter()
-        .filter(|s| {
-            let (gx, gy) = lyracore_shared::spatial::grid_cell(s.x, s.y);
-            s.map_id == map_id && gx >= gx_min && gx <= gx_max && gy >= gy_min && gy <= gy_max
-        })
-        .map(|s| s.guid)
-        .collect();
-    for g in &doomed {
-        crate::WorldEntity::delete(ctx, g);
-        splines.guid().delete(g);
-        spawns.guid().delete(g);
-    }
-    if !doomed.is_empty() {
-        crate::threat::clear_all(ctx);
-    }
-    spacetimedb::log::info!(
-        "debug_retire_region_creatures: retired {} creature(s) in map {map_id} cells \
-         ({gx_min}..{gx_max}, {gy_min}..{gy_max})",
-        doomed.len()
-    );
-    Ok(())
-}
-
 pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Timestamp {
     ctx.timestamp
         .checked_add(spacetimedb::TimeDuration::from_micros(
@@ -463,6 +424,26 @@ pub(crate) fn insert_creature_entity(ctx: &spacetimedb::ReducerContext, mut enti
 }
 
 pub(crate) fn build_creature_entity(
+    ctx: &ReducerContext,
+    spawn: &CreatureSpawn,
+    tmpl: &CreatureTemplate,
+    rand: u32,
+    instance_id: u64,
+) -> WorldEntity {
+    let mut entity = build_creature_from_template(spawn, tmpl, rand, instance_id);
+    if let Some(stats) = super::catalogue::level_stats(ctx, tmpl, entity.level) {
+        entity.health = stats.health;
+        entity.max_health = stats.health;
+        entity.armor = stats.armor;
+    }
+    let (display_id, scale) = super::catalogue::display(ctx, tmpl, ctx.random());
+    entity.display_id = display_id;
+    entity.native_display_id = display_id;
+    entity.scale_x = scale;
+    entity
+}
+
+pub(crate) fn build_creature_from_template(
     spawn: &CreatureSpawn,
     tmpl: &CreatureTemplate,
     rand: u32,

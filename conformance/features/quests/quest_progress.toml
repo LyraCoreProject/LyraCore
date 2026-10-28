@@ -1,0 +1,140 @@
+schema_version = 1
+id = "quest_progress"
+system = "quests"
+scope = "A Character can accept, progress and complete a quest under its source gates and rewards."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Handlers/QuestHandler.cpp"
+symbol = "WorldSession::HandleQuestgiverAcceptQuestOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "quests.breadcrumb full-world 23, alliance-single 9: Breadcrumb prerequisites are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.breadcrumb; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.complete-script full-world 252, alliance-single 96: The Module does not dispatch completion scripts."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.complete-script; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.condition full-world 76, alliance-single 35: Quest acceptance has no imported condition reference."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.condition; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.event-credit-without-source full-world 175, alliance-single 53: Grant sources are absent; quest 2608 has a documented accept-only exception."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.event-credit-without-source; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.exclusive-group full-world 427, alliance-single 151: Exclusive quest groups are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.exclusive-group; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.explicit-zero-xp full-world 725, alliance-single 228: The Module treats zero as a fallback request and can grant XP."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.explicit-zero-xp; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.extra-reputation-rewards full-world 37, alliance-single 6: Only the first two reputation reward slots are stored."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.extra-reputation-rewards; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.flags full-world 3048, alliance-single 1034: Raw QuestFlags and SpecialFlags beyond repeatable/event are not carried."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.flags; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.maximum-level full-world 89, alliance-single 22: Maximum acceptance levels below 60 are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.maximum-level; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.maximum-reputation full-world 38, alliance-single 22: Maximum reputation gates are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.maximum-reputation; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.money-requirement full-world 69, alliance-single 15: Negative reward money does not charge the quest cost."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.money-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.negative-prerequisite full-world 44, alliance-single 16: Negative prerequisite semantics are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.negative-prerequisite; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.reputation-requirement full-world 264, alliance-single 16: Minimum reputation gates are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.reputation-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.reputation-spillover-mask full-world 723, alliance-single 338: Per-quest reputation spillover masks are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.reputation-spillover-mask; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.reward-cast full-world 202, alliance-single 72: Only a single-effect learn wrapper produces a reward spell."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.reward-cast; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.skill-requirement full-world 143, alliance-single 51: Required skill/rank gates are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.skill-requirement; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.start-script full-world 103, alliance-single 39: The Module does not dispatch acceptance scripts."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.start-script; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.start-spell full-world 4, alliance-single 2: Acceptance spell casts are not represented."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.start-spell; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "quests.unavailable-collect-objective full-world 937, alliance-single 415: Objectives for items absent from the current catalogue availability set are omitted."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest quests.unavailable-collect-objective; conformance/vmangos-port-census/quests.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Training the Beast 6086 cannot complete its taming sequence: the rod use loses its target, the reward wrapper is refused and the C++ aura callback is absent."
+path = "module/src/items/ops.rs"
+symbol = "apply_item_use"
+evidence = "conformance/vmangos-port-census/event-credit-m4.md: quest 6086 source sequence."

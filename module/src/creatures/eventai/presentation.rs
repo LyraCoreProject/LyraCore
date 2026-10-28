@@ -50,11 +50,7 @@ pub enum CreaturePresentationInstruction {
     SetImmuneToPlayersAndCreatures,
     ClearImmuneToPlayersAndCreatures,
     SetNotSelectable,
+    // Persisted variant order and payload must survive publication over classic-db Realms.
     SetRajaxxSpawnProtection(ImportVerifiedRajaxxProjection),
-}
-
-pub(super) fn import_verified_rajaxx_spawn_protection() -> CreaturePresentationInstruction {
-    CreaturePresentationInstruction::SetRajaxxSpawnProtection(ImportVerifiedRajaxxProjection {
-        _private: (),
-    })
+    ModifyNpcFlags(super::RelayFlagChange),
 }

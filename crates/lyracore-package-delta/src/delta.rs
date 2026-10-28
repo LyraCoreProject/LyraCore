@@ -1157,7 +1157,9 @@ impl Claim {
                 let missing: Vec<String> = table
                     .columns()
                     .iter()
-                    .filter(|column| !fields.contains_key(column.name))
+                    .filter(|column| {
+                        !fields.contains_key(column.name) && !table.column_has_default(column.name)
+                    })
                     .map(|column| column.name.to_owned())
                     .collect();
                 if !missing.is_empty() {

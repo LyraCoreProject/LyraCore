@@ -127,23 +127,12 @@ fn tri_cell_range(t: &VmapTri) -> Option<(u16, u16, u16, u16)> {
     Some((cx0, cx1, cy0, cy1))
 }
 
-#[cfg(test)]
-pub(crate) fn bin_by_cell(map_id: u32, tris: &[VmapTri]) -> HashMap<u64, Vec<VmapTri>> {
-    let mut by_cell: HashMap<u64, Vec<VmapTri>> = HashMap::new();
-    for t in tris {
-        let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(t) else {
-            continue;
-        };
-        for cx in cx0..=cx1 {
-            for cy in cy0..=cy1 {
-                by_cell
-                    .entry(cell_key(map_id, cx, cy))
-                    .or_default()
-                    .push(*t);
-            }
-        }
-    }
-    by_cell
+fn tri_cells(t: &VmapTri) -> impl Iterator<Item = (u16, u16)> {
+    tri_cell_range(t)
+        .into_iter()
+        .flat_map(|(cx0, cx1, cy0, cy1)| {
+            (cx0..=cx1).flat_map(move |cx| (cy0..=cy1).map(move |cy| (cx, cy)))
+        })
 }
 
 const SPOOL_RECORD_BYTES: usize = 45;
@@ -735,16 +724,12 @@ fn build_plan(
             }
             world_tris += 1;
             wmo_tris += usize::from(matches!(tri.class, TriClass::Wmo { .. }));
-            if let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) {
-                for cx in cx0..=cx1 {
-                    for cy in cy0..=cy1 {
-                        let key = cell_key(map_id, cx, cy);
-                        if !restrict_to_scope || selected_cells.contains(&key) {
-                            if let Err(err) = spool.append(key, tri) {
-                                spool_error = Some(err);
-                                return;
-                            }
-                        }
+            for (cx, cy) in tri_cells(&tri) {
+                let key = cell_key(map_id, cx, cy);
+                if !restrict_to_scope || selected_cells.contains(&key) {
+                    if let Err(err) = spool.append(key, tri) {
+                        spool_error = Some(err);
+                        return;
                     }
                 }
             }
@@ -912,26 +897,21 @@ fn build_instance_plan(
             }
             world_tris += 1;
             wmo_tris += usize::from(matches!(tri.class, TriClass::Wmo { .. }));
-            let Some((cx0, cx1, cy0, cy1)) = tri_cell_range(&tri) else {
-                return;
-            };
-            for cell_x in cx0..=cx1 {
-                for cell_y in cy0..=cy1 {
-                    let key = cell_key(slice.map_id, cell_x, cell_y);
-                    if selected_cells.contains(&key) {
-                        selected_tri_refs += 1;
-                        if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
-                            spool_error = Some(anyhow::anyhow!(
-                                "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
-                            ));
-                            return;
-                        }
-                        if let Err(error) = spool.append(key, tri) {
-                            spool_error = Some(error);
-                            return;
-                        }
-                        route_tris.entry((cell_x, cell_y)).or_default().push(tri);
+            for (cell_x, cell_y) in tri_cells(&tri) {
+                let key = cell_key(slice.map_id, cell_x, cell_y);
+                if selected_cells.contains(&key) {
+                    selected_tri_refs += 1;
+                    if selected_tri_refs > MAX_INSTANCE_SELECTED_TRI_REFS {
+                        spool_error = Some(anyhow::anyhow!(
+                            "bounded instance slice exceeds the {MAX_INSTANCE_SELECTED_TRI_REFS}-triangle-reference output limit"
+                        ));
+                        return;
                     }
+                    if let Err(error) = spool.append(key, tri) {
+                        spool_error = Some(error);
+                        return;
+                    }
+                    route_tris.entry((cell_x, cell_y)).or_default().push(tri);
                 }
             }
         });
@@ -1228,25 +1208,11 @@ fn instance_map_source(
         .with_context(|| format!("reading {map_dbc_path}"))?;
     let maps = ClientMap::read(&mut Cursor::new(&map_dbc))
         .context("parsing Map.dbc for Instance Vmap Slice")?;
-    let mut rows = maps.rows.iter().filter(|row| row.id.id == map_id);
-    let row = rows
-        .next()
-        .with_context(|| format!("Map.dbc has no map {map_id}"))?;
-    if rows.next().is_some() {
-        bail!("Map.dbc has more than one map {map_id}");
-    }
-    if row.internal_name.is_empty()
-        || !row
-            .internal_name
-            .bytes()
-            .all(|byte| byte.is_ascii_alphanumeric() || byte == b'_')
-    {
-        bail!(
-            "Map.dbc map {map_id} has unsafe internal name {:?}",
-            row.internal_name
-        );
-    }
-    let map_name = row.internal_name.clone();
+    let names = crate::map_catalogue::archive_names(&maps)?;
+    let map_name = names
+        .get(&map_id)
+        .with_context(|| format!("Map.dbc has no map {map_id}"))?
+        .to_string();
     let wdt_path = format!("World\\Maps\\{map_name}\\{map_name}.wdt");
     let wdt = chain
         .read_file(&wdt_path)
@@ -1343,6 +1309,25 @@ fn placement_key(placement: &Placement) -> String {
 
 fn apply_plan(shard: &Shard, plan: &VmapPlan) -> Result<()> {
     let generation_id = plan.generation_id.to_string();
+    let output = shard.query_json(
+        "vmap",
+        &format!(
+            "SELECT state, map_id, expected_chunks, accepted_chunks, expected_bytes, manifest_digest, source_identity, selection_identity FROM game_vmap_generation WHERE id = {generation_id}"
+        ),
+    )?;
+    let existing = serde_json::from_str(&output).context("parse existing vmap generation")?;
+    match matching_generation_state(&existing, plan)? {
+        Some(ACTIVE) => {
+            println!("vmap: generation {generation_id} is already active and matches the plan");
+            return Ok(());
+        }
+        Some(VERIFIED) => {
+            shard.call_reducer_args("activate_vmap_generation", &[&generation_id])?;
+            return Ok(());
+        }
+        Some(0) | None => {}
+        Some(state) => bail!("vmap generation {generation_id} cannot resume from state {state}"),
+    }
     let map_id = plan.map_id.to_string();
     let expected_chunks = plan.shard_rows.to_string();
     let expected_bytes = plan.total_bytes.to_string();
@@ -1400,6 +1385,44 @@ fn apply_plan(shard: &Shard, plan: &VmapPlan) -> Result<()> {
     Ok(())
 }
 
+fn matching_generation_state(existing: &serde_json::Value, plan: &VmapPlan) -> Result<Option<u64>> {
+    let rows = sql_column_rows(
+        existing,
+        &[
+            "state",
+            "map_id",
+            "expected_chunks",
+            "accepted_chunks",
+            "expected_bytes",
+            "manifest_digest",
+            "source_identity",
+            "selection_identity",
+        ],
+    );
+    let Some(row) = rows.first() else {
+        return Ok(None);
+    };
+    let state = row[0].as_u64().context("invalid vmap generation state")?;
+    anyhow::ensure!(
+        row[1].as_u64() == Some(u64::from(plan.map_id))
+            && row[2].as_u64() == Some(plan.shard_rows as u64)
+            && row[4].as_u64() == Some(plan.total_bytes as u64)
+            && row[5].as_str() == Some(plan.manifest.as_str())
+            && row[6].as_str() == Some(plan.source_identity.as_str())
+            && row[7].as_str() == Some(plan.selection_identity.as_str()),
+        "vmap generation {} has different metadata from the import plan",
+        plan.generation_id
+    );
+    if matches!(state, VERIFIED | ACTIVE) {
+        anyhow::ensure!(
+            row[3].as_u64() == Some(plan.shard_rows as u64),
+            "vmap generation {} is complete but has missing chunks",
+            plan.generation_id
+        );
+    }
+    Ok(Some(state))
+}
+
 const BATCH_BYTES: usize = 28_000;
 
 // Hex-encoded rows must remain below the Linux argv-string limit of about 128 KB.
@@ -1407,15 +1430,6 @@ const MAX_ROW_TRI_BYTES: usize = 20_000;
 
 // The 45-byte spool records occupy at most 22.5 MB per Instance Vmap Slice.
 const MAX_INSTANCE_SELECTED_TRI_REFS: usize = 500_000;
-
-#[cfg(test)]
-fn shard_cell(tris: &[VmapTri]) -> Vec<Vec<u8>> {
-    let per_shard = ((MAX_ROW_TRI_BYTES.saturating_sub(HEADER_BYTES)) / TRI_BYTES).max(1);
-    if tris.is_empty() {
-        return vec![encode(tris)];
-    }
-    tris.chunks(per_shard).map(encode).collect()
-}
 
 struct GenerationInfo {
     map_id: u32,
@@ -1563,8 +1577,6 @@ mod tests {
     use lyracore_shared::spatial::MAP_COORD_MAX;
     use lyracore_shared::terrain::CELL_SIZE;
 
-    const MAP: u32 = 0;
-
     fn cell_bounds(cx: u16, cy: u16) -> (f32, f32, f32, f32) {
         let x_hi = MAP_COORD_MAX - cx as f32 * CELL_SIZE;
         let x_lo = x_hi - CELL_SIZE;
@@ -1630,39 +1642,42 @@ mod tests {
         assert!((out[2] - 0.0).abs() < 1e-4, "z: {out:?}");
     }
 
+    fn spooled_shards(map_id: u32, key: u64, tris: &[VmapTri]) -> Vec<Vec<u8>> {
+        let spool = VmapSpool::new(map_id).unwrap();
+        for tri in tris {
+            spool.append(key, *tri).unwrap();
+        }
+        let mut shards = Vec::new();
+        spool
+            .for_each_shard(key, |shard| {
+                shards.push(shard);
+                Ok(())
+            })
+            .unwrap();
+        shards
+    }
+
     #[test]
     fn a_triangle_wholly_inside_one_cell_lands_in_exactly_one_cell() {
         let (x_hi, x_lo, y_hi, y_lo) = cell_bounds(500, 500);
         let (cx, cy) = ((x_hi + x_lo) / 2.0, (y_hi + y_lo) / 2.0);
         let t = tri_at(cx, cy, 100.0, 1.0, TriClass::M2);
-        let by_cell = bin_by_cell(MAP, &[t]);
-        assert_eq!(by_cell.len(), 1);
-        let only = by_cell.values().next().unwrap();
-        assert_eq!(only.len(), 1);
-        assert_eq!(*only.iter().next().unwrap(), t);
+        assert_eq!(tri_cells(&t).collect::<Vec<_>>(), [(500, 500)]);
     }
 
     #[test]
     fn a_triangle_spanning_a_cell_boundary_lands_in_every_cell_it_touches() {
         let (x_hi_500, _x_lo_500, y_hi, y_lo) = cell_bounds(500, 500);
-        let boundary_x = x_hi_500;
         let cy = (y_hi + y_lo) / 2.0;
-        let t = tri_at(boundary_x, cy, 100.0, CELL_SIZE * 0.4, TriClass::M2);
-        let by_cell = bin_by_cell(MAP, &[t]);
-        assert_eq!(by_cell.len(), 2, "must land in both straddled cells");
-        for tris in by_cell.values() {
-            assert_eq!(tris.len(), 1);
-            assert_eq!(tris[0], t);
-        }
+        let t = tri_at(x_hi_500, cy, 100.0, CELL_SIZE * 0.4, TriClass::M2);
+        assert_eq!(tri_cells(&t).collect::<Vec<_>>(), [(499, 500), (500, 500)]);
     }
 
     #[test]
-    fn wmo_and_m2_classification_survives_binning_and_packing() {
-        let (x_hi, x_lo, y_hi, y_lo) = cell_bounds(500, 500);
-        let (cx, cy) = ((x_hi + x_lo) / 2.0, (y_hi + y_lo) / 2.0);
+    fn wmo_and_m2_classification_survives_the_spool_and_packing() {
         let wmo = tri_at(
-            cx,
-            cy,
+            0.0,
+            0.0,
             100.0,
             1.0,
             TriClass::Wmo {
@@ -1670,15 +1685,13 @@ mod tests {
                 mogp_flags: 0x2000,
             },
         );
-        let m2 = tri_at(cx, cy, 105.0, 1.0, TriClass::M2);
-        let by_cell = bin_by_cell(MAP, &[wmo, m2]);
-        assert_eq!(by_cell.len(), 1);
-        let tris = by_cell.values().next().unwrap();
-        assert_eq!(tris.len(), 2);
-        let blob = encode(tris);
-        let back = lyracore_shared::vmap::decode(&blob).expect("round trip");
-        assert!(back.contains(&wmo));
-        assert!(back.contains(&m2));
+        let m2 = tri_at(0.0, 0.0, 105.0, 1.0, TriClass::M2);
+        let shards = spooled_shards(78, 1, &[wmo, m2]);
+        assert_eq!(shards.len(), 1);
+        assert_eq!(
+            lyracore_shared::vmap::decode(&shards[0]).unwrap(),
+            [wmo, m2]
+        );
     }
 
     #[test]
@@ -1686,70 +1699,117 @@ mod tests {
         let tris: Vec<VmapTri> = (0..5)
             .map(|i| tri_at(0.0, 0.0, i as f32, 1.0, TriClass::M2))
             .collect();
-        let shards = shard_cell(&tris);
+        let shards = spooled_shards(79, 1, &tris);
         assert_eq!(shards.len(), 1);
-        let back = lyracore_shared::vmap::decode(&shards[0]).expect("round trip");
-        assert_eq!(back.len(), 5);
+        assert_eq!(lyracore_shared::vmap::decode(&shards[0]).unwrap(), tris);
     }
 
     #[test]
     fn a_dense_cell_splits_into_byte_capped_shards_that_reassemble_exactly() {
-        let per_shard = (MAX_ROW_TRI_BYTES - HEADER_BYTES) / TRI_BYTES;
-        let n = per_shard * 3 + 7;
-        let tris: Vec<VmapTri> = (0..n)
+        let tris: Vec<VmapTri> = (0..444 * 3 + 7)
             .map(|i| tri_at(0.0, 0.0, i as f32, 1.0, TriClass::M2))
             .collect();
-        let shards = shard_cell(&tris);
-        assert!(
-            shards.len() >= 4,
-            "expected at least 4 shards, got {}",
-            shards.len()
-        );
-        for s in &shards {
-            assert!(
-                s.len() <= MAX_ROW_TRI_BYTES,
-                "shard exceeds the byte cap: {} > {MAX_ROW_TRI_BYTES}",
-                s.len()
-            );
-        }
-        let mut reassembled: Vec<VmapTri> = shards
+        let shards = spooled_shards(80, 1, &tris);
+        let sizes: Vec<usize> = shards.iter().map(Vec::len).collect();
+        assert_eq!(sizes, [19_985, 19_985, 19_985, 320]);
+        let reassembled: Vec<VmapTri> = shards
             .iter()
-            .flat_map(|b| lyracore_shared::vmap::decode(b).expect("shard round trip"))
+            .flat_map(|blob| lyracore_shared::vmap::decode(blob).unwrap())
             .collect();
-        let mut expected = tris.clone();
-        reassembled.sort_by(|a, b| a.verts[0][2].partial_cmp(&b.verts[0][2]).unwrap());
-        expected.sort_by(|a, b| a.verts[0][2].partial_cmp(&b.verts[0][2]).unwrap());
-        assert_eq!(reassembled, expected);
+        assert_eq!(reassembled, tris);
     }
 
     #[test]
-    fn disk_spool_orders_cells_and_bounds_live_shard_memory() {
+    fn disk_spool_lists_cells_in_key_order() {
         let spool = VmapSpool::new(77).unwrap();
-        let per_shard = (MAX_ROW_TRI_BYTES - HEADER_BYTES) / TRI_BYTES;
         for key in [9u64, 3] {
-            for i in 0..(per_shard * 2 + 1) {
-                spool
-                    .append(key, tri_at(0.0, 0.0, i as f32, 1.0, TriClass::M2))
-                    .unwrap();
-            }
+            spool
+                .append(key, tri_at(0.0, 0.0, 0.0, 1.0, TriClass::M2))
+                .unwrap();
         }
         assert_eq!(spool.keys().unwrap(), vec![3, 9]);
-        for key in spool.keys().unwrap() {
-            let mut count = 0;
-            spool
-                .for_each_shard(key, |shard| {
-                    assert!(shard.len() <= MAX_ROW_TRI_BYTES);
-                    if count == 0 {
-                        assert_eq!(
-                            lyracore_shared::vmap::decode(&shard).unwrap().len(),
-                            per_shard
-                        );
+    }
+
+    #[test]
+    fn completed_generation_reuse_requires_matching_metadata_and_all_chunks() {
+        let plan = VmapPlan {
+            map_id: 78,
+            ownership: VmapOwnership::Spatial,
+            source_identity: "client fixture".into(),
+            selection_identity: "map=78;fixture".into(),
+            spool: VmapSpool::new(78).unwrap(),
+            keys: vec![],
+            total_bytes: 123,
+            shard_rows: 2,
+            manifest: "0123".into(),
+            generation_id: 456,
+            world_tris: 0,
+            wmo_tris: 0,
+            route_evidence: None,
+        };
+        let columns = [
+            "state",
+            "map_id",
+            "expected_chunks",
+            "accepted_chunks",
+            "expected_bytes",
+            "manifest_digest",
+            "source_identity",
+            "selection_identity",
+        ];
+        let response = |rows| {
+            serde_json::json!([{
+                "schema": {"elements": columns.map(|name| serde_json::json!({"name":{"some":name}}))},
+                "rows": rows,
+            }])
+        };
+        assert_eq!(
+            matching_generation_state(&response(serde_json::json!([])), &plan).unwrap(),
+            None
+        );
+        for state in [VERIFIED, ACTIVE] {
+            let row = serde_json::json!([
+                state,
+                78,
+                2,
+                2,
+                123,
+                "0123",
+                "client fixture",
+                "map=78;fixture"
+            ]);
+            assert_eq!(
+                matching_generation_state(&response(serde_json::json!([row])), &plan).unwrap(),
+                Some(state)
+            );
+            for (index, wrong) in [
+                (1, serde_json::json!(79)),
+                (2, serde_json::json!(3)),
+                (3, serde_json::json!(1)),
+                (4, serde_json::json!(124)),
+                (5, serde_json::json!("different digest")),
+                (6, serde_json::json!("another client")),
+                (7, serde_json::json!("another scope")),
+            ] {
+                let mut changed = row.clone();
+                changed[index] = wrong;
+                assert_eq!(
+                    matching_generation_state(&response(serde_json::json!([changed])), &plan)
+                        .unwrap_err()
+                        .to_string(),
+                    if index == 3 {
+                        format!(
+                            "vmap generation {} is complete but has missing chunks",
+                            plan.generation_id
+                        )
+                    } else {
+                        format!(
+                            "vmap generation {} has different metadata from the import plan",
+                            plan.generation_id
+                        )
                     }
-                    count += 1;
-                    Ok(())
-                })
-                .unwrap();
-            assert_eq!(count, 3);
+                );
+            }
         }
     }
 
@@ -1772,7 +1832,6 @@ mod tests {
         };
         let mut shifted = placement.clone();
 
-        assert_eq!(placement_key(&placement), placement_key(&placement));
         shifted.position[0] += 1.0;
         assert_ne!(placement_key(&placement), placement_key(&shifted));
     }
@@ -1796,7 +1855,10 @@ mod tests {
         assert!(sql_owns_instance_pool(owned).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("true", "false")).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("[0,true]", "[1,true]")).unwrap());
-        assert!(sql_owns_instance_pool("not json").is_err());
+        assert_eq!(
+            sql_owns_instance_pool("not json").unwrap_err().to_string(),
+            "parse JSON SQL Instance Pool response"
+        );
     }
 
     fn wmo_tri(verts: [[f32; 3]; 3]) -> VmapTri {
@@ -1834,14 +1896,8 @@ mod tests {
     fn route_cells(tris: &[VmapTri]) -> HashMap<(u16, u16), Vec<VmapTri>> {
         let mut cells = HashMap::new();
         for tri in tris {
-            let (cx0, cx1, cy0, cy1) = tri_cell_range(tri).expect("worked triangle is on-map");
-            for cell_x in cx0..=cx1 {
-                for cell_y in cy0..=cy1 {
-                    cells
-                        .entry((cell_x, cell_y))
-                        .or_insert_with(Vec::new)
-                        .push(*tri);
-                }
+            for cell in tri_cells(tri) {
+                cells.entry(cell).or_insert_with(Vec::new).push(*tri);
             }
         }
         cells

@@ -1,6 +1,9 @@
 mod support;
 
-use support::{lone_wolf, number, poll_until, Standalone, POLL_TIMEOUT};
+use support::{
+    event_rows, fence_subscription, lone_wolf, number, poll_until, subscribe_with_fence,
+    Standalone, POLL_TIMEOUT,
+};
 
 #[test]
 #[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
@@ -44,6 +47,12 @@ fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
     let wolf = lone_wolf(&mut shard);
     let guid = number::<u64>(&wolf, "guid").to_string();
     let in_combat = lyracore_shared::constants::unit_flags::IN_COMBAT;
+    let updates = subscribe_with_fence(
+        &shard,
+        &[&format!(
+            "SELECT * FROM game_world_entity WHERE guid = {guid}"
+        )],
+    );
     shard.assert_sql(&format!(
         "UPDATE game_world_entity SET unit_flags = {in_combat}, combat_until_ms = 0, \
          combat_active = false, simulation_indexed = false WHERE guid = {guid}"
@@ -59,6 +68,15 @@ fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
             && number::<u32>(row, "unit_flags") & in_combat == 0
             && number::<u64>(row, "combat_until_ms") == 0
     }));
+    fence_subscription(&shard, &updates);
+    let rows = event_rows(&updates, "game_world_entity");
+    assert!(!rows.is_empty());
+    for row in rows {
+        assert_eq!(
+            row["combat_until_ms"], "0",
+            "the deadline restarted: {row:?}"
+        );
+    }
 }
 
 #[test]

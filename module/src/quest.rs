@@ -54,6 +54,14 @@ pub enum EventAiQuestCredit {
     QuestEvent(QuestEvent),
     CastCredit(CastCredit),
     KillCredit(KillCredit),
+    ScriptEvent(ScriptQuestEvent),
+}
+
+#[derive(spacetimedb::SpacetimeType, Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ScriptQuestEvent {
+    pub quest_entry: u32,
+    pub distance_yd: u32,
+    pub group: bool,
 }
 
 #[derive(Clone, Debug)]
@@ -85,6 +93,26 @@ const PARTY_SHARE_RANGE_SQ: f32 = crate::group::GROUP_XP_RANGE_SQ;
 pub(crate) const MAX_QUEST_LOG_SIZE: usize = 20;
 
 const QUEST_MAX_LEVEL_PAYOUT: u32 = 60;
+
+#[derive(Debug, PartialEq, Eq)]
+struct QuestPayout {
+    money: u32,
+    xp: Option<u32>,
+}
+
+fn quest_payout(level: u32, xp: u32) -> QuestPayout {
+    if level >= QUEST_MAX_LEVEL_PAYOUT {
+        QuestPayout {
+            money: lyracore_shared::quest::max_level_money_reward(xp),
+            xp: None,
+        }
+    } else {
+        QuestPayout {
+            money: 0,
+            xp: Some(xp),
+        }
+    }
+}
 
 #[table(accessor = game_quest_template, public)]
 pub struct QuestTemplate {
@@ -905,15 +933,11 @@ pub(crate) fn request_turn_in_quest(
         tmpl.reward_money_max_level,
         tmpl.quest_level,
     );
-    let xp = crate::xp::rated_xp(ctx, base_xp);
-    if player.level >= QUEST_MAX_LEVEL_PAYOUT {
-        player.money = player
-            .money
-            .saturating_add(lyracore_shared::quest::max_level_money_reward(xp));
-    }
+    let payout = quest_payout(player.level, crate::xp::rated_xp(ctx, base_xp));
+    player.money = player.money.saturating_add(payout.money);
     // Packages can catch a Refusal; resolve every item Gate before the infallible quest effects.
     crate::items::exchange_items(ctx, player_guid, &collect, &rewards)?;
-    if player.level < QUEST_MAX_LEVEL_PAYOUT {
+    if let Some(xp) = payout.xp {
         crate::xp::XpEvent::send(
             ctx,
             player_guid,
@@ -1035,12 +1059,18 @@ pub(crate) fn apply_eventai_credit(
         EventAiQuestCredit::QuestEvent(request) => request.recipient_policy,
         EventAiQuestCredit::CastCredit(request) => request.recipient_policy,
         EventAiQuestCredit::KillCredit(request) => request.recipient_policy,
+        EventAiQuestCredit::ScriptEvent(request) => {
+            return apply_script_event(ctx, request, credit_context)
+        }
     };
     let Ok(recipients) = eventai_credit_recipients(ctx, policy, credit_context) else {
         return QuestCreditOutcome::Refused;
     };
 
     match request {
+        EventAiQuestCredit::ScriptEvent(_) => {
+            unreachable!("script credit returned before recipient selection")
+        }
         EventAiQuestCredit::QuestEvent(request) => {
             if ctx
                 .db
@@ -1103,6 +1133,91 @@ pub(crate) fn apply_eventai_credit(
         }
     }
     QuestCreditOutcome::Applied
+}
+
+fn apply_script_event(
+    ctx: &ReducerContext,
+    request: ScriptQuestEvent,
+    context: &EventAiQuestCreditContext,
+) -> QuestCreditOutcome {
+    let entities = ctx.db.game_world_entity();
+    let Some(selected) = context
+        .selected_character
+        .and_then(|guid| entities.guid().find(guid))
+        .filter(crate::WorldEntity::is_player)
+    else {
+        return QuestCreditOutcome::Refused;
+    };
+    let source = entities.guid().find(context.source_creature_guid);
+    let recipients = if request.group {
+        match crate::group::group_with_members(ctx, selected.guid) {
+            Ok(Some((_, members))) => members
+                .into_iter()
+                .map(|member| member.character_guid)
+                .collect(),
+            Ok(None) => vec![selected.guid],
+            Err(_) => return QuestCreditOutcome::Refused,
+        }
+    } else {
+        vec![selected.guid]
+    };
+    for guid in recipients {
+        let Some(recipient) = entities.guid().find(guid) else {
+            continue;
+        };
+        let Some(mut quest) = character_quest_row(ctx, guid, request.quest_entry)
+            .filter(|quest| !quest.rewarded && !quest.failed)
+        else {
+            continue;
+        };
+        let in_range = request.distance_yd == 0
+            || source.as_ref().is_none_or(|source| {
+                crate::helpers::in_same_partition(&recipient, source.map_id, source.instance_id)
+                    && (recipient.x - source.x).powi(2)
+                        + (recipient.y - source.y).powi(2)
+                        + (recipient.z - source.z).powi(2)
+                        < (request.distance_yd as f32
+                            + script_credit_radius(ctx, source)
+                            + script_credit_radius(ctx, &recipient))
+                        .powi(2)
+            });
+        if in_range {
+            let credits = ctx.db.game_character_quest_event_credit();
+            if !credits
+                .by_character()
+                .filter(guid)
+                .any(|credit| credit.quest_entry == request.quest_entry)
+            {
+                CharacterQuestEventCredit::insert(
+                    ctx,
+                    CharacterQuestEventCredit {
+                        id: 0,
+                        character_guid: guid,
+                        quest_entry: request.quest_entry,
+                    },
+                );
+            }
+        } else {
+            quest.failed = true;
+            quest.deadline_micros = 0;
+            quest.update(ctx);
+        }
+    }
+    QuestCreditOutcome::Applied
+}
+
+fn script_credit_radius(ctx: &ReducerContext, entity: &crate::WorldEntity) -> f32 {
+    use crate::creatures::catalogue::game_creature_display;
+    if entity.is_player() {
+        return 0.389 * entity.scale_x;
+    }
+    ctx.db
+        .game_creature_display()
+        .by_display()
+        .filter(entity.display_id)
+        .next()
+        .map_or(0.389, |display| display.bounding_radius)
+        * entity.scale_x
 }
 
 fn eventai_credit_recipients(
@@ -1671,9 +1786,9 @@ mod fixtures;
 #[cfg(test)]
 mod tests {
     use super::{
-        eventai_credit_recipient_set, is_expired, pick_choice_reward, AreaTriggerRoute,
-        AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
-        QUEST_MAX_LEVEL_PAYOUT,
+        eventai_credit_recipient_set, is_expired, pick_choice_reward, quest_payout,
+        AreaTriggerRoute, AreaTriggerVolume, EventAiQuestCreditContext, QuestCreditRecipientPolicy,
+        QuestPayout,
     };
 
     fn quest_credit_context() -> EventAiQuestCreditContext {
@@ -1798,8 +1913,25 @@ mod tests {
     }
 
     #[test]
-    fn quest_max_level_payout_matches_the_vanilla_cap() {
-        assert_eq!(QUEST_MAX_LEVEL_PAYOUT, 60);
+    fn a_level_59_turn_in_grants_the_quest_xp() {
+        assert_eq!(
+            quest_payout(59, 1_450),
+            QuestPayout {
+                money: 0,
+                xp: Some(1_450)
+            }
+        );
+    }
+
+    #[test]
+    fn a_level_60_turn_in_pays_six_copper_per_xp_instead() {
+        assert_eq!(
+            quest_payout(60, 1_450),
+            QuestPayout {
+                money: 8_700,
+                xp: None
+            }
+        );
     }
 
     #[test]

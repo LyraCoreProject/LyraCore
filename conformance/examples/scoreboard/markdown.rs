@@ -93,6 +93,11 @@ pub fn markdown(report: &Report, date: &str) -> Result<String> {
             }
         }
     }
-    writeln!(text, "Reproduce with `./conformance/audit --host /path/to/spacetimedb-standalone --date {date}` after preparing the pinned Reference Server. See [the audit command](../README.md#conformance-audit). The command stops both local servers on exit. Scrubbed LyraCore candidates are in [{date}.traces]({date}.traces/). This report is rendered from [{date}.json]({date}.json); Reference Server candidates and credentials stay in scratch. No real-client check was performed.")?;
+    let command = if audit.content.contains("no world import") {
+        format!("./conformance/audit --host /path/to/spacetimedb-standalone --date {date}")
+    } else {
+        format!("./conformance/audit --date {date}")
+    };
+    writeln!(text, "Reproduce with `{command}` after preparing the pinned Reference Server. See [the audit command](../README.md#conformance-audit). The command stops both local servers on exit. Scrubbed LyraCore candidates are in [{date}.traces]({date}.traces/). This report is rendered from [{date}.json]({date}.json); Reference Server candidates and credentials stay in scratch. No real-client check was performed.")?;
     Ok(text)
 }

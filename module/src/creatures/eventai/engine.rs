@@ -45,7 +45,7 @@ pub(crate) trait EventAiWorld {
     fn eventai_in_zone_or_area(&self, unit: &EventAiUnit, zone_or_area_id: u32) -> bool;
     fn eventai_combat_action_ready(&self, guid: u64) -> bool;
     fn eventai_rout_ends_ms(&self, creature_guid: u64) -> Option<u32>;
-    fn eventai_broadcast(&self, id: u32) -> Option<BroadcastLine>;
+    fn eventai_broadcast(&self, id: u32, speaker_guid: u64) -> Option<BroadcastLine>;
     fn eventai_summon_location(&self, id: u32) -> Option<SummonLocation>;
     fn eventai_summon_template_exists(&self, entry: u32) -> bool;
     fn eventai_roll(&self) -> u32;
@@ -74,6 +74,7 @@ pub(crate) trait EventAiWorld {
         language: u8,
         message: String,
     ) -> bool;
+    fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8);
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool;
     fn eventai_start_spell(
         &mut self,
@@ -278,6 +279,21 @@ fn evaluate_rule<W: EventAiWorld>(
         return;
     }
 
+    if let ExecutionPolicy::ScriptEvent(policy) = rule.execution {
+        if policy.not_casting && world.eventai_is_casting(context.creature_guid) {
+            return;
+        }
+        let predicate_subject = match policy.predicate {
+            EventPredicate::Map(_) => Some(context.creature_guid),
+            _ => context.invoker_guid.or(context.current_target_guid),
+        };
+        if policy.predicate != EventPredicate::Always
+            && !predicate_subject
+                .is_some_and(|guid| world.eventai_matches_predicate(guid, policy.predicate))
+        {
+            return;
+        }
+    }
     if initialized {
         return;
     }
@@ -314,49 +330,132 @@ fn evaluate_rule<W: EventAiWorld>(
         return;
     }
 
-    let instructions: Vec<&CreatureInstruction> = match (rule.selection, rule.instructions.len()) {
-        (InstructionSelection::RandomOne, 0) => Vec::new(),
-        (InstructionSelection::RandomOne, len) => rule
-            .instructions
-            .get(invocation_choice(seed, branch, 2) as usize % len)
-            .into_iter()
-            .collect(),
-        (InstructionSelection::All, _) => rule.instructions.iter().collect(),
-    };
-    for (index, instruction) in instructions.into_iter().enumerate() {
-        if context.assisted && matches!(instruction, CreatureInstruction::Speak(_)) {
-            continue;
-        }
-        let result = execute_instruction(world, &context, instruction, linked_choice);
-        match result {
-            ActionResult::Applied => {}
-            // A later action's Refusal keeps earlier effects and spends the opportunity.
-            ActionResult::Refused
-                if index == 0 && rule.execution == ExecutionPolicy::CombatAction =>
-            {
-                hold_opportunity_open(world, &context, rule, open_state);
-                return;
+    if let InstructionSelection::CommandLists(lists) = &rule.selection {
+        let selected = lists.random.then(|| branch as usize % lists.ends.len());
+        let mut start = 0;
+        let mut aborted = false;
+        for (group, &end) in lists.ends.iter().enumerate() {
+            if selected.is_none_or(|selected| selected == group) {
+                for index in start..end as usize {
+                    let instruction = &rule.instructions[index];
+                    let choice = if instruction_uses_random(instruction) {
+                        u64::from(world.eventai_roll())
+                    } else {
+                        linked_choice
+                    };
+                    let result = execute_instruction(world, &context, instruction, choice);
+                    if result != ActionResult::Applied
+                        && lists.abort_on_failure.contains(&(index as u32))
+                    {
+                        aborted = true;
+                        break;
+                    }
+                }
             }
-            ActionResult::Refused => {}
-            ActionResult::Unsupported => {
-                finish_opportunity(world, &context, rule, creature_state);
-                return;
+            start = end as usize;
+        }
+        if aborted
+            && matches!(
+                rule.execution,
+                ExecutionPolicy::ScriptEvent(super::ScriptEventPolicy {
+                    check_result: true,
+                    ..
+                })
+            )
+        {
+            world.put_eventai_rule_state(
+                context.creature_guid,
+                rule.source_rule_id,
+                RuleState {
+                    next_eligible_ms: context.now_ms,
+                    invocation_started: false,
+                    executing: false,
+                    ..open_state
+                },
+            );
+            return;
+        }
+    } else {
+        let instructions: Vec<&CreatureInstruction> =
+            match (&rule.selection, rule.instructions.len()) {
+                (InstructionSelection::RandomOne, 0) => Vec::new(),
+                (InstructionSelection::RandomOne, len) => rule
+                    .instructions
+                    .get(invocation_choice(seed, branch, 2) as usize % len)
+                    .into_iter()
+                    .collect(),
+                _ => rule.instructions.iter().collect(),
+            };
+        for (index, instruction) in instructions.into_iter().enumerate() {
+            if context.assisted && matches!(instruction, CreatureInstruction::Speak(_)) {
+                continue;
+            }
+            let result = execute_instruction(world, &context, instruction, linked_choice);
+            match result {
+                ActionResult::Applied => {}
+                // A later action's Refusal keeps earlier effects and spends the opportunity.
+                ActionResult::Refused
+                    if index == 0 && rule.execution == ExecutionPolicy::CombatAction =>
+                {
+                    hold_opportunity_open(world, &context, rule, open_state);
+                    return;
+                }
+                ActionResult::Refused => {}
+                ActionResult::Unsupported => {
+                    finish_opportunity(world, &context, rule, creature_state);
+                    return;
+                }
             }
         }
     }
     finish_opportunity(world, &context, rule, creature_state);
 }
 
-fn execute_instruction<W: EventAiWorld>(
+fn flee_with_text<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    text: u32,
+    linked_choice: u64,
+) -> ActionResult {
+    let result = super::combat::execute(
+        world,
+        context,
+        &CreatureInstruction::FleeForAssist,
+        linked_choice,
+    );
+    if result == ActionResult::Applied {
+        speak(
+            world,
+            context,
+            &SpeakInstruction {
+                mode: SpeechMode::Emote,
+                broadcast_ids: vec![text],
+                legacy_text: String::new(),
+                target: super::InstructionTarget::CurrentOpponent,
+            },
+            context.current_target_guid.unwrap_or(0),
+            linked_choice,
+        );
+    }
+    result
+}
+
+pub(super) fn execute_instruction<W: EventAiWorld>(
     world: &mut W,
     context: &EventContext,
     instruction: &CreatureInstruction,
     linked_choice: u64,
 ) -> ActionResult {
     match instruction {
+        CreatureInstruction::FleeWithText(text) => {
+            flee_with_text(world, context, *text, linked_choice)
+        }
         CreatureInstruction::Speak(speech) => {
             let Some(target) =
                 super::combat::unit_target(world, context, speech.target, None, linked_choice)
+                    .or_else(|| {
+                        (speech.target == super::InstructionTarget::ProvidedTarget).then_some(0)
+                    })
             else {
                 return ActionResult::Refused;
             };
@@ -378,39 +477,12 @@ fn execute_instruction<W: EventAiWorld>(
                 super::combat::cast(world, context, cast, target)
             }
         }
-        CreatureInstruction::SetPhase(set_phase) => {
-            if set_phase.phase >= 32 {
-                return ActionResult::Refused;
-            }
-            world.set_eventai_phase(context.creature_guid, set_phase.phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::IncrementPhase(increment) => {
-            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
-                .saturating_add(increment.amount)
-                .clamp(0, 31) as u8;
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::RandomPhase(random) => {
-            let Some(phase) = random
-                .phases
-                .get(linked_choice as usize % random.phases.len())
-                .copied()
-            else {
-                return ActionResult::Refused;
-            };
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
-        }
-        CreatureInstruction::RandomPhaseRange(range) => {
-            if range.min_phase >= range.max_phase || range.max_phase >= 32 {
-                return ActionResult::Refused;
-            }
-            let span = u32::from(range.max_phase - range.min_phase) + 1;
-            let phase = range.min_phase + (linked_choice % u64::from(span)) as u8;
-            world.set_eventai_phase(context.creature_guid, phase);
-            ActionResult::Applied
+        CreatureInstruction::SetPhase(_)
+        | CreatureInstruction::IncrementPhase(_)
+        | CreatureInstruction::CheckedIncrementPhase(_)
+        | CreatureInstruction::RandomPhase(_)
+        | CreatureInstruction::RandomPhaseRange(_) => {
+            execute_phase(world, context, instruction, linked_choice)
         }
         CreatureInstruction::AttackStart(_)
         | CreatureInstruction::Emote(_)
@@ -524,6 +596,9 @@ fn execute_instruction<W: EventAiWorld>(
         CreatureInstruction::StartRelay(start) => {
             let Some(selected) =
                 super::combat::unit_target(world, context, start.target, None, linked_choice)
+                    .or_else(|| {
+                        (start.target == super::InstructionTarget::ProvidedTarget).then_some(0)
+                    })
             else {
                 return ActionResult::Refused;
             };
@@ -534,18 +609,75 @@ fn execute_instruction<W: EventAiWorld>(
             else {
                 return ActionResult::Refused;
             };
-            if world.eventai_start_relay(
-                relay_id,
-                context.creature_guid,
-                selected,
-                linked_choice,
-                start.catalogue_version,
-            ) {
+            if relay_id != 0
+                && world.eventai_start_relay(
+                    relay_id,
+                    context.creature_guid,
+                    selected,
+                    linked_choice,
+                    start.catalogue_version,
+                )
+            {
                 ActionResult::Applied
             } else {
                 ActionResult::Refused
             }
         }
+    }
+}
+
+fn execute_phase<W: EventAiWorld>(
+    world: &mut W,
+    context: &EventContext,
+    instruction: &CreatureInstruction,
+    linked_choice: u64,
+) -> ActionResult {
+    match instruction {
+        CreatureInstruction::SetPhase(set_phase) => {
+            if set_phase.phase >= 32 {
+                return ActionResult::Refused;
+            }
+            world.set_eventai_phase(context.creature_guid, set_phase.phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::IncrementPhase(increment) => {
+            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
+                .saturating_add(increment.amount)
+                .clamp(0, 31) as u8;
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::CheckedIncrementPhase(increment) => {
+            let phase = i32::from(world.eventai_creature_state(context.creature_guid).phase)
+                .saturating_add(increment.amount)
+                .max(0);
+            if phase >= 32 {
+                return ActionResult::Refused;
+            }
+            world.set_eventai_phase(context.creature_guid, phase as u8);
+            ActionResult::Applied
+        }
+        CreatureInstruction::RandomPhase(random) => {
+            let Some(phase) = random
+                .phases
+                .get(linked_choice as usize % random.phases.len())
+                .copied()
+            else {
+                return ActionResult::Refused;
+            };
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        CreatureInstruction::RandomPhaseRange(range) => {
+            if range.min_phase >= range.max_phase || range.max_phase >= 32 {
+                return ActionResult::Refused;
+            }
+            let span = u32::from(range.max_phase - range.min_phase) + 1;
+            let phase = range.min_phase + (linked_choice % u64::from(span)) as u8;
+            world.set_eventai_phase(context.creature_guid, phase);
+            ActionResult::Applied
+        }
+        _ => ActionResult::Unsupported,
     }
 }
 
@@ -571,10 +703,10 @@ fn speak<W: EventAiWorld>(
         1 => Some(ids[0]),
         len => Some(ids[linked_choice as usize % len]),
     };
-    let (message, chat_type, language, emote) = match picked {
-        None => (speech.legacy_text.clone(), chat_type, 0, 0),
+    let (message, chat_type, language, emote, sound) = match picked {
+        None => (speech.legacy_text.clone(), chat_type, 0, 0, 0),
         Some(id) => {
-            let Some(line) = world.eventai_broadcast(id) else {
+            let Some(line) = world.eventai_broadcast(id, context.creature_guid) else {
                 return false;
             };
             (
@@ -586,9 +718,13 @@ fn speak<W: EventAiWorld>(
                 },
                 line.language,
                 line.emote,
+                line.sound,
             )
         }
     };
+    if sound != 0 {
+        world.eventai_deliver_sound(context.creature_guid, sound, chat_type);
+    }
     if chat_type == lyracore_shared::chat::broadcast_chat::CREATURE_WHISPER
         && !world
             .eventai_unit(target_guid)
@@ -729,7 +865,11 @@ fn fresh_invocation<W: EventAiWorld>(
     } else {
         deterministic.rotate_left(11)
     };
-    let branch = if rule.selection == InstructionSelection::RandomOne {
+    let branch = if matches!(
+        &rule.selection,
+        InstructionSelection::RandomOne
+            | InstructionSelection::CommandLists(super::CommandLists { random: true, .. })
+    ) {
         world.eventai_roll()
     } else {
         linked
@@ -748,47 +888,48 @@ fn invocation_choice(seed: u64, branch: u32, lane: u64) -> u64 {
 
 fn rule_uses_linked_random(rule: &EventAiRule) -> bool {
     matches!(rule.event, EventCondition::SelectAttackingTarget(_))
-        || rule
-            .instructions
-            .iter()
-            .any(|instruction| match instruction {
-                CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
-                CreatureInstruction::Cast(cast) => random_target(cast.target),
-                CreatureInstruction::AttackStart(target) => random_target(*target),
-                CreatureInstruction::Emote(emote) => random_target(emote.target),
-                CreatureInstruction::RandomEmote(_) => true,
-                CreatureInstruction::Summon(summon) => random_target(summon.target),
-                CreatureInstruction::SpawnAtActor(spawn) => random_target(spawn.target),
-                CreatureInstruction::RemoveAura(remove) => random_target(remove.target),
-                CreatureInstruction::ThrowAiEvent(event) => random_target(event.target),
-                CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
-                CreatureInstruction::SetFacing(facing) => random_target(facing.target),
-                CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => {
-                    true
-                }
-                CreatureInstruction::StartRelay(_) => true,
-                CreatureInstruction::FleeForAssist
-                | CreatureInstruction::CallForHelp(_)
-                | CreatureInstruction::SetPhase(_)
-                | CreatureInstruction::IncrementPhase(_)
-                | CreatureInstruction::SetRangedPosture(_)
-                | CreatureInstruction::SetLethalDamageFloor(_)
-                | CreatureInstruction::ForceDeath
-                | CreatureInstruction::ForceDespawn(_)
-                | CreatureInstruction::SetStandState(_)
-                | CreatureInstruction::SetReactState(_)
-                | CreatureInstruction::RemoveGuardians(_)
-                | CreatureInstruction::SetAutoAttack(_)
-                | CreatureInstruction::ZoneCombat
-                | CreatureInstruction::SetSheath(_)
-                | CreatureInstruction::EmptyTextNoEffect
-                | CreatureInstruction::MissingTextTemplateNoEffect(_)
-                | CreatureInstruction::ScaleAllThreat(_)
-                | CreatureInstruction::Presentation(_)
-                | CreatureInstruction::QuestCredit(_)
-                | CreatureInstruction::Movement(_)
-                | CreatureInstruction::NotifyEncounter(_) => false,
-            })
+        || rule.instructions.iter().any(instruction_uses_random)
+}
+
+fn instruction_uses_random(instruction: &CreatureInstruction) -> bool {
+    match instruction {
+        CreatureInstruction::Speak(speech) => speech.broadcast_ids.len() > 1,
+        CreatureInstruction::Cast(cast) => random_target(cast.target),
+        CreatureInstruction::AttackStart(target) => random_target(*target),
+        CreatureInstruction::Emote(emote) => random_target(emote.target),
+        CreatureInstruction::RandomEmote(_) => true,
+        CreatureInstruction::Summon(summon) => random_target(summon.target),
+        CreatureInstruction::SpawnAtActor(spawn) => random_target(spawn.target),
+        CreatureInstruction::RemoveAura(remove) => random_target(remove.target),
+        CreatureInstruction::ThrowAiEvent(event) => random_target(event.target),
+        CreatureInstruction::ScaleSelectedThreat(scale) => random_target(scale.target),
+        CreatureInstruction::SetFacing(facing) => random_target(facing.target),
+        CreatureInstruction::RandomPhase(_) | CreatureInstruction::RandomPhaseRange(_) => true,
+        CreatureInstruction::StartRelay(_) => true,
+        CreatureInstruction::FleeForAssist
+        | CreatureInstruction::FleeWithText(_)
+        | CreatureInstruction::CallForHelp(_)
+        | CreatureInstruction::SetPhase(_)
+        | CreatureInstruction::IncrementPhase(_)
+        | CreatureInstruction::CheckedIncrementPhase(_)
+        | CreatureInstruction::SetRangedPosture(_)
+        | CreatureInstruction::SetLethalDamageFloor(_)
+        | CreatureInstruction::ForceDeath
+        | CreatureInstruction::ForceDespawn(_)
+        | CreatureInstruction::SetStandState(_)
+        | CreatureInstruction::SetReactState(_)
+        | CreatureInstruction::RemoveGuardians(_)
+        | CreatureInstruction::SetAutoAttack(_)
+        | CreatureInstruction::ZoneCombat
+        | CreatureInstruction::SetSheath(_)
+        | CreatureInstruction::EmptyTextNoEffect
+        | CreatureInstruction::MissingTextTemplateNoEffect(_)
+        | CreatureInstruction::ScaleAllThreat(_)
+        | CreatureInstruction::Presentation(_)
+        | CreatureInstruction::QuestCredit(_)
+        | CreatureInstruction::Movement(_)
+        | CreatureInstruction::NotifyEncounter(_) => false,
+    }
 }
 
 fn random_target(target: super::InstructionTarget) -> bool {
@@ -861,7 +1002,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .iter()
             .filter_map(|fight| {
                 let creature = entities.guid().find(fight.attacker_guid)?;
-                (super::runs_eventai(&creature)
+                (super::runs_eventai(self.ctx, &creature)
                     && !creature.dead
                     && scope.covers(creature.instance_id))
                 .then_some(EngagedFight {
@@ -882,7 +1023,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
             };
             if creature.dead
                 || !scope.covers(creature.instance_id)
-                || !super::runs_eventai(&creature)
+                || !super::runs_eventai(self.ctx, &creature)
             {
                 continue;
             }
@@ -1096,6 +1237,18 @@ impl EventAiWorld for DatabaseWorld<'_> {
             EventPredicate::QuestTaken(quest) => {
                 crate::quest::quest_is_taken(self.ctx, guid, quest.quest_entry)
             }
+            EventPredicate::QuestIncomplete(quest_entry) => {
+                crate::quest::character_quest_row(self.ctx, guid, quest_entry).is_some_and(
+                    |quest| {
+                        !quest.rewarded
+                            && !quest.failed
+                            && !crate::quest::quest_is_complete(self.ctx, &quest)
+                    },
+                )
+            }
+            EventPredicate::Map(map_id) => self
+                .eventai_unit(guid)
+                .is_some_and(|unit| unit.map_id == map_id),
         }
     }
 
@@ -1122,17 +1275,20 @@ impl EventAiWorld for DatabaseWorld<'_> {
             .map(|fight| fight.rout_ends_ms)
     }
 
-    fn eventai_broadcast(&self, id: u32) -> Option<BroadcastLine> {
+    fn eventai_broadcast(&self, id: u32, speaker_guid: u64) -> Option<BroadcastLine> {
+        let speaker = self.ctx.db.game_world_entity().guid().find(speaker_guid)?;
+        let gender = crate::creatures::catalogue::display_gender(self.ctx, speaker.display_id);
         self.ctx
             .db
             .game_creature_ai_broadcast_text()
             .id()
             .find(id)
             .map(|text| BroadcastLine {
-                text: text.male_text,
+                text: text.text_for_gender(gender).to_owned(),
                 chat_type: text.chat_type,
                 language: text.language_id,
                 emote: text.emote_id_1,
+                sound: text.sound_id,
             })
     }
 
@@ -1344,6 +1500,10 @@ impl EventAiWorld for DatabaseWorld<'_> {
             message,
         )
         .is_ok()
+    }
+
+    fn eventai_deliver_sound(&mut self, source_guid: u64, sound_id: u32, chat_type: u8) {
+        crate::native::creature_sound(self.ctx, source_guid, sound_id, chat_type);
     }
 
     fn eventai_deliver_emote(&mut self, source_guid: u64, emote_id: u32, target_guid: u64) -> bool {

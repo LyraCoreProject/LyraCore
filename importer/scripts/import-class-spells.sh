@@ -2,6 +2,9 @@
 # Spell imports need both LearnSpell wrapper IDs and castable rank IDs.
 set -euo pipefail
 
+# shellcheck source=importer/scripts/vmangos-source.sh
+source "$(dirname "$0")/vmangos-source.sh"
+
 DBC="${1:-../wowclient/Data}"
 DB="${DB:-lyracore}"
 SPACETIME_SERVER="${SPACETIME_SERVER:-http://127.0.0.1:3000}"
@@ -64,4 +67,4 @@ bind "${OVR_MAGE}"    ${TRAINERS_MAGE}
 bind "${IDS_HUNTER}"  ${TRAINERS_HUNTER}
 bind "${IDS_SHAMAN}"  ${TRAINERS_SHAMAN}
 bind "${IDS_DRUID}"   ${TRAINERS_DRUID}
-exec ./target/debug/lyracore-importer --server "$SPACETIME_SERVER" --db "$DB" --dbc "${DBC}" --spells --only "${IDS}" "${TRAINER_ARGS[@]}" --apply
+exec ./target/debug/lyracore-importer --server "$SPACETIME_SERVER" --db "$DB" --dump "$DUMP" --source-sha "$SOURCE_SHA" --dbc "${DBC}" --spells --only "${IDS}" "${TRAINER_ARGS[@]}" --apply

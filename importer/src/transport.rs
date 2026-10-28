@@ -5,13 +5,13 @@ use wow_dbc::vanilla_tables::taxi_path::TaxiPath;
 use wow_dbc::vanilla_tables::taxi_path_node::TaxiPathNode;
 use wow_dbc::DbcTable;
 
-use crate::dump::{field, got, push_insert, sql_text};
+use crate::dump::{got, push_insert, sql_text};
 
 const MO_TRANSPORT: u32 = 15;
 
 mod tr {
-    pub const ENTRY: usize = 0;
-    pub const PERIOD: usize = 2;
+    pub const ENTRY: &str = "entry";
+    pub const PERIOD: &str = "period";
 }
 
 #[derive(Debug, PartialEq, Eq)]
@@ -25,26 +25,26 @@ pub(crate) struct TransportCatalogueSql {
 pub(crate) fn catalogue_sql(
     paths: &TaxiPath,
     points: &TaxiPathNode,
-    dump: &str,
+    dump: &(impl crate::dump::TableRows + ?Sized),
 ) -> Result<TransportCatalogueSql> {
-    let templates: HashMap<u32, Vec<String>> =
-        crate::dump::parse_complete_table(dump, "gameobject_template")?
-            .into_iter()
-            .filter_map(|row| Some((field(&row, got::ENTRY).parse().ok()?, row)))
-            .collect();
+    let template_rows = crate::dump::parse_table(dump, "gameobject_template")?;
+    let templates: HashMap<u32, &crate::world_source::Row> = template_rows
+        .iter()
+        .map(|row| Ok((row.number::<u32>(got::ENTRY)?, row)))
+        .collect::<Result<_>>()?;
     let path_ids: HashSet<u32> = paths.rows().iter().map(|row| row.id.id).collect();
-    let transports = crate::dump::parse_complete_table(dump, "transports")?;
+    let transports = crate::dump::parse_table(dump, "transports")?;
     if transports.is_empty() {
         bail!("transport dump has no transports rows");
     }
     let mut rows = Vec::new();
     let mut warnings = Vec::new();
-    for transport in transports {
-        let entry: u32 = field(&transport, tr::ENTRY)
-            .parse()
+    for transport in transports.iter() {
+        let entry: u32 = transport
+            .number(tr::ENTRY)
             .context("transports has an invalid entry")?;
-        let period_ms: u32 = field(&transport, tr::PERIOD)
-            .parse()
+        let period_ms: u32 = transport
+            .number(tr::PERIOD)
             .with_context(|| format!("transport {entry} has an invalid period"))?;
         let Some(template) = templates.get(&entry) else {
             warnings.push(format!(
@@ -52,9 +52,9 @@ pub(crate) fn catalogue_sql(
             ));
             continue;
         };
-        let number = |column: usize| -> Result<u32> {
-            field(template, column)
-                .parse()
+        let number = |column: &str| -> Result<u32> {
+            template
+                .number(column)
                 .with_context(|| format!("transport {entry} template column {column} is invalid"))
         };
         if number(got::TYPE)? != MO_TRANSPORT {
@@ -87,12 +87,12 @@ pub(crate) fn catalogue_sql(
             continue;
         }
         let map_id = nodes[0].map.id;
-        let size: f32 = field(template, got::SIZE)
-            .parse()
+        let size: f32 = template
+            .number(got::SIZE)
             .with_context(|| format!("transport {entry} has an invalid size"))?;
         rows.push(format!(
             "({entry},{},{},{size},{},{path_id},{speed},{accel},{period_ms},{map_id})",
-            sql_text(field(template, got::NAME)),
+            sql_text(template.text(got::NAME)?.trim()),
             number(got::DISPLAY_ID)?,
             number(got::FLAGS)?,
         ));
@@ -151,28 +151,102 @@ mod tests {
             .collect()
     }
 
-    const DUMP: &str = "INSERT INTO `gameobject_template` VALUES \
-        (176244,15,3015,'Moonspray',0,40,0,1,293,30,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,''),\
-        (176231,15,3015,'Proudmore\\'s Treasure',0,40,0,1,292,30,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,''),\
-        (50100,3,259,'Chest',0,0,0,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,'');\n\
-        INSERT INTO `transports` VALUES (176244,'Teldrassil and Auberdine',316251),\
-        (176231,'Menethil Harbor and Theramore Isle',329313),(50100,'Not a ship',1000),\
-        (99999,'Missing',1000);";
+    fn transport_source() -> crate::world_source::WorldSource {
+        crate::world_source::fixture_sql("CREATE TABLE gameobject_template (
+            entry INTEGER PRIMARY KEY, patch INTEGER DEFAULT 10, type INTEGER, displayId INTEGER,
+            name TEXT, flags INTEGER, size REAL, data0 INTEGER, data1 INTEGER, data2 INTEGER);
+            INSERT INTO gameobject_template (entry,type,displayId,name,flags,size,data0,data1,data2)
+            VALUES (176244,15,3015,'Fixture boat A',40,1,293,30,1),
+                   (176231,15,3015,'Fixture boat B',40,1,292,30,1),
+                   (50100,3,259,'Chest',0,1,0,0,0);
+            CREATE TABLE transports (entry INTEGER PRIMARY KEY, build INTEGER DEFAULT 5875, period INTEGER);
+            INSERT INTO transports (entry,period) VALUES (176244,316251),(176231,329313),(50100,1000),(99999,1000);")
+    }
+
+    #[test]
+    fn vmangos_transports_select_build_and_template_patch_by_name() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::{Integer as N, Text};
+        let template = |patch, display| {
+            [
+                ("entry", N(7)),
+                ("patch", N(patch)),
+                ("type", N(15)),
+                ("displayId", N(display)),
+                ("name", Text("Boat".into())),
+                ("size", N(1)),
+                ("flags", N(40)),
+                ("data0", N(1)),
+                ("data1", N(10)),
+                ("data2", N(2)),
+            ]
+        };
+        let transport =
+            |build, period| [("entry", N(7)), ("build", N(build)), ("period", N(period))];
+        let source = sqlite_fixture(&[
+            FixtureTable {
+                name: "gameobject_template",
+                columns: &[
+                    ("entry", "INTEGER"),
+                    ("patch", "INTEGER"),
+                    ("type", "INTEGER"),
+                    ("displayId", "INTEGER"),
+                    ("name", "TEXT"),
+                    ("size", "REAL"),
+                    ("flags", "INTEGER"),
+                    ("data0", "INTEGER"),
+                    ("data1", "INTEGER"),
+                    ("data2", "INTEGER"),
+                ],
+                key: &["entry", "patch"],
+                rows: &[&template(0, 1), &template(10, 2)],
+            },
+            FixtureTable {
+                name: "transports",
+                columns: &[
+                    ("period", "INTEGER"),
+                    ("build", "INTEGER"),
+                    ("entry", "INTEGER"),
+                ],
+                key: &["entry", "build"],
+                rows: &[
+                    &transport(5860, 1000),
+                    &transport(5875, 2000),
+                    &transport(6000, 999),
+                ],
+            },
+        ])
+        .unwrap();
+        let catalogue = catalogue_sql(
+            &paths(&[1]),
+            &TaxiPathNode {
+                rows: points(1, &[0, 1, 1]),
+            },
+            &source,
+        )
+        .unwrap();
+        assert_eq!(catalogue.count, 1);
+        assert!(catalogue.statements[1].contains("(7,'Boat',2,1,40,1,10,2,2000,0)"));
+    }
 
     #[test]
     fn a_route_imports_with_its_template_period_and_first_map() {
         let mut nodes = points(293, &[1, 1, 1, 1]);
         nodes.extend(points(292, &[0, 0, 1, 1]));
-        let catalogue =
-            catalogue_sql(&paths(&[292, 293]), &TaxiPathNode { rows: nodes }, DUMP).unwrap();
+        let catalogue = catalogue_sql(
+            &paths(&[292, 293]),
+            &TaxiPathNode { rows: nodes },
+            &transport_source(),
+        )
+        .unwrap();
         assert_eq!(catalogue.count, 2);
         assert_eq!(
             catalogue.statements[0],
             "DELETE FROM game_transport WHERE entry >= 0"
         );
         for row in [
-            "(176244,'Moonspray',3015,1,40,293,30,1,316251,1)",
-            "(176231,'Proudmore''s Treasure',3015,1,40,292,30,1,329313,0)",
+            "(176244,'Fixture boat A',3015,1,40,293,30,1,316251,1)",
+            "(176231,'Fixture boat B',3015,1,40,292,30,1,329313,0)",
         ] {
             assert!(
                 catalogue.statements[1].contains(row),
@@ -186,8 +260,12 @@ mod tests {
     fn routes_the_runtime_cannot_run_are_omitted_with_a_warning() {
         let mut nodes = points(293, &[1, 1, 1, 1]);
         nodes.extend(points(292, &[0, 0, 1, 1]));
-        let catalogue =
-            catalogue_sql(&paths(&[292, 293]), &TaxiPathNode { rows: nodes }, DUMP).unwrap();
+        let catalogue = catalogue_sql(
+            &paths(&[292, 293]),
+            &TaxiPathNode { rows: nodes },
+            &transport_source(),
+        )
+        .unwrap();
         let warnings = catalogue.warnings.join("\n");
         assert!(warnings.contains("transport 50100 is not an MO_TRANSPORT"));
         assert!(warnings.contains("transport 99999 has no gameobject_template row"));
@@ -195,17 +273,31 @@ mod tests {
 
     #[test]
     fn a_dump_without_transports_fails_instead_of_clearing_them() {
-        let error = catalogue_sql(&paths(&[293]), &TaxiPathNode { rows: vec![] }, "")
-            .unwrap_err()
-            .to_string();
+        let error = catalogue_sql(
+            &paths(&[293]),
+            &TaxiPathNode { rows: vec![] },
+            &crate::world_source::fixture_sql(
+                "CREATE TABLE gameobject_template (entry INTEGER PRIMARY KEY, patch INTEGER);
+             CREATE TABLE transports (entry INTEGER PRIMARY KEY, build INTEGER);",
+            ),
+        )
+        .unwrap_err()
+        .to_string();
         assert!(error.contains("no transports rows"), "{error}");
     }
 
     #[test]
     fn a_transport_without_imported_path_points_is_omitted() {
-        let catalogue =
-            catalogue_sql(&paths(&[293]), &TaxiPathNode { rows: vec![] }, DUMP).unwrap();
+        let catalogue = catalogue_sql(
+            &paths(&[293]),
+            &TaxiPathNode { rows: vec![] },
+            &transport_source(),
+        )
+        .unwrap();
         assert_eq!(catalogue.count, 0);
-        assert!(catalogue.warnings[0].contains("path 293 has no imported route"));
+        assert!(catalogue
+            .warnings
+            .iter()
+            .any(|warning| warning.contains("path 293 has no imported route")));
     }
 }

@@ -1,0 +1,2918 @@
+{
+  "format_version": 1,
+  "name": "vmangos-4641790",
+  "commit": "464179081673cfd240f7ffe7f0daf96bca0b5a70",
+  "tables": {
+    "area_template": {
+      "columns": {
+        "integer": [
+          "area_level",
+          "entry",
+          "explore_flag",
+          "flags",
+          "liquid_type",
+          "map_id",
+          "team",
+          "zone_id"
+        ],
+        "text": [
+          "name"
+        ]
+      },
+      "locked_rows": 1081,
+      "bits": {
+        "flags": 1023
+      }
+    },
+    "areatrigger_involvedrelation": {
+      "columns": {
+        "integer": [
+          "id",
+          "quest"
+        ]
+      },
+      "locked_rows": 50
+    },
+    "areatrigger_teleport": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch",
+          "required_condition",
+          "target_map"
+        ],
+        "real": [
+          "target_orientation",
+          "target_position_x",
+          "target_position_y",
+          "target_position_z"
+        ],
+        "text": [
+          "name"
+        ]
+      },
+      "locked_rows": 121
+    },
+    "areatrigger_template": {
+      "columns": {
+        "integer": [
+          "build",
+          "condition_id",
+          "cooldown",
+          "id",
+          "map_id",
+          "script_id"
+        ],
+        "real": [
+          "box_orientation",
+          "box_x",
+          "box_y",
+          "box_z",
+          "radius",
+          "x",
+          "y",
+          "z"
+        ],
+        "text": [
+          "name",
+          "script_name"
+        ]
+      },
+      "locked_rows": 502
+    },
+    "broadcast_text": {
+      "columns": {
+        "integer": [
+          "chat_type",
+          "emote_delay1",
+          "emote_delay2",
+          "emote_delay3",
+          "emote_id1",
+          "emote_id2",
+          "emote_id3",
+          "entry",
+          "language_id",
+          "sound_id"
+        ],
+        "text": [
+          "female_text",
+          "male_text"
+        ]
+      },
+      "locked_rows": 11108
+    },
+    "conditions": {
+      "columns": {
+        "integer": [
+          "condition_entry",
+          "flags",
+          "type",
+          "value1",
+          "value2",
+          "value3",
+          "value4"
+        ]
+      },
+      "locked_rows": 1882,
+      "bits": {
+        "flags": 3
+      },
+      "values": {
+        "type": [
+          -3,
+          -2,
+          -1,
+          1,
+          2,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          19,
+          20,
+          21,
+          22,
+          23,
+          24,
+          25,
+          27,
+          28,
+          29,
+          30,
+          31,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59
+        ]
+      }
+    },
+    "creature": {
+      "columns": {
+        "integer": [
+          "guid",
+          "id",
+          "id2",
+          "id3",
+          "id4",
+          "id5",
+          "map",
+          "movement_type",
+          "patch_max",
+          "patch_min",
+          "spawn_flags",
+          "spawntimesecsmax",
+          "spawntimesecsmin"
+        ],
+        "real": [
+          "health_percent",
+          "mana_percent",
+          "orientation",
+          "position_x",
+          "position_y",
+          "position_z",
+          "visibility_mod",
+          "wander_distance"
+        ]
+      },
+      "locked_rows": 66243,
+      "bits": {
+        "spawn_flags": 255
+      }
+    },
+    "creature_ai_events": {
+      "columns": {
+        "integer": [
+          "action1_script",
+          "action2_script",
+          "action3_script",
+          "condition_id",
+          "creature_id",
+          "event_chance",
+          "event_flags",
+          "event_inverse_phase_mask",
+          "event_param1",
+          "event_param2",
+          "event_param3",
+          "event_param4",
+          "event_type",
+          "id"
+        ]
+      },
+      "locked_rows": 6179,
+      "bits": {
+        "event_flags": 15
+      },
+      "values": {
+        "event_type": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          21,
+          22,
+          23,
+          24,
+          25,
+          27,
+          28,
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36
+        ]
+      }
+    },
+    "creature_ai_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 7331,
+      "bits": {
+        "data_flags": 31
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          14,
+          15,
+          16,
+          18,
+          19,
+          20,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          29,
+          33,
+          34,
+          35,
+          37,
+          38,
+          39,
+          42,
+          43,
+          44,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          54,
+          55,
+          56,
+          59,
+          60,
+          61,
+          62,
+          65,
+          67,
+          68,
+          69,
+          71,
+          72,
+          73,
+          74,
+          77,
+          78,
+          79,
+          80,
+          81,
+          83,
+          84,
+          85,
+          88,
+          90,
+          91
+        ],
+        "target_type": [
+          0,
+          1,
+          4,
+          5,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          22,
+          23,
+          24,
+          25,
+          28,
+          29
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 197
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33948610
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 6,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 9
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 39
+        },
+        {
+          "command": 16,
+          "column": "datalong2",
+          "allowed": 2
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 7
+        },
+        {
+          "command": 74,
+          "column": "datalong2",
+          "allowed": 8
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 3
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0,
+            1,
+            4
+          ]
+        },
+        {
+          "command": 29,
+          "column": "datalong",
+          "allowed": [
+            0,
+            1,
+            8
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
+          ]
+        }
+      ],
+      "target_bits": [
+        {
+          "target": 4,
+          "column": "target_param1",
+          "allowed": 771
+        },
+        {
+          "target": 5,
+          "column": "target_param1",
+          "allowed": 259
+        },
+        {
+          "target": 7,
+          "column": "target_param1",
+          "allowed": 1
+        }
+      ]
+    },
+    "creature_classlevelstats": {
+      "columns": {
+        "integer": [
+          "armor",
+          "class",
+          "health",
+          "level"
+        ],
+        "real": [
+          "melee_damage"
+        ]
+      },
+      "locked_rows": 189
+    },
+    "creature_display_info_addon": {
+      "columns": {
+        "real": ["bounding_radius"],
+        "integer": [
+          "build",
+          "display_id",
+          "display_id_other_gender",
+          "gender"
+        ]
+      },
+      "locked_rows": 10537,
+      "values": {
+        "gender": [
+          0,
+          1,
+          2
+        ]
+      }
+    },
+    "creature_groups": {
+      "columns": {
+        "integer": [
+          "member_guid"
+        ]
+      },
+      "locked_rows": 5781
+    },
+    "creature_involvedrelation": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch_max",
+          "patch_min",
+          "quest"
+        ]
+      },
+      "locked_rows": 4069
+    },
+    "creature_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 232486
+    },
+    "creature_movement": {
+      "columns": {
+        "integer": [
+          "id",
+          "path_id",
+          "point",
+          "script_id",
+          "waittime"
+        ],
+        "real": [
+          "orientation",
+          "position_x",
+          "position_y",
+          "position_z",
+          "wander_distance"
+        ]
+      },
+      "locked_rows": 76370
+    },
+    "creature_movement_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 1788,
+      "bits": {
+        "data_flags": 31
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          9,
+          10,
+          13,
+          14,
+          15,
+          16,
+          18,
+          19,
+          20,
+          22,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28,
+          34,
+          35,
+          37,
+          39,
+          41,
+          44,
+          51,
+          59,
+          60,
+          61,
+          62,
+          63,
+          66,
+          67,
+          68,
+          69,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          84,
+          87,
+          90,
+          92
+        ],
+        "target_type": [
+          0,
+          10,
+          11,
+          13,
+          14,
+          23,
+          24,
+          25,
+          27
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 2,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 327
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33555202
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 6,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 3
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 39
+        },
+        {
+          "command": 16,
+          "column": "datalong2",
+          "allowed": 2
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 1
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "creature_movement_template": {
+      "columns": {
+        "integer": [
+          "entry",
+          "path_id",
+          "point",
+          "script_id",
+          "waittime"
+        ],
+        "real": [
+          "orientation",
+          "position_x",
+          "position_y",
+          "position_z",
+          "wander_distance"
+        ]
+      },
+      "locked_rows": 9648
+    },
+    "creature_questrelation": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch_max",
+          "patch_min",
+          "quest"
+        ]
+      },
+      "locked_rows": 3908
+    },
+    "creature_spells": {
+      "columns": {
+        "integer": [
+          "entry",
+          "spellId_1",
+          "spellId_2",
+          "spellId_3",
+          "spellId_4",
+          "spellId_5",
+          "spellId_6",
+          "spellId_7",
+          "spellId_8"
+        ]
+      },
+      "locked_rows": 2645
+    },
+    "creature_template": {
+      "columns": {
+        "integer": [
+          "base_attack_time",
+          "display_id1",
+          "display_id2",
+          "display_id3",
+          "display_id4",
+          "display_probability1",
+          "display_probability2",
+          "display_probability3",
+          "display_probability4",
+          "display_total_probability",
+          "entry",
+          "faction",
+          "flags_extra",
+          "gold_max",
+          "gold_min",
+          "gossip_menu_id",
+          "immunity_flags",
+          "level_max",
+          "level_min",
+          "loot_id",
+          "mechanic_immune_mask",
+          "npc_flags",
+          "patch",
+          "pet_family",
+          "pickpocket_loot_id",
+          "rank",
+          "school_immune_mask",
+          "skinning_loot_id",
+          "spawn_spell_id",
+          "spell_list_id",
+          "static_flags1",
+          "static_flags2",
+          "totem_spell_id",
+          "trainer_class",
+          "trainer_id",
+          "trainer_type",
+          "type",
+          "unit_class",
+          "vendor_id"
+        ],
+        "real": [
+          "armor_multiplier",
+          "damage_multiplier",
+          "damage_variance",
+          "display_scale1",
+          "display_scale2",
+          "display_scale3",
+          "display_scale4",
+          "health_multiplier"
+        ],
+        "text": [
+          "ai_name",
+          "auras",
+          "name",
+          "script_name",
+          "subname"
+        ]
+      },
+      "locked_rows": 15217,
+      "bits": {
+        "flags_extra": 1048575,
+        "immunity_flags": 127,
+        "npc_flags": 302546943,
+        "static_flags1": 4294967295,
+        "static_flags2": 126
+      }
+    },
+    "disenchant_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ]
+      },
+      "locked_rows": 81
+    },
+    "event_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 379,
+      "bits": {
+        "data_flags": 31
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          3,
+          4,
+          9,
+          10,
+          11,
+          13,
+          15,
+          18,
+          20,
+          22,
+          25,
+          26,
+          28,
+          31,
+          35,
+          37,
+          38,
+          39,
+          41,
+          44,
+          61,
+          68,
+          69,
+          76,
+          80,
+          81,
+          83,
+          86
+        ],
+        "target_type": [
+          0,
+          10,
+          11,
+          13,
+          14,
+          22
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 1
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 2
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 768
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 29
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 1
+        },
+        {
+          "command": 31,
+          "column": "datalong3",
+          "allowed": 1
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "faction": {
+      "columns": {
+        "integer": [
+          "base_rep_class_mask1",
+          "base_rep_class_mask2",
+          "base_rep_class_mask3",
+          "base_rep_class_mask4",
+          "base_rep_race_mask1",
+          "base_rep_race_mask2",
+          "base_rep_race_mask3",
+          "base_rep_race_mask4",
+          "base_rep_value1",
+          "base_rep_value2",
+          "base_rep_value3",
+          "base_rep_value4",
+          "build",
+          "id",
+          "reputation_flags1",
+          "reputation_flags2",
+          "reputation_flags3",
+          "reputation_flags4",
+          "reputation_list_id",
+          "team"
+        ],
+        "text": [
+          "description",
+          "name"
+        ]
+      },
+      "locked_rows": 253,
+      "bits": {
+        "reputation_flags1": 31,
+        "reputation_flags2": 30,
+        "reputation_flags3": 17,
+        "reputation_flags4": 17
+      }
+    },
+    "faction_template": {
+      "columns": {
+        "integer": [
+          "build",
+          "enemy_faction1",
+          "enemy_faction2",
+          "enemy_faction3",
+          "enemy_faction4",
+          "faction_flags",
+          "faction_id",
+          "friend_faction1",
+          "friend_faction2",
+          "friend_faction3",
+          "friend_faction4",
+          "friendly_mask",
+          "hostile_mask",
+          "id",
+          "our_mask"
+        ]
+      },
+      "locked_rows": 331,
+      "bits": {
+        "faction_flags": 7295
+      }
+    },
+    "fishing_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 2484
+    },
+    "forbidden_items": {
+      "columns": {
+        "integer": [
+          "after_or_before",
+          "entry",
+          "patch"
+        ]
+      },
+      "locked_rows": 4084
+    },
+    "game_event_creature": {
+      "columns": {
+        "integer": [
+          "event",
+          "guid"
+        ]
+      },
+      "locked_rows": 3064
+    },
+    "game_event_gameobject": {
+      "columns": {
+        "integer": [
+          "event",
+          "guid"
+        ]
+      },
+      "locked_rows": 12137
+    },
+    "game_graveyard_zone": {
+      "columns": {
+        "integer": [
+          "faction",
+          "ghost_zone",
+          "id",
+          "patch_max",
+          "patch_min"
+        ]
+      },
+      "locked_rows": 199
+    },
+    "gameobject": {
+      "columns": {
+        "integer": [
+          "animprogress",
+          "guid",
+          "id",
+          "map",
+          "patch_max",
+          "patch_min",
+          "spawn_flags",
+          "spawntimesecsmax",
+          "spawntimesecsmin",
+          "state"
+        ],
+        "real": [
+          "orientation",
+          "position_x",
+          "position_y",
+          "position_z",
+          "rotation0",
+          "rotation1",
+          "rotation2",
+          "rotation3",
+          "visibility_mod"
+        ]
+      },
+      "locked_rows": 56639,
+      "bits": {
+        "spawn_flags": 15
+      }
+    },
+    "gameobject_involvedrelation": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch_max",
+          "patch_min",
+          "quest"
+        ]
+      },
+      "locked_rows": 209
+    },
+    "gameobject_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 13850
+    },
+    "gameobject_questrelation": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch_max",
+          "patch_min",
+          "quest"
+        ]
+      },
+      "locked_rows": 262
+    },
+    "gameobject_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 139,
+      "bits": {
+        "data_flags": 23
+      },
+      "values": {
+        "command": [
+          3,
+          9,
+          10,
+          11,
+          12,
+          15,
+          20,
+          28,
+          31,
+          34,
+          37,
+          39,
+          41,
+          60,
+          76,
+          77,
+          82
+        ],
+        "target_type": [
+          0,
+          10,
+          11,
+          13
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 4
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 2
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 25
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 2
+        },
+        {
+          "command": 31,
+          "column": "datalong3",
+          "allowed": 1
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0
+          ]
+        }
+      ]
+    },
+    "gameobject_template": {
+      "columns": {
+        "integer": [
+          "data0",
+          "data1",
+          "data2",
+          "data3",
+          "data5",
+          "displayId",
+          "entry",
+          "flags",
+          "patch",
+          "type"
+        ],
+        "real": [
+          "size"
+        ],
+        "text": [
+          "name",
+          "script_name"
+        ]
+      },
+      "locked_rows": 9530,
+      "bits": {
+        "flags": 127
+      }
+    },
+    "generic_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 3057,
+      "bits": {
+        "data_flags": 31
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          3,
+          4,
+          6,
+          7,
+          9,
+          10,
+          11,
+          13,
+          14,
+          15,
+          16,
+          18,
+          19,
+          20,
+          22,
+          24,
+          25,
+          26,
+          27,
+          28,
+          33,
+          34,
+          35,
+          37,
+          39,
+          41,
+          42,
+          43,
+          44,
+          48,
+          49,
+          51,
+          52,
+          55,
+          59,
+          60,
+          61,
+          62,
+          63,
+          65,
+          66,
+          68,
+          69,
+          70,
+          71,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93
+        ],
+        "target_type": [
+          0,
+          9,
+          10,
+          11,
+          13,
+          14,
+          22,
+          23,
+          24,
+          25,
+          28
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 335
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 17
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33817474
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 6,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 15
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 39
+        },
+        {
+          "command": 16,
+          "column": "datalong2",
+          "allowed": 6
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 74,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 78,
+          "column": "datalong",
+          "allowed": 7
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0,
+            8
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "gossip_menu": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "script_id",
+          "text_id"
+        ]
+      },
+      "locked_rows": 3253
+    },
+    "gossip_menu_option": {
+      "columns": {
+        "integer": [
+          "action_menu_id",
+          "action_poi_id",
+          "action_script_id",
+          "box_broadcast_text",
+          "box_coded",
+          "box_money",
+          "condition_id",
+          "id",
+          "menu_id",
+          "npc_option_npcflag",
+          "option_broadcast_text",
+          "option_icon",
+          "option_id"
+        ],
+        "text": [
+          "box_text",
+          "option_text"
+        ]
+      },
+      "locked_rows": 2654
+    },
+    "gossip_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 522,
+      "bits": {
+        "data_flags": 15
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          6,
+          7,
+          8,
+          9,
+          10,
+          13,
+          14,
+          15,
+          16,
+          17,
+          18,
+          20,
+          22,
+          25,
+          26,
+          28,
+          30,
+          34,
+          35,
+          36,
+          37,
+          39,
+          41,
+          48,
+          60,
+          61,
+          74,
+          80,
+          83,
+          84,
+          85,
+          87,
+          93
+        ],
+        "target_type": [
+          0,
+          10,
+          13,
+          14
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 2,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 69
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 33554944
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 6,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 12
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 7
+        },
+        {
+          "command": 16,
+          "column": "datalong2",
+          "allowed": 0
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 74,
+          "column": "datalong2",
+          "allowed": 0
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "item_enchantment_template": {
+      "columns": {
+        "integer": [
+          "ench",
+          "entry",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "chance"
+        ]
+      },
+      "locked_rows": 30602
+    },
+    "item_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ]
+      },
+      "locked_rows": 2677
+    },
+    "item_template": {
+      "columns": {
+        "integer": [
+          "allowable_class",
+          "allowable_race",
+          "arcane_res",
+          "armor",
+          "bag_family",
+          "block",
+          "bonding",
+          "buy_count",
+          "buy_price",
+          "class",
+          "container_slots",
+          "delay",
+          "display_id",
+          "entry",
+          "fire_res",
+          "flags",
+          "food_type",
+          "frost_res",
+          "holy_res",
+          "inventory_type",
+          "item_level",
+          "max_count",
+          "max_durability",
+          "nature_res",
+          "page_text",
+          "patch",
+          "quality",
+          "random_property",
+          "required_level",
+          "required_reputation_faction",
+          "required_reputation_rank",
+          "required_skill",
+          "required_skill_rank",
+          "sell_price",
+          "shadow_res",
+          "sheath",
+          "spellid_1",
+          "spellid_2",
+          "spellid_3",
+          "spellid_4",
+          "spellid_5",
+          "spelltrigger_1",
+          "spelltrigger_2",
+          "spelltrigger_3",
+          "spelltrigger_4",
+          "spelltrigger_5",
+          "stackable",
+          "start_quest",
+          "stat_type1",
+          "stat_type10",
+          "stat_type2",
+          "stat_type3",
+          "stat_type4",
+          "stat_type5",
+          "stat_type6",
+          "stat_type7",
+          "stat_type8",
+          "stat_type9",
+          "stat_value1",
+          "stat_value10",
+          "stat_value2",
+          "stat_value3",
+          "stat_value4",
+          "stat_value5",
+          "stat_value6",
+          "stat_value7",
+          "stat_value8",
+          "stat_value9",
+          "subclass"
+        ],
+        "real": [
+          "dmg_max1",
+          "dmg_min1"
+        ],
+        "text": [
+          "name"
+        ]
+      },
+      "locked_rows": 20034,
+      "bits": {
+        "flags": 258039
+      }
+    },
+    "mail_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 72
+    },
+    "map_template": {
+      "columns": {
+        "integer": [
+          "entry",
+          "ghost_entrance_map",
+          "linked_zone",
+          "map_type",
+          "parent",
+          "patch",
+          "player_limit",
+          "reset_delay"
+        ],
+        "real": [
+          "ghost_entrance_x",
+          "ghost_entrance_y"
+        ],
+        "text": [
+          "map_name",
+          "script_name"
+        ]
+      },
+      "locked_rows": 66
+    },
+    "npc_gossip": {
+      "columns": {
+        "integer": [
+          "npc_guid",
+          "textid"
+        ]
+      },
+      "locked_rows": 8
+    },
+    "npc_text": {
+      "columns": {
+        "integer": [
+          "BroadcastTextID0",
+          "BroadcastTextID1",
+          "BroadcastTextID2",
+          "BroadcastTextID3",
+          "BroadcastTextID4",
+          "BroadcastTextID5",
+          "BroadcastTextID6",
+          "BroadcastTextID7",
+          "ID"
+        ],
+        "real": [
+          "Probability0",
+          "Probability1",
+          "Probability2",
+          "Probability3",
+          "Probability4",
+          "Probability5",
+          "Probability6",
+          "Probability7"
+        ]
+      },
+      "locked_rows": 3036
+    },
+    "npc_trainer": {
+      "columns": {
+        "integer": [
+          "build_max",
+          "build_min",
+          "entry",
+          "reqlevel",
+          "reqskill",
+          "reqskillvalue",
+          "spell",
+          "spellcost"
+        ]
+      },
+      "locked_rows": 4676
+    },
+    "npc_trainer_template": {
+      "columns": {
+        "integer": [
+          "build_max",
+          "build_min",
+          "entry",
+          "reqlevel",
+          "reqskill",
+          "reqskillvalue",
+          "spell",
+          "spellcost"
+        ]
+      },
+      "locked_rows": 2404
+    },
+    "npc_vendor": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "incrtime",
+          "item",
+          "itemflags",
+          "maxcount",
+          "slot"
+        ]
+      },
+      "locked_rows": 13269,
+      "bits": {
+        "itemflags": 3
+      }
+    },
+    "npc_vendor_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "incrtime",
+          "item",
+          "itemflags",
+          "maxcount",
+          "slot"
+        ]
+      },
+      "locked_rows": 685,
+      "bits": {
+        "itemflags": 0
+      }
+    },
+    "pickpocketing_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 6901
+    },
+    "player_classlevelstats": {
+      "columns": {
+        "integer": [
+          "basehp",
+          "basemana",
+          "class",
+          "level"
+        ]
+      },
+      "locked_rows": 540
+    },
+    "player_levelstats": {
+      "columns": {
+        "integer": [
+          "agi",
+          "class",
+          "inte",
+          "level",
+          "race",
+          "spi",
+          "sta",
+          "str"
+        ]
+      },
+      "locked_rows": 2400
+    },
+    "playercreateinfo": {
+      "columns": {
+        "integer": [
+          "class",
+          "map",
+          "race",
+          "zone"
+        ],
+        "real": [
+          "orientation",
+          "position_x",
+          "position_y",
+          "position_z"
+        ]
+      },
+      "locked_rows": 40
+    },
+    "playercreateinfo_action": {
+      "columns": {
+        "integer": [
+          "action",
+          "button",
+          "class",
+          "race",
+          "type"
+        ]
+      },
+      "locked_rows": 214
+    },
+    "playercreateinfo_item": {
+      "columns": {
+        "integer": [
+          "class",
+          "itemid",
+          "race"
+        ]
+      },
+      "locked_rows": 302
+    },
+    "playercreateinfo_spell": {
+      "columns": {
+        "integer": [
+          "build_max",
+          "build_min",
+          "class",
+          "race",
+          "spell"
+        ]
+      },
+      "locked_rows": 1499
+    },
+    "pool_creature": {
+      "columns": {
+        "integer": [
+          "flags",
+          "guid",
+          "patch_max",
+          "patch_min",
+          "pool_entry"
+        ],
+        "real": [
+          "chance"
+        ]
+      },
+      "locked_rows": 140,
+      "bits": {
+        "flags": 0
+      }
+    },
+    "pool_creature_template": {
+      "columns": {
+        "integer": [
+          "flags",
+          "id",
+          "patch_max",
+          "patch_min",
+          "pool_entry"
+        ],
+        "real": [
+          "chance"
+        ]
+      },
+      "locked_rows": 56,
+      "bits": {
+        "flags": 0
+      }
+    },
+    "pool_gameobject": {
+      "columns": {
+        "integer": [
+          "guid",
+          "patch_max",
+          "patch_min",
+          "pool_entry"
+        ]
+      },
+      "locked_rows": 29466
+    },
+    "pool_gameobject_template": {
+      "columns": {
+        "integer": [
+          "id",
+          "patch_max",
+          "patch_min",
+          "pool_entry"
+        ]
+      },
+      "locked_rows": 100
+    },
+    "pool_pool": {
+      "columns": {
+        "integer": [
+          "flags",
+          "mother_pool",
+          "pool_id"
+        ],
+        "real": [
+          "chance"
+        ]
+      },
+      "locked_rows": 5583,
+      "bits": {
+        "flags": 0
+      }
+    },
+    "pool_template": {
+      "columns": {
+        "integer": [
+          "entry",
+          "flags",
+          "max_limit",
+          "patch_max",
+          "patch_min"
+        ]
+      },
+      "locked_rows": 7440,
+      "bits": {
+        "flags": 0
+      }
+    },
+    "quest_end_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 1696,
+      "bits": {
+        "data_flags": 31
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          3,
+          4,
+          5,
+          9,
+          10,
+          13,
+          14,
+          15,
+          16,
+          18,
+          19,
+          20,
+          22,
+          25,
+          26,
+          27,
+          28,
+          31,
+          32,
+          35,
+          37,
+          39,
+          41,
+          44,
+          60,
+          61,
+          62,
+          66,
+          68,
+          69,
+          76,
+          80,
+          81,
+          82,
+          89
+        ],
+        "target_type": [
+          0,
+          10,
+          11,
+          13,
+          14,
+          28
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 327
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 9,
+          "column": "datalong2",
+          "allowed": 16
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 768
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 23
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 15
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 2
+        },
+        {
+          "command": 16,
+          "column": "datalong2",
+          "allowed": 2
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 1
+        },
+        {
+          "command": 31,
+          "column": "datalong3",
+          "allowed": 1
+        },
+        {
+          "command": 32,
+          "column": "datalong3",
+          "allowed": 0
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1,
+            0
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            9,
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "quest_start_scripts": {
+      "columns": {
+        "integer": [
+          "command",
+          "condition_id",
+          "data_flags",
+          "dataint",
+          "dataint2",
+          "dataint3",
+          "dataint4",
+          "datalong",
+          "datalong2",
+          "datalong3",
+          "datalong4",
+          "delay",
+          "id",
+          "priority",
+          "target_param1",
+          "target_param2",
+          "target_type"
+        ],
+        "real": [
+          "o",
+          "x",
+          "y",
+          "z"
+        ]
+      },
+      "locked_rows": 666,
+      "bits": {
+        "data_flags": 15
+      },
+      "values": {
+        "command": [
+          0,
+          1,
+          3,
+          4,
+          5,
+          7,
+          9,
+          10,
+          11,
+          15,
+          17,
+          20,
+          22,
+          25,
+          26,
+          27,
+          28,
+          31,
+          32,
+          35,
+          39,
+          41,
+          44,
+          52,
+          55,
+          60,
+          61,
+          69,
+          71,
+          74,
+          76,
+          82,
+          93
+        ],
+        "target_type": [
+          0,
+          10,
+          11,
+          14
+        ]
+      },
+      "command_bits": [
+        {
+          "command": 3,
+          "column": "datalong3",
+          "allowed": 71
+        },
+        {
+          "command": 3,
+          "column": "datalong4",
+          "allowed": 3
+        },
+        {
+          "command": 4,
+          "field": 46,
+          "column": "datalong2",
+          "allowed": 770
+        },
+        {
+          "command": 4,
+          "field": 147,
+          "column": "datalong2",
+          "allowed": 3
+        },
+        {
+          "command": 10,
+          "column": "dataint",
+          "allowed": 15
+        },
+        {
+          "command": 15,
+          "column": "datalong2",
+          "allowed": 32
+        },
+        {
+          "command": 22,
+          "column": "datalong2",
+          "allowed": 7
+        },
+        {
+          "command": 31,
+          "column": "datalong3",
+          "allowed": 1
+        },
+        {
+          "command": 32,
+          "column": "datalong3",
+          "allowed": 1
+        },
+        {
+          "command": 74,
+          "column": "datalong2",
+          "allowed": 0
+        }
+      ],
+      "command_values": [
+        {
+          "command": 10,
+          "column": "dataint3",
+          "allowed": [
+            -1
+          ]
+        },
+        {
+          "command": 4,
+          "column": "datalong",
+          "allowed": [
+            46,
+            147
+          ]
+        }
+      ]
+    },
+    "quest_template": {
+      "columns": {
+        "integer": [
+          "BreadcrumbForQuestId",
+          "CompleteScript",
+          "ExclusiveGroup",
+          "LimitTime",
+          "MaxLevel",
+          "MinLevel",
+          "NextQuestInChain",
+          "PrevQuestId",
+          "QuestFlags",
+          "QuestLevel",
+          "ReqCreatureOrGOCount1",
+          "ReqCreatureOrGOCount2",
+          "ReqCreatureOrGOCount3",
+          "ReqCreatureOrGOCount4",
+          "ReqCreatureOrGOId1",
+          "ReqCreatureOrGOId2",
+          "ReqCreatureOrGOId3",
+          "ReqCreatureOrGOId4",
+          "ReqItemCount1",
+          "ReqItemCount2",
+          "ReqItemCount3",
+          "ReqItemCount4",
+          "ReqItemId1",
+          "ReqItemId2",
+          "ReqItemId3",
+          "ReqItemId4",
+          "ReqSpellCast1",
+          "ReqSpellCast2",
+          "ReqSpellCast3",
+          "ReqSpellCast4",
+          "RequiredClasses",
+          "RequiredCondition",
+          "RequiredMaxRepFaction",
+          "RequiredMinRepFaction",
+          "RequiredRaces",
+          "RequiredSkill",
+          "RewChoiceItemCount1",
+          "RewChoiceItemCount2",
+          "RewChoiceItemCount3",
+          "RewChoiceItemCount4",
+          "RewChoiceItemCount5",
+          "RewChoiceItemCount6",
+          "RewChoiceItemId1",
+          "RewChoiceItemId2",
+          "RewChoiceItemId3",
+          "RewChoiceItemId4",
+          "RewChoiceItemId5",
+          "RewChoiceItemId6",
+          "RewItemCount1",
+          "RewItemCount2",
+          "RewItemCount3",
+          "RewItemCount4",
+          "RewItemId1",
+          "RewItemId2",
+          "RewItemId3",
+          "RewItemId4",
+          "RewMailDelaySecs",
+          "RewMailMoney",
+          "RewMailTemplateId",
+          "RewMoneyMaxLevel",
+          "RewOrReqMoney",
+          "RewRepFaction1",
+          "RewRepFaction2",
+          "RewRepFaction3",
+          "RewRepFaction4",
+          "RewRepFaction5",
+          "RewRepSpilloverMask",
+          "RewRepValue1",
+          "RewRepValue2",
+          "RewSpell",
+          "RewSpellCast",
+          "RewXP",
+          "SpecialFlags",
+          "SrcItemCount",
+          "SrcItemId",
+          "SrcSpell",
+          "StartScript",
+          "Type",
+          "ZoneOrSort",
+          "entry",
+          "patch"
+        ],
+        "text": [
+          "Details",
+          "Objectives",
+          "OfferRewardText",
+          "RequestItemsText",
+          "Title"
+        ]
+      },
+      "locked_rows": 4727,
+      "bits": {
+        "QuestFlags": 1903,
+        "SpecialFlags": 3
+      }
+    },
+    "reference_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 10231
+    },
+    "skill_line_ability": {
+      "columns": {
+        "integer": [
+          "build",
+          "class_mask",
+          "id",
+          "learn_on_get_skill",
+          "max_value",
+          "min_value",
+          "race_mask",
+          "req_skill_value",
+          "req_train_points",
+          "skill_id",
+          "spell_id",
+          "superseded_by_spell"
+        ]
+      },
+      "locked_rows": 55579
+    },
+    "skinning_loot_template": {
+      "columns": {
+        "integer": [
+          "condition_id",
+          "entry",
+          "groupid",
+          "item",
+          "maxcount",
+          "mincountOrRef",
+          "patch_max",
+          "patch_min"
+        ],
+        "real": [
+          "ChanceOrQuestChance"
+        ]
+      },
+      "locked_rows": 2977
+    },
+    "spell_chain": {
+      "columns": {
+        "integer": [
+          "build_max",
+          "build_min",
+          "first_spell",
+          "prev_spell",
+          "rank",
+          "req_spell",
+          "spell_id"
+        ]
+      },
+      "locked_rows": 1094
+    },
+    "spell_learn_spell": {
+      "columns": {
+        "integer": [
+          "Active",
+          "SpellID",
+          "build_max",
+          "build_min",
+          "entry"
+        ]
+      },
+      "locked_rows": 5
+    },
+    "spell_proc_event": {
+      "columns": {
+        "integer": [
+          "Cooldown",
+          "SchoolMask",
+          "SpellFamilyMask0",
+          "SpellFamilyMask1",
+          "SpellFamilyMask2",
+          "SpellFamilyName",
+          "build_max",
+          "build_min",
+          "entry",
+          "procEx",
+          "procFlags"
+        ],
+        "real": [
+          "CustomChance",
+          "ppmRate"
+        ]
+      },
+      "locked_rows": 201,
+      "bits": {
+        "procFlags": 1046520
+      }
+    },
+    "spell_template": {
+      "columns": {
+        "integer": [
+          "activeIconId",
+          "attributes",
+          "attributesEx",
+          "attributesEx2",
+          "attributesEx3",
+          "attributesEx4",
+          "auraDescriptionFlags",
+          "auraInterruptFlags",
+          "baseLevel",
+          "build",
+          "castUI",
+          "casterAuraState",
+          "castingTimeIndex",
+          "category",
+          "categoryRecoveryTime",
+          "channelInterruptFlags",
+          "customFlags",
+          "descriptionFlags",
+          "dispel",
+          "dmgClass",
+          "durationIndex",
+          "effect1",
+          "effect2",
+          "effect3",
+          "effectAmplitude1",
+          "effectAmplitude2",
+          "effectAmplitude3",
+          "effectApplyAuraName1",
+          "effectApplyAuraName2",
+          "effectApplyAuraName3",
+          "effectBaseDice1",
+          "effectBaseDice2",
+          "effectBaseDice3",
+          "effectBasePoints1",
+          "effectBasePoints2",
+          "effectBasePoints3",
+          "effectChainTarget1",
+          "effectChainTarget2",
+          "effectChainTarget3",
+          "effectDieSides1",
+          "effectDieSides2",
+          "effectDieSides3",
+          "effectImplicitTargetA1",
+          "effectImplicitTargetA2",
+          "effectImplicitTargetA3",
+          "effectImplicitTargetB1",
+          "effectImplicitTargetB2",
+          "effectImplicitTargetB3",
+          "effectItemType1",
+          "effectItemType2",
+          "effectItemType3",
+          "effectMechanic1",
+          "effectMechanic2",
+          "effectMechanic3",
+          "effectMiscValue1",
+          "effectMiscValue2",
+          "effectMiscValue3",
+          "effectRadiusIndex1",
+          "effectRadiusIndex2",
+          "effectRadiusIndex3",
+          "effectTriggerSpell1",
+          "effectTriggerSpell2",
+          "effectTriggerSpell3",
+          "entry",
+          "equippedItemClass",
+          "equippedItemInventoryTypeMask",
+          "equippedItemSubClassMask",
+          "interruptFlags",
+          "manCostPerLevel",
+          "manaCost",
+          "manaCostPercentage",
+          "manaPerSecond",
+          "manaPerSecondPerLevel",
+          "maxAffectedTargets",
+          "maxLevel",
+          "maxTargetLevel",
+          "mechanic",
+          "minFactionId",
+          "minReputation",
+          "minTargetLevel",
+          "modelNextSpell",
+          "nameFlags",
+          "nameSubtextFlags",
+          "powerType",
+          "preventionType",
+          "procChance",
+          "procCharges",
+          "procFlags",
+          "rangeIndex",
+          "reagent1",
+          "reagent2",
+          "reagent3",
+          "reagent4",
+          "reagent5",
+          "reagent6",
+          "reagent7",
+          "reagent8",
+          "reagentCount1",
+          "reagentCount2",
+          "reagentCount3",
+          "reagentCount4",
+          "reagentCount5",
+          "reagentCount6",
+          "reagentCount7",
+          "reagentCount8",
+          "recoveryTime",
+          "requiredAuraVision",
+          "requiresSpellFocus",
+          "school",
+          "spellFamilyFlags",
+          "spellFamilyName",
+          "spellIconId",
+          "spellLevel",
+          "spellPriority",
+          "spellVisual1",
+          "spellVisual2",
+          "stackAmount",
+          "stanceBarOrder",
+          "stances",
+          "stancesNot",
+          "startRecoveryCategory",
+          "startRecoveryTime",
+          "targetAuraState",
+          "targetCreatureType",
+          "targets",
+          "totem1",
+          "totem2"
+        ],
+        "real": [
+          "dmgMultiplier1",
+          "dmgMultiplier2",
+          "dmgMultiplier3",
+          "effectBonusCoefficient1",
+          "effectBonusCoefficient2",
+          "effectBonusCoefficient3",
+          "effectDicePerLevel1",
+          "effectDicePerLevel2",
+          "effectDicePerLevel3",
+          "effectMultipleValue1",
+          "effectMultipleValue2",
+          "effectMultipleValue3",
+          "effectPointsPerComboPoint1",
+          "effectPointsPerComboPoint2",
+          "effectPointsPerComboPoint3",
+          "effectRealPointsPerLevel1",
+          "effectRealPointsPerLevel2",
+          "effectRealPointsPerLevel3",
+          "speed"
+        ],
+        "text": [
+          "auraDescription",
+          "description",
+          "name",
+          "nameSubtext",
+          "script_name"
+        ]
+      },
+      "locked_rows": 35752,
+      "bits": {
+        "auraDescriptionFlags": 4128894,
+        "auraInterruptFlags": 8371711,
+        "channelInterruptFlags": 262143,
+        "customFlags": 16311,
+        "descriptionFlags": 8323198,
+        "interruptFlags": 31,
+        "nameFlags": 8323198,
+        "nameSubtextFlags": 8323198,
+        "procFlags": 4194303,
+        "spellFamilyFlags": 68719476735
+      }
+    },
+    "taxi_nodes": {
+      "columns": {
+        "integer": [
+          "build",
+          "id",
+          "map_id",
+          "mount_creature_id1",
+          "mount_creature_id2"
+        ],
+        "real": [
+          "x",
+          "y",
+          "z"
+        ],
+        "text": [
+          "name"
+        ]
+      },
+      "locked_rows": 105
+    },
+    "transports": {
+      "columns": {
+        "integer": [
+          "build",
+          "entry",
+          "period"
+        ]
+      },
+      "locked_rows": 14
+    }
+  }
+}

@@ -430,6 +430,10 @@ pub(super) fn target<W: EventAiWorld>(
         InstructionTarget::AiSender => context.ai_sender_guid,
         InstructionTarget::Spawner => context.spawner_guid,
         InstructionTarget::EventSubject => context.event_target_guid,
+        InstructionTarget::ProvidedTarget => context
+            .event_target_guid
+            .or(context.invoker_guid)
+            .or(context.current_target_guid),
         InstructionTarget::HighestThreat | InstructionTarget::HighestThreatCharacter => {
             ranked_threat(world, &creature, target_policy, cast, admission)
                 .first()
@@ -576,7 +580,10 @@ pub(crate) fn authored_combat(ctx: &ReducerContext, creature_guid: u64) -> Autho
                     ..
                 })
             );
-            authored.flee |= matches!(instruction, CreatureInstruction::FleeForAssist);
+            authored.flee |= matches!(
+                instruction,
+                CreatureInstruction::FleeForAssist | CreatureInstruction::FleeWithText(_)
+            );
         }
     }
     authored
@@ -593,7 +600,7 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
     let Some(creature) = ctx.db.game_world_entity().guid().find(creature_guid) else {
         return EventAiDefinition::empty(creature_guid);
     };
-    if !super::runs_eventai(&creature) {
+    if !super::runs_eventai(ctx, &creature) {
         return EventAiDefinition::empty(creature_guid);
     }
     let definitions = ctx.db.game_creature_ai_definition();
@@ -608,7 +615,11 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
             revision: DefinitionRevision {
                 value: row.definition_revision,
             },
-            rules: row.rules,
+            rules: row
+                .rules
+                .into_iter()
+                .filter_map(|rule| rule.restore(ctx, row.definition_revision))
+                .collect(),
         });
     }
     let source_guid = ctx
@@ -637,7 +648,11 @@ pub(super) fn definition_for(ctx: &ReducerContext, creature_guid: u64) -> EventA
             revision: DefinitionRevision {
                 value: row.definition_revision,
             },
-            rules: row.rules,
+            rules: row
+                .rules
+                .into_iter()
+                .filter_map(|rule| rule.restore(ctx, row.definition_revision))
+                .collect(),
         });
     }
     EventAiDefinition::compose(creature_guid, rows)
@@ -947,7 +962,10 @@ fn killed_invoker_target(
     selected_guid: u64,
 ) -> bool {
     context.kind == EventKind::OnKill
-        && target_policy == InstructionTarget::Invoker
+        && matches!(
+            target_policy,
+            InstructionTarget::Invoker | InstructionTarget::ProvidedTarget
+        )
         && context.invoker_guid == Some(selected_guid)
 }
 

@@ -6,9 +6,8 @@ use common::{
     WHOLE_GAMEOBJECT_SPAWN_ROW, WHOLE_GAMEOBJECT_TEMPLATE_ROW, WHOLE_GAMEOBJECT_TRAP_ROW,
 };
 use lyracore_package_delta::{
-    is_fixture_reserved_gameobject_id, is_package_gameobject_id, packed_gameobject_spawn_guid,
-    DeltaError, PackageDelta, PrimaryKey, Table, PACKAGE_GAMEOBJECT_ID_CEIL,
-    PACKAGE_GAMEOBJECT_ID_FLOOR,
+    is_fixture_reserved_gameobject_id, is_package_gameobject_id, DeltaError, PackageDelta,
+    PrimaryKey, Table, PACKAGE_GAMEOBJECT_ID_CEIL, PACKAGE_GAMEOBJECT_ID_FLOOR,
 };
 
 const A_NAME: &str = r#"{"name":{"type":"string","value":"Kindled Cache"}}"#;
@@ -19,14 +18,7 @@ fn a_spawn_key_derives_the_importers_gameobject_guid() {
     let key = PrimaryKey::gameobject_spawn(REAL_MAP, REAL_GAMEOBJECT_SPAWN)
         .expect("a real spawn is claimable");
 
-    assert_eq!(
-        key.row_id(),
-        (0xF110u64 << 48) | u64::from(REAL_GAMEOBJECT_SPAWN)
-    );
-    assert_eq!(
-        key.row_id(),
-        packed_gameobject_spawn_guid(REAL_GAMEOBJECT_SPAWN)
-    );
+    assert_eq!(key.row_id(), 0xF110_0000_0000_1E61);
     assert_eq!(key.table(), Table::GameobjectSpawn);
 }
 

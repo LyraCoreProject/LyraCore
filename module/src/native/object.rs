@@ -20,7 +20,12 @@ pub(super) fn view(
         y: object.y,
         z: object.z,
         orientation: object.orientation,
-        state: object.state,
+        // Module closed/open states are the inverse of client READY/ACTIVE states.
+        state: match object.state {
+            0 => 1,
+            1 => 0,
+            state => state,
+        },
         type_id: template.type_id,
         display_id: template.display_id,
         rotation_0: object.rotation_0,

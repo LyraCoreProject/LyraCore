@@ -44,13 +44,13 @@ jobs:
           for target in "${targets[@]}"; do args+=(--test "$target"); done
           echo "targets: ${targets[*]}"
           # Remove the taxi skip with the last gap in conformance/features/taxi/taxi_single_hop.toml.
-          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip lethal_floor --skip populated_old_module_upgrades_without_clearing --skip taxi_single_hop_matches_its_golden_trace
+          cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing --skip taxi_single_hop_matches_its_golden_trace
 
       - name: Check out the populated-upgrade baseline
         if: matrix.shard == 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 44b04878f2050936faa61d6f087f3aa1a7a78a46
+          ref: 859c7257c74d2c371dea8ed743cfbccd596cac11
           path: .lyracore-upgrade-baseline
           persist-credentials: false
 

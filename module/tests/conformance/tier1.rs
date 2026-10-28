@@ -83,7 +83,10 @@ fn update_result(
     Ok(())
 }
 
-fn run_scenario(id: &str, setup: impl FnOnce(&Standalone) -> Result<()>) -> Result<()> {
+fn run_scenario(
+    id: &str,
+    setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
+) -> Result<()> {
     let path = core_root().join(".lyracore/conformance/tier1.json");
     std::fs::create_dir_all(path.parent().unwrap())?;
     let golden = catalogue::get(id)?;
@@ -96,7 +99,7 @@ fn run_scenario(id: &str, setup: impl FnOnce(&Standalone) -> Result<()>) -> Resu
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    setup(&shard)?;
+    setup(&shard, golden.scenario())?;
     let mut transport = OperatorTransport::prepare(&shard, golden.scenario())?;
     let now = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
@@ -129,14 +132,14 @@ fn run_scenario(id: &str, setup: impl FnOnce(&Standalone) -> Result<()>) -> Resu
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn connection_identity_matches_its_golden_trace() -> Result<()> {
-    run_scenario("connection_identity", |_| Ok(()))
+    run_scenario("connection_identity", |_, _| Ok(()))
 }
 
 #[test]
 #[ignore = "taxi divergence: eight known gaps; run manually with the bundled route fixture"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
-    run_scenario("taxi_single_hop", |shard| {
-        for statement in super::taxi_route::statements() {
+    run_scenario("taxi_single_hop", |shard, scenario| {
+        for statement in super::taxi_route::statements(scenario)? {
             shard.assert_sql(&statement);
         }
         Ok(())

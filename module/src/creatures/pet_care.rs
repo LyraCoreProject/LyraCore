@@ -67,27 +67,18 @@ pub(crate) fn scale_hunter_pet_swing(
     scale_damage(range, pet.happiness)
 }
 
-fn decay_per_interval(loyalty_level: u8, in_combat: bool) -> u32 {
+fn care_intervals_due(last_micros: i64, now_micros: i64) -> i64 {
+    (now_micros - last_micros).max(0) / CARE_INTERVAL_MICROS
+}
+
+fn happiness_after_interval(happiness: u32, loyalty_level: u8, in_combat: bool) -> u32 {
     let normal = (140u32 >> loyalty_level.min(7)) * 125;
-    if in_combat {
+    let loss = if in_combat {
         normal.saturating_mul(3) / 2
     } else {
         normal
-    }
-}
-
-#[cfg(test)]
-fn decay_elapsed(
-    happiness: u32,
-    loyalty_level: u8,
-    elapsed_micros: i64,
-    in_combat: bool,
-) -> (u32, i64) {
-    let intervals = elapsed_micros.max(0) / CARE_INTERVAL_MICROS;
-    let loss = u64::from(decay_per_interval(loyalty_level, in_combat))
-        .saturating_mul(intervals as u64)
-        .min(u64::from(u32::MAX)) as u32;
-    (happiness.saturating_sub(loss), intervals)
+    };
+    happiness.saturating_sub(loss)
 }
 
 fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
@@ -103,7 +94,7 @@ fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
         return;
     };
     let in_combat = live.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;
-    let intervals = (now - last).max(0) / CARE_INTERVAL_MICROS;
+    let intervals = care_intervals_due(last, now);
     if intervals == 0 {
         return;
     }
@@ -111,9 +102,7 @@ fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
     let live_guid = live.guid;
     for interval in 1..=intervals {
         let old_happiness = pet.happiness;
-        pet.happiness = pet
-            .happiness
-            .saturating_sub(decay_per_interval(pet.loyalty_level, in_combat));
+        pet.happiness = happiness_after_interval(pet.happiness, pet.loyalty_level, in_combat);
         pet.care_updated_at = Timestamp::from_micros_since_unix_epoch(
             last.saturating_add(interval.saturating_mul(CARE_INTERVAL_MICROS)),
         );
@@ -366,28 +355,20 @@ mod tests {
     }
 
     #[test]
-    fn catch_up_equals_regular_firings_and_saturates_at_zero() {
-        let start = MAX_HAPPINESS;
-        let (catch_up, ticks) = decay_elapsed(start, 1, CARE_INTERVAL_MICROS * 9, false);
-        let mut regular = start;
-        for _ in 0..9 {
-            regular = decay_elapsed(regular, 1, CARE_INTERVAL_MICROS, false).0;
-        }
-        assert_eq!(ticks, 9);
-        assert_eq!(catch_up, regular);
-        assert_eq!(decay_elapsed(1, 1, CARE_INTERVAL_MICROS, false).0, 0);
+    fn care_catches_up_only_whole_seven_and_a_half_second_intervals() {
+        assert_eq!(care_intervals_due(0, 7_499_999), 0);
+        assert_eq!(care_intervals_due(0, 7_500_000), 1);
+        assert_eq!(care_intervals_due(1_000_000, 68_500_000), 9);
+        assert_eq!(care_intervals_due(10_000_000, 0), 0);
     }
 
     #[test]
-    fn decay_preserves_partial_intervals_and_combat_is_faster() {
-        assert_eq!(
-            decay_elapsed(100_000, 1, CARE_INTERVAL_MICROS - 1, false),
-            (100_000, 0)
-        );
-        assert!(
-            decay_elapsed(100_000, 1, CARE_INTERVAL_MICROS, true).0
-                < decay_elapsed(100_000, 1, CARE_INTERVAL_MICROS, false).0
-        );
+    fn each_interval_loses_cmangos_happiness_by_loyalty_and_half_again_in_combat() {
+        assert_eq!(happiness_after_interval(1_000_000, 0, false), 982_500);
+        assert_eq!(happiness_after_interval(1_000_000, 1, false), 991_250);
+        assert_eq!(happiness_after_interval(1_000_000, 1, true), 986_875);
+        assert_eq!(happiness_after_interval(1_000_000, 6, false), 999_750);
+        assert_eq!(happiness_after_interval(8_000, 1, false), 0);
     }
 
     #[test]

@@ -73,6 +73,27 @@ pub struct CharBaseInfo {
     pub class: u8,
 }
 
+#[table(accessor = game_map, public)]
+pub struct GameMap {
+    #[primary_key]
+    pub id: u32,
+    pub internal_name: String,
+    pub name: String,
+    pub map_type: u32,
+    pub linked_zone: u32,
+    pub parent: u32,
+    #[default(0u32)]
+    pub player_limit: u32,
+    #[default(0u32)]
+    pub reset_delay: u32,
+    #[default({ -1i32 })]
+    pub ghost_entrance_map: i32,
+    #[default(0.0f32)]
+    pub ghost_entrance_x: f32,
+    #[default(0.0f32)]
+    pub ghost_entrance_y: f32,
+}
+
 #[table(accessor = game_area, public)]
 pub struct GameArea {
     #[primary_key]
@@ -242,38 +263,43 @@ mod realm_address_tests {
     #[test]
     fn a_blank_address_is_refused_rather_than_advertising_nothing() {
         for blank in ["", "   ", "\t\n"] {
-            assert!(
-                validate_realm_address(blank).is_err(),
-                "{blank:?} must be refused"
+            assert_eq!(
+                validate_realm_address(blank),
+                Err("realm address must not be blank".to_string())
             );
         }
     }
 
     #[test]
     fn an_address_without_a_port_is_refused() {
-        assert!(validate_realm_address("192.168.1.50").is_err());
-        assert!(validate_realm_address("realm.example.com").is_err());
+        assert_eq!(
+            validate_realm_address("192.168.1.50"),
+            Err("realm address must be host:port, got `192.168.1.50`".to_string())
+        );
+        assert_eq!(
+            validate_realm_address("realm.example.com"),
+            Err("realm address must be host:port, got `realm.example.com`".to_string())
+        );
     }
 
     #[test]
     fn a_port_that_is_not_a_number_in_range_is_refused() {
-        for bad in [
-            "192.168.1.50:notaport",
-            "192.168.1.50:0",
-            "192.168.1.50:65536",
-            "192.168.1.50:-1",
-            "192.168.1.50:",
-        ] {
-            assert!(
-                validate_realm_address(bad).is_err(),
-                "{bad} must be refused"
+        for port in ["notaport", "0", "65536", "-1", ""] {
+            assert_eq!(
+                validate_realm_address(&format!("192.168.1.50:{port}")),
+                Err(format!(
+                    "realm address port must be 1-65535, got `{port}` in `192.168.1.50:{port}`"
+                ))
             );
         }
     }
 
     #[test]
     fn an_address_without_a_host_is_refused() {
-        assert!(validate_realm_address(":8085").is_err());
+        assert_eq!(
+            validate_realm_address(":8085"),
+            Err("realm address has no host: `:8085`".to_string())
+        );
     }
 
     #[test]

@@ -30,6 +30,7 @@ cargo test -p lyracore-conformance -- --nocapture
 cargo test -p lyracore-conformance --example scoreboard --example audit
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
+python3 -m unittest discover -s importer/scripts/tests -v
 cargo test -p lyracore-importer
 cargo test -p lyracore-module --lib --features=debug_reducers
 cargo test -p lyracore-module --test build_script
@@ -41,6 +42,8 @@ cargo test -p lyracore-package-delta
 cargo test -p lyracore-protocol
 cargo test -p lyracore-shared
 cargo test -p lyracore-test-support
+bash importer/scripts/import-world-sql-test.sh
+bash importer/scripts/import-manifest-smoke.sh
 cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
 ```
 
@@ -68,17 +71,19 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines --skip
-lethal_floor`. The Deadmines targets need the separately installed dungeons Package, and the
-`lethal_floor` ranged phase is flaky. CI also skips `taxi_single_hop_matches_its_golden_trace`;
+CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`.
+The Deadmines targets need the separately installed dungeons Package. CI also skips
+`taxi_single_hop_matches_its_golden_trace`;
 the [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) has eight known gaps. The
 bundled route fixture removes its imported-data requirement. Remove the skip with the last gap fix.
 Running that test by hand still fails with the full comparator report.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
-`44b04878f2050936faa61d6f087f3aa1a7a78a46`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
-and publishes the current Module over the populated fixture without clearing it. Other durable
-runs must skip that test unless the baseline Wasm is available.
+`859c7257c74d2c371dea8ed743cfbccd596cac11`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
+and publishes the current Module over the populated fixture without clearing it. Character, entity,
+spell and effect rows must survive; new spell fields must receive their migration defaults. The
+fixture includes nonzero combo scaling and checks live emote delivery. Other durable runs must skip
+that test unless the baseline Wasm is available.
 
 `scripts/durable-test-targets.py` assigns targets by the durations in
 `.github/durable-test-seconds.json`. It includes every current target once and estimates 20 seconds
@@ -236,7 +241,7 @@ These ignored tests read data you own. Set the variable, then run the test with 
 | --- | --- | --- |
 | `LYRACORE_CLIENT_DATA` | your 1.12.1 client's `Data/` directory | the terrain slice self-checks in `importer/src/terrain.rs` |
 | `LYRACORE_TEST_DBC` | the DBC files of a build 5875 client | the spell catalogue tests in `importer/src/spell.rs` |
-| `LYRACORE_CLASSIC_DB_SQL` | the pinned classic-db dump, decompressed or gzip | the dump tests in `importer/src/world_import.rs` |
+| `LYRACORE_VMANGOS_SQLITE` | a locally fetched vmangos SQLite snapshot | real-source importer tests |
 
 For example:
 
@@ -244,12 +249,12 @@ For example:
 LYRACORE_CLIENT_DATA=/games/WoW-1.12.1/Data cargo test -p lyracore-importer terrain -- --ignored
 ```
 
-The complete creature import test loads the pinned dump and client catalogues into a private local
-SpacetimeDB node, checks every source position, waits for the shared-world population, and reimports
+The complete creature import test loads the local SQLite snapshot and client catalogues into a
+private SpacetimeDB node, checks every source position, waits for the shared-world population, and reimports
 the populated roster:
 
 ```bash
-LYRACORE_CLASSIC_DB_SQL=/path/to/classic.sql LYRACORE_TEST_DBC=/path/to/client/Data \
+LYRACORE_VMANGOS_SQLITE=/path/to/mangos.sqlite LYRACORE_TEST_DBC=/path/to/client/Data \
   cargo test -p lyracore-importer full_world_source_loads_every_definition_and_spawn_locally -- --ignored
 ```
 

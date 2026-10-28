@@ -15,6 +15,25 @@ cover what the client draws and prints.
   showed. A missing control, wrong string, duplicate line, stale name plate or disconnect is a finding.
   Headless output never completes a step.
 
+## World Source change
+
+Record the imported vmangos commit from `game_import_meta` with the Core commit. Repeat these
+checks after the source change; automated counts cannot establish client behavior.
+
+- Enter each Alliance starting corridor, Deadmines and Deeprun Tram. Check terrain alignment,
+  creature models, patrols, doors and portal destinations.
+- Accept, progress and turn in starter quests. Check giver greetings, objective text and rewards.
+  Repeat a quest with normal objectives whose source event script is listed as unsupported.
+- Fight Defias casters and VanCleef. Check casts, yells and summoned allies. Exercise the dungeons
+  Package doors, cannon and Smite weapon changes.
+- Check vendor stock, trainer offers, gossip submenus, taxi destinations and mount models.
+- Repeat Mail, Meeting stone, Self-resurrection, Distract, Energy regeneration and Duel below.
+  Their items, spells, quest rewards or GameObjects now come from vmangos.
+
+Known unsupported encounters are listed in the
+[behavior ledger](../../../conformance/unsupported-vmangos.md). Do not count an automated import as
+completion of any step here.
+
 ## Auction house
 
 Tests: `auction_buyout.rs`, `auction_cancel.rs`, `auction_expiry.rs`. Scenario: `check_auctions`.
@@ -89,7 +108,7 @@ Tests: `self_resurrection.rs`. Scenario: `check_death`.
 
 Setup. A Warlock of level 18 or higher and a Priest who knows Resurrection. Import spells and items
 so the Soulstone ranks exist. The field index and the 30 minute duration come from emulator source
-and the ClassicDB dump, not a client, so these steps are their only client proof.
+and the vmangos snapshot, so these steps are their only client proof.
 
 - `call debug_grant_item <guid> 5232 1` and use the Minor Soulstone on the Warlock. Record the
   cast bar and whether the buff shows 30 minutes.
@@ -118,6 +137,20 @@ the imported spells. Stand near idle, patrolling and wandering Creatures.
 - Record the cast visual (destination or caster, no impact flash on the Rogue) and what a visible,
   a stealthed, a neutral, a boss and a totem Creature do. The server turns only hostile Creatures
   and leaves aggro and stealth detection unchanged.
+
+## Weapon Strike
+
+Tests: `weapon_strike.rs`. No `check.py` scenario.
+
+Setup. A Rogue with a stack of throwing knives in the ranged slot and a dagger in the main hand,
+next to a target dummy or a low-level Creature. Spells 2764 Throw and 1752 Sinister Strike must
+exist in the imported spells.
+
+- Throw shows a half-second cast bar, and the knife flies to the target. The hit lands as the
+  knife arrives, and the damage is close to the knife's tooltip damage.
+- Each Throw takes one knife off the stack. The last knife still hits, and then Throw greys out.
+- Sinister Strike hits for the dagger's damage plus its bonus, not for a few points. A dodged or
+  parried strike shows Dodge or Parry, and awards no combo point.
 
 ## Energy regeneration
 

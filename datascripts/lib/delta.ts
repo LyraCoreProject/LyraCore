@@ -166,6 +166,7 @@ export function buildClaim(
 
   if (operation === "insert") {
     const missing = Object.values(columnsOf(table))
+      .filter((column) => column.defaultValue === undefined)
       .map((column) => column.column)
       .filter((name) => !fields.has(name));
     if (missing.length > 0) throw incompleteInsert(table, missing);

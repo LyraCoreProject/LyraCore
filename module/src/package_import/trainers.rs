@@ -167,8 +167,8 @@ fn built_trainer_spell(row: &TracedRow) -> Result<TrainerSpell, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, plan, some_value, trainer_spell_claim, PACKAGE_TRAINER_SPELL, REAL_TRAINER_SPELL,
-        WHOLE_TRAINER_SPELL_ROW,
+        artifact, assert_each_column_sets_its_own_field, plan, trainer_spell_claim,
+        PACKAGE_TRAINER_SPELL, REAL_TRAINER_SPELL, WHOLE_TRAINER_SPELL_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -222,12 +222,12 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_trainer_spell_column_has_a_setter() {
-        let mut trainer = blank_trainer_spell(PACKAGE_TRAINER_SPELL);
-        for column in ClaimTable::TrainerSpell.columns() {
-            apply_trainer_spell_field(&mut trainer, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_trainer_spell` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_trainer_spell_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::TrainerSpell,
+            || blank_trainer_spell(PACKAGE_TRAINER_SPELL),
+            apply_trainer_spell_field,
+        );
     }
 
     #[test]

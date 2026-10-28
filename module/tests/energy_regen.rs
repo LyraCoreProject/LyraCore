@@ -107,17 +107,17 @@ fn adrenaline_rush_doubles_each_energy_tick() {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
-         VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 15000, 1, \
-         0, 0, 0, 0, 0, 20, 0, false, 0, 0, 8, 0, 0, 0, 0)"
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
+         VALUES ({ADRENALINE_RUSH}, 'Adrenaline Rush', {ENERGY}, 0, 0, 0, 300000, 0, 60000, 1, \
+         0, 0, 0, 0, 0, 20, 0, false, 0, 0, 8, 0, 0, 0, 0, 0)"
     ));
     let effect_id = u64::from(ADRENALINE_RUSH) << 2;
     shard.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({effect_id}, {ADRENALINE_RUSH}, 0, {A_MOD_POWER_REGEN_PCT}, 100, 0, 0.0, 0, \
-         {T_SELF}, 0.0, 0, 0, 0, {ENERGY}, {P_POWER_TYPE}, 0, 0, false)"
+         {T_SELF}, 0.0, 0, 0, 0, {ENERGY}, {P_POWER_TYPE}, 0, 0, false, 0.0)"
     ));
     shard.assert_call(
         "debug_force_cast",

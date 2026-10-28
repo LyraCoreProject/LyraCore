@@ -341,7 +341,7 @@ impl Report {
         Ok(())
     }
 
-    fn load_structure(path: &Path, tier: &str) -> Result<Self> {
+    pub fn load_structure(path: &Path, tier: &str) -> Result<Self> {
         let report: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         report.validate_structure(tier)?;
         Ok(report)
@@ -449,28 +449,27 @@ impl Report {
         )
     }
 
-    pub fn validate_changes(&self, directory: &Path) -> Result<()> {
+    pub fn validate_changes(&self) -> Result<()> {
+        self.validate_changes_in(&Path::new(env!("CARGO_MANIFEST_DIR")).join("reports"))
+    }
+
+    fn validate_changes_in(&self, history: &Path) -> Result<()> {
         let Some(audit) = &self.audit else {
             return Ok(());
         };
-        let Some(name) = &audit.previous_report else {
+        let expected = expected_predecessor(history, self.recorded_at_unix_ms)?;
+        ensure!(
+            audit.previous_report == expected,
+            "previous report must be the newest earlier audit: {expected:?}"
+        );
+        let Some(previous_name) = expected else {
             return Ok(());
         };
-        let path = Path::new(name);
-        ensure!(
-            path.file_name().and_then(|name| name.to_str()) == Some(name.as_str())
-                && path.extension().is_some_and(|ext| ext == "json"),
-            "previous report must be a JSON filename"
-        );
-        let previous_path = directory.join(path);
-        let previous = Self::load_structure(&previous_path, "conformance_audit")?;
+        let previous_path = history.join(previous_name);
+        let previous = Report::load_structure(&previous_path, "conformance_audit")?;
         if previous.harness_revision == harness_revision() {
             previous.verify_capture(&previous_path)?;
         }
-        ensure!(
-            previous.recorded_at_unix_ms < self.recorded_at_unix_ms,
-            "previous report must be earlier"
-        );
         for (behavior, result) in &audit.behaviors {
             ensure!(
                 result.changes == self.changes_since(&previous, behavior),
@@ -578,7 +577,10 @@ pub fn same_core(root: &Path, measured: &str, head: &str) -> Result<bool> {
     Ok(diff.success())
 }
 
-pub fn latest_audit(directory: &Path) -> Result<Option<(PathBuf, Report)>> {
+pub fn latest_audit(
+    directory: &Path,
+    before_unix_ms: Option<u64>,
+) -> Result<Option<(PathBuf, Report)>> {
     if !directory.exists() {
         return Ok(None);
     }
@@ -587,6 +589,9 @@ pub fn latest_audit(directory: &Path) -> Result<Option<(PathBuf, Report)>> {
         let path = entry?.path();
         if path.extension().is_some_and(|ext| ext == "json") {
             let report = Report::load_structure(&path, "conformance_audit")?;
+            if before_unix_ms.is_some_and(|before| report.recorded_at_unix_ms >= before) {
+                continue;
+            }
             if latest.as_ref().is_none_or(|(old_path, old)| {
                 (report.recorded_at_unix_ms, &path) > (old.recorded_at_unix_ms, old_path)
             }) {
@@ -595,6 +600,17 @@ pub fn latest_audit(directory: &Path) -> Result<Option<(PathBuf, Report)>> {
         }
     }
     Ok(latest)
+}
+
+pub fn expected_predecessor(history: &Path, recorded_at_unix_ms: u64) -> Result<Option<String>> {
+    latest_audit(history, Some(recorded_at_unix_ms))?
+        .map(|(path, _)| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .context("report filename")
+        })
+        .transpose()
 }
 
 #[cfg(test)]

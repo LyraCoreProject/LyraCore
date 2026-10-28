@@ -54,7 +54,7 @@ pub(crate) use book::{
     forgotten as spell_forgotten, learned as spell_learned, skill_changed, talent_points,
 };
 pub(crate) use channel::notice as channel_notice;
-pub(crate) use chat::{realm_chat_line, speech, system_message, text_emote};
+pub(crate) use chat::{creature_sound, realm_chat_line, speech, system_message, text_emote};
 pub(crate) use combat::{combat_event, combo_points_changed, engagement_changed};
 pub(crate) use creature::{
     changed as creature_spline_changed, equipment_changed as creature_equipment_changed,
@@ -179,6 +179,8 @@ pub struct NativePlayer {
     pub teleport_counter: u32,
     #[default(0u32)]
     pub zone_id: u32,
+    #[default(0u32)]
+    pub gossip_root_menu_id: u32,
 }
 
 pub(crate) fn group_event(

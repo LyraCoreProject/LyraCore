@@ -140,18 +140,22 @@ test("conditional, duplicate, aliased and unknown bindings are refused", async (
   await scratch(async (dir, build) => {
     const path = join(dir, "scripts/welcome.lua");
     const handler = "local function welcome(event) end\n";
-    for (const source of [
-      handler + "if true then events.player.onLogin(welcome) end",
-      handler + "events.player.onLogin(welcome)\nevents.player.onLevelUp(welcome)",
-      handler + "local subscribe = events.player.onLogin\nsubscribe(welcome)",
-      handler + "events.player.onSneeze(welcome)",
-      handler + "events.player.onLogin(welcome, {priority = 2147483648})",
-      handler + "events.player.onLogin(welcome, {enabled = 1})",
-      handler + "events.player.onLogin(welcome, {priority = 1, priority = 2})",
-      handler + "events.player.onLogin(welcome)\nreturn 7",
-    ]) {
+    const single = /declare one top-level Event Binding/;
+    const walk = /events may only appear in one unconditional top-level Event Binding/;
+    for (const [source, refusal] of [
+      [handler + "if true then events.player.onLogin(welcome) end", single],
+      [handler + "events.player.onLogin(welcome)\nif true then events.player.onLevelUp(welcome) end", walk],
+      [handler + "events.player.onLogin(welcome)\nevents.player.onLevelUp(welcome)", /exactly one Event Binding/],
+      [handler + "local subscribe = events.player.onLogin\nsubscribe(welcome)", single],
+      [handler + "events.player.onLogin(welcome)\nlocal subscribe = events.player.onLevelUp", walk],
+      [handler + "events.player.onSneeze(welcome)", /unknown Event Binding events\.player\.onSneeze/],
+      [handler + "events.player.onLogin(welcome, {priority = 2147483648})", /priority must be a literal signed 32-bit integer/],
+      [handler + "events.player.onLogin(welcome, {enabled = 1})", /enabled must be a literal boolean/],
+      [handler + "events.player.onLogin(welcome, {priority = 1, priority = 2})", /duplicate Event Binding option priority/],
+      [handler + "events.player.onLogin(welcome)\nreturn 7", /return a Script Answer from the handler/],
+    ] as const) {
       writeFileSync(path, source);
-      await expect(build()).rejects.toThrow();
+      await expect(build()).rejects.toThrow(refusal);
     }
   });
 });

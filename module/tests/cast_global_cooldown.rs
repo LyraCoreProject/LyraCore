@@ -111,6 +111,11 @@ fn a_refused_cast_does_not_start_a_global_cooldown() {
     shard.assert_call("debug_set_power", &["1", "0"]);
     let result = shard.call("gw_cast_spell", &[ACTOR, "133", &WOLF.to_string()]);
     assert!(!result.status.success());
+    assert!(
+        String::from_utf8_lossy(&result.stderr).contains("not enough power: have 0, need 1000"),
+        "{}",
+        String::from_utf8_lossy(&result.stderr)
+    );
     assert!(shard
         .query_rows("SELECT * FROM game_spell_cooldown")
         .is_empty());

@@ -1,4 +1,6 @@
+use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
+use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
 
@@ -267,9 +269,19 @@ pub(crate) fn aura_apply(
     } else {
         points
     };
-    let duration_ms = if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
+    let points = if matches!(e.kind, A_PERIODIC_DAMAGE | A_PERIODIC_HEAL | A_ABSORB) {
+        let power = if e.kind == A_PERIODIC_HEAL {
+            healing_power(ctx, caster_guid, hdr.school_mask)
+        } else {
+            spell_power(ctx, caster_guid, hdr.school_mask)
+        };
+        source_behavior::bonus_magnitude(points, power, e.bonus_coefficient, hdr.custom_flags, true)
+    } else {
+        points
+    };
+    let duration_ms = if hdr.cast_flags & SPELL_ATTR_COMBO_FINISHER != 0 {
         let combo = crate::combo::held_points(ctx, caster_guid);
-        crate::combo::finisher_duration_ms(hdr.duration_ms, combo)
+        crate::combo::finisher_duration_ms(hdr.duration_ms, hdr.max_duration_ms, combo)
     } else {
         hdr.duration_ms
     };
@@ -289,7 +301,7 @@ pub(crate) fn aura_apply(
             }
             crate::spell::stacking::ApplyDecision::Apply {
                 duration_scale_bp, ..
-            } => ((duration_ms as u64) * (duration_scale_bp as u64) / 10_000) as u32,
+            } => crate::spell::stacking::dr_scaled_duration_ms(duration_ms, duration_scale_bp),
         }
     } else {
         duration_ms
@@ -301,8 +313,14 @@ pub(crate) fn aura_apply(
         now.checked_add(TimeDuration::from_micros((duration_ms as i64) * 1000))
             .unwrap_or(now)
     };
-    let next_tick_micros = if e.period_ms > 0 {
-        now.to_micros_since_unix_epoch() + (e.period_ms as i64) * 1000
+    // Channels without periodic effects still need the indexed cadence for range checks.
+    let period_ms = if e.period_ms == 0 && hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+        100
+    } else {
+        e.period_ms
+    };
+    let next_tick_micros = if period_ms > 0 {
+        now.to_micros_since_unix_epoch() + i64::from(period_ms) * 1000
     } else {
         0
     };
@@ -342,16 +360,28 @@ pub(crate) fn aura_apply(
             .collect();
         displace_auras(ctx, target_guid, &other_rank_ids);
     }
+    let coexist = source_behavior::aura_casters_coexist(hdr, e.kind);
+    let cross_caster_stack =
+        hdr.custom_flags & custom::ALLOW_STACK_BETWEEN_CASTER != 0 && hdr.max_stacks > 0;
+    if !coexist && !cross_caster_stack {
+        let replaced = auras
+            .by_target()
+            .filter(&target_guid)
+            .filter(|a| a.effect_id == e.id && a.caster_guid != caster_guid)
+            .collect();
+        shed_auras(ctx, target_guid, replaced);
+    }
     let existing = auras
         .by_target()
         .filter(&target_guid)
-        .find(|a| a.effect_id == e.id);
+        .find(|a| a.effect_id == e.id && (cross_caster_stack || a.caster_guid == caster_guid));
     let amount_remaining = if e.kind == A_ABSORB { points.max(0) } else { 0 };
-    let channel_target = if e.kind == A_PERIODIC_TRIGGER {
-        cast_target_guid
-    } else {
-        0
-    };
+    let channel_target =
+        if e.kind == A_PERIODIC_TRIGGER || hdr.cast_flags & SPELL_ATTR_CHANNELED != 0 {
+            cast_target_guid
+        } else {
+            0
+        };
     // p1 holds linked debuffs, so trigger auras freeze trigger_spell in eff_p1.
     let eff_p1 = if e.kind == A_PERIODIC_TRIGGER || e.kind == A_PROC_TRIGGER {
         e.trigger_spell as i32
@@ -363,9 +393,13 @@ pub(crate) fn aura_apply(
     if let Some(mut a) = existing {
         a.stacks = next_stacks(a.stacks, hdr.max_stacks);
         a.expires_at = expires;
-        a.amount = points;
+        // Shared stacks retain their original caster and that caster's frozen magnitude.
+        if !cross_caster_stack || a.caster_guid == caster_guid {
+            a.amount = points;
+        }
         a.amount_remaining = amount_remaining;
         a.next_tick_micros = next_tick_micros;
+        a.period_ms = period_ms;
         a.applied_at = now;
         a.eff_p1 = eff_p1;
         a.channel_target = channel_target;
@@ -394,12 +428,21 @@ pub(crate) fn aura_apply(
         let existing: Vec<(u8, u32)> = auras
             .by_target()
             .filter(&target_guid)
-            .map(|a| (a.slot, a.spell_id))
+            .map(|a| {
+                (
+                    a.slot,
+                    if coexist && a.caster_guid != caster_guid && a.spell_id == hdr.spell_id {
+                        u32::MAX
+                    } else {
+                        a.spell_id
+                    },
+                )
+            })
             .collect();
         let Some(slot) = pick_aura_slot(
             &existing,
             hdr.spell_id,
-            hdr.is_negative,
+            hdr.negative(),
             tracer_spell::BUFF_SLOT_COUNT,
             tracer_spell::AURA_SLOTS,
         ) else {
@@ -438,7 +481,7 @@ pub(crate) fn aura_apply(
             eff_p0: e.p0,
             eff_p0_kind: e.p0_kind,
             eff_p1,
-            period_ms: e.period_ms,
+            period_ms,
             amount_remaining,
             stacks: 1,
             next_tick_micros,
@@ -457,6 +500,8 @@ pub(crate) fn aura_apply(
         }
         .insert(ctx);
     }
+
+    source_behavior::finish_aura_apply(ctx, hdr, e, caster_guid, target_guid);
 
     // Advance diminishing returns only after successful aura placement.
     if let Some(category) = dr_category {
@@ -479,12 +524,7 @@ pub(crate) fn aura_apply(
         crate::mount::recompute_mount(ctx, target_guid);
     }
 
-    // Spend combo points after reading duration and successfully placing the aura.
-    if hdr.cast_flags & SPELL_ATTR_FINISHER_DURATION != 0 {
-        crate::combo::spend_combo(ctx, caster_guid);
-    }
-
-    if hdr.is_negative {
+    if hdr.negative() {
         let entities = ctx.db.game_world_entity();
         let caster_is_player = entities
             .guid()
@@ -557,6 +597,7 @@ pub(crate) fn apply_effect(
     points: i32,
     dest: Option<(f32, f32, f32)>,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
 
@@ -584,6 +625,13 @@ pub(crate) fn apply_effect(
         }
     };
     match kind {
+        EffectKind::SummonGuardians => {
+            if let Err(error) = crate::creatures::guardian::summon(ctx, caster_guid, hdr, e, points)
+            {
+                spacetimedb::log::warn!("guardian summon refused: {error}");
+            }
+            EffectHit::none()
+        }
         EffectKind::SummonHostile => {
             if let Err(error) = crate::creatures::summon_hostile(ctx, caster_guid, hdr, e) {
                 spacetimedb::log::warn!("hostile summon refused: {error}");
@@ -605,9 +653,16 @@ pub(crate) fn apply_effect(
         EffectKind::Damage
         | EffectKind::WeaponStrike
         | EffectKind::Judgement
-        | EffectKind::FinisherDamage => {
-            apply_damage_effect(ctx, e, hdr, caster_guid, target_guid, points, triggered)
-        }
+        | EffectKind::FinisherDamage => apply_damage_effect(
+            ctx,
+            e,
+            hdr,
+            caster_guid,
+            target_guid,
+            points,
+            triggered,
+            strike_crit,
+        ),
         EffectKind::Heal
         | EffectKind::HealMaxHealth
         | EffectKind::Energize
@@ -768,6 +823,7 @@ fn hit_of(
     )
 }
 
+#[allow(clippy::too_many_arguments)]
 fn apply_damage_effect(
     ctx: &ReducerContext,
     e: &SpellEffect,
@@ -776,19 +832,29 @@ fn apply_damage_effect(
     target_guid: u64,
     points: i32,
     triggered: bool,
+    strike_crit: bool,
 ) -> EffectHit {
     match e.kind {
         E_DAMAGE => {
             let sp = spell_power(ctx, caster_guid, hdr.school_mask);
-            let scaled = compose_magnitude(points, sp, SPELL_POWER_COEFF_PCT);
+            let scaled = source_behavior::bonus_magnitude(
+                points,
+                sp,
+                e.bonus_coefficient,
+                hdr.custom_flags,
+                false,
+            );
             let (dmg_flat, dmg_pct) =
                 crate::spell::math::spell_mod(ctx, caster_guid, SPELLMOD_OP_DAMAGE, hdr);
-            let scaled =
-                crate::spell::math::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32;
+            let scaled = if hdr.custom_flags & custom::FIXED_DAMAGE != 0 {
+                scaled
+            } else {
+                crate::spell::math::apply_spell_mod(scaled.max(0) as u32, dmg_flat, dmg_pct) as i32
+            };
             let is_crit = (ctx.random::<u32>() % 10_000) < spell_crit_bp(ctx, caster_guid);
             let crit_scaled = apply_spell_crit(scaled, is_crit);
             let after_resist =
-                apply_resistance(ctx, target_guid, caster_guid, hdr.school_mask, crit_scaled);
+                source_behavior::mitigate_spell(ctx, hdr, caster_guid, target_guid, crit_scaled);
             let resisted = crit_scaled.saturating_sub(after_resist).max(0) as u32;
 
             if hdr.range_yd > 0 && target_guid != caster_guid {
@@ -843,23 +909,53 @@ fn apply_damage_effect(
         }
         E_WEAPON_STRIKE => {
             let entities = ctx.db.game_world_entity();
-            if let (Some(caster), Some(target)) = (
+            let (Some(caster), Some(target)) = (
                 entities.guid().find(caster_guid),
                 entities.guid().find(target_guid),
-            ) {
-                let (dmg, crit) =
-                    crate::combat::weapon_strike_damage(ctx, &caster, &target, points);
-                // Physical crit travels in Hit; EffectHit.crit is the magic crit roll.
-                let (dealt, absorbed) = apply_target_damage(
+            ) else {
+                return EffectHit::none();
+            };
+            let strike = crate::combat::WeaponStrike {
+                bonus: points,
+                percent: e.p0.max(0) as u32,
+                normalized: e.p1 != 0,
+                ranged: hdr.attributes & SPELL_ATTR_USES_RANGED_SLOT != 0,
+            };
+            let dmg = crate::combat::weapon_strike_spell_damage(
+                ctx,
+                &caster,
+                &target,
+                strike,
+                hdr,
+                strike_crit,
+            );
+            if strike.ranged && target_guid != caster_guid {
+                // The impact emits the damage log, so this GO carries no damage.
+                crate::combat::launch_ranged_strike(
                     ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg as i32,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, crit),
+                    &caster,
+                    &target,
+                    dmg,
+                    hdr.spell_id,
+                    strike_crit,
                 );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+                return EffectHit::none();
+            }
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
             }
         }
         E_JUDGEMENT => {
@@ -879,22 +975,37 @@ fn apply_damage_effect(
             }
         }
         E_FINISHER_DAMAGE => {
-            let combo = crate::combo::combo_points(ctx, caster_guid, target_guid);
-            let dmg = crate::combo::finisher_damage(points, combo);
-            let hit = if dmg > 0 {
-                let (dealt, absorbed) = apply_target_damage(
-                    ctx,
-                    target_guid,
-                    caster_guid,
-                    dmg,
-                    hit_of(hdr, triggered, crate::combat::HitSource::MeleeSpell, false),
-                );
-                EffectHit::dmg(dealt, absorbed)
-            } else {
-                EffectHit::none()
+            let entities = ctx.db.game_world_entity();
+            let (Some(caster), Some(target)) = (
+                entities.guid().find(caster_guid),
+                entities.guid().find(target_guid),
+            ) else {
+                return EffectHit::none();
             };
-            crate::combo::spend_combo(ctx, caster_guid);
-            hit
+            let dmg = crate::combat::finisher_strike_damage(
+                ctx,
+                &caster,
+                &target,
+                hdr,
+                points,
+                strike_crit,
+            );
+            let (dealt, absorbed) = apply_target_damage(
+                ctx,
+                target_guid,
+                caster_guid,
+                dmg as i32,
+                hit_of(
+                    hdr,
+                    triggered,
+                    crate::combat::HitSource::MeleeSpell,
+                    strike_crit,
+                ),
+            );
+            EffectHit {
+                crit: strike_crit,
+                ..EffectHit::dmg(dealt, absorbed)
+            }
         }
         _ => EffectHit::none(),
     }
@@ -910,7 +1021,7 @@ fn apply_restore_effect(
     triggered: bool,
 ) -> EffectHit {
     match e.kind {
-        E_HEAL => EffectHit::heal(apply_heal(ctx, hdr, caster_guid, target_guid, points)),
+        E_HEAL => EffectHit::heal(apply_heal(ctx, hdr, e, caster_guid, target_guid, points)),
         E_HEAL_MAX_HEALTH => {
             if let Some(mut t) = ctx.db.game_world_entity().guid().find(target_guid) {
                 let before = t.health;
@@ -1249,12 +1360,14 @@ fn apply_character_effect(
 fn apply_heal(
     ctx: &ReducerContext,
     hdr: &Spell,
+    e: &SpellEffect,
     caster_guid: u64,
     target_guid: u64,
     points: i32,
 ) -> u32 {
     let sp = healing_power(ctx, caster_guid, hdr.school_mask);
-    let scaled = compose_magnitude(points, sp, SPELL_POWER_COEFF_PCT);
+    let scaled =
+        source_behavior::bonus_magnitude(points, sp, e.bonus_coefficient, hdr.custom_flags, false);
     apply_direct_heal(ctx, caster_guid, target_guid, scaled)
 }
 

@@ -41,7 +41,8 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 Ids for Behaviors, systems and deviations start with a lowercase ASCII letter and contain only
 lowercase letters, digits and underscores. Scenario ids have no prescribed naming syntax. Empty
 and duplicate scenario ids fail. Opcode strings use `0x` and four uppercase hexadecimal digits.
-A Behavior must claim at least one request or reply. Claims need not be exclusive across Behaviors.
+A Behavior must claim a request or reply unless it records a known world-data gap with no opcode
+claim. Claims need not be exclusive across Behaviors.
 
 The rungs are `unit`, `codec`, `durable_module`, `tier1`, `conformance_audit` and `real_client`.
 A required rung is an obligation, not a result. The `tests` array names Rust source evidence from
@@ -74,7 +75,7 @@ or reclassifies data fields. Known gaps cannot change a tag or excuse a failure.
 
 ## Migration and source evidence
 
-The nine entries replace the former `benilla_inventory/behaviors.json`. They retain Behavior ids,
+The original nine entries replace the former `benilla_inventory/behaviors.json`. They retain Behavior ids,
 opcode claims, prerequisites and all eight Rust evidence links. The old `support`, `remaining` and
 `durable_operations` fields do not belong to this schema. Scope states the required result; test
 presence does not certify it. Native Python checks remain in place until a recorded conformance
@@ -82,8 +83,8 @@ scenario replaces each one.
 
 The vmangos references name reviewed functions at one full commit. They point to sources, and
 contain no copied implementation or world data. Those references identify where to investigate
-and record each Behavior; they are not a claim that all nine conform today. All nine real-client
-checks remain unverified and their scenario lists are empty.
+and record each Behavior; they are not a claim that the original nine conform today. Their real-client
+checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
 
 ## Scenario catalogue and tier 1
 
@@ -132,7 +133,8 @@ ids equal client node ids. Learning is idempotent and sends no packets or flight
 
 The tier 1 test installs the hand-written fixture in
 `conformance/support/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
-its 28 vertices, and a minimal synthetic template for the scenario's flight master, entry 352.
+its 28 vertices, and a minimal synthetic template for the scenario's flight master. The template
+entry comes from the pinned scenario's Creature Fixture Verb, currently 523.
 The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
 no mount template or other world data is needed.
@@ -225,7 +227,7 @@ duplicate results and malformed reports fail before freshness checks.
 | `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |
 | `audit` | Audit-only server provenance and per-Behavior summaries |
 
-`audit` records the Native Host and Module binary hashes, content fixture description, and vmangos
+`audit` records the Native Host and Module binary hashes, imported world description, and vmangos
 binary release, archive hash, source commit and database commit. Its `behaviors` map holds each
 Behavior's `candidate` and `reference` summaries. Each summary has `rule` and `data` groups with
 `raw_records` and a `signatures` array of `{signature, raw_records}`. The scoreboard recomputes
@@ -247,11 +249,15 @@ binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is
 the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
 its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
 
-`audit.previous_report` is the preceding JSON filename, or null on the first audit. Each Behavior's
+`audit.previous_report` is the JSON filename of the newest `conformance_audit` report in
+`conformance/reports/` with a strictly earlier `recorded_at_unix_ms`, or null when none exists.
+Equal earlier timestamps use filename order; the report being checked is never excluded by name.
+Each Behavior's
 `changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no
 earlier audit exists or the harness revision or any scenario hash for that Behavior differs. In the
 latter case the report says comparison is not possible. Multiplicity and values cannot fix or
-regress a signature. The scoreboard checks these sets against the named earlier report. It also
+regress a signature. The scoreboard derives the predecessor from the reports directory and checks
+these sets against it. It also
 replays that earlier report's LyraCore candidates when its harness revision matches the current pin.
 Older reports receive structure checks; the newest report receives current ledger checks, so a
 Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
@@ -259,27 +265,35 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 ## Conformance Audit
 
 Prepare the pinned Reference Server once with the harness's
-[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/adapters/vmangos/README.md).
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/adapters/vmangos/README.md).
 Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
-Build the Native Host for this checkout as described in [testing](../docs/testing.md#native-protocol-tier).
-Then run:
+Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
+The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 
 ```bash
-./conformance/audit --host /path/to/spacetimedb-standalone --date 2026-10-27
+./conformance/audit --date 2026-10-28-c5 --client-data /path/to/client/Data
 ./conformance/scoreboard
 ```
 
-The Python command manages local processes because it can reuse `native-host/host.py`. The Rust
-`audit` example exports catalogue scenarios, compares candidates through the pinned library, and
+The Python command creates a disposable Git worktree under
+`$HOME/.cache/lyracore-scratch/conformance/` and manages its own Realm through `lyracore dev`.
+It refuses a changed CLI pin until the isolation contract has been reviewed. The worktree owns
+its `.lyracore/native-data`, JWT keys and Operator token; the audit stops its Native Host and
+deletes the worktree after capture. Its loopback ports 3000, 3724 and 8085 must be free.
+The Rust `audit` example exports catalogue scenarios, compares candidates through the pinned library, and
 writes the reports. It shares counting and evidence validation with the scoreboard. Neither core
 command reads scenarios or Golden Traces from a harness checkout. Cargo metadata locates the
 pinned checkout only to build `vanilla-wire` and run its server adapters.
 
-The command builds `vanilla-wire`, the audit example and the Module with `debug_reducers`. It starts
-a fresh Native Host on free loopback ports, provisions a disposable Account, and installs the same
-hand-written route fixture as tier 1. It uses normal SRP login and encrypted world TCP sessions;
-fixture world-entry bypasses are not compiled into this Module. The fixture supplies the current
-catalogue's content without importing world data. New scenarios may need more content.
+The command builds `vanilla-wire` and the audit example. It starts an owned local Realm with
+`lyracore dev up`, runs `lyracore import --accept` using the supplied client path,
+and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
+under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
+and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
+The audit starts with an empty Shard and retains imported creature spawns. The taxi scenario uses
+flight-master entry 523 because an imported entry 352 in the same cell could be mistaken for its
+fixture spawn during setup. Tier 1 still uses the bundled route
+fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
 pins and provenance, starts its compose services, and resets only the catalogue Characters on the
@@ -287,14 +301,14 @@ disposable Reference Server. Every scenario produces both a LyraCore and vmangos
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
 
-The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`, refusing
-existing outputs. The trace directory contains only LyraCore candidates. Reference Server
-candidates stay in the audit's scratch directory and are deleted with it at exit; the report keeps
-their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report destination. To replace the single
-baseline, capture with the same date into scratch and replace all three outputs together. A report
-with that same filename is not used as its own previous report. Rule differences are audit findings
-and do not make the command fail; missing captures, infrastructure errors and invalid evidence do. A
-failed run cannot write a partial success report. No scenario is skipped, including taxi.
+The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
+history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
+command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
+Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
+keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
+destination. Rule differences are audit findings and do not make the command fail; missing
+captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
+success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
 The runner stops both servers on exit, including capture failures and normal interrupts. Credentials
@@ -335,12 +349,11 @@ The embedded initial sets still enforce the starting limit after a squash or reb
 
 ## Trainable spells
 
-The scoreboard finds `mangos.sqlite` below `$HOME/.cache/lyracore-scratch/vmangos-db/`, or accepts
-`--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and `query_only`. A missing file
-prints `Trainable spells: no data` with the expected path and leaves the rest of the scoreboard
-usable. Multiple default copies, unreadable files, malformed schemas and dangling teaching-spell
-references fail. No importer output or vmangos rows enter git; the importer mapping functions are
-checked as source.
+The scoreboard uses `.import/vmangos/current.json`, the same snapshot selection as `lyracore
+import`, or accepts `--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and
+`query_only`. A missing snapshot prints `Trainable spells: no data` with the expected path and
+leaves the rest of the scoreboard usable. A snapshot path outside `.import/vmangos/`, unreadable
+files, malformed schemas and dangling teaching-spell references fail. No vmangos rows enter git.
 
 For each class, "trainable" is the union of:
 
@@ -359,16 +372,12 @@ Use the largest `spell_template.build <= 5875` per entry. Resolve teaching spell
 once per class, keeping ranks separate. A spell must have at least one nonzero effect. Every
 nonzero effect must map to a supported kind through the importer rules, in all three slots.
 
-`examples/scoreboard/spells.rs` reproduces the importer's private `instant_effect_to_kind` and
-`aura_mod_to_kind` functions. An AST comparison test fails if either differs from
-`importer/src/spell.rs`. The importer is a binary and exposes no library mapping to call.
-`spell_counts.py` applies the same name-dependent support rules, including the Stealth exception,
-home-target teleport and dismount cases. A test checks the name list against the importer table.
-Raw 5, 29 and 96 are not blanket support for Blink or Charge. Raw 59, 63 and 91 use the importer's
-supported mappings. Unknown kinds stay unsupported unless the importer has a named correction.
-
-Re-derive these mappings after the vmangos port merges: that port changes `importer/src/spell.rs`.
-The cross-check must pass against the merged importer before using these counts.
+The scoreboard reads trainable spell rows from the selected vmangos SQLite file and calls
+`lyracore-importer::spell_kind::supported_effect` for each nonempty effect slot. The importer
+uses the same kind mappings and name corrections when building the spell catalogue. The counter
+therefore has no copied Rust mapping or Python list of script-name exceptions. Raw 5, 29 and 96
+are not blanket support for Blink or Charge. Raw 59, 63 and 91 use importer mappings. Unknown
+kinds stay unsupported unless the importer has a named correction.
 
 Class skill lines follow vmangos at
 [`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77),

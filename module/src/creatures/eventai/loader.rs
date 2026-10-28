@@ -2,6 +2,7 @@ use std::collections::HashSet;
 
 use spacetimedb::{reducer, ReducerContext, Table};
 
+use super::stored::game_creature_ai_script_policy;
 use super::{
     AiEventKind, AuraStackCondition, CallForHelpInstruction, CastInstruction, CreatureAiDefinition,
     CreatureEntryCondition, CreatureHealthCondition, CreatureInstruction,
@@ -74,12 +75,28 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
         }
     }
     if replace {
+        for policy in ctx.db.game_creature_ai_script_policy().iter() {
+            ctx.db
+                .game_creature_ai_script_policy()
+                .id()
+                .delete(policy.id);
+        }
         for id in table.iter().map(|row| row.id).collect::<Vec<_>>() {
             table.id().delete(id);
         }
     }
     for definition in definitions {
-        table.insert(definition);
+        table.insert(CreatureAiDefinition {
+            id: 0,
+            creature_entry: definition.creature_entry,
+            creature_guid: definition.creature_guid,
+            definition_revision: definition.definition_revision,
+            rules: definition
+                .rules
+                .into_iter()
+                .map(|rule| super::stored::store(ctx, definition.definition_revision, rule))
+                .collect(),
+        });
     }
     super::relay::reap_unused_definitions(ctx);
     Ok(())
@@ -87,7 +104,7 @@ fn load_definition_batch(ctx: &ReducerContext, packed: &str, replace: bool) -> R
 
 fn validate_relay_catalogue_pins(
     ctx: &ReducerContext,
-    definitions: &[CreatureAiDefinition],
+    definitions: &[ParsedDefinition],
 ) -> Result<(), String> {
     let current = super::relay::current_catalogue_version(ctx);
     for definition in definitions {
@@ -105,7 +122,7 @@ fn validate_relay_catalogue_pins(
                     start.catalogue_version, current
                 ));
             }
-            for relay_id in &start.relay_ids {
+            for relay_id in start.relay_ids.iter().filter(|id| **id != 0) {
                 if !super::relay::catalogue_contains(ctx, start.catalogue_version, *relay_id) {
                     return Err(format!(
                         "EventAI rule {rule_id} relay dependency {relay_id} is missing from catalogue {}",
@@ -126,7 +143,14 @@ pub(crate) fn replace_definition_for_debug(
     load_definition_batch(ctx, packed, true)
 }
 
-fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, String> {
+struct ParsedDefinition {
+    creature_entry: u32,
+    creature_guid: u64,
+    definition_revision: u64,
+    rules: Vec<EventAiRule>,
+}
+
+fn parse_definition_batch(packed: &str) -> Result<Vec<ParsedDefinition>, String> {
     let mut subjects = HashSet::new();
     packed
         .lines()
@@ -145,7 +169,7 @@ fn parse_definition_batch(packed: &str) -> Result<Vec<CreatureAiDefinition>, Str
         .collect()
 }
 
-fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
+fn parse_definition(line: &str) -> Result<ParsedDefinition, String> {
     let mut fields = line.splitn(3, '@');
     let subject = fields.next().ok_or("definition subject is missing")?;
     let revision = parse_u64(fields.next().ok_or("definition revision is missing")?)?;
@@ -178,7 +202,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
 
     let rules: Vec<EventAiRule> = encoded_rules
         .split('~')
-        .map(|encoded| parse_rule_for_subject(encoded, creature_guid))
+        .map(parse_rule)
         .collect::<Result<_, _>>()?;
     if rules
         .windows(2)
@@ -186,8 +210,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
     {
         return Err("definition rules must have unique ascending source ids".to_string());
     }
-    Ok(CreatureAiDefinition {
-        id: 0,
+    Ok(ParsedDefinition {
         creature_entry,
         creature_guid,
         definition_revision: revision,
@@ -195,12 +218,7 @@ fn parse_definition(line: &str) -> Result<CreatureAiDefinition, String> {
     })
 }
 
-#[cfg(test)]
 fn parse_rule(encoded: &str) -> Result<EventAiRule, String> {
-    parse_rule_for_subject(encoded, 0)
-}
-
-fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRule, String> {
     let fields: Vec<&str> = encoded.splitn(9, ',').collect();
     if !(8..=9).contains(&fields.len()) {
         return Err(format!(
@@ -237,12 +255,17 @@ fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRu
     };
     let instructions = encoded_instructions
         .split('+')
-        .map(|instruction| {
-            parse_import_verified_instruction(instruction, source_rule_id, creature_guid)
-        })
+        .map(parse_instruction)
         .collect::<Result<Vec<_>, _>>()?;
     if instructions.is_empty() {
         return Err("rule has no instructions".to_string());
+    }
+    let selection = parse_selection(fields[5], instructions.len())?;
+    let execution = parse_execution(fields[6])?;
+    if matches!(selection, InstructionSelection::CommandLists(_))
+        != matches!(execution, ExecutionPolicy::ScriptEvent(_))
+    {
+        return Err("command lists require a script event policy".to_string());
     }
     Ok(EventAiRule {
         source_rule_id,
@@ -250,38 +273,73 @@ fn parse_rule_for_subject(encoded: &str, creature_guid: u64) -> Result<EventAiRu
         chance_pct,
         allowed_phases,
         recurrence: parse_recurrence(fields[4])?,
-        selection: match fields[5] {
-            "all" => InstructionSelection::All,
-            "random" => InstructionSelection::RandomOne,
-            value => return Err(format!("unknown instruction selection: {value}")),
-        },
-        execution: match fields[6] {
-            "ordinary" => ExecutionPolicy::Ordinary,
-            "combat" => ExecutionPolicy::CombatAction,
-            value => return Err(format!("unknown execution policy: {value}")),
-        },
+        selection,
+        execution,
         posture,
         instructions,
     })
 }
 
-fn parse_import_verified_instruction(
+fn parse_selection(
     encoded: &str,
-    source_rule_id: u64,
-    creature_guid: u64,
-) -> Result<CreatureInstruction, String> {
-    const RAJAXX_RULE_ID: u64 = 1_534_108;
-    const RAJAXX_CREATURE_GUID: u64 = 17_379_391_219_402_170_660;
+    instruction_count: usize,
+) -> Result<InstructionSelection, String> {
+    match encoded {
+        "all" => return Ok(InstructionSelection::All),
+        "random" => return Ok(InstructionSelection::RandomOne),
+        _ => {}
+    }
+    let fields = encoded.split(':').collect::<Vec<_>>();
+    let ["lists", random, ends, aborts] = fields.as_slice() else {
+        return Err(format!("unknown instruction selection: {encoded}"));
+    };
+    let ends = ends
+        .split('.')
+        .map(parse_u32)
+        .collect::<Result<Vec<_>, _>>()?;
+    let abort_on_failure = if aborts.is_empty() {
+        Vec::new()
+    } else {
+        aborts
+            .split('.')
+            .map(parse_u32)
+            .collect::<Result<Vec<_>, _>>()?
+    };
+    if ends.is_empty()
+        || ends.len() > 3
+        || ends[0] == 0
+        || ends.windows(2).any(|pair| pair[0] >= pair[1])
+        || ends.last().copied().map(|end| end as usize) != Some(instruction_count)
+        || instruction_count > 4096
+        || abort_on_failure
+            .iter()
+            .any(|index| *index as usize >= instruction_count)
+        || abort_on_failure.windows(2).any(|pair| pair[0] >= pair[1])
+    {
+        return Err("invalid command list boundaries or abort indices".to_string());
+    }
+    Ok(InstructionSelection::CommandLists(super::CommandLists {
+        ends,
+        abort_on_failure,
+        random: parse_bool(random)?,
+    }))
+}
 
-    if encoded != "unit-flags:set:rajaxx-spawn-protection" {
-        return parse_instruction(encoded);
+fn parse_execution(encoded: &str) -> Result<ExecutionPolicy, String> {
+    match encoded {
+        "ordinary" => return Ok(ExecutionPolicy::Ordinary),
+        "combat" => return Ok(ExecutionPolicy::CombatAction),
+        _ => {}
     }
-    if source_rule_id != RAJAXX_RULE_ID || creature_guid != RAJAXX_CREATURE_GUID {
-        return Err("Rajaxx client projection is reserved for its pinned source rule".to_string());
-    }
-    Ok(CreatureInstruction::Presentation(
-        super::import_verified_rajaxx_spawn_protection(),
-    ))
+    let fields = encoded.splitn(4, ':').collect::<Vec<_>>();
+    let ["script", not_casting, check_result, predicate] = fields.as_slice() else {
+        return Err(format!("unknown execution policy: {encoded}"));
+    };
+    Ok(ExecutionPolicy::ScriptEvent(super::ScriptEventPolicy {
+        not_casting: parse_bool(not_casting)?,
+        check_result: parse_bool(check_result)?,
+        predicate: parse_event_predicate(predicate)?,
+    }))
 }
 
 fn parse_event(encoded: &str) -> Result<EventCondition, String> {
@@ -457,6 +515,10 @@ fn parse_event_predicate(encoded: &str) -> Result<EventPredicate, String> {
         "always" => Ok(EventPredicate::Always),
         "alliance" => Ok(EventPredicate::Alliance),
         "horde" => Ok(EventPredicate::Horde),
+        value if value.starts_with("quest-incomplete.") => {
+            nonzero_u32(&value[17..], "quest").map(EventPredicate::QuestIncomplete)
+        }
+        value if value.starts_with("map.") => parse_u32(&value[4..]).map(EventPredicate::Map),
         value => value
             .strip_prefix("quest-taken.")
             .map(parse_u32)
@@ -571,14 +633,15 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 .split('.')
                 .map(parse_i32)
                 .collect::<Result<Vec<_>, _>>()?;
-            if emote_ids.len() != 3 {
-                return Err("random-emote needs exactly three source choices".to_string());
+            if !(1..=4).contains(&emote_ids.len()) {
+                return Err("random-emote needs one through four choices".to_string());
             }
             Ok(CreatureInstruction::RandomEmote(RandomEmoteInstruction {
                 emote_ids,
             }))
         }
         ["attack-start", target] => Ok(CreatureInstruction::AttackStart(parse_target(target)?)),
+        ["flee", text] => Ok(CreatureInstruction::FleeWithText(parse_u32(text)?)),
         ["flee"] => Ok(CreatureInstruction::FleeForAssist),
         ["help", radius] => Ok(CreatureInstruction::CallForHelp(CallForHelpInstruction {
             radius_yd: parse_u32(radius)?,
@@ -590,6 +653,11 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             }
             Ok(CreatureInstruction::SetPhase(SetPhaseInstruction { phase }))
         }
+        ["phase-inc-checked", amount] => Ok(CreatureInstruction::CheckedIncrementPhase(
+            IncrementPhaseInstruction {
+                amount: parse_i32(amount)?,
+            },
+        )),
         ["phase-inc", amount] => Ok(CreatureInstruction::IncrementPhase(
             IncrementPhaseInstruction {
                 amount: parse_i32(amount)?,
@@ -751,6 +819,24 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 },
             },
         )),
+        ["npc-flags", flags, operation] => {
+            let flags = parse_u32(flags)?;
+            if flags == 0 || flags & !3 != 0 {
+                return Err("NPC flags must name gossip or quests".into());
+            }
+            let operation = match *operation {
+                "add" => super::RelayFlagOperation::Add,
+                "remove" => super::RelayFlagOperation::Remove,
+                "toggle" => super::RelayFlagOperation::Toggle,
+                _ => return Err("unknown NPC-flag operation".into()),
+            };
+            Ok(CreatureInstruction::Presentation(
+                CreaturePresentationInstruction::ModifyNpcFlags(super::RelayFlagChange {
+                    flags,
+                    operation,
+                }),
+            ))
+        }
         ["npc-flags", flags] => Ok(CreatureInstruction::Presentation(
             CreaturePresentationInstruction::SetNpcFlags {
                 flags: match *flags {
@@ -785,6 +871,13 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
             }
             value => return Err(format!("unknown clear unit flag: {value}")),
         })),
+        ["script-quest-event", quest, distance, group] => Ok(CreatureInstruction::QuestCredit(
+            crate::quest::EventAiQuestCredit::ScriptEvent(crate::quest::ScriptQuestEvent {
+                quest_entry: nonzero_u32(quest, "quest")?,
+                distance_yd: parse_u32(distance)?,
+                group: parse_bool(group)?,
+            }),
+        )),
         ["quest-event", quest, recipient] => Ok(CreatureInstruction::QuestCredit(
             crate::quest::EventAiQuestCredit::QuestEvent(QuestEvent {
                 quest_entry: nonzero_u32(quest, "quest event quest")?,
@@ -870,12 +963,15 @@ fn parse_instruction(encoded: &str) -> Result<CreatureInstruction, String> {
                 signal: parse_encounter_signal(signal)?,
             },
         )),
-        ["start-relay", relays, target, catalogue] => {
+        [kind @ ("start-relay" | "start-script"), relays, target, catalogue] => {
             let relay_ids = relays
                 .split('.')
                 .map(parse_u32)
                 .collect::<Result<Vec<_>, _>>()?;
-            if relay_ids.is_empty() || relay_ids.contains(&0) {
+            if relay_ids.is_empty()
+                || (*kind == "start-relay" && relay_ids.contains(&0))
+                || (*kind == "start-script" && relay_ids.len() > 100)
+            {
                 return Err("start-relay needs nonzero definition ids".to_string());
             }
             let catalogue_version = parse_u64(catalogue)?;
@@ -927,6 +1023,7 @@ fn parse_encounter_binding(value: &str) -> Result<crate::encounter::EncounterBin
         "wailing-caverns-serpentis" => Ok(WailingCavernsSerpentis),
         "wailing-caverns-mutanus" => Ok(WailingCavernsMutanus),
         "zul-gurub-ohgan" => Ok(ZulGurubOhgan),
+        "ruins-of-ahnqiraj-rajaxx" => Ok(RuinsOfAhnQirajRajaxx),
         _ => Err(format!("unknown encounter binding: {value}")),
     }
 }
@@ -934,6 +1031,7 @@ fn parse_encounter_binding(value: &str) -> Result<crate::encounter::EncounterBin
 fn parse_encounter_signal(value: &str) -> Result<crate::encounter::EncounterSignal, String> {
     use crate::encounter::EncounterSignal::*;
     match value {
+        "reset" => Ok(Reset),
         "begin" => Ok(Begin),
         "fail" => Ok(Fail),
         "complete" => Ok(Complete),
@@ -947,6 +1045,7 @@ fn parse_encounter_signal(value: &str) -> Result<crate::encounter::EncounterSign
 fn parse_target(value: &str) -> Result<InstructionTarget, String> {
     match value {
         "opponent" => Ok(InstructionTarget::CurrentOpponent),
+        "provided" => Ok(InstructionTarget::ProvidedTarget),
         "self" => Ok(InstructionTarget::SelfActor),
         "highest-threat" => Ok(InstructionTarget::HighestThreat),
         "second-threat" => Ok(InstructionTarget::SecondThreat),
@@ -1180,6 +1279,39 @@ mod tests {
     use super::*;
 
     #[test]
+    fn command_list_boundaries_and_abort_indices_are_checked_before_loading() {
+        assert!(parse_rule(
+            "7,aggro,100,4294967295,once,lists:1:2.3:0,script:1:1:always,phase:1+phase:2+phase:3"
+        )
+        .is_ok());
+        for selection in [
+            "lists:1:0.3:",
+            "lists:1:2.1:",
+            "lists:0:2:2",
+            "lists:0:2:1.1",
+            "lists:0:3:",
+        ] {
+            assert!(
+                parse_rule(&format!(
+                    "7,aggro,100,4294967295,once,{selection},script:0:0:always,phase:1+phase:2"
+                ))
+                .is_err(),
+                "{selection}"
+            );
+        }
+    }
+
+    #[test]
+    fn script_selection_and_execution_must_be_loaded_together() {
+        for (selection, execution) in [("all", "script:0:0:always"), ("lists:0:1:", "ordinary")] {
+            assert!(parse_rule(&format!(
+                "7,aggro,100,1,once,{selection},{execution},phase:1"
+            ))
+            .is_err());
+        }
+    }
+
+    #[test]
     fn native_definition_decodes_more_than_three_ordered_instructions() {
         let rules = "17,aggro,100,4294967295,once,all,ordinary,emote:1:self+emote:2:self+emote:3:self+emote:4:self";
         let material = format!("entry:6@{rules}");
@@ -1255,6 +1387,22 @@ mod tests {
     }
 
     #[test]
+    fn weighted_script_starts_keep_empty_choices_and_bound_the_choice_count() {
+        let CreatureInstruction::StartRelay(start) =
+            parse_instruction("start-script:7.7.0:provided:17").unwrap()
+        else {
+            panic!("expected a script start")
+        };
+        assert_eq!(start.relay_ids, [7, 7, 0]);
+        assert!(parse_instruction("start-relay:7.0:self:17").is_err());
+        assert!(parse_instruction(&format!(
+            "start-script:{}:self:17",
+            vec!["7"; 101].join(".")
+        ))
+        .is_err());
+    }
+
+    #[test]
     fn relay_starts_require_and_keep_the_catalogue_pin() {
         assert_eq!(
             parse_instruction("start-relay:9989.9990.9991:self:77").unwrap(),
@@ -1285,28 +1433,6 @@ mod tests {
             })
         ));
         assert!(parse_instruction("unit-flags:set:rajaxx-spawn-protection").is_err());
-        let quarantine_rule =
-            "1534108,aggro,100,1,once,all,ordinary,unit-flags:set:rajaxx-spawn-protection";
-        let quarantine_subject = "guid:17379391219402170660";
-        let material = format!("{quarantine_subject}@{quarantine_rule}");
-        let quarantine = parse_definition(&format!(
-            "{quarantine_subject}@{}@{quarantine_rule}",
-            definition_revision(&material)
-        ))
-        .unwrap();
-        assert!(matches!(
-            quarantine.rules[0].instructions[0],
-            CreatureInstruction::Presentation(
-                CreaturePresentationInstruction::SetRajaxxSpawnProtection(_)
-            )
-        ));
-        let invalid_rule = quarantine_rule.replacen("1534108", "1534109", 1);
-        let material = format!("{quarantine_subject}@{invalid_rule}");
-        assert!(parse_definition(&format!(
-            "{quarantine_subject}@{}@{invalid_rule}",
-            definition_revision(&material)
-        ))
-        .is_err());
         assert!(parse_instruction("unit-field:147:3").is_err());
         assert!(parse_instruction("unit-flags:set:832").is_err());
     }
@@ -1405,7 +1531,9 @@ mod tests {
             })
         ));
 
-        assert!(parse_instruction("random-emote:11.18").is_err());
+        assert!(parse_instruction("random-emote:11.18").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21").is_ok());
+        assert!(parse_instruction("random-emote:11.18.4.21.22").is_err());
         assert!(parse_instruction("set-react-state:3").is_err());
         assert!(parse_instruction("no-effect:missing-text-template:0").is_err());
     }

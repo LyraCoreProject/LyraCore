@@ -126,8 +126,8 @@ mod tests {
         assert_eq!(fall_damage(0, 100), 0);
         assert_eq!(fall_damage(800, 100), 0);
         assert_eq!(fall_damage(1_180, 100), 0);
-        let d15 = fall_damage(1_500, 100);
-        assert!((10..25).contains(&d15), "{d15}");
+        assert_eq!(fall_damage(1_500, 100), 14);
+        assert_eq!(fall_damage(1_500, 1_000), 148);
         assert_eq!(fall_damage(10_000, 100), 100);
     }
 
@@ -220,6 +220,11 @@ mod tests {
                 expired_ticks: 0
             }
         );
-        assert_eq!(drowning_damage(100).saturating_mul(10).min(100), 100);
+    }
+
+    #[test]
+    fn drowning_takes_a_fifth_of_max_health_rounded_up() {
+        assert_eq!(drowning_damage(100), 20);
+        assert_eq!(drowning_damage(7), 2);
     }
 }

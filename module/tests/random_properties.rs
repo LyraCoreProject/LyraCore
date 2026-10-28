@@ -107,8 +107,8 @@ fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it()
 }
 
 fn create_spell(shard: &Standalone) {
-    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges) VALUES (5090100,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0)");
-    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat) VALUES (20360400,5090100,0,7,2,0,0.0,0,0,0.0,0,0,0,{ITEM},8,0,0,false)"));
+    shard.assert_sql("INSERT INTO game_spell (spell_id,name,power_type,cost,cast_time_ms,gcd_ms,cooldown_ms,range_yd,duration_ms,school_mask,dispel_type,mechanic,max_stacks,aura_interrupt,attributes,spell_level,max_level,is_negative,cast_flags,stances,family_name,family_flags,proc_flags,proc_chance,proc_charges,max_duration_ms) VALUES (5090100,'Fixture craft',0,0,0,0,0,0,0,1,0,0,0,0,0,0,0,false,0,0,0,0,0,0,0,0)");
+    shard.assert_sql(&format!("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360400,5090100,0,7,2,0,0.0,0,0,0.0,0,0,0,{ITEM},8,0,0,false,0.0)"));
 }
 
 #[test]
@@ -237,7 +237,16 @@ fn creation_is_atomic_even_when_the_spell_handles_a_full_inventory() {
         .all(|item| item["random_property_id"] == PROPERTY));
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
     let refused = shard.call("debug_grant_item", &["1", ITEM, "1"]);
-    assert!(!refused.status.success());
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refused.stdout),
+        String::from_utf8_lossy(&refused.stderr)
+    );
+    assert!(
+        !refused.status.success()
+            && text.contains(&format!("invalid property pool {POOL} for item {ITEM}")),
+        "{text}"
+    );
     assert_eq!(
         shard.query_rows("SELECT random_property_id FROM game_item_instance WHERE owner_guid = 1"),
         created

@@ -1,7 +1,9 @@
 mod ai;
+pub(crate) mod catalogue;
 pub(crate) mod cycle;
 pub(crate) mod distraction;
 mod eventai;
+pub(crate) mod guardian;
 mod hostile_summon;
 mod hunter_pet;
 mod pet;
@@ -31,7 +33,9 @@ pub(crate) use eventai::{
     CreatureInstruction, CreatureReactState, SummonLocation,
 };
 #[cfg(feature = "debug_reducers")]
-pub(crate) use eventai::{run_relay_arrival, start_imported_relay};
+pub(crate) use eventai::{
+    run_relay_arrival, stage_script_failure_policies_for_debug, start_imported_relay,
+};
 
 pub use eventai::{
     game_creature_ai_broadcast_text, game_creature_ai_definition, game_creature_ai_event,
@@ -88,6 +92,8 @@ pub use spawn::{
     NpcText, NpcTextSlot, MOVEMENT_IDLE, MOVEMENT_RANDOM,
 };
 
+#[cfg(feature = "debug_reducers")]
+pub(crate) use spawn::build_creature_from_template;
 #[cfg(test)]
 pub(crate) use spawn::rank_hp_multiplier_permille;
 pub(crate) use spawn::{

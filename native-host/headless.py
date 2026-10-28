@@ -221,12 +221,15 @@ def destroys(packets):
 def values(packets, guid, create=False):
     fields = {}
     for opcode, body in packets:
-        if opcode != 0xa9 or body[:5] != struct.pack('<IB', 1, 0) or body[5] not in ((3,) if create else (0,)) or packed_guid(body[6:]) != guid:
+        if opcode != 0xa9 or body[:5] != struct.pack('<IB', 1, 0) or body[5] not in ((2, 3) if create else (0,)) or packed_guid(body[6:]) != guid:
             continue
         offset = 7 + body[6].bit_count()
         if create and body[offset] in (1, 2):  # TYPEID_ITEM or TYPEID_CONTAINER.
             assert body[offset + 1] == 0x10  # ALL, followed by its u32.
             offset += 2 + 4
+        elif create and body[offset] == 5:  # TYPEID_GAMEOBJECT.
+            assert body[offset + 1] == 0x50  # HAS_POSITION and ALL.
+            offset += 2 + 16 + 4
         elif create:
             assert body[offset] == 4  # TYPEID_PLAYER.
             assert body[offset + 1] in (0x30, 0x31)  # LIVING, ALL and optional SELF.

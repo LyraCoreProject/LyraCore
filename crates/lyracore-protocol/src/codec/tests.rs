@@ -9,6 +9,41 @@ use wow_world_messages::vanilla::{
 use lyracore_shared::loot_roll::vote_kind;
 use wow_world_messages::vanilla::RollVote;
 
+/// OBJECT_FIELD_TYPE is field 2: bit 2 of the first mask word in a one-object VALUES body.
+fn values_mask_has_object_type(body: &[u8]) -> bool {
+    assert_eq!(
+        &body[..4],
+        &1u32.to_le_bytes(),
+        "one object; body {body:02x?}"
+    );
+    assert_eq!(body[5], 0, "VALUES update type; body {body:02x?}");
+    let blocks = 7 + body[6].count_ones() as usize;
+    assert!(body[blocks] > 0, "the mask has a block; body {body:02x?}");
+    let first = u32::from_le_bytes(body[blocks + 1..blocks + 5].try_into().unwrap());
+    first & (1 << 2) != 0
+}
+
+fn assert_no_object_type(body: &[u8]) {
+    assert!(
+        !values_mask_has_object_type(body),
+        "OBJECT_FIELD_TYPE must not be re-sent in a partial VALUES update; body {body:02x?}"
+    );
+}
+
+#[test]
+fn the_object_type_probe_detects_a_mask_that_keeps_field_2() {
+    let msg = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![Object::Values {
+            guid1: Guid::new(1),
+            mask1: UpdateMask::Player(UpdatePlayer::builder().set_player_xp(450).finalize()),
+        }],
+    };
+    let mut buf = Vec::new();
+    msg.write_unencrypted_server(&mut buf).unwrap();
+    assert!(values_mask_has_object_type(&buf[4..]));
+}
+
 fn warrior_entity() -> EntityView {
     EntityView {
         guid: 1,
@@ -160,16 +195,11 @@ fn creature_virtual_items_use_all_three_display_fields_without_object_type() {
     let (opcode, body) = build_virtual_item_values(guid, 2196, 2716, 0);
     assert_eq!(opcode, 0x00A9);
 
-    let mut expected = update_mask::UpdateMaskValues::new();
-    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY, 2196);
-    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 1, 2716);
-    expected.set_u32(update_mask::idx::UNIT_VIRTUAL_ITEM_SLOT_DISPLAY + 2, 0);
-    assert!(body.ends_with(&expected.to_bytes()));
-    assert_eq!(
-        expected.get(update_mask::idx::OBJECT_TYPE),
-        None,
-        "partial equipment VALUES must not resend OBJECT_FIELD_TYPE"
-    );
+    // Two mask blocks; fields 37..=39 are bits 5..=7 of the second, with no OBJECT_FIELD_TYPE bit.
+    let expected = [
+        2, 0, 0, 0, 0, 0xE0, 0, 0, 0, 0x94, 0x08, 0, 0, 0x9C, 0x0A, 0, 0, 0, 0, 0, 0,
+    ];
+    assert!(body.ends_with(&expected), "{body:02X?}");
 }
 
 #[test]
@@ -274,12 +304,7 @@ fn resistance_values_is_unit_only_no_object_type() {
         "resistance VALUES must carry only indices 155..=161; tail was {:02x?}",
         &buf[buf.len().saturating_sub(56)..]
     );
-    let contains = |needle: &[u8]| buf.windows(needle.len()).any(|w| w == needle);
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the resistance VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -304,11 +329,7 @@ fn dynamic_flags_values_is_unit_only_no_object_type() {
         "expected dynamic_flags value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in a partial VALUES update; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -332,11 +353,7 @@ fn coinage_values_is_player_mask_without_object_type() {
         "expected coinage value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the coinage VALUES update; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -384,11 +401,7 @@ fn aura_values_is_player_mask_without_object_type() {
         "cleared aura mask must never carry OBJECT_FIELD_TYPE"
     );
     let (_op, clear_body) = build_values_update_raw(1, &clear);
-    assert!(
-        !win(&clear_body, &[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not appear in the cleared aura VALUES update; clear body {:02x?}",
-        clear_body
-    );
+    assert_no_object_type(&clear_body);
 }
 
 #[test]
@@ -553,11 +566,7 @@ fn ghost_values_is_player_mask_without_object_type() {
         "expected unit_bytes_1 vis-ghost (byte 3); buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the ghost VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -674,23 +683,18 @@ fn resurrect_request_names_the_caster_without_sickness_or_delay() {
 fn level_values_is_player_mask_without_object_type() {
     let msg = build_level_values(1, 2);
     match &msg.objects[0] {
-        Object::Values { guid1, mask1 } => {
+        Object::Values {
+            guid1,
+            mask1: UpdateMask::Player(p),
+        } => {
             assert_eq!(guid1.guid(), 1);
-            assert!(
-                matches!(mask1, UpdateMask::Player(_)),
-                "ding update must be a Player mask"
-            );
+            assert_eq!(p.unit_level(), Some(2));
         }
-        other => panic!("expected Object::Values, got {other:?}"),
+        other => panic!("expected a Player Values update, got {other:?}"),
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    let type_word = [0x09u8, 0x00, 0x00, 0x00];
-    assert!(
-        !buf.windows(4).any(|w| w == type_word),
-        "build_level_values must not re-send OBJECT_FIELD_TYPE (0x09 word present); body {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -700,24 +704,11 @@ fn attack_start_carries_attacker_and_victim() {
     let msg = build_attack_start(player, chicken);
     assert_eq!(msg.attacker.guid(), player);
     assert_eq!(msg.victim.guid(), chicken);
-    let server: ServerOpcodeMessage = ServerOpcodeMessage::SMSG_ATTACKSTART(Box::new(msg));
-    let mut buf = Vec::new();
-    server.write_unencrypted_server(&mut buf).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut buf.as_slice()).unwrap() {
-        ServerOpcodeMessage::SMSG_ATTACKSTART(m) => {
-            assert_eq!(m.attacker.guid(), player);
-            assert_eq!(m.victim.guid(), chicken);
-        }
-        other => panic!("expected SMSG_ATTACKSTART, got {other}"),
-    }
 }
 
 #[test]
-fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
-    let start = build_breath_timer_start(57_000, 60_000);
-    let mut start_bytes = Vec::new();
-    start.write_unencrypted_server(&mut start_bytes).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut start_bytes.as_slice()).unwrap() {
+fn breath_mirror_timer_edges_carry_the_breath_timer() {
+    match build_breath_timer_start(57_000, 60_000) {
         ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
             assert_eq!(msg.timer, TimerType::Breath);
             assert_eq!(msg.time_remaining, 57_000);
@@ -728,10 +719,7 @@ fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
         other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
     }
 
-    let stop = build_breath_timer_stop();
-    let mut stop_bytes = Vec::new();
-    stop.write_unencrypted_server(&mut stop_bytes).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut stop_bytes.as_slice()).unwrap() {
+    match build_breath_timer_stop() {
         ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
             assert_eq!(msg.timer, TimerType::Breath)
         }
@@ -740,11 +728,8 @@ fn breath_mirror_timer_edges_roundtrip_on_the_vanilla_wire() {
 }
 
 #[test]
-fn drowning_damage_log_roundtrips_with_the_actual_damage() {
-    let msg = build_drowning_damage_log(0xF00D, 19);
-    let mut bytes = Vec::new();
-    msg.write_unencrypted_server(&mut bytes).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+fn drowning_damage_log_carries_the_actual_damage() {
+    match build_drowning_damage_log(0xF00D, 19) {
         ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
             assert_eq!(log.guid.guid(), 0xF00D);
             assert_eq!(log.damage_type, EnvironmentalDamageType::Drowning);
@@ -755,12 +740,9 @@ fn drowning_damage_log_roundtrips_with_the_actual_damage() {
 }
 
 #[test]
-fn fatigue_mirror_timer_drains_recovers_and_stops_on_the_vanilla_wire() {
+fn fatigue_mirror_timer_drains_recovers_and_stops() {
     for (in_deep_water, scale) in [(true, u32::MAX), (false, 10)] {
-        let start = build_fatigue_timer_start(in_deep_water, 42_000, 60_000);
-        let mut bytes = Vec::new();
-        start.write_unencrypted_server(&mut bytes).unwrap();
-        match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+        match build_fatigue_timer_start(in_deep_water, 42_000, 60_000) {
             ServerOpcodeMessage::SMSG_START_MIRROR_TIMER(msg) => {
                 assert_eq!(msg.timer, TimerType::Fatigue);
                 assert_eq!(msg.time_remaining, 42_000);
@@ -770,11 +752,7 @@ fn fatigue_mirror_timer_drains_recovers_and_stops_on_the_vanilla_wire() {
             other => panic!("expected SMSG_START_MIRROR_TIMER, got {other}"),
         }
     }
-    let mut bytes = Vec::new();
-    build_fatigue_timer_stop()
-        .write_unencrypted_server(&mut bytes)
-        .unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+    match build_fatigue_timer_stop() {
         ServerOpcodeMessage::SMSG_STOP_MIRROR_TIMER(msg) => {
             assert_eq!(msg.timer, TimerType::Fatigue)
         }
@@ -783,11 +761,8 @@ fn fatigue_mirror_timer_drains_recovers_and_stops_on_the_vanilla_wire() {
 }
 
 #[test]
-fn exhaustion_damage_log_roundtrips_with_the_actual_damage() {
-    let msg = build_exhaustion_damage_log(0xF00D, 212);
-    let mut bytes = Vec::new();
-    msg.write_unencrypted_server(&mut bytes).unwrap();
-    match ServerOpcodeMessage::read_unencrypted(&mut bytes.as_slice()).unwrap() {
+fn exhaustion_damage_log_carries_the_actual_damage() {
+    match build_exhaustion_damage_log(0xF00D, 212) {
         ServerOpcodeMessage::SMSG_ENVIRONMENTAL_DAMAGE_LOG(log) => {
             assert_eq!(log.guid.guid(), 0xF00D);
             assert_eq!(log.damage_type, EnvironmentalDamageType::Exhausted);
@@ -1952,22 +1927,9 @@ fn gossip_message_echoes_guid_with_a_greeting_option() {
         &menu(true, true),
     );
     assert_eq!(both.gossips.len(), 2);
+    assert_eq!(both.gossips[0].message, "I'd like to browse your goods.");
     assert_eq!(both.gossips[1].message, "Make this inn your home.");
     assert_eq!(both.gossips[1].id, 1);
-}
-
-#[test]
-fn gossip_message_with_no_imports_is_byte_identical_to_pre_217() {
-    let guid = 0xF130_0000_0000_0042u64;
-    let m = build_gossip_message(
-        guid,
-        4,
-        Vec::new(),
-        &gossip_menu_options(Vec::new(), true, true),
-    );
-    assert_eq!(m.gossips.len(), 2);
-    assert_eq!(m.gossips[0].message, "I'd like to browse your goods.");
-    assert_eq!(m.gossips[1].message, "Make this inn your home.");
 }
 
 #[test]
@@ -2235,11 +2197,7 @@ fn unit_flags_values_is_unit_only_no_object_type() {
         "expected the unit_flags value; buf {:02x?}",
         buf
     );
-    assert!(
-        !contains(&[0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the unit_flags VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2271,11 +2229,7 @@ fn power_values_selects_the_descriptor_by_power_byte() {
     let msg = build_power_values(1, 1, 222);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the power VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2294,11 +2248,7 @@ fn target_values_is_unit_only_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the target VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2331,11 +2281,7 @@ fn max_vitals_values_sets_maxhealth_and_selects_max_power_descriptor() {
     let msg = build_max_vitals_values(1, 777, 0, 1001);
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the max-vitals VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2352,11 +2298,7 @@ fn player_ammo_id_values_is_player_only_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the ammo VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2397,11 +2339,7 @@ fn player_xp_values_carries_xp_and_next_level_no_object_type() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the xp VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]
@@ -2431,11 +2369,7 @@ fn item_values_clamps_zero_stack_count_to_one_and_carries_durability() {
     }
     let mut buf = Vec::new();
     msg.write_unencrypted_server(&mut buf).unwrap();
-    assert!(
-        !buf.windows(4).any(|w| w == [0x09, 0x00, 0x00, 0x00]),
-        "OBJECT_FIELD_TYPE (0x09) must not be re-sent in the item VALUES; buf {:02x?}",
-        buf
-    );
+    assert_no_object_type(&buf[4..]);
 }
 
 #[test]

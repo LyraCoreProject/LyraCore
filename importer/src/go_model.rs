@@ -6,7 +6,7 @@ use wow_dbc::vanilla_tables::game_object_display_info::{
 };
 use wow_dbc::Indexable;
 
-use crate::dump::{field, got, parse_table};
+use crate::dump::{got, parse_table};
 use crate::nav::Tri;
 use crate::world_import::{GO_BUTTON, GO_DOOR};
 
@@ -71,38 +71,40 @@ struct DoorTemplate {
     size: f32,
 }
 
-fn door_templates(dump: &str) -> Vec<DoorTemplate> {
-    parse_table(dump, "gameobject_template")
+fn door_templates(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> anyhow::Result<Vec<DoorTemplate>> {
+    parse_table(dump, "gameobject_template")?
         .iter()
-        .filter_map(|row| {
-            let entry: u64 = field(row, got::ENTRY).parse().ok()?;
-            let raw_type: u32 = field(row, got::TYPE).parse().ok()?;
-            let stored_type = crate::world_import::classify_go_type(entry, raw_type)?;
-            (stored_type == GO_DOOR || stored_type == GO_BUTTON).then(|| DoorTemplate {
+        .map(|row| -> anyhow::Result<_> {
+            let entry: u64 = row.number(got::ENTRY)?;
+            let raw_type: u32 = row.number(got::TYPE)?;
+            let Some(stored_type) = crate::world_import::classify_go_type(entry, raw_type) else {
+                return Ok(None);
+            };
+            if stored_type != GO_DOOR && stored_type != GO_BUTTON {
+                return Ok(None);
+            }
+            Ok(Some(DoorTemplate {
                 entry,
-                display_id: field(row, got::DISPLAY_ID).parse().unwrap_or(0),
-                size: field(row, got::SIZE).parse().unwrap_or(0.0),
-            })
+                display_id: row.number(got::DISPLAY_ID)?,
+                size: row.number(got::SIZE)?,
+            }))
         })
-        .collect()
+        .filter_map(Result::transpose)
+        .collect::<anyhow::Result<_>>()
 }
 
 const BATCH_BYTES: usize = 28_000;
 
-pub(crate) fn run(
-    data_dir: &str,
-    dump_path: Option<&str>,
-    apply: bool,
-    shard: &crate::shard::Shard,
-) -> Result<()> {
-    let data_dir = Path::new(data_dir);
-    let dump_path = dump_path
-        .context("--go-models needs --dump too (gameobject_template is the template source)")?;
-    let dump = crate::dump::read_dump(dump_path)?;
-    let templates = door_templates(&dump);
+pub(crate) fn packed_rows(
+    data_dir: &Path,
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
+    let templates = door_templates(dump)?;
     if templates.is_empty() {
-        println!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
-        return Ok(());
+        eprintln!("go-models: no DOOR/BUTTON gameobject_template rows in this dump");
+        return Ok(Vec::new());
     }
 
     let mut dbc_chain = crate::dbc::open_chain(data_dir)?;
@@ -142,8 +144,8 @@ pub(crate) fn run(
         let shuffled: Vec<Tri> = local_tris.into_iter().map(shuffle_tri).collect();
         let radius = bounding_radius(&shuffled);
         let blob = encode_capped(t.entry, model_name, &shuffled)?;
-        println!(
-            "go-models: entry {} model {model_name} — {} tri(s), radius {radius:.2}",
+        eprintln!(
+            "go-models: entry {} model {model_name}, {} tri(s), radius {radius:.2}",
             t.entry,
             shuffled.len()
         );
@@ -151,12 +153,30 @@ pub(crate) fn run(
         rows.push(format!("{},{},{radius},{hex}", t.entry, t.size));
     }
 
-    println!(
+    eprintln!(
         "go-models: {}/{} DOOR/BUTTON template(s) resolved ({skipped_missing_display} missing \
          display, {skipped_wmo} WMO skipped, {skipped_empty} empty mesh)",
         rows.len(),
         templates.len()
     );
+
+    Ok(rows)
+}
+
+pub(crate) fn run(
+    data_dir: &str,
+    dump_path: Option<&str>,
+    apply: bool,
+    shard: &crate::shard::Shard,
+) -> Result<()> {
+    let data_dir = Path::new(data_dir);
+    let dump_path = dump_path
+        .context("--go-models needs --dump too (gameobject_template is the template source)")?;
+    let dump = crate::world_source::WorldSource::open(Path::new(dump_path))?;
+    let rows = packed_rows(data_dir, &dump)?;
+    if rows.is_empty() && door_templates(&dump)?.is_empty() {
+        return Ok(());
+    }
 
     if !apply {
         println!(
@@ -211,28 +231,36 @@ mod tests {
     }
 
     #[test]
-    fn door_templates_keeps_only_door_and_button_rows() {
-        let dump = "INSERT INTO `gameobject_template` VALUES \
-            (1,0,10,'Door',0,0,0,1.0,0,0),\
-            (2,1,20,'Button',0,0,0,1.0,0,0),\
-            (3,3,30,'Chest',0,0,0,1.0,0,0),\
-            (4,10,40,'Goober',0,0,0,1.0,0,0);";
-        let templates = door_templates(dump);
-        let entries: Vec<u64> = templates.iter().map(|t| t.entry).collect();
-        assert_eq!(
-            entries,
-            vec![1, 2],
-            "only the DOOR (type 0) and BUTTON (type 1) rows survive"
-        );
-        assert_eq!(templates[0].display_id, 10);
-        assert_eq!(templates[1].display_id, 20);
-    }
-
-    #[test]
-    fn door_templates_drops_a_row_with_no_classification() {
-        let dump =
-            "INSERT INTO `gameobject_template` VALUES (5,25,50,'Fishing Hole',0,0,0,1.0,0,0);";
-        assert!(door_templates(dump).is_empty());
+    fn vmangos_door_models_use_selected_template_versions() {
+        use crate::world_source::{sqlite_fixture, FixtureTable};
+        use rusqlite::types::Value::Integer as N;
+        let row = |patch, display| {
+            [
+                ("entry", N(7)),
+                ("patch", N(patch)),
+                ("type", N(0)),
+                ("displayId", N(display)),
+                ("size", N(1)),
+            ]
+        };
+        let source = sqlite_fixture(&[FixtureTable {
+            name: "gameobject_template",
+            columns: &[
+                ("size", "REAL"),
+                ("displayId", "INTEGER"),
+                ("type", "INTEGER"),
+                ("patch", "INTEGER"),
+                ("entry", "INTEGER"),
+            ],
+            key: &["entry", "patch"],
+            rows: &[&row(0, 1), &row(10, 2), &row(11, 3)],
+        }])
+        .unwrap();
+        let templates = door_templates(&source).unwrap();
+        assert_eq!(templates.len(), 1);
+        assert_eq!(templates[0].entry, 7);
+        assert_eq!(templates[0].display_id, 2);
+        assert_eq!(templates[0].size, 1.0);
     }
 
     #[test]
@@ -242,36 +270,11 @@ mod tests {
     }
 
     #[test]
-    fn bounding_radius_covers_every_shuffled_vertex() {
-        let tris: Vec<Tri> = cube(2.0, 5.0).into_iter().map(shuffle_tri).collect();
-        let radius = bounding_radius(&tris);
-        let (mut lo, mut hi) = ([f32::MAX; 3], [f32::MIN; 3]);
-        for t in &tris {
-            for v in t {
-                for k in 0..3 {
-                    lo[k] = lo[k].min(v[k]);
-                    hi[k] = hi[k].max(v[k]);
-                }
-            }
-        }
-        let center = [
-            (lo[0] + hi[0]) / 2.0,
-            (lo[1] + hi[1]) / 2.0,
-            (lo[2] + hi[2]) / 2.0,
-        ];
-        for t in &tris {
-            for v in t {
-                let d = ((v[0] - center[0]).powi(2)
-                    + (v[1] - center[1]).powi(2)
-                    + (v[2] - center[2]).powi(2))
-                .sqrt();
-                assert!(
-                    d <= radius + 1e-4,
-                    "vertex {v:?} lies outside radius {radius}"
-                );
-            }
-        }
-        assert!(radius > 0.0);
+    fn bounding_radius_reaches_the_farthest_vertex_from_the_box_centre() {
+        let square: Vec<Tri> = cube(2.0, 5.0).into_iter().map(shuffle_tri).collect();
+        assert!((bounding_radius(&square) - 8f32.sqrt()).abs() < 1e-6);
+        let right_triangle = shuffle_tri([[0.0, 0.0, 0.0], [6.0, 0.0, 0.0], [0.0, 0.0, 8.0]]);
+        assert_eq!(bounding_radius(&[right_triangle]), 5.0);
     }
 
     #[test]

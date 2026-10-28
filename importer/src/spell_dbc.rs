@@ -46,13 +46,18 @@ pub(crate) struct Spell {
     pub(crate) effect_amplitude: [u32; 3],
     pub(crate) effect_multiple_values: [f32; 3],
     pub(crate) effect_chain_target: [u32; 3],
-    pub(crate) effect_item_type: [i32; 3],
+    pub(crate) effect_item_type: [u64; 3],
     pub(crate) effect_misc_value: [u32; 3],
     pub(crate) effect_trigger_spell: [u32; 3],
     pub(crate) effect_points_per_combo: [f32; 3],
     pub(crate) name: String,
     pub(crate) family_name: u32,
     pub(crate) family_flags: u64,
+    pub(crate) custom_flags: u32,
+    pub(crate) min_target_level: u32,
+    pub(crate) single_target_key: u64,
+    pub(crate) bonus_coefficient: Option<[f32; 3]>,
+    pub(crate) npc_guardian_entry: Option<u32>,
 }
 
 pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
@@ -94,6 +99,11 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
             let name = std::str::from_utf8(&name[..end])
                 .with_context(|| format!("Spell.dbc row {id} name is not UTF-8"))?;
             let spell = Spell {
+                custom_flags: 0,
+                min_target_level: 0,
+                single_target_key: 0,
+                bonus_coefficient: None,
+                npc_guardian_entry: None,
                 id: column(0),
                 school: column(1),
                 dispel_type: column(4),
@@ -135,7 +145,7 @@ pub(crate) fn read_spells(bytes: &[u8]) -> Result<Vec<Spell>> {
                 effect_amplitude: array(94),
                 effect_multiple_values: array(97).map(f32::from_bits),
                 effect_chain_target: array(100),
-                effect_item_type: array(103).map(|n| n as i32),
+                effect_item_type: array(103).map(u64::from),
                 effect_misc_value: array(106),
                 effect_trigger_spell: array(109),
                 effect_points_per_combo: array(112).map(f32::from_bits),
@@ -173,20 +183,31 @@ mod tests {
 
     #[test]
     fn malformed_layout_strings_and_magnitudes_return_errors() {
+        let refusal = |bytes: &[u8]| read_spells(bytes).unwrap_err().to_string();
         for bytes in [vec![], vec![0; 20]] {
-            assert!(read_spells(&bytes).is_err());
+            assert_eq!(refusal(&bytes), "Spell.dbc has no WDBC header");
         }
-        for (at, value) in [
-            (4, u32::MAX),
-            (8, 172),
-            (12, 688),
-            (16, 2),
-            (20 + 120 * 4, 2),
-            (20 + 73 * 4, f32::NAN.to_bits()),
+        let layout = "Spell.dbc requires the build 5875 layout: 173 fields, 692 bytes per row";
+        let lengths = "Spell.dbc record and string lengths do not match its header";
+        for (at, value, reason) in [
+            (4, u32::MAX, lengths),
+            (8, 172, layout),
+            (12, 688, layout),
+            (16, 2, lengths),
+            (
+                20 + 120 * 4,
+                2,
+                "Spell.dbc row 0 name offset exceeds the string block",
+            ),
+            (
+                20 + 73 * 4,
+                f32::NAN.to_bits(),
+                "Spell.dbc row 0 contains a non-finite effect magnitude",
+            ),
         ] {
             let mut bytes = empty_spell();
             bytes[at..at + 4].copy_from_slice(&value.to_le_bytes());
-            assert!(read_spells(&bytes).is_err(), "byte {at}");
+            assert_eq!(refusal(&bytes), reason, "byte {at}");
         }
         let mut bytes = empty_spell();
         bytes[4..8].copy_from_slice(&0u32.to_le_bytes());
@@ -197,11 +218,11 @@ mod tests {
             .contains("no rows"));
         let mut bytes = empty_spell();
         bytes[712] = b'x';
-        assert!(read_spells(&bytes).is_err());
+        assert_eq!(refusal(&bytes), "Spell.dbc row 0 name has no terminator");
         bytes[16..20].copy_from_slice(&2u32.to_le_bytes());
         bytes[712] = 0xff;
         bytes.push(0);
-        assert!(read_spells(&bytes).is_err());
+        assert_eq!(refusal(&bytes), "Spell.dbc row 0 name is not UTF-8");
     }
 
     #[test]

@@ -40,11 +40,11 @@ lyracore config set client-data <path-to-client-Data-folder>
 lyracore import
 ```
 You supply your own client's `Data` folder. After you confirm the prompt, `lyracore import`
-downloads the pinned world-data dump from [cMaNGOS classic-db](https://github.com/cmangos/classic-db),
-verifies its checksum, and imports it together with data extracted from your client. You do not
-need to download or configure a SQL dump yourself.
+downloads the current SQLite snapshot from [vmangos](https://github.com/vmangos/core), verifies
+GitHub's asset digest, and checks its Source Profile before import. It records the actual source
+commit and combines the world data with the remaining catalogues and geometry from your client.
 
-See the [detailed import instructions](./docs/quickstart.md#5-point-your-client-at-it) for what
+See the [detailed import instructions](./docs/quickstart.md#getting-the-real-world) for what
 the import loads and how long it takes.
 
 ## Can I use my existing client?

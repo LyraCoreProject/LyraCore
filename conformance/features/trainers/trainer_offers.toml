@@ -1,0 +1,38 @@
+schema_version = 1
+id = "trainer_offers"
+system = "trainers"
+scope = "A trainer offers spells under their skill and riding requirements."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/ObjectMgr.cpp"
+symbol = "ObjectMgr::LoadTrainers"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "trainers.multiple-learn-targets full-world 14, alliance-single 10: The Module grants the first learn target."
+path = "importer/src/world_import_trainers.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest trainers.multiple-learn-targets; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "trainers.racial-riding full-world 7, alliance-single 0: The Module's mount gates use skill 762, not the older racial riding lines."
+path = "importer/src/world_import_trainers.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest trainers.racial-riding; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "trainers.skill-requirement full-world 4879, alliance-single 1839: Trainer offers have no required skill/rank columns."
+path = "importer/src/world_import_trainers.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest trainers.skill-requirement; conformance/vmangos-port-census/trainers.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

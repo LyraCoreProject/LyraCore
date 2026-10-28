@@ -30,11 +30,12 @@ pub use engage::{
 pub(crate) use folds::{
     arm_react, aura_attack_power_bonus, clear_queued_strike, effective_agility, effective_armor,
     effective_crit_bp, effective_move_speed, effective_strength, effective_swing_time,
-    equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo,
-    interrupt_form_bound_queued_strike, interrupt_queued_strike_of, queued_strike_damage,
-    react_window_active, retaliate_on_hit, roll_money, roll_ranged_swing, roll_swing,
-    roll_swing_with_range, seal_holy_on_swing, swing_range_ctx, weapon_strike_damage, wear_weapon,
-    ReactKind,
+    equipped_offhand_weapon_damage, equipped_ranged_weapon, find_ammo, finisher_strike_damage,
+    interrupt_form_bound_queued_strike, interrupt_queued_strike_of, melee_attack_power,
+    queued_strike_damage, ranged_projectile, react_window_active, retaliate_on_hit, roll_money,
+    roll_ranged_swing, roll_strike_outcome, roll_swing, roll_swing_with_range, seal_holy_on_swing,
+    spend_ranged_ammo, swing_range_ctx, weapon_strike_spell_damage, wear_weapon, ReactKind,
+    WeaponStrike,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use folds::{
@@ -44,12 +45,13 @@ pub(crate) use folds::{
 
 pub(crate) use energy::regenerate_energy;
 pub use energy::{game_energy_clock, EnergyClock};
+pub(crate) use swing::launch_ranged_strike;
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
-    agility_crit_bp, apply_offhand_penalty, armor_mitigation_pct, attack_outcome, block_chance_bp,
-    crit_bp_with_bonus, crushing_chance_bp, dodge_chance_bp, effective_stat, glancing_chance_bp,
-    is_rage_user, is_translating, melee_attack_power_for, miss_bp_with_bonus, miss_chance_bp,
-    parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
+    agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,
+    block_chance_bp, crit_bp_with_bonus, crushing_chance_bp, dodge_chance_bp, effective_stat,
+    glancing_chance_bp, is_rage_user, is_translating, melee_attack_power_for, miss_bp_with_bonus,
+    miss_chance_bp, parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
     regen_entity_health, regen_entity_health_in_combat, regen_entity_power, resist_mitigation_pct,
     scale_swing_for_rank, swing_time_with_haste, weapon_swing_range_ap, AttackTable, RegenWindow,
     AUTO_SHOT_PROJECTILE_SPEED, COMBAT_BACKSTOP_SQ, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN,

@@ -36,7 +36,7 @@ using a separate scenario author and independent decoders.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/1c111d4d983f76838c7e075319ca0e901a17c57b/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -75,8 +75,7 @@ using a separate scenario author and independent decoders.
     A different implementer makes tier 1 pass in core. Nobody performs both roles for one Behavior.
     Record both assignments and the harness PR in the implementation brief. The implementer
     reports suspected scenario defects to the author and never changes a scenario, Golden Trace
-    or Equivalence Rule to obtain a pass. [Testing](../testing.md#conformance) and the
-    [orchestration skill](../../.claude/skills/orchestrate-backlog/SKILL.md#5-implement) enforce these roles.
+    or Equivalence Rule to obtain a pass. [Testing](../testing.md#conformance) records these roles.
 
 ## Two verification tiers
 
@@ -94,9 +93,9 @@ the full comparator report. Keep no known-differences baseline; the other confor
 continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
-its Native Host and the content its scenarios require, and the Reference Server, through the same
-wire scenarios. Run it before feature batches and at milestones. It writes a dated report and never
-gates CI.
+its Native Host and the vmangos world loaded by `lyracore import`, and the Reference Server,
+through the same wire scenarios. The Operator's client data comes from `lyracore config`.
+Run it before feature batches and at milestones. It writes a dated report and never gates CI.
 
 The harness repository owns scenarios, Fixture Verbs, Golden Traces, general Equivalence Rules,
 the comparator and Reference Server adapter. Core's `conformance/` owns the Feature Ledger,
@@ -150,8 +149,8 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.5`, commit
-`bc83d81cc1992fd1b522cab38c2ea048b5c6db23`, through a git dev-dependency at the full SHA in
+Core pins `wire-client` to `v0.2.0-conformance.6`, commit
+`1c111d4d983f76838c7e075319ca0e901a17c57b`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
 on `wire-client` in every workspace member. It also checks the source and exact revision
 of every declaration, including renamed, optional and target-specific dependencies. The ledger
@@ -191,10 +190,14 @@ results; the durable taxi skip remains until the Behavior conforms with the bund
 
 ## Milestone 3 audit
 
-`conformance/audit` starts an owned local Native Host with the shared hand-written taxi fixture and
-starts the pinned Reference Server through a `newgrp docker` heredoc. Every embedded catalogue
+`conformance/audit` creates a disposable Git worktree and Realm, starts its Native Host through
+`lyracore dev up`, imports the vmangos world through `lyracore import`, and starts the pinned
+Reference Server through a `newgrp docker` heredoc. The audit retains imported creature spawns;
+the taxi scenario spawns flight master entry 523. Tier 1 derives its synthetic flight master
+template entry from that pinned scenario. Every embedded catalogue
 scenario runs over TCP on both servers, and both candidates compare with their Golden Traces.
-The command writes a dated Markdown report and schema-2 JSON evidence, then stops both servers.
+The command appends a dated Markdown report and schema-2 JSON evidence under a new filename,
+then stops both servers. Earlier audit reports remain in canonical history.
 The Reference Server comparison and recorded provenance establish reference stability separately.
 
 The Rust audit example and scoreboard share evidence validation. Both count differences by

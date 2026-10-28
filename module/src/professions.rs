@@ -8,6 +8,7 @@ use crate::game_skinning_loot;
 use crate::game_world_entity;
 use crate::loot::LOOT_RANGE_SQ;
 
+// Light Leather.
 pub(crate) const LEATHER_ENTRY: u32 = 2318;
 pub(crate) const LEATHER_COUNT: u32 = 1;
 
@@ -338,12 +339,6 @@ mod tests {
             "your Skinning skill (19) is too low — need 20"
         );
         assert!(can_skin(false, false, true, true, 0.0, true, false, 20, 3).is_ok());
-    }
-
-    #[test]
-    fn skin_leather_constants_are_the_real_light_leather_2318_flat_one() {
-        assert_eq!(LEATHER_ENTRY, 2318);
-        assert_eq!(LEATHER_COUNT, 1);
     }
 
     #[test]

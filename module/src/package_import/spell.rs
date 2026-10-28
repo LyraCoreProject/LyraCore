@@ -134,6 +134,10 @@ fn blank_spell(spell_id: u32) -> Spell {
         proc_flags: 0,
         proc_chance: 0,
         proc_charges: 0,
+        max_duration_ms: 0,
+        custom_flags: 0,
+        min_target_level: 0,
+        single_target_key: 0,
     }
 }
 
@@ -157,6 +161,8 @@ fn blank_spell_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         p1: 0,
         script_id: 0,
         enters_combat: false,
+        points_per_combo: 0.0,
+        bonus_coefficient: -1.0,
     }
 }
 
@@ -185,6 +191,9 @@ fn apply_spell_field(spell: &mut Spell, field: &str, value: &FieldValue) -> Resu
         "family_flags" => spell.family_flags = as_u64(field, value)?,
         "proc_flags" => spell.proc_flags = as_u32(field, value)?,
         "proc_chance" => spell.proc_chance = as_u8(field, value)?,
+        "single_target_key" => spell.single_target_key = as_u64(field, value)?,
+        "custom_flags" => spell.custom_flags = as_u32(field, value)?,
+        "min_target_level" => spell.min_target_level = as_u32(field, value)?,
         "proc_charges" => spell.proc_charges = as_u8(field, value)?,
         other => return Err(format!("`game_spell` has no claimable column `{other}`")),
     }
@@ -211,6 +220,7 @@ fn apply_effect_field(
         "p0_kind" => effect.p0_kind = as_u8(field, value)?,
         "p1" => effect.p1 = as_i32(field, value)?,
         "script_id" => effect.script_id = as_u32(field, value)?,
+        "bonus_coefficient" => effect.bonus_coefficient = as_f32(field, value)?,
         "enters_combat" => effect.enters_combat = as_bool(field, value)?,
         other => {
             return Err(format!(
@@ -252,8 +262,8 @@ fn built_spell_effect(row: &TracedRow) -> Result<SpellEffect, String> {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, effect_claim, plan, some_value, spell_claim, PACKAGE_SPELL, REAL_SPELL,
-        WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
+        artifact, assert_each_column_sets_its_own_field, effect_claim, plan, spell_claim,
+        PACKAGE_SPELL, REAL_SPELL, WHOLE_EFFECT_ROW, WHOLE_SPELL_ROW,
     };
     use super::*;
 
@@ -324,21 +334,21 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_spell_column_has_a_setter() {
-        let mut spell = blank_spell(PACKAGE_SPELL);
-        for column in ClaimTable::Spell.columns() {
-            apply_spell_field(&mut spell, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_spell_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::Spell,
+            || blank_spell(PACKAGE_SPELL),
+            apply_spell_field,
+        );
     }
 
     #[test]
-    fn every_claimable_effect_column_has_a_setter() {
-        let mut effect = blank_spell_effect(PACKAGE_SPELL, 0);
-        for column in ClaimTable::SpellEffect.columns() {
-            apply_effect_field(&mut effect, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("`game_spell_effect` column `{}`: {e}", column.name));
-        }
+    fn every_claimable_effect_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellEffect,
+            || blank_spell_effect(PACKAGE_SPELL, 0),
+            apply_effect_field,
+        );
     }
 
     #[test]

@@ -84,6 +84,7 @@ pub struct WeatherSchedule {
     pub scheduled_at: ScheduleAt,
 }
 
+// CMaNGOS ChangeWeatherInterval default; every change is a packet to a whole zone.
 pub(crate) const WEATHER_TICK_MICROS: i64 = 600_000_000;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -380,37 +381,27 @@ mod tests {
         }
     }
 
-    fn micros_at(year: i64, month: u32, day: u32) -> i64 {
-        const BEFORE_MONTH: [i64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
-        let mut days = 0i64;
-        for earlier in 1970..year {
-            days += if is_leap_year(earlier) { 366 } else { 365 };
-        }
-        days += BEFORE_MONTH[(month - 1) as usize];
-        if month > 2 && is_leap_year(year) {
-            days += 1;
-        }
-        days += day as i64 - 1;
-        days * 86_400_000_000
-    }
+    const SECOND: i64 = 1_000_000;
+    const MARCH_1_2024: i64 = 1_709_251_200 * SECOND;
+    const DECEMBER_31_2024: i64 = 1_735_603_200 * SECOND;
+    const MARCH_19_2026: i64 = 1_773_878_400 * SECOND;
+    const MARCH_20_2026: i64 = 1_773_964_800 * SECOND;
+    const DECEMBER_31_2026: i64 = 1_798_675_200 * SECOND;
+    const JANUARY_1_2027: i64 = 1_798_761_600 * SECOND;
 
     #[test]
     fn day_of_year_matches_worked_calendar_dates() {
         assert_eq!(day_of_year(0), 0, "the epoch is 1 January 1970");
-        assert_eq!(day_of_year(micros_at(2026, 3, 20)), 78, "31 + 28 + 19");
-        assert_eq!(
-            day_of_year(micros_at(2024, 3, 1)),
-            60,
-            "31 + 29 in a leap year"
-        );
-        assert_eq!(day_of_year(micros_at(2026, 12, 31)), 364);
-        assert_eq!(day_of_year(micros_at(2024, 12, 31)), 365, "a leap year");
+        assert_eq!(day_of_year(MARCH_20_2026), 78, "31 + 28 + 19");
+        assert_eq!(day_of_year(MARCH_1_2024), 60, "31 + 29 in a leap year");
+        assert_eq!(day_of_year(DECEMBER_31_2026), 364);
+        assert_eq!(day_of_year(DECEMBER_31_2024), 365, "a leap year");
     }
 
     #[test]
     fn seasons_turn_a_day_before_the_equinox_and_every_ninety_one_days_after_that() {
         let day = 86_400_000_000i64;
-        let turn = micros_at(2026, 3, 19);
+        let turn = MARCH_19_2026;
         assert_eq!(day_of_year(turn), 77, "the day the season index steps");
         assert_eq!(season_of(turn - day), 3, "18 March is still winter");
         assert_eq!(season_of(turn), 0, "then spring");
@@ -418,11 +409,7 @@ mod tests {
         assert_eq!(season_of(turn + 91 * day), 1, "then summer");
         assert_eq!(season_of(turn + 182 * day), 2, "then fall");
         assert_eq!(season_of(turn + 273 * day), 3, "then winter");
-        assert_eq!(
-            season_of(micros_at(2027, 1, 1)),
-            3,
-            "winter wraps the new year"
-        );
+        assert_eq!(season_of(JANUARY_1_2027), 3, "winter wraps the new year");
     }
 
     #[test]
@@ -698,15 +685,6 @@ mod tests {
                 "intensity {intensity} is outside the vanilla grade range"
             );
         }
-    }
-
-    #[test]
-    fn the_roll_fires_every_ten_minutes() {
-        assert_eq!(
-            WEATHER_TICK_MICROS,
-            10 * 60 * 1_000_000,
-            "the weather cadence is CMaNGOS's default; every change is a packet to a whole zone"
-        );
     }
 
     #[test]

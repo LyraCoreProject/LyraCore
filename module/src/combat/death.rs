@@ -204,10 +204,13 @@ fn kill_creature_with_attribution(
     }
     clear_lethal_damage_floor(ctx, target_guid);
     if target.owner_guid != 0 {
+        let guardian = crate::creatures::guardian::die(ctx, target_guid);
         crate::creatures::begin_death_dispatch(ctx, target_guid, killer);
         crate::creatures::on_pet_death(ctx, target_guid);
         disengage(ctx, target_guid);
-        crate::WorldEntity::delete(ctx, target_guid);
+        if !guardian {
+            crate::WorldEntity::delete(ctx, target_guid);
+        }
         crate::creatures::clear_live_pet_kind(ctx, target_guid);
         crate::creatures::distraction::clear(ctx, target_guid);
         crate::hooks::fire_on_death(

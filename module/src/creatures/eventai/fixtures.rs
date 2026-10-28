@@ -66,6 +66,7 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             emote_id_2: 0,
             emote_delay_3_ms: 0,
             emote_id_3: 0,
+            sound_id: 0,
         });
         by_entry.entry(entry).or_default().push(EventAiRule {
             source_rule_id: rule_id,
@@ -127,7 +128,10 @@ pub(crate) fn seed_on_aggro_fixtures(ctx: &ReducerContext) {
             creature_entry: entry,
             creature_guid: 0,
             definition_revision: revision.value,
-            rules,
+            rules: rules
+                .into_iter()
+                .map(|rule| super::stored::store(ctx, revision.value, rule))
+                .collect(),
         });
     }
 }
