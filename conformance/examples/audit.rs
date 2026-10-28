@@ -1,5 +1,5 @@
 use std::collections::BTreeMap;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use lyracore_conformance::FeatureLedger;
@@ -53,7 +53,7 @@ fn compare_run(
     directory: &Path,
     ledger: &FeatureLedger,
     run: Run,
-    previous: Option<&Report>,
+    previous: Option<(&str, &Report)>,
 ) -> Result<Report> {
     let pin = include_str!("../../.wire-harness-rev")
         .lines()
@@ -117,7 +117,7 @@ fn compare_run(
     let mut behaviors = BTreeMap::new();
     for scenario in &report.scenarios {
         let candidate = report.summary(&scenario.behavior, false);
-        let changes = previous.and_then(|old| report.changes_since(old, &scenario.behavior));
+        let changes = previous.and_then(|(_, old)| report.changes_since(old, &scenario.behavior));
         behaviors.insert(
             scenario.behavior.clone(),
             BehaviorAudit {
@@ -132,7 +132,7 @@ fn compare_run(
         module_sha256: run.module_sha256,
         content: run.content,
         reference: run.reference,
-        previous_report: previous.map(|old| old.recorded_at_unix_ms.to_string()),
+        previous_report: previous.map(|(name, _)| name.to_owned()),
         behaviors,
     });
     report.validate("conformance_audit", ledger)?;
@@ -153,43 +153,63 @@ fn compare_run(
     Ok(report)
 }
 
+fn write_report(directory: &Path, output: &Path, date: &str) -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let run: Run = serde_json::from_slice(&std::fs::read(directory.join("run.json"))?)?;
+    let history = root.join("reports");
+    let previous_name = evidence::expected_predecessor(&history, run.recorded_at_unix_ms, date)?;
+    let previous = previous_name
+        .as_ref()
+        .map(|name| Report::load_structure(&history.join(name), "conformance_audit"))
+        .transpose()?;
+    let report = compare_run(
+        directory,
+        &ledger,
+        run,
+        previous_name.as_deref().zip(previous.as_ref()),
+    )?;
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()?;
+    ensure!(head.status.success(), "git rev-parse failed");
+    ensure!(
+        evidence::same_core(
+            root.parent().context("core root")?,
+            &report.core_commit,
+            String::from_utf8(head.stdout)?.trim()
+        )?,
+        "core changed after capture"
+    );
+    let json = output.join(format!("{date}.json"));
+    let md = output.join(format!("{date}.md"));
+    report.validate_changes(&json)?;
+    std::fs::create_dir_all(output)?;
+    ensure!(
+        !json.exists() && !md.exists(),
+        "report already exists; use a new date or archive the old report"
+    );
+    let rendered = evidence::markdown(&report, date)?;
+    let traces = json.with_extension("traces");
+    ensure!(!traces.exists(), "candidate directory already exists");
+    std::fs::create_dir(&traces)?;
+    for entry in catalogue::ENTRIES {
+        let name = format!("{}-lyracore.json", entry.id);
+        std::fs::copy(directory.join(&name), traces.join(name))?;
+    }
+    std::fs::write(&json, serde_json::to_vec_pretty(&report)?)?;
+    std::fs::write(&md, &rendered)?;
+    Report::load(&json, "conformance_audit", &ledger)?.verify_capture(&json)?;
+    println!("{rendered}");
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [mode, directory] if mode == "export" => export(Path::new(directory)),
-        [mode, directory, output, date] if mode == "report" => {
-            let root = Path::new(env!("CARGO_MANIFEST_DIR"));
-            let ledger = FeatureLedger::load(&root.join("features"))?;
-            let run: Run = serde_json::from_slice(&std::fs::read(Path::new(directory).join("run.json"))?)?;
-            let previous = evidence::latest_audit(&root.join("reports"), Some(date), Some(run.recorded_at_unix_ms))?;
-            let mut report = compare_run(Path::new(directory), &ledger, run, previous.as_ref().map(|(_, report)| report))?;
-            if let Some((path, _)) = &previous {
-                report.audit.as_mut().unwrap().previous_report = Some(path.file_name().context("report filename")?.to_string_lossy().into());
-            }
-            report.validate_changes(&root.join("reports"))?;
-            let head = std::process::Command::new("git").args(["rev-parse", "HEAD"]).current_dir(root).output()?;
-            ensure!(head.status.success(), "git rev-parse failed");
-            ensure!(evidence::same_core(root.parent().context("core root")?, &report.core_commit,
-                String::from_utf8(head.stdout)?.trim())?, "core changed after capture");
-            let output = PathBuf::from(output);
-            std::fs::create_dir_all(&output)?;
-            let json = output.join(format!("{date}.json"));
-            let md = output.join(format!("{date}.md"));
-            ensure!(!json.exists() && !md.exists(), "report already exists; use a new date or archive the old report");
-            let rendered = evidence::markdown(&report, date)?;
-            let traces = json.with_extension("traces");
-            ensure!(!traces.exists(), "candidate directory already exists");
-            std::fs::create_dir(&traces)?;
-            for entry in catalogue::ENTRIES {
-                let name = format!("{}-lyracore.json", entry.id);
-                std::fs::copy(Path::new(directory).join(&name), traces.join(name))?;
-            }
-            std::fs::write(&json, serde_json::to_vec_pretty(&report)?)?;
-            std::fs::write(&md, &rendered)?;
-            Report::load(&json, "conformance_audit", &ledger)?.verify_capture(&json)?;
-            println!("{rendered}");
-            Ok(())
-        }
+        [mode, directory, output, date] if mode == "report" => write_report(Path::new(directory), Path::new(output), date),
         _ => bail!("audit export DIRECTORY | report DIRECTORY OUTPUT_DIRECTORY DATE; use conformance/audit for a full run"),
     }
 }
@@ -244,7 +264,12 @@ mod tests {
             assert_eq!(result.reference, Summary::default());
             assert!(result.changes.is_none());
         }
-        let repeated = compare_run(&directory, &ledger, load_run()?, Some(&report))?;
+        let repeated = compare_run(
+            &directory,
+            &ledger,
+            load_run()?,
+            Some(("previous.json", &report)),
+        )?;
         for result in repeated.audit.as_ref().unwrap().behaviors.values() {
             let changes = result.changes.as_ref().unwrap();
             assert!(changes.rule.fixed.is_empty() && changes.rule.regressed.is_empty());
@@ -253,5 +278,67 @@ mod tests {
         std::fs::remove_file(directory.join("taxi_single_hop-vmangos.json"))?;
         assert!(compare_run(&directory, &ledger, load_run()?, None).is_err());
         Ok(())
+    }
+
+    #[test]
+    fn replacing_committed_date_selects_earlier_predecessor() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let committed = Report::load_structure(
+            &root.join("reports/2026-10-28-c5.json"),
+            "conformance_audit",
+        )?;
+        let audit = committed.audit.as_ref().context("audit")?;
+        let directory = scratch::Scratch::new("replace-audit-test")?;
+        let input = directory.join("input");
+        let output = directory.join("output");
+        std::fs::create_dir(&input)?;
+        let head = std::process::Command::new("git")
+            .args(["rev-parse", "HEAD"])
+            .current_dir(root)
+            .output()?;
+        ensure!(head.status.success(), "git rev-parse failed");
+        let core_commit = String::from_utf8(head.stdout)?.trim().to_owned();
+        std::fs::write(
+            input.join("run.json"),
+            serde_json::to_vec(&serde_json::json!({
+                "core_commit": core_commit,
+                "working_tree_dirty": false,
+                "harness_revision": committed.harness_revision,
+                "recorded_at_unix_ms": committed.recorded_at_unix_ms + 1,
+                "native_host_sha256": audit.native_host_sha256,
+                "module_sha256": audit.module_sha256,
+                "content": audit.content,
+                "reference": audit.reference,
+            }))?,
+        )?;
+        for entry in catalogue::ENTRIES {
+            let name = format!("{}-lyracore.json", entry.id);
+            std::fs::copy(
+                root.join("reports/2026-10-28-c5.traces").join(&name),
+                input.join(name),
+            )?;
+            let mut reference: serde_json::Value = serde_json::from_str(entry.trace)?;
+            reference["header"]["origin"] =
+                serde_json::json!({"kind": "candidate", "adapter": "vmangos"});
+            std::fs::write(
+                input.join(format!("{}-vmangos.json", entry.id)),
+                serde_json::to_vec(&reference)?,
+            )?;
+        }
+        write_report(&input, &output, "2026-10-28-c5")?;
+        let path = output.join("2026-10-28-c5.json");
+        let ledger = FeatureLedger::load(&root.join("features"))?;
+        let report = Report::load(&path, "conformance_audit", &ledger)?;
+        assert_eq!(
+            report
+                .audit
+                .as_ref()
+                .context("audit")?
+                .previous_report
+                .as_deref(),
+            Some("2026-10-28.json")
+        );
+        report.validate_changes(&path)?;
+        report.verify_capture(&path)
     }
 }

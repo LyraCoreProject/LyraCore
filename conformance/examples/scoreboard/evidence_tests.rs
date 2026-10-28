@@ -251,17 +251,17 @@ fn fixed_and_regressed_sets_are_checked_against_the_named_report() {
     .unwrap();
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .is_ok());
     current["audit"]["behaviors"]["taxi_single_hop"]["changes"]["rule"]["fixed"] = json!([]);
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .is_err());
     current["audit"]["previous_report"] = json!("../previous.json");
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .is_err());
 }
 
@@ -280,7 +280,7 @@ fn missing_predecessor_link_fails_when_an_earlier_audit_exists() {
     current["recorded_at_unix_ms"] = json!(2);
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .is_err());
 }
 
@@ -294,7 +294,7 @@ fn older_predecessor_link_fails_when_a_newer_audit_exists() {
     current["audit"]["previous_report"] = json!("older.json");
     assert!(parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .is_err());
 }
 
@@ -306,7 +306,7 @@ fn first_audit_has_no_predecessor_link() {
     current["recorded_at_unix_ms"] = json!(2);
     parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .unwrap();
 }
 
@@ -320,7 +320,7 @@ fn newest_earlier_audit_is_the_predecessor() {
     current["audit"]["previous_report"] = json!("newer.json");
     parse(&current, &ledger)
         .unwrap()
-        .validate_changes(&directory)
+        .validate_changes_in(&directory.join("current.json"), &directory)
         .unwrap();
 }
 
@@ -335,7 +335,7 @@ fn every_committed_audit_validates_its_predecessor() -> Result<()> {
         {
             let report = Report::load_structure(&path, "conformance_audit")?;
             report
-                .validate_changes(&directory)
+                .validate_changes(&path)
                 .with_context(|| path.display().to_string())?;
         }
     }
@@ -615,7 +615,7 @@ fn fixed_and_regressed_cannot_trust_an_edited_previous_comparison() -> Result<()
             previous_path.with_extension("md"),
             markdown(previous, "previous")?,
         )?;
-        current.validate_changes(&directory)
+        current.validate_changes_in(&current_path, &directory)
     };
     check_previous(&previous, &mut current)?;
     let mut changed = previous;

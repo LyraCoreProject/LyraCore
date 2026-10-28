@@ -13,6 +13,10 @@ mod evidence;
 mod spells;
 use evidence::{Report, State};
 
+#[cfg(test)]
+#[path = "../support/scratch.rs"]
+mod scratch;
+
 fn requests(behaviors: &[&Behavior]) -> Result<BTreeSet<u16>> {
     behaviors
         .iter()
@@ -127,7 +131,7 @@ fn main() -> Result<()> {
     }
     if let Some((path, report)) = &audit {
         report.validate("conformance_audit", &ledger)?;
-        report.validate_changes(path.parent().context("report directory")?)?;
+        report.validate_changes(path)?;
         report.verify_capture(path)?;
         provenance(path, report);
     } else {
@@ -246,6 +250,54 @@ fn committed_audit_report_replays() -> Result<()> {
     let (path, report) =
         evidence::latest_audit(&directory, None, None)?.context("committed audit report")?;
     report.validate("conformance_audit", &ledger)?;
-    report.validate_changes(&directory)?;
+    report.validate_changes(&path)?;
+    report.verify_capture(&path)
+}
+
+#[cfg(test)]
+fn copied_audit() -> Result<(scratch::Scratch, PathBuf)> {
+    let directory = scratch::Scratch::new("external-audit-test")?;
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("reports/2026-10-28-c5.json");
+    let path = directory.join("2026-10-28-c5.json");
+    std::fs::copy(&source, &path)?;
+    std::fs::copy(source.with_extension("md"), path.with_extension("md"))?;
+    let traces = path.with_extension("traces");
+    std::fs::create_dir(&traces)?;
+    for entry in std::fs::read_dir(source.with_extension("traces"))? {
+        let entry = entry?;
+        std::fs::copy(entry.path(), traces.join(entry.file_name()))?;
+    }
+    Ok((directory, path))
+}
+
+#[test]
+fn external_report_without_canonical_predecessor_link_fails() -> Result<()> {
+    let (_directory, path) = copied_audit()?;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let mut report = Report::load(&path, "conformance_audit", &ledger)?;
+    let audit = report.audit.as_mut().context("audit")?;
+    audit.previous_report = None;
+    for behavior in audit.behaviors.values_mut() {
+        behavior.changes = None;
+    }
+    std::fs::write(&path, serde_json::to_vec_pretty(&report)?)?;
+    std::fs::write(
+        path.with_extension("md"),
+        evidence::markdown(&report, "2026-10-28-c5")?,
+    )?;
+    let report = Report::load(&path, "conformance_audit", &ledger)?;
+    report.verify_capture(&path)?;
+    assert!(report.validate_changes(&path).is_err());
+    Ok(())
+}
+
+#[test]
+fn external_report_with_canonical_predecessor_link_passes() -> Result<()> {
+    let (_directory, path) = copied_audit()?;
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let report = Report::load(&path, "conformance_audit", &ledger)?;
+    report.validate_changes(&path)?;
     report.verify_capture(&path)
 }

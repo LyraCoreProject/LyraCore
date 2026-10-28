@@ -341,7 +341,7 @@ impl Report {
         Ok(())
     }
 
-    fn load_structure(path: &Path, tier: &str) -> Result<Self> {
+    pub fn load_structure(path: &Path, tier: &str) -> Result<Self> {
         let report: Self = serde_json::from_slice(&std::fs::read(path)?)?;
         report.validate_structure(tier)?;
         Ok(report)
@@ -449,22 +449,28 @@ impl Report {
         )
     }
 
-    pub fn validate_changes(&self, directory: &Path) -> Result<()> {
+    pub fn validate_changes(&self, path: &Path) -> Result<()> {
+        self.validate_changes_in(path, &Path::new(env!("CARGO_MANIFEST_DIR")).join("reports"))
+    }
+
+    fn validate_changes_in(&self, path: &Path, history: &Path) -> Result<()> {
         let Some(audit) = &self.audit else {
             return Ok(());
         };
-        let previous = latest_audit(directory, None, Some(self.recorded_at_unix_ms))?;
-        let expected = previous
-            .as_ref()
-            .and_then(|(path, _)| path.file_name())
-            .and_then(|name| name.to_str());
+        let own_stem = path
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .context("report filename")?;
+        let expected = expected_predecessor(history, self.recorded_at_unix_ms, own_stem)?;
         ensure!(
-            audit.previous_report.as_deref() == expected,
+            audit.previous_report == expected,
             "previous report must be the newest earlier audit: {expected:?}"
         );
-        let Some((previous_path, previous)) = previous else {
+        let Some(previous_name) = expected else {
             return Ok(());
         };
+        let previous_path = history.join(previous_name);
+        let previous = Report::load_structure(&previous_path, "conformance_audit")?;
         if previous.harness_revision == harness_revision() {
             previous.verify_capture(&previous_path)?;
         }
@@ -604,6 +610,21 @@ pub fn latest_audit(
         }
     }
     Ok(latest)
+}
+
+pub fn expected_predecessor(
+    history: &Path,
+    recorded_at_unix_ms: u64,
+    own_stem: &str,
+) -> Result<Option<String>> {
+    latest_audit(history, Some(own_stem), Some(recorded_at_unix_ms))?
+        .map(|(path, _)| {
+            path.file_name()
+                .and_then(|name| name.to_str())
+                .map(str::to_owned)
+                .context("report filename")
+        })
+        .transpose()
 }
 
 #[cfg(test)]
