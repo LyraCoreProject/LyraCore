@@ -488,7 +488,13 @@ pub(crate) fn apply_trainer_buy(
             caster.update(ctx);
             match grant {
                 BuyGrant::Profession(line, cap) => {
-                    crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16)
+                    crate::skill::learn_profession(ctx, caster_guid, owner, line, cap as u16);
+                    crate::spell::learn_spell_with_dependents(
+                        ctx,
+                        caster_guid,
+                        owner,
+                        resolve_learn_target(ctx, spell_id),
+                    );
                 }
                 BuyGrant::Riding(tier) => {
                     crate::skill::learn_riding(ctx, caster_guid, owner, tier as u16)

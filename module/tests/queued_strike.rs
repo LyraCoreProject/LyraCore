@@ -216,14 +216,14 @@ fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fir
         "the client learns the cooldown from the fired strike"
     );
     assert_eq!(raptor_strike_cooldown(&standalone).len(), 1);
-    let now_ms = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
+    let fired_ms = spacetimedb::Timestamp::parse_from_rfc3339(&fired_row["created_at"])
         .unwrap()
-        .as_millis() as u64;
-    let regen_paused_until: u64 = after["mana_regen_paused_until_ms"].parse().unwrap();
-    assert!(
-        regen_paused_until > now_ms,
-        "spending mana must pause mana regeneration"
+        .to_micros_since_unix_epoch()
+        / 1000;
+    assert_eq!(
+        after["mana_regen_paused_until_ms"],
+        (fired_ms + 5000).to_string(),
+        "spending mana pauses mana regeneration for five seconds"
     );
 }
 
@@ -571,16 +571,16 @@ fn stage_form(standalone: &Standalone, spell_id: u32, name: &str, stance: u8) {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, false, 0, \
-         0, 0, 0, 0, 0, 0)"
+         0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_SET_STANCE}, 0, 0, 0.0, 0, {T_SELF}, 0.0, 0, 0, 0, \
-         {stance}, 0, 0, 0, false)",
+         {stance}, 0, 0, 0, false, 0.0)",
         (spell_id as u64) << 2
     ));
 }
@@ -690,17 +690,17 @@ fn stage_on_next_swing_spell(standalone: &Standalone, strike: QueuedStrike) {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', {power_type}, {cost}, 0, 0, {cooldown_ms}, 5, 0, 1, 0, 0, \
          0, 0, 0, 0, 0, \
-         false, 0, {stances}, 0, 0, 0, 0, 0)"
+         false, 0, {stances}, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({}, {spell_id}, 0, {E_NEXT_SWING}, 11, 0, 0.0, 0, {T_TARGET_ENEMY}, 0.0, 0, 0, 0, \
-         0, 0, 0, 0, false)",
+         0, 0, 0, 0, false, 0.0)",
         (spell_id as u64) << 2
     ));
 }

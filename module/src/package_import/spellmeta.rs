@@ -353,8 +353,9 @@ fn no_such_column(table: &str, column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, plan, some_value, spell_chain_claim, spell_learn_claim, PACKAGE_SPELL,
-        PACKAGE_SPELL_LEARN, REAL_SPELL, REAL_SPELL_LEARN, WHOLE_SPELL_CHAIN_ROW,
+        artifact, assert_each_column_sets_its_own_field, plan, spell_chain_claim,
+        spell_learn_claim, PACKAGE_SPELL, PACKAGE_SPELL_LEARN, REAL_SPELL, REAL_SPELL_LEARN,
+        WHOLE_SPELL_CHAIN_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -428,21 +429,22 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_spell_metadata_column_has_a_setter() {
-        let mut chain = blank_spell_chain(PACKAGE_SPELL);
-        let mut learn = blank_spell_learn(PACKAGE_SPELL_LEARN);
-        let mut overlay = blank_spell_proc_event(PACKAGE_SPELL);
-
-        for column in ClaimTable::SpellChain.columns() {
-            apply_spell_chain_field(&mut chain, column.name, &some_value(*column)).expect("setter");
-        }
-        for column in ClaimTable::SpellLearn.columns() {
-            apply_spell_learn_field(&mut learn, column.name, &some_value(*column)).expect("setter");
-        }
-        for column in ClaimTable::SpellProcEvent.columns() {
-            apply_spell_proc_event_field(&mut overlay, column.name, &some_value(*column))
-                .expect("setter");
-        }
+    fn every_claimable_spell_metadata_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellChain,
+            || blank_spell_chain(PACKAGE_SPELL),
+            apply_spell_chain_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellLearn,
+            || blank_spell_learn(PACKAGE_SPELL_LEARN),
+            apply_spell_learn_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::SpellProcEvent,
+            || blank_spell_proc_event(PACKAGE_SPELL),
+            apply_spell_proc_event_field,
+        );
     }
 
     #[test]

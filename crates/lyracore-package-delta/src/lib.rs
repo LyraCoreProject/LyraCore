@@ -17,7 +17,7 @@ mod trace;
 pub use delta::{
     Claim, ClaimCounts, Operation, PackageDelta, PackageId, PrimaryKey, SourceHash, DELTA_VERSION,
 };
-pub use error::DeltaError;
+pub use error::{DeltaError, ScriptRefusal};
 pub use ids::{
     is_fixture_reserved_cast_id, is_fixture_reserved_creature_ai_id,
     is_fixture_reserved_creature_id, is_fixture_reserved_creature_spawn_id,

@@ -1,9 +1,58 @@
 use crate::constants::gossip_condition as encoded;
 
-/// Source kinds are signed: -3 NOT, -2 OR, -1 AND; operands can be condition ids.
+/// See docs/data-ingestion.md when changing the stable stored condition codes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum ConditionKind {
+    Not,
+    Any,
+    All,
+    Always,
+    Team,
+    QuestRewarded,
+    QuestTaken,
+    RaceClass,
+    Level,
+    QuestAbsent,
+    Unsupported(i32),
+}
+
+impl ConditionKind {
+    pub fn from_code(code: i32) -> Self {
+        match code {
+            -3 => Self::Not,
+            -2 => Self::Any,
+            -1 => Self::All,
+            0 => Self::Always,
+            6 => Self::Team,
+            8 => Self::QuestRewarded,
+            9 => Self::QuestTaken,
+            14 => Self::RaceClass,
+            15 => Self::Level,
+            22 => Self::QuestAbsent,
+            other => Self::Unsupported(other),
+        }
+    }
+
+    pub fn code(self) -> i32 {
+        match self {
+            Self::Not => -3,
+            Self::Any => -2,
+            Self::All => -1,
+            Self::Always => 0,
+            Self::Team => 6,
+            Self::QuestRewarded => 8,
+            Self::QuestTaken => 9,
+            Self::RaceClass => 14,
+            Self::Level => 15,
+            Self::QuestAbsent => 22,
+            Self::Unsupported(code) => code,
+        }
+    }
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Condition {
-    pub kind: i32,
+    pub kind: ConditionKind,
     pub values: [u32; 4],
     pub flags: u8,
 }
@@ -47,28 +96,28 @@ pub fn evaluate_option(
     quest: impl Fn(u32) -> QuestState,
     condition: impl Fn(u32) -> Option<Condition>,
 ) -> Result<bool, Unavailable> {
-    let source_kind = match kind {
+    let condition_kind = match kind {
         encoded::NONE => return Ok(true),
-        encoded::QUEST_TAKEN => 9,
-        encoded::QUEST_REWARDED => 8,
+        encoded::QUEST_TAKEN => ConditionKind::QuestTaken,
+        encoded::QUEST_REWARDED => ConditionKind::QuestRewarded,
         encoded::NEVER => return Ok(false),
-        encoded::LEVEL => 15,
-        encoded::TEAM => 6,
-        encoded::RACE_CLASS => 14,
-        encoded::QUEST_NONE => 22,
+        encoded::LEVEL => ConditionKind::Level,
+        encoded::TEAM => ConditionKind::Team,
+        encoded::RACE_CLASS => ConditionKind::RaceClass,
+        encoded::QUEST_NONE => ConditionKind::QuestAbsent,
         encoded::REFERENCE => {
             return evaluate_reference(value1, character, quest, condition);
         }
         _ => return Err(Unavailable::Unsupported(kind as i32)),
     };
     Evaluation::new(character, &quest, &condition).row(Condition {
-        kind: source_kind,
+        kind: condition_kind,
         values: [value1, value2, 0, 0],
         flags: 0,
     })
 }
 
-/// Missing, cyclic, or excessive source references return `Err`.
+/// Missing, cyclic, or excessive references return `Err`.
 pub fn evaluate_reference(
     id: u32,
     character: CharacterFacts,
@@ -121,20 +170,24 @@ where
             return Err(Unavailable::Flags(row.flags));
         }
         let [a, b, c, d] = row.values;
-        if row.kind >= 0 && (c != 0 || d != 0) {
-            return Err(Unavailable::Operands(row.kind));
+        if !matches!(
+            row.kind,
+            ConditionKind::Not | ConditionKind::Any | ConditionKind::All
+        ) && (c != 0 || d != 0)
+        {
+            return Err(Unavailable::Operands(row.kind.code()));
         }
         let result = match row.kind {
-            -3 if b == 0 && c == 0 && d == 0 => !self.reference(a)?,
-            -2 | -1 => {
-                let mut result = row.kind == -1;
+            ConditionKind::Not if b == 0 && c == 0 && d == 0 => !self.reference(a)?,
+            ConditionKind::Any | ConditionKind::All => {
+                let mut result = row.kind == ConditionKind::All;
                 for id in [a, b]
                     .into_iter()
                     .chain([c, d].into_iter().filter(|id| *id != 0))
                 {
                     // Evaluate every operand: a true branch cannot conceal an unsupported sibling.
                     let child = self.reference(id)?;
-                    result = if row.kind == -1 {
+                    result = if row.kind == ConditionKind::All {
                         result && child
                     } else {
                         result || child
@@ -142,22 +195,24 @@ where
                 }
                 result
             }
-            0 if a == 0 && b == 0 => true,
-            6 if b == 0 && matches!(a, 67 | 469) => {
+            ConditionKind::Always if a == 0 && b == 0 => true,
+            ConditionKind::Team if b == 0 && matches!(a, 67 | 469) => {
                 if !matches!(self.character.race, 1..=8) {
-                    return Err(Unavailable::Operands(row.kind));
+                    return Err(Unavailable::Operands(row.kind.code()));
                 }
                 crate::faction::team_for_race(self.character.race) == a
             }
-            8 if a != 0 && b == 0 => self.quest_state(a)? == QuestState::Rewarded,
-            9 if a != 0 && b <= 2 => matches!(
+            ConditionKind::QuestRewarded if a != 0 && b == 0 => {
+                self.quest_state(a)? == QuestState::Rewarded
+            }
+            ConditionKind::QuestTaken if a != 0 && b <= 2 => matches!(
                 (self.quest_state(a)?, b),
                 (QuestState::Incomplete, 0 | 1) | (QuestState::Complete, 0 | 2)
             ),
-            14 => {
-                // CMaNGOS loading requires a playable bit per nonzero mask and at least one mask.
+            ConditionKind::RaceClass => {
+                // Each nonzero mask must contain a playable race or class.
                 if (a == 0 && b == 0) || (a != 0 && a & 0xff == 0) || (b != 0 && b & 0x5df == 0) {
-                    return Err(Unavailable::Operands(row.kind));
+                    return Err(Unavailable::Operands(row.kind.code()));
                 }
                 let race = self
                     .character
@@ -170,23 +225,29 @@ where
                     .checked_sub(1)
                     .and_then(|v| 1u32.checked_shl(v.into()));
                 let (Some(race), Some(class)) = (race, class) else {
-                    return Err(Unavailable::Operands(row.kind));
+                    return Err(Unavailable::Operands(row.kind.code()));
                 };
                 (a == 0 || race & a != 0) && (b == 0 || class & b != 0)
             }
-            15 if a > 0 && a <= 60 && b <= 2 => match b {
+            ConditionKind::Level if a > 0 && a <= 60 && b <= 2 => match b {
                 0 => self.character.level == a,
                 1 => self.character.level >= a,
                 _ => self.character.level <= a,
             },
-            22 if a != 0 && b == 0 => {
+            ConditionKind::QuestAbsent if a != 0 && b == 0 => {
                 matches!(
                     self.quest_state(a)?,
                     QuestState::Absent | QuestState::Failed
                 )
             }
-            -3 | 0 | 6 | 8 | 9 | 15 | 22 => return Err(Unavailable::Operands(row.kind)),
-            kind => return Err(Unavailable::Unsupported(kind)),
+            ConditionKind::Unsupported(kind) => return Err(Unavailable::Unsupported(kind)),
+            ConditionKind::Not
+            | ConditionKind::Always
+            | ConditionKind::Team
+            | ConditionKind::QuestRewarded
+            | ConditionKind::QuestTaken
+            | ConditionKind::Level
+            | ConditionKind::QuestAbsent => return Err(Unavailable::Operands(row.kind.code())),
         };
         Ok(if row.flags & 1 != 0 { !result } else { result })
     }
@@ -210,11 +271,32 @@ mod tests {
         class: 1,
     };
 
-    fn row(kind: i32, a: u32, b: u32) -> Condition {
+    fn row(kind: ConditionKind, a: u32, b: u32) -> Condition {
         Condition {
             kind,
             values: [a, b, 0, 0],
             flags: 0,
+        }
+    }
+
+    #[test]
+    fn stored_codes_keep_existing_realm_meanings() {
+        for (code, kind) in [
+            (-3, ConditionKind::Not),
+            (-2, ConditionKind::Any),
+            (-1, ConditionKind::All),
+            (0, ConditionKind::Always),
+            (6, ConditionKind::Team),
+            (8, ConditionKind::QuestRewarded),
+            (9, ConditionKind::QuestTaken),
+            (14, ConditionKind::RaceClass),
+            (15, ConditionKind::Level),
+            (22, ConditionKind::QuestAbsent),
+            (99, ConditionKind::Unsupported(99)),
+            (i32::MIN, ConditionKind::Unsupported(i32::MIN)),
+        ] {
+            assert_eq!(ConditionKind::from_code(code), kind);
+            assert_eq!(kind.code(), code);
         }
     }
 
@@ -282,11 +364,11 @@ mod tests {
     #[test]
     fn compound_references_and_reverse_flags_preserve_boolean_semantics() {
         let mut rows = HashMap::from([
-            (1, row(15, 20, 0)),
-            (2, row(8, 777, 0)),
-            (3, row(-3, 2, 0)),
-            (4, row(-1, 1, 3)),
-            (5, row(-2, 1, 2)),
+            (1, row(ConditionKind::Level, 20, 0)),
+            (2, row(ConditionKind::QuestRewarded, 777, 0)),
+            (3, row(ConditionKind::Not, 2, 0)),
+            (4, row(ConditionKind::All, 1, 3)),
+            (5, row(ConditionKind::Any, 1, 2)),
         ]);
         let eval = |id, rows: &HashMap<u32, Condition>| {
             evaluate_reference(
@@ -306,12 +388,17 @@ mod tests {
 
     #[test]
     fn unsupported_missing_cyclic_and_invalid_conditions_stay_unavailable_under_negation() {
-        for bad in [row(99, 0, 0), row(-3, 99, 0), row(-3, 2, 0), row(9, 777, 3)] {
+        for bad in [
+            row(ConditionKind::Unsupported(99), 0, 0),
+            row(ConditionKind::Not, 99, 0),
+            row(ConditionKind::Not, 2, 0),
+            row(ConditionKind::QuestTaken, 777, 3),
+        ] {
             let rows = HashMap::from([
-                (1, row(-3, 2, 0)),
+                (1, row(ConditionKind::Not, 2, 0)),
                 (2, bad),
-                (3, row(0, 0, 0)),
-                (4, row(-2, 3, 1)),
+                (3, row(ConditionKind::Always, 0, 0)),
+                (4, row(ConditionKind::Any, 3, 1)),
             ]);
             for id in [1, 4] {
                 assert!(evaluate_reference(
@@ -342,9 +429,9 @@ mod tests {
             |_| QuestState::Absent,
             |id| {
                 Some(if id < 20 {
-                    row(-1, id + 1, id + 1)
+                    row(ConditionKind::All, id + 1, id + 1)
                 } else {
-                    row(0, 0, 0)
+                    row(ConditionKind::Always, 0, 0)
                 })
             },
         );
@@ -355,9 +442,9 @@ mod tests {
     fn invalid_race_class_masks_stay_unavailable_under_reverse_and_not() {
         for (race, class) in [(0, 0), (0x100, 0), (0, 0x20)] {
             for flags in [0, 1] {
-                let mut invalid = row(14, race, class);
+                let mut invalid = row(ConditionKind::RaceClass, race, class);
                 invalid.flags = flags;
-                let rows = HashMap::from([(1, invalid), (2, row(-3, 1, 0))]);
+                let rows = HashMap::from([(1, invalid), (2, row(ConditionKind::Not, 1, 0))]);
                 for id in [1, 2] {
                     assert_eq!(
                         evaluate_reference(
@@ -375,15 +462,19 @@ mod tests {
 
     #[test]
     fn a_missing_quest_subject_stays_unavailable_under_reverse_not_and_or() {
-        for kind in [8, 9, 22] {
+        for kind in [
+            ConditionKind::QuestRewarded,
+            ConditionKind::QuestTaken,
+            ConditionKind::QuestAbsent,
+        ] {
             for flags in [0, 1] {
                 let mut missing_quest = row(kind, 777, 0);
                 missing_quest.flags = flags;
                 let rows = HashMap::from([
                     (1, missing_quest),
-                    (2, row(-3, 1, 0)),
-                    (3, row(0, 0, 0)),
-                    (4, row(-2, 3, 1)),
+                    (2, row(ConditionKind::Not, 1, 0)),
+                    (3, row(ConditionKind::Always, 0, 0)),
+                    (4, row(ConditionKind::Any, 3, 1)),
                 ]);
                 for id in [1, 2, 4] {
                     assert_eq!(

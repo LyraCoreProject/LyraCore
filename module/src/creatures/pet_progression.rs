@@ -155,7 +155,10 @@ fn refresh_live_level(ctx: &ReducerContext, pet: &HunterPet, level: u32) {
         live.update(ctx);
         return;
     };
-    let base_health = super::scale_health_for_rank(template.health, template.rank);
+    let base_health = super::catalogue::level_stats(ctx, &template, template.level).map_or_else(
+        || super::scale_health_for_rank(template.health, template.rank),
+        |stats| stats.health,
+    );
     let (health, max_health) = refreshed_pet_health(
         live.health,
         live.max_health,

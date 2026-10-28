@@ -26,13 +26,14 @@ pub enum EncounterBinding {
     WailingCavernsSerpentis,
     WailingCavernsMutanus,
     ZulGurubOhgan,
+    RuinsOfAhnQirajRajaxx,
 }
 
 pub(crate) type EncounterPackageHandler =
     fn(&ReducerContext, u64, EncounterSignal) -> Result<(), String>;
 
 impl EncounterBinding {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::BlackfathomDeepsKelris,
         Self::BlackrockDepthsTombOfSeven,
         Self::DireMaulAlzzin,
@@ -47,6 +48,7 @@ impl EncounterBinding {
         Self::WailingCavernsSerpentis,
         Self::WailingCavernsMutanus,
         Self::ZulGurubOhgan,
+        Self::RuinsOfAhnQirajRajaxx,
     ];
 
     pub(crate) fn map_id(self) -> u32 {
@@ -65,6 +67,7 @@ impl EncounterBinding {
             | Self::WailingCavernsSerpentis
             | Self::WailingCavernsMutanus => 43,
             Self::ZulGurubOhgan => 309,
+            Self::RuinsOfAhnQirajRajaxx => 509,
         }
     }
 }
@@ -77,6 +80,7 @@ pub enum EncounterSignal {
     BreakAlzzinCrumbleWall,
     InterruptAvatarSuppression,
     SendMandokirDownstairs,
+    Reset,
 }
 
 pub(crate) fn notify_from_eventai(
@@ -148,18 +152,6 @@ fn package_handler_for(
     Ok(Some(handler))
 }
 
-#[cfg(test)]
-fn encounter_state_for_signal(signal: EncounterSignal) -> Option<u8> {
-    match signal {
-        EncounterSignal::Begin => Some(ENCOUNTER_IN_PROGRESS),
-        EncounterSignal::Fail => Some(ENCOUNTER_FAILED),
-        EncounterSignal::Complete => Some(ENCOUNTER_DONE),
-        EncounterSignal::BreakAlzzinCrumbleWall
-        | EncounterSignal::InterruptAvatarSuppression
-        | EncounterSignal::SendMandokirDownstairs => None,
-    }
-}
-
 pub const ENCOUNTER_NOT_STARTED: u8 = 0;
 #[allow(dead_code, reason = "Packages select the encounter states they need")]
 pub const ENCOUNTER_IN_PROGRESS: u8 = 1;
@@ -172,6 +164,7 @@ pub const ENCOUNTER_FAILED: u8 = 3;
 pub const RESERVED_ENCOUNTER_ID_BIT: u32 = 0x8000_0000;
 
 pub const HP_FIRED_NONE: u32 = 101;
+const _: () = assert!(HP_FIRED_NONE > 100);
 
 #[table(accessor = game_encounter_state, index(accessor = by_pair, btree(columns = [instance_id, encounter_id])))]
 pub struct EncounterState {
@@ -257,6 +250,14 @@ pub(crate) fn crossed_thresholds(watches: &[u8], lowest_fired: u32, new_pct: u32
     fired.sort_unstable_by(|a, b| b.cmp(a));
     fired.dedup();
     fired
+}
+
+pub(crate) fn next_wave_low(spawn_lows: impl Iterator<Item = u64>) -> u64 {
+    spawn_lows
+        .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
+        .max()
+        .unwrap_or(0)
+        + 1
 }
 
 pub(crate) fn wave_guid(entry: u32, next_low: u64) -> u64 {
@@ -498,16 +499,13 @@ pub(crate) fn spawn_wave(
             spacetimedb::log::warn!("spawn_wave: no creature template {entry} — skipped");
             continue;
         };
-        let next_low = ctx
-            .db
-            .game_creature_spawn()
-            .iter()
-            .filter(|s| s.entry == entry)
-            .map(|s| s.guid & 0x00FF_FFFF)
-            .filter(|low| low & crate::instance::INSTANCE_POP_LOW_BAND == 0)
-            .max()
-            .unwrap_or(0)
-            + 1;
+        let next_low = next_wave_low(
+            ctx.db
+                .game_creature_spawn()
+                .iter()
+                .filter(|s| s.entry == entry)
+                .map(|s| s.guid & 0x00FF_FFFF),
+        );
         let guid = wave_guid(entry, next_low);
         let (dx, dy) = wave_offset(i);
         let spawn = crate::creatures::CreatureSpawn {
@@ -533,7 +531,7 @@ pub(crate) fn spawn_wave(
             instance_id,
         };
         let entity =
-            crate::creatures::build_creature_entity(&spawn, &tmpl, ctx.random(), instance_id);
+            crate::creatures::build_creature_entity(ctx, &spawn, &tmpl, ctx.random(), instance_id);
         ctx.db.game_creature_spawn().insert(spawn);
         crate::creatures::insert_creature_entity(ctx, entity);
         ctx.db.game_encounter_spawn().insert(EncounterSpawn {
@@ -779,24 +777,6 @@ mod tests {
         assert!(!is_reserved_encounter_id(1));
         assert!(!is_reserved_encounter_id(0x7FFF_FFFF));
         assert_ne!(hp_fired_key(639), hp_fired_key(646));
-    }
-
-    #[test]
-    fn state_constants_are_the_mangos_four_and_hp_fired_none_sits_above_every_pct() {
-        assert_eq!(ENCOUNTER_NOT_STARTED, 0);
-        assert_eq!(ENCOUNTER_IN_PROGRESS, 1);
-        assert_eq!(ENCOUNTER_DONE, 2);
-        assert_eq!(ENCOUNTER_FAILED, 3);
-        const { assert!(HP_FIRED_NONE > 100) };
-    }
-
-    #[test]
-    fn named_source_states_translate_to_the_internal_encounter_contract() {
-        assert_eq!(encounter_state_for_signal(EncounterSignal::Fail), Some(3));
-        assert_eq!(
-            encounter_state_for_signal(EncounterSignal::Complete),
-            Some(2)
-        );
     }
 
     #[test]

@@ -339,6 +339,7 @@ fn blank_broadcast_text(id: u32) -> CreatureAiBroadcastText {
         emote_id_2: 0,
         emote_delay_3_ms: 0,
         emote_id_3: 0,
+        sound_id: 0,
     }
 }
 
@@ -421,10 +422,10 @@ fn apply_quest_event_requirement_field(
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, broadcast_text_claim, plan, quest_event_requirement_claim, some_value,
-        summon_claim, PACKAGE_BROADCAST_TEXT, PACKAGE_QUEST_EVENT_REQUIREMENT, PACKAGE_SUMMON,
-        REAL_BROADCAST_TEXT, WHOLE_BROADCAST_TEXT_ROW, WHOLE_QUEST_EVENT_REQUIREMENT_ROW,
-        WHOLE_SUMMON_ROW,
+        artifact, assert_each_column_sets_its_own_field, broadcast_text_claim, plan,
+        quest_event_requirement_claim, summon_claim, PACKAGE_BROADCAST_TEXT,
+        PACKAGE_QUEST_EVENT_REQUIREMENT, PACKAGE_SUMMON, REAL_BROADCAST_TEXT,
+        WHOLE_BROADCAST_TEXT_ROW, WHOLE_QUEST_EVENT_REQUIREMENT_ROW, WHOLE_SUMMON_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -517,28 +518,22 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_creature_ai_column_has_a_setter() {
-        let mut text = blank_broadcast_text(PACKAGE_BROADCAST_TEXT);
-        for column in ClaimTable::CreatureAiBroadcastText.columns() {
-            apply_broadcast_text_field(&mut text, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("broadcast text column `{}`: {e}", column.name));
-        }
-
-        let mut summon = blank_summon(PACKAGE_SUMMON);
-        for column in ClaimTable::CreatureAiSummon.columns() {
-            apply_summon_field(&mut summon, column.name, &some_value(*column))
-                .unwrap_or_else(|e| panic!("summon column `{}`: {e}", column.name));
-        }
-
-        let mut requirement = blank_quest_event_requirement(PACKAGE_QUEST_EVENT_REQUIREMENT);
-        for column in ClaimTable::QuestEventRequirement.columns() {
-            apply_quest_event_requirement_field(
-                &mut requirement,
-                column.name,
-                &some_value(*column),
-            )
-            .unwrap_or_else(|e| panic!("quest event requirement column `{}`: {e}", column.name));
-        }
+    fn every_claimable_creature_ai_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureAiBroadcastText,
+            || blank_broadcast_text(PACKAGE_BROADCAST_TEXT),
+            apply_broadcast_text_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureAiSummon,
+            || blank_summon(PACKAGE_SUMMON),
+            apply_summon_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::QuestEventRequirement,
+            || blank_quest_event_requirement(PACKAGE_QUEST_EVENT_REQUIREMENT),
+            apply_quest_event_requirement_field,
+        );
     }
 
     #[test]

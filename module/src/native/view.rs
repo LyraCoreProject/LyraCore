@@ -167,7 +167,7 @@ pub(super) fn items(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInstanceV
 }
 
 pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask::QuestLogSlot> {
-    use crate::quest::game_character_quest;
+    use crate::quest::{game_character_quest, game_quest_objective, objective_kind};
     let mut quests: Vec<_> = ctx
         .db
         .game_character_quest()
@@ -180,12 +180,30 @@ pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask:
         .into_iter()
         .take(codec::update_mask::idx::QUEST_LOG_SLOTS as usize)
         .enumerate()
-        .map(|(slot, quest)| codec::update_mask::QuestLogSlot {
-            slot: slot as u8,
-            quest_id: quest.quest_entry,
-            state: u8::from(crate::quest::quest_is_complete(ctx, &quest)),
-            counts: quest.counts,
-            timer: 0,
+        .map(|(slot, quest)| {
+            let state = u8::from(crate::quest::quest_is_complete(ctx, &quest));
+            let mut counts = quest.counts;
+            // The client redraws its quest tracker only when a counter changes, so carried
+            // items fill their objective's counter as vmangos does.
+            for objective in ctx
+                .db
+                .game_quest_objective()
+                .by_quest()
+                .filter(quest.quest_entry)
+                .filter(|objective| objective.kind == objective_kind::COLLECT_ITEM)
+            {
+                if let Some(count) = counts.get_mut(usize::from(objective.obj_index)) {
+                    *count = crate::items::item_count(ctx, guid, objective.target_entry)
+                        .min(objective.required_count);
+                }
+            }
+            codec::update_mask::QuestLogSlot {
+                slot: slot as u8,
+                quest_id: quest.quest_entry,
+                state,
+                counts,
+                timer: 0,
+            }
         })
         .collect()
 }

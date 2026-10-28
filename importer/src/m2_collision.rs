@@ -97,7 +97,12 @@ mod tests {
     #[test]
     fn valid_collision_survives_unreadable_rendering_records() {
         let bytes = collision_with_unreadable_particle_records();
-        assert!(wow_m2::parse_m2(&mut Cursor::new(&bytes)).is_err());
+        assert_eq!(
+            wow_m2::parse_m2(&mut Cursor::new(&bytes))
+                .unwrap_err()
+                .to_string(),
+            "I/O error: failed to fill whole buffer"
+        );
         assert_eq!(
             triangles(&bytes).unwrap(),
             vec![[[0.0, 0.0, 0.0], [1.0, 0.0, 0.0], [0.0, 1.0, 0.0]]]
@@ -122,26 +127,39 @@ mod tests {
 
     #[test]
     fn malformed_collision_cannot_be_reported_as_empty_or_partial() {
+        let refusal = |bytes: &[u8]| triangles(bytes).unwrap_err().to_string();
         let valid = collision_with_unreadable_particle_records();
         let mut truncated = valid.clone();
         truncated.pop();
-        assert!(triangles(&truncated).is_err());
+        assert_eq!(
+            refusal(&truncated),
+            "M2 collision indices range exceeds the file"
+        );
         let mut outside = valid.clone();
         outside[552..554].copy_from_slice(&3u16.to_le_bytes());
-        assert!(triangles(&outside).is_err());
+        assert_eq!(
+            refusal(&outside),
+            "M2 collision index exceeds the vertex count"
+        );
         let mut nonfinite = valid.clone();
         nonfinite[512..516].copy_from_slice(&f32::NAN.to_le_bytes());
-        assert!(triangles(&nonfinite).is_err());
+        assert_eq!(refusal(&nonfinite), "M2 collision vertex is not finite");
         let mut incomplete = valid.clone();
         replace_header(&mut incomplete, |header| {
             header.bounding_triangles.count = 2
         });
-        assert!(triangles(&incomplete).is_err());
-        let mut overflow = valid;
-        replace_header(&mut overflow, |header| {
+        assert_eq!(
+            refusal(&incomplete),
+            "M2 collision index count is not a multiple of three"
+        );
+        let mut far = valid;
+        replace_header(&mut far, |header| {
             header.bounding_vertices.offset = u32::MAX;
             header.bounding_vertices.count = u32::MAX;
         });
-        assert!(triangles(&overflow).is_err());
+        assert_eq!(
+            refusal(&far),
+            "M2 collision vertices range exceeds the file"
+        );
     }
 }

@@ -511,8 +511,8 @@ fn no_such_column(table: &str, column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, gossip_option_claim, npc_text_claim, plan, some_value, PACKAGE_GOSSIP,
-        REAL_NPC_TEXT, WHOLE_GOSSIP_OPTION_ROW, WHOLE_NPC_TEXT_ROW,
+        artifact, assert_each_column_sets_its_own_field, gossip_option_claim, npc_text_claim, plan,
+        PACKAGE_GOSSIP, REAL_NPC_TEXT, WHOLE_GOSSIP_OPTION_ROW, WHOLE_NPC_TEXT_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -585,39 +585,40 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_gossip_column_has_a_setter() {
-        let mut menu = crate::GossipMenu {
-            entry: 6,
-            text_id: 0,
-        };
-        let mut profile = blank_menu_profile(PACKAGE_GOSSIP as u32);
-        let mut profile_option = blank_menu_profile_option(PACKAGE_GOSSIP as u32);
-        let mut option = blank_gossip_option(PACKAGE_GOSSIP as u32);
-        let mut text = blank_npc_text(PACKAGE_GOSSIP as u32);
-        let mut slot = blank_npc_text_slot(PACKAGE_GOSSIP);
-
-        for column in ClaimTable::GossipMenu.columns() {
-            apply_gossip_menu_field(&mut menu, column.name, &some_value(*column)).expect("setter");
-        }
-        for column in ClaimTable::GossipMenuProfile.columns() {
-            apply_menu_profile_field(&mut profile, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::GossipMenuProfileOption.columns() {
-            apply_menu_profile_option_field(&mut profile_option, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::GossipOption.columns() {
-            apply_gossip_option_field(&mut option, column.name, &some_value(*column))
-                .expect("setter");
-        }
-        for column in ClaimTable::NpcText.columns() {
-            apply_npc_text_field(&mut text, column.name, &some_value(*column)).expect("setter");
-        }
-        for column in ClaimTable::NpcTextSlot.columns() {
-            apply_npc_text_slot_field(&mut slot, column.name, &some_value(*column))
-                .expect("setter");
-        }
+    fn every_claimable_gossip_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GossipMenu,
+            || crate::GossipMenu {
+                entry: 6,
+                text_id: 0,
+            },
+            apply_gossip_menu_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GossipMenuProfile,
+            || blank_menu_profile(PACKAGE_GOSSIP as u32),
+            apply_menu_profile_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GossipMenuProfileOption,
+            || blank_menu_profile_option(PACKAGE_GOSSIP as u32),
+            apply_menu_profile_option_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::GossipOption,
+            || blank_gossip_option(PACKAGE_GOSSIP as u32),
+            apply_gossip_option_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::NpcText,
+            || blank_npc_text(PACKAGE_GOSSIP as u32),
+            apply_npc_text_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::NpcTextSlot,
+            || blank_npc_text_slot(PACKAGE_GOSSIP),
+            apply_npc_text_slot_field,
+        );
     }
 
     #[test]

@@ -303,9 +303,9 @@ fn insert_spell(standalone: &Standalone, spell_id: u32, name: &str, cost: u32) {
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
-         family_name, family_flags, proc_flags, proc_chance, proc_charges) \
+         family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', 0, {cost}, 0, 0, 0, 0, 0, 1, 0, 0, 0, 0, 0, 0, 0, \
-         false, 0, 0, 0, 0, 0, 0, 0)"
+         false, 0, 0, 0, 0, 0, 0, 0, 0)"
     ));
 }
 
@@ -323,9 +323,9 @@ fn insert_effect(
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
-         p0, p0_kind, p1, script_id, enters_combat) \
+         p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
          VALUES ({id}, {spell_id}, {effect_index}, {kind}, {base_points}, 0, 0.0, 0, {target}, \
-         0.0, 0, 0, 0, 0, 0, 0, {script_id}, false)"
+         0.0, 0, 0, 0, 0, 0, 0, {script_id}, false, 0.0)"
     ));
 }
 

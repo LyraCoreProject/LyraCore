@@ -356,7 +356,7 @@ fn path_exists(ctx: &ReducerContext, creature_guid: u64, path_id: u32) -> bool {
 
 pub(crate) fn intent(ctx: &ReducerContext, creature_guid: u64) -> Option<CreatureAiMovementIntent> {
     let creature = ctx.db.game_world_entity().guid().find(creature_guid)?;
-    if !super::runs_eventai(&creature) {
+    if !super::runs_eventai(ctx, &creature) {
         return None;
     }
     ctx.db

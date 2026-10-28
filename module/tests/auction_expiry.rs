@@ -17,7 +17,6 @@ fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
     for reducer in [
         "debug_replay_auction_expiry_fixture",
         "debug_verify_auction_expiry_fixture",
-        "debug_verify_auction_expiry_fixture",
     ] {
         standalone.assert_call(reducer, &[]);
     }

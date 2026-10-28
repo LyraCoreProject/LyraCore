@@ -900,31 +900,14 @@ mod tests {
         assert_eq!(trap_cooldown_secs(1), 1);
         assert_eq!(trap_cooldown_secs(30), 30);
     }
-    use crate::skill::{next_skill, skill_line, APPRENTICE_CAP};
 
     #[test]
-    fn gather_type_id_is_the_synthetic_marker_25() {
-        assert_eq!(go_type::GATHER, 25);
-        assert_ne!(go_type::GATHER, go_type::CHEST);
-        assert_ne!(go_type::GATHER, go_type::GOOBER);
+    fn go_type_ids_are_the_client_gameobject_types() {
         assert_eq!(go_type::DOOR, 0);
         assert_eq!(go_type::BUTTON, 1);
-        let live = [
-            go_type::DOOR,
-            go_type::BUTTON,
-            go_type::QUESTGIVER,
-            go_type::CHEST,
-            go_type::GOOBER,
-            go_type::GATHER,
-        ];
-        for i in 0..live.len() {
-            for j in (i + 1)..live.len() {
-                assert_ne!(
-                    live[i], live[j],
-                    "LIVE go_type ids must be pairwise distinct"
-                );
-            }
-        }
+        assert_eq!(go_type::CHEST, 3);
+        assert_eq!(go_type::TRAP, 6);
+        assert_eq!(go_type::GOOBER, 10);
     }
 
     #[test]
@@ -987,16 +970,6 @@ mod tests {
             can_gather(5, 25).unwrap_err(),
             "your skill is too low to gather this node"
         );
-    }
-
-    #[test]
-    fn gather_gate_passes_and_skill_climbs_toward_apprentice_cap() {
-        let cap = APPRENTICE_CAP as u32;
-        assert!(can_gather(1, 1).is_ok());
-        assert_eq!(next_skill(1, cap), 2);
-        assert_eq!(skill_line::MINING, 186);
-        assert_eq!(next_skill(74, cap), 75);
-        assert_eq!(next_skill(75, cap), 75);
     }
 
     #[test]

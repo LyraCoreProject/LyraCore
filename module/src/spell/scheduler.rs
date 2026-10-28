@@ -216,7 +216,7 @@ pub(crate) fn do_cancel_aura(
         if spell.attributes & SPELL_ATTR_PASSIVE != 0 {
             return Err(format!("spell {spell_id} is passive and cannot be cancelled").into());
         }
-        if spell.is_negative {
+        if spell.negative() {
             return Err(format!("spell {spell_id} is a debuff and cannot be cancelled").into());
         }
     }
@@ -304,6 +304,11 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
             continue;
         };
         if target.dead {
+            continue;
+        }
+        if !crate::spell::source_behavior::channel_target_in_range(ctx, a) {
+            break_channel(ctx, a.caster_guid);
+            channel_end.push(a.id);
             continue;
         }
         match a.eff_kind {
@@ -494,16 +499,8 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
         if trigger_spell == 0 {
             continue;
         }
-        if let Err(e) = resolve_cast_at(
-            ctx,
-            caster_guid,
-            trigger_spell,
-            level,
-            channel_target,
-            false,
-            false,
-            None,
-        ) {
+        let result = cast_triggered(ctx, caster_guid, trigger_spell, level, channel_target);
+        if let Err(e) = result {
             log::info!(
                 "channel tick: caster {caster_guid}'s trigger {trigger_spell} at {channel_target} did not resolve: {e}"
             );

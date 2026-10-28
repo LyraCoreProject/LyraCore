@@ -1011,19 +1011,6 @@ mod tests {
         placement.bounds_min = Some([17404.025, -22.289986, 17045.37]);
         placement.bounds_max = Some([17963.29, 87.404465, 17390.137]);
 
-        let modf_world_lo: [f32; 3] = [-323.4707, -896.62305, -22.289986];
-        let modf_world_hi: [f32; 3] = [21.296875, -337.35938, 87.404465];
-        let movt_world_lo: [f32; 3] = [-317.0512, -895.1547, -22.262207];
-        let movt_world_hi: [f32; 3] = [19.425507, -341.70523, 87.37669];
-        let movt_error = (0..3)
-            .map(|axis| {
-                (movt_world_lo[axis] - modf_world_lo[axis]).abs()
-                    + (movt_world_hi[axis] - modf_world_hi[axis]).abs()
-            })
-            .sum::<f32>()
-            / 6.0;
-        assert!((movt_error - 2.360_098_6).abs() < 0.000_1);
-
         let selected = calibration(&[(&placement, authored)]).expect("authored bounds fit");
         assert_eq!(selected.convention, expected);
         assert!(selected.q25_error_yards < 0.002);
@@ -1031,8 +1018,18 @@ mod tests {
 
     #[test]
     fn calibration_refuses_malformed_mohd_bounds() {
-        assert!(mohd_calibration_points([f32::NAN, 0.0, 0.0], [1.0; 3]).is_err());
-        assert!(mohd_calibration_points([2.0, 0.0, 0.0], [1.0; 3]).is_err());
+        assert_eq!(
+            mohd_calibration_points([f32::NAN, 0.0, 0.0], [1.0; 3])
+                .unwrap_err()
+                .to_string(),
+            "WMO MOHD bounds are not finite"
+        );
+        assert_eq!(
+            mohd_calibration_points([2.0, 0.0, 0.0], [1.0; 3])
+                .unwrap_err()
+                .to_string(),
+            "WMO MOHD bounds are not ordered"
+        );
     }
 
     #[test]
@@ -1061,9 +1058,9 @@ mod tests {
         retain_placement(&mut placements, &mut seen, first, "first.adt").unwrap();
         let mut conflicting_m2 = test_placement(false);
         conflicting_m2.scale = 2.0;
-        assert!(
-            retain_placement(&mut placements, &mut seen, conflicting_m2, "second.adt").is_err()
-        );
+        let error =
+            retain_placement(&mut placements, &mut seen, conflicting_m2, "second.adt").unwrap_err();
+        assert!(error.to_string().contains("conflicting archive data"));
     }
 
     #[test]

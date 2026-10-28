@@ -1,5 +1,5 @@
 use lyracore_shared::constants::{gossip_option, npc_flags, MIN_TALENT_LEVEL};
-use lyracore_shared::gossip::{self, CharacterFacts, Condition, QuestState};
+use lyracore_shared::gossip::{self, CharacterFacts, Condition, ConditionKind, QuestState};
 use spacetimedb::{table, ReducerContext};
 
 use crate::creatures::{
@@ -21,15 +21,28 @@ pub struct GossipCondition {
     pub flags: u8,
 }
 
-/// `source_menu_id` is 0 for the entry menu, or the active profile id.
+/// The caller supplies trusted menu ids; 0 denotes the creature entry menu.
+pub(crate) struct Selection {
+    pub option_id: u32,
+    pub row_id: u32,
+    pub menu_id: u32,
+    pub root_menu_id: u32,
+    pub action: u32,
+}
+
 pub(crate) fn select_gate(
     ctx: &ReducerContext,
     character_guid: u64,
     npc_guid: u64,
-    option_row_id: u32,
-    source_menu_id: u32,
-    selected_action: u32,
-) -> Result<(), String> {
+    selection: &Selection,
+) -> Result<u32, String> {
+    let Selection {
+        row_id: option_row_id,
+        menu_id: source_menu_id,
+        root_menu_id,
+        action: selected_action,
+        ..
+    } = *selection;
     let (actor, npc) = if selected_action == gossip_option::SPIRITHEALER {
         crate::ghost::spirit_healer_gate(ctx, character_guid, npc_guid)?
     } else {
@@ -44,7 +57,7 @@ pub(crate) fn select_gate(
         )?
     };
     let active_menu = active_menu(ctx, &npc);
-    if source_menu_id != active_menu.as_ref().map_or(0, |menu| menu.menu_id) {
+    if root_menu_id != active_menu.as_ref().map_or(0, |menu| menu.menu_id) {
         return Err("gossip menu has changed".into());
     }
     if !service_available(ctx, &actor, &npc, selected_action) {
@@ -55,22 +68,23 @@ pub(crate) fn select_gate(
         if !synthesized_service_matches(
             ctx,
             &npc,
-            active_menu.map(|menu| menu.menu_id),
+            (source_menu_id != 0).then_some(source_menu_id),
             selected_action,
         ) {
             return Err("gossip service is no longer available".into());
         }
-        return Ok(());
+        return Ok(0);
     }
-    let (action, kind, value1, value2) = if let Some(menu) = active_menu {
+    let (action, target_menu, kind, value1, value2) = if source_menu_id != 0 {
         ctx.db
             .game_gossip_menu_profile_option()
             .row_id()
             .find(option_row_id)
-            .filter(|option| option.menu_id == menu.menu_id)
+            .filter(|option| option.menu_id == source_menu_id)
             .map(|option| {
                 (
                     option.action,
+                    option.action_menu_id,
                     option.cond_type,
                     option.cond_value1,
                     option.cond_value2,
@@ -85,6 +99,7 @@ pub(crate) fn select_gate(
             .map(|option| {
                 (
                     option.action,
+                    option.action_menu_id,
                     option.cond_type,
                     option.cond_value1,
                     option.cond_value2,
@@ -95,7 +110,8 @@ pub(crate) fn select_gate(
     if action != selected_action {
         return Err("gossip option action has changed".into());
     }
-    condition_gate(ctx, character_guid, actor.level, (kind, value1, value2))
+    condition_gate(ctx, character_guid, actor.level, (kind, value1, value2))?;
+    Ok(target_menu)
 }
 
 pub(crate) fn active_menu(
@@ -139,7 +155,7 @@ fn condition_gate(
                 .condition_id()
                 .find(id)
                 .map(|row| Condition {
-                    kind: row.kind,
+                    kind: ConditionKind::from_code(row.kind),
                     values: [row.value1, row.value2, row.value3, row.value4],
                     flags: row.flags,
                 })
@@ -205,9 +221,22 @@ fn service_available(
                     })
         }
         gossip_option::INNKEEPER => npc.npc_flags & npc_flags::INNKEEPER != 0,
-        gossip_option::TRAINER | gossip_option::UNLEARNTALENTS => {
-            (selected_action != gossip_option::UNLEARNTALENTS
-                || actor.level >= u32::from(MIN_TALENT_LEVEL))
+        gossip_option::TRAINER => {
+            crate::trainer::validate_trainer_interaction(ctx, actor, npc.guid).is_ok()
+        }
+        gossip_option::UNLEARNTALENTS => {
+            actor.level >= u32::from(MIN_TALENT_LEVEL)
+                && crate::helpers::character_by_guid(ctx, actor.guid).is_some_and(|character| {
+                    use crate::game_creature_template;
+                    ctx.db
+                        .game_creature_template()
+                        .entry()
+                        .find(npc.entry)
+                        .is_some_and(|trainer| {
+                            trainer.trainer_type == lyracore_shared::trainer::trainer_type::CLASS
+                                && trainer.trainer_class == character.class
+                        })
+                })
                 && crate::trainer::validate_trainer_interaction(ctx, actor, npc.guid).is_ok()
         }
         gossip_option::TAXI => npc.npc_flags & npc_flags::TAXI != 0,

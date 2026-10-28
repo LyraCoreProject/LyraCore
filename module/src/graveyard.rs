@@ -143,11 +143,12 @@ fn to_gy(g: GraveyardLoc) -> Graveyard {
     }
 }
 
-fn zone_linked(
+fn linked_to(
     ctx: &ReducerContext,
     zone_id: u32,
     team: u32,
     map_filter: Option<u32>,
+    outside_instance: bool,
 ) -> Vec<Graveyard> {
     ctx.db
         .game_graveyard_zone()
@@ -156,7 +157,31 @@ fn zone_linked(
         .filter(|gz| gz.faction == 0 || gz.faction == team)
         .filter_map(|gz| ctx.db.game_graveyard().id().find(gz.safe_loc_id))
         .filter(|g| map_filter.is_none_or(|m| g.map_id == m))
+        .filter(|g| {
+            !outside_instance || !lyracore_shared::instance::has_instance_population(g.map_id)
+        })
         .map(to_gy)
+        .collect()
+}
+
+fn area_then_zone_linked(
+    ctx: &ReducerContext,
+    area_id: Option<u32>,
+    zones: &[u32],
+    team: u32,
+    map_filter: Option<u32>,
+    outside_instance: bool,
+) -> Vec<Graveyard> {
+    if let Some(area) = area_id {
+        let linked = linked_to(ctx, area, team, map_filter, outside_instance);
+        if !linked.is_empty() {
+            return linked;
+        }
+    }
+    zones
+        .iter()
+        .filter(|&&zone| Some(zone) != area_id)
+        .flat_map(|&zone| linked_to(ctx, zone, team, map_filter, outside_instance))
         .collect()
 }
 
@@ -177,6 +202,7 @@ pub(crate) fn resolve_graveyard(
     race: u8,
 ) -> Graveyard {
     let team = team_for_race(race);
+    let area_id = crate::terrain::area_id_at(ctx, map_id, x, y);
 
     if crate::instance::is_dungeon_map(map_id) {
         use crate::game_area;
@@ -193,11 +219,14 @@ pub(crate) fn resolve_graveyard(
         }
         zones.sort_unstable();
         zones.dedup();
-        let linked: Vec<Graveyard> = zones
-            .into_iter()
-            .flat_map(|zone| zone_linked(ctx, zone, team, entrance.map(|point| point.0)))
-            .filter(|graveyard| !lyracore_shared::instance::has_instance_population(graveyard.map))
-            .collect();
+        let linked: Vec<Graveyard> = area_then_zone_linked(
+            ctx,
+            area_id,
+            &zones,
+            team,
+            entrance.map(|point| point.0),
+            true,
+        );
         // Dungeon coordinates cannot be compared with positions on the outside map.
         if let Some((outside_map, outside_x, outside_y, outside_z, outside_o)) = entrance {
             let fallback = nearest_of(&all_on_map(ctx, outside_map), outside_x, outside_y)
@@ -221,10 +250,8 @@ pub(crate) fn resolve_graveyard(
             .or_else(|| instance_static_fallback(map_id))
             .unwrap_or(NORTHSHIRE);
     }
-    let linked = match crate::terrain::zone_id_at(ctx, map_id, x, y) {
-        Some(zone_id) => zone_linked(ctx, zone_id, team, Some(map_id)),
-        None => Vec::new(),
-    };
+    let zone = crate::terrain::zone_id_at(ctx, map_id, x, y);
+    let linked = area_then_zone_linked(ctx, area_id, zone.as_slice(), team, Some(map_id), false);
     let all = all_on_map(ctx, map_id);
     pick_graveyard(&linked, &all, x, y)
 }

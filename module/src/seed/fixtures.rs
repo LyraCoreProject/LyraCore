@@ -314,7 +314,7 @@ pub(crate) fn seed_taxi_fixture(ctx: &ReducerContext) {
     });
     crate::creatures::insert_creature_entity(
         ctx,
-        crate::creatures::build_creature_entity(&spawn, &template, 0, 0),
+        crate::creatures::build_creature_entity(ctx, &spawn, &template, 0, 0),
     );
 }
 
@@ -405,6 +405,10 @@ pub(crate) fn base_spell(spell_id: u32, name: &str) -> Spell {
         proc_flags: 0,
         proc_chance: 0,
         proc_charges: 0,
+        max_duration_ms: 0,
+        custom_flags: 0,
+        min_target_level: 0,
+        single_target_key: 0,
     }
 }
 
@@ -428,6 +432,8 @@ pub(crate) fn base_effect(spell_id: u32, effect_index: u8) -> SpellEffect {
         p1: 0,
         script_id: 0,
         enters_combat: false,
+        points_per_combo: 0.0,
+        bonus_coefficient: -1.0,
     }
 }
 

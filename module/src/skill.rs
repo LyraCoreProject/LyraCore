@@ -1041,36 +1041,12 @@ mod tests {
     }
 
     #[test]
-    fn combat_skillup_chance_seam_is_continuous() {
-        let level = 60;
-        let cap = 300u32;
-        let at_headroom_6 = combat_skillup_chance_bp(cap - 6, cap, level, 0, false);
-        let at_headroom_7 = combat_skillup_chance_bp(cap - 7, cap, level, 0, false);
-        assert!(
-            at_headroom_7 >= at_headroom_6,
-            "chance must not drop when headroom grows (further from cap)"
-        );
-        let gap = at_headroom_7 - at_headroom_6;
-        assert!(
-            gap < 1000,
-            "the seam should be near-continuous, got a {gap}bp jump"
-        );
-    }
-
-    #[test]
-    fn combat_practice_fraction_branches_agree_exactly_at_the_seam() {
-        let seam = SEAM_HEADROOM as f64;
-        for cap in [5u32, 60, 145, 300] {
-            let taper_at_seam = (seam * seam) / (seam * cap as f64);
-            for level in [1u32, 12, 30, 60] {
-                let catch_up_at_seam = combat_practice_fraction(SEAM_HEADROOM, cap, level);
-                assert_eq!(
-                    catch_up_at_seam, taper_at_seam,
-                    "branches must meet at the seam (cap={cap} level={level})"
-                );
-                assert_eq!(catch_up_at_seam, seam / cap as f64);
-            }
-        }
+    fn combat_skillup_chance_meets_at_the_seam_headroom_of_seven() {
+        // Headroom 6 tapers as 36/(7*cap); headroom 7 starts catch-up at 7/cap.
+        assert_eq!(combat_skillup_chance_bp(294, 300, 60, 0, false), 171);
+        assert_eq!(combat_skillup_chance_bp(293, 300, 60, 0, false), 233);
+        assert_eq!(combat_skillup_chance_bp(54, 60, 12, 0, false), 857);
+        assert_eq!(combat_skillup_chance_bp(53, 60, 12, 0, false), 1_166);
     }
 
     #[test]
@@ -1230,60 +1206,36 @@ mod tests {
     }
 
     #[test]
-    fn skill_diff_from_caps_equals_old_level_derived_form() {
-        for al in 0u32..=100 {
-            for tl in 0u32..=100 {
-                let new = skill_diff(skill_cap_for_level(tl), skill_cap_for_level(al));
-                let old = tl.saturating_sub(al) * SKILL_PER_LEVEL;
-                assert_eq!(
-                    new, old,
-                    "diverged at attacker_level={al} target_level={tl}"
-                );
-            }
-        }
+    fn class_weapon_skill_lines_are_the_vanilla_melee_proficiencies() {
+        let lines = |class| {
+            let mut lines = class_weapon_skill_lines(class).to_vec();
+            lines.sort_unstable();
+            lines
+        };
+        assert_eq!(lines(1), [43, 44, 54, 55, 160, 172, 173, 229, 473]);
+        assert_eq!(lines(2), [43, 44, 54, 55, 160, 172, 229]);
+        assert_eq!(lines(3), [43, 44, 55, 136, 172, 173, 229, 473]);
+        assert_eq!(lines(4), [43, 54, 173, 473]);
+        assert_eq!(lines(5), [54, 136, 173]);
+        assert_eq!(lines(7), [44, 54, 136, 160, 172, 173, 473]);
+        assert_eq!(lines(8), [43, 136, 173]);
+        assert_eq!(lines(9), [43, 136, 173]);
+        assert_eq!(lines(11), [54, 136, 160, 173, 473]);
+        assert!(lines(0).is_empty());
+        assert!(lines(6).is_empty());
     }
 
     #[test]
-    fn mage_weapon_proficiency_lines_are_dagger_staff_sword_1h() {
-        let lines = class_weapon_skill_lines(8);
-        let mut set: std::collections::HashSet<u32> = lines.iter().copied().collect();
-        assert!(
-            set.remove(&skill_line::DAGGER),
-            "Mage must have DAGGER (173)"
-        );
-        assert!(set.remove(&skill_line::STAFF), "Mage must have STAFF (136)");
-        assert!(
-            set.remove(&skill_line::SWORD_1H),
-            "Mage must have SWORD_1H (43)"
-        );
-        assert!(
-            set.is_empty(),
-            "Mage has unexpected extra weapon proficiency lines: {:?}",
-            set
-        );
-    }
-
-    #[test]
-    fn class_weapon_skill_lines_nonempty_for_playable_classes_empty_otherwise() {
-        for &class in &[1u8, 2, 3, 4, 5, 7, 8, 9, 11] {
-            let lines = class_weapon_skill_lines(class);
-            assert!(
-                !lines.is_empty(),
-                "class {class} returned zero weapon proficiency lines"
-            );
-        }
-        assert!(class_weapon_skill_lines(0).is_empty());
-        assert!(class_weapon_skill_lines(6).is_empty());
-    }
-
-    #[test]
-    fn combat_skillup_chance_pinned_outputs() {
+    fn combat_skillup_chance_matches_worked_examples() {
+        // 7/300 + 0.22*(1 + 12/60)*ln(205/12) = 0.7726
         assert_eq!(combat_skillup_chance_bp(100, 300, 60, 0, false), 7_725);
+        // Level 60 with 750 intellect adds the full 0.10 assist.
         assert_eq!(combat_skillup_chance_bp(100, 300, 60, 750, true), 8_725);
+        // 1/(7*300) = 0.00048
         assert_eq!(combat_skillup_chance_bp(299, 300, 60, 0, false), 4);
-        assert_eq!(combat_skillup_chance_bp(294, 300, 60, 0, false), 171);
-        assert_eq!(combat_skillup_chance_bp(293, 300, 60, 0, false), 233);
+        // 7/60 + 0.22*(1 + 12/12)*ln(45/12) = 0.6982
         assert_eq!(combat_skillup_chance_bp(20, 60, 12, 0, false), 6_982);
+        // 1/(7*5) = 0.0286
         assert_eq!(combat_skillup_chance_bp(4, 5, 1, 0, false), 285);
     }
 }

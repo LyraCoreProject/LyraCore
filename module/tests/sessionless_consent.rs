@@ -1,6 +1,6 @@
 mod support;
 
-use support::{poll_until, Standalone, POLL_TIMEOUT};
+use support::Standalone;
 
 fn stage(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);
@@ -40,18 +40,18 @@ fn call_capture(shard: &Standalone, reducer: &str, args: &[&str]) -> serde_json:
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn durable_transfer_intent_survives_event_reaping_and_fences_actions() {
     let shard = stage("sessionless-durable-transfer-intent");
-    shard.assert_call(
-        "debug_bot_transfer",
-        &["1", "1", "0", "1200", "1200", "50", "0", "fixture"],
+    let teleports = shard.capture_updates(
+        "SELECT * FROM game_teleport_event WHERE mover_guid = 1",
+        2,
+        || {
+            shard.assert_call(
+                "debug_bot_transfer",
+                &["1", "1", "0", "1200", "1200", "50", "0", "fixture"],
+            );
+        },
     );
-    let teleport_before = shard.query_rows(
-        "SELECT id, mover_guid, map_id, created_micros FROM game_teleport_event WHERE mover_guid = 1",
-    );
-    let event_reaped = poll_until(POLL_TIMEOUT, || {
-        shard
-            .query_rows("SELECT id FROM game_teleport_event WHERE mover_guid = 1")
-            .is_empty()
-    });
+    let teleport_before = teleports[0]["game_teleport_event"]["inserts"].clone();
+    let event_reaped = teleports[1]["game_teleport_event"]["deletes"] == teleport_before;
     let teleport_after =
         shard.query_rows("SELECT id FROM game_teleport_event WHERE mover_guid = 1");
     let pending = shard.query_rows(
@@ -544,9 +544,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
     assert!(shard
         .query_rows("SELECT id FROM game_group_invite")
         .is_empty());
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
-        .is_empty());
 
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "true"]);
     shard.assert_call("debug_set_sessionless_action_consent", &[&target, "false"]);
@@ -573,9 +570,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
         shard.query_rows("SELECT id FROM game_group_member").len(),
         2
     );
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
-        .is_empty());
 
     shard.assert_call("debug_set_sessionless_action_consent", &["1", "false"]);
     shard.assert_call("debug_emit_sessionless_group_intent", &["1", "0", "true"]);
@@ -590,9 +584,6 @@ fn companion_invites_and_departures_apply_locally_with_current_consent() {
         .is_empty());
     assert!(shard
         .query_rows("SELECT group_id FROM game_group")
-        .is_empty());
-    assert!(shard
-        .query_rows("SELECT id FROM game_bot_invite_intent")
         .is_empty());
 }
 

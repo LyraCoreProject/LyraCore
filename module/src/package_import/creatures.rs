@@ -327,9 +327,9 @@ fn no_such_column(table: &str, column: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::super::fixtures::{
-        artifact, creature_spawn_claim, creature_template_claim, plan, some_value,
-        PACKAGE_CREATURE, REAL_CREATURE, REAL_CREATURE_SPAWN, REAL_MAP,
-        WHOLE_CREATURE_TEMPLATE_ROW,
+        artifact, assert_each_column_sets_its_own_field, creature_spawn_claim,
+        creature_template_claim, plan, PACKAGE_CREATURE, REAL_CREATURE, REAL_CREATURE_SPAWN,
+        REAL_MAP, WHOLE_CREATURE_TEMPLATE_ROW,
     };
     use super::*;
     use lyracore_package_delta::Table as ClaimTable;
@@ -437,31 +437,32 @@ mod tests {
     }
 
     #[test]
-    fn every_claimable_creature_column_has_a_setter() {
-        let mut template = blank_template(PACKAGE_CREATURE);
-        for column in ClaimTable::CreatureTemplate.columns() {
-            apply_template_field(&mut template, column.name, &some_value(*column)).expect("setter");
-        }
-
-        let mut spawn = CreatureSpawn {
-            guid: 1,
-            entry: REAL_CREATURE,
-            map_id: REAL_MAP,
-            x: 0.0,
-            y: 0.0,
-            z: 0.0,
-            orientation: 0.0,
-            respawn_at: spacetimedb::Timestamp::UNIX_EPOCH,
-            despawn_at: spacetimedb::Timestamp::UNIX_EPOCH,
-            movement_type: 0,
-            respawn_secs: 0,
-            life_seq: 0,
-            source_guid: 0,
-            instance_id: 0,
-        };
-        for column in ClaimTable::CreatureSpawn.columns() {
-            apply_spawn_field(&mut spawn, column.name, &some_value(*column)).expect("setter");
-        }
+    fn every_claimable_creature_column_sets_its_own_field() {
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureTemplate,
+            || blank_template(PACKAGE_CREATURE),
+            apply_template_field,
+        );
+        assert_each_column_sets_its_own_field(
+            ClaimTable::CreatureSpawn,
+            || CreatureSpawn {
+                guid: 1,
+                entry: REAL_CREATURE,
+                map_id: REAL_MAP,
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+                orientation: 0.0,
+                respawn_at: spacetimedb::Timestamp::UNIX_EPOCH,
+                despawn_at: spacetimedb::Timestamp::UNIX_EPOCH,
+                movement_type: 0,
+                respawn_secs: 0,
+                life_seq: 0,
+                source_guid: 0,
+                instance_id: 0,
+            },
+            apply_spawn_field,
+        );
     }
 
     #[test]

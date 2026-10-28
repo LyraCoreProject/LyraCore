@@ -1053,9 +1053,32 @@ impl PetSink for CtxWorld<'_> {
             .iter()
             .filter_map(|guid| entities.guid().find(guid))
             .filter(|p| scope.covers(p.instance_id))
+            .filter(|p| !p.dead || !crate::creatures::guardian::is_guardian(self.ctx, p.guid))
             .map(|p| {
-                let (command, react, command_target) =
-                    pet::pet_command_state(self.ctx, p.owner_guid);
+                let guardian = crate::creatures::guardian::is_guardian(self.ctx, p.guid);
+                let own_victim = guardian
+                    .then(|| crate::threat::top_threat_target(self.ctx, p.guid))
+                    .flatten()
+                    .or_else(|| {
+                        melee
+                            .attacker_guid()
+                            .find(p.guid)
+                            .map(|row| row.target_guid)
+                    })
+                    .filter(|target| pet::may_attack(self.ctx, p.owner_guid, p.guid, *target));
+                let (command, react, command_target) = if guardian {
+                    (
+                        if own_victim.is_some() {
+                            pet::CMD_ATTACK
+                        } else {
+                            pet::CMD_FOLLOW
+                        },
+                        pet::REACT_AGGRESSIVE,
+                        own_victim.unwrap_or(0),
+                    )
+                } else {
+                    pet::pet_command_state(self.ctx, p.owner_guid)
+                };
                 Pet {
                     guid: p.guid,
                     at: Point {
@@ -1068,7 +1091,16 @@ impl PetSink for CtxWorld<'_> {
                     owner: entities
                         .guid()
                         .find(p.owner_guid)
-                        .filter(|o| !o.dead)
+                        .filter(|o| !o.dead || (guardian && own_victim.is_some()))
+                        .filter(|o| {
+                            !guardian
+                                || (o.map_id == p.map_id
+                                    && o.instance_id == p.instance_id
+                                    && (o.x - p.x).powi(2)
+                                        + (o.y - p.y).powi(2)
+                                        + (o.z - p.z).powi(2)
+                                        <= 120.0 * 120.0)
+                        })
                         .map(|o| PetOwner {
                             guid: o.guid,
                             at: Point {
@@ -1101,6 +1133,12 @@ impl PetSink for CtxWorld<'_> {
         pet::cancel_attack_order(self.ctx, owner);
     }
     fn take_victim(&mut self, guid: u64, victim: u64) {
+        if crate::creatures::guardian::is_guardian(self.ctx, guid)
+            && crate::combat::arm_creature_engagement(self.ctx, guid, victim, true)
+        {
+            return;
+        }
+
         let melee = self.ctx.db.game_melee_attack();
         match melee.attacker_guid().find(guid) {
             Some(mut row) => {

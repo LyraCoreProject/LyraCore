@@ -38,6 +38,7 @@ effect_kinds! {
     E_TRIGGER => Trigger = 0x05,
     E_TAUNT => Taunt = 0x06,
     E_CREATE_ITEM => CreateItem = 0x07,
+    // WeaponStrike p0 is the weapon damage percent; p1 is 1 when the weapon speed is normalized.
     E_WEAPON_STRIKE => WeaponStrike = 0x08,
     E_CHARGE => Charge = 0x09,
     E_CONVERT_RESOURCE => ConvertResource = 0x0A,
@@ -97,18 +98,28 @@ effect_kinds! {
     A_TRANSFORM => AuraTransform = 0xB6,
     A_MOD_POWER_REGEN_PCT => AuraModPowerRegenPct = 0xB7,
     A_FLAG => AuraFlag = 0xBE,
+    E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
 pub const SPELL_ATTR_PASSIVE: u32 = 0x40;
+// A Spell.dbc Attributes bit like SPELL_ATTR_PASSIVE, not a cast_flags bit.
+pub const SPELL_ATTR_USES_RANGED_SLOT: u32 = 0x02;
 pub const SPELL_ATTR_REQ_BEHIND: u32 = 0x0001;
 pub const SPELL_ATTR_REQ_STEALTH: u32 = 0x0002;
 pub const SPELL_ATTR_STEALTH_SAFE: u32 = 0x0004;
-pub const SPELL_ATTR_FINISHER_DURATION: u32 = 0x0008;
+// A finishing move needs and spends combo points.
+pub const SPELL_ATTR_COMBO_FINISHER: u32 = 0x0008;
 pub const SPELL_ATTR_INCAP_OPENER: u32 = 0x0010;
 pub const SPELL_ATTR_REQ_OVERPOWER: u32 = 0x0020;
 pub const SPELL_ATTR_REQ_REVENGE: u32 = 0x0040;
 pub const SPELL_ATTR_REQ_DAGGER: u32 = 0x0100;
+pub const SPELL_FAMILY_DRUID: u8 = 7;
+pub const SPELL_FAMILY_ROGUE: u8 = 8;
+// Spell.dbc SpellFamilyFlags bits, as vmangos `SpellClassMask.h` names them.
+pub const FAMILY_FLAG_ROGUE_EVISCERATE: u64 = 0x0002_0000;
+pub const FAMILY_FLAG_ROGUE_RUPTURE: u64 = 0x0010_0000;
+pub const FAMILY_FLAG_DRUID_RIP_BITE: u64 = 0x0080_0000;
 pub const HUMANOID_TYPE: u8 = 7;
 pub const BEAST_TYPE: u8 = 1;
 pub const CRITTER_TYPE: u8 = 8;
@@ -196,6 +207,7 @@ mod tests {
         assert_eq!(E_DAMAGE, 0x01);
         assert_eq!(E_HEAL, 0x02);
         assert_eq!(E_DISPEL, 0x04);
+        assert_eq!(E_SUMMON_GUARDIANS, 0x27);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

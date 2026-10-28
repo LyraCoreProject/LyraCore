@@ -366,6 +366,10 @@ pub(crate) fn wear_weapon(ctx: &ReducerContext, player_guid: u64) {
 }
 
 pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (u32, u32) {
+    melee_range(ctx, attacker, false)
+}
+
+fn melee_range(ctx: &ReducerContext, attacker: &WorldEntity, normalized: bool) -> (u32, u32) {
     let disarmed = crate::spell::is_disarmed(ctx, attacker.guid);
     if !attacker.is_player() {
         let tmpl = ctx.db.game_creature_template().entry().find(attacker.entry);
@@ -385,7 +389,17 @@ pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (
                 }
                 _ => (base_min, base_max),
             };
-        let rank = tmpl.map(|t| t.rank).unwrap_or(0);
+        let stats = tmpl
+            .as_ref()
+            .and_then(|t| crate::creatures::catalogue::level_stats(ctx, t, attacker.level));
+        let derived = stats.is_some()
+            || tmpl.as_ref().is_some_and(|t| {
+                crate::creatures::catalogue::level_stats(ctx, t, t.level).is_some()
+            });
+        let (base_min, base_max) = stats.map_or((base_min, base_max), |stats| {
+            (stats.damage_min, stats.damage_max)
+        });
+        let rank = tmpl.filter(|_| !derived).map(|t| t.rank).unwrap_or(0);
         let (min, max) = scale_swing_for_rank(base_min, base_max, rank);
         if disarmed {
             let pct = crate::spell::DISARM_SWING_RETAINED_PCT;
@@ -393,19 +407,226 @@ pub(crate) fn swing_range_ctx(ctx: &ReducerContext, attacker: &WorldEntity) -> (
         }
         return (min, max);
     }
-    let class = attacker.class();
-    let ap = melee_attack_power_for(
-        class,
-        effective_strength(ctx, attacker),
-        effective_agility(ctx, attacker),
-        attacker.level,
-    ) + aura_attack_power_bonus(ctx, attacker.guid);
+    let ap = melee_attack_power(ctx, attacker);
+    let mainhand = lyracore_shared::constants::starter_item::MAINHAND_SLOT;
+    let speed = |delay| {
+        if normalized {
+            normalized_speed_ms(ctx, attacker.guid, mainhand)
+        } else {
+            delay
+        }
+    };
     if !disarmed {
         if let Some((dmin, dmax, delay)) = equipped_weapon_damage(ctx, attacker.guid) {
-            return weapon_swing_range_ap(ap, dmin, dmax, delay);
+            return weapon_swing_range_ap(ap, dmin, dmax, speed(delay));
         }
     }
-    player_swing_range_ap(ap, attacker.base_attack_time_ms)
+    player_swing_range_ap(ap, speed(attacker.base_attack_time_ms))
+}
+
+const NORMALIZED_ONE_HAND_MS: u32 = 2400;
+const NORMALIZED_TWO_HAND_MS: u32 = 3300;
+const NORMALIZED_DAGGER_MS: u32 = 1700;
+const NORMALIZED_RANGED_MS: u32 = 2800;
+
+// vmangos GetAPMultiplier: normalized damage adds attack power at a fixed speed per weapon type.
+fn normalized_speed_ms(ctx: &ReducerContext, player_guid: u64, slot: u8) -> u32 {
+    normalized_speed_for(
+        crate::items::item_in_slot(ctx, player_guid, slot)
+            .and_then(|item| ctx.db.game_item_template().entry().find(item.entry))
+            .map(|tmpl| (tmpl.inventory_type, tmpl.subclass)),
+    )
+}
+
+fn normalized_speed_for(weapon: Option<(u8, u8)>) -> u32 {
+    use crate::items::invtype as t;
+    match weapon {
+        Some((t::TWO_HAND_WEAPON, _)) => NORMALIZED_TWO_HAND_MS,
+        Some((t::RANGED | t::RANGED_RIGHT | t::THROWN, _)) => NORMALIZED_RANGED_MS,
+        Some((_, crate::items::weapon_subclass::DAGGER)) => NORMALIZED_DAGGER_MS,
+        _ => NORMALIZED_ONE_HAND_MS,
+    }
+}
+
+/// One weapon spell's damage terms; `percent` scales the weapon roll and `bonus` together.
+#[derive(Clone, Copy)]
+pub(crate) struct WeaponStrike {
+    pub(crate) bonus: i32,
+    pub(crate) percent: u32,
+    pub(crate) normalized: bool,
+    pub(crate) ranged: bool,
+}
+
+// vmangos MeleeSpellHitResult: no glancing or crushing; ranged strikes skip dodge and parry.
+pub(crate) fn roll_strike_outcome(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    ranged: bool,
+) -> u8 {
+    let sd = crate::skill::skill_diff_ctx(ctx, attacker, target);
+    let (dodge, parry) = if ranged {
+        (0, 0)
+    } else {
+        (
+            effective_dodge_bp(ctx, target, sd),
+            effective_parry_bp(ctx, target, sd),
+        )
+    };
+    let table = AttackTable {
+        miss: effective_miss_bp(ctx, attacker, sd),
+        dodge,
+        parry,
+        glancing: 0,
+        block: 0,
+        crit: effective_crit_bp(ctx, attacker),
+        crushing: 0,
+    };
+    attack_outcome(ctx.random::<u32>() % 10_000, &table)
+}
+
+pub(crate) fn weapon_strike_spell_damage(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    strike: WeaponStrike,
+    spell: &crate::spell::Spell,
+    crit: bool,
+) -> u32 {
+    let (min, max) = strike_weapon_range(ctx, attacker, strike);
+    let weapon = min + ctx.random::<u32>() % (max.saturating_sub(min) + 1);
+    let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
+    let mit_pct = if spell.school_mask == SCHOOL_MASK_PHYSICAL
+        && spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR == 0
+    {
+        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
+    } else {
+        0
+    };
+    strike_amount(weapon, strike.bonus, strike.percent, mods, crit, mit_pct)
+}
+
+/// A finisher's damage: `amount` with the damage spell mods, the strike's crit and the target's armor.
+pub(crate) fn finisher_strike_damage(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    spell: &crate::spell::Spell,
+    amount: i32,
+    crit: bool,
+) -> u32 {
+    let mods = crate::spell::spell_mod(ctx, attacker.guid, crate::spell::SPELLMOD_OP_DAMAGE, spell);
+    let mit_pct = if spell.custom_flags & lyracore_shared::spell_custom::IGNORE_ARMOR != 0 {
+        0
+    } else {
+        armor_mitigation_pct(effective_armor(ctx, target), attacker.level)
+    };
+    strike_amount(0, amount, 100, mods, crit, mit_pct)
+}
+
+pub(crate) fn melee_attack_power(ctx: &ReducerContext, unit: &WorldEntity) -> u32 {
+    melee_attack_power_for(
+        unit.class(),
+        effective_strength(ctx, unit),
+        effective_agility(ctx, unit),
+        unit.level,
+    ) + aura_attack_power_bonus(ctx, unit.guid)
+}
+
+const SCHOOL_MASK_PHYSICAL: u8 = 1;
+
+fn strike_weapon_range(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    strike: WeaponStrike,
+) -> (u32, u32) {
+    if !attacker.is_player() {
+        return crate::creatures::scale_hunter_pet_swing(
+            ctx,
+            attacker.guid,
+            swing_range_ctx(ctx, attacker),
+        );
+    }
+    if !strike.ranged {
+        return melee_range(ctx, attacker, strike.normalized);
+    }
+    let Some((dmin, dmax, delay, subclass)) = equipped_ranged_weapon(ctx, attacker.guid) else {
+        return (0, 0);
+    };
+    let delay = if strike.normalized {
+        normalized_speed_ms(ctx, attacker.guid, crate::items::equip_slot::RANGED)
+    } else {
+        delay
+    };
+    let (_, min, max) = ranged_sheet_values(
+        effective_agility(ctx, attacker),
+        attacker.level,
+        Some((dmin, dmax, delay, subclass)),
+    );
+    (min, max)
+}
+
+fn strike_amount(
+    weapon: u32,
+    bonus: i32,
+    percent: u32,
+    (mod_flat, mod_pct): (i32, i32),
+    crit: bool,
+    mit_pct: u32,
+) -> u32 {
+    let scaled = (i64::from(weapon) + i64::from(bonus)).max(0) * i64::from(percent) / 100;
+    let base =
+        crate::spell::apply_spell_mod(scaled.min(i64::from(u32::MAX)) as u32, mod_flat, mod_pct);
+    let pre_mit = u64::from(base) * if crit { u64::from(CRIT_MULT) } else { 1 };
+    (pre_mit * u64::from(100 - mit_pct.min(100)) / 100).clamp(1, u64::from(u32::MAX)) as u32
+}
+
+// vmangos TakeAmmo: a thrown stack loses one; an unstackable thrown weapon loses durability.
+pub(crate) fn spend_ranged_ammo(ctx: &ReducerContext, player_guid: u64) {
+    let Some(mut weapon) =
+        crate::items::item_in_slot(ctx, player_guid, crate::items::equip_slot::RANGED)
+    else {
+        return;
+    };
+    let Some(tmpl) = ctx.db.game_item_template().entry().find(weapon.entry) else {
+        return;
+    };
+    if tmpl.inventory_type == crate::items::invtype::THROWN {
+        if tmpl.max_stack > 1 {
+            spend_one(ctx, weapon);
+        } else if weapon.durability > 0 {
+            weapon.durability -= 1;
+            weapon.update(ctx);
+        }
+    } else if tmpl.subclass != crate::items::weapon_subclass::WAND {
+        if let Some(ammo) = find_ammo(ctx, player_guid) {
+            spend_one(ctx, ammo);
+        }
+    }
+}
+
+pub(crate) fn spend_one(ctx: &ReducerContext, mut item: ItemInstance) {
+    item.stack_count = item.stack_count.saturating_sub(1);
+    if item.stack_count == 0 {
+        crate::ItemInstance::delete(ctx, item.guid);
+    } else {
+        item.update(ctx);
+    }
+}
+
+// vmangos WriteAmmoToPacket: a thrown weapon flies as itself; a launcher shows its loaded ammo.
+pub(crate) fn ranged_projectile(ctx: &ReducerContext, player_guid: u64) -> Option<(u32, u32)> {
+    let templates = ctx.db.game_item_template();
+    let weapon = crate::items::item_in_slot(ctx, player_guid, crate::items::equip_slot::RANGED)?;
+    let tmpl = templates.entry().find(weapon.entry)?;
+    if tmpl.inventory_type == crate::items::invtype::THROWN {
+        return Some((tmpl.display_id, u32::from(tmpl.inventory_type)));
+    }
+    if tmpl.subclass == crate::items::weapon_subclass::WAND {
+        return None;
+    }
+    let ammo = templates.entry().find(find_ammo(ctx, player_guid)?.entry)?;
+    Some((ammo.display_id, u32::from(ammo.inventory_type)))
 }
 
 pub(crate) fn weapon_strike_damage(
@@ -413,14 +634,16 @@ pub(crate) fn weapon_strike_damage(
     caster: &WorldEntity,
     target: &WorldEntity,
     flat_bonus: i32,
+    (mod_flat, mod_pct): (i32, i32),
 ) -> (u32, bool) {
     let (min, max) = swing_range_ctx(ctx, caster);
     let base = min + ctx.random::<u32>() % (max - min + 1);
     let total = (base as i32 + flat_bonus).max(1) as u32;
+    let total = crate::spell::apply_spell_mod(total, mod_flat, mod_pct).max(1);
     let crit = (ctx.random::<u32>() % 10_000) < effective_crit_bp(ctx, caster);
     let pre_mit = if crit { total * CRIT_MULT } else { total };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), caster.level);
-    ((pre_mit * (100 - mit_pct) / 100).max(1), crit)
+    (armor_mitigated(pre_mit, mit_pct), crit)
 }
 
 pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_guid: u64) {
@@ -443,7 +666,7 @@ pub(crate) fn retaliate_on_hit(ctx: &ReducerContext, victim_guid: u64, attacker_
     if victim.dead || attacker.dead {
         return;
     }
-    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0);
+    let (dmg, _crit) = weapon_strike_damage(ctx, &victim, &attacker, 0, (0, 0));
     crate::spell::apply_target_damage(
         ctx,
         attacker_guid,
@@ -537,7 +760,7 @@ fn resolve_swing(
         HIT_CRUSHING => base * CRUSH_DAMAGE_PCT / 100,
         _ => base,
     };
-    let dmg = (pre_mit * (100 - mit_pct) / 100).max(1);
+    let dmg = armor_mitigated(pre_mit, mit_pct);
     let blocks = match strike {
         Some(_) => rolls.block < block_bp,
         None => outcome == HIT_BLOCK,
@@ -569,7 +792,7 @@ pub(crate) fn roll_ranged_swing(
     let base = dmin + ctx.random::<u32>() % (dmax.saturating_sub(dmin) + 1);
     let pre_mit = if is_crit { base * CRIT_MULT } else { base };
     let mit_pct = armor_mitigation_pct(effective_armor(ctx, target), attacker.level);
-    let dmg = (pre_mit * (100 - mit_pct) / 100).max(1);
+    let dmg = armor_mitigated(pre_mit, mit_pct);
     (dmg, if is_crit { HIT_CRIT } else { HIT_NORMAL })
 }
 
@@ -578,6 +801,40 @@ pub(crate) fn roll_money(ctx: &ReducerContext, min: u32, max: u32) -> u32 {
         return 0;
     }
     min + ctx.random::<u32>() % (max - min + 1)
+}
+
+#[cfg(test)]
+mod weapon_strike_tests {
+    use super::{normalized_speed_for, strike_amount};
+
+    #[test]
+    fn a_weapon_percent_scales_the_weapon_roll_and_the_flat_bonus_together() {
+        // vmangos EffectWeaponDmg: (40 weapon + 10 bonus) at Backstab's 150%.
+        assert_eq!(strike_amount(40, 10, 150, (0, 0), false, 0), 75);
+    }
+
+    #[test]
+    fn a_strike_crits_for_double_before_armor_mitigates_it() {
+        assert_eq!(strike_amount(40, 10, 100, (0, 0), true, 20), 80);
+    }
+
+    #[test]
+    fn a_damage_spell_mod_applies_after_the_weapon_percent() {
+        assert_eq!(strike_amount(40, 10, 100, (5, 10), false, 0), 60);
+    }
+
+    #[test]
+    fn normalized_speed_follows_the_weapon_type() {
+        use crate::items::{invtype as t, weapon_subclass as ws};
+        assert_eq!(normalized_speed_for(None), 2400);
+        assert_eq!(normalized_speed_for(Some((t::WEAPON, ws::DAGGER))), 1700);
+        assert_eq!(normalized_speed_for(Some((t::WEAPON, ws::SWORD_1H))), 2400);
+        assert_eq!(
+            normalized_speed_for(Some((t::TWO_HAND_WEAPON, ws::STAFF))),
+            3300
+        );
+        assert_eq!(normalized_speed_for(Some((t::THROWN, ws::THROWN))), 2800);
+    }
 }
 
 #[cfg(test)]

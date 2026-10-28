@@ -9,7 +9,6 @@ const LINES: &str = "SELECT * FROM game_realm_chat_event";
 const HUMAN: u8 = 1;
 const ORC: u8 = 2;
 
-const JOINED: u64 = 0x00;
 const YOU_JOINED: u64 = 0x02;
 const YOU_LEFT: u64 = 0x03;
 const OWNER_CHANGED: u64 = 0x08;
@@ -698,11 +697,7 @@ fn moderation_and_announcements_toggle_for_moderators_only() {
     assert_eq!(announcements_off, [(ANNOUNCEMENTS_OFF, 1, vec![1, 2])]);
 
     let joined = notices_of(&realm, || join(&realm, &actor("3"), "Officers", HUMAN));
-    assert_eq!(joined, [(YOU_JOINED, 0, vec![3])]);
-    assert!(
-        !joined.iter().any(|(notice, ..)| *notice == JOINED),
-        "announcements are off"
-    );
+    assert_eq!(joined, [(YOU_JOINED, 0, vec![3])], "announcements are off");
 
     let left = notices_of(&realm, || {
         realm.assert_call(
