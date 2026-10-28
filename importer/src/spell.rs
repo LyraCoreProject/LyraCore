@@ -1538,6 +1538,7 @@ fn save_snapshot(rows: &SpellRows, cov: &Coverage, path: &str) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use lyracore_shared::spell::taxonomy::{A_STEALTH, E_DISMOUNT};
 
     fn source_spell_fixture() -> Vec<u8> {
         let mut bytes = b"WDBC".to_vec();

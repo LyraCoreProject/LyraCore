@@ -75,7 +75,7 @@ or reclassifies data fields. Known gaps cannot change a tag or excuse a failure.
 
 ## Migration and source evidence
 
-The nine entries replace the former `benilla_inventory/behaviors.json`. They retain Behavior ids,
+The original nine entries replace the former `benilla_inventory/behaviors.json`. They retain Behavior ids,
 opcode claims, prerequisites and all eight Rust evidence links. The old `support`, `remaining` and
 `durable_operations` fields do not belong to this schema. Scope states the required result; test
 presence does not certify it. Native Python checks remain in place until a recorded conformance
@@ -83,8 +83,8 @@ scenario replaces each one.
 
 The vmangos references name reviewed functions at one full commit. They point to sources, and
 contain no copied implementation or world data. Those references identify where to investigate
-and record each Behavior; they are not a claim that all nine conform today. All nine real-client
-checks remain unverified and their scenario lists are empty.
+and record each Behavior; they are not a claim that the original nine conform today. Their real-client
+checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
 
 ## Scenario catalogue and tier 1
 
