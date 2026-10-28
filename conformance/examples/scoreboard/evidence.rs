@@ -578,13 +578,21 @@ pub fn same_core(root: &Path, measured: &str, head: &str) -> Result<bool> {
     Ok(diff.success())
 }
 
-pub fn latest_audit(directory: &Path) -> Result<Option<(PathBuf, Report)>> {
+pub fn latest_audit(
+    directory: &Path,
+    excluded_stem: Option<&str>,
+) -> Result<Option<(PathBuf, Report)>> {
     if !directory.exists() {
         return Ok(None);
     }
     let mut latest: Option<(PathBuf, Report)> = None;
     for entry in std::fs::read_dir(directory)? {
         let path = entry?.path();
+        if excluded_stem.is_some_and(|excluded| {
+            path.file_stem().and_then(|stem| stem.to_str()) == Some(excluded)
+        }) {
+            continue;
+        }
         if path.extension().is_some_and(|ext| ext == "json") {
             let report = Report::load_structure(&path, "conformance_audit")?;
             if latest.as_ref().is_none_or(|(old_path, old)| {

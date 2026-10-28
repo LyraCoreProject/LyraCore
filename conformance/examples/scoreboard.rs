@@ -118,7 +118,7 @@ fn main() -> Result<()> {
             let report = Report::load(&path, "conformance_audit", &ledger)?;
             Some((path, report))
         }
-        None => evidence::latest_audit(&root.join("conformance/reports"))?,
+        None => evidence::latest_audit(&root.join("conformance/reports"), None)?,
     };
     if let Some(report) = &tier1 {
         provenance(&tier1_path, report);
@@ -243,7 +243,8 @@ fn committed_audit_report_replays() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let directory = root.join("reports");
-    let (path, report) = evidence::latest_audit(&directory)?.context("committed audit report")?;
+    let (path, report) =
+        evidence::latest_audit(&directory, None)?.context("committed audit report")?;
     report.validate("conformance_audit", &ledger)?;
     report.validate_changes(&directory)?;
     report.verify_capture(&path)

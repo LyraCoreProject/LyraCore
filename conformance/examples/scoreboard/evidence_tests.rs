@@ -284,14 +284,14 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
         serde_json::to_vec(&value).unwrap(),
     )
     .unwrap();
-    latest_audit(&directory)
+    latest_audit(&directory, None)
         .unwrap()
         .unwrap()
         .1
         .validate("conformance_audit", &ledger)
         .unwrap();
     assert_eq!(
-        latest_audit(&directory)
+        latest_audit(&directory, None)
             .unwrap()
             .unwrap()
             .0
@@ -300,7 +300,30 @@ fn latest_audit_uses_capture_time_and_rejects_malformed_evidence() {
         "a.json"
     );
     std::fs::write(directory.join("a.json"), b"{}").unwrap();
-    assert!(latest_audit(&directory).is_err());
+    assert!(latest_audit(&directory, None).is_err());
+}
+
+#[test]
+fn latest_audit_excludes_regenerated_report_before_selecting_predecessor() {
+    let directory = scratch::Scratch::new("scoreboard-test").unwrap();
+    let (_, mut report) = audit_example();
+    report["recorded_at_unix_ms"] = json!(1);
+    std::fs::write(
+        directory.join("2026-10-28.json"),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+    report["recorded_at_unix_ms"] = json!(2);
+    std::fs::write(
+        directory.join("2026-10-28-c5.json"),
+        serde_json::to_vec(&report).unwrap(),
+    )
+    .unwrap();
+
+    let (path, _) = latest_audit(&directory, Some("2026-10-28-c5"))
+        .unwrap()
+        .unwrap();
+    assert_eq!(path.file_name().unwrap(), "2026-10-28.json");
 }
 
 #[test]

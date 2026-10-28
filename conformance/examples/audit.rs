@@ -160,8 +160,7 @@ fn main() -> Result<()> {
         [mode, directory, output, date] if mode == "report" => {
             let root = Path::new(env!("CARGO_MANIFEST_DIR"));
             let ledger = FeatureLedger::load(&root.join("features"))?;
-            let previous = evidence::latest_audit(&root.join("reports"))?
-                .filter(|(path, _)| path.file_stem().and_then(|s| s.to_str()) != Some(date));
+            let previous = evidence::latest_audit(&root.join("reports"), Some(date))?;
             let mut report = compare_run(Path::new(directory), &ledger, previous.as_ref().map(|(_, report)| report))?;
             if let Some((path, _)) = &previous {
                 report.audit.as_mut().unwrap().previous_report = Some(path.file_name().context("report filename")?.to_string_lossy().into());
