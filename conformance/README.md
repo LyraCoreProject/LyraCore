@@ -178,14 +178,21 @@ The ledger's other required rungs remain obligations.
 The system table counts Behaviors with and without scenarios. The open-work list includes every
 Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
 pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
-an entry with one. Each entry gives a next command. The scenario-author command opens the ledger
-entry; the implementer command runs the first listed scenario. Further scenarios are in the
-Behavior's `scenarios` field.
+an entry with one when its evidence still points to implementation work. If tier 1 passes, or a
+stale audit measured no rule signatures and the ledger has no known gaps, an entry with a missing,
+stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
+`./conformance/audit`.
+Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
+command. The scenario-author command opens the ledger entry; the implementer command runs the first
+listed scenario. Further scenarios are in the Behavior's `scenarios` field.
 
-The list sorts by descending number of other Behaviors that directly depend on the entry, then
-descending audited rule-signature count plus ledger known-gap count, then descending number of
-distinct claimed request opcodes, then ascending Behavior id. Missing audit evidence contributes
-zero signatures. The formula uses no assigned priority or tier 1 baseline.
+Within those groups, the list sorts by descending number of other Behaviors that directly depend
+on the entry, then descending measured rule-signature count, then descending number of distinct
+claimed request opcodes, then ascending Behavior id. It uses the committed audit's signature count
+when available, otherwise tier 1's count. If neither measured the Behavior, it uses the number of
+distinct known gaps. Repeating a known gap does not increase priority. Dependency edits change the
+ranking and receive review as such in their PRs. The formula uses no assigned priority or tier 1
+baseline.
 
 `--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
 keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
@@ -199,8 +206,10 @@ measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unve
 `unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
 record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
-`kind`, `next_command` and the three numeric ranking inputs. `kind` is `scenario_author` or
-`implementer`. Counts and state names have the same meaning as the text scoreboard.
+`kind`, `next_command` and the three numeric ranking inputs. `kind` is `scenario_author`,
+`implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input is the measured
+signature count or the distinct-gap fallback. Counts and state names have the same meaning as the
+text scoreboard.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:

@@ -22,7 +22,7 @@ struct OpenWork {
     kind: &'static str,
     next_command: String,
     dependents: usize,
-    open_signatures_and_gaps: usize,
+    open_signatures_or_gaps: usize,
     claimed_opcodes: usize,
 }
 
@@ -57,16 +57,42 @@ fn open_work(
         {
             continue;
         }
-        let signatures = audit
+        let measured = audit
             .and_then(|report| report.audit.as_ref()?.behaviors.get(&behavior.id))
             .map(|evidence| evidence.candidate.rule.signatures.len())
-            .unwrap_or(0);
+            .or_else(|| {
+                tier1
+                    .filter(|report| {
+                        report
+                            .scenarios
+                            .iter()
+                            .any(|result| result.behavior == behavior.id)
+                    })
+                    .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
+            });
+        let distinct_gaps = behavior
+            .known_gaps
+            .iter()
+            .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
+            .collect::<BTreeSet<_>>()
+            .len();
         let kind = if behavior.scenarios.is_empty() {
             "scenario_author"
+        } else if matches!(
+            audit_state,
+            State::NotRun | State::Stale | State::Unverified(_) | State::UnstableReference(_)
+        ) && (tier1_state.is_match()
+            || (!matches!(tier1_state, State::Different(_))
+                && measured == Some(0)
+                && distinct_gaps == 0))
+        {
+            "evidence_refresh"
         } else {
             "implementer"
         };
-        let next_command = if let Some(scenario) = behavior.scenarios.first() {
+        let next_command = if kind == "evidence_refresh" {
+            "./conformance/audit".to_owned()
+        } else if let Some(scenario) = behavior.scenarios.first() {
             format!("./conformance/run {scenario}")
         } else {
             format!(
@@ -84,16 +110,20 @@ fn open_work(
                 .iter()
                 .filter(|other| other.dependencies.contains(&behavior.id))
                 .count(),
-            open_signatures_and_gaps: signatures + behavior.known_gaps.len(),
+            open_signatures_or_gaps: measured.unwrap_or(distinct_gaps),
             claimed_opcodes: requests(&[behavior])?.len(),
         });
     }
     work.sort_by(|a, b| {
-        b.dependents
-            .cmp(&a.dependents)
-            .then_with(|| b.open_signatures_and_gaps.cmp(&a.open_signatures_and_gaps))
-            .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
-            .then_with(|| a.behavior.cmp(&b.behavior))
+        (a.kind == "evidence_refresh")
+            .cmp(&(b.kind == "evidence_refresh"))
+            .then_with(|| {
+                b.dependents
+                    .cmp(&a.dependents)
+                    .then_with(|| b.open_signatures_or_gaps.cmp(&a.open_signatures_or_gaps))
+                    .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
+                    .then_with(|| a.behavior.cmp(&b.behavior))
+            })
     });
     Ok(work)
 }
@@ -442,16 +472,16 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
         }
     }
     spells::print(spells);
-    println!("\nOpen work, ranked by dependents, open rule signatures plus known gaps, claimed request opcodes, then Behavior id:");
+    println!("\nOpen work, with evidence refresh last; ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
-            "{}. {} / {}: {} (dependents {}, signatures + gaps {}, opcodes {}); {}",
+            "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); {}",
             index + 1,
             item.system,
             item.behavior,
             item.kind,
             item.dependents,
-            item.open_signatures_and_gaps,
+            item.open_signatures_or_gaps,
             item.claimed_opcodes,
             item.next_command
         );
@@ -500,12 +530,33 @@ status = "unverified"
 "#
         )
     };
+    let gap = "\n[[known_gaps]]\ndescription = \"Gap\"\npath = \"module/src/taxi.rs\"\nsymbol = \"test\"\nevidence = \"test\"\n";
     let sources = [
-        ("sample/root.toml", source("root", "[]", "[]", "[\"0x0050\"]")),
-        ("sample/branch.toml", source("branch", "[\"root\"]", "[\"branch\"]", "[\"0x0050\", \"0x01DC\"]")),
-        ("sample/leaf.toml", source("leaf", "[\"root\", \"branch\"]", "[]", "[\"0x0050\"]")),
-        ("sample/tie.toml", format!("{}\n[[known_gaps]]\ndescription = \"Gap\"\npath = \"module/src/taxi.rs\"\nsymbol = \"test\"\nevidence = \"test\"\n", source("tie", "[]", "[]", "[\"0x0050\"]"))),
-        ("sample/more.toml", source("more", "[]", "[]", "[\"0x0050\", \"0x01DC\"]")),
+        (
+            "sample/root.toml",
+            source("root", "[]", "[]", "[\"0x0050\"]"),
+        ),
+        (
+            "sample/branch.toml",
+            source(
+                "branch",
+                "[\"root\"]",
+                "[\"branch\"]",
+                "[\"0x0050\", \"0x01DC\"]",
+            ),
+        ),
+        (
+            "sample/leaf.toml",
+            source("leaf", "[\"root\", \"branch\"]", "[]", "[\"0x0050\"]"),
+        ),
+        (
+            "sample/tie.toml",
+            format!("{}{gap}{gap}", source("tie", "[]", "[]", "[\"0x0050\"]")),
+        ),
+        (
+            "sample/more.toml",
+            source("more", "[]", "[]", "[\"0x0050\", \"0x01DC\"]"),
+        ),
         ("sample/zoo.toml", source("zoo", "[]", "[]", "[\"0x0050\"]")),
     ];
     FeatureLedger::from_sources(
@@ -530,6 +581,74 @@ fn open_work_ranks_synthetic_ledger_deterministically() -> Result<()> {
     assert_eq!(work[1].kind, "implementer");
     assert_eq!(work[1].next_command, "./conformance/run branch");
     assert_eq!(work[2].kind, "scenario_author");
+    assert_eq!(work[2].open_signatures_or_gaps, 1);
+    Ok(())
+}
+
+#[test]
+fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let mut tier1_value = serde_json::to_value(&audit)?;
+    tier1_value["tier"] = json!("tier1");
+    tier1_value["audit"] = Value::Null;
+    let tier1: Report = serde_json::from_value(tier1_value)?;
+    let work = open_work(
+        &ledger,
+        Some(&audit),
+        Some(&tier1),
+        &tier1.core_commit,
+        "stale-head",
+        &tier1.harness_revision,
+    )?;
+    let connection = work
+        .iter()
+        .find(|item| item.behavior == "connection_identity")
+        .unwrap();
+    let taxi = work
+        .iter()
+        .find(|item| item.behavior == "taxi_single_hop")
+        .unwrap();
+    assert_eq!(connection.kind, "evidence_refresh");
+    assert_eq!(connection.next_command, "./conformance/audit");
+    assert_eq!(taxi.kind, "implementer");
+    assert_eq!(taxi.next_command, "./conformance/run taxi_single_hop");
+    assert_eq!(taxi.open_signatures_or_gaps, 24);
+    assert!(
+        work.iter()
+            .position(|item| item.behavior == "taxi_single_hop")
+            < work
+                .iter()
+                .position(|item| item.behavior == "connection_identity")
+    );
+    let without_tier1 = open_work(
+        &ledger,
+        Some(&audit),
+        None,
+        &tier1.core_commit,
+        "stale-head",
+        &tier1.harness_revision,
+    )?;
+    let connection = without_tier1
+        .iter()
+        .find(|item| item.behavior == "connection_identity")
+        .unwrap();
+    assert_eq!(connection.kind, "evidence_refresh");
+    assert_eq!(connection.next_command, "./conformance/audit");
+    let without_audit = open_work(
+        &ledger,
+        None,
+        Some(&tier1),
+        &tier1.core_commit,
+        &tier1.core_commit,
+        &tier1.harness_revision,
+    )?;
+    let taxi = without_audit
+        .iter()
+        .find(|item| item.behavior == "taxi_single_hop")
+        .unwrap();
+    assert_eq!(taxi.open_signatures_or_gaps, 24);
     Ok(())
 }
 
