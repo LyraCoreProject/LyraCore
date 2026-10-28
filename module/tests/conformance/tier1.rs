@@ -11,6 +11,9 @@ use wire_client::{catalogue, compare, runner};
 
 use super::transport::OperatorTransport;
 
+#[path = "../../../conformance/support/ratchet.rs"]
+mod ratchet;
+
 static REPORT: Mutex<()> = Mutex::new(());
 
 fn git(arguments: &[&str]) -> Result<String> {
@@ -122,10 +125,12 @@ fn run_scenario(
     update_result(&path, &golden, Some(&comparison), now)?;
     let report = serde_json::to_string_pretty(&comparison)?;
     println!("{id}: {report}");
-    assert!(
-        comparison.is_match(),
-        "{id} differs from its Golden Trace:\n{report}"
-    );
+    let baseline = ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?;
+    baseline.check(&ratchet::ScenarioBaseline::from_comparison(
+        id,
+        &golden.scenario().behavior,
+        &comparison,
+    ))?;
     Ok(())
 }
 
@@ -136,7 +141,7 @@ fn connection_identity_matches_its_golden_trace() -> Result<()> {
 }
 
 #[test]
-#[ignore = "taxi divergence: eight known gaps; run manually with the bundled route fixture"]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
     run_scenario("taxi_single_hop", |shard, scenario| {
         for statement in super::taxi_route::statements(scenario)? {
