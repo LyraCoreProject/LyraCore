@@ -125,7 +125,8 @@ values and the comparator rule's reason. The Behavior's vmangos commit, path and
 the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
 exact signature and provenance equality. The command exits with code 1 when the baseline differs
 and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
-case it prints the test diagnostic. Taxi can exit successfully while its known rule differences remain visible.
+case it prints the test diagnostic. Code 0 means the run completed and the Tier 1 baseline matches.
+Taxi can exit successfully while its known rule differences remain visible.
 
 `--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
 with `scenario`, `error.kind = "setup_failed"`, and `error.diagnostic` from the test output.
@@ -230,6 +231,11 @@ Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with 
 when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
 differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
+Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
+matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
+After an improvement, run both tier 1 tests and `./conformance/baseline`, then review the changed
+signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
+`prerequisites`. The command chooses an unused report name; audit history is append-only.
 
 Within those groups, the list sorts by descending number of other Behaviors that directly depend
 on the entry, then descending measured rule-signature count, then descending number of distinct
@@ -251,7 +257,7 @@ measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unve
 `unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
 record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
-`kind`, `reproduce_with`, `next_command` and the three numeric ranking inputs. `kind` is
+`kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
 `scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
 is the measured signature count or the distinct-gap fallback. Counts and state names have the same
 meaning as the text scoreboard.

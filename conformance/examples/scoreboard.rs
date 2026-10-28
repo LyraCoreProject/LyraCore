@@ -22,9 +22,38 @@ struct OpenWork {
     kind: &'static str,
     reproduce_with: Option<&'static str>,
     next_command: String,
+    prerequisites: Vec<&'static str>,
     dependents: usize,
     open_signatures_or_gaps: usize,
     claimed_opcodes: usize,
+}
+
+fn unused_audit_name(reports: &Path, date: &str) -> String {
+    for number in 0.. {
+        let name = if number == 0 {
+            date.to_owned()
+        } else {
+            format!("{date}-c{number}")
+        };
+        if ["md", "json", "traces"]
+            .iter()
+            .all(|extension| !reports.join(format!("{name}.{extension}")).exists())
+        {
+            return name;
+        }
+    }
+    unreachable!()
+}
+
+fn audit_command() -> Result<String> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let output = Command::new("date").arg("+%F").output()?;
+    ensure!(output.status.success(), "date failed");
+    let date = String::from_utf8(output.stdout)?;
+    let name = unused_audit_name(&root.join("reports"), date.trim());
+    Ok(format!(
+        "./conformance/audit --date {name} --client-data /path/to/client/Data"
+    ))
 }
 
 struct ScoreboardData<'a> {
@@ -101,12 +130,21 @@ fn open_work(
             Some("tier1")
         };
         let next_command = match reproduce_with {
-            Some("audit") => "./conformance/audit".to_owned(),
+            Some("audit") => audit_command()?,
             Some("tier1") => format!("./conformance/run {}", behavior.scenarios[0]),
             _ => format!(
                 "cat conformance/features/{}/{}.toml",
                 behavior.system, behavior.id
             ),
+        };
+        let prerequisites = if reproduce_with == Some("audit") {
+            vec![
+                "Existing 1.12.1 client Data directory; replace /path/to/client/Data",
+                "Prepared pinned Reference Server and Docker group access; stop the Reference Server before running",
+                "Free loopback ports 3000, 3724 and 8085; maintainer access for the disposable Realm",
+            ]
+        } else {
+            Vec::new()
         };
         work.push(OpenWork {
             behavior: behavior.id.clone(),
@@ -114,6 +152,7 @@ fn open_work(
             kind,
             reproduce_with,
             next_command,
+            prerequisites,
             dependents: ledger
                 .behaviors()
                 .iter()
@@ -590,8 +629,41 @@ fn open_work_ranks_synthetic_ledger_deterministically() -> Result<()> {
     assert_eq!(work[0].dependents, 2);
     assert_eq!(work[1].kind, "implementer");
     assert_eq!(work[1].next_command, "./conformance/run branch");
+    assert!(work[1].prerequisites.is_empty());
     assert_eq!(work[2].kind, "scenario_author");
     assert_eq!(work[2].open_signatures_or_gaps, 1);
+    Ok(())
+}
+
+#[test]
+fn audit_name_skips_existing_report_parts() -> Result<()> {
+    let reports = scratch::Scratch::new("audit-name-test")?;
+    for extension in ["json", "md", "traces"] {
+        std::fs::write(reports.join(format!("2026-10-28.{extension}")), "")?;
+    }
+    std::fs::write(reports.join("2026-10-28-c1.json"), "")?;
+    assert_eq!(unused_audit_name(&reports, "2026-10-28"), "2026-10-28-c2");
+    Ok(())
+}
+
+#[test]
+fn tier1_next_command_uses_runner_cli() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .context("root")?;
+    let help = Command::new(root.join("conformance/run"))
+        .arg("--help")
+        .output()?;
+    ensure!(help.status.success(), "conformance/run --help failed");
+    let help = String::from_utf8(help.stdout)?;
+    assert!(help.contains("scenario"));
+    assert!(help.contains("--json"));
+    let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
+    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    for scenario in ["taxi_single_hop", "connection_identity"] {
+        let item = work.iter().find(|item| item.behavior == scenario).unwrap();
+        assert_eq!(item.next_command, format!("./conformance/run {scenario}"));
+    }
     Ok(())
 }
 
@@ -621,7 +693,13 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .find(|item| item.behavior == "taxi_single_hop")
         .unwrap();
     assert_eq!(connection.kind, "evidence_refresh");
-    assert_eq!(connection.next_command, "./conformance/audit");
+    assert!(connection
+        .next_command
+        .starts_with("./conformance/audit --date "));
+    assert!(connection
+        .next_command
+        .ends_with(" --client-data /path/to/client/Data"));
+    assert_eq!(connection.prerequisites.len(), 3);
     assert_eq!(taxi.kind, "implementer");
     assert_eq!(taxi.next_command, "./conformance/run taxi_single_hop");
     assert_eq!(taxi.open_signatures_or_gaps, 24);
@@ -645,7 +723,9 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .find(|item| item.behavior == "connection_identity")
         .unwrap();
     assert_eq!(connection.kind, "evidence_refresh");
-    assert_eq!(connection.next_command, "./conformance/audit");
+    assert!(connection
+        .next_command
+        .starts_with("./conformance/audit --date "));
     let without_audit = open_work(
         &ledger,
         None,
@@ -688,7 +768,8 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
         .unwrap();
     assert_eq!(taxi.kind, "implementer");
     assert_eq!(taxi.reproduce_with, Some("audit"));
-    assert_eq!(taxi.next_command, "./conformance/audit");
+    assert!(taxi.next_command.starts_with("./conformance/audit --date "));
+    assert_eq!(taxi.prerequisites.len(), 3);
     assert_eq!(serde_json::to_value(taxi)?["reproduce_with"], "audit");
     Ok(())
 }
