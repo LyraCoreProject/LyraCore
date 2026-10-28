@@ -79,18 +79,17 @@ using a separate scenario author and independent decoders.
 
 ## Two verification tiers
 
-Tier 1 runs on every core change in CI, except the taxi comparison until its known gaps are fixed.
+Tier 1 runs on every core change in CI, including the taxi comparison.
 It drives the Module through native reducers and compares emitted packets with Golden Traces.
 It bypasses WoW TCP, SRP and the header cipher. The initial mechanism test must prove that an
 Operator WebSocket connection can enter the world through a feature-gated debug reducer,
 call `native_world_receive`, and subscribe to `game_native_packet`.
 The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
-CI explicitly skips `taxi_single_hop_matches_its_golden_trace` in `module-durable.yml`, with a
-pointer to `conformance/features/taxi/taxi_single_hop.toml`. Its hand-written fixture holds path 6
-with 28 vertices, nodes 2 and 4, and a minimal flight-master template. The eight known gameplay gaps
-remain. Remove the CI skip in the same PR that fixes the last gap. A manual run still fails with
-the full comparator report. Keep no known-differences baseline; the other conformance checks
-continue to run in durable CI.
+Its hand-written fixture holds path 6 with 28 vertices, nodes 2 and 4, and a minimal flight-master
+template. The eight known gameplay gaps remain. Each scenario's rule and data signature sets must
+equal the committed tier 1 baseline. A changed set requires regeneration from the comparator
+result in the same PR. The baseline does not change classification, scoreboard status or audit
+findings.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
 its Native Host and the vmangos world loaded by `lyracore import`, and the Reference Server,
@@ -186,7 +185,7 @@ core defects. No gameplay or Equivalence Rule changes belong to this update.
 The ledger can record `known_gaps` with a description, core source path, symbol and comparison
 evidence. These entries have no status and never participate in rule/data classification. They
 are separate from Deliberate Deviations. The scoreboard displays their count beside the measured
-results; the durable taxi skip remains until the Behavior conforms with the bundled route fixture.
+results; the durable taxi comparison uses the bundled route fixture and signature baseline.
 
 ## Milestone 3 audit
 

@@ -106,6 +106,15 @@ checkout is read and no catalogue check can skip. The pinned harness enables
 values. Core needs no feature override.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
+and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
+opcode and field path. It holds no reason or packet values. The durable test checks provenance and
+requires exact set equality, including when a difference disappears. After both tier 1 tests run,
+use `./conformance/baseline` to regenerate it from `.lyracore/conformance/tier1.json`. The command
+checks the core commit, harness revision and scenario hashes, then rewrites the canonical file.
+Review the changed signatures with the behavior change. This baseline does not change comparator
+tags, scoreboard pass/fail or the Conformance Audit.
+
 The runner prepares the scenario's Character through debug reducers, then runs the
 harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
@@ -121,8 +130,10 @@ filters packets during the scenario or changes its Equivalence Rules.
 The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
 revision, capture time and the harness comparison. It removes the scenario's previous result before
 setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
-and preserve other scenarios from the same revision. Both difference classes remain in the report. Only rule records fail the
-test. No packet text enters this result. The scoreboard consumes it.
+and preserve other scenarios from the same revision. Both difference classes remain in the report.
+The comparator marks a Behavior as nonconforming when it finds rule records. The tier 1 baseline
+check fails when either signature set changes or provenance differs, regardless of that result.
+No packet text enters this result. The scoreboard consumes it.
 
 ## Taxi data
 
@@ -150,10 +161,9 @@ cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ign
 ```
 
 This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
-Shard and fails with the full comparator report for the eight known gameplay gaps. Durable CI
-keeps the explicit `taxi_single_hop_matches_its_golden_trace` skip until those gaps are fixed.
-Remove the skip in the PR that fixes the last gap. All other conformance checks stay in CI.
-Known gaps never excuse a difference or supply a passing baseline.
+Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
+baseline. The eight known gameplay gaps remain comparator differences. Known gaps never excuse a
+difference or supply a passing result.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
@@ -246,8 +256,8 @@ Each LyraCore candidate's bytes must match `capture.sha256`, and its core commit
 must match the audit run. At the pinned harness revision, the candidate header has no slot for
 those three provenance values; it records only the adapter and scenario metadata. The report
 binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is corroborated by
-the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison still has
-its explicit durable CI skip, so it has no such passing corroboration until its gaps are fixed.
+the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison runs in
+durable CI against its signature baseline. Its rule differences still prevent a passing result.
 
 `audit.previous_report` is the JSON filename of the newest `conformance_audit` report in
 `conformance/reports/` with a strictly earlier `recorded_at_unix_ms`, or null when none exists.
