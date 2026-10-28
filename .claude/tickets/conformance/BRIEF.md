@@ -388,3 +388,47 @@ sizes.
 
 The first new Behavior built through the system, taxi chains, starts only after this branch and the
 vmangos port have both merged into `main`.
+
+### Milestone 4: the climbing loop
+
+Added 2026-10-28. **The end goal of this system is to give agents tools to hill-climb to 1.12
+parity.** Judge every change by whether it makes that loop faster, more trustworthy, or harder to
+game. Milestone 4 starts after `feat/conformance` merges into `main`, and branches from `main`.
+
+**Decisions:**
+
+- **A ratchet in CI.** Each Behavior with a scenario has a committed tier 1 baseline: the set of
+  rule signatures the comparator reports today. CI runs tier 1 and requires the signature set to
+  equal the baseline. A new signature fails (a regression). A removed signature also fails until
+  the same PR regenerates the baseline, so every improvement is visible in review. The baseline is
+  written only by a command from comparator output, never by hand, holds no reason text, and never
+  changes classification, the scoreboard's pass/fail, or the audit. With the ratchet, the taxi
+  comparison runs in CI again (its baseline is today's signatures) and the durable skip goes.
+- **One command for the inner loop.** `conformance run <scenario>` runs tier 1 for one scenario
+  and prints the grouped signatures, each with expected and actual values, the rule and its
+  reason, and the Behavior's vmangos source reference. `--json` gives the same for agents.
+- **A machine-readable scoreboard** (`--json`) with a ranked list of open work. Rank by a stated,
+  simple formula (for example: Behaviors other Behaviors depend on, then signature count, then
+  claimed-opcode count); explain it in the README. No hand-written priority.
+- **Every Behavior gets a scenario.** The scoreboard shows scenario coverage per system. A
+  Behavior without a scenario is open work for a scenario author.
+- **Separate roles stay.** A scenario author writes and records scenarios in harness PRs; an
+  implementer climbs in core. The climbing skill enforces it.
+
+**Slices.**
+
+- **M4a (core).** The ratchet and its regeneration command; taxi back in durable CI.
+- **M4b (core).** `conformance run` with text and JSON output.
+- **M4c (core).** Scoreboard JSON and the ranked open-work list; scenario coverage.
+- **M4d (core).** `.claude/skills/climb-conformance/SKILL.md`: the loop for an implementer (pick
+  the top open item from the scoreboard JSON, confirm a scenario exists or hand off to an author,
+  reproduce with `conformance run`, implement, run tier 1 and the ratchet, regenerate the baseline,
+  open a PR) and for a scenario author (Fixture Verbs, recording against the Reference Server,
+  tagging a harness prerelease, bumping the pin). Follow `writing-for-agents`.
+- **M4e (harness).** Agent-runnable recording: one command that brings up the Reference Server,
+  records a scenario, checks a repeat recording matches, and writes the trace. Fixture Verbs as the
+  first new scenarios need them. Fold in the two parked nits (single-sample validation against the
+  Golden Trace, the intermittent SRP retry).
+- **M4f (first climb).** The 8 taxi gaps, through the skill, by an implementer who did not write
+  the scenario. Each fix shrinks the ratchet baseline. The orchestrator merges these PRs into
+  `main` after tests and review.
