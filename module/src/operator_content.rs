@@ -1,4 +1,6 @@
 // The Operator Content API; read docs/operator-content-api.md before changing a contract.
+mod items;
+
 use lyracore_package_delta::{
     is_operator_spawn_id, is_package_creature_id, is_package_gameobject_id,
     packed_creature_spawn_guid, packed_gameobject_spawn_guid, MAX_CREATURE_GUID_COMPONENT,

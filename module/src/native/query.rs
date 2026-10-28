@@ -1,6 +1,7 @@
 use lyracore_protocol::{codec, messages::vanilla::opcodes::ServerOpcodeMessage};
-use spacetimedb::ReducerContext;
+use spacetimedb::{ReducerContext, Table};
 
+use super::game_native_world_connection;
 use crate::creatures::game_hunter_pet_protocol;
 use crate::gameobject::game_gameobject_template;
 use crate::items::game_item_template;
@@ -78,6 +79,27 @@ pub(super) fn item(ctx: &ReducerContext, entry: u32) -> ServerOpcodeMessage {
     ServerOpcodeMessage::SMSG_ITEM_QUERY_SINGLE_RESPONSE(Box::new(
         codec::build_item_query_response(entry, view.as_ref()),
     ))
+}
+
+pub(crate) fn broadcast_item_query(ctx: &ReducerContext, entry: u32) -> Result<(), String> {
+    let packet = lyracore_protocol::world::encode(item(ctx, entry))
+        .map_err(|reason| format!("item {entry} query response: {reason}"))?;
+    for connection in ctx.db.game_native_world_connection().iter() {
+        if matches!(
+            connection.state,
+            super::NativeWorldState::CharacterSelection { .. }
+                | super::NativeWorldState::InWorld(_)
+        ) {
+            super::send_raw(
+                ctx,
+                connection.connection_id,
+                packet.opcode,
+                packet.body.clone(),
+                false,
+            );
+        }
+    }
+    Ok(())
 }
 
 pub(super) fn npc_text(ctx: &ReducerContext, text_id: u32) -> ServerOpcodeMessage {

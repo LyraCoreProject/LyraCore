@@ -15,6 +15,7 @@ from eventai_speech import check_eventai_speech
 from headless import (AUTH_CHALLENGE, Logon, cast, creates, destroys, item_pointer, packed_guid, read_exact,
                       spell_go_misses, spell_id, teleport_ack, values)
 from host import MODULE, Host
+from operator_items import check_operator_items
 import reload
 import retention
 from spell_source import check_spell_source_behavior
@@ -5009,7 +5010,7 @@ def named(*checks):
 
 # These checks share one seeded Host and run in this order, with reset() after each.
 SHARED = named(
-    check_operator_reducers, check_logon, check_character_create, check_queries, check_visibility,
+    check_operator_reducers, check_operator_items, check_logon, check_character_create, check_queries, check_visibility,
     check_inventory, check_creature_catalogue, check_pet_level_scaling, check_spell_source_behavior, check_gossip_submenus, check_enchantments, check_quest_chain, check_quest_items, check_group_loot, check_aoi, check_auras, check_melee,
     check_casting, check_progression, check_taxi, check_death, check_environment, check_fatigue, check_social,
     check_channels, check_party,
