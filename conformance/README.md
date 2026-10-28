@@ -183,8 +183,12 @@ stale audit measured no rule signatures and the ledger has no known gaps, an ent
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
 Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
-command. The scenario-author command opens the ledger entry; the implementer command runs the first
-listed scenario. Further scenarios are in the Behavior's `scenarios` field.
+command. The scenario-author command opens the ledger entry. An implementer normally runs the first
+listed scenario; further scenarios are in the Behavior's `scenarios` field.
+Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
+when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
+differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
+the tier 1 fixture misses something; a scenario author can fix that fixture.
 
 Within those groups, the list sorts by descending number of other Behaviors that directly depend
 on the entry, then descending measured rule-signature count, then descending number of distinct
@@ -206,10 +210,10 @@ measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unve
 `unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
 record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
-`kind`, `next_command` and the three numeric ranking inputs. `kind` is `scenario_author`,
-`implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input is the measured
-signature count or the distinct-gap fallback. Counts and state names have the same meaning as the
-text scoreboard.
+`kind`, `reproduce_with`, `next_command` and the three numeric ranking inputs. `kind` is
+`scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
+is the measured signature count or the distinct-gap fallback. Counts and state names have the same
+meaning as the text scoreboard.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:

@@ -20,6 +20,7 @@ struct OpenWork {
     behavior: String,
     system: String,
     kind: &'static str,
+    reproduce_with: Option<&'static str>,
     next_command: String,
     dependents: usize,
     open_signatures_or_gaps: usize,
@@ -90,20 +91,28 @@ fn open_work(
         } else {
             "implementer"
         };
-        let next_command = if kind == "evidence_refresh" {
-            "./conformance/audit".to_owned()
-        } else if let Some(scenario) = behavior.scenarios.first() {
-            format!("./conformance/run {scenario}")
+        let reproduce_with = if kind == "scenario_author" {
+            None
+        } else if kind == "evidence_refresh"
+            || (tier1_state.is_match() && matches!(audit_state, State::Different(_)))
+        {
+            Some("audit")
         } else {
-            format!(
+            Some("tier1")
+        };
+        let next_command = match reproduce_with {
+            Some("audit") => "./conformance/audit".to_owned(),
+            Some("tier1") => format!("./conformance/run {}", behavior.scenarios[0]),
+            _ => format!(
                 "cat conformance/features/{}/{}.toml",
                 behavior.system, behavior.id
-            )
+            ),
         };
         work.push(OpenWork {
             behavior: behavior.id.clone(),
             system: behavior.system.clone(),
             kind,
+            reproduce_with,
             next_command,
             dependents: ledger
                 .behaviors()
@@ -475,7 +484,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
     println!("\nOpen work, with evidence refresh last; ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
-            "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); {}",
+            "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); reproduce with {}; {}",
             index + 1,
             item.system,
             item.behavior,
@@ -483,6 +492,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
             item.dependents,
             item.open_signatures_or_gaps,
             item.claimed_opcodes,
+            item.reproduce_with.unwrap_or("none"),
             item.next_command
         );
     }
@@ -653,6 +663,37 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
 }
 
 #[test]
+fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let mut tier1_value = serde_json::to_value(&audit)?;
+    tier1_value["tier"] = json!("tier1");
+    tier1_value["audit"] = Value::Null;
+    for scenario in tier1_value["scenarios"].as_array_mut().unwrap() {
+        scenario["comparison"]["differences"] = json!([]);
+    }
+    let tier1: Report = serde_json::from_value(tier1_value)?;
+    let work = open_work(
+        &ledger,
+        Some(&audit),
+        Some(&tier1),
+        &tier1.core_commit,
+        &audit.core_commit,
+        &tier1.harness_revision,
+    )?;
+    let taxi = work
+        .iter()
+        .find(|item| item.behavior == "taxi_single_hop")
+        .unwrap();
+    assert_eq!(taxi.kind, "implementer");
+    assert_eq!(taxi.reproduce_with, Some("audit"));
+    assert_eq!(taxi.next_command, "./conformance/audit");
+    assert_eq!(serde_json::to_value(taxi)?["reproduce_with"], "audit");
+    Ok(())
+}
+
+#[test]
 fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     let ledger = synthetic_ledger();
     let counts = counts::Counts {
@@ -688,6 +729,8 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     );
     assert_eq!(output["opcode_coverage"]["claimed"], 2);
     assert_eq!(output["open_work"].as_array().unwrap().len(), 6);
+    assert_eq!(output["open_work"][0]["reproduce_with"], Value::Null);
+    assert_eq!(output["open_work"][1]["reproduce_with"], "tier1");
     assert!(output["audit_evidence"].is_null());
     Ok(())
 }
