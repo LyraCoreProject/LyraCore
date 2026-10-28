@@ -25,7 +25,8 @@ use crate::{game_spell, game_world_entity};
 const MAX_EDITS: usize = 64;
 const MAX_LIST_ROWS: usize = 128;
 const MAX_BATCH_ROWS: usize = 512;
-const MAX_RESPAWNS: usize = 256;
+// See docs/operator-content-api.md for the measured respawn budget.
+const MAX_RESPAWNS: usize = 2_000;
 const MAX_TEXT_BYTES: usize = 255;
 
 // Exhaustive construction makes a new template column a compile failure here.
@@ -538,7 +539,7 @@ fn respawn_changed(ctx: &ReducerContext, changed: &BTreeMap<u32, usize>) -> Resu
             spawns.push(spawn);
             if spawns.len() > MAX_RESPAWNS {
                 return Err(format!(
-                    "creature edit {index}: a batch may respawn at most {MAX_RESPAWNS} creatures"
+                    "creature edit {index}: entry {entry} exceeds the batch limit; a batch may respawn at most {MAX_RESPAWNS} creatures"
                 ));
             }
         }

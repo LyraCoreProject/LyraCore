@@ -392,25 +392,77 @@ fn refused_batches_keep_rows_lives_and_logs_and_unchanged_imported_values_pass()
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn respawn_cap_refuses_the_whole_batch() {
     let shard = realm("operator-creatures-cap");
+    const CAP: usize = 2_000;
     let spawn = row(&shard, "game_creature_spawn", CHICKEN).unwrap();
     let placement = json!({"map_id": number::<u32>(&spawn, "map_id"), "x": number::<f32>(&spawn, "x"),
         "y": number::<f32>(&spawn, "y"), "z": number::<f32>(&spawn, "z"), "orientation": 0.0,
         "movement_type": 0, "respawn_secs": 120});
-    let edits = vec![json!({"createCreature": {"entry": 620, "placement": placement}}); 256];
-    shard.assert_call("operator_apply_spawn_edits", &[&json!(edits).to_string()]);
+    let edits = vec![json!({"createCreature": {"entry": 620, "placement": placement}}); CAP];
+    for batch in edits.chunks(256) {
+        shard.assert_call("operator_apply_spawn_edits", &[&json!(batch).to_string()]);
+    }
     assert!(poll_until(POLL_TIMEOUT, || shard
         .query_rows("SELECT guid FROM game_world_entity WHERE entry = 620")
         .len()
-        >= 257));
+        == CAP + 1));
     let before = template(&shard, 620).unwrap();
+    let lives = shard.query_rows("SELECT guid,life_seq FROM game_creature_spawn WHERE entry = 620");
     refusal(
         &shard,
         json!([
             {"createCreature": {"fields": fields(&shard)}},
             {"updateCreature": {"entry": 620, "fields": fields(&shard)}}
         ]),
-        "at most 256 creatures",
+        "entry 620 exceeds the batch limit; a batch may respawn at most 2000 creatures",
     );
     assert!(template(&shard, FIRST).is_none());
     assert_eq!(template(&shard, 620).unwrap(), before);
+    assert_eq!(
+        shard.query_rows("SELECT guid,life_seq FROM game_creature_spawn WHERE entry = 620"),
+        lives
+    );
+    let guid = lives
+        .iter()
+        .map(|row| number::<u64>(row, "guid"))
+        .max()
+        .unwrap();
+    shard.assert_call("operator_delete_creature_spawn", &[&guid.to_string()]);
+    let mut updated = fields(&shard);
+    updated["health"] = json!(234);
+    updated["max_level_health"] = json!(234);
+    let edit = json!({"updateCreature": {"entry": 620, "fields": updated}});
+    apply(&shard, json!([edit, edit]));
+    assert!(poll_until(POLL_TIMEOUT, || shard
+        .query_rows("SELECT guid FROM game_world_entity WHERE entry = 620 AND health = 234")
+        .len()
+        == CAP));
+    for life in shard.query_rows("SELECT guid,life_seq FROM game_creature_spawn WHERE entry = 620")
+    {
+        let before = lives
+            .iter()
+            .find(|row| row["guid"] == life["guid"])
+            .unwrap();
+        assert_eq!(
+            number::<u64>(&life, "life_seq"),
+            number::<u64>(before, "life_seq") + 1
+        );
+    }
+}
+
+#[test]
+#[ignore = "capacity measurement; see docs/operator-content-api.md"]
+fn benchmark_creature_template_respawns() {
+    let shard = realm("operator-creatures-benchmark");
+    let status = std::process::Command::new("python3")
+        .arg(concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/tests/operator_creature_benchmark.py"
+        ))
+        .arg(shard.server())
+        .arg(shard.shard_name())
+        .env("LYRACORE_BENCH_TOKEN", shard.owner_token())
+        .env("LYRACORE_BENCH_FIELDS", fields(&shard).to_string())
+        .status()
+        .expect("failed to start the creature benchmark");
+    assert!(status.success(), "creature benchmark failed");
 }

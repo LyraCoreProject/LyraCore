@@ -584,10 +584,12 @@ despawn cleanup applies. Running Instance copies, population copies, Package spa
 guardians and summons stay in place. Their copied fields change at their next creation.
 Instance-map source rows remain dormant. Loot and spell edits do not cause a respawn.
 
-A batch may respawn at most **256 creatures**. This matches `pass_respawn`'s 256-spawn tick budget,
-so one edit batch adds at most one pass's worth of respawn work. Other due spawns may delay the
-new lives. A batch over the cap is refused in full before any despawn. Narrow the edit scope or
-wait until fewer matching Authored Spawns are live.
+A batch may respawn at most **2,000 creatures**, summed across its affected entries. The
+Refusal names the edit index, the entry that crossed the limit and the cap. A batch over the cap
+is refused in full before any despawn. Repeating an entry in the batch counts its creatures once.
+`pass_respawn` still rebuilds at most 256 creatures per 500 ms creature tick, so a full batch
+needs at least eight ticks, about four seconds. Other due spawns may delay the new lives.
+[Respawn measurements](#respawn-measurements) explain the cap and its limits.
 
 Creature level-stat rows stay unchanged. The catalogue uses stored stats only while their
 endpoints agree with the template; otherwise it synthesizes stats from the edited template.
@@ -645,3 +647,118 @@ owning Import Family:
 
 The creature importer refuses source templates in the Operator Template Range. That reservation
 prevents source allocation conflicts; it does not preserve Operator rows across an import.
+
+### Respawn measurements
+
+Measured on 2026-10-28 with an Intel Core i7-7820HQ, Linux x86_64, the release Wasm Module and
+SpacetimeDB Standalone 2.7.1. Each case had one idle template with N live instance-zero Authored
+Spawns, no imported world, combat, Package AI or clients. Five updates changed template health
+and waited for every creature to return with the new health. Other processes were running on
+this machine; these are observed durations, not a capacity guarantee.
+
+| Live spawns | Empty batch median ms | Edit median / max ms | Recovery median s | Respawn ticks | Tick mean / upper bound ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 | 0.015 | 8.544 / 9.506 | 0.466 | 1 | 7.571 / <=10 |
+| 1,000 | 0.013 | 34.514 / 36.250 | 1.920 | 4 | 7.881 / <=25 |
+| 2,000 | 0.017 | 73.290 / 86.675 | 3.885 | 8 | 9.669 / <=50 |
+| 4,000 | 0.019 | 204.285 / 226.194 | 7.738 | 16 | 12.775 / <=50 |
+
+The final durable-suite run repeated the accepted sizes with the shipped cap. Other jobs
+continued running; the larger peaks show why the initial curve needs headroom.
+
+| Live spawns | Empty batch median ms | Edit median / max ms | Recovery median s | Respawn ticks | Tick mean / upper bound ms |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 256 | 0.023 | 12.050 / 14.960 | 0.429 | 1 | 13.049 / <=25 |
+| 1,000 | 0.025 | 58.133 / 63.079 | 1.912 | 4 | 13.366 / <=25 |
+| 1,129 | 0.020 | 41.779 / 65.225 | 2.414 | 5 | 10.282 / <=25 |
+| 2,000 | 0.018 | 89.699 / 160.897 | 3.858 | 8 | 13.149 / <=50 |
+
+The 4,000 case used a temporary measurement cap of 4,000; the shipped cap refuses it. Across
+both runs, the 2,000 case's maximum used 32.2% of the 500 ms creature interval, leaving 67.8%
+headroom. The interval is over three times that observed peak. Even the initial 4,000 case used
+45.3%. The cap is a count limit, not an elapsed-time deadline.
+The code and danger-zone guidance define no general reducer-duration target. The 256-per-tick
+respawn limit bounds reconstruction work after a world import and remains unchanged. Movement
+publication runs every 50 ms and melee every 100 ms, so an edit can delay those shorter schedules.
+This measurement does not promise uninterrupted movement during an Operator edit.
+
+Edit and empty-batch times come directly from the HTTP `spacetime-execution-duration-micros`
+header, so no wall-clock baseline subtraction is needed. Recovery starts after the edit response
+and polls at 50 ms intervals. Tick durations come from differences in the
+`spacetime_reducer_plus_query_duration_sec` histogram at `/v1/metrics`, including subscription
+query work. The upper bound is a histogram bucket boundary, not an exact maximum. Tick means
+include every creature tick during recovery. The benchmark has no elapsed-time assertions;
+it checks successful edits and complete reconstruction.
+
+Run the durable benchmark on its own, with Python 3 and the prerequisites in
+[Testing](testing.md#durable-tier):
+
+```bash
+mkdir -p target/measure-tmp
+TMPDIR="$PWD/target/measure-tmp" cargo test -p lyracore-module --test operator_creatures \
+  benchmark_creature_template_respawns -- --ignored --nocapture
+```
+
+`LYRACORE_BENCH_SIZES` defaults to `256,1000,1129,2000`; `LYRACORE_BENCH_REPEATS` defaults to 5.
+Use increasing sizes within the cap. The test owns a Standalone on a free loopback port.
+The same driver can use a Disposable Native Host and one Headless Client. By default, 32
+creatures are in the client's AOI and the rest are distant. It checks a destroy/create pair for
+each visible creature and one template response per edit, and reports wire bytes.
+
+```bash
+TMPDIR="$PWD/target/measure-tmp" LYRACORE_BENCH_SIZES=1129,2000 \
+  python3 module/tests/operator_creature_benchmark.py --native-host /path/to/spacetimedb-standalone
+```
+
+The pinned Native Host, SpacetimeDB 2.13.0 with LyraCore extensions, gave these additional
+five-update results on the same machine:
+
+| Live / visible spawns | Edit median / max ms | Recovery median s | Ticks | Tick mean / upper bound ms | Wire bytes per edit |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 1,129 / 32 | 44.946 / 53.924 | 2.358 | 5 | 13.383 / <=25 | 6,130 |
+| 2,000 / 32 | 82.676 / 83.913 | 3.837 | 8 | 15.058 / <=25 | 6,130 |
+| 2,000 / 2,000 | 100.403 / 105.121 | 3.796 | 8 | 58.802 / <=100 | 380,042 |
+
+Every edit delivered exactly the expected destroy/create pairs and one template response.
+Wire totals include four-byte packet headers. The dense case's 105.121 ms maximum leaves 79%
+of the 500 ms creature interval. Its reconstruction ticks all stayed within the 100 ms histogram
+bucket. The durable-suite peak above remains the limiting measurement. The 2,000 cap is about
+1.77 times the largest source entry; raising it to 4,000 spends headroom without helping that snapshot's entries.
+The Host binary SHA-256 was
+`2d8a48c830cc6b7e4c17efe5272cf6b1b6eacb8eafe9334ce55373790936adce`.
+
+`LYRACORE_BENCH_VISIBLE=2000` puts every creature in this run in the client's AOI. Native delivery
+cost scales with observer grants: each visible life produces one destroy and one create per
+observer. Template responses scale with authenticated World Sessions, once per edited entry.
+The ordinary cleanup path uses indexed entity, spawn, threat, loot and AOI lookups. One broader
+read remains: `combo::forget` scans all combo-point rows for each despawn. Relay cancellation can
+also scan active Relay definitions when it releases references. Removing these costs requires
+changes outside the template editor; neither dominates the empty-state measurement above.
+
+The cached vmangos SQLite snapshot had 1,141 migrations, highest id `20260913120518`, matching
+`importer/scripts/vmangos.lock`. Its SHA-256 was
+`a8ce8ecc8e9c9d00dfe23321d0763cf8aee19677c836f1e1b9acc15fb1fbd5c9`.
+A read-only SQL census applied patch 10 and the importer's `spawn_flags & 2 = 0` and nonzero-entry
+filters. All retained source rows import with instance zero; Instance-map rows stay dormant.
+The largest entry was **16356**, Scourge Invasion Minion, finder, with **1,129 positions**, all on
+maps 0 and 1. These belong to events 90 through 95, so this is a source-count upper bound,
+not a claim that all 1,129 are normally live together. Rabbit, entry 721, had 456 source positions,
+of which 452 were on open-world maps. The 2,000 cap covers the largest source count with 871
+positions to spare. No full world import was run for this census.
+
+This query reproduces the source-count upper bound on `mangos.sqlite`:
+
+```sql
+SELECT id AS entry, COUNT(*) AS source_positions
+FROM creature
+WHERE patch_min <= 10 AND patch_max >= 10
+  AND (spawn_flags & 2) = 0 AND id <> 0
+GROUP BY id
+ORDER BY source_positions DESC
+LIMIT 10;
+```
+
+The boundary test verifies that 2,001 live creatures refuse the whole batch without changing
+lives or templates, then removes one spawn and verifies that two updates to the same entry
+rebuild exactly 2,000 creatures once. Populated-world combat, many simultaneous observers,
+production hardware and real build 5875 presentation remain unmeasured.
