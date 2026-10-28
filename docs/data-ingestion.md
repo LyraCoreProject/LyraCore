@@ -288,6 +288,13 @@ WORLD_PROFILE=full-world DBC=/path/to/client/Data \
   bash importer/scripts/import-world.sh
 ```
 
+Before and after the import, the script compares the database's spatial maps with the maps that
+`--print-scope-maps` reports for the same scope and source. Before the import it stops on any other
+map unless `ALLOW_MAP_SWITCH=1` is set or the database is a fresh Shard. After the import any other
+map fails the run. For
+`full-world` that list follows the source, so it includes maps such as 269 and 451 that are not
+in the profile's supported map list. Importing their rows does not make them ready for player entry.
+
 All authored creature positions are retained, including nonselectable creatures and population
 alternatives. Population metadata retains entry choices, count limits, chances and event links.
 Creature pools retain supported count limits and chances. Nested or mixed memberships the Module

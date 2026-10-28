@@ -53,6 +53,7 @@ struct Args {
     pack_client: Option<String>,
     pack_out: Option<String>,
     print_extents: bool,
+    print_scope_maps: bool,
     spells: bool,
     talents: bool,
     only: Vec<u32>,
@@ -99,6 +100,7 @@ where
         go_models: None,
         terrain: None,
         print_extents: false,
+        print_scope_maps: false,
         spells: false,
         spell_snapshot: None,
         talents: false,
@@ -167,6 +169,7 @@ where
             }
             "--pack-out" => a.pack_out = Some(it.next().context("--pack-out needs an output dir")?),
             "--print-extents" => a.print_extents = true,
+            "--print-scope-maps" => a.print_scope_maps = true,
             "--spells" => a.spells = true,
             "--talents" => a.talents = true,
             "--only" => {
@@ -391,6 +394,9 @@ where
     }
     if a.print_extents && a.dump.is_none() {
         bail!("--print-extents is only valid with --dump (it reads the source creature table)");
+    }
+    if a.print_scope_maps && (a.dump.is_none() || a.apply) {
+        bail!("--print-scope-maps needs --dump and takes no --apply (it reads the source spawn tables)");
     }
     if !a.only.is_empty() && !a.spells {
         bail!("--only is only valid with --spells (the additive spell allowlist)");
@@ -619,6 +625,14 @@ fn main() -> Result<()> {
 
     if args.print_extents {
         return extents::print_extents(&dump_path, args.map, args.bbox);
+    }
+
+    if args.print_scope_maps {
+        let source = world_source::WorldSource::open(std::path::Path::new(&dump_path))?;
+        for map in args.world_import_scope()?.source_maps(&source)? {
+            println!("{map}");
+        }
+        return Ok(());
     }
 
     if args.spells {
@@ -1034,6 +1048,7 @@ mod tests {
             vmap_prepare_coverage: None,
             go_models: None,
             print_extents: false,
+            print_scope_maps: false,
             spells: false,
             talents: false,
             only: Vec::new(),
