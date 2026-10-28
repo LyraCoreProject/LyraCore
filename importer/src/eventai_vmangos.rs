@@ -1246,13 +1246,19 @@ mod tests {
             "cast:5200:self:0:direct:actor:selected:0:0:0:0:0"
         );
         assert_eq!(compiled.templates, BTreeSet::from([636]));
-        assert!(source
-            .compile_command(&cast, &mut Compiled::default(), &HashSet::new())
-            .is_err());
+        assert_eq!(
+            source
+                .compile_command(&cast, &mut Compiled::default(), &HashSet::new())
+                .unwrap_err(),
+            "guardian-template-dependency"
+        );
         source.guardian_entries.clear();
-        assert!(source
-            .compile_command(&cast, &mut Compiled::default(), &HashSet::from([636]))
-            .is_err());
+        assert_eq!(
+            source
+                .compile_command(&cast, &mut Compiled::default(), &HashSet::from([636]))
+                .unwrap_err(),
+            "command:15:parameters"
+        );
     }
 
     #[test]
@@ -1316,7 +1322,7 @@ mod tests {
     fn source_event_numbers_do_not_inherit_classic_meanings() {
         let mut event = event([10, 0, 0]);
         event.kind = 29;
-        assert!(event.compile().is_err());
+        assert_eq!(event.compile().unwrap_err(), "event:29:parameters");
         event.kind = 36;
         event.params = [42, u32::MAX, 0, 0];
         assert_eq!(event.compile().unwrap().0, "spell-hit-target:42:4294967295");
@@ -1450,9 +1456,12 @@ mod tests {
         }
         let mut targeted = step(1, [4, 21, 0, 0]);
         targeted.ints[0] = 1;
-        assert!(source
-            .compile_command(&targeted, &mut Compiled::default(), &HashSet::new())
-            .is_err());
+        assert_eq!(
+            source
+                .compile_command(&targeted, &mut Compiled::default(), &HashSet::new())
+                .unwrap_err(),
+            "command:1:parameters"
+        );
     }
 
     #[test]
@@ -1561,16 +1570,19 @@ mod tests {
                 .unwrap(),
             "notify-encounter:dire-maul-alzzin:break-alzzin-crumble-wall"
         );
-        for (entry, field, state) in [
-            (4832, 1, 3),
-            (9034, 4, 2),
-            (11391, 5, 4),
-            (8440, 8, 4),
-            (3671, 0, 4),
+        for (entry, field, state, expected) in [
+            (4832, 1, 3, "encounter-binding:4832:1"),
+            (9034, 4, 2, "encounter-binding:9034:4"),
+            (11391, 5, 4, "encounter-state:11391:5:4"),
+            (8440, 8, 4, "encounter-state:8440:8:4"),
+            (3671, 0, 4, "encounter-state:3671:0:4"),
         ] {
-            assert!(source
-                .encounter_command(entry, &step(37, [field, state, 0, 0]))
-                .is_err());
+            assert_eq!(
+                source
+                    .encounter_command(entry, &step(37, [field, state, 0, 0]))
+                    .unwrap_err(),
+                expected
+            );
         }
         source.source_maps.insert(4832, BTreeSet::from([0]));
         assert_eq!(

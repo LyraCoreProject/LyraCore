@@ -1793,9 +1793,21 @@ mod tests {
             ] {
                 let mut changed = row.clone();
                 changed[index] = wrong;
-                assert!(
+                assert_eq!(
                     matching_generation_state(&response(serde_json::json!([changed])), &plan)
-                        .is_err()
+                        .unwrap_err()
+                        .to_string(),
+                    if index == 3 {
+                        format!(
+                            "vmap generation {} is complete but has missing chunks",
+                            plan.generation_id
+                        )
+                    } else {
+                        format!(
+                            "vmap generation {} has different metadata from the import plan",
+                            plan.generation_id
+                        )
+                    }
                 );
             }
         }
@@ -1843,7 +1855,10 @@ mod tests {
         assert!(sql_owns_instance_pool(owned).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("true", "false")).unwrap());
         assert!(!sql_owns_instance_pool(&owned.replace("[0,true]", "[1,true]")).unwrap());
-        assert!(sql_owns_instance_pool("not json").is_err());
+        assert_eq!(
+            sql_owns_instance_pool("not json").unwrap_err().to_string(),
+            "parse JSON SQL Instance Pool response"
+        );
     }
 
     fn wmo_tri(verts: [[f32; 3]; 3]) -> VmapTri {

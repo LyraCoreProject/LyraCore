@@ -32,7 +32,6 @@ pub(crate) struct SpellHeaderRow {
     pub(crate) proc_flags: u32,
     pub(crate) proc_chance: u8,
     pub(crate) proc_charges: u8,
-    // The Package API does not claim the combo-point columns, so the snapshot omits them.
     pub(crate) max_duration_ms: u32,
     pub(crate) custom_flags: u32,
     pub(crate) min_target_level: u32,
@@ -75,8 +74,13 @@ impl SpellHeaderRow {
 
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
+        // SQL retains combo scaling in published order; the Base Snapshot omits it.
+        let position = columns
+            .iter()
+            .position(|(name, _)| *name == "custom_flags")
+            .expect("spell headers contain custom_flags");
         columns.insert(
-            25,
+            position,
             ("max_duration_ms", FieldValue::U32(self.max_duration_ms)),
         );
         sql_tuple(&columns)
@@ -136,8 +140,12 @@ impl SpellEffectRow {
     pub(crate) fn sql_values(&self) -> String {
         let mut columns = self.columns();
         columns.insert(0, ("id", FieldValue::U64(self.row_id())));
+        let position = columns
+            .iter()
+            .position(|(name, _)| *name == "bonus_coefficient")
+            .expect("spell effects contain bonus_coefficient");
         columns.insert(
-            18,
+            position,
             ("points_per_combo", FieldValue::F32(self.points_per_combo)),
         );
         sql_tuple(&columns)
@@ -319,6 +327,21 @@ mod tests {
             sql.ends_with(",true,0,0,3,18446744073709551615,0,0,0,8000,0,0,0)"),
             "{sql}"
         );
+    }
+
+    #[test]
+    fn sql_keeps_combo_scaling_before_the_vmangos_columns() {
+        let mut spell = header(133, "Fireball");
+        spell.max_duration_ms = 13000;
+        spell.custom_flags = 64;
+        spell.min_target_level = 12;
+        spell.single_target_key = 99;
+        assert!(spell.sql_values().ends_with(",13000,64,12,99)"));
+
+        let mut effect = effect(133, 0);
+        effect.points_per_combo = 3.5;
+        effect.bonus_coefficient = 0.75;
+        assert!(effect.sql_values().ends_with(",3.5,0.75)"));
     }
 
     #[test]

@@ -152,6 +152,91 @@ fn procs(
 mod tests {
     use super::*;
 
+    #[test]
+    fn derived_ranks_are_ordered_and_ignore_duplicate_or_zero_links() {
+        assert_eq!(
+            derived_spell_rank_rows(
+                &[(284, 285), (78, 284), (78, 284), (0, 78), (285, 0)],
+                &BTreeSet::new(),
+            )
+            .unwrap(),
+            ["(78,0,78,1,0)", "(284,78,78,2,0)", "(285,284,78,3,0)"]
+        );
+    }
+
+    #[test]
+    fn derived_ranks_preserve_explicit_partial_families() {
+        for explicit in [
+            BTreeSet::from([133, 143]),
+            BTreeSet::from([143]),
+            BTreeSet::from([145]),
+        ] {
+            assert_eq!(
+                derived_spell_rank_rows(&[(133, 143), (143, 145), (78, 284)], &explicit).unwrap(),
+                ["(78,0,78,1,0)", "(284,78,78,2,0)"]
+            );
+        }
+    }
+
+    #[test]
+    fn derived_ranks_ignore_ambiguity_and_cycles_in_explicit_families() {
+        assert_eq!(
+            derived_spell_rank_rows(
+                &[(133, 143), (133, 145), (143, 133), (78, 284)],
+                &BTreeSet::from([145]),
+            )
+            .unwrap(),
+            ["(78,0,78,1,0)", "(284,78,78,2,0)"]
+        );
+    }
+
+    #[test]
+    fn derived_ranks_refuse_ambiguous_families() {
+        for (links, expected) in [
+            ([(1, 2), (1, 3)], "ambiguous client spell rank link 1 -> 3"),
+            ([(1, 3), (2, 3)], "ambiguous client spell rank link 2 -> 3"),
+        ] {
+            assert_eq!(
+                derived_spell_rank_rows(&links, &BTreeSet::new())
+                    .unwrap_err()
+                    .to_string(),
+                expected
+            );
+        }
+    }
+
+    #[test]
+    fn derived_ranks_refuse_cycles() {
+        for links in [
+            vec![(1, 1)],
+            vec![(1, 2), (2, 1)],
+            vec![(1, 2), (2, 3), (3, 1)],
+        ] {
+            assert_eq!(
+                derived_spell_rank_rows(&links, &BTreeSet::new())
+                    .unwrap_err()
+                    .to_string(),
+                "client spell rank links contain a cycle"
+            );
+        }
+    }
+
+    #[test]
+    fn derived_ranks_accept_255_ranks_and_refuse_256() {
+        let mut links: Vec<_> = (1..255).map(|spell| (spell, spell + 1)).collect();
+        let rows = derived_spell_rank_rows(&links, &BTreeSet::new()).unwrap();
+        assert_eq!(rows.len(), 255);
+        assert_eq!(rows.first().unwrap(), "(1,0,1,1,0)");
+        assert_eq!(rows.last().unwrap(), "(255,254,1,255,0)");
+        links.push((255, 256));
+        assert_eq!(
+            derived_spell_rank_rows(&links, &BTreeSet::new())
+                .unwrap_err()
+                .to_string(),
+            "cyclic or oversized client spell family 1"
+        );
+    }
+
     fn fixture() -> WorldSource {
         let connection = rusqlite::Connection::open_in_memory().unwrap();
         connection.execute_batch("CREATE TABLE spell_template (entry INTEGER,build INTEGER,effect1 INTEGER,effect2 INTEGER,effect3 INTEGER,effectApplyAuraName1 INTEGER,effectApplyAuraName2 INTEGER,effectApplyAuraName3 INTEGER,PRIMARY KEY(entry,build));

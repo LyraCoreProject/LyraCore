@@ -49,7 +49,7 @@ jobs:
         if: matrix.shard == 2
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 44b04878f2050936faa61d6f087f3aa1a7a78a46
+          ref: 859c7257c74d2c371dea8ed743cfbccd596cac11
           path: .lyracore-upgrade-baseline
           persist-credentials: false
 

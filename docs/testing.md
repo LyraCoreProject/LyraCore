@@ -69,7 +69,7 @@ CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmi
 Deadmines targets need the separately installed dungeons Package.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
-`44b04878f2050936faa61d6f087f3aa1a7a78a46`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
+`859c7257c74d2c371dea8ed743cfbccd596cac11`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
 and publishes the current Module over the populated fixture without clearing it. Other durable
 runs must skip that test unless the baseline Wasm is available.
 

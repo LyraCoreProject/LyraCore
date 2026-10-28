@@ -656,7 +656,14 @@ mod tests {
             vec!["--go-models", "client"],
             vec!["--family", "spell"],
         ] {
-            assert!(parse_args_from(args.into_iter().chain(extra)).is_err());
+            let error = parse_args_from(args.into_iter().chain(extra))
+                .err()
+                .expect("competing snapshot mode must be refused");
+            assert_eq!(
+                error.to_string(),
+                "--spell-snapshot writes the Base Snapshot and touches no database; run it on its \
+                 own, then run the import separately"
+            );
         }
     }
 
@@ -807,7 +814,7 @@ mod tests {
             "unknown-profile",
         ])
         .err()
-        .expect("unknown EventAI Source Profile");
+        .expect("unknown Source Profile");
         assert!(format!("{error:#}").contains("unknown Source Profile"));
     }
 
@@ -816,12 +823,23 @@ mod tests {
         let base = ["--dump", "source.sqlite", "--family", "creature-ai"];
         let args = parse_args_from(base).unwrap();
         assert_eq!(args.eventai_profile, vmangos_profile::NAME);
-        assert!(parse_args_from(
-            base.into_iter()
-                .chain(["--eventai-profile", "unknown-profile"])
-        )
-        .is_err());
-        assert!(parse_args_from(base.into_iter().chain(["--apply"])).is_err());
+        assert_eq!(
+            parse_args_from(
+                base.into_iter()
+                    .chain(["--eventai-profile", "unknown-profile"])
+            )
+            .err()
+            .expect("input must be refused")
+            .to_string(),
+            "unknown Source Profile \"unknown-profile\"; expected vmangos-4641790"
+        );
+        assert_eq!(
+            parse_args_from(base.into_iter().chain(["--apply"]))
+                .err()
+                .expect("input must be refused")
+                .to_string(),
+            "apply requires --source-sha with the actual snapshot commit"
+        );
         let actual = "0123456789012345678901234567890123456789";
         let args =
             parse_args_from(base.into_iter().chain(["--apply", "--source-sha", actual])).unwrap();

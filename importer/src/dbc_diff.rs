@@ -404,6 +404,12 @@ mod tests {
             assert_eq!(records.value(&records.rows[&7], &field).unwrap(), expected);
         }
         bytes.pop();
-        assert!(Records::read(&bytes, 4).is_err());
+        assert_eq!(
+            Records::read(&bytes, 4)
+                .err()
+                .expect("input must be refused")
+                .to_string(),
+            "invalid DBC length"
+        );
     }
 }
