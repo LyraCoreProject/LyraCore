@@ -21,7 +21,7 @@ and publishing. [The Package API](./package-api.md) is the authority for the Pac
 | [operations/disk-policy.md](./operations/disk-policy.md) | Runbook | An Operator installs pruning and disk monitoring |
 | [operations/vmap-rollout.md](./operations/vmap-rollout.md) | Runbook | A maintainer enables exact collision on a Realm |
 | [data-ingestion.md](./data-ingestion.md) | How-to | You run importer stages or read a dry run |
-| [vmangos behavior gaps](../conformance/unsupported-vmangos.md) | Reference | You assess omitted source behavior or plan conformance work |
+| [Feature Ledger](../conformance/README.md) | Reference | You assess 1.12 Behavior evidence or vmangos gaps |
 | [World Source port census](../conformance/vmangos-port-census/README.md) | Evidence | You compare the accepted snapshot with the previous import |
 | [operator-content-api.md](./operator-content-api.md) | Reference | A world editor edits spawns on a running Realm |
 | [migrating-to-native-host.md](./migrating-to-native-host.md) | How-to | You port a Gateway-era branch, Package or local Realm |

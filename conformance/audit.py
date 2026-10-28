@@ -7,6 +7,7 @@ import json
 import os
 from pathlib import Path
 import secrets
+import shlex
 import shutil
 import signal
 import socket
@@ -19,8 +20,6 @@ import tomllib
 ROOT = Path(__file__).resolve().parent.parent
 SCRATCH = Path.home() / '.cache/lyracore-scratch/conformance'
 REFERENCE = Path.home() / '.cache/lyracore-scratch/reference-server'
-sys.path.insert(0, str(ROOT / 'native-host'))
-from host import Host
 
 
 def run(args, **options):
@@ -170,47 +169,81 @@ def delete_reference_character(wire, name, password, env):
             print('Retrying Reference Server cleanup after an SRP proof rejection.', flush=True)
 
 
-def capture_servers(host_binary, module, harness, wire, work):
+@contextmanager
+def local_realm(work):
+    cli = ROOT / 'lyracore'
+    status = run([cli, 'dev', 'status'], capture_output=True, text=True).stdout
+    if 'Native Host: Stopped' not in status:
+        raise RuntimeError('local Realm is already running; this audit only owns servers it starts')
+    for port in [3000, 3724, 8085]:
+        with socket.socket() as listener:
+            listener.bind(('127.0.0.1', port))
+    spacetime = shutil.which('spacetime')
+    if spacetime is None:
+        raise RuntimeError('spacetime CLI is missing')
+    bin_dir = work / 'bin'
+    bin_dir.mkdir()
+    isolated = bin_dir / 'spacetime'
+    isolated.write_text('#!/bin/sh\n'
+                        'if [ "$1" = login ] && [ "$2" = show ] && [ "$3" = --token ]; then\n'
+                        '    exit 1\n'
+                        'fi\n'
+                        'exec ' + shlex.quote(spacetime) + ' "$@"\n')
+    isolated.chmod(0o700)
+    cli_env = dict(os.environ)
+    cli_env.pop('CARGO_TARGET_DIR', None)
+    cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
+    try:
+        run([cli, 'dev', 'up', '--single'], env=cli_env)
+        run([cli, 'import', '--accept'], env=cli_env)
+        password = secrets.token_hex(8)
+        run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
+            input=(password + '\n').encode(), env=cli_env)
+        token = ROOT / '.lyracore/native-owner-token'
+        if not token.is_file():
+            raise RuntimeError('local Realm has no Operator token')
+        copied_token = work / 'operator-token'
+        copied_token.write_bytes(token.read_bytes())
+        copied_token.chmod(0o600)
+        host = ROOT / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
+        module = ROOT / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
+        yield password, copied_token, host, module
+    finally:
+        run([cli, 'dev', 'down'], env=cli_env)
+
+
+def capture_servers(harness, wire, work):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     scenarios = json.loads((work / 'catalogue.json').read_text())
-    with reference_server(harness) as provenance:
-        passwords = b''.join((REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                             for name in ['player-password', 'gm-password'])
-        reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
+    with local_realm(work) as (password, token, host, module):
+        host_hash = digest(host)
+        module_hash = digest(module)
+        with reference_server(harness) as provenance:
+            passwords = b''.join((REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
+                                 for name in ['player-password', 'gm-password'])
+            reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
+            for scenario in scenarios:
+                delete_reference_character(wire, scenario['character'], passwords.splitlines()[0] + b'\n', env)
+                capture(wire, work, scenario, 'vmangos', [13724, 18085], passwords, reference_env)
+        env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
+                   WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         for scenario in scenarios:
-            delete_reference_character(wire, scenario['character'], passwords.splitlines()[0] + b'\n', env)
-            capture(wire, work, scenario, 'vmangos', [13724, 18085], passwords, reference_env)
-        with Host(host_binary, module=module) as host:
-            try:
-                host.call('debug_repair_after_publish')
-                for statement in json.loads((work / 'taxi-fixture.json').read_text()):
-                    host.sql(statement)
-                host.call('provision_realm', [1, 'Conformance', f'127.0.0.1:{host.world_port}', 0, 1])
-                password = secrets.token_hex(8)
-                host.account('CONFORMANCE', password=password)
-                token = work / 'operator-token'
-                token.touch(mode=0o600)
-                token.write_text(host.token)
-                env.update(WIRE_REALM_URL=f'http://127.0.0.1:{host.http_port}',
-                           WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD=host.database)
-                for scenario in scenarios:
-                    capture(wire, work, scenario, 'lyracore', [host.logon_port, host.world_port],
-                            (password + '\n').encode(), env)
-            except BaseException:
-                print('Native Host capture failed; both local servers will stop.', file=sys.stderr)
-                raise
-        return provenance
+            capture(wire, work, scenario, 'lyracore', [3724, 8085],
+                    (password + '\n').encode(), env)
+        if digest(host) != host_hash or digest(module) != module_hash:
+            raise RuntimeError('local Realm binaries changed during capture')
+        snapshot = json.loads((ROOT / '.import/vmangos/current.json').read_text())
+        content = f"lyracore import alliance-single, vmangos db_latest {snapshot['commit']}, client data from lyracore config"
+        return provenance, host_hash, module_hash, content
 
 
 def main():
     parser = argparse.ArgumentParser(description='Run every catalogue scenario on two owned local servers.')
-    parser.add_argument('--host', type=Path, required=True, help='Native Host binary built from this core revision')
     parser.add_argument('--date', default=datetime.date.today().isoformat())
     parser.add_argument('--output', type=Path, default=ROOT / 'conformance/reports')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if datetime.date.fromisoformat(args.date).isoformat() != args.date:
         parser.error('--date must be YYYY-MM-DD')
-    args.host = args.host.resolve(strict=True)
     if any((args.output / f'{args.date}.{suffix}').exists() for suffix in ['md', 'json', 'traces']):
         parser.error('report already exists; choose a new date or archive it first')
     SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -234,27 +267,20 @@ def main():
     harness = pinned_harness(metadata, revision, cargo_home)
     run(['cargo', 'build', '--locked', '-p', 'lyracore-conformance', '--example', 'audit'])
     run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml', '--bin', 'vanilla-wire'])
-    run(['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',
-         '-p', 'lyracore-module', '--features=debug_reducers'])
-    module = target / 'wasm32-unknown-unknown/release/lyracore_module.wasm'
     audit = target / 'debug/examples/audit'
     with tempfile.TemporaryDirectory(prefix='audit-', dir=SCRATCH) as directory:
         work = Path(directory)
         tempfile.tempdir = str(work)
         os.environ['TMPDIR'] = str(work)
         run([audit, 'export', work])
-        captured_module = work / 'lyracore_module.wasm'
-        shutil.copyfile(module, captured_module)
-        host_hash = digest(args.host)
-        provenance = capture_servers(args.host, captured_module, harness, target / 'debug/vanilla-wire', work)
-        if digest(args.host) != host_hash:
-            raise RuntimeError('Native Host binary changed during capture')
+        provenance, host_hash, module_hash, content = capture_servers(
+            harness, target / 'debug/vanilla-wire', work)
         if core_commit != git('rev-parse', 'HEAD') or dirty != git('status', '--porcelain', '--untracked-files=normal'):
             raise RuntimeError('core changed during capture; rerun the audit')
         (work / 'run.json').write_text(json.dumps(dict(
             core_commit=core_commit, working_tree_dirty=bool(dirty), harness_revision=revision,
             recorded_at_unix_ms=time.time_ns() // 1_000_000, native_host_sha256=host_hash,
-            module_sha256=digest(captured_module), reference=provenance)))
+            module_sha256=module_hash, content=content, reference=provenance)))
         run([audit, 'report', work, args.output, args.date])
 
 

@@ -31,7 +31,7 @@ The [migration censuses](../conformance/vmangos-port-census/README.md) compare p
 not observations of a Realm. The consumed floors
 and their count-based rationale are in
 [`vmangos-floors.md`](../importer/manifests/vmangos-floors.md). The
-[unsupported behavior ledger](../conformance/unsupported-vmangos.md) records known gaps,
+[Feature Ledger](../conformance/README.md) records known gaps,
 including creatures whose behavior lives in vmangos C++ AI or has no source rows.
 
 The vmangos globals Compatibility Manifest reports portal conditions that the Module cannot apply.

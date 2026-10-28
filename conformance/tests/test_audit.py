@@ -93,6 +93,26 @@ class WorldReadiness(unittest.TestCase):
         self.assertEqual(connect.call_count, 2)
 
 
+class LocalRealmLifetime(unittest.TestCase):
+    def test_import_failure_stops_the_realm_started_by_the_audit(self):
+        calls = []
+
+        def run(args, **_):
+            calls.append(args[1:])
+            if args[1:3] == ['dev', 'status']:
+                return type('Result', (), {'stdout': 'Native Host: Stopped'})()
+            if args[1:3] == ['import', '--accept']:
+                raise RuntimeError('import failed')
+
+        with tempfile.TemporaryDirectory() as directory, patch.object(audit, 'ROOT', Path(directory)), \
+                patch.object(audit, 'run', run), patch.object(audit.socket, 'socket'):
+            with self.assertRaisesRegex(RuntimeError, 'import failed'):
+                with audit.local_realm(Path(directory)):
+                    self.fail('capture must not start')
+        self.assertEqual(calls, [['dev', 'status'], ['dev', 'up', '--single'],
+                                 ['import', '--accept'], ['dev', 'down']])
+
+
 class CleanupAuthentication(unittest.TestCase):
     def test_only_pre_authentication_proof_errors_retry_once(self):
         proof = audit.subprocess.CalledProcessError(1, ['wire'], stderr=b'Error: logon proof rejected\n')

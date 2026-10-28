@@ -1,0 +1,26 @@
+schema_version = 1
+id = "portal_entry"
+system = "portals"
+scope = "A portal applies its source condition before moving a Character."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Handlers/MiscHandler.cpp"
+symbol = "WorldSession::HandleAreaTriggerOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "globals.portal-condition selected 16: Condition kinds are translated. Portal gameplay support remains unimplemented."
+path = "importer/src/world_import.rs"
+symbol = "build_areatrigger_teleport_sql"
+evidence = "Compatibility Manifest globals.portal-condition; conformance/vmangos-port-census/globals.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

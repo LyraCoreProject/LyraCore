@@ -12,8 +12,6 @@ use wire_client::{
 
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
-#[path = "../support/taxi_route.rs"]
-mod taxi_route;
 use evidence::{Audit, BehaviorAudit, CandidateCapture, Report, ScenarioResult};
 
 #[cfg(test)]
@@ -29,6 +27,7 @@ struct Run {
     recorded_at_unix_ms: u64,
     native_host_sha256: Sha256Digest,
     module_sha256: Sha256Digest,
+    content: String,
     reference: Provenance,
 }
 
@@ -46,10 +45,6 @@ fn export(directory: &Path) -> Result<()> {
     std::fs::write(
         directory.join("catalogue.json"),
         serde_json::to_vec_pretty(&scenarios)?,
-    )?;
-    std::fs::write(
-        directory.join("taxi-fixture.json"),
-        serde_json::to_vec(&taxi_route::statements())?,
     )?;
     Ok(())
 }
@@ -133,9 +128,12 @@ fn compare_run(
         );
     }
     report.audit = Some(Audit {
-        native_host_sha256: run.native_host_sha256, module_sha256: run.module_sha256,
-        content: "Module seed content and the hand-written taxi route fixture, nodes 2 and 4, path 6, 28 vertices and flight master 352; no world import".into(),
-        reference: run.reference, previous_report: previous.map(|old| old.recorded_at_unix_ms.to_string()), behaviors,
+        native_host_sha256: run.native_host_sha256,
+        module_sha256: run.module_sha256,
+        content: run.content,
+        reference: run.reference,
+        previous_report: previous.map(|old| old.recorded_at_unix_ms.to_string()),
+        behaviors,
     });
     report.validate("conformance_audit", ledger)?;
     for behavior in ledger
@@ -219,7 +217,8 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "core_commit": "1".repeat(40), "working_tree_dirty": false,
                 "harness_revision": revision, "recorded_at_unix_ms": 2,
-                "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64), "reference": provenance,
+                "native_host_sha256": "a".repeat(64), "module_sha256": "b".repeat(64),
+                "content": "imported vmangos world", "reference": provenance,
             }))?,
         )?;
         for entry in catalogue::ENTRIES {

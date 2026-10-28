@@ -1,0 +1,74 @@
+schema_version = 1
+id = "map_and_trigger_rules"
+system = "world"
+scope = "Maps and area triggers apply their source gameplay rules."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Maps/Map.cpp"
+symbol = "Map::Update"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "dbc.map-ghost-entrance: The source behavior is not represented by the current import."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.map-ghost-entrance; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.map-player-limit: The source behavior is not represented by the current import."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.map-player-limit; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.map-reset-delay: The source behavior is not represented by the current import."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.map-reset-delay; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.map-script-name: The source behavior is not represented by the current import."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.map-script-name; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.trigger-condition selected 0: A future nonzero source condition will be reported; trigger entry has no condition Gate."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.trigger-condition; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.trigger-cooldown selected 2: Trigger cooldowns are not represented."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.trigger-cooldown; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.trigger-script-id selected 2: Source trigger script lists await the script system."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.trigger-script-id; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "dbc.trigger-script-name selected 53: Source named trigger scripts are unsupported."
+path = "importer/src/dbc_source.rs"
+symbol = "findings"
+evidence = "Compatibility Manifest dbc.trigger-script-name; conformance/vmangos-port-census/dbc.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Raid lockouts do not follow the vmangos Map reset rules."
+path = "importer/src/dbc_source.rs"
+symbol = "world_plan"
+evidence = "conformance/vmangos-port-census/dbc.md: Map reset delays and lockout limits."

@@ -41,7 +41,8 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 Ids for Behaviors, systems and deviations start with a lowercase ASCII letter and contain only
 lowercase letters, digits and underscores. Scenario ids have no prescribed naming syntax. Empty
 and duplicate scenario ids fail. Opcode strings use `0x` and four uppercase hexadecimal digits.
-A Behavior must claim at least one request or reply. Claims need not be exclusive across Behaviors.
+A Behavior must claim a request or reply unless it records a known world-data gap with no opcode
+claim. Claims need not be exclusive across Behaviors.
 
 The rungs are `unit`, `codec`, `durable_module`, `tier1`, `conformance_audit` and `real_client`.
 A required rung is an obligation, not a result. The `tests` array names Rust source evidence from
@@ -225,7 +226,7 @@ duplicate results and malformed reports fail before freshness checks.
 | `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |
 | `audit` | Audit-only server provenance and per-Behavior summaries |
 
-`audit` records the Native Host and Module binary hashes, content fixture description, and vmangos
+`audit` records the Native Host and Module binary hashes, imported world description, and vmangos
 binary release, archive hash, source commit and database commit. Its `behaviors` map holds each
 Behavior's `candidate` and `reference` summaries. Each summary has `rule` and `data` groups with
 `raw_records` and a `signatures` array of `{signature, raw_records}`. The scoreboard recomputes
@@ -261,25 +262,26 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/bc83d81cc1992fd1b522cab38c2ea048b5c6db23/adapters/vmangos/README.md).
 Stop it before the audit. The runner refuses a running Reference Server or occupied reference ports.
-Build the Native Host for this checkout as described in [testing](../docs/testing.md#native-protocol-tier).
+Set the client Data path with `./lyracore config set client-data PATH` before the audit.
 Then run:
 
 ```bash
-./conformance/audit --host /path/to/spacetimedb-standalone --date 2026-10-27
+./conformance/audit --date 2026-10-28
 ./conformance/scoreboard
 ```
 
-The Python command manages local processes because it can reuse `native-host/host.py`. The Rust
+The Python command manages the local Realm through `lyracore dev`. The Rust
 `audit` example exports catalogue scenarios, compares candidates through the pinned library, and
 writes the reports. It shares counting and evidence validation with the scoreboard. Neither core
 command reads scenarios or Golden Traces from a harness checkout. Cargo metadata locates the
 pinned checkout only to build `vanilla-wire` and run its server adapters.
 
-The command builds `vanilla-wire`, the audit example and the Module with `debug_reducers`. It starts
-a fresh Native Host on free loopback ports, provisions a disposable Account, and installs the same
-hand-written route fixture as tier 1. It uses normal SRP login and encrypted world TCP sessions;
-fixture world-entry bypasses are not compiled into this Module. The fixture supplies the current
-catalogue's content without importing world data. New scenarios may need more content.
+The command builds `vanilla-wire` and the audit example. It starts an owned local Realm with
+`lyracore dev up`, runs `lyracore import --accept` using the client path from `lyracore config`,
+and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
+under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
+and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
+Tier 1 still uses the bundled route fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
 pins and provenance, starts its compose services, and resets only the catalogue Characters on the
@@ -335,12 +337,11 @@ The embedded initial sets still enforce the starting limit after a squash or reb
 
 ## Trainable spells
 
-The scoreboard finds `mangos.sqlite` below `$HOME/.cache/lyracore-scratch/vmangos-db/`, or accepts
-`--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and `query_only`. A missing file
-prints `Trainable spells: no data` with the expected path and leaves the rest of the scoreboard
-usable. Multiple default copies, unreadable files, malformed schemas and dangling teaching-spell
-references fail. No importer output or vmangos rows enter git; the importer mapping functions are
-checked as source.
+The scoreboard uses `.import/vmangos/current.json`, the same snapshot selection as `lyracore
+import`, or accepts `--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and
+`query_only`. A missing snapshot prints `Trainable spells: no data` with the expected path and
+leaves the rest of the scoreboard usable. A snapshot path outside `.import/vmangos/`, unreadable
+files, malformed schemas and dangling teaching-spell references fail. No vmangos rows enter git.
 
 For each class, "trainable" is the union of:
 
@@ -359,16 +360,12 @@ Use the largest `spell_template.build <= 5875` per entry. Resolve teaching spell
 once per class, keeping ranks separate. A spell must have at least one nonzero effect. Every
 nonzero effect must map to a supported kind through the importer rules, in all three slots.
 
-`examples/scoreboard/spells.rs` reproduces the importer's private `instant_effect_to_kind` and
-`aura_mod_to_kind` functions. An AST comparison test fails if either differs from
-`importer/src/spell.rs`. The importer is a binary and exposes no library mapping to call.
-`spell_counts.py` applies the same name-dependent support rules, including the Stealth exception,
-home-target teleport and dismount cases. A test checks the name list against the importer table.
-Raw 5, 29 and 96 are not blanket support for Blink or Charge. Raw 59, 63 and 91 use the importer's
-supported mappings. Unknown kinds stay unsupported unless the importer has a named correction.
-
-Re-derive these mappings after the vmangos port merges: that port changes `importer/src/spell.rs`.
-The cross-check must pass against the merged importer before using these counts.
+The scoreboard reads trainable spell rows from the selected vmangos SQLite file and calls
+`lyracore-importer::spell_kind::supported_effect` for each nonempty effect slot. The importer
+uses the same kind mappings and name corrections when building the spell catalogue. The counter
+therefore has no copied Rust mapping or Python list of script-name exceptions. Raw 5, 29 and 96
+are not blanket support for Blink or Charge. Raw 59, 63 and 91 use importer mappings. Unknown
+kinds stay unsupported unless the importer has a named correction.
 
 Class skill lines follow vmangos at
 [`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77),

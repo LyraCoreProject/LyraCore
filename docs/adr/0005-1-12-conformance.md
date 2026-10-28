@@ -94,9 +94,9 @@ the full comparator report. Keep no known-differences baseline; the other confor
 continue to run in durable CI.
 
 Tier 2 is the manual Conformance Audit. The harness drives a complete local LyraCore Realm with
-its Native Host and the content its scenarios require, and the Reference Server, through the same
-wire scenarios. Run it before feature batches and at milestones. It writes a dated report and never
-gates CI.
+its Native Host and the vmangos world loaded by `lyracore import`, and the Reference Server,
+through the same wire scenarios. The Operator's client data comes from `lyracore config`.
+Run it before feature batches and at milestones. It writes a dated report and never gates CI.
 
 The harness repository owns scenarios, Fixture Verbs, Golden Traces, general Equivalence Rules,
 the comparator and Reference Server adapter. Core's `conformance/` owns the Feature Ledger,
@@ -191,8 +191,9 @@ results; the durable taxi skip remains until the Behavior conforms with the bund
 
 ## Milestone 3 audit
 
-`conformance/audit` starts an owned local Native Host with the shared hand-written taxi fixture and
-starts the pinned Reference Server through a `newgrp docker` heredoc. Every embedded catalogue
+`conformance/audit` starts an owned local Realm through `lyracore dev up`, imports the vmangos
+world through `lyracore import`, and starts the pinned Reference Server through a `newgrp docker`
+heredoc. The tier 1 taxi route fixture stays in tier 1. Every embedded catalogue
 scenario runs over TCP on both servers, and both candidates compare with their Golden Traces.
 The command writes a dated Markdown report and schema-2 JSON evidence, then stops both servers.
 The Reference Server comparison and recorded provenance establish reference stability separately.

@@ -1,0 +1,38 @@
+schema_version = 1
+id = "spell_learning_links"
+system = "spells"
+scope = "Spell learning and proc links follow their source activation and rank rules."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Spells/SpellMgr.cpp"
+symbol = "SpellMgr::LoadSpellLearnSpells"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "spellmeta.inactive-learn: Inactive source learn links remain active in the Module."
+path = "importer/src/world_import_spellmeta.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest spellmeta.inactive-learn; conformance/vmangos-port-census/spellmeta.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "spellmeta.missing-rank-spell: A rank link to a spell absent from the selected catalogue is omitted."
+path = "importer/src/world_import_spellmeta.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest spellmeta.missing-rank-spell; conformance/vmangos-port-census/spellmeta.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "spellmeta.proc-mask: Distinct active proc masks cannot fit the Module’s single family mask."
+path = "importer/src/world_import_spellmeta.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest spellmeta.proc-mask; conformance/vmangos-port-census/spellmeta.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

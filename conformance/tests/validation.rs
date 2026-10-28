@@ -169,3 +169,15 @@ evidence = "Comparison record 1: missing_packet."
     assert!(load(&format!("{source}\nstatus = \"open\"\n")).is_err());
     assert!(load(&format!("known_gaps = [\"missing reply\"]\n{EXAMPLE}")).is_err());
 }
+
+#[test]
+fn world_data_behavior_needs_a_gap_when_it_claims_no_opcode() {
+    let no_opcodes = EXAMPLE
+        .replace("requests = [\"0x0189\", \"0x018E\"]", "requests = []")
+        .replace("replies = [\"0x0191\"]", "replies = []");
+    assert!(load(&no_opcodes).is_err());
+    let with_gap = format!(
+        "{no_opcodes}\n[[known_gaps]]\ndescription = \"Source gate is absent.\"\npath = \"module/src/quest.rs\"\nsymbol = \"quest_gate\"\nevidence = \"vmangos manifest quests.condition\"\n"
+    );
+    assert_eq!(load(&with_gap).unwrap().behaviors()[0].known_gaps.len(), 1);
+}

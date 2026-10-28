@@ -392,6 +392,10 @@ pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) 
     }
 }
 
+fn should_insert_discovery(already_known: bool) -> bool {
+    !already_known
+}
+
 fn route_is_supported(
     source: &GameTaxiNode,
     destination: &GameTaxiNode,

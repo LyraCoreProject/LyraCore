@@ -1199,6 +1199,7 @@ name = "lyracore-conformance"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "lyracore-importer",
  "lyracore-shared",
  "serde",
  "serde_json",
@@ -1220,6 +1221,7 @@ dependencies = [
  "lyracore-shared",
  "lyracore-test-support",
  "rusqlite",
+ "serde",
  "serde_json",
  "wow-adt",
  "wow-m2",
@@ -2565,7 +2567,7 @@ dependencies = [
  "log",
  "rand 0.9.5",
  "sha1",
- "thiserror 2.0.19",
+ "thiserror 2.0.21",
  "utf-8",
 ]
 

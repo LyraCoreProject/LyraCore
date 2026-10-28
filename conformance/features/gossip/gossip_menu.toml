@@ -1,0 +1,98 @@
+schema_version = 1
+id = "gossip_menu"
+system = "gossip"
+scope = "A Character sees and selects source gossip options with their conditions and text."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Handlers/NPCHandler.cpp"
+symbol = "WorldSession::HandleGossipSelectOptionOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "gossip.broadcast-metadata selected 5720: Language, chat type, sound and emote metadata are absent from the text tables."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.broadcast-metadata; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.condition-flags selected 57: Only reverse-result flags are represented; swapped targets stay unavailable."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.condition-flags; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.condition-kind selected 735: Unsupported source kinds become an unavailable sentinel."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.condition-kind; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.conditional-greeting selected 1280: The Module cannot select greeting text by current condition state. It uses the last unconditional greeting, or source default 0xffffff."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.conditional-greeting; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.menu-script selected 8: Source greeting scripts are not dispatched."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.menu-script; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-action selected 14: Unsupported service actions stay unavailable."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-action; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-condition selected 521: The referenced condition graph contains unavailable predicates, operands or flags."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-condition; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-confirmation selected 5: The option table has no confirmation text."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-confirmation; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-gender selected 7: Option labels store one string; male text wins when both genders are present."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-gender; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-poi selected 351: Source points of interest are not sent."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-poi; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.option-script selected 526: Source option scripts are not dispatched."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.option-script; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.profile-npc-flags selected 2548: Profile options cannot carry the source NPC flag mask. Creature entry options apply it during import."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.profile-npc-flags; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gossip.spawn-greeting selected 8: Greeting tables are keyed by creature entry, not spawn GUID."
+path = "importer/src/world_import_gossip.rs"
+symbol = "plan"
+evidence = "Compatibility Manifest gossip.spawn-greeting; conformance/vmangos-port-census/gossip.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

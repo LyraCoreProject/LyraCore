@@ -93,8 +93,8 @@ impl Behavior {
         identifier(&self.system)?;
         nonempty(&self.scope, "scope")?;
         ensure!(
-            !self.requests.is_empty() || !self.replies.is_empty(),
-            "Behavior has no opcodes"
+            !self.requests.is_empty() || !self.replies.is_empty() || !self.known_gaps.is_empty(),
+            "Behavior has neither opcodes nor known gaps"
         );
         for (direction, opcodes) in [("requests", &self.requests), ("replies", &self.replies)] {
             unique(opcodes, direction)?;
