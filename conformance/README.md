@@ -124,8 +124,8 @@ then prints differences grouped by signature. Each record shows the expected and
 values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
 the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
 exact signature and provenance equality. The command exits with code 1 when the baseline differs
-and code 2 when the test produces no completed comparison. In the latter case it prints the test
-diagnostic. Taxi can exit successfully while its known rule differences remain visible.
+and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
+case it prints the test diagnostic. Taxi can exit successfully while its known rule differences remain visible.
 
 `--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
 with `scenario`, `error.kind = "setup_failed"`, and `error.diagnostic` from the test output.

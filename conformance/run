@@ -55,13 +55,16 @@ def main():
         environment = os.environ.copy()
         environment["TMPDIR"] = str(scratch)
         environment["LYRACORE_CONFORMANCE_RESULT"] = str(result)
-        test = subprocess.run(
-            ["cargo", "test", "--quiet", "--locked", "-p", "lyracore-module",
-             "--test", "native_conformance",
-             f"tier1::{args.scenario}_matches_its_golden_trace", "--",
-             "--ignored", "--exact", "--test-threads=1"],
-            cwd=root, env=environment, capture_output=True, text=True, check=False,
-        )
+        try:
+            test = subprocess.run(
+                ["cargo", "test", "--quiet", "--locked", "-p", "lyracore-module",
+                 "--test", "native_conformance",
+                 f"tier1::{args.scenario}_matches_its_golden_trace", "--",
+                 "--ignored", "--exact", "--test-threads=1"],
+                cwd=root, env=environment, capture_output=True, text=True, check=False,
+            )
+        except OSError as error:
+            return setup_failure(args.scenario, args.json, f"could not start cargo: {error}")
         if not has_completed_comparison(result, args.scenario):
             diagnostic = (test.stdout + test.stderr).strip()
             diagnostic = f"{diagnostic}\nno completed tier 1 comparison for {args.scenario}".strip()
@@ -71,7 +74,10 @@ def main():
                    "--example", "run", "--", args.scenario]
         if args.json:
             command.append("--json")
-        rendered = subprocess.run(command, cwd=root, env=environment, check=False)
+        try:
+            rendered = subprocess.run(command, cwd=root, env=environment, check=False)
+        except OSError as error:
+            return setup_failure(args.scenario, args.json, f"could not start cargo: {error}")
         if test.returncode and not rendered.returncode:
             sys.stderr.write(test.stdout + test.stderr)
         return rendered.returncode or test.returncode
