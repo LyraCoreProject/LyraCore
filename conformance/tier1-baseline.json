@@ -4,7 +4,7 @@
     {
       "scenario": "connection_identity",
       "behavior": "connection_identity",
-      "harness_revision": "1c111d4d983f76838c7e075319ca0e901a17c57b",
+      "harness_revision": "ad27050ef5c91a1f5ba7337dce29d5d31233898b",
       "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
       "rule": [],
       "data": []
@@ -12,7 +12,7 @@
     {
       "scenario": "taxi_single_hop",
       "behavior": "taxi_single_hop",
-      "harness_revision": "1c111d4d983f76838c7e075319ca0e901a17c57b",
+      "harness_revision": "ad27050ef5c91a1f5ba7337dce29d5d31233898b",
       "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
       "rule": [
         {

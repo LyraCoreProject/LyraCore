@@ -303,7 +303,7 @@ mod tests {
             serde_json::to_vec(&serde_json::json!({
                 "core_commit": core_commit,
                 "working_tree_dirty": false,
-                "harness_revision": committed.harness_revision,
+                "harness_revision": evidence::harness_revision(),
                 "recorded_at_unix_ms": committed.recorded_at_unix_ms + 1,
                 "native_host_sha256": audit.native_host_sha256,
                 "module_sha256": audit.module_sha256,
