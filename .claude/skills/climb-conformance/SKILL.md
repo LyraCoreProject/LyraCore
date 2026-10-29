@@ -26,9 +26,9 @@ When setup cannot be repaired or no fix matches the Reference Server, stop and h
 ## Scenario author
 
 1. Run `./conformance/scoreboard --json`. Take its first open item with `kind = "scenario_author"`. Read its Feature Ledger TOML and vmangos source reference.
-2. In the harness repository, write a TOML scenario with Fixture Verbs, steps, checkpoints and Equivalence Rules. Follow [scenario format and verb additions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/docs/scenarios.md). Add a needed Fixture Verb to the scenario model and both adapters, with their tests, before recording.
-   Register the scenario and its trace in `src/catalogue.rs` as [adding a scenario](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/CONTRIBUTING.md#adding-a-scenario) describes.
-3. Prepare the local Reference Server as its [adapter README](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md) directs. Build `vanilla-wire`, then run the checked recorder. It captures and compares two samples:
+2. In the harness repository, write a TOML scenario with Fixture Verbs, steps, checkpoints and Equivalence Rules. Follow [scenario format and verb additions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/docs/scenarios.md). Add a needed Fixture Verb to the scenario model and both adapters, with their tests, before recording.
+   Register the scenario and its trace in `src/catalogue.rs` as [adding a scenario](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/CONTRIBUTING.md#adding-a-scenario) describes.
+3. Prepare the local Reference Server as its [adapter README](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md) directs. Build `vanilla-wire`, then run the checked recorder. It captures and compares two samples:
 
    ```sh
    cargo build --locked --bin vanilla-wire
