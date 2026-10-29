@@ -1,0 +1,20 @@
+schema_version = 1
+id = "bag_management"
+system = "inventory"
+scope = "A Character can equip, move, split and destroy items across bags and equipment."
+requests = ["0x010A", "0x010B", "0x010C", "0x010D", "0x010E", "0x010F", "0x0111"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/ItemHandler.cpp"
+symbol = "WorldSession::HandleAutoEquipItemOpcode"
+
+[real_client]
+status = "unverified"

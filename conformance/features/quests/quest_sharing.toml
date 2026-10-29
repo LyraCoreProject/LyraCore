@@ -1,0 +1,26 @@
+schema_version = 1
+id = "quest_sharing"
+system = "quests"
+scope = "A Character can share a quest with party members and receive their responses."
+requests = ["0x019D", "0x019B", "0x0276"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/QuestHandler.cpp"
+symbol = "WorldSession::HandlePushQuestToParty"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_QUEST_CONFIRM_ACCEPT, MSG_QUEST_PUSH_RESULT."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

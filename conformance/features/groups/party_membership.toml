@@ -1,0 +1,20 @@
+schema_version = 1
+id = "party_membership"
+system = "groups"
+scope = "Characters can invite, join, decline, remove and leave a party."
+requests = ["0x006E", "0x0072", "0x0073", "0x0070", "0x0075", "0x0076", "0x007B"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/GroupHandler.cpp"
+symbol = "WorldSession::HandleGroupInviteOpcode"
+
+[real_client]
+status = "unverified"

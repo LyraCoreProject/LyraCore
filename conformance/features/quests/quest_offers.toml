@@ -1,0 +1,20 @@
+schema_version = 1
+id = "quest_offers"
+system = "quests"
+scope = "A Character can query available quests and inspect their offered requirements."
+requests = ["0x005C", "0x0182", "0x0184", "0x0186", "0x0187", "0x0190"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/QuestHandler.cpp"
+symbol = "WorldSession::HandleQuestQueryOpcode"
+
+[real_client]
+status = "unverified"

@@ -1,0 +1,20 @@
+schema_version = 1
+id = "channel_settings"
+system = "channels"
+scope = "Chat Channel owners and moderators can change access, roles and notices."
+requests = ["0x009C", "0x009D", "0x009E", "0x009F", "0x00A0", "0x00A1", "0x00A2", "0x00A7", "0x00A8"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/ChannelHandler.cpp"
+symbol = "WorldSession::HandleChannelPasswordOpcode"
+
+[real_client]
+status = "unverified"

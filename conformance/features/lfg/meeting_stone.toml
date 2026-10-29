@@ -1,0 +1,20 @@
+schema_version = 1
+id = "meeting_stone"
+system = "lfg"
+scope = "Characters can join, inspect and leave meeting-stone group finding."
+requests = ["0x0292", "0x0293", "0x0296", "0x01FF"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/LFG/LFGHandler.cpp"
+symbol = "WorldSession::HandleMeetingStoneJoinOpcode"
+
+[real_client]
+status = "unverified"

@@ -238,14 +238,18 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
     }
     let all: Vec<_> = ledger.behaviors().iter().collect();
     let claimed = requests(&all)?;
+    let unclaimed = unclaimed_requests(ledger, counts)?;
     Ok(json!({
         "schema_version": 1,
         "tier1_evidence": tier1.map(|(path, report)| json!({"path": path, "report": report})),
         "audit_evidence": audit.map(|(path, report)| json!({"path": path, "report": report})),
         "opcode_coverage": {
             "claimed": claimed.intersection(&counts.variants).count(),
+            "out_of_scope": counts.out_of_scope.len(),
+            "unclaimed": unclaimed.len(),
+            "unclaimed_opcodes": unclaimed.iter().map(|opcode| format!("0x{opcode:04X}")).collect::<Vec<_>>(),
             "total": counts.variants.len(),
-            "outside_enum": claimed.difference(&counts.variants).count(),
+            "outside_enum": claimed.difference(&counts.enum_variants).count(),
             "unavailable_total": counts.unavailable.len(),
             "unavailable_claimed": claimed.intersection(&counts.unavailable).count(),
         },
@@ -264,6 +268,25 @@ fn requests(behaviors: &[&Behavior]) -> Result<BTreeSet<u16>> {
         .flat_map(|behavior| &behavior.requests)
         .map(|opcode| u16::from_str_radix(&opcode[2..], 16).map_err(Into::into))
         .collect()
+}
+
+fn unclaimed_requests(ledger: &FeatureLedger, counts: &counts::Counts) -> Result<BTreeSet<u16>> {
+    let all: Vec<_> = ledger.behaviors().iter().collect();
+    let claimed = requests(&all)?;
+    ensure!(
+        claimed.is_disjoint(&counts.out_of_scope),
+        "an out-of-scope opcode is also claimed by a Behavior"
+    );
+    ensure!(
+        claimed.is_subset(&counts.variants),
+        "a Behavior claims an opcode outside the build-5875 request inventory"
+    );
+    Ok(counts
+        .variants
+        .difference(&claimed)
+        .filter(|opcode| !counts.out_of_scope.contains(opcode))
+        .copied()
+        .collect())
 }
 
 fn state(
@@ -355,6 +378,16 @@ fn main() -> Result<()> {
         )
     }))?;
     let counts = counts::read(root)?;
+    let unclaimed = unclaimed_requests(&ledger, &counts)?;
+    ensure!(
+        unclaimed.is_empty(),
+        "unclaimed client requests: {}",
+        unclaimed
+            .iter()
+            .map(|opcode| format!("0x{opcode:04X}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let tier1 = if explicit_tier1 || tier1_path.exists() {
         Some(Report::load(&tier1_path, "tier1", &ledger)?)
     } else {
@@ -460,7 +493,8 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
     }
     let all: Vec<_> = ledger.behaviors().iter().collect();
     let claimed = requests(&all)?;
-    println!("\nClient opcodes claimed: {}/{} ClientOpcodeMessage variants; {} claims outside that enum.", claimed.intersection(&counts.variants).count(), counts.variants.len(), claimed.difference(&counts.variants).count());
+    let unclaimed = unclaimed_requests(ledger, counts)?;
+    println!("\nClient requests: {} claimed by a Behavior, {} out of scope, {} unclaimed, {} total; {} claims outside ClientOpcodeMessage.", claimed.intersection(&counts.variants).count(), counts.out_of_scope.len(), unclaimed.len(), counts.variants.len(), claimed.difference(&counts.enum_variants).count());
     println!(
         "Unavailable requests: {} total, {} claimed by the ledger.",
         counts.unavailable.len(),
@@ -553,6 +587,24 @@ fn shared_opcode_claims_count_once() {
         requests(&[behavior, behavior]).unwrap(),
         [0x0050, 0x01dc].into()
     );
+}
+
+#[test]
+fn protocol_coverage_exposes_unclaimed_requests_and_rejects_overlap() -> Result<()> {
+    let ledger = FeatureLedger::from_sources([(
+        "connection/connection_identity.toml",
+        include_str!("../features/connection/connection_identity.toml"),
+    )])?;
+    let mut counts = counts::Counts {
+        variants: [0x0050, 0x01dc, 0x0036, 0x0002].into(),
+        enum_variants: [0x0050, 0x01dc, 0x0036, 0x0002].into(),
+        unavailable: BTreeSet::new(),
+        out_of_scope: [0x0002].into(),
+    };
+    assert_eq!(unclaimed_requests(&ledger, &counts)?, [0x0036].into());
+    counts.out_of_scope.insert(0x0050);
+    assert!(unclaimed_requests(&ledger, &counts).is_err());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -797,7 +849,9 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     let ledger = synthetic_ledger();
     let counts = counts::Counts {
         variants: [0x0050, 0x01dc].into(),
+        enum_variants: [0x0050, 0x01dc].into(),
         unavailable: [0x0050].into(),
+        out_of_scope: BTreeSet::new(),
     };
     let spells = spells::SpellCounts {
         build: 5875,
@@ -827,6 +881,8 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
         json!(["tier1", "conformance_audit", "real_client"])
     );
     assert_eq!(output["opcode_coverage"]["claimed"], 2);
+    assert_eq!(output["opcode_coverage"]["out_of_scope"], 0);
+    assert_eq!(output["opcode_coverage"]["unclaimed"], 0);
     assert_eq!(output["open_work"].as_array().unwrap().len(), 6);
     assert_eq!(output["open_work"][0]["reproduce_with"], Value::Null);
     assert_eq!(output["open_work"][1]["reproduce_with"], "tier1");
@@ -839,9 +895,12 @@ fn json_keeps_committed_audit_evidence() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let (path, report) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let all: Vec<_> = ledger.behaviors().iter().collect();
     let counts = counts::Counts {
-        variants: BTreeSet::new(),
+        variants: requests(&all)?,
+        enum_variants: BTreeSet::new(),
         unavailable: BTreeSet::new(),
+        out_of_scope: BTreeSet::new(),
     };
     let spells = spells::SpellCounts {
         build: 5875,

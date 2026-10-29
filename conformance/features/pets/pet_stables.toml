@@ -1,0 +1,32 @@
+schema_version = 1
+id = "pet_stables"
+system = "pets"
+scope = "A hunter can list, store, retrieve, revive and swap pets at a stable master."
+requests = ["0x026F", "0x0270", "0x0271", "0x0272", "0x0274", "0x0275"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/NPCHandler.cpp"
+symbol = "WorldSession::HandleListStabledPetsOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for MSG_LIST_STABLED_PETS, CMSG_STABLE_PET, CMSG_UNSTABLE_PET, CMSG_BUY_STABLE_SLOT, CMSG_STABLE_SWAP_PET."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "Stable pet revival has no native request decoder or response."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "Build-5875 CMSG_STABLE_REVIVE_PET is absent from ClientOpcodeMessage and module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

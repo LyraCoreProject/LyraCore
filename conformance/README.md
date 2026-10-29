@@ -88,6 +88,23 @@ contain no copied implementation or world data. Those references identify where 
 and record each Behavior; they are not a claim that the original nine conform today. Their real-client
 checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
 
+The build-5875 request inventory is `client-requests-5875.tsv`, transcribed from the pinned
+vmangos `Opcodes_1_12_1.h`. Each row has one opcode number and name. `out-of-scope-opcodes.toml`
+records requests used only for GM commands, debug, obsolete or server-origin traffic, with a
+reason for each. Every other inventory opcode must be claimed by at least one Behavior. The
+scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks that
+every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
+
+`tools/create_ledger_denominator.py` created the initial request Behaviors and both inventory
+files from the pinned vmangos raw sources and the core opcode dependency. Its
+`tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
+`--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
+After creation, maintain the Behavior TOML files and the two inventory files by hand. The coverage
+check catches an inventory request with no Behavior or out-of-scope reason. New entries can leave
+`replies` empty until a scenario author
+checks the packets returned by the Reference Server. A vmangos dispatch entry marked unhandled
+uses `BuildOpcodeList` as its source reference because it has no handler.
+
 ## Scenario catalogue and tier 1
 
 `wire_client::catalogue` embeds the scenarios and Golden Traces at the revision in
@@ -281,6 +298,10 @@ trainable, supported-kind and unsupported-kind counts. Open-work items give `beh
 `scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
 is the measured signature count or the distinct-gap fallback. Counts and state names have the same
 meaning as the text scoreboard.
+`opcode_coverage` reports `claimed`, `out_of_scope`, `unclaimed` and `total` for the build-5875
+request inventory. `unclaimed_opcodes` lists the missing numbers; it is empty on a successful run.
+The existing `outside_enum` field counts Behavior claims outside `ClientOpcodeMessage`, not outside
+the build-5875 inventory.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
@@ -298,9 +319,9 @@ comparison also prevent an audit pass. A matching run made with
 uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
 Real-client cells come only from the ledger, never from a report.
 
-Counts use unique opcode values. The denominator is every variant of the pinned core
-`ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
-a separate count. System totals count shared claims once. The unavailable count includes request
+Counts use unique opcode values. The denominator is every row of `client-requests-5875.tsv`.
+Claims outside the pinned core `ClientOpcodeMessage` enum have a separate count. System totals
+count shared claims once. The unavailable count includes request
 patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
 control receipts, tests, comments, imports and explicit empty responses for ignored requests.
 Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.

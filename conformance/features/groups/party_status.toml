@@ -1,0 +1,20 @@
+schema_version = 1
+id = "party_status"
+system = "groups"
+scope = "Party members can request member state, ping the map and roll a shared random number."
+requests = ["0x027F", "0x01D5", "0x01FB"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/GroupHandler.cpp"
+symbol = "WorldSession::HandleRequestPartyMemberStatsOpcode"
+
+[real_client]
+status = "unverified"

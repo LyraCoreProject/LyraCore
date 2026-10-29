@@ -1,0 +1,26 @@
+schema_version = 1
+id = "equipment_display"
+system = "inventory"
+scope = "A Character can toggle the visible helm and cloak preferences."
+requests = ["0x02B9", "0x02BA"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/CharacterHandler.cpp"
+symbol = "WorldSession::HandleShowingHelmOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_TOGGLE_HELM, CMSG_TOGGLE_CLOAK."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
