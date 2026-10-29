@@ -28,6 +28,10 @@ entry menu. Submenu selections keep this root so a Runtime Script menu replaceme
 the open menu. SpacetimeDB disconnects clients for this schema update; reconnect starts at the
 entry menu. The Host does not decode this table, and its delivery layouts do not change.
 
+`game_native_player.teleport_started_micros` records when a native teleport began. Its typed zero
+default expires a near teleport already pending at migration on the next tick. World ports do not
+use this timeout.
+
 `game_creature_level_stats` holds final health, damage and armor by template and level.
 `game_creature_display` holds weighted display choices by template. Both are new tables, so an
 existing Realm migrates without changing stored template rows. A template stat change takes

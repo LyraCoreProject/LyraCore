@@ -82,7 +82,9 @@ pub(crate) use spell::{cast_event, spell_impact};
 pub(crate) use taxi::{
     aborted as taxi_aborted, landed as taxi_landed, spline_changed as taxi_spline_changed,
 };
-pub(crate) use teleport::{begin as begin_teleport, changed as teleport_changed};
+pub(crate) use teleport::{
+    begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,
+};
 pub(crate) use trade::event as trade_event;
 pub(crate) use visibility::{entity_changed, grant_added, grant_removed, loot_flags, motion};
 
@@ -183,6 +185,8 @@ pub struct NativePlayer {
     pub zone_id: u32,
     #[default(0u32)]
     pub gossip_root_menu_id: u32,
+    #[default(0i64)]
+    pub teleport_started_micros: i64,
 }
 
 pub(crate) fn group_event(

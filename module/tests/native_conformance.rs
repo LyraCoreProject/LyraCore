@@ -155,6 +155,50 @@ fn operator_connection_enters_world_and_receives_pong() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_missing_near_teleport_ack_expires_and_world_requests_resume() {
+    let (shard, guid, _) = fixture("native-teleport-expiry");
+    let mut connection = enter(&shard, guid);
+    connection.drain_packets();
+    shard.assert_call(
+        "debug_teleport",
+        &[&guid.to_string(), "0", "20", "0", "0", "0"],
+    );
+    connection.drain_packets();
+
+    let mut query = || {
+        connection
+            .call("native_world_receive", json!([0x1ceu32, Vec::<u8>::new()]))
+            .unwrap()
+    };
+    assert!(query().inserts("game_native_packet").is_empty());
+    std::thread::sleep(Duration::from_secs(21));
+    let response = query();
+    assert!(response.inserts("game_native_packet").iter().any(|row| {
+        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
+        opcode.get() == "463"
+    }));
+    let has_heartbeat = |row: &RawValue| {
+        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
+        opcode.get() == "238"
+    };
+    assert!(
+        response
+            .inserts("game_native_packet")
+            .iter()
+            .any(|row| has_heartbeat(row))
+            || connection
+                .drain_packets()
+                .iter()
+                .any(|row| has_heartbeat(row))
+    );
+    assert_eq!(
+        shard.query_rows("SELECT teleport FROM game_native_player")[0]["teleport"],
+        "(none = ())"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
     let (shard, guid, account) = fixture("native-conformance-session");
     let key = serde_json::to_string(&vec![0x37u8; 40]).unwrap();
@@ -626,6 +670,56 @@ fn permanent_taxi_abort_sends_dismount_result() {
         "permanent abort sent no successful dismount result: {rows:?}"
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn taxi_landing_sends_a_position_correction_after_dismount() {
+    use wire_client::decode::Field;
+
+    let (shard, passenger, _) = fixture("taxi-landing-correction");
+    shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
+    let mut connection = enter(&shard, passenger);
+    connection.drain_packets();
+    start_taxi_flight(&shard, passenger, 32);
+
+    let mut direct = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(8);
+    while !direct.iter().any(|(opcode, _)| *opcode == 199) && std::time::Instant::now() < deadline {
+        for row in connection.wait_for_packets(Duration::from_secs(1)).unwrap() {
+            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if audience == 0 && option == 0 {
+                let opcode = serde_json::from_str::<u16>(opcode.get()).unwrap();
+                let decoded =
+                    (opcode == 199).then(|| packet(&row, connection.connection_id(), opcode));
+                direct.push((opcode, decoded));
+            }
+        }
+    }
+
+    let dismount = direct
+        .iter()
+        .position(|(opcode, _)| *opcode == 367)
+        .unwrap();
+    let correction = direct
+        .iter()
+        .position(|(opcode, _)| *opcode == 199)
+        .unwrap();
+    assert!(
+        dismount < correction,
+        "landing correction preceded dismount"
+    );
+    let fields = &direct[correction].1.as_ref().unwrap().fields;
+    assert_eq!(fields.get("guid"), Some(&Field::Guid(passenger)));
+    assert_eq!(fields.get("flags"), Some(&Field::Unsigned(0)));
+    let Some(Field::Object(position)) = fields.get("position") else {
+        panic!("landing correction has no position");
+    };
+    assert_eq!(position.get("x"), Some(&Field::Float(32.0)));
+    assert_eq!(position.get("y"), Some(&Field::Float(0.0)));
+    assert_eq!(position.get("z"), Some(&Field::Float(0.0)));
+}
+
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
     start_taxi_flight_on_route(
         shard,
