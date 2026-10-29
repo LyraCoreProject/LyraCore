@@ -421,7 +421,7 @@ fn route_is_supported(
     })
 }
 
-const TAXI_SPEED_YARDS_PER_SECOND: f64 = 32.0;
+const TAXI_SPEED_YARDS_PER_SECOND: f32 = 32.0;
 const TAXI_TICK_MICROS: i64 = 100_000;
 const TAXI_MOVEMENT_FORWARD: u32 = 0x0000_0001;
 
@@ -447,13 +447,12 @@ fn flight_route(
     points
 }
 
-fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f64; 3]; 4] {
-    let coords =
-        |point: &GameTaxiPathNode| [f64::from(point.x), f64::from(point.y), f64::from(point.z)];
+fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f32; 3]; 4] {
+    let coords = |point: &GameTaxiPathNode| [point.x, point.y, point.z];
     let current = coords(&points[index]);
     let next = coords(&points[index + 1]);
     let prior = if index == 0 {
-        std::array::from_fn(|axis| 2.0 * current[axis] - next[axis])
+        std::array::from_fn(|axis| current[axis] - (next[axis] - current[axis]))
     } else {
         coords(&points[index - 1])
     };
@@ -461,7 +460,7 @@ fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f64; 3]; 4] {
     [prior, current, next, after]
 }
 
-fn spline_position(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
+fn spline_position(controls: &[[f32; 3]; 4], t: f32) -> [f32; 3] {
     let t2 = t * t;
     let t3 = t2 * t;
     let weights = [
@@ -479,7 +478,7 @@ fn spline_position(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
     })
 }
 
-fn spline_direction(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
+fn spline_direction(controls: &[[f32; 3]; 4], t: f32) -> [f32; 3] {
     let t2 = t * t;
     let weights = [
         -1.5 * t2 + 2.0 * t - 0.5,
@@ -498,25 +497,28 @@ fn spline_direction(controls: &[[f64; 3]; 4], t: f64) -> [f64; 3] {
 
 fn route_timestamps_micros(points: &[GameTaxiPathNode]) -> Option<Vec<i64>> {
     (points.len() >= 2).then(|| {
-        // The Reference Server starts at 1 ms and truncates each segment before adding it.
+        // vmangos starts at 1 ms and truncates the clock after each float segment duration.
         let mut elapsed_ms = 1i64;
         let mut times = vec![0];
         for index in 0..points.len() - 1 {
             let controls = spline_controls(points, index);
             let mut previous = controls[1];
-            let mut length = 0.0;
+            let mut length = 0.0f64;
             for step in 1..=3 {
-                let current = spline_position(&controls, f64::from(step) / 3.0);
-                let delta: [f64; 3] = std::array::from_fn(|axis| current[axis] - previous[axis]);
-                length += delta
-                    .iter()
-                    .map(|component| component * component)
-                    .sum::<f64>()
-                    .sqrt();
+                let current = spline_position(&controls, step as f32 / 3.0);
+                let delta: [f32; 3] = std::array::from_fn(|axis| current[axis] - previous[axis]);
+                length += f64::from(
+                    delta
+                        .iter()
+                        .map(|component| component * component)
+                        .sum::<f32>()
+                        .sqrt(),
+                );
                 previous = current;
             }
-            elapsed_ms =
-                elapsed_ms.saturating_add((length * 1_000.0 / TAXI_SPEED_YARDS_PER_SECOND) as i64);
+            elapsed_ms = (elapsed_ms as f32
+                + (length as f32) * (1_000.0 / TAXI_SPEED_YARDS_PER_SECOND))
+                as i64;
             times.push(elapsed_ms.saturating_mul(1_000));
         }
         times
@@ -547,16 +549,16 @@ fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<Ro
     for index in 0..points.len() - 1 {
         if elapsed < times[index + 1] {
             let duration = times[index + 1] - times[index];
-            let t = ((elapsed - times[index]) as f64 / duration as f64).clamp(0.0, 1.0);
+            let t = ((elapsed - times[index]) as f32 / duration as f32).clamp(0.0, 1.0);
             let controls = spline_controls(points, index);
             let position = spline_position(&controls, t);
             let direction = spline_direction(&controls, t);
             return Some(RoutePosition {
                 point_index: index,
-                x: position[0] as f32,
-                y: position[1] as f32,
-                z: position[2] as f32,
-                orientation: direction[1].atan2(direction[0]) as f32,
+                x: position[0],
+                y: position[1],
+                z: position[2],
+                orientation: direction[1].atan2(direction[0]),
                 complete: false,
             });
         }
@@ -1685,6 +1687,29 @@ mod tests {
                 durable.orientation
             ),
             (0, -9443.5, 58.25, 56.75, 1.25)
+        );
+    }
+
+    #[test]
+    fn curved_route_uses_float_segment_lengths_and_accumulated_milliseconds() {
+        let coordinates = [
+            (5.0, -16.0, -1.0),
+            (9.0, -14.0, -28.0),
+            (27.0, 8.0, -6.0),
+            (2.0, -19.0, -8.0),
+        ];
+        let points: Vec<_> = coordinates
+            .into_iter()
+            .enumerate()
+            .map(|(index, (x, y, z))| {
+                let mut point = point(index as u32 + 1, 99, index as u32, 0);
+                (point.x, point.y, point.z) = (x, y, z);
+                point
+            })
+            .collect();
+        assert_eq!(
+            route_timestamps_micros(&points),
+            Some(vec![0, 874_000, 2_016_000, 3_173_000])
         );
     }
 
