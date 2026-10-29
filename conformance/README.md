@@ -147,7 +147,8 @@ access token scoped only to `LyraCoreProject/LyraCore`. Give it repository permi
 read and write** and **Pull requests: read and write**. The label endpoint accepts Pull requests:
 write. The harness uses its default `GITHUB_TOKEN` with `contents: write` to create tags; it needs
 no cross-repository secret. The core token must belong to a principal allowed to open PRs. A PR
-created with the default `GITHUB_TOKEN` would not start the other Actions workflows.
+created with the default `GITHUB_TOKEN` can leave its PR checks waiting for approval; the PAT lets
+them run automatically.
 
 To test the full flow after creating the secret, merge a harness PR that changes an existing
 scenario, trace, `src/`, adapter, or Cargo manifest or lockfile. Confirm harness CI creates one new
