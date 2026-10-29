@@ -122,6 +122,12 @@ pub struct GameAreaTrigger {
     pub box_yaw: f32,
 }
 
+#[table(accessor = game_tavern_area_trigger, public)]
+pub struct GameTavernAreaTrigger {
+    #[primary_key]
+    pub trigger_id: u32,
+}
+
 #[table(accessor = game_taxi_node, public)]
 pub struct GameTaxiNode {
     #[primary_key]
