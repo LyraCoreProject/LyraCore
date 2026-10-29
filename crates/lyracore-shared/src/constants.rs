@@ -146,7 +146,7 @@ pub mod speeds {
     pub const RUN_BACK: f32 = 4.5;
     pub const SWIM: f32 = 4.722_222;
     pub const SWIM_BACK: f32 = 2.5;
-    pub const TURN_RATE: f32 = std::f32::consts::PI;
+    pub const TURN_RATE: f32 = 3.141_594;
 }
 
 pub mod start_human_warrior {

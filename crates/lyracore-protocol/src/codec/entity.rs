@@ -439,7 +439,7 @@ pub fn build_create_object(
     };
 
     let running_speed = speeds::RUN * (entity.run_speed_mult_bp as f32 / 10_000.0);
-    let mut update_flag = MovementBlock_UpdateFlag::empty()
+    let mut update_flag = MovementBlock_UpdateFlag::new(0x40, None, None, None, None, None)
         .set_all(MovementBlock_UpdateFlag_All { unknown1: 1 })
         .set_living(MovementBlock_UpdateFlag_Living::Living {
             flags: create_movement_flags(entity)?,
@@ -462,14 +462,23 @@ pub fn build_create_object(
         update_flag = update_flag.set_self();
     }
 
-    Ok(SMSG_UPDATE_OBJECT {
-        has_transport: 0,
-        objects: vec![Object::CreateObject2 {
+    let create = match kind {
+        CreateKind::SelfPlayer => Object::CreateObject2 {
             guid3: Guid::new(entity.guid),
             object_type,
             movement2: MovementBlock { update_flag },
             mask2,
-        }],
+        },
+        CreateKind::Peer => Object::CreateObject {
+            guid3: Guid::new(entity.guid),
+            object_type,
+            movement2: MovementBlock { update_flag },
+            mask2,
+        },
+    };
+    Ok(SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![create],
     })
 }
 

@@ -103,53 +103,6 @@
           "field_path": [
             "objects",
             "0",
-            "kind"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "arriving",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "turn_rate"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "arriving",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "update_flags"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "arriving",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
             "values",
             "field_126"
           ]
@@ -232,53 +185,6 @@
             "0",
             "values",
             "field_28"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "watcher",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "kind"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "watcher",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "turn_rate"
-          ]
-        },
-        {
-          "rule": "exact_field",
-          "character": "watcher",
-          "checkpoint": "arrival",
-          "stream": {
-            "kind": "broadcast",
-            "id": "objects"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "movement",
-            "update_flags"
           ]
         },
         {
