@@ -4736,12 +4736,15 @@ def check_progression(host):
     host.sql('INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (5090902)')
     inn_z = host.rows('SELECT z FROM game_area_trigger WHERE id = 5090902')[0][0]
     host.sql(f'UPDATE game_world_entity SET z = {inn_z} WHERE guid = {guid}')
+    rest_bytes = host.rows(f'SELECT player_bytes_2 FROM game_world_entity WHERE guid = {guid}')[0][0]
     host.call('debug_check_rest_at', [guid, 0, -9464, 42])
-    rested = values(client.collect(), guid)[194]
-    assert rested >> 24 == 1 and (rested >> 16) & 255 == 1
+    rested = values(client.collect(), guid)
+    assert rested[190] & 0x20 and 194 not in rested
+    assert host.rows(f'SELECT player_bytes_2 FROM game_world_entity WHERE guid = {guid}') == [[rest_bytes]]
     host.call('debug_check_rest_at', [guid, 0, 0, 0])
-    unrested = values(client.collect(), guid)[194]
-    assert unrested >> 24 == 2 and unrested & 0xffffff == rested & 0xffffff
+    unrested = values(client.collect(), guid)
+    assert unrested[190] & 0x20 == 0 and 194 not in unrested
+    assert host.rows(f'SELECT player_bytes_2 FROM game_world_entity WHERE guid = {guid}') == [[rest_bytes]]
     host.sql(f'UPDATE game_world_entity SET z = 0 WHERE guid = {guid}')
     peer.collect()
     host.sql('INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES (5090901,62,0)')

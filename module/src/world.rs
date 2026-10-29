@@ -752,7 +752,7 @@ pub(crate) fn apply_player_login(
     );
     character.rested_xp = rested;
     character.rest_state = crate::rest::rest_state_after_bonus(
-        character.rest_state,
+        lyracore_shared::packing::REST_STATE_NORMAL,
         character.rested_xp,
         character.level,
     );

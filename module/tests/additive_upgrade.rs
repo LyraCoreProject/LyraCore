@@ -42,7 +42,7 @@ fn populated_old_module_upgrades_without_clearing() {
 
     shard.publish_module_bytes(current);
 
-    assert_eq!(character(&shard), character_before);
+    assert_eq!(upgraded_character(&shard), character_before);
     assert_eq!(entity(&shard), entity_before);
     let mut spell_after = shard.query_rows("SELECT * FROM game_spell WHERE spell_id = 5090100");
     for column in ["custom_flags", "min_target_level", "single_target_key"] {
@@ -89,7 +89,7 @@ fn populated_old_module_upgrades_without_clearing() {
         }),
         "the scheduled backfill must derive simulation columns from preserved gameplay state"
     );
-    assert_eq!(character(&shard), character_before);
+    assert_eq!(upgraded_character(&shard), character_before);
 
     let events = subscribe_with_fence(
         &shard,
@@ -160,6 +160,12 @@ fn character(shard: &Standalone) -> Row {
     shard
         .query_rows("SELECT * FROM game_character WHERE guid = 1")
         .remove(0)
+}
+
+fn upgraded_character(shard: &Standalone) -> Row {
+    let mut row = character(shard);
+    assert_eq!(row.remove("rest_state").as_deref(), Some("0"));
+    row
 }
 
 fn entity(shard: &Standalone) -> Row {

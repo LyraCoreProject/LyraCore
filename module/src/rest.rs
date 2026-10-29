@@ -105,10 +105,10 @@ pub(crate) fn check_rest_state(
             c.rested_since_micros = now as u64;
         } else {
             let elapsed = (now as u64).saturating_sub(c.rested_since_micros);
-            c.rested_xp = crate::xp::rest_accrue_live(c.rested_xp, elapsed, c.level as u32);
+            c.rested_xp = crate::xp::rest_accrue_live(c.rested_xp, elapsed, mover.level);
             c.rested_since_micros = 0;
         }
-        c.rest_state = rest_state_after_bonus(c.rest_state, c.rested_xp, c.level);
+        c.rest_state = rest_state_after_bonus(c.rest_state, c.rested_xp, mover.level as u8);
         set_rest_state_byte(mover, c.rest_state);
         chars.guid().update(c);
     }
@@ -164,18 +164,19 @@ crate::game_tick_pass!(fn rested_accrue_pass(ctx) {
         .filter(|c| !crate::transfer::is_in_transit(ctx, c.guid))
         .collect();
     for mut c in resting {
+        let Some(mut entity) = ctx.db.game_world_entity().guid().find(c.guid) else {
+            continue;
+        };
         let elapsed = (now as u64).saturating_sub(c.rested_since_micros);
-        let grown = crate::xp::rest_accrue_live(c.rested_xp, elapsed, c.level as u32);
+        let grown = crate::xp::rest_accrue_live(c.rested_xp, elapsed, entity.level);
         if grown > c.rested_xp {
             c.rested_xp = grown;
             c.rested_since_micros = now as u64;
             let previous = c.rest_state;
-            c.rest_state = rest_state_after_bonus(previous, grown, c.level);
+            c.rest_state = rest_state_after_bonus(previous, grown, entity.level as u8);
             if c.rest_state != previous {
-                if let Some(mut entity) = ctx.db.game_world_entity().guid().find(c.guid) {
-                    set_rest_state_byte(&mut entity, c.rest_state);
-                    entity.update(ctx);
-                }
+                set_rest_state_byte(&mut entity, c.rest_state);
+                entity.update(ctx);
             }
             chars.guid().update(c);
         }

@@ -110,6 +110,29 @@ fn background_passes_leave_a_character_in_escrow_unchanged() {
     assert_eq!(escrowed_rest["rested_since_micros"], "1");
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn resting_accrual_uses_the_live_level_when_the_character_row_lags() {
+    let shard = start("rest-live-level", true);
+    shard.assert_sql("UPDATE game_world_entity SET level = 60 WHERE guid = 1");
+    shard.assert_sql(
+        "UPDATE game_character SET level = 59, resting = true, rested_since_micros = 1, \
+         rest_state = 2 WHERE guid = 1",
+    );
+    shard.assert_sql(
+        "UPDATE game_character SET level = 59, resting = true, rested_since_micros = 1 \
+         WHERE guid = 2",
+    );
+
+    assert!(poll_until(REST_WINDOW_WAIT, || {
+        rest(&shard, BYSTANDER)["rested_xp"] != "0"
+    }));
+    let capped =
+        shard.query_rows("SELECT rested_xp, rest_state FROM game_character WHERE guid = 1");
+    assert_eq!(capped[0]["rested_xp"], "0");
+    assert_eq!(capped[0]["rest_state"], "2");
+}
+
 fn quest(shard: &Standalone, guid: &str) -> Row {
     shard.query_rows(&format!(
         "SELECT failed, deadline_micros FROM game_character_quest WHERE character_guid = {guid}"

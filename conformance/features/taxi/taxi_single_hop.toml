@@ -41,6 +41,6 @@ rung = "durable_module"
 
 [[tests]]
 path = "module/tests/native_conformance.rs"
-function = "world_entry_keeps_the_rest_state_in_the_bonus_hysteresis_band"
+function = "world_entry_resets_rest_state_before_bonus_threshold"
 rung = "durable_module"
 
