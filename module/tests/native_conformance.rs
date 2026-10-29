@@ -705,7 +705,7 @@ fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
         .join(";");
     shard.assert_call("import_terrain_chunks", &[&chunks]);
     shard.assert_sql(&format!(
-        "UPDATE game_character SET x = 0, y = 0, z = 0, zone_id = 1519 WHERE guid = {passenger}"
+        "UPDATE game_character SET x = 0, y = 0, z = 0, zone_id = 0 WHERE guid = {passenger}"
     ));
 
     let mut connection = enter(&shard, passenger);
