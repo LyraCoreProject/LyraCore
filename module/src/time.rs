@@ -187,8 +187,10 @@ macro_rules! capture_schedule {
                 ScheduleAt::Time(at) if $initial => (at.to_micros_since_unix_epoch(), 0),
                 ScheduleAt::Time(at) => {
                     let parked = at.to_micros_since_unix_epoch();
-                    let arming = $ctx.db.game_conformance_arming().parked_micros().find(parked)
+                    let arming_table = $ctx.db.game_conformance_arming();
+                    let arming = arming_table.parked_micros().find(parked)
                         .ok_or_else(|| format!("schedule {}:{} has no virtual due time", $kind, row.$id))?;
+                    arming_table.parked_micros().delete(parked);
                     (arming.due_micros, arming.interval_micros)
                 }
             };
@@ -317,6 +319,7 @@ pub fn debug_advance_virtual_clock(ctx: &ReducerContext, delta_micros: i64) -> R
         .game_conformance_schedule()
         .iter()
         .filter(|record| record.due_micros <= target)
+        // Equal deadlines use table kind then row id; live scheduling does not promise this order.
         .min_by_key(|record| (record.due_micros, record.key))
     {
         fired += 1;

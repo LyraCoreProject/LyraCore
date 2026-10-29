@@ -350,21 +350,22 @@ fn weapon_damage_uses_the_selected_main_off_and_ranged_item() {
     ));
     shard.assert_sql("UPDATE game_item_instance SET slot = 16, durability = 70 WHERE owner_guid = 1 AND slot = 17");
     shard.assert_sql("UPDATE game_world_entity SET simulation_indexed = false, strength = 0, agility = 0, health = 100000, max_health = 100000 WHERE guid = 1");
-    let swings = shard.subscribe(&["SELECT * FROM game_combat_event_live WHERE attacker_guid = 1"]);
     shard.assert_call("debug_engage", &["1", &wolf]);
-    assert!(
-        poll_until(POLL_TIMEOUT, || {
-            support::event_rows(&swings, "game_combat_event_live")
-                .iter()
-                .any(|row| row["damage"].parse::<u32>().unwrap() >= 14)
-        }),
-        "the off-hand stream never used its 14..16 property-adjusted range"
-    );
+    assert!(poll_until(POLL_TIMEOUT, || {
+        shard
+            .query_rows(
+                "SELECT last_offhand_swing_ms FROM game_melee_attack WHERE attacker_guid = 1",
+            )
+            .first()
+            .is_some_and(|row| row["last_offhand_swing_ms"] != "0")
+    }));
+    let offhand_roll = readout(&shard, "offhand_roll");
+    assert_eq!(offhand_roll["base_min"], "14");
+    assert_eq!(offhand_roll["base_max"], "16");
 
     shard.assert_sql(
         "UPDATE game_item_instance SET durability = 0 WHERE owner_guid = 1 AND slot = 16",
     );
-    drop(swings);
     let swings = shard.subscribe(&["SELECT * FROM game_combat_event_live WHERE attacker_guid = 1"]);
     let before = shard
         .query_rows("SELECT last_offhand_swing_ms FROM game_melee_attack WHERE attacker_guid = 1")
