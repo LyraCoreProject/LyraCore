@@ -1,0 +1,26 @@
+schema_version = 1
+id = "creature_controls"
+system = "administration"
+scope = "Legacy creature and GameObject creation and control requests receive vmangos's unhandled result."
+requests = ["0x0011", "0x0012", "0x0014", "0x0016", "0x0018", "0x0019", "0x001A", "0x0021", "0x0022", "0x002E", "0x022B", "0x026C"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Server/Protocol/Opcodes.cpp"
+symbol = "BuildOpcodeList"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_CREATEMONSTER, CMSG_DESTROYMONSTER, CMSG_CREATEGAMEOBJECT, CMSG_MAKEMONSTERATTACKGUID, CMSG_FORCEACTION, CMSG_FORCEACTIONONOTHER, CMSG_FORCEACTIONSHOW, CMSG_BEASTMASTER, CMSG_GODMODE, CMSG_DEBUG_AISTATE, CMSG_GM_SUMMONMOB, CMSG_PLAYER_AI_CHEAT is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

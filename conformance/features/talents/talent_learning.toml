@@ -2,7 +2,7 @@ schema_version = 1
 id = "talent_learning"
 system = "talents"
 scope = "A Character can spend and reset talent points with class and cost rules."
-requests = ["0x0251", "0x02AA"]
+requests = ["0x0251", "0x02AA", "0x0213"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleLearnTalentOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_UNLEARN_TALENTS is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

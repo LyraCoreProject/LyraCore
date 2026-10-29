@@ -76,6 +76,10 @@ fn open_work(
     audit_head: &str,
     revision: &str,
 ) -> Result<Vec<OpenWork>> {
+    let baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    let baseline_scenarios = baseline["scenarios"]
+        .as_array()
+        .context("tier 1 baseline scenarios")?;
     let mut work = Vec::new();
     for behavior in ledger.behaviors() {
         let tier1_state = state(tier1, behavior, tier1_head, revision)?;
@@ -87,19 +91,32 @@ fn open_work(
         {
             continue;
         }
-        let measured = audit
-            .and_then(|report| report.audit.as_ref()?.behaviors.get(&behavior.id))
-            .map(|evidence| evidence.candidate.rule.signatures.len())
-            .or_else(|| {
-                tier1
-                    .filter(|report| {
-                        report
-                            .scenarios
-                            .iter()
-                            .any(|result| result.behavior == behavior.id)
-                    })
-                    .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
-            });
+        let baseline_signatures = baseline_scenarios
+            .iter()
+            .filter(|entry| entry["behavior"] == behavior.id)
+            .filter_map(|entry| entry["rule"].as_array())
+            .flat_map(|signatures| signatures.iter())
+            .map(serde_json::to_string)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let baseline_count = baseline_scenarios
+            .iter()
+            .any(|entry| entry["behavior"] == behavior.id)
+            .then_some(baseline_signatures.len());
+        let measured = baseline_count.or_else(|| {
+            audit
+                .and_then(|report| report.audit.as_ref()?.behaviors.get(&behavior.id))
+                .map(|evidence| evidence.candidate.rule.signatures.len())
+                .or_else(|| {
+                    tier1
+                        .filter(|report| {
+                            report
+                                .scenarios
+                                .iter()
+                                .any(|result| result.behavior == behavior.id)
+                        })
+                        .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
+                })
+        });
         let distinct_gaps = behavior
             .known_gaps
             .iter()
@@ -762,13 +779,13 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .prerequisites
         .iter()
         .any(|item| item.contains("13724 and 18085")));
-    assert_eq!(taxi.kind, "implementer");
-    assert_eq!(taxi.next_command, "./conformance/run taxi_single_hop");
-    assert_eq!(taxi.open_signatures_or_gaps, 24);
+    assert_eq!(taxi.kind, "evidence_refresh");
+    assert!(taxi.next_command.starts_with("./conformance/audit --date "));
+    assert_eq!(taxi.open_signatures_or_gaps, 0);
     assert!(
         work.iter()
             .position(|item| item.behavior == "taxi_single_hop")
-            < work
+            > work
                 .iter()
                 .position(|item| item.behavior == "connection_identity")
     );
@@ -800,7 +817,7 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .iter()
         .find(|item| item.behavior == "taxi_single_hop")
         .unwrap();
-    assert_eq!(taxi.open_signatures_or_gaps, 24);
+    assert_eq!(taxi.open_signatures_or_gaps, 0);
     Ok(())
 }
 

@@ -2,7 +2,7 @@ schema_version = 1
 id = "home_binding"
 system = "inns"
 scope = "A Character can bind its hearthstone at an innkeeper."
-requests = ["0x01B5"]
+requests = ["0x01B5", "0x0154", "0x0156"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleBinderActivateOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_SETDEATHBINDPOINT, CMSG_GETDEATHBINDZONE is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

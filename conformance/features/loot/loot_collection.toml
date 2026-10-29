@@ -2,7 +2,7 @@ schema_version = 1
 id = "loot_collection"
 system = "loot"
 scope = "Eligible Characters can collect, assign and roll for loot from an open source."
-requests = ["0x015F", "0x02A3", "0x02A0"]
+requests = ["0x015F", "0x02A3", "0x02A0", "0x0109"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleLootReleaseOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_STORE_LOOT_IN_SLOT is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

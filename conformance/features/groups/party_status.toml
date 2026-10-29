@@ -2,7 +2,7 @@ schema_version = 1
 id = "party_status"
 system = "groups"
 scope = "Party members can request member state, ping the map and roll a shared random number."
-requests = ["0x027F", "0x01D5", "0x01FB"]
+requests = ["0x027F", "0x01D5", "0x01FB", "0x0080"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleRequestPartyMemberStatsOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of MSG_UPDATE_GROUP_MEMBERS is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

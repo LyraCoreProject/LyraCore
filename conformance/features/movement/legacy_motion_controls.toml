@@ -1,0 +1,26 @@
+schema_version = 1
+id = "legacy_motion_controls"
+system = "movement"
+scope = "Legacy speed, root, knockback, hover and water-movement requests receive vmangos's unhandled result."
+requests = ["0x00CD", "0x00CF", "0x00D1", "0x00D3", "0x00D5", "0x00D8", "0x00EC", "0x00ED", "0x00F1", "0x00F7", "0x02B0", "0x02B1"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Server/Protocol/Opcodes.cpp"
+symbol = "BuildOpcodeList"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of MSG_MOVE_SET_RUN_SPEED, MSG_MOVE_SET_RUN_BACK_SPEED, MSG_MOVE_SET_WALK_SPEED, MSG_MOVE_SET_SWIM_SPEED, MSG_MOVE_SET_SWIM_BACK_SPEED, MSG_MOVE_SET_TURN_RATE, MSG_MOVE_ROOT, MSG_MOVE_UNROOT, MSG_MOVE_KNOCK_BACK, MSG_MOVE_HOVER, MSG_MOVE_FEATHER_FALL, MSG_MOVE_WATER_WALK is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

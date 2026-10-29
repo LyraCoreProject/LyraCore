@@ -18,3 +18,9 @@ symbol = "WorldSession::HandlePetitionDeclineOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of MSG_DELETE_GUILD_CHARTER is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

@@ -2,7 +2,7 @@ schema_version = 1
 id = "bag_management"
 system = "inventory"
 scope = "A Character can equip, move, split and destroy items across bags and equipment."
-requests = ["0x010A", "0x010B", "0x010C", "0x010D", "0x010E", "0x010F", "0x0111"]
+requests = ["0x010A", "0x010B", "0x010C", "0x010D", "0x010E", "0x010F", "0x0111", "0x0106", "0x0107", "0x0110"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleAutoEquipItemOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_AUTOEQUIP_GROUND_ITEM, CMSG_AUTOSTORE_GROUND_ITEM, CMSG_DROP_ITEM is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

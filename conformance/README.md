@@ -35,7 +35,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -63,7 +63,7 @@ and `evidence`. The last field names the recorded observations. Audits never upd
 No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
 Deviation; that field records a result LyraCore has chosen to keep different.
 
-Known gaps record observed defects and their comparison evidence. They neither excuse differences
+Known gaps record observed defects or open stock-client questions and their evidence. They neither excuse differences
 nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
 separately. Each entry requires nonempty description, symbol and evidence fields and a relative
 source path. Unknown fields, including status, fail.
@@ -94,12 +94,14 @@ Its 465 sorted `(id, name)` rows have SHA-256
 `2ac5acc43e5e0f8eea113ec75626640557e801194324b6af08d561e5a9d8a216`. The coverage test
 checks both values so a removed row fails even if its Behavior claim is removed too.
 `opcodes-out-of-scope.toml` holds only requests with a cited administrator gate.
-`unverified_client_use` keeps requests with uncertain stock-client use in the denominator.
+System Behaviors keep requests with uncertain stock-client use in the denominator and record the
+dispatch result and open question in `known_gaps`.
 The scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks
 that every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
 
 `tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
-files from the pinned vmangos raw sources and the core opcode dependency. Its
+files from the pinned vmangos raw sources and the core opcode dependency. It groups uncertain
+requests by system and records vmangos dispatch results in their known gaps. Its
 `tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
 `--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
 After creation, maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
@@ -260,8 +262,8 @@ The ledger's other required rungs remain obligations.
 The system table counts Behaviors with and without scenarios. The open-work list includes every
 Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
 pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
-an entry with one when its evidence still points to implementation work. If tier 1 passes, or a
-stale audit measured no rule signatures and the ledger has no known gaps, an entry with a missing,
+an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
+best available rule-signature count is zero and the ledger has no known gaps, an entry with a missing,
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
 Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
@@ -279,11 +281,11 @@ signatures. For an audit item, replace `/path/to/client/Data` in `next_command` 
 
 Within those groups, the list sorts by descending number of other Behaviors that directly depend
 on the entry, then descending measured rule-signature count, then descending number of distinct
-claimed request opcodes, then ascending Behavior id. It uses the committed audit's signature count
-when available, otherwise tier 1's count. If neither measured the Behavior, it uses the number of
-distinct known gaps. Repeating a known gap does not increase priority. Dependency edits change the
-ranking and receive review as such in their PRs. The formula uses no assigned priority or tier 1
-baseline.
+claimed request opcodes, then ascending Behavior id. It uses the committed tier 1 baseline's
+distinct rule signatures when the Behavior has one, then the audit count, then a local tier 1
+count. If none exists, it uses the number of distinct known gaps. Repeating a known gap does not
+increase priority. Dependency edits change the ranking and receive review as such in their PRs.
+The formula uses no assigned priority.
 
 `--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
 keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,

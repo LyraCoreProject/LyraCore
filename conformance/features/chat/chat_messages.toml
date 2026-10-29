@@ -2,7 +2,7 @@ schema_version = 1
 id = "chat_messages"
 system = "chat"
 scope = "Characters can send 1.12.1 chat messages and report ignored chat."
-requests = ["0x0095", "0x0225"]
+requests = ["0x0095", "0x0225", "0x0331"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleChatMessageOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_CHAT_FILTERED is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

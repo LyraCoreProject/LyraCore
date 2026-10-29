@@ -2,7 +2,7 @@ schema_version = 1
 id = "death_and_resurrection"
 system = "combat"
 scope = "A dead Character can release, find, reclaim or resurrect its body."
-requests = ["0x015A", "0x015C", "0x01D2", "0x0216", "0x021C", "0x02B3"]
+requests = ["0x015A", "0x015C", "0x01D2", "0x0216", "0x021C", "0x02B3", "0x01E5", "0x032E"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleRepopRequestOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_GHOST, MSG_DELAY_GHOST_TELEPORT is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

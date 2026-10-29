@@ -2,7 +2,7 @@ schema_version = 1
 id = "movement_receipts"
 system = "movement"
 scope = "The client acknowledges forced movement, speed, teleport and spline changes in order."
-requests = ["0x00E3", "0x00E5", "0x00E7", "0x00E9", "0x00EB", "0x00F0", "0x00F6", "0x02C9", "0x02CE", "0x02CF", "0x02D0", "0x02DB", "0x02DD", "0x02DF"]
+requests = ["0x00E3", "0x00E5", "0x00E7", "0x00E9", "0x00EB", "0x00F0", "0x00F6", "0x02C9", "0x02CE", "0x02CF", "0x02D0", "0x02DB", "0x02DD", "0x02DF", "0x00E0", "0x0319"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleForceSpeedChangeAckOpcodes"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of MSG_MOVE_SET_RAW_POSITION_ACK, MSG_MOVE_TIME_SKIPPED is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

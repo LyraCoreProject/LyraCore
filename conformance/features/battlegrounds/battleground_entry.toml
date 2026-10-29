@@ -2,7 +2,7 @@ schema_version = 1
 id = "battleground_entry"
 system = "battlegrounds"
 scope = "A Character can browse, join and leave battleground queues and instances."
-requests = ["0x023C", "0x023E", "0x02D5", "0x02D7", "0x02EE", "0x02E1"]
+requests = ["0x023C", "0x023E", "0x02D5", "0x02D7", "0x02EE", "0x02E1", "0x0032"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -24,3 +24,9 @@ description = "The Module returns an unavailable response for CMSG_BATTLEFIELD_L
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_PVP_PORT_OBSOLETE is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

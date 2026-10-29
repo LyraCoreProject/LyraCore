@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Create the initial ledger denominator from pinned opcode sources."""
+"""Write the initial Feature Ledger without overwriting existing files."""
 
 import pathlib
 import re
@@ -59,7 +59,8 @@ GROUPS = {
     "combat/auto_attack": "CMSG_ATTACKSWING CMSG_ATTACKSTOP CMSG_SETSHEATHED CMSG_SET_SELECTION CMSG_SET_TARGET_OBSOLETE",
     "combat/duel_response": "CMSG_DUEL_ACCEPTED CMSG_DUEL_CANCELLED",
     "combat/death_and_resurrection": "CMSG_REPOP_REQUEST CMSG_RESURRECT_RESPONSE CMSG_RECLAIM_CORPSE MSG_CORPSE_QUERY CMSG_SPIRIT_HEALER_ACTIVATE CMSG_SELF_RES",
-    "spells/cast_and_interrupt": "CMSG_CAST_SPELL CMSG_CANCEL_CAST CMSG_CANCEL_AURA CMSG_CANCEL_CHANNELLING CMSG_CANCEL_AUTO_REPEAT_SPELL CMSG_CANCEL_GROWTH_AURA CMSG_GAMEOBJ_USE",
+    "spells/cast_and_interrupt": "CMSG_CAST_SPELL CMSG_CANCEL_CAST CMSG_CANCEL_AURA CMSG_CANCEL_CHANNELLING CMSG_CANCEL_AUTO_REPEAT_SPELL CMSG_CANCEL_GROWTH_AURA",
+    "gameobjects/gameobject_interaction": "CMSG_GAMEOBJ_USE",
     "talents/talent_learning": "CMSG_LEARN_TALENT MSG_TALENT_WIPE_CONFIRM",
     "skills/skill_unlearning": "CMSG_UNLEARN_SKILL",
     "actions/action_buttons": "CMSG_SET_ACTION_BUTTON",
@@ -138,6 +139,7 @@ SCOPES = {
     "duel_response": "Two Characters can accept or cancel a duel challenge.",
     "death_and_resurrection": "A dead Character can release, find, reclaim or resurrect its body.",
     "cast_and_interrupt": "A Character can cast and interrupt spells and cancel active auras.",
+    "gameobject_interaction": "A Character can use a GameObject and receive its type-specific result.",
     "talent_learning": "A Character can spend and reset talent points with class and cost rules.",
     "skill_unlearning": "A Character can unlearn a profession skill when the rules permit it.",
     "action_buttons": "A Character can set and clear action button assignments.",
@@ -161,6 +163,80 @@ SCOPES = {
     "battleground_entry": "A Character can browse, join and leave battleground queues and instances.",
     "battleground_state": "A battleground participant can inspect score, positions and spirit-healer state.",
     "gm_tickets": "A Character can inspect, submit, update and delete a support ticket.",
+}
+
+RESTORED_REQUESTS = {
+    "connection/legacy_session_requests": "0000 0001 0033 0034 0035 0153",
+    "queries/world_queries": "0002 0004 0006 000A",
+    "administration/world_controls": "0009 000C 001F 002D 0031",
+    "world/world_state_controls": "0027 0237 02BE 031B",
+    "world/time_controls": "0044 0046 0048",
+    "guilds/guild_emblem": "000D 000E",
+    "spells/legacy_spell_controls": "000F 0010 012D 0201 0204",
+    "administration/creature_controls": "0011 0012 0014 0016 0018 0019 001A 0021 0022 002E 022B 026C",
+    "administration/item_controls": "0013 0020 0024 0210 0287",
+    "support/client_telemetry": "0017 027D 0315 0316 0323",
+    "pets/pet_debug_controls": "001C 0026",
+    "administration/character_progression": "0025 0028 0029 01D8 020F 021D 0221 0223 02E5",
+    "administration/character_presence": "01E6 01E8 01E9 01EF 0226 0228 0229 022D 022E 022F 026E",
+    "administration/corpse_controls": "022A 022C 0310 0311",
+    "quests/quest_debug_controls": "002A 002B 002C",
+    "pvp/pvp_debug_controls": "0030 0288 0289 028A 028B",
+    "battlegrounds/battleground_entry": "0032",
+    "groups/party_status": "0080",
+    "guilds/guild_roster": "0094",
+    "gameobjects/gameobject_interaction": "00B2",
+    "movement/character_movement": "00C5 02D8 02D9",
+    "movement/legacy_motion_controls": "00CD 00CF 00D1 00D3 00D5 00D8 00EC 00ED 00F1 00F7 02B0 02B1",
+    "movement/debug_motion_controls": "00C4 00C6 00C8 00CC 00CE 00D0 00D2 00D4 00D6 00D7 00D9 02AD 032C",
+    "movement/movement_receipts": "00E0 0319",
+    "world/cinematics": "00F8",
+    "inventory/bag_management": "0106 0107 0110",
+    "loot/loot_collection": "0109",
+    "reputation/faction_debug_controls": "0126 0281",
+    "channels/channel_settings": "0139 013A",
+    "combat/auto_attack": "0152",
+    "inns/home_binding": "0154 0156",
+    "taxi/taxi_node_controls": "01A6 01A7 01A8 0241 0242",
+    "actions/legacy_macro_request": "01E3",
+    "combat/death_and_resurrection": "01E5 032E",
+    "administration/account_controls": "01F9 01FA 01FD 030F",
+    "administration/operator_commands": "0227 02B2 02B5",
+    "talents/talent_learning": "0213",
+    "skills/skill_unlearning": "021F 0220",
+    "lfg/meeting_stone": "0294",
+    "support/ticket_administration": "029A 0327",
+    "world/minigame_requests": "02F8",
+    "world/instance_reset": "0329",
+    "chat/chat_messages": "0331",
+    "world/lottery_requests": "0334 0336",
+}
+
+RESTORED_SCOPES = {
+    "legacy_session_requests": "The Realm marks a null action invalid and leaves legacy login, boot and save requests unhandled.",
+    "world_controls": "Teleport-to-unit follows vmangos's command path; legacy weather, event and spawn controls stay unhandled.",
+    "world_state_controls": "Legacy world-state and exploration edit requests receive vmangos's unhandled result.",
+    "time_controls": "Legacy game-time, speed and Realm-time edit requests receive vmangos's unhandled result.",
+    "legacy_spell_controls": "Legacy spell charge, learning and slot requests receive vmangos's unhandled result.",
+    "creature_controls": "Legacy creature and GameObject creation and control requests receive vmangos's unhandled result.",
+    "item_controls": "Legacy item creation, money, durability and undress requests receive vmangos's unhandled result.",
+    "client_telemetry": "Client diagnostics, damage logging and Lua usage requests receive vmangos's unhandled result.",
+    "pet_debug_controls": "Legacy pet level and invulnerability requests receive vmangos's unhandled result.",
+    "character_progression": "Legacy Character level, skill, stat and spell edit requests receive vmangos's unhandled result.",
+    "character_presence": "Legacy Character location, visibility and online-state requests receive vmangos's unhandled result.",
+    "corpse_controls": "Legacy resurrection and Corpse edit requests receive vmangos's unhandled result.",
+    "quest_debug_controls": "Legacy quest flag, completion and clearing requests receive vmangos's unhandled result.",
+    "pvp_debug_controls": "Legacy PvP rank, medal, title and flag edit requests receive vmangos's unhandled result.",
+    "legacy_motion_controls": "Legacy speed, root, knockback, hover and water-movement requests receive vmangos's unhandled result.",
+    "debug_motion_controls": "Raw-position teleport is administrator-gated; other legacy movement debug requests stay unhandled.",
+    "faction_debug_controls": "Legacy faction standing edit requests receive vmangos's unhandled result.",
+    "taxi_node_controls": "Legacy taxi-node edit requests receive vmangos's unhandled result.",
+    "legacy_macro_request": "The obsolete macro request receives vmangos's unhandled result.",
+    "account_controls": "Legacy Account security, lookup and removal requests receive vmangos's unhandled result.",
+    "operator_commands": "Legacy command, broadcast and script requests receive vmangos's unhandled result.",
+    "ticket_administration": "Legacy ticket intake and status edit requests receive vmangos's unhandled result.",
+    "minigame_requests": "The minigame move request receives vmangos's unhandled result.",
+    "lottery_requests": "Legacy lottery query and ticket purchase requests receive vmangos's unhandled result.",
 }
 
 
@@ -204,10 +280,19 @@ def main():
     sources["src/game/Server/WorldSession.cpp"] = raw("src/game/Server/WorldSession.cpp")
     baseline = (ROOT / "conformance/tools/ledger-denominator-base.txt").read_text().splitlines()
     claimed = {int(opcode, 16) for name in baseline for opcode in tomllib.loads((FEATURES / name).read_text())["requests"]}
+    grouped = {group: names.split() for group, names in GROUPS.items()}
+    by_id = {number: name for name, number in all_ids.items()}
+    restored = set()
+    for group, numbers in RESTORED_REQUESTS.items():
+        for number in numbers.split():
+            name = by_id[int(number, 16)]
+            assert name not in restored, name
+            grouped.setdefault(group, []).append(name)
+            restored.add(name)
     assigned = {}
-    for group, request_names in GROUPS.items():
-        assert group.split("/")[1] in SCOPES, group
-        for name in request_names.split():
+    for group, request_names in grouped.items():
+        assert group.split("/")[1] in SCOPES | RESTORED_SCOPES, group
+        for name in request_names:
             assert name in all_ids and name not in assigned, name
             assigned[name] = group
     assert all_ids.keys() >= assigned.keys()
@@ -218,6 +303,7 @@ def main():
          if name not in assigned and name not in OUT_OF_SCOPE and number not in claimed),
         key=all_ids.get,
     )
+    assert not unverified, unverified
     out_of_scope = {name: OUT_OF_SCOPE[name] for name in OUT_OF_SCOPE if all_ids[name] not in claimed}
     output.mkdir(parents=True, exist_ok=True)
     inventory = output / "client-requests-5875.tsv"
@@ -226,9 +312,9 @@ def main():
     unavailable = (ROOT / "module/src/native/unavailable.rs").read_text()
     unavailable_names = set(re.findall(r"ClientOpcodeMessage::([A-Z0-9_]+)", unavailable.split("fn unavailable(", 1)[0]))
     unavailable_numbers = {0x0205, 0x0207, 0x023E, 0x00F9, 0x0200, 0x0312, 0x0317, 0x005A}
-    for group, request_names in GROUPS.items():
+    for group, request_names in grouped.items():
         system, behavior = group.split("/")
-        requested = [name for name in request_names.split() if all_ids[name] not in claimed]
+        requested = [name for name in request_names if all_ids[name] not in claimed]
         if not requested:
             continue
         target = output / "features" / system / (behavior + ".toml")
@@ -244,55 +330,37 @@ def main():
             assert all(name in invalid for name in requested), group
             source_path, source_symbol = "src/game/Server/Protocol/Opcodes.cpp", "BuildOpcodeList"
         opcodes = ", ".join(quoted(f"0x{all_ids[name]:04X}") for name in requested)
-        lines = ["schema_version = 1", f"id = {quoted(behavior)}", f"system = {quoted(system)}", f"scope = {quoted(SCOPES[behavior])}", f"requests = [{opcodes}]", "replies = []", "dependencies = []", 'required_rungs = ["tier1", "conformance_audit", "real_client"]', "scenarios = []", "deliberate_deviations = []", "prerequisites = []", "tests = []", "", "[vmangos]", f"commit = {quoted(SHA)}", f"path = {quoted(source_path)}", f"symbol = {quoted(source_symbol)}", "", "[real_client]", 'status = "unverified"']
+        lines = ["schema_version = 1", f"id = {quoted(behavior)}", f"system = {quoted(system)}", f"scope = {quoted((SCOPES | RESTORED_SCOPES)[behavior])}", f"requests = [{opcodes}]", "replies = []", "dependencies = []", 'required_rungs = ["tier1", "conformance_audit", "real_client"]', "scenarios = []", "deliberate_deviations = []", "prerequisites = []", "tests = []", "", "[vmangos]", f"commit = {quoted(SHA)}", f"path = {quoted(source_path)}", f"symbol = {quoted(source_symbol)}", "", "[real_client]", 'status = "unverified"']
         gaps = [name for name in requested if name in unavailable_names or all_ids[name] in unavailable_numbers]
         if gaps:
             lines += ["", "[[known_gaps]]", f"description = {quoted('The Module returns an unavailable response for ' + ', '.join(gaps) + '.')}", 'path = "module/src/native/unavailable.rs"', f"symbol = {quoted('responses' if any(name in unavailable_names for name in gaps) else 'raw_responses')}", 'evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"']
+        uncertain = [name for name in requested if name in restored or name in invalid]
+        for reason in ["Invalid", "Unhandled", "Handled", "AdminGated"]:
+            names = [name for name in uncertain if (
+                "AdminGated" if name == "MSG_MOVE_TELEPORT_CHEAT" else
+                invalid.get(name, "Handled")) == reason]
+            if not names:
+                continue
+            plural = len(names) > 1
+            result = {
+                "Invalid": "marks them invalid" if plural else "marks it invalid",
+                "Unhandled": "marks them unhandled" if plural else "marks it unhandled",
+                "Handled": "dispatches them to handlers" if plural else "dispatches it to a handler",
+                "AdminGated": "requires administrator access for raw-position teleport",
+            }[reason]
+            lines += ["", "[[known_gaps]]",
+                      f"description = {quoted('Stock-client use of ' + ', '.join(names) + ' is unverified; vmangos ' + result + '. Check whether the client sends ' + ('any of them' if plural else 'it') + ' and what result to preserve.')}",
+                      'path = "module/src/native/mod.rs"', 'symbol = "receive"',
+                      f"evidence = {quoted(RAW + 'src/game/Server/Protocol/Opcodes.cpp' + ('; ' + RAW + 'src/game/Handlers/MiscHandler.cpp' if reason == 'AdminGated' else ''))}"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n")
-    target = output / "features/unverified/unverified_client_use.toml"
-    assert not target.exists(), target
-    target.parent.mkdir(parents=True, exist_ok=True)
-    opcode_rows = ["requests = ["]
-    for start in range(0, len(unverified), 8):
-        names = unverified[start:start + 8]
-        opcode_rows.append("    " + ", ".join(quoted(f"0x{all_ids[name]:04X}") for name in names) + ",")
-    opcode_rows.append("]")
-    target.write_text("\n".join([
-        "schema_version = 1",
-        'id = "unverified_client_use"',
-        'system = "unverified"',
-        'scope = "Identify whether the stock build-5875 client sends these requests and preserve any observable result."',
-        *opcode_rows,
-        "replies = []",
-        "dependencies = []",
-        'required_rungs = ["tier1", "conformance_audit", "real_client"]',
-        "scenarios = []",
-        "deliberate_deviations = []",
-        "prerequisites = []",
-        "tests = []",
-        "",
-        "[vmangos]",
-        f"commit = {quoted(SHA)}",
-        'path = "src/game/Server/Protocol/Opcodes.cpp"',
-        'symbol = "BuildOpcodeList"',
-        "",
-        "[real_client]",
-        'status = "unverified"',
-        "",
-        "[[known_gaps]]",
-        'description = "Stock-client use and expected responses for these request ids are unverified."',
-        'path = "module/src/native/mod.rs"',
-        'symbol = "receive"',
-        'evidence = "Pinned vmangos Opcodes_1_12_1.h and Opcodes.cpp enumerate the requests; no stock-client trace confirms their use."',
-    ]) + "\n")
     out = output / "opcodes-out-of-scope.toml"
     assert not out.exists(), out
     lines = ["[out_of_scope]"]
     for name, reason in sorted(out_of_scope.items(), key=lambda entry: all_ids[entry[0]]):
         lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted('https://github.com/vmangos/core/blob/' + SHA + '/src/game/Handlers/MiscHandler.cpp')}"]
     out.write_text("\n".join(lines) + "\n")
-    print(f"Created {len(GROUPS) + 1} Behavior groups; {len(unverified)} unverified requests; {len(out_of_scope)} out-of-scope opcodes")
+    print(f"Created {len(grouped)} Behavior groups; {len(restored)} restored requests; {len(out_of_scope)} out-of-scope opcodes")
 
 
 if __name__ == "__main__":

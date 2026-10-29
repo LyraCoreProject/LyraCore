@@ -1,0 +1,26 @@
+schema_version = 1
+id = "character_presence"
+system = "administration"
+scope = "Legacy Character location, visibility and online-state requests receive vmangos's unhandled result."
+requests = ["0x01E6", "0x01E8", "0x01E9", "0x01EF", "0x0226", "0x0228", "0x0229", "0x022D", "0x022E", "0x022F", "0x026E"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Server/Protocol/Opcodes.cpp"
+symbol = "BuildOpcodeList"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_GM_INVIS, MSG_GM_BIND_OTHER, MSG_GM_SUMMON, MSG_GM_SHOWLABEL, CMSG_GM_VISION, CMSG_GM_SILENCE, CMSG_GM_REVEALTO, CMSG_GM_FREEZE, CMSG_GM_UBERINVIS, CMSG_GM_REQUEST_PLAYER_INFO, MSG_GM_ACCOUNT_ONLINE is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

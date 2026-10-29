@@ -2,7 +2,7 @@ schema_version = 1
 id = "guild_roster"
 system = "guilds"
 scope = "Guild members can query the roster, notes, message of the day and guild information."
-requests = ["0x0054", "0x0087", "0x0089", "0x0234", "0x0235", "0x0091", "0x02FC"]
+requests = ["0x0054", "0x0087", "0x0089", "0x0234", "0x0235", "0x0091", "0x02FC", "0x0094"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleGuildQueryOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of MSG_UPDATE_GUILD is unverified; vmangos marks it unhandled. Check whether the client sends it and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

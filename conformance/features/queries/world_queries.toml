@@ -2,7 +2,7 @@ schema_version = 1
 id = "world_queries"
 system = "queries"
 scope = "The client can query item, creature, gameobject, NPC text and time data used by the world UI."
-requests = ["0x0056", "0x0057", "0x02C4", "0x005E", "0x0060", "0x017F", "0x01CE"]
+requests = ["0x0056", "0x0057", "0x02C4", "0x005E", "0x0060", "0x017F", "0x01CE", "0x0002", "0x0004", "0x0006", "0x000A"]
 replies = []
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
@@ -18,3 +18,9 @@ symbol = "WorldSession::HandleItemQuerySingleOpcode"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_ITEM_QUERY_MULTIPLE, CMSG_DBLOOKUP, CMSG_QUERY_OBJECT_POSITION, CMSG_QUERY_OBJECT_ROTATION, CMSG_ZONE_MAP is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
