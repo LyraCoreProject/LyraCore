@@ -236,7 +236,7 @@ def peer_accounts(scenario):
 
 
 @contextmanager
-def scenario_reference_server(harness, key):
+def scenario_reference_server(harness, key, peer_count=0):
     adapter = harness / 'adapters/vmangos'
     pins = json.loads((adapter / 'pins.json').read_text())
     runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
@@ -270,6 +270,9 @@ def scenario_reference_server(harness, key):
                     wait_port(18085, world=True)
                     run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'],
                         capture_output=True)
+                    if peer_count:
+                        run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)],
+                            capture_output=True)
             except BaseException:
                 run([*compose, 'down'], capture_output=True)
                 raise
@@ -278,6 +281,9 @@ def scenario_reference_server(harness, key):
             with timed('Reference Server start'):
                 wait_port(13724)
                 wait_port(18085, world=True)
+                if peer_count:
+                    run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)],
+                        capture_output=True)
         yield provenance
 
 
@@ -374,7 +380,7 @@ def local_realm(work, client_data, peer_count):
 
 
 @contextmanager
-def scenario_realm(key, pins, client_data):
+def scenario_realm(key, pins, client_data, peer_count):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     if (ROOT / '.lyracore-cli-rev').read_text().strip() != 'a016c82c6848a098ecbbb07ed53704c2b7dfdff1':
@@ -405,7 +411,6 @@ def scenario_realm(key, pins, client_data):
                     stdout=subprocess.DEVNULL)
             shutil.rmtree(cache)
             state = None
-        fresh = state is None
         if state is None:
             for port in [3000, 3724, 8085]:
                 free_port(port)
@@ -435,6 +440,10 @@ def scenario_realm(key, pins, client_data):
                 run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
                     input=(password + '\n').encode(), env=cli_env, cwd=realm_root,
                     stdout=subprocess.DEVNULL)
+                for peer in range(2, peer_count + 2):
+                    run([cli, 'account', 'create', f'CONFORMANCE{peer}', '--password-stdin'],
+                        input=(password + '\n').encode(), env=cli_env, cwd=realm_root,
+                        stdout=subprocess.DEVNULL)
                 secret = cache / 'password'
                 secret.write_text(password + '\n')
                 secret.chmod(0o600)
@@ -474,7 +483,7 @@ def scenario_realm(key, pins, client_data):
         if not token.is_file():
             raise RuntimeError('cached Realm has no Operator token')
         password = (cache / 'password').read_text().strip()
-        yield password, token, host, module, realm_root, fresh
+        yield password, token, host, module, realm_root
 
 
 def capture_servers(harness, wire, work, client_data):
@@ -515,36 +524,37 @@ def capture_servers(harness, wire, work, client_data):
 def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     realm_env = dict(env)
-    entry, = json.loads((work / 'catalogue.json').read_text())
-    with scenario_realm(key, pins, client_data) as (password, token, host, module, realm_root, fresh):
+    catalogue = json.loads((work / 'catalogue.json').read_text())
+    entry = next((item for item in catalogue if item['id'] == scenario), None)
+    if entry is None:
+        raise RuntimeError(f'unknown catalogue scenario {scenario}')
+    characters = entry['characters']
+    peer_count = len(characters) - 1
+    max_peer_count = max(len(item['characters']) - 1 for item in catalogue)
+    with scenario_realm(key, pins, client_data, max_peer_count) as (password, token, host, module, realm_root):
         realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
                          WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
-        if fresh:
-            with timed(f'{scenario} Realm prime run'):
-                capture(wire, work, entry, 'lyracore', [3724, 8085],
-                        (password + '\n').encode(), realm_env, progress=sys.stderr)
-            (work / f'{scenario}-lyracore.json').unlink()
-            cli_env = dict(os.environ)
-            cli_env.pop('CARGO_TARGET_DIR', None)
-            cli_env['PATH'] = str(SCENARIO_CACHE / 'realm/bin') + ':' + cli_env['PATH']
-            with timed('Realm reset after prime'):
-                restore_imported_world(realm_root, SCENARIO_CACHE / 'realm/imported-world',
-                                       realm_root / 'lyracore', cli_env)
-        with scenario_reference_server(harness, key) as provenance:
+        with scenario_reference_server(harness, key, peer_count) as provenance:
             (work / 'reference.json').write_text(json.dumps(provenance))
-            passwords = b''.join((REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                                 for name in ['player-password', 'gm-password'])
             reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             with timed(f'{scenario} Reference Server run'):
-                delete_reference_character(wire, entry['character'],
-                                           passwords.splitlines()[0] + b'\n', env)
-                capture(wire, work, entry, 'vmangos', [13724, 18085], passwords,
+                accounts = ['CONFORMANCE', *peer_accounts(entry)]
+                passwords = []
+                for index, account in enumerate(accounts):
+                    name = 'player-password' if index == 0 else f'peer{index + 1}-password'
+                    secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
+                    passwords.append(secret)
+                    delete_reference_character(wire, characters[index], account, secret, env)
+                passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
+                capture(wire, work, entry, 'vmangos', [13724, 18085], b''.join(passwords),
                         reference_env, progress=sys.stderr)
         with timed(f'{scenario} Realm run'):
-            delete_reference_character(wire, entry['character'], (password + '\n').encode(), realm_env,
-                                       endpoints=(3724, 8085))
+            for index, character in enumerate(characters):
+                account = 'CONFORMANCE' if index == 0 else f'CONFORMANCE{index + 1}'
+                delete_reference_character(wire, character, account, (password + '\n').encode(),
+                                           realm_env, endpoints=(3724, 8085))
             capture(wire, work, entry, 'lyracore', [3724, 8085],
-                    (password + '\n').encode(), realm_env, progress=sys.stderr)
+                    (password + '\n').encode() * len(characters), realm_env, progress=sys.stderr)
         state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
         snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
         if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
@@ -570,7 +580,7 @@ def run_scenario(args, harness, target, core_commit, revision):
         os.environ['TMPDIR'] = str(work)
         audit = target / 'debug/examples/audit'
         wire = target / 'debug/vanilla-wire'
-        run([audit, 'export-one', work, args.scenario], capture_output=True)
+        run([audit, 'export', work], capture_output=True)
         capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data))
         if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
             raise RuntimeError('core changed during scenario capture; commit and rerun')

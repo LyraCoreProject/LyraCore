@@ -47,13 +47,10 @@ struct AuditScenarioBaseline<'a> {
     data: Vec<evidence::Signature>,
 }
 
-fn export(directory: &Path, selected: Option<&str>) -> Result<()> {
+fn export(directory: &Path) -> Result<()> {
     std::fs::create_dir_all(directory)?;
     let mut scenarios = Vec::new();
     for entry in catalogue::ENTRIES {
-        if selected.is_some_and(|id| id != entry.id) {
-            continue;
-        }
         let golden = catalogue::get(entry.id)?;
         let fixtures = if golden.scenario().schema_version == 4 {
             golden
@@ -75,10 +72,6 @@ fn export(directory: &Path, selected: Option<&str>) -> Result<()> {
         std::fs::write(directory.join(format!("{}.toml", entry.id)), entry.scenario)?;
         scenarios.push(serde_json::json!({"id": entry.id, "characters": characters}));
     }
-    ensure!(
-        !scenarios.is_empty(),
-        "unknown catalogue scenario {selected:?}"
-    );
     std::fs::write(
         directory.join("catalogue.json"),
         serde_json::to_vec_pretty(&scenarios)?,
@@ -95,11 +88,10 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
         .scenarios
         .iter()
         .find(|entry| entry.id == scenario)
-        .context("scenario is missing from the committed full Conformance Audit report")?;
-    ensure!(
-        previous.scenario_sha256 == golden.trace().header.scenario_sha256,
-        "scenario changed since the committed full Conformance Audit report"
-    );
+        .filter(|entry| {
+            entry.scenario_sha256 == golden.trace().header.scenario_sha256
+                && entry.behavior == golden.scenario().behavior
+        });
     let Origin::Golden { provenance } = &golden.trace().header.origin else {
         bail!("expected Golden Trace");
     };
@@ -143,14 +135,17 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
         }],
     });
     std::fs::write(directory.join("result.json"), serde_json::to_vec(&result)?)?;
-    let summary = evidence::Summary::collect(previous.comparison.differences.iter());
+    let summary = previous.map_or_else(evidence::Summary::default, |entry| {
+        evidence::Summary::collect(entry.comparison.differences.iter())
+    });
+    let unrecorded = Sha256Digest::of(b"not in the latest full audit");
     let baseline = AuditBaseline {
         schema_version: 1,
         scenarios: vec![AuditScenarioBaseline {
             scenario,
-            behavior: &previous.behavior,
+            behavior: previous.map_or(golden.scenario().behavior.as_str(), |entry| &entry.behavior),
             harness_revision: &committed.harness_revision,
-            scenario_sha256: &previous.scenario_sha256,
+            scenario_sha256: previous.map_or(&unrecorded, |entry| &entry.scenario_sha256),
             rule: summary
                 .rule
                 .signatures
@@ -330,11 +325,10 @@ fn write_report(directory: &Path, output: &Path, date: &str) -> Result<()> {
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
-        [mode, directory] if mode == "export" => export(Path::new(directory), None),
-        [mode, directory, scenario] if mode == "export-one" => export(Path::new(directory), Some(scenario)),
+        [mode, directory] if mode == "export" => export(Path::new(directory)),
         [mode, directory, scenario] if mode == "check" => check(Path::new(directory), scenario),
         [mode, directory, output, date] if mode == "report" => write_report(Path::new(directory), Path::new(output), date),
-        _ => bail!("audit export DIRECTORY | export-one DIRECTORY SCENARIO | check DIRECTORY SCENARIO | report DIRECTORY OUTPUT_DIRECTORY DATE; use conformance/audit"),
+        _ => bail!("audit export DIRECTORY | check DIRECTORY SCENARIO | report DIRECTORY OUTPUT_DIRECTORY DATE; use conformance/audit"),
     }
 }
 
@@ -390,7 +384,7 @@ mod tests {
     #[test]
     fn audit_requires_both_candidates_for_every_catalogue_scenario() -> Result<()> {
         let directory = scratch::Scratch::new("audit-test")?;
-        export(&directory, None)?;
+        export(&directory)?;
         let exported: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("catalogue.json"))?)?;
         let visibility = exported
