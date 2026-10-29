@@ -19,10 +19,15 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module sends an empty world-state list when the Character enters Elwynn and Westfall."
+description = "The Module lacks the 55 War Effort world states in the Golden Trace."
+path = "module/src/native/environment.rs"
+symbol = "enter_zone"
+evidence = "taxi_single_hop Tier 1 data signature zone_world_state_catalogue / flight / broadcast/zones / 0x02C2 / states: expected 164 entries, actual 109. The first 109 match def_world_states in Player.cpp::SendInitWorldStates at d9173eca3ea08dd985c52dabbcc826898d1d0b77. That function appends BuildWarEffortWorldStates only while EVENT_WAR_EFFORT is active; the last 55 trace entries are identical in Stormwind, Elwynn and Westfall. The Module has no War Effort activation or progress state."
+
+[[tests]]
 path = "crates/lyracore-protocol/src/codec/char.rs"
-symbol = "build_init_world_states"
-evidence = "taxi_single_hop Tier 1 data signature zone_world_state_catalogue / flight / broadcast/zones / 0x02C2 / states: each Golden Trace list has 164 entries, while the Module serializes a zero count. The first 109 entries match the unconditional def_world_states defaults sent by Player.cpp::SendInitWorldStates at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+function = "init_world_states_sends_the_defaults_in_every_zone"
+rung = "codec"
 
 [[tests]]
 path = "crates/lyracore-protocol/src/codec/tests.rs"
