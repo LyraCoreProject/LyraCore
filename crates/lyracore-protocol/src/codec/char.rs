@@ -185,11 +185,128 @@ pub fn build_trigger_cinematic(sequence: u32) -> (u16, Vec<u8>) {
     (0x00fa, sequence.to_le_bytes().to_vec())
 }
 
-/// u32 map, u32 zone, u16 count 0: the client clears its world-state table.
+const DEFAULT_WORLD_STATES: &[(u32, i32)] = &[
+    (0x07AE, 1),
+    (0x0532, 1),
+    (0x0531, 0),
+    (0x052E, 0),
+    (0x06F9, 0),
+    (0x06F3, 0),
+    (0x06F1, 0),
+    (0x06EE, 0),
+    (0x06ED, 0),
+    (0x0571, 0),
+    (0x0570, 0),
+    (0x0567, 1),
+    (0x0566, 1),
+    (0x0550, 1),
+    (0x0544, 0),
+    (0x0536, 0),
+    (0x0535, 1),
+    (0x03C6, 0),
+    (0x03C4, 0),
+    (0x03C2, 0),
+    (0x07A8, 0),
+    (0x07A3, 9999),
+    (0x0574, 0),
+    (0x0573, 0),
+    (0x0572, 0),
+    (0x056F, 0),
+    (0x056E, 0),
+    (0x056D, 0),
+    (0x056C, 0),
+    (0x056B, 0),
+    (0x056A, 1),
+    (0x0569, 1),
+    (0x0568, 1),
+    (0x0565, 0),
+    (0x0564, 0),
+    (0x0563, 0),
+    (0x0562, 0),
+    (0x0561, 0),
+    (0x0560, 0),
+    (0x055F, 0),
+    (0x055E, 0),
+    (0x055D, 0),
+    (0x055C, 0),
+    (0x055B, 0),
+    (0x055A, 0),
+    (0x0559, 0),
+    (0x0558, 0),
+    (0x0557, 0),
+    (0x0556, 0),
+    (0x0555, 0),
+    (0x0554, 1),
+    (0x0553, 1),
+    (0x0552, 1),
+    (0x0551, 1),
+    (0x054F, 0),
+    (0x054E, 0),
+    (0x054D, 1),
+    (0x054C, 0),
+    (0x054B, 0),
+    (0x0545, 0),
+    (0x0543, 1),
+    (0x0542, 0),
+    (0x0540, 0),
+    (0x053F, 0),
+    (0x053E, 0),
+    (0x053D, 0),
+    (0x053C, 0),
+    (0x053B, 0),
+    (0x053A, 1),
+    (0x0539, 0),
+    (0x0538, 0),
+    (0x0537, 0),
+    (0x0534, 0),
+    (0x0533, 0),
+    (0x0530, 0),
+    (0x052F, 0),
+    (0x052D, 1),
+    (0x0516, 1),
+    (0x0515, 0),
+    (0x03B6, 0),
+    (0x0745, 2),
+    (0x0736, 1),
+    (0x0735, 1),
+    (0x0734, 1),
+    (0x0733, 1),
+    (0x0732, 1),
+    (0x0702, 0),
+    (0x0701, 0),
+    (0x0700, 0),
+    (0x06FE, 0),
+    (0x06FD, 0),
+    (0x06FC, 0),
+    (0x06FB, 0),
+    (0x06F8, 0),
+    (0x06F7, 0),
+    (0x06F6, 0),
+    (0x06F4, 2000),
+    (0x06F2, 0),
+    (0x06F0, 0),
+    (0x06EF, 0),
+    (0x06EC, 0),
+    (0x06EA, 0),
+    (0x06E9, 0),
+    (0x06E8, 0),
+    (0x06E7, 0),
+    (0x0518, 0),
+    (0x0517, 0),
+    (0x0703, 0),
+    (0x0000, 0),
+];
+
+/// u32 map, u32 zone, u16 count, then id/value pairs.
 pub fn build_init_world_states(map_id: u32, zone_id: u32) -> (u16, Vec<u8>) {
-    let mut body = map_id.to_le_bytes().to_vec();
+    let mut body = Vec::with_capacity(10 + DEFAULT_WORLD_STATES.len() * 8);
+    body.extend_from_slice(&map_id.to_le_bytes());
     body.extend_from_slice(&zone_id.to_le_bytes());
-    body.extend_from_slice(&0u16.to_le_bytes());
+    body.extend_from_slice(&(DEFAULT_WORLD_STATES.len() as u16).to_le_bytes());
+    for &(id, value) in DEFAULT_WORLD_STATES {
+        body.extend_from_slice(&id.to_le_bytes());
+        body.extend_from_slice(&value.to_le_bytes());
+    }
     (0x02c2, body)
 }
 
@@ -295,11 +412,25 @@ mod tests {
     }
 
     #[test]
-    fn init_world_states_names_the_map_and_zone_with_no_states() {
-        assert_eq!(
-            raw_frame(build_init_world_states(0, 12)),
-            [0x00, 0x0c, 0xc2, 0x02, 0, 0, 0, 0, 12, 0, 0, 0, 0, 0]
-        );
+    fn init_world_states_sends_the_defaults_in_every_zone() {
+        let (opcode, body) = build_init_world_states(0, 12);
+        assert_eq!(opcode, 0x02c2);
+        assert_eq!(body.len(), 10 + 109 * 8);
+        assert_eq!(&body[..10], &[0, 0, 0, 0, 12, 0, 0, 0, 109, 0]);
+        let states = body[10..]
+            .chunks_exact(8)
+            .map(|pair| {
+                (
+                    u32::from_le_bytes(pair[..4].try_into().unwrap()),
+                    i32::from_le_bytes(pair[4..].try_into().unwrap()),
+                )
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(&states[..3], &[(0x07AE, 1), (0x0532, 1), (0x0531, 0)]);
+        assert_eq!(states.last(), Some(&(0, 0)));
+        let (_, other_zone) = build_init_world_states(1, 14);
+        assert_eq!(&other_zone[..8], &[1, 0, 0, 0, 14, 0, 0, 0]);
+        assert_eq!(&other_zone[8..], &body[8..]);
     }
 
     #[test]
