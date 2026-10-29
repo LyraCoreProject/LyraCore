@@ -98,6 +98,11 @@ pub(super) fn create(
 ) -> Result<(), String> {
     let mut rotation = None;
     let mut passenger_movement = None;
+    let mut freshness = if newly_added {
+        codec::CreateFreshness::New
+    } else {
+        codec::CreateFreshness::Known
+    };
     let mut message = match grant.layer {
         WORLD_ENTITY => {
             if grant.viewer_guid == grant.entity_guid {
@@ -115,6 +120,9 @@ pub(super) fn create(
                 .guid()
                 .find(grant.entity_guid)
                 .ok_or("AOI Grant refers to missing WorldEntity")?;
+            if entity.is_player() {
+                freshness = codec::CreateFreshness::Known;
+            }
             let mut view = super::view::entity(ctx, &entity);
             super::taxi::create_spline(ctx, entity.guid, &mut view);
             view.dynamic_flags = super::loot::dynamic_flags(ctx, &entity, grant.viewer_guid);
@@ -135,6 +143,13 @@ pub(super) fn create(
                 .find(grant.entity_guid)
                 .ok_or("AOI Grant refers to missing GameObject")?;
             let view = super::object::view(ctx, &object)?;
+            if matches!(
+                view.type_id,
+                lyracore_shared::constants::go_type::ELEVATOR
+                    | lyracore_shared::constants::go_type::MO_TRANSPORT
+            ) {
+                freshness = codec::CreateFreshness::Known;
+            }
             rotation = Some(codec::build_gameobject_rotation_values(&view));
             codec::build_gameobject_create_object(&view)
         }
@@ -164,17 +179,13 @@ pub(super) fn create(
                 object.radius_yd,
             )
         }
-        TRANSPORT => super::transport::create(ctx, grant.entity_guid)?,
+        TRANSPORT => {
+            freshness = codec::CreateFreshness::Known;
+            super::transport::create(ctx, grant.entity_guid)?
+        }
         _ => return Err("unknown AOI layer".into()),
     };
-    codec::set_create_freshness(
-        &mut message,
-        if newly_added {
-            codec::CreateFreshness::New
-        } else {
-            codec::CreateFreshness::Known
-        },
-    );
+    codec::set_create_freshness(&mut message, freshness);
     let packet = match passenger_movement {
         Some(movement) => lyracore_protocol::world::Packet {
             opcode: codec::SMSG_UPDATE_OBJECT_OPCODE,

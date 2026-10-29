@@ -82,6 +82,20 @@ fn visibility_create_examples() -> Vec<(&'static str, SMSG_UPDATE_OBJECT)> {
             "gameobject",
             build_gameobject_create_object(&GameObjectView::default()),
         ),
+        (
+            "elevator",
+            build_gameobject_create_object(&GameObjectView {
+                type_id: lyracore_shared::constants::go_type::ELEVATOR,
+                ..Default::default()
+            }),
+        ),
+        (
+            "moving transport",
+            build_gameobject_create_object(&GameObjectView {
+                type_id: lyracore_shared::constants::go_type::MO_TRANSPORT,
+                ..Default::default()
+            }),
+        ),
         ("corpse", build_corpse_create_object(&CorpseView::default())),
         (
             "dynamic object",
