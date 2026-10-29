@@ -676,6 +676,102 @@ fn taxi_landing_sends_a_position_correction_after_dismount() {
     assert_eq!(position.get("z"), Some(&Field::Float(0.0)));
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
+    use std::collections::BTreeMap;
+    use wire_client::decode::Field;
+
+    let (shard, passenger, _) = fixture("taxi-zone-boundaries");
+    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (1519,0,0,1,256,0,2,'Stormwind'),(12,0,0,2,0,0,2,'Elwynn Forest'),(40,0,0,3,0,0,2,'Westfall')");
+    let y_cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+    let mut areas = BTreeMap::new();
+    for x in (0..=200).step_by(5) {
+        let cell = lyracore_shared::terrain::cell_index(x as f32).unwrap();
+        let area = if x < 50 {
+            1519
+        } else if x < 125 {
+            12
+        } else {
+            40
+        };
+        areas.entry(cell).or_insert(area);
+    }
+    let heights = vec!["0"; 145].join(":");
+    let chunks = areas
+        .into_iter()
+        .map(|(cell, area)| format!("0,{cell},{y_cell},0,0,0,{area},{heights}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    shard.assert_call("import_terrain_chunks", &[&chunks]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET x = 0, y = 0, z = 0, zone_id = 1519 WHERE guid = {passenger}"
+    ));
+
+    let mut connection = enter(&shard, passenger);
+    connection.drain_packets();
+    let starting = shard.query_rows(&format!(
+        "SELECT zone_id,resting,player_flags FROM game_world_entity WHERE guid = {passenger}"
+    ));
+    assert_eq!(starting[0]["zone_id"], "1519");
+    assert_eq!(starting[0]["resting"], "true");
+    assert_eq!(starting[0]["player_flags"], "32");
+
+    start_taxi_flight(&shard, passenger, 200);
+    let mut zones = Vec::new();
+    let mut weather = 0;
+    let mut rest_flags = Vec::new();
+    let deadline = std::time::Instant::now() + Duration::from_secs(12);
+    while std::time::Instant::now() < deadline
+        && (zones.len() < 2 || weather < 2 || rest_flags.is_empty())
+    {
+        for row in connection.wait_for_packets(Duration::from_secs(1)).unwrap() {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            if option != 0 {
+                continue;
+            }
+            let opcode = serde_json::from_str::<u16>(opcode.get()).unwrap();
+            if audience == 0 && opcode == 706 {
+                let decoded = packet(&row, connection.connection_id(), opcode);
+                if let Some(Field::Unsigned(zone)) = decoded.fields.get("zone") {
+                    zones.push(*zone);
+                }
+            } else if audience == 0 && opcode == 756 {
+                weather += 1;
+            } else if opcode == 169 {
+                let bytes = body
+                    .as_bytes()
+                    .chunks_exact(2)
+                    .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+                    .collect::<Vec<_>>();
+                let decoded = wire_client::decode::decode(opcode, &bytes).unwrap();
+                if let Some(Field::List(objects)) = decoded.fields.get("objects") {
+                    for object in objects {
+                        if let Field::Object(object) = object {
+                            if let Some(Field::Object(values)) = object.get("values") {
+                                if let Some(Field::Unsigned(flags)) = values.get("field_190") {
+                                    rest_flags.push(*flags);
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    assert_eq!(zones, [12, 40]);
+    assert_eq!(weather, 2);
+    assert_eq!(rest_flags, [0]);
+    let ending = shard.query_rows(&format!(
+        "SELECT zone_id,resting,player_flags FROM game_world_entity WHERE guid = {passenger}"
+    ));
+    assert_eq!(ending[0]["zone_id"], "40");
+    assert_eq!(ending[0]["resting"], "false");
+    assert_eq!(ending[0]["player_flags"], "0");
+}
+
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
     start_taxi_flight_on_route(
         shard,

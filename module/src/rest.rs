@@ -1,8 +1,10 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
-use crate::game_character;
 use crate::world::WorldEntity;
-use lyracore_shared::packing;
+use crate::{game_area, game_character};
+use lyracore_shared::{constants::player_flags, packing};
+
+const AREA_FLAG_CAPITAL: u32 = 0x0000_0100;
 
 struct RestTrigger {
     map_id: u32,
@@ -21,13 +23,23 @@ const REST_TRIGGERS: &[RestTrigger] = &[
     },
 ];
 
-fn in_rest_area(map_id: u32, x: f32, y: f32) -> bool {
-    REST_TRIGGERS.iter().any(|t| {
+fn in_rest_area(ctx: &ReducerContext, map_id: u32, x: f32, y: f32) -> bool {
+    if REST_TRIGGERS.iter().any(|t| {
         t.map_id == map_id && {
             let (dx, dy) = (x - t.x, y - t.y);
             dx * dx + dy * dy <= t.radius * t.radius
         }
-    })
+    }) {
+        return true;
+    }
+    let Some(area) = crate::terrain::area_at(ctx, map_id, x, y) else {
+        return false;
+    };
+    ctx.db
+        .game_area()
+        .id()
+        .find(crate::terrain::zone_of(&area))
+        .is_some_and(|zone| zone.flags & AREA_FLAG_CAPITAL != 0)
 }
 
 #[table(accessor = game_rest_state_event, public)]
@@ -49,7 +61,12 @@ crate::character_owned!(delete, fn sweep_delete_game_rest_state_event(ctx, chara
 crate::character_owned!(not_transported, fn sweep_transfer_game_rest_state_event());
 
 pub(crate) fn check_rest_state(ctx: &ReducerContext, mover: &mut WorldEntity) {
-    let now_resting = in_rest_area(mover.map_id, mover.x, mover.y);
+    let now_resting = in_rest_area(ctx, mover.map_id, mover.x, mover.y);
+    if now_resting {
+        mover.player_flags |= player_flags::RESTING;
+    } else {
+        mover.player_flags &= !player_flags::RESTING;
+    }
     if now_resting == mover.resting {
         return;
     }

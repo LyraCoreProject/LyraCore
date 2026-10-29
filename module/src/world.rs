@@ -764,6 +764,20 @@ pub(crate) fn apply_player_login(
     character.online = true;
     character.first_login = false;
     chars.guid().update(character);
+    if let Some(mut entity) = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(character_guid)
+        .filter(|entity| crate::terrain::area_at(ctx, entity.map_id, entity.x, entity.y).is_some())
+    {
+        let was_resting = entity.resting;
+        let previous_flags = entity.player_flags;
+        crate::rest::check_rest_state(ctx, &mut entity);
+        if was_resting != entity.resting || previous_flags != entity.player_flags {
+            entity.update(ctx);
+        }
+    }
     crate::instance::reconcile_instance_removal(ctx, character_guid);
     crate::hooks::fire_on_login(ctx, &crate::hooks::LoginPayload { character_guid });
     Ok(())
