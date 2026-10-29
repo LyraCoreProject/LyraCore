@@ -732,6 +732,8 @@ fn finish_flight(ctx: &ReducerContext, player: WorldEntity, plan: FlightEndPlan)
 }
 
 fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
+    let character_guid = player.guid;
+    let mounted = player.mount_display_id != 0;
     finish_flight(
         ctx,
         player,
@@ -741,6 +743,7 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
             zone_id: None,
         },
     );
+    crate::native::taxi_aborted(ctx, character_guid, mounted);
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {

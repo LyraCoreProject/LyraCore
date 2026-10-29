@@ -396,6 +396,32 @@ fn flyer_reconnect_restores_position_and_replays_current_spline() {
         "replayed {replay_x}, world {world_x}"
     );
 }
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn permanent_taxi_abort_sends_dismount_result() {
+    let (shard, passenger, _) = taxi_flight("taxi-abort-dismount", 40);
+    let mut connection = enter(&shard, passenger);
+    connection.drain_packets();
+    shard.assert_sql("DELETE FROM game_taxi_path_node WHERE id = 5090994");
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows(&format!(
+            "SELECT character_guid FROM game_active_taxi_flight WHERE character_guid = {passenger}"
+        ))
+            .is_empty()
+    ));
+    let rows = connection.wait_for_packets(Duration::from_secs(5)).unwrap();
+    assert!(
+        rows.iter().any(|row| {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            audience == 0 && option == 0 && opcode.get() == "367" && body == "03000000"
+        }),
+        "permanent abort sent no successful dismount result: {rows:?}"
+    );
+}
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
     shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,{destination_x},0,0,'End',0,1147)"));
     shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
