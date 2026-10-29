@@ -117,7 +117,7 @@ pub(crate) fn entity_changed(
     }) {
         return;
     }
-    refresh_entity_with_freshness(ctx, entity.guid, old.is_none());
+    refresh_entity_with_freshness(ctx, entity.guid, old.is_none() && !entity.is_player());
 }
 
 pub(crate) fn enter_viewer(ctx: &ReducerContext, guid: u64) -> Result<(), String> {

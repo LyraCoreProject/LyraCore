@@ -1,8 +1,16 @@
 use super::*;
 
 #[test]
-fn a_new_object_beside_a_viewer_uses_create_kind_three_for_every_world_type() {
-    for (name, mut message) in visibility_create_examples() {
+fn a_new_map_object_beside_a_viewer_uses_create_kind_three() {
+    for (name, mut message) in visibility_create_examples()
+        .into_iter()
+        .filter(|(name, _)| {
+            matches!(
+                *name,
+                "creature" | "gameobject" | "corpse" | "dynamic object"
+            )
+        })
+    {
         set_create_freshness(&mut message, CreateFreshness::New);
         assert!(
             matches!(message.objects[0], Object::CreateObject2 { .. }),
