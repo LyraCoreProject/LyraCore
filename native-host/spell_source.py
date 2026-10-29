@@ -99,12 +99,15 @@ def check_spell_source_behavior(host):
     apply(shared_heal, source=b)
     assert len(auras(shared_heal)) == 1 and auras(shared_heal)[0][0] == a and auras(shared_heal)[0][3:] == [2, 60], auras(shared_heal)
 
+    unit_flags, combat_active, combat_until_ms = host.rows(f'SELECT unit_flags, combat_active, combat_until_ms FROM game_world_entity WHERE guid = {b}')[0]
+    host.sql(f'UPDATE game_world_entity SET unit_flags = {unit_flags | 0x80000}, combat_active = true, combat_until_ms = 9999999999999 WHERE guid = {b}')
     heal = spell(kind=2, amount=10, coefficient=0.5)
     fixed_heal = spell(flags=0x10, kind=2, amount=10, coefficient=0.5)
     for sid, restored in [(heal, 60), (fixed_heal, 10)]:
         host.sql(f'UPDATE game_world_entity SET health = 100, max_health = 10000 WHERE guid = {b}')
         apply(sid)
         assert host.rows(f'SELECT health FROM game_world_entity WHERE guid = {b}') == [[100 + restored]]
+    host.sql(f'UPDATE game_world_entity SET unit_flags = {unit_flags}, combat_active = {str(combat_active).lower()}, combat_until_ms = {combat_until_ms} WHERE guid = {b}')
     periodic = spell(kind=0x91, amount=10, coefficient=0.25)
     apply(periodic)
     assert auras(periodic)[0][4] == 35, auras(periodic)
