@@ -1,8 +1,8 @@
 # Operator Content API
 
 The Operator Content API edits creature and gameobject spawns, item and creature templates,
-vendor offers, creature displays, loot and spells on a running Realm. A world editor such as Meld
-calls it with the Owner Token. Spawn edits despawn the old live entity and let the respawn pass
+vendor offers, creature displays, loot, spells and Character positions on a running Realm.
+A world editor such as Meld calls it with the Owner Token. Spawn edits despawn the old live entity and let the respawn pass
 make the new one. Item edits refresh connected wearers and send new item query answers to clients.
 
 The source is `module/src/operator_content.rs` and `module/src/operator_content/items.rs`. The
@@ -10,6 +10,8 @@ durable tests are in `module/tests/operator_content.rs` and `module/tests/operat
 `module/src/operator_content/creatures.rs` and `module/tests/operator_creatures.rs` cover creature edits.
 `native-host/operator_creatures.py` checks their packets and respawns.
 `native-host/operator_items.py` checks item edits with the Headless Client.
+`module/src/operator_content/characters.rs`, `module/tests/operator_characters.rs` and
+`native-host/operator_characters.py` cover Character teleport and its packets.
 
 ## Which database
 
@@ -66,6 +68,104 @@ spacetime call <db> operator_apply_spawn_edits -- '[
   {"deleteGameObject": 17370383762768003073}
 ]'
 ```
+
+## Character teleport
+
+```text
+operator_teleport_character(name: String, map_id: u32, x: f32, y: f32, z: f32, o: f32)
+    -> Result<(), String>
+```
+
+The Operator calls this with the Owner Token. Meld's Game › Play Here and Launch-at-camera
+can use the same call. Play Here moves the Character in the world. Launch must close the game
+and wait for logout before the call, then start the game after success. The Meld caller ships
+in a separate PR.
+
+Names match without ASCII case distinctions, so `Tester`, `tester` and `TESTER` match the same
+Character. Whitespace is significant; non-ASCII letters must match exactly. The Module's
+unique name index is case-sensitive, so older or directly created rows can differ only in case.
+More than one matching Character is a Refusal, even when one spelling matches exactly.
+Characters in Transfer are hidden by the existing Character read Gate.
+
+A Character with a `game_world_entity` uses `world::teleport_player`. Same-map moves send
+`MSG_MOVE_TELEPORT_ACK`; map changes send `SMSG_TRANSFER_PENDING` and `SMSG_NEW_WORLD` and
+wait for `MSG_MOVE_WORLDPORT_ACK` before rebuilding a connected Character's entity.
+A live Character without a World Session moves immediately. The normal teleport path
+updates the saved position, drops queued motion and resolves the destination zone. Its usual
+mount, trade, duel and Instance cleanup still applies. A pending native teleport refuses a
+second call, including the far-teleport interval with no live entity.
+
+Without a live entity, the reducer writes `map_id`, `x`, `y`, `z`, `orientation` and `zone_id`
+to `game_character`, and resets `pending_instance_id` to zero. The zone comes from the terrain
+chunk's area and its parent zone. If area data is unavailable, the offline write sets zone zero
+instead of keeping a zone from the previous position. It emits no teleport packet. The next
+login reads this saved position. An `online` Character without an entity is refused, unless an
+already-pending teleport has supplied the more specific Refusal first.
+
+The destination must have a `game_map` row with `map_type = 0`, and must not be one of the
+Module's known Instance maps. Dungeons, raids and battlegrounds are out of scope. The Realm
+must also have instance-zero spawn content for the map or terrain or navigation at the point,
+using the same loaded-map check as spawn edits. A catalogue row alone does not admit a map.
+All four floats must be finite. Both horizontal coordinates must lie inside the terrain grid,
+and the absolute height must not exceed `MAP_COORD_MAX`, about 17,066.67 yards.
+
+The reducer preserves `z` exactly. It does not call `ground_z` or `snap_z`: terrain height can
+lie above a cave floor or below a bridge, and collision data may differ from Meld's edited
+client files. Meld must supply its ground point, with a small upward offset if needed. The call
+does not check walkability, collision or height above ground. Orientation is in radians and
+is stored without normalization.
+
+This authoring operation refuses a dead Character, a ghost, combat, a taxi flight or a Transport
+Passenger. It does not resurrect, end combat or cancel travel. Ghost status is read from the
+live entity, or `pending_ghost` when offline. Offline health zero means an uninitialized vitals
+snapshot, not death. Logout completes in one transaction in the current Native Host path;
+there is no pending-logout timer to cancel. The call either runs before logout under the online
+rules or after logout under the offline rules.
+
+### Refusals
+
+A Refusal returns `Err` and changes no rows. These are the messages; braces denote substituted
+values. `{name:?}` is Rust debug string formatting, including quotes and escaping.
+
+| Message | Cause |
+| --- | --- |
+| `operator only` | The caller is not the claimed Operator. |
+| `operator not claimed` | No Operator has been claimed. |
+| `the position and orientation must be finite` | At least one float is NaN or infinite. |
+| `({x}, {y}, {z}) is outside the map bounds` | Coordinates are outside the grid or height bound. |
+| `map {map_id} is not in the Realm's map catalogue` | No map row exists. |
+| `map {map_id} requires an Instance` | The map type is nonzero or the Module identifies an Instance map. |
+| `map {map_id} is not loaded at ({x}, {y})` | No loaded-map evidence exists. |
+| `character {name:?} does not exist or is in Transfer` | No visible name matches. |
+| `character name {name:?} is ambiguous ignoring ASCII case` | Multiple visible names match. |
+| `character is already teleporting` | A native teleport awaits acknowledgement. |
+| `character is on a taxi flight` | A taxi flight row exists. |
+| `character is aboard a transport` | A Transport Passenger row exists. |
+| `character is a ghost` | The live ghost flag or offline `pending_ghost` is set. |
+| `character is dead` | The live entity is dead. |
+| `character is in combat` | Combat is active or its grace period has not expired. |
+| `character is online without a world entity; retry after logout` | An online Character has no entity. |
+
+One `info` line after success records the caller, Character guid, escaped requested name,
+online or offline path, and destination. A Refusal emits no successful teleport log.
+
+### Call example
+
+Use the CLI identity for the Realm's Owner Token and select the intended Realm server:
+
+```bash
+spacetime call --server <server-url> <db> operator_teleport_character -- \
+  '"Tester"' 0 -8949.95 -132.493 83.5312 0.0
+```
+
+The positional JSON argument array, also used by the HTTP reducer endpoint, is:
+
+```json
+["Tester",0,-8949.95,-132.493,83.5312,0.0]
+```
+
+The CLI takes each array element as a separate argument. It does not take the whole array as
+one argument. Saved Character positions survive content imports.
 
 ## Item arguments
 
