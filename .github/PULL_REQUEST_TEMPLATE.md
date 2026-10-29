@@ -13,36 +13,11 @@ Closes #
 
 ## What you verified
 
-<!-- Paste real output, not intentions. Each `cargo test` prints several `test result:` lines (unit
-     target, integration target, doctests); read them all. docs/testing.md explains each tier. -->
+<!-- CI runs fmt, clippy, the unit, durable, native and Runtime Script checks on this PR (see
+     .github/workflows and docs/testing.md). Do not run them locally; link the green run. List here
+     what CI does not cover. -->
 
-The commands CI runs, in `.github/workflows/rust.yml`:
-
-- [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --workspace --all-targets --all-features -- -D warnings`
-- [ ] `cargo test -p lyracore-importer`
-- [ ] `cargo test -p lyracore-module --lib --features=debug_reducers`
-- [ ] `cargo test -p lyracore-module --test build_script`
-- [ ] `cargo test -p lyracore-module --test package_api_lint`
-- [ ] `cargo test -p lyracore-package-delta`
-- [ ] `cargo test -p lyracore-protocol`
-- [ ] `cargo test -p lyracore-shared`
-- [ ] `cargo test -p lyracore-test-support`
-- [ ] `cargo check --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers`
-
-In `.github/workflows/module-durable.yml`, when the change reaches the Module or the schema:
-
-- [ ] `cargo test -p lyracore-module --test <target> -- --ignored` for each durable target the change touches (CI runs them all)
-
-In `.github/workflows/native-host.yml`, when the change reaches native requests or delivery:
-
-- [ ] Native protocol check
-- [ ] Crash-recovery check
-- [ ] Slow-reader isolation check
-
-In `.github/workflows/runtime-scripts.yml`, when the change reaches `datascripts/`:
-
-- [ ] `bun test` in `datascripts/`
+- [ ] CI is green: <link to the run>
 
 Other checks:
 

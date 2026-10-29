@@ -77,8 +77,8 @@ targets core `main`.
 ## How a change is judged
 
 1. The checks pass. CI runs the Rust workflow and the durable suite on every pull request,
-   including one from a fork. The pull request template lists the commands CI runs, and
-   [`docs/testing.md`](docs/testing.md) explains them.
+   including one from a fork; you need not run them first. [`docs/testing.md`](docs/testing.md)
+   explains them.
 2. The evidence is stated: what 1.12.1 does, and how you know. A packet capture, a DBC field, a
    real client, or the behaviour of an established emulator all count.
 3. The code follows [`CODING_STANDARDS.md`](CODING_STANDARDS.md) and uses the glossary terms.
