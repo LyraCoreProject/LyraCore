@@ -294,10 +294,25 @@ pub fn build_create_object(
     let is_player = entity.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
     let (object_type, mask2) = if is_player {
         let (skin, face, hair_style, hair_color) = unpack4(entity.player_bytes);
-        let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(entity.player_bytes_2);
+        let player_bytes_2 = if entity.player_bytes_2 & 0x0000_ff00 == 0 {
+            entity.player_bytes_2 | 0x0000_ee00
+        } else {
+            entity.player_bytes_2
+        };
+        let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(player_bytes_2);
         let (pb3_a, pb3_b, pb3_c, pb3_d) = unpack4(entity.player_bytes_3);
-        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1);
-        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2);
+        let unit_bytes_1 = if matches!(power_b, 0 | 1) && entity.unit_bytes_1 & 0x0000_ff00 == 0 {
+            entity.unit_bytes_1 | 0x0000_ee00
+        } else {
+            entity.unit_bytes_1
+        };
+        let unit_bytes_2 = if entity.unit_bytes_2 & 0x0000_ff00 == 0 {
+            entity.unit_bytes_2 | 0x0000_2800
+        } else {
+            entity.unit_bytes_2
+        };
+        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(unit_bytes_1);
+        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(unit_bytes_2);
 
         let mut builder = UpdatePlayer::builder()
             .set_object_guid(Guid::new(entity.guid))
@@ -312,6 +327,7 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
+            .set_unit_mod_cast_speed(1.0)
             .set_unit_bytes_1(ub1_a, ub1_b, ub1_c, ub1_d)
             // gtker misnames these parameters; field 164 is UNIT_FIELD_BYTES_2, sheath in byte 0.
             .set_unit_bytes_2(ub2_a, ub2_b, ub2_c, ub2_d)
@@ -319,6 +335,7 @@ pub fn build_create_object(
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
             .set_player_bytes_3(pb3_a, pb3_b, pb3_c, pb3_d)
             .set_player_flags(entity.player_flags as i32);
+        builder = builder.set_unit_power4(100).set_unit_maxpower4(100);
         if matches!(kind, CreateKind::SelfPlayer) {
             builder = builder
                 .set_player_xp(entity.xp as i32)
@@ -357,7 +374,6 @@ pub fn build_create_object(
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
         }
 
-        // Explicit zero clears Guild fields cached by the client.
         builder = builder
             .set_player_guildid(entity.guild_id as i32)
             .set_player_guildrank(entity.guild_rank as i32);
@@ -424,6 +440,7 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
+            .set_unit_mod_cast_speed(1.0)
             .set_unit_bytes_2(cb2_a, cb2_b, cb2_c, cb2_d)
             .set_unit_dynamic_flags(entity.dynamic_flags as i32)
             .set_unit_npc_flags(entity.npc_flags as i32);

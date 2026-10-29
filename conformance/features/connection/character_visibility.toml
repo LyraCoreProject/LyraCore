@@ -20,10 +20,16 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Peer CREATE VALUES have different health, attack time and packed player fields. The descriptor mask omits off-hand attack time and other expected fields, and includes zero target, player and visible-item words."
+description = "Peer CREATE still carries a 2000 ms main-hand attack time where the reference carries 1900 ms, and omits the Warrior stance aura fields."
+path = "module/src/native/view.rs"
+symbol = "entity"
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: field_126 is 1900 in the reference and 2000 in core; fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients."
+
+[[known_gaps]]
+description = "The disposable fixture leaves Character health and model dimensions different from the reference. The scenario author must identify the source data before these fields can be corrected."
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: 18 exact_field and 92 field_shape signatures for both recipients. Off-hand attack time field_127 is absent; target fields_16 and _17 and 48 zero visible-item words are present. Rest flag field_190 and outfit entries 38, 39, 40 and 2362 now match."
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: fields_22 and _28 are 100 in the reference and 60 in core; model radius field_129 is about 0.306 and reach field_130 is 1.5 in the reference but both are absent in core, for both recipients. The arrival_max_health data rule incorrectly targets field_26."
 
 [[known_gaps]]
 description = "Scenario-author gap: the pinned arrival_max_health data rule is unused because it targets UNIT_FIELD_POWER4 rather than max health. Correct the rule in a separate harness PR."
