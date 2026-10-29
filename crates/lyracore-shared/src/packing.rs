@@ -15,8 +15,8 @@ pub const fn player_bytes_2(facial_hair: u8, bank_bag_slots: u8) -> u32 {
     player_bytes_2_with_rest(facial_hair, bank_bag_slots, false)
 }
 
-pub const fn player_bytes_2_with_rest(facial_hair: u8, bank_bag_slots: u8, resting: bool) -> u32 {
-    let rest = if resting {
+pub const fn player_bytes_2_with_rest(facial_hair: u8, bank_bag_slots: u8, rested: bool) -> u32 {
+    let rest = if rested {
         REST_STATE_RESTED
     } else {
         REST_STATE_NORMAL

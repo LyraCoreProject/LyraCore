@@ -9,7 +9,6 @@ required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["taxi_single_hop"]
 deliberate_deviations = []
 prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs", "Bundled game_area rows for Stormwind, Elwynn and Westfall, and terrain cells along route 6 with those area ids"]
-tests = []
 
 [vmangos]
 commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
@@ -20,19 +19,27 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "When PLAYER_FLAGS changes, the Module also sends the unchanged UNIT_BYTES_1 field."
-path = "crates/lyracore-protocol/src/codec/values.rs"
-symbol = "build_player_flags_values"
-evidence = "taxi_single_hop Tier 1 extra_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_138. The Golden Trace sends only field_190 = 0. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp::SetRestType changes PLAYER_FLAGS without writing UNIT_BYTES_1."
-
-[[known_gaps]]
 description = "The Module sends an empty world-state list when the Character enters Elwynn and Westfall."
 path = "crates/lyracore-protocol/src/codec/char.rs"
 symbol = "build_init_world_states"
 evidence = "taxi_single_hop Tier 1 data signature zone_world_state_catalogue / flight / broadcast/zones / 0x02C2 / states: each Golden Trace list has 164 entries, while the Module serializes a zero count. The first 109 entries match the unconditional def_world_states defaults sent by Player.cpp::SendInitWorldStates at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
 
-[[known_gaps]]
-description = "Leaving Stormwind changes the Module's PLAYER_BYTES_2 rest-state byte, but the Golden Trace does not send that field."
+[[tests]]
+path = "crates/lyracore-protocol/src/codec/tests.rs"
+function = "player_flags_values_only_write_changed_fields"
+rung = "codec"
+
+[[tests]]
 path = "module/src/rest.rs"
-symbol = "check_rest_state"
-evidence = "taxi_single_hop Tier 1 extra_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_194. The Golden Trace sends only field_190 = 0. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp::SetRestBonus changes the rest-state byte when rested XP changes, while SetRestType changes PLAYER_FLAGS."
+function = "rest_state_follows_bonus_thresholds_and_holds_between_them"
+rung = "unit"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "tavern_rest_uses_imported_trigger_geometry"
+rung = "durable_module"
+
+[[tests]]
+path = "module/tests/native_conformance.rs"
+function = "world_entry_resets_rest_state_before_bonus_threshold"
+rung = "durable_module"

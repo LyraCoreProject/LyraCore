@@ -14,38 +14,7 @@
       "behavior": "taxi_single_hop",
       "harness_revision": "f58d550eb316557b64290f61da26339aa9e09ceb",
       "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
-      "rule": [
-        {
-          "rule": "extra_packet",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_138"
-          ]
-        },
-        {
-          "rule": "extra_packet",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_194"
-          ]
-        }
-      ],
+      "rule": [],
       "data": [
         {
           "rule": "zone_world_state_catalogue",

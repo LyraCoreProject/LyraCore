@@ -81,4 +81,6 @@ pub struct Character {
     pub bank_bag_slots: u8,
     #[default(NO_WATCHED_FACTION)]
     pub watched_faction_index: i32,
+    #[default(0u8)]
+    pub rest_state: u8,
 }

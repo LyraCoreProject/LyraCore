@@ -446,7 +446,11 @@ fn updates(old: &WorldEntity, new: &WorldEntity) -> Vec<ServerOpcodeMessage> {
         out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
     }
     if is_player && (old.player_flags != new.player_flags || old.unit_bytes_1 != new.unit_bytes_1) {
-        let m = codec::build_player_flags_values(new.guid, new.player_flags, new.unit_bytes_1);
+        let m = codec::build_player_flags_values(
+            new.guid,
+            (old.player_flags != new.player_flags).then_some(new.player_flags),
+            (old.unit_bytes_1 != new.unit_bytes_1).then_some(new.unit_bytes_1),
+        );
         out.push(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(m)));
     }
     if is_player && old.power != new.power {

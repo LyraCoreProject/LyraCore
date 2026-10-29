@@ -439,7 +439,7 @@ pub(crate) fn decode_blob(transfer_id: u64, bytes: &[u8]) -> Result<ExportBlob, 
         .map_err(|e| format!("transfer {transfer_id}: corrupt export blob: {e}"))
 }
 
-// Only a missing final watched-slot i32 receives its legacy default.
+// Older transfer rows may lack the final rest-state byte or watched index and rest-state suffix.
 pub(crate) fn decode_character_row(
     transfer_id: u64,
     bytes: &[u8],
@@ -450,26 +450,30 @@ pub(crate) fn decode_character_row(
         format!("transfer {transfer_id}: cannot decode the arriving character row: {reason}")
     };
     let mut remaining = bytes;
-    match from_reader::<crate::character::Character>(&mut remaining) {
-        Ok(character) if remaining.is_empty() => Ok(character),
-        Ok(_) => Err(refusal("trailing bytes".to_string())),
+    let suffix: &[u8] = match from_reader::<crate::character::Character>(&mut remaining) {
+        Ok(character) if remaining.is_empty() => return Ok(character),
+        Ok(_) => return Err(refusal("trailing bytes".to_string())),
+        Err(DecodeError::BufferLength {
+            for_type: "u8",
+            expected: 1,
+            given: 0,
+        }) if remaining.is_empty() => &[0],
         Err(DecodeError::BufferLength {
             for_type: "i32",
             expected: 4,
             given: 0,
-        }) if remaining.is_empty() => {
-            let mut upgraded = bytes.to_vec();
-            upgraded.extend_from_slice(&(-1i32).to_le_bytes());
-            let mut remaining = upgraded.as_slice();
-            let character = from_reader::<crate::character::Character>(&mut remaining)
-                .map_err(|e| refusal(e.to_string()))?;
-            if !remaining.is_empty() {
-                return Err(refusal("trailing bytes".to_string()));
-            }
-            Ok(character)
-        }
-        Err(e) => Err(refusal(e.to_string())),
+        }) if remaining.is_empty() => &[0xFF, 0xFF, 0xFF, 0xFF, 0],
+        Err(e) => return Err(refusal(e.to_string())),
+    };
+    let mut upgraded = bytes.to_vec();
+    upgraded.extend_from_slice(suffix);
+    let mut remaining = upgraded.as_slice();
+    let character = from_reader::<crate::character::Character>(&mut remaining)
+        .map_err(|e| refusal(e.to_string()))?;
+    if !remaining.is_empty() {
+        return Err(refusal("trailing bytes".to_string()));
     }
+    Ok(character)
 }
 
 // Keep each compatibility entry until every Shard can export that table.

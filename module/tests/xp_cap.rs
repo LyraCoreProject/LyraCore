@@ -59,4 +59,6 @@ fn assert_capped(standalone: &Standalone) {
     assert_eq!(entity[0]["level"], "60");
     assert_eq!(entity[0]["xp"], "0");
     assert_eq!(entity[0]["next_level_xp"], "0");
+    let character = standalone.query_rows("SELECT level FROM game_character WHERE guid = 1");
+    assert_eq!(character[0]["level"], "60");
 }

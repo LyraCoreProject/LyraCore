@@ -604,7 +604,11 @@ pub(crate) fn build_player_entity(
         player_bytes_2: packing::player_bytes_2_with_rest(
             character.facial_hair,
             character.bank_bag_slots,
-            character.resting,
+            crate::rest::rest_state_after_bonus(
+                character.rest_state,
+                character.rested_xp,
+                character.level,
+            ) == packing::REST_STATE_RESTED,
         ),
         player_bytes_3: character.gender as u32,
         player_flags: if character.resting {

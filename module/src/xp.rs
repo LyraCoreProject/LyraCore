@@ -182,9 +182,9 @@ pub(crate) fn explore_xp(exploration_level: u32, player_level: u32) -> u32 {
     }
 }
 
-const REST_ACCRUE_PERCENT_PER_8H: u64 = 5;
+const REST_ACCRUE_PERMILLE_PER_8H: u64 = 25;
 const REST_EIGHT_HOURS_MICROS: u64 = 8 * 3600 * 1_000_000;
-const REST_CAP_PERMILLE: u64 = 1500;
+const REST_CAP_PERMILLE: u64 = 750;
 
 fn rest_bonus(base_xp: u32, pool: u32) -> (u32, u32) {
     let bonus = base_xp.min(pool);
@@ -193,13 +193,16 @@ fn rest_bonus(base_xp: u32, pool: u32) -> (u32, u32) {
 
 fn rest_pool_after(pool: u32, offline_micros: u64, level: u32) -> u32 {
     let level_xp = xp_to_next_level(level) as u64;
-    if level_xp == 0 || offline_micros == 0 {
+    if level_xp == 0 {
+        return 0;
+    }
+    if offline_micros == 0 {
         return pool;
     }
     // Widen before multiplying; long offline spans overflow u64 before the rested cap applies.
     let accrued =
-        ((level_xp as u128) * (REST_ACCRUE_PERCENT_PER_8H as u128) * (offline_micros as u128)
-            / (100 * REST_EIGHT_HOURS_MICROS as u128)) as u64;
+        ((level_xp as u128) * (REST_ACCRUE_PERMILLE_PER_8H as u128) * (offline_micros as u128)
+            / (1000 * REST_EIGHT_HOURS_MICROS as u128)) as u64;
     let cap = level_xp * REST_CAP_PERMILLE / 1000;
     (pool as u64 + accrued).min(cap) as u32
 }
@@ -253,6 +256,9 @@ pub(crate) fn award_xp(
         Some(mut c) if c.rested_xp > 0 => {
             let (granted, drained) = rest_bonus(base, c.rested_xp);
             c.rested_xp = c.rested_xp.saturating_sub(drained);
+            c.rest_state =
+                crate::rest::rest_state_after_bonus(c.rest_state, c.rested_xp, p.level as u8);
+            crate::rest::set_rest_state_byte(&mut p, c.rest_state);
             chars.guid().update(c);
             granted
         }
@@ -363,6 +369,14 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
             }
         }
     }
+    if leveled && p.level >= LEVEL_CAP {
+        if let Some(mut character) = crate::helpers::character_by_guid(ctx, p.guid) {
+            character.level = p.level as u8;
+            character.rest_state = lyracore_shared::packing::REST_STATE_NORMAL;
+            ctx.db.game_character().guid().update(character);
+        }
+        crate::rest::set_rest_state_byte(p, lyracore_shared::packing::REST_STATE_NORMAL);
+    }
 }
 
 #[cfg(test)]
@@ -463,13 +477,14 @@ mod tests {
     }
 
     #[test]
-    fn rest_pool_accrues_5pct_per_8h_capped_at_1_5_levels() {
-        assert_eq!(rest_pool_after(0, REST_EIGHT_HOURS_MICROS, 1), 20);
-        assert_eq!(rest_pool_after(0, 3 * REST_EIGHT_HOURS_MICROS, 1), 60);
-        assert_eq!(rest_pool_after(100, REST_EIGHT_HOURS_MICROS, 1), 120);
-        assert_eq!(rest_pool_after(0, 10_000 * REST_EIGHT_HOURS_MICROS, 1), 600);
+    fn rest_pool_accrues_2_5pct_per_8h_capped_at_75pct_of_next_level() {
+        assert_eq!(rest_pool_after(0, REST_EIGHT_HOURS_MICROS, 1), 10);
+        assert_eq!(rest_pool_after(0, 3 * REST_EIGHT_HOURS_MICROS, 1), 30);
+        assert_eq!(rest_pool_after(100, REST_EIGHT_HOURS_MICROS, 1), 110);
+        assert_eq!(rest_pool_after(0, 10_000 * REST_EIGHT_HOURS_MICROS, 1), 300);
         assert_eq!(rest_pool_after(123, 0, 1), 123);
-        assert_eq!(rest_pool_after(123, REST_EIGHT_HOURS_MICROS, 60), 123);
+        assert_eq!(rest_pool_after(123, REST_EIGHT_HOURS_MICROS, 60), 0);
+        assert_eq!(rest_pool_after(123, 0, 60), 0);
     }
 
     #[test]
@@ -489,7 +504,7 @@ mod tests {
         let eight_h_ago = (now as u64) - REST_EIGHT_HOURS_MICROS;
         assert_eq!(
             accrue_rested_on_login(now, eight_h_ago, 0, 1, true),
-            (20, true)
+            (10, true)
         );
         assert_eq!(
             accrue_rested_on_login(now, (now as u64) + 999, 5, 1, true),
@@ -503,11 +518,11 @@ mod tests {
         let eight_h_ago = (now as u64) - REST_EIGHT_HOURS_MICROS;
         assert_eq!(
             accrue_rested_on_login(now, eight_h_ago, 0, 1, true),
-            (20, true)
+            (10, true)
         );
         assert_eq!(
             accrue_rested_on_login(now, eight_h_ago, 0, 1, false),
-            (5, true)
+            (2, true)
         );
     }
 

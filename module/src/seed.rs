@@ -175,6 +175,7 @@ fn seed_production_core(ctx: &ReducerContext) {
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
         bank_bag_slots: 0,
         watched_faction_index: -1,
+        rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
     });
     crate::spell::spellbook::grant_createinfo_spells(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);
     crate::action_bar::grant_createinfo_actions(ctx, 1, Identity::ZERO, hw::RACE, hw::CLASS);

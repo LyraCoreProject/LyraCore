@@ -930,16 +930,38 @@ fn tavern_rest_uses_imported_trigger_geometry() {
     );
     let rest = || {
         shard.query_rows(&format!(
-            "SELECT resting FROM game_world_entity WHERE guid = {character}"
-        ))[0]["resting"]
+            "SELECT resting,player_bytes_2 FROM game_world_entity WHERE guid = {character}"
+        ))[0]
             .clone()
     };
-    assert_eq!(rest(), "true");
+    let state = rest();
+    assert_eq!(state["resting"], "true");
+    assert_eq!(state["player_bytes_2"].parse::<u32>().unwrap() >> 24, 2);
     shard.assert_call(
         "debug_check_rest_at",
         &[&character.to_string(), "0", "-9459", "42"],
     );
-    assert_eq!(rest(), "false");
+    let state = rest();
+    assert_eq!(state["resting"], "false");
+    assert_eq!(state["player_bytes_2"].parse::<u32>().unwrap() >> 24, 2);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn world_entry_resets_rest_state_before_bonus_threshold() {
+    let (shard, character, _) = fixture("rest-state-login");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET rested_xp = 5, rest_state = 1 WHERE guid = {character}"
+    ));
+    let _connection = enter(&shard, character);
+    let entity = &shard.query_rows(&format!(
+        "SELECT player_bytes_2 FROM game_world_entity WHERE guid = {character}"
+    ))[0];
+    assert_eq!(entity["player_bytes_2"].parse::<u32>().unwrap() >> 24, 2);
+    let saved = &shard.query_rows(&format!(
+        "SELECT rest_state FROM game_character WHERE guid = {character}"
+    ))[0];
+    assert_eq!(saved["rest_state"], "2");
 }
 
 #[test]

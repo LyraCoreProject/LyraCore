@@ -209,6 +209,8 @@ respawn, so the spawn point never moves into the pet identity.
 
 Public. It exists whether or not the Character is online, so an offline Character costs no live
 world machinery. `owner_identity` is `Identity::ZERO` until `establish_session` binds it.
+`rest_state` records the client rest-state byte. Login seeds it from normal and rested XP.
+WorldPort keeps the existing state, so hysteresis lasts through map changes in one World Session.
 
 ### Accounts and Sessions (`module/src/auth.rs`, `module/src/account_ownership.rs`)
 
