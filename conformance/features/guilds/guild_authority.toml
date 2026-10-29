@@ -1,0 +1,20 @@
+schema_version = 1
+id = "guild_authority"
+system = "guilds"
+scope = "Guild leaders can assign ranks, promote members and transfer leadership."
+requests = ["0x008B", "0x008C", "0x0090", "0x0231", "0x0232", "0x0233"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/GuildHandler.cpp"
+symbol = "WorldSession::HandleGuildPromoteOpcode"
+
+[real_client]
+status = "unverified"

@@ -1,0 +1,20 @@
+schema_version = 1
+id = "character_management"
+system = "connection"
+scope = "A Realm Account can list, create, delete and rename its 1.12.1 Characters."
+requests = ["0x0036", "0x0037", "0x0038", "0x02C7"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/CharacterHandler.cpp"
+symbol = "WorldSession::HandleCharCreateOpcode"
+
+[real_client]
+status = "unverified"

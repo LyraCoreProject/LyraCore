@@ -1,0 +1,20 @@
+schema_version = 1
+id = "active_mover"
+system = "movement"
+scope = "A Character can select and report movement for its controlled unit."
+requests = ["0x026A", "0x02D1"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/MovementHandler.cpp"
+symbol = "WorldSession::HandleSetActiveMoverOpcode"
+
+[real_client]
+status = "unverified"

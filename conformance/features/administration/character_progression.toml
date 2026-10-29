@@ -1,0 +1,27 @@
+schema_version = 1
+id = "character_progression"
+system = "administration"
+scope = "Legacy Character level, skill, stat and spell edit requests receive vmangos's unhandled result."
+requests = ["0x0025", "0x0028", "0x0029", "0x01D8", "0x020F", "0x021D", "0x0221", "0x0223", "0x02E5"]
+replies = []
+scope_verification = "stock_client_use_unverified"
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Server/Protocol/Opcodes.cpp"
+symbol = "BuildOpcodeList"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "Stock-client use of CMSG_LEVEL_CHEAT, CMSG_COOLDOWN_CHEAT, CMSG_USE_SKILL_CHEAT, CMSG_SET_SKILL_CHEAT, CMSG_GM_TEACH, CMSG_SET_STAT_CHEAT, CMSG_XP_CHEAT, CMSG_CHARACTER_POINT_CHEAT, CMSG_GM_UNTEACH is unverified; vmangos marks them unhandled. Check whether the client sends any of them and what result to preserve."
+path = "module/src/native/mod.rs"
+symbol = "receive"
+evidence = "https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

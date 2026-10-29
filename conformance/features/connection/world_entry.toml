@@ -1,0 +1,20 @@
+schema_version = 1
+id = "world_entry"
+system = "connection"
+scope = "A Character can authenticate, enter and leave the world with the expected transition packets."
+requests = ["0x01ED", "0x003D", "0x004A", "0x004B", "0x004E"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/CharacterHandler.cpp"
+symbol = "WorldSession::HandlePlayerLoginOpcode"
+
+[real_client]
+status = "unverified"

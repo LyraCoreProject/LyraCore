@@ -1,0 +1,26 @@
+schema_version = 1
+id = "summon_response"
+system = "movement"
+scope = "A Character can accept or decline a summon invitation."
+requests = ["0x02AC"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/MovementHandler.cpp"
+symbol = "WorldSession::HandleSummonResponseOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_SUMMON_RESPONSE."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

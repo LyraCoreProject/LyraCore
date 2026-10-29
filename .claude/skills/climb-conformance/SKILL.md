@@ -8,6 +8,10 @@ metadata:
 # Climb conformance
 
 Take one role for one Behavior. Whoever dispatches the work assigns the scenario author and implementer to different people or agents. The core PR description names the Behavior and your role, and links its harness PR if one exists. Read the [Feature Ledger](../../../conformance/README.md) and [verification steps](../../../docs/testing.md#conformance) before changing evidence.
+The scoreboard requires every build-5875 client request to have a Behavior claim or an
+out-of-scope reason. Add a ledger entry before taking ranked work when it reports an unclaimed
+opcode. New request Behaviors have empty scenario lists; their vmangos references and scope are
+starting points for scenario authors.
 
 ## Implementer
 

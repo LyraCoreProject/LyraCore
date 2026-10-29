@@ -1,0 +1,26 @@
+schema_version = 1
+id = "raid_management"
+system = "groups"
+scope = "A raid leader can organize subgroups, assistants, targets, ready checks and lockout information."
+requests = ["0x028E", "0x027E", "0x0280", "0x028F", "0x0321", "0x0322", "0x02CD"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/GroupHandler.cpp"
+symbol = "WorldSession::HandleGroupRaidConvertOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_REQUEST_RAID_INFO."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

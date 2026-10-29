@@ -19,8 +19,8 @@ and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
 
-All fields below except `known_gaps` are required. Use an empty array when no
-entry exists yet.
+All fields below except `known_gaps` and `scope_verification` are required. Use an empty array
+when no entry exists yet.
 All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
 
 | Field | Meaning |
@@ -29,13 +29,14 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `id` | Globally unique Behavior id, matching the filename without `.toml` |
 | `system` | Scoreboard group, matching the directory name |
 | `scope` | The 1.12.1 result in plain words, including boundaries that matter |
+| `scope_verification` | Optional `stock_client_use_unverified` when every request in the Behavior still needs a stock-client-use check; otherwise defaults to `established` |
 | `requests`, `replies` | Client and server opcode claims, written as strings such as `0x018E` |
 | `dependencies` | Other Behavior ids that this Behavior requires |
 | `vmangos` | Source reference with `commit`, `path` and `symbol`; the commit is a full SHA |
 | `required_rungs` | Evidence needed to count the Behavior as done |
 | `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
 | `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
-| `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `known_gaps` | Optional list of defects or open stock-client questions with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
 | `real_client` | A human-maintained check, described below |
 | `prerequisites` | Fixture or world-data requirements in plain words |
 | `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
@@ -63,10 +64,12 @@ and `evidence`. The last field names the recorded observations. Audits never upd
 No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
 Deviation; that field records a result LyraCore has chosen to keep different.
 
-Known gaps record observed defects and their comparison evidence. They neither excuse differences
-nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
-separately. Each entry requires nonempty description, symbol and evidence fields and a relative
-source path. Unknown fields, including status, fail.
+Known gaps record observed defects or open stock-client questions and their evidence. They neither
+excuse differences nor change rule/data classification, pass counts or freshness.
+`scope_verification` marks Behaviors whose every request has unverified stock-client use. It
+requires at least one request and does not change the denominator. The scoreboard shows known-gap
+counts separately. Each entry requires nonempty description, symbol and evidence fields and a
+relative source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
@@ -87,6 +90,28 @@ The vmangos references name reviewed functions at one full commit. They point to
 contain no copied implementation or world data. Those references identify where to investigate
 and record each Behavior; they are not a claim that the original nine conform today. Their real-client
 checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
+
+The build-5875 request inventory is `client-requests-5875.tsv`, transcribed from the pinned
+[vmangos opcode table](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes_1_12_1.h).
+Its 465 sorted `(id, name)` rows have SHA-256
+`2ac5acc43e5e0f8eea113ec75626640557e801194324b6af08d561e5a9d8a216`. The coverage test
+checks both values so a removed row fails even if its Behavior claim is removed too.
+`opcodes-out-of-scope.toml` holds only requests with a cited administrator gate.
+System Behaviors keep requests with uncertain stock-client use in the denominator and record the
+dispatch result and open question in `known_gaps`.
+The scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks
+that every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
+
+`tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
+files from the pinned vmangos raw sources and the core opcode dependency. It groups uncertain
+requests by system and records vmangos dispatch results in their known gaps. Its
+`tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
+`--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
+After creation, maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
+check catches an inventory request with no Behavior or out-of-scope reason. New entries can leave
+`replies` empty until a scenario author
+checks the packets returned by the Reference Server. A vmangos dispatch entry marked unhandled
+uses `BuildOpcodeList` as its source reference because it has no handler.
 
 ## Scenario catalogue and tier 1
 
@@ -281,12 +306,13 @@ The ledger's other required rungs remain obligations.
 The system table counts Behaviors with and without scenarios. The open-work list includes every
 Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
 pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
-an entry with one when its evidence still points to implementation work. If tier 1 passes, or a
-stale audit measured no rule signatures and the ledger has no known gaps, an entry with a missing,
+an entry with one when its evidence still points to implementation work. If tier 1 passes, or the
+best available rule-signature count is zero and the ledger has no known gaps, an entry with a missing,
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
-Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
-command. The scenario-author command opens the ledger entry. An implementer normally runs the first
+Scope verification follows established implementation and scenario work; evidence refresh comes
+last. Each entry gives a next command. The scenario-author command opens the ledger entry. An
+implementer normally runs the first
 listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
 when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
@@ -298,13 +324,15 @@ After an improvement, run `./conformance/baseline <scenario>`, then review the c
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
 `prerequisites`. The command chooses an unused report name; audit history is append-only.
 
-Within those groups, the list sorts by descending number of other Behaviors that directly depend
-on the entry, then descending measured rule-signature count, then descending number of distinct
-claimed request opcodes, then ascending Behavior id. It uses the committed audit's signature count
-when available, otherwise tier 1's count. If neither measured the Behavior, it uses the number of
-distinct known gaps. Repeating a known gap does not increase priority. Dependency edits change the
-ranking and receive review as such in their PRs. The formula uses no assigned priority or tier 1
-baseline.
+The scope-verification group contains Behaviors marked `stock_client_use_unverified`. Its next
+command opens the ledger entry so the request-use question can be checked. Within each group, the
+list sorts by descending number of other Behaviors that directly depend on the entry, then
+descending measured rule-signature count, then descending number of distinct
+claimed request opcodes, then ascending Behavior id. It uses the committed tier 1 baseline's
+distinct rule signatures when the Behavior has one, then the audit count, then a local tier 1
+count. If none exists, it uses the number of distinct known gaps. Repeating a known gap does not
+increase priority. Dependency edits change the ranking and receive review as such in their PRs.
+The formula uses no assigned priority.
 
 `--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
 keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
@@ -312,16 +340,20 @@ keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `traina
 the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
 Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
 `real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
-`scenarios`, `dependencies`, `required_rungs`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
+`scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
 `unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
 measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
 `unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
 record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
-`scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
+`scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
 is the measured signature count or the distinct-gap fallback. Counts and state names have the same
 meaning as the text scoreboard.
+`opcode_coverage` reports `claimed`, `out_of_scope`, `unclaimed` and `total` for the build-5875
+request inventory. `unclaimed_opcodes` lists the missing numbers; it is empty on a successful run.
+The existing `outside_enum` field counts Behavior claims outside `ClientOpcodeMessage`, not outside
+the build-5875 inventory.
 
 The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
 under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
@@ -339,9 +371,9 @@ comparison also prevent an audit pass. A matching run made with
 uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
 Real-client cells come only from the ledger, never from a report.
 
-Counts use unique opcode values. The denominator is every variant of the pinned core
-`ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
-a separate count. System totals count shared claims once. The unavailable count includes request
+Counts use unique opcode values. The denominator is every row of `client-requests-5875.tsv`.
+Claims outside the pinned core `ClientOpcodeMessage` enum have a separate count. System totals
+count shared claims once. The unavailable count includes request
 patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
 control receipts, tests, comments, imports and explicit empty responses for ignored requests.
 Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
@@ -473,12 +505,12 @@ captures remain unverified.
 
 ## Opcode coverage
 
-`tests/opcode_coverage.rs` checks every variant of the pinned `ClientOpcodeMessage` against ledger
-request claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. Out-of-scope entries map a
-variant name to a table with `reason` and an optional `source`. That list is currently empty. The
-initial allowlist has 285 variants. Adding a Behavior or a scope decision requires removing its
-opcodes from the allowlist in the same change. Unknown names, duplicate allowances and overlapping
-categories fail.
+`tests/opcode_coverage.rs` checks every row of `client-requests-5875.tsv` against ledger request
+claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. It also checks every variant in
+the pinned `ClientOpcodeMessage` enum against the inventory. Out-of-scope entries map an opcode
+name to a reason and a pinned source. The initial allowance had 285 variants; it is now empty.
+Adding a Behavior or a scope decision requires removing its opcodes from the allowance in the same
+change. Unknown names, duplicate allowances and overlapping categories fail.
 
 The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
 set as constants. Current unclaimed membership must be a subset of that initial set. An

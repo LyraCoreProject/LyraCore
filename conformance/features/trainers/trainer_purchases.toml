@@ -1,0 +1,20 @@
+schema_version = 1
+id = "trainer_purchases"
+system = "trainers"
+scope = "A Character can browse and buy spells from a trainer when eligible."
+requests = ["0x01B0", "0x01B2"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/NPCHandler.cpp"
+symbol = "WorldSession::HandleTrainerListOpcode"
+
+[real_client]
+status = "unverified"

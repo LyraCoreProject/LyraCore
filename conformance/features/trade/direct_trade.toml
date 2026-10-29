@@ -1,0 +1,20 @@
+schema_version = 1
+id = "direct_trade"
+system = "trade"
+scope = "Two Characters can negotiate and complete a direct item and money trade atomically."
+requests = ["0x0116", "0x0117", "0x0118", "0x0119", "0x011A", "0x011B", "0x011C", "0x011D", "0x011E", "0x011F"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/TradeHandler.cpp"
+symbol = "WorldSession::HandleInitiateTradeOpcode"
+
+[real_client]
+status = "unverified"

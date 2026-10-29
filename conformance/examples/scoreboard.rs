@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
-use lyracore_conformance::{Behavior, FeatureLedger, RealClient};
+use lyracore_conformance::{Behavior, FeatureLedger, RealClient, ScopeVerification};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -76,6 +76,10 @@ fn open_work(
     audit_head: &str,
     revision: &str,
 ) -> Result<Vec<OpenWork>> {
+    let baseline: Value = serde_json::from_str(include_str!("../tier1-baseline.json"))?;
+    let baseline_scenarios = baseline["scenarios"]
+        .as_array()
+        .context("tier 1 baseline scenarios")?;
     let mut work = Vec::new();
     for behavior in ledger.behaviors() {
         let tier1_state = state(tier1, behavior, tier1_head, revision)?;
@@ -84,29 +88,45 @@ fn open_work(
             && tier1_state.is_match()
             && audit_state.is_match()
             && behavior.known_gaps.is_empty()
+            && behavior.scope_verification == ScopeVerification::Established
         {
             continue;
         }
-        let measured = audit
-            .and_then(|report| report.audit.as_ref()?.behaviors.get(&behavior.id))
-            .map(|evidence| evidence.candidate.rule.signatures.len())
-            .or_else(|| {
-                tier1
-                    .filter(|report| {
-                        report
-                            .scenarios
-                            .iter()
-                            .any(|result| result.behavior == behavior.id)
-                    })
-                    .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
-            });
+        let baseline_signatures = baseline_scenarios
+            .iter()
+            .filter(|entry| entry["behavior"] == behavior.id)
+            .filter_map(|entry| entry["rule"].as_array())
+            .flat_map(|signatures| signatures.iter())
+            .map(serde_json::to_string)
+            .collect::<Result<BTreeSet<_>, _>>()?;
+        let baseline_count = baseline_scenarios
+            .iter()
+            .any(|entry| entry["behavior"] == behavior.id)
+            .then_some(baseline_signatures.len());
+        let measured = baseline_count.or_else(|| {
+            audit
+                .and_then(|report| report.audit.as_ref()?.behaviors.get(&behavior.id))
+                .map(|evidence| evidence.candidate.rule.signatures.len())
+                .or_else(|| {
+                    tier1
+                        .filter(|report| {
+                            report
+                                .scenarios
+                                .iter()
+                                .any(|result| result.behavior == behavior.id)
+                        })
+                        .map(|report| report.summary(&behavior.id, false).rule.signatures.len())
+                })
+        });
         let distinct_gaps = behavior
             .known_gaps
             .iter()
             .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
             .collect::<BTreeSet<_>>()
             .len();
-        let kind = if behavior.scenarios.is_empty() {
+        let kind = if behavior.scope_verification == ScopeVerification::StockClientUseUnverified {
+            "scope_verification"
+        } else if behavior.scenarios.is_empty() {
             "scenario_author"
         } else if matches!(
             audit_state,
@@ -120,7 +140,7 @@ fn open_work(
         } else {
             "implementer"
         };
-        let reproduce_with = if kind == "scenario_author" {
+        let reproduce_with = if kind == "scenario_author" || kind == "scope_verification" {
             None
         } else if kind == "evidence_refresh"
             || (tier1_state.is_match() && matches!(audit_state, State::Different(_)))
@@ -164,16 +184,19 @@ fn open_work(
             claimed_opcodes: requests(&[behavior])?.len(),
         });
     }
+    let group = |kind| match kind {
+        "scope_verification" => 1,
+        "evidence_refresh" => 2,
+        _ => 0,
+    };
     work.sort_by(|a, b| {
-        (a.kind == "evidence_refresh")
-            .cmp(&(b.kind == "evidence_refresh"))
-            .then_with(|| {
-                b.dependents
-                    .cmp(&a.dependents)
-                    .then_with(|| b.open_signatures_or_gaps.cmp(&a.open_signatures_or_gaps))
-                    .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
-                    .then_with(|| a.behavior.cmp(&b.behavior))
-            })
+        group(a.kind).cmp(&group(b.kind)).then_with(|| {
+            b.dependents
+                .cmp(&a.dependents)
+                .then_with(|| b.open_signatures_or_gaps.cmp(&a.open_signatures_or_gaps))
+                .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
+                .then_with(|| a.behavior.cmp(&b.behavior))
+        })
     });
     Ok(work)
 }
@@ -214,6 +237,7 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
         };
         behaviors.insert(behavior.id.clone(), json!({
             "system": behavior.system, "scenarios": behavior.scenarios,
+            "scope_verification": behavior.scope_verification,
             "dependencies": behavior.dependencies, "required_rungs": behavior.required_rungs,
             "tier1": state_json(&state(tier1.map(|(_, report)| report), behavior, tier1_head, revision)?),
             "audit": state_json(&state(audit.map(|(_, report)| report), behavior, audit_head, revision)?),
@@ -238,14 +262,18 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
     }
     let all: Vec<_> = ledger.behaviors().iter().collect();
     let claimed = requests(&all)?;
+    let unclaimed = unclaimed_requests(ledger, counts)?;
     Ok(json!({
         "schema_version": 1,
         "tier1_evidence": tier1.map(|(path, report)| json!({"path": path, "report": report})),
         "audit_evidence": audit.map(|(path, report)| json!({"path": path, "report": report})),
         "opcode_coverage": {
             "claimed": claimed.intersection(&counts.variants).count(),
+            "out_of_scope": counts.out_of_scope.len(),
+            "unclaimed": unclaimed.len(),
+            "unclaimed_opcodes": unclaimed.iter().map(|opcode| format!("0x{opcode:04X}")).collect::<Vec<_>>(),
             "total": counts.variants.len(),
-            "outside_enum": claimed.difference(&counts.variants).count(),
+            "outside_enum": claimed.difference(&counts.enum_variants).count(),
             "unavailable_total": counts.unavailable.len(),
             "unavailable_claimed": claimed.intersection(&counts.unavailable).count(),
         },
@@ -264,6 +292,25 @@ fn requests(behaviors: &[&Behavior]) -> Result<BTreeSet<u16>> {
         .flat_map(|behavior| &behavior.requests)
         .map(|opcode| u16::from_str_radix(&opcode[2..], 16).map_err(Into::into))
         .collect()
+}
+
+fn unclaimed_requests(ledger: &FeatureLedger, counts: &counts::Counts) -> Result<BTreeSet<u16>> {
+    let all: Vec<_> = ledger.behaviors().iter().collect();
+    let claimed = requests(&all)?;
+    ensure!(
+        claimed.is_disjoint(&counts.out_of_scope),
+        "an out-of-scope opcode is also claimed by a Behavior"
+    );
+    ensure!(
+        claimed.is_subset(&counts.variants),
+        "a Behavior claims an opcode outside the build-5875 request inventory"
+    );
+    Ok(counts
+        .variants
+        .difference(&claimed)
+        .filter(|opcode| !counts.out_of_scope.contains(opcode))
+        .copied()
+        .collect())
 }
 
 fn state(
@@ -355,6 +402,16 @@ fn main() -> Result<()> {
         )
     }))?;
     let counts = counts::read(root)?;
+    let unclaimed = unclaimed_requests(&ledger, &counts)?;
+    ensure!(
+        unclaimed.is_empty(),
+        "unclaimed client requests: {}",
+        unclaimed
+            .iter()
+            .map(|opcode| format!("0x{opcode:04X}"))
+            .collect::<Vec<_>>()
+            .join(", ")
+    );
     let tier1 = if explicit_tier1 || tier1_path.exists() {
         Some(Report::load(&tier1_path, "tier1", &ledger)?)
     } else {
@@ -460,7 +517,8 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
     }
     let all: Vec<_> = ledger.behaviors().iter().collect();
     let claimed = requests(&all)?;
-    println!("\nClient opcodes claimed: {}/{} ClientOpcodeMessage variants; {} claims outside that enum.", claimed.intersection(&counts.variants).count(), counts.variants.len(), claimed.difference(&counts.variants).count());
+    let unclaimed = unclaimed_requests(ledger, counts)?;
+    println!("\nClient requests: {} claimed by a Behavior, {} out of scope, {} unclaimed, {} total; {} claims outside ClientOpcodeMessage.", claimed.intersection(&counts.variants).count(), counts.out_of_scope.len(), unclaimed.len(), counts.variants.len(), claimed.difference(&counts.enum_variants).count());
     println!(
         "Unavailable requests: {} total, {} claimed by the ledger.",
         counts.unavailable.len(),
@@ -522,7 +580,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
         }
     }
     spells::print(spells);
-    println!("\nOpen work, with evidence refresh last; ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
+    println!("\nOpen work: established Behaviors, scope verification, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
             "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); reproduce with {}; {}",
@@ -553,6 +611,24 @@ fn shared_opcode_claims_count_once() {
         requests(&[behavior, behavior]).unwrap(),
         [0x0050, 0x01dc].into()
     );
+}
+
+#[test]
+fn protocol_coverage_exposes_unclaimed_requests_and_rejects_overlap() -> Result<()> {
+    let ledger = FeatureLedger::from_sources([(
+        "connection/connection_identity.toml",
+        include_str!("../features/connection/connection_identity.toml"),
+    )])?;
+    let mut counts = counts::Counts {
+        variants: [0x0050, 0x01dc, 0x0036, 0x0002].into(),
+        enum_variants: [0x0050, 0x01dc, 0x0036, 0x0002].into(),
+        unavailable: BTreeSet::new(),
+        out_of_scope: [0x0002].into(),
+    };
+    assert_eq!(unclaimed_requests(&ledger, &counts)?, [0x0036].into());
+    counts.out_of_scope.insert(0x0050);
+    assert!(unclaimed_requests(&ledger, &counts).is_err());
+    Ok(())
 }
 
 #[cfg(test)]
@@ -602,7 +678,13 @@ status = "unverified"
         ),
         (
             "sample/tie.toml",
-            format!("{}{gap}{gap}", source("tie", "[]", "[]", "[\"0x0050\"]")),
+            format!(
+                "{}{gap}{gap}",
+                source("tie", "[]", "[]", "[\"0x0050\"]").replace(
+                    "replies = []",
+                    "replies = []\nscope_verification = \"stock_client_use_unverified\""
+                )
+            ),
         ),
         (
             "sample/more.toml",
@@ -626,14 +708,30 @@ fn open_work_ranks_synthetic_ledger_deterministically() -> Result<()> {
         work.iter()
             .map(|item| item.behavior.as_str())
             .collect::<Vec<_>>(),
-        ["root", "branch", "tie", "more", "leaf", "zoo"]
+        ["root", "branch", "more", "leaf", "zoo", "tie"]
     );
     assert_eq!(work[0].dependents, 2);
     assert_eq!(work[1].kind, "implementer");
     assert_eq!(work[1].next_command, "./conformance/run branch");
     assert!(work[1].prerequisites.is_empty());
     assert_eq!(work[2].kind, "scenario_author");
-    assert_eq!(work[2].open_signatures_or_gaps, 1);
+    assert_eq!(work[5].open_signatures_or_gaps, 1);
+    Ok(())
+}
+
+#[test]
+fn unverified_request_scope_follows_established_work_before_evidence_refresh() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    let position = |id| work.iter().position(|item| item.behavior == id).unwrap();
+    assert!(position("direct_trade") < position("debug_motion_controls"));
+    assert!(position("cast_and_interrupt") < position("debug_motion_controls"));
+    assert!(position("debug_motion_controls") < position("connection_identity"));
+    assert_eq!(
+        work[position("debug_motion_controls")].kind,
+        "scope_verification"
+    );
     Ok(())
 }
 
@@ -649,34 +747,29 @@ fn audit_name_skips_existing_report_parts() -> Result<()> {
 }
 
 #[test]
-fn tier1_next_command_uses_runner_cli() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("root")?;
-    let help = Command::new(root.join("conformance/run"))
-        .arg("--help")
-        .output()?;
-    ensure!(help.status.success(), "conformance/run --help failed");
-    let help = String::from_utf8(help.stdout)?;
-    assert!(help.contains("scenario"));
-    assert!(help.contains("--json"));
-    let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
+fn clean_baseline_without_report_requests_audit() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
     let work = open_work(&ledger, None, None, "head", "head", "pin")?;
-    for scenario in ["taxi_single_hop", "connection_identity"] {
-        let item = work.iter().find(|item| item.behavior == scenario).unwrap();
-        assert_eq!(item.next_command, format!("./conformance/run {scenario}"));
+    for behavior in ["connection_identity", "taxi_single_hop"] {
+        let item = work.iter().find(|item| item.behavior == behavior).unwrap();
+        assert_eq!(item.kind, "evidence_refresh");
+        assert!(item.next_command.starts_with("./conformance/audit --date "));
     }
     Ok(())
 }
 
 #[test]
-fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
+fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
     let mut tier1_value = serde_json::to_value(&audit)?;
     tier1_value["tier"] = json!("tier1");
     tier1_value["audit"] = Value::Null;
+    for scenario in tier1_value["scenarios"].as_array_mut().unwrap() {
+        scenario["comparison"]["differences"] = json!([]);
+    }
     let tier1: Report = serde_json::from_value(tier1_value)?;
     let work = open_work(
         &ledger,
@@ -710,13 +803,13 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .prerequisites
         .iter()
         .any(|item| item.contains("13724 and 18085")));
-    assert_eq!(taxi.kind, "implementer");
-    assert_eq!(taxi.next_command, "./conformance/run taxi_single_hop");
-    assert_eq!(taxi.open_signatures_or_gaps, 24);
+    assert_eq!(taxi.kind, "evidence_refresh");
+    assert!(taxi.next_command.starts_with("./conformance/audit --date "));
+    assert_eq!(taxi.open_signatures_or_gaps, 0);
     assert!(
         work.iter()
             .position(|item| item.behavior == "taxi_single_hop")
-            < work
+            > work
                 .iter()
                 .position(|item| item.behavior == "connection_identity")
     );
@@ -748,7 +841,7 @@ fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
         .iter()
         .find(|item| item.behavior == "taxi_single_hop")
         .unwrap();
-    assert_eq!(taxi.open_signatures_or_gaps, 24);
+    assert_eq!(taxi.open_signatures_or_gaps, 0);
     Ok(())
 }
 
@@ -797,7 +890,9 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
     let ledger = synthetic_ledger();
     let counts = counts::Counts {
         variants: [0x0050, 0x01dc].into(),
+        enum_variants: [0x0050, 0x01dc].into(),
         unavailable: [0x0050].into(),
+        out_of_scope: BTreeSet::new(),
     };
     let spells = spells::SpellCounts {
         build: 5875,
@@ -827,6 +922,8 @@ fn json_reports_behavior_evidence_and_scenario_coverage() -> Result<()> {
         json!(["tier1", "conformance_audit", "real_client"])
     );
     assert_eq!(output["opcode_coverage"]["claimed"], 2);
+    assert_eq!(output["opcode_coverage"]["out_of_scope"], 0);
+    assert_eq!(output["opcode_coverage"]["unclaimed"], 0);
     assert_eq!(output["open_work"].as_array().unwrap().len(), 6);
     assert_eq!(output["open_work"][0]["reproduce_with"], Value::Null);
     assert_eq!(output["open_work"][1]["reproduce_with"], "tier1");
@@ -839,9 +936,12 @@ fn json_keeps_committed_audit_evidence() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let (path, report) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
+    let all: Vec<_> = ledger.behaviors().iter().collect();
     let counts = counts::Counts {
-        variants: BTreeSet::new(),
+        variants: requests(&all)?,
+        enum_variants: BTreeSet::new(),
         unavailable: BTreeSet::new(),
+        out_of_scope: BTreeSet::new(),
     };
     let spells = spells::SpellCounts {
         build: 5875,

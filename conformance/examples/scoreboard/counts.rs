@@ -2,6 +2,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
 use anyhow::{ensure, Context, Result};
+use serde::Deserialize;
 use syn::visit::{self, Visit};
 
 #[path = "../../support/opcodes.rs"]
@@ -9,12 +10,34 @@ mod opcodes;
 
 pub struct Counts {
     pub variants: BTreeSet<u16>,
+    pub enum_variants: BTreeSet<u16>,
     pub unavailable: BTreeSet<u16>,
+    pub out_of_scope: BTreeSet<u16>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Exclusions {
+    out_of_scope: BTreeMap<String, Exclusion>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Exclusion {
+    reason: String,
+    source: Option<String>,
 }
 
 pub fn read(root: &Path) -> Result<Counts> {
     let opcodes = opcodes::read(root)?;
-    let variants = opcodes.values().copied().collect();
+    let inventory = opcodes::read_inventory(root)?;
+    for (name, value) in &opcodes {
+        ensure!(
+            inventory.get(name) == Some(value),
+            "core opcode differs from build 5875: {name}"
+        );
+    }
+    let variants = inventory.values().copied().collect();
     let all_opcodes = (0..=u16::MAX)
         .filter_map(|opcode| {
             wow_world_messages::vanilla::opcode_to_name(opcode.into())
@@ -25,9 +48,35 @@ pub fn read(root: &Path) -> Result<Counts> {
         &std::fs::read_to_string(root.join("module/src/native/unavailable.rs"))?,
         &all_opcodes,
     )?;
+    let exclusions: Exclusions = toml::from_str(&std::fs::read_to_string(
+        root.join("conformance/opcodes-out-of-scope.toml"),
+    )?)?;
+    let mut out_of_scope = BTreeSet::new();
+    for (name, exclusion) in exclusions.out_of_scope {
+        ensure!(
+            !exclusion.reason.trim().is_empty(),
+            "missing reason for {name}"
+        );
+        ensure!(
+            exclusion
+                .source
+                .as_deref()
+                .is_some_and(|source| !source.is_empty()),
+            "missing source for {name}"
+        );
+        let value = *inventory
+            .get(&name)
+            .with_context(|| format!("unknown out-of-scope opcode: {name}"))?;
+        ensure!(
+            out_of_scope.insert(value),
+            "duplicate out-of-scope opcode: {name}"
+        );
+    }
     Ok(Counts {
         variants,
+        enum_variants: opcodes.values().copied().collect(),
         unavailable,
+        out_of_scope,
     })
 }
 

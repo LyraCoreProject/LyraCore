@@ -1,0 +1,20 @@
+schema_version = 1
+id = "cast_and_interrupt"
+system = "spells"
+scope = "A Character can cast and interrupt spells and cancel active auras."
+requests = ["0x012E", "0x012F", "0x0136", "0x013B", "0x026D", "0x029B"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/SpellHandler.cpp"
+symbol = "WorldSession::HandleCastSpellOpcode"
+
+[real_client]
+status = "unverified"

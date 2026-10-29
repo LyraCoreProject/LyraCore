@@ -1,0 +1,26 @@
+schema_version = 1
+id = "readable_pages"
+system = "queries"
+scope = "A Character can open readable item and page text and receive its complete text chain."
+requests = ["0x005A", "0x00AD"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/QueryHandler.cpp"
+symbol = "WorldSession::HandlePageTextQueryOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_PAGE_TEXT_QUERY."
+path = "module/src/native/unavailable.rs"
+symbol = "raw_responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

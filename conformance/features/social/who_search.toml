@@ -1,0 +1,20 @@
+schema_version = 1
+id = "who_search"
+system = "social"
+scope = "A Character can search the online Character list with 1.12.1 who filters."
+requests = ["0x0062"]
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/MiscHandler.cpp"
+symbol = "WorldSession::HandleWhoOpcode"
+
+[real_client]
+status = "unverified"
