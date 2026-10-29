@@ -1609,7 +1609,7 @@ def check_world_objects(host):
     outside.send(0xb1, struct.pack('<Q', door))
     toggled = outside.collect()
     toggled_values = values(toggled, door)
-    assert toggled_values and toggled_values.get(14, 0) == 0 and door not in creates(toggled)
+    assert toggled_values and toggled_values[14] == 0 and door not in creates(toggled)
     assert host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}') == [[grant]]
     assert not values(first.collect() + second.collect(), door)
     host.sql(f'UPDATE game_gameobject SET rotation_0 = 0.5, rotation_1 = 0.5, rotation_2 = 0.5, rotation_3 = 0.5 WHERE guid = {door}')
@@ -1619,7 +1619,7 @@ def check_world_objects(host):
     assert [values(closed, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     opened = outside.collect()
-    assert values(opened, door).get(14, 0) == 0 and door not in creates(opened)
+    assert values(opened, door)[14] == 0 and door not in creates(opened)
     assert [values(opened, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     host.call('debug_encounter_open_door', [door_entry, 0])
     assert not values(outside.collect(), door)

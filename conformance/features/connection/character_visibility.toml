@@ -41,4 +41,4 @@ evidence = "Tier 1 two_character_visibility at harness 166ecd70: model radius fi
 description = "Scenario-author gap: arrival_max_health targets UNIT_FIELD_POWER4 instead of UNIT_FIELD_MAXHEALTH. Correct the rule in a separate harness PR."
 path = "conformance/features/connection/character_visibility.toml"
 symbol = "arrival_max_health"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: the rule declares objects.0.values.field_26, classifies its 80 expected versus 100 actual difference as data, and leaves an unused-rule declaration. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28, whose 100 expected versus 60 actual difference remains exact_field."
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: the rule declares objects.0.values.field_26, and classifies its 80 expected versus 100 actual difference as data. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28, whose 100 expected versus 60 actual difference remains exact_field."
