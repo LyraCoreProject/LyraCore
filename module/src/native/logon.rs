@@ -124,7 +124,10 @@ pub fn native_logon_open(ctx: &ReducerContext, peer: String) -> Result<(), Strin
     if ctx.db.game_native_logon_reaper().id().find(0).is_none() {
         ctx.db.game_native_logon_reaper().insert(NativeLogonReaper {
             id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(WINDOW_MICROS)),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(WINDOW_MICROS),
+            ),
         });
     }
     Ok(())
@@ -446,7 +449,7 @@ pub fn native_reap_logon_addresses(
     ctx: &ReducerContext,
     _schedule: NativeLogonReaper,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".into());
     }
     let now = crate::time::now(ctx).to_micros_since_unix_epoch();

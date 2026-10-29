@@ -516,7 +516,7 @@ pub(crate) fn cancel_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64)
 
 #[reducer]
 pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let now = crate::time::now(ctx).to_micros_since_unix_epoch();

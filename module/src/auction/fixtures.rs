@@ -29,7 +29,7 @@ pub fn debug_auction_due(ctx: &ReducerContext, auction_id: u32) -> Result<(), St
     ctx.db.game_auction_expiry().auction_id().delete(auction_id);
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+        scheduled_at: crate::time::schedule_time(ctx, Timestamp::from_micros_since_unix_epoch(due)),
         auction_id,
     });
     Ok(())
@@ -229,7 +229,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(expires_at),
+        scheduled_at: crate::time::schedule_time(ctx, expires_at),
         auction_id: EXPIRY_FIXTURE_AUCTION_ID,
     });
 
@@ -284,7 +284,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(unsold_expires_at),
+        scheduled_at: crate::time::schedule_time(ctx, unsold_expires_at),
         auction_id: EXPIRY_FIXTURE_UNSOLD_AUCTION_ID,
     });
     Ok(())

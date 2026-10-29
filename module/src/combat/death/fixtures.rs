@@ -1,6 +1,5 @@
 use super::*;
 use crate::game_corpse_loot;
-use spacetimedb::ScheduleAt;
 
 #[spacetimedb::reducer]
 pub fn debug_stage_lethal_damage_floor_fixture(
@@ -76,7 +75,7 @@ pub fn debug_stage_ranged_lethal_damage_floor_fixture(
         .game_ranged_impact_schedule()
         .insert(crate::RangedImpactSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(land_at),
+            scheduled_at: crate::time::schedule_time(ctx, land_at),
             attacker_guid,
             target_guid,
             damage,

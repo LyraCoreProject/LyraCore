@@ -732,7 +732,7 @@ pub fn evict_instance_population(
 
 #[reducer]
 pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let instances: Vec<GameInstance> = ctx.db.game_instance().iter().collect();
@@ -998,7 +998,10 @@ pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u
         let due = crate::time::now(ctx).to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
         InstanceRemoval {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+            scheduled_at: crate::time::schedule_time(
+                ctx,
+                Timestamp::from_micros_since_unix_epoch(due),
+            ),
             character_guid,
             instance_id: standing.instance_id,
             group_id: standing.group_id,
@@ -1018,7 +1021,7 @@ pub fn expire_instance_removal(
     ctx: &ReducerContext,
     removal: InstanceRemoval,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     fire_instance_removal(ctx, &removal);

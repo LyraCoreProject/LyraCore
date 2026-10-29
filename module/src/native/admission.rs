@@ -119,7 +119,7 @@ pub fn native_admission_tick(
     ctx: &ReducerContext,
     _tick: NativeAdmissionTick,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".into());
     }
     drain(ctx, None)
@@ -226,7 +226,7 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
     } else if ticks.id().find(0).is_none() {
         ticks.insert(NativeAdmissionTick {
             id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
         });
     }
     Ok(())

@@ -1924,7 +1924,7 @@ fn schedule_arrival(
         .game_creature_ai_relay_arrival()
         .insert(RelayArrival {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(scheduled_at),
+            scheduled_at: crate::time::schedule_time(ctx, scheduled_at),
             map_id: source.map_id,
             instance_id: source.instance_id,
             source_guid,
@@ -1987,7 +1987,7 @@ fn arrival_motion(
 
 #[reducer]
 pub fn resume_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     run_relay_arrival(ctx, arrival);
@@ -2289,14 +2289,14 @@ fn schedule_run(ctx: &ReducerContext, run_id: u64, due_ms: u64) {
     );
     table.insert(RelayContinuation {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(due),
+        scheduled_at: crate::time::schedule_time(ctx, due),
         run_id,
     });
 }
 
 #[reducer]
 pub fn resume_relay_run(ctx: &ReducerContext, continuation: RelayContinuation) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     if let Err(error) = advance_run(ctx, continuation.run_id) {

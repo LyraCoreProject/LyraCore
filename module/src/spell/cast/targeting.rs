@@ -2,7 +2,7 @@ use crate::spell::source_behavior;
 use lyracore_shared::constants::tracer_spell;
 use lyracore_shared::spell_custom as custom;
 
-use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
+use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{game_character, game_creature_template, game_world_entity};
 
@@ -874,7 +874,7 @@ fn apply_damage_effect(
                                 .game_pending_spell_impact()
                                 .insert(PendingSpellImpact {
                                     scheduled_id: 0,
-                                    scheduled_at: ScheduleAt::Time(fire_at),
+                                    scheduled_at: crate::time::schedule_time(ctx, fire_at),
                                     caster_guid,
                                     target_guid,
                                     spell_id: hdr.spell_id,

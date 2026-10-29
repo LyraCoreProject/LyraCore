@@ -1165,7 +1165,7 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(expires_at),
+        scheduled_at: crate::time::schedule_time(ctx, expires_at),
         auction_id: auction.id,
     });
     auction.id
@@ -1465,7 +1465,7 @@ impl ExpirySink for CtxExpiry<'_> {
 
 #[reducer]
 pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     expire_active(&mut CtxExpiry { ctx }, schedule.auction_id)

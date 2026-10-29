@@ -725,9 +725,10 @@ impl BeginSink for CtxShard<'_> {
         if sched.iter().next().is_none() {
             sched.insert(TransferReaperSchedule {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                    TRANSFER_REAP_INTERVAL_MICROS as i64,
-                )),
+                scheduled_at: crate::time::schedule_interval(
+                    self.ctx,
+                    TimeDuration::from_micros(TRANSFER_REAP_INTERVAL_MICROS as i64),
+                ),
             });
         }
     }
@@ -1492,7 +1493,7 @@ pub(crate) fn apply_finish<S: FinishSink>(sink: &mut S, transfer_id: u64) {
 
 #[reducer]
 pub fn reap_transfers(ctx: &ReducerContext, _schedule: TransferReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     apply_reap(&mut CtxShard { ctx });

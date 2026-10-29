@@ -26,7 +26,7 @@ pub struct EventReaperSchedule {
 
 #[reducer]
 pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - EVENT_TTL_MICROS;

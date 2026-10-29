@@ -18,7 +18,10 @@ pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&Inst
     };
     let timer = row.map_or(0, |row| {
         remaining_ms(
-            row.scheduled_at,
+            match row.scheduled_at {
+                ScheduleAt::Time(at) => ScheduleAt::Time(crate::time::scheduled_time(ctx, at)),
+                interval => interval,
+            },
             crate::time::now(ctx).to_micros_since_unix_epoch(),
         )
     });

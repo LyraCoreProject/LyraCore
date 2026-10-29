@@ -134,7 +134,7 @@ fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
 
 #[reducer]
 pub fn tick_pet_care(ctx: &ReducerContext, _schedule: PetCareSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     for pet in ctx.db.game_hunter_pet().iter().collect::<Vec<_>>() {

@@ -728,7 +728,7 @@ pub(crate) fn party_disbanded(ctx: &ReducerContext, group_id: u64, former_member
 
 #[reducer]
 pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneReminderSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let Some(next_reminder_at) =
@@ -760,7 +760,10 @@ pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
     }
     schedule.insert(MeetingStoneReminderSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(REMINDER_TICK_MICROS)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(REMINDER_TICK_MICROS),
+        ),
     });
 }
 

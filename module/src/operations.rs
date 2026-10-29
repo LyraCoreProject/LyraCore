@@ -1,4 +1,4 @@
-use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
 use crate::spell::stacking::game_spell_group;
 use crate::{
@@ -109,7 +109,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     } else {
         ctx.db.game_aura_schedule().insert(AuraSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
         });
         1
     };
@@ -119,7 +119,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     } else {
         ctx.db.game_breath_schedule().insert(BreathSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
         });
         1
     };
@@ -129,9 +129,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     } else {
         ctx.db.game_duel_schedule().insert(DuelSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                crate::duel::DUEL_TICK_MICROS,
-            )),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(crate::duel::DUEL_TICK_MICROS),
+            ),
         });
         1
     };
@@ -143,7 +144,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
             .game_ground_area_schedule()
             .insert(GroundAreaSchedule {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+                scheduled_at: crate::time::schedule_interval(
+                    ctx,
+                    TimeDuration::from_micros(500_000),
+                ),
             });
         1
     };
@@ -162,9 +166,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
             .game_motion_publish_schedule()
             .insert(crate::motion::MotionPublishSchedule {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                    crate::motion::MOTION_TICK_MICROS,
-                )),
+                scheduled_at: crate::time::schedule_interval(
+                    ctx,
+                    TimeDuration::from_micros(crate::motion::MOTION_TICK_MICROS),
+                ),
             });
         1
     };
@@ -174,9 +179,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     } else {
         ctx.db.game_pet_care_schedule().insert(PetCareSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-                crate::creatures::CARE_INTERVAL_MICROS,
-            )),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(crate::creatures::CARE_INTERVAL_MICROS),
+            ),
         });
         1
     };
@@ -192,7 +198,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     }
     move_sched.insert(CreatureMoveSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+        scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(500_000)),
         instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
     });
 
@@ -203,9 +209,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     }
     reaper_sched.insert(crate::instance::InstanceReaperSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-            crate::instance::INSTANCE_REAPER_INTERVAL_MICROS,
-        )),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(crate::instance::INSTANCE_REAPER_INTERVAL_MICROS),
+        ),
     });
 
     let lease_sched = ctx.db.game_gateway_lease_reaper_schedule();
@@ -215,9 +222,10 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
     }
     lease_sched.insert(crate::gw::GatewayLeaseReaperSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(
-            crate::gw::ACCOUNT_CLAIM_REAP_MICROS,
-        )),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(crate::gw::ACCOUNT_CLAIM_REAP_MICROS),
+        ),
     });
 
     crate::weather::rearm_weather_schedule(ctx);
@@ -239,7 +247,7 @@ pub fn debug_repair_after_publish(ctx: &ReducerContext) -> Result<(), String> {
         {
             ctx.db.game_auction_expiry().insert(AuctionExpiry {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Time(auction.expires_at),
+                scheduled_at: crate::time::schedule_time(ctx, auction.expires_at),
                 auction_id: auction.id,
             });
             auction_expiries += 1;

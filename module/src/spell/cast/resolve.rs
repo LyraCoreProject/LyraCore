@@ -1,5 +1,5 @@
 use lyracore_shared::spell_custom as custom;
-use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
@@ -1516,7 +1516,7 @@ pub(crate) fn begin_cast_with_admission(
     };
     let cast = pending.insert(PendingCast {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(fire_at),
+        scheduled_at: crate::time::schedule_time(ctx, fire_at),
         caster_guid,
         spell_id,
         level,
@@ -1536,7 +1536,7 @@ pub(crate) fn begin_cast_with_admission(
             ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
         },
     );
-    Ok(CastStart::Started(cast.into()))
+    Ok(CastStart::Started(CastHandle::from_row(ctx, cast)))
 }
 
 #[cfg(test)]

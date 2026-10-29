@@ -12,6 +12,10 @@ mod combat;
 mod death;
 mod edges;
 mod mobility;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use mobility::{expire_eventai_summon, fire_eventai_forced_despawn};
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use relay::{resume_relay_arrival, resume_relay_run};
 pub(crate) mod movement;
 mod quest_credit;
 mod threat;

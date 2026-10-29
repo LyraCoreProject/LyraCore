@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
 
 use crate::spell::SpellCastEventKind;
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
@@ -7,14 +7,9 @@ use super::*;
 
 #[reducer]
 pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    melee_pass(ctx);
-}
-
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) fn virtual_melee_tick(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     melee_pass(ctx);
 }
 
@@ -726,7 +721,7 @@ fn schedule_ranged_impact(
         .game_ranged_impact_schedule()
         .insert(RangedImpactSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(land_at),
+            scheduled_at: crate::time::schedule_time(ctx, land_at),
             attacker_guid,
             target_guid,
             damage,
@@ -737,7 +732,7 @@ fn schedule_ranged_impact(
 
 #[reducer]
 pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let entities = ctx.db.game_world_entity();

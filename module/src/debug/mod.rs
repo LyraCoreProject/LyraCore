@@ -19,7 +19,7 @@ pub use readout::{game_debug_readout, DebugReadout};
 
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};
 use lyracore_shared::{constants, spatial};
-use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration};
 
 use crate::{
     game_character, game_config, game_corpse, game_creature_move_schedule, game_creature_spawn,
@@ -1526,7 +1526,10 @@ pub fn debug_arm_instance_tick(
     }
     sched.insert(CreatureMoveSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(tick_ms as i64 * 1000)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(tick_ms as i64 * 1000),
+        ),
         instance_id,
     });
     Ok(())

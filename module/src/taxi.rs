@@ -1287,14 +1287,9 @@ pub fn gw_arm_taxi_flight(
 
 #[spacetimedb::reducer]
 pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    taxi_pass(ctx, schedule);
-}
-
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) fn virtual_taxi_tick(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     taxi_pass(ctx, schedule);
 }
 

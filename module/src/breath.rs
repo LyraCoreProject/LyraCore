@@ -91,7 +91,7 @@ pub(crate) fn update_breath_edge(ctx: &ReducerContext, mover: &WorldEntity, subm
 
 #[reducer]
 pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     crate::fatigue::tick_fatigue(ctx);

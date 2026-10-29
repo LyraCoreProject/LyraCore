@@ -1039,7 +1039,7 @@ pub fn debug_hold_instance_removals(ctx: &ReducerContext) -> Result<(), String> 
     for mut removal in removals.iter().collect::<Vec<_>>() {
         crate::InstanceRemoval::delete(ctx, removal.character_guid);
         removal.scheduled_id = 0;
-        removal.scheduled_at = spacetimedb::ScheduleAt::Time(due);
+        removal.scheduled_at = crate::time::schedule_time(ctx, due);
         removal.insert(ctx);
     }
     Ok(())

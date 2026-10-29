@@ -152,7 +152,9 @@ fn armed_micros(ctx: &ReducerContext, mail_id: u64) -> Option<i64> {
         .find(mail_id)?
         .scheduled_at
     {
-        ScheduleAt::Time(at) => Some(at.to_micros_since_unix_epoch()),
+        ScheduleAt::Time(at) => {
+            Some(crate::time::scheduled_time(ctx, at).to_micros_since_unix_epoch())
+        }
         ScheduleAt::Interval(_) => None,
     }
 }
@@ -338,7 +340,7 @@ pub fn debug_replay_mail_timer_fixture(ctx: &ReducerContext) -> Result<(), Strin
             ctx,
             &MailTimer {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Time(crate::time::now(ctx)),
+                scheduled_at: crate::time::schedule_time(ctx, crate::time::now(ctx)),
                 mail_id,
             },
         );

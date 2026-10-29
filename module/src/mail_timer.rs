@@ -111,7 +111,7 @@ fn arm(ctx: &ReducerContext, mail_id: u64, at: Timestamp) {
     timers.mail_id().delete(mail_id);
     timers.insert(MailTimer {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(at),
+        scheduled_at: crate::time::schedule_time(ctx, at),
         mail_id,
     });
 }
@@ -163,7 +163,7 @@ pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
 
 #[reducer]
 pub fn fire_mail_timer(ctx: &ReducerContext, timer: MailTimer) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     fire(ctx, &timer);
@@ -179,7 +179,7 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
         return;
     };
     let due = match timer.scheduled_at {
-        ScheduleAt::Time(at) => at,
+        ScheduleAt::Time(at) => crate::time::scheduled_time(ctx, at),
         ScheduleAt::Interval(_) => crate::time::now(ctx),
     };
     match firing(&mail, due, crate::time::now(ctx)) {

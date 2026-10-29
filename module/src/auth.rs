@@ -114,7 +114,7 @@ pub(crate) fn expired_sessions(
 
 #[reducer]
 pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     let sessions = ctx.db.game_session();
@@ -140,7 +140,10 @@ fn ensure_session_reaper_armed(ctx: &ReducerContext) {
     }
     schedule.insert(SessionReaperSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(SESSION_REAP_MICROS)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(SESSION_REAP_MICROS),
+        ),
     });
 }
 

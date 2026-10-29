@@ -1,4 +1,4 @@
-use spacetimedb::{log, reducer, ReducerContext, ScheduleAt, Table, TimeDuration, Timestamp};
+use spacetimedb::{log, reducer, ReducerContext, Table, TimeDuration, Timestamp};
 
 use crate::{game_world_entity, WorldEntity};
 
@@ -6,7 +6,7 @@ use super::*;
 
 #[reducer]
 pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     // Release this cast identity before effect hooks can begin another cast.
@@ -69,7 +69,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
 
 #[reducer]
 pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let (dealt, absorbed) = apply_target_damage(
@@ -273,7 +273,7 @@ pub(crate) fn is_due_for_expiry(eff_kind: u8, expires_at: Timestamp, now: Timest
 #[reducer]
 #[allow(clippy::too_many_lines)]
 pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let now = crate::time::now(ctx);
@@ -589,7 +589,7 @@ fn flush_pool(
 
 #[reducer]
 pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     const AOE_MAX_TARGETS: usize = 20;
@@ -688,7 +688,7 @@ pub(crate) fn arm_ground_area_tick(ctx: &ReducerContext) {
         .game_ground_area_schedule()
         .insert(GroundAreaSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(500_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(500_000)),
         });
 }
 

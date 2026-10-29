@@ -8,6 +8,12 @@ mod hostile_summon;
 mod hunter_pet;
 mod pet;
 mod pet_care;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use eventai::{
+    expire_eventai_summon, fire_eventai_forced_despawn, resume_relay_arrival, resume_relay_run,
+};
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use pet_care::tick_pet_care;
 mod pet_progression;
 pub(crate) mod population;
 pub(crate) mod presentation;

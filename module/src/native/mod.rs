@@ -48,6 +48,8 @@ mod view;
 mod visibility;
 mod world;
 pub(crate) use addon::appeared as addon_message;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use admission::{game_native_admission_tick, native_admission_tick};
 pub(crate) use auction::notice as auction_notice;
 pub(crate) use aura::changed as aura_changed;
 pub(crate) use book::{
@@ -67,7 +69,11 @@ pub(crate) use environment::{breath_event, fall_damage, weather_changed};
 pub(crate) use guild::{event as guild_event, membership_changed as guild_membership_changed};
 pub(crate) use instance::removal_changed as instance_removal_changed;
 pub(crate) use inventory::changed as item_changed;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use logon::{game_native_logon_reaper, native_reap_logon_addresses};
 pub(crate) use mail::arrived as mail_arrived;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use member_stats::{game_native_member_stats, tick_native_member_stats};
 pub(crate) use member_stats::{
     sweep_delete_game_native_member_stats, sweep_transfer_game_native_member_stats,
 };

@@ -110,14 +110,9 @@ pub struct CreatureMoveSchedule {
 
 #[reducer]
 pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    creature_pass(ctx, schedule);
-}
-
-#[cfg(feature = "conformance_test_fixture")]
-pub(crate) fn virtual_creature_tick(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     creature_pass(ctx, schedule);
 }
 

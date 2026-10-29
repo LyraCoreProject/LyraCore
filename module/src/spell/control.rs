@@ -299,15 +299,15 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
         let ScheduleAt::Time(fire_at) = p.scheduled_at else {
             continue;
         };
-        let Some(new_fire_at) =
-            fire_at.checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
+        let Some(new_fire_at) = crate::time::scheduled_time(ctx, fire_at)
+            .checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
         else {
             continue;
         };
         let spell_id = p.spell_id;
         p.pushback_count += 1;
         let new_count = p.pushback_count;
-        p.scheduled_at = ScheduleAt::Time(new_fire_at);
+        p.scheduled_at = crate::time::schedule_time(ctx, new_fire_at);
         pending.scheduled_id().update(p);
         crate::spell::SpellCastEvent::insert(
             ctx,
