@@ -11,6 +11,9 @@ We build complex things as simply as possible, and we look for ways to remove co
 - Apply [the comment policy](CODING_STANDARDS.md#comments-and-documentation) when writing or reviewing
   source, tests, scripts and configuration. Complete its
   [comment review](CODING_STANDARDS.md#comment-review) before handoff.
+- CI runs formatting checks, clippy and every test suite on each pull request. Do not run them
+  before you open or update a PR; push, then fix what CI reports. Run `cargo fmt --all` to format.
+  Run one test locally only to reproduce a CI failure, or to see a new test fail before your fix.
 - [`docs/README.md`](docs/README.md) lists every document and when to read it. Open a document when
   your change reaches its subject.
 - Keep cargo target dirs, worktrees, clones and other large scratch output out of `/tmp` and

@@ -13,7 +13,8 @@ Use this order when two good practices compete:
 2. Use the domain language in the glossary (`CORE_TERMS.md`, `CONTEXT.md`).
 3. Put authority in the tier described by `docs/architecture.md`.
 4. Choose the smallest design that makes the behavior explicit and testable.
-5. Verify at the lowest sufficient rung, then run every higher rung the change requires.
+5. Verify at the lowest sufficient rung. CI runs the automated rungs; run by hand only the rungs CI
+   does not, such as a live Realm or a real client.
 
 ## Behavior and scope
 

@@ -34,6 +34,7 @@ pub mod player_flags {
     pub const DND: u32 = 0x0004;
 
     pub const GHOST: u32 = 0x0010;
+    pub const RESTING: u32 = 0x0020;
 }
 
 pub mod npc_flags {

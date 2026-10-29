@@ -33,6 +33,11 @@
       },
       "locked_rows": 50
     },
+    "areatrigger_tavern": {
+      "columns": {
+        "integer": ["id", "patch_min"]
+      }
+    },
     "areatrigger_teleport": {
       "columns": {
         "integer": [

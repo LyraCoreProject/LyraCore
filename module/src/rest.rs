@@ -1,33 +1,51 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
-use crate::game_character;
 use crate::world::WorldEntity;
-use lyracore_shared::packing;
+use crate::{
+    game_area, game_area_trigger, game_character, game_realm, game_tavern_area_trigger, GameArea,
+};
+use lyracore_shared::{constants::player_flags, faction, packing};
 
-struct RestTrigger {
-    map_id: u32,
-    x: f32,
-    y: f32,
-    radius: f32,
-}
+const AREA_FLAG_CAPITAL: u32 = 0x0000_0100;
+const AREA_TEAM_ALLIANCE: u32 = 2;
+const AREA_TEAM_HORDE: u32 = 4;
+const AREA_TEAM_NONE: u32 = 0;
 
-const REST_TRIGGERS: &[RestTrigger] = &[
-    // The Goldshire inn threshold is a fixture estimate.
-    RestTrigger {
-        map_id: 0,
-        x: -9464.0,
-        y: 42.0,
-        radius: 20.0,
-    },
-];
-
-fn in_rest_area(map_id: u32, x: f32, y: f32) -> bool {
-    REST_TRIGGERS.iter().any(|t| {
-        t.map_id == map_id && {
-            let (dx, dy) = (x - t.x, y - t.y);
-            dx * dx + dy * dy <= t.radius * t.radius
-        }
-    })
+fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameArea>) -> bool {
+    if ctx.db.game_tavern_area_trigger().iter().any(|tavern| {
+        ctx.db
+            .game_area_trigger()
+            .id()
+            .find(tavern.trigger_id)
+            .is_some_and(|trigger| {
+                trigger.map_id == mover.map_id
+                    && crate::quest::AreaTriggerVolume::of(&trigger).contains(
+                        [trigger.x, trigger.y, trigger.z],
+                        [mover.x, mover.y, mover.z],
+                    )
+            })
+    }) {
+        return true;
+    }
+    let Some(area) = area else {
+        return false;
+    };
+    let Some(zone) = ctx.db.game_area().id().find(crate::terrain::zone_of(area)) else {
+        return false;
+    };
+    if zone.flags & AREA_FLAG_CAPITAL == 0 {
+        return false;
+    }
+    match zone.faction_group {
+        AREA_TEAM_ALLIANCE => faction::team_for_race(mover.race()) == faction::TEAM_ALLIANCE,
+        AREA_TEAM_HORDE => faction::team_for_race(mover.race()) == faction::TEAM_HORDE,
+        AREA_TEAM_NONE => !ctx
+            .db
+            .game_realm()
+            .iter()
+            .any(|realm| matches!(realm.realm_type, 1 | 8 | 16)),
+        _ => true,
+    }
 }
 
 #[table(accessor = game_rest_state_event, public)]
@@ -48,8 +66,17 @@ crate::character_owned!(delete, fn sweep_delete_game_rest_state_event(ctx, chara
 });
 crate::character_owned!(not_transported, fn sweep_transfer_game_rest_state_event());
 
-pub(crate) fn check_rest_state(ctx: &ReducerContext, mover: &mut WorldEntity) {
-    let now_resting = in_rest_area(mover.map_id, mover.x, mover.y);
+pub(crate) fn check_rest_state(
+    ctx: &ReducerContext,
+    mover: &mut WorldEntity,
+    area: Option<&GameArea>,
+) {
+    let now_resting = in_rest_area(ctx, mover, area);
+    if now_resting {
+        mover.player_flags |= player_flags::RESTING;
+    } else {
+        mover.player_flags &= !player_flags::RESTING;
+    }
     if now_resting == mover.resting {
         return;
     }
@@ -106,7 +133,8 @@ pub fn debug_check_rest_at(
     e.map_id = map_id;
     e.x = x;
     e.y = y;
-    check_rest_state(ctx, &mut e);
+    let area = crate::terrain::area_at(ctx, e.map_id, e.x, e.y);
+    check_rest_state(ctx, &mut e, area.as_ref());
     e.update(ctx);
     Ok(())
 }
