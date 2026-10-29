@@ -155,6 +155,50 @@ fn operator_connection_enters_world_and_receives_pong() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_missing_near_teleport_ack_expires_and_world_requests_resume() {
+    let (shard, guid, _) = fixture("native-teleport-expiry");
+    let mut connection = enter(&shard, guid);
+    connection.drain_packets();
+    shard.assert_call(
+        "debug_teleport",
+        &[&guid.to_string(), "0", "20", "0", "0", "0"],
+    );
+    connection.drain_packets();
+
+    let mut query = || {
+        connection
+            .call("native_world_receive", json!([0x1ceu32, Vec::<u8>::new()]))
+            .unwrap()
+    };
+    assert!(query().inserts("game_native_packet").is_empty());
+    std::thread::sleep(Duration::from_secs(21));
+    let response = query();
+    assert!(response.inserts("game_native_packet").iter().any(|row| {
+        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
+        opcode.get() == "463"
+    }));
+    let has_heartbeat = |row: &RawValue| {
+        let Packet(_, _, (_, opcode), _, _, _, _) = serde_json::from_str(row.get()).unwrap();
+        opcode.get() == "238"
+    };
+    assert!(
+        response
+            .inserts("game_native_packet")
+            .iter()
+            .any(|row| has_heartbeat(row))
+            || connection
+                .drain_packets()
+                .iter()
+                .any(|row| has_heartbeat(row))
+    );
+    assert_eq!(
+        shard.query_rows("SELECT teleport FROM game_native_player")[0]["teleport"],
+        "(none = ())"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
     let (shard, guid, account) = fixture("native-conformance-session");
     let key = serde_json::to_string(&vec![0x37u8; 40]).unwrap();

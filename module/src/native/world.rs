@@ -204,6 +204,7 @@ pub(super) fn enter_character(
         teleport: None,
         teleport_counter,
         zone_id: entity.zone_id,
+        teleport_started_micros: 0,
     });
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant)?;
@@ -272,6 +273,7 @@ pub(super) fn receive(
         .find(connection.connection_id)
         .filter(|player| player.character_guid == guid)
         .ok_or("native World Session is no longer current")?;
+    let player = super::teleport::expire(ctx, player)?;
     if matches!(opcode, 0x00c7 | 0x00dc) {
         return Ok(super::teleport::acknowledge(
             ctx, connection, player, opcode, body,
