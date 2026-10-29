@@ -30,6 +30,7 @@ pub struct EntityView {
     pub unit_flags: u32,
     pub mount_display_id: u32,
     pub base_attack_time_ms: u32,
+    pub offhand_attack_time_ms: Option<u32>,
     pub dynamic_flags: u32,
     pub player_bytes: u32,
     pub player_bytes_2: u32,
@@ -319,6 +320,25 @@ pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill
     lines
 }
 
+fn create_packed_bytes(entity: &EntityView, power: u8) -> (u32, u32, u32) {
+    let player_bytes_2 = if entity.player_bytes_2 & 0x0000_ff00 == 0 {
+        entity.player_bytes_2 | 0x0000_ee00
+    } else {
+        entity.player_bytes_2
+    };
+    let unit_bytes_1 = if matches!(power, 0 | 1) && entity.unit_bytes_1 & 0x0000_ff00 == 0 {
+        entity.unit_bytes_1 | 0x0000_ee00
+    } else {
+        entity.unit_bytes_1
+    };
+    let unit_bytes_2 = if entity.unit_bytes_2 & 0x0000_ff00 == 0 {
+        entity.unit_bytes_2 | 0x0000_2800
+    } else {
+        entity.unit_bytes_2
+    };
+    (player_bytes_2, unit_bytes_1, unit_bytes_2)
+}
+
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
@@ -334,10 +354,11 @@ pub fn build_create_object(
     let is_player = entity.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
     let (object_type, mask2) = if is_player {
         let (skin, face, hair_style, hair_color) = unpack4(entity.player_bytes);
-        let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(entity.player_bytes_2);
+        let (player_bytes_2, unit_bytes_1, unit_bytes_2) = create_packed_bytes(entity, power_b);
+        let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(player_bytes_2);
         let (pb3_a, pb3_b, pb3_c, pb3_d) = unpack4(entity.player_bytes_3);
-        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(entity.unit_bytes_1);
-        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(entity.unit_bytes_2);
+        let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(unit_bytes_1);
+        let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(unit_bytes_2);
 
         let mut builder = UpdatePlayer::builder()
             .set_object_guid(Guid::new(entity.guid))
@@ -352,6 +373,7 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
+            .set_unit_mod_cast_speed(1.0)
             .set_unit_bytes_1(ub1_a, ub1_b, ub1_c, ub1_d)
             // gtker misnames these parameters; field 164 is UNIT_FIELD_BYTES_2, sheath in byte 0.
             .set_unit_bytes_2(ub2_a, ub2_b, ub2_c, ub2_d)
@@ -359,6 +381,7 @@ pub fn build_create_object(
             .set_player_bytes_2(facial_hair, pb2_b, pb2_c, pb2_d)
             .set_player_bytes_3(pb3_a, pb3_b, pb3_c, pb3_d)
             .set_player_flags(entity.player_flags as i32);
+        builder = builder.set_unit_power4(100).set_unit_maxpower4(100);
         if matches!(kind, CreateKind::SelfPlayer) {
             builder = builder
                 .set_player_xp(entity.xp as i32)
@@ -397,7 +420,6 @@ pub fn build_create_object(
                 .set_player_field_mod_damage_done_pct(1.0_f32.to_bits() as i32);
         }
 
-        // Explicit zero clears Guild fields cached by the client.
         builder = builder
             .set_player_guildid(entity.guild_id as i32)
             .set_player_guildrank(entity.guild_rank as i32);
@@ -464,6 +486,7 @@ pub fn build_create_object(
             .set_unit_nativedisplayid(entity.native_display_id as i32)
             .set_unit_flags(entity.unit_flags as i32)
             .set_unit_baseattacktime(entity.base_attack_time_ms as i32)
+            .set_unit_mod_cast_speed(1.0)
             .set_unit_bytes_2(cb2_a, cb2_b, cb2_c, cb2_d)
             .set_unit_dynamic_flags(entity.dynamic_flags as i32)
             .set_unit_npc_flags(entity.npc_flags as i32);
@@ -516,10 +539,21 @@ pub fn build_create_object(
             mask2,
         },
     };
-    Ok(SMSG_UPDATE_OBJECT {
+    let mut message = SMSG_UPDATE_OBJECT {
         has_transport: 0,
         objects: vec![create],
-    })
+    };
+    let offhand_attack_time_ms = if is_player {
+        entity.offhand_attack_time_ms
+    } else {
+        Some(entity.base_attack_time_ms)
+    };
+    if let Some(delay) = offhand_attack_time_ms {
+        add_create_fields(&mut message, |mask| {
+            mask.set_u32(127, delay);
+        })?;
+    }
+    Ok(message)
 }
 
 pub fn build_self_create_object(
@@ -528,8 +562,6 @@ pub fn build_self_create_object(
     learned_skills: &[(u32, u16, u16)],
     quests: &[update_mask::QuestLogSlot],
 ) -> Result<SMSG_UPDATE_OBJECT> {
-    use wow_world_messages::vanilla::ServerMessage;
-
     let mut create =
         build_create_object(entity, CreateKind::SelfPlayer, inventory, learned_skills)?;
     if quests.is_empty() {
@@ -541,8 +573,26 @@ pub fn build_self_create_object(
             .all(|q| u16::from(q.slot) < update_mask::idx::QUEST_LOG_SLOTS),
         "quest log slot outside the Character descriptor"
     );
-    let Object::CreateObject2 { mask2, .. } = &mut create.objects[0] else {
-        unreachable!("build_create_object returns one CREATE_OBJECT2");
+    add_create_fields(&mut create, |mask| {
+        let quest_mask = update_mask::full_quest_log_mask(quests);
+        for index in update_mask::idx::PLAYER_QUEST_LOG_1_1
+            ..update_mask::quest_log_field(update_mask::idx::QUEST_LOG_SLOTS, 0)
+        {
+            mask.set_u32(index, quest_mask.get(index).unwrap_or(0));
+        }
+    })?;
+    Ok(create)
+}
+
+fn add_create_fields(
+    create: &mut SMSG_UPDATE_OBJECT,
+    add: impl FnOnce(&mut update_mask::UpdateMaskValues),
+) -> Result<()> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let mask2 = match &mut create.objects[0] {
+        Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+        _ => unreachable!("build_create_object returns one CREATE"),
     };
     // This local envelope carries OBJECT_FIELD_TYPE and must never reach the client.
     let envelope = SMSG_UPDATE_OBJECT {
@@ -563,12 +613,7 @@ pub fn build_self_create_object(
     for &(index, value) in fields {
         mask.set_u32(index, value);
     }
-    let quest_mask = update_mask::full_quest_log_mask(quests);
-    for index in update_mask::idx::PLAYER_QUEST_LOG_1_1
-        ..update_mask::quest_log_field(update_mask::idx::QUEST_LOG_SLOTS, 0)
-    {
-        mask.set_u32(index, quest_mask.get(index).unwrap_or(0));
-    }
+    add(&mut mask);
     bytes.truncate(4 + 4 + 1 + 1 + 1);
     mask.write_to(&mut bytes);
     let size = u16::try_from(bytes.len() - 2)?;
@@ -582,7 +627,7 @@ pub fn build_self_create_object(
         unreachable!("the local envelope contains one VALUES descriptor");
     };
     *mask2 = mask1;
-    Ok(create)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

@@ -4,6 +4,9 @@ use anyhow::{ensure, Context, Result};
 use sha1::{Digest, Sha1};
 use subtle::ConstantTimeEq;
 use wow_world_messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage};
+use wow_world_messages::vanilla::{Object, ObjectType, UpdateMask, SMSG_UPDATE_OBJECT};
+
+use crate::codec::update_mask::UpdateMaskValues;
 
 #[derive(Debug, PartialEq, Eq)]
 pub struct Packet {
@@ -12,6 +15,19 @@ pub struct Packet {
 }
 
 pub fn encode(message: ServerOpcodeMessage) -> Result<Packet> {
+    if let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) = &message {
+        if update.objects.iter().any(|object| {
+            matches!(
+                object,
+                Object::CreateObject { .. } | Object::CreateObject2 { .. }
+            )
+        }) {
+            return Ok(Packet {
+                opcode: crate::codec::SMSG_UPDATE_OBJECT_OPCODE,
+                body: encode_create_masks(update)?,
+            });
+        }
+    }
     let mut frame = Vec::new();
     message.write_unencrypted_server(&mut frame)?;
     if matches!(&message, ServerOpcodeMessage::SMSG_GAMEOBJECT_QUERY_RESPONSE(query) if query.found.is_some())
@@ -24,6 +40,159 @@ pub fn encode(message: ServerOpcodeMessage) -> Result<Packet> {
         opcode: u16::from_le_bytes([frame[2], frame[3]]),
         body: frame[4..].to_vec(),
     })
+}
+
+fn encode_create_masks(update: &SMSG_UPDATE_OBJECT) -> Result<Vec<u8>> {
+    let mut body = Vec::new();
+    body.extend_from_slice(&(update.objects.len() as u32).to_le_bytes());
+    body.push(update.has_transport);
+    for object in &update.objects {
+        let encoded = encode_object(object)?;
+        let (kind, mask) = match object {
+            Object::CreateObject {
+                object_type, mask2, ..
+            }
+            | Object::CreateObject2 {
+                object_type, mask2, ..
+            } => (object_type, mask2),
+            _ => {
+                body.extend_from_slice(&encoded);
+                continue;
+            }
+        };
+        let mut empty = object.clone();
+        match &mut empty {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => {
+                *mask2 = empty_mask(mask);
+            }
+            _ => unreachable!("CREATE object was matched above"),
+        }
+        let mask_start = encode_object(&empty)?.len() - 1;
+        let fields = parse_mask(&encoded[mask_start..])?;
+        let mut present = UpdateMaskValues::new();
+        for &(index, value) in &fields {
+            present.set_u32(index, value);
+        }
+        let mut selected = UpdateMaskValues::new();
+        for &(index, value) in &fields {
+            let pair = if guid_start(*kind, index) {
+                Some(index + 1)
+            } else if index > 0 && guid_start(*kind, index - 1) {
+                Some(index - 1)
+            } else {
+                None
+            };
+            if value != 0 || pair.is_some_and(|other| present.get(other).is_some_and(|v| v != 0)) {
+                selected.set_u32(index, value);
+            }
+        }
+        if *kind == ObjectType::GameObject
+            && present
+                .get(21)
+                .is_none_or(|value| !matches!(value, 11 | 15))
+        {
+            // vmangos excludes both Transport types from forced GAMEOBJECT_DYN_FLAGS.
+            selected.set_u32(19, present.get(19).unwrap_or(0));
+        }
+        body.extend_from_slice(&encoded[..mask_start]);
+        selected.write_to(&mut body);
+    }
+    Ok(body)
+}
+
+fn encode_object(object: &Object) -> Result<Vec<u8>> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let message = SMSG_UPDATE_OBJECT {
+        has_transport: 0,
+        objects: vec![object.clone()],
+    };
+    let mut frame = Vec::new();
+    message.write_unencrypted_server(&mut frame)?;
+    Ok(frame[9..].to_vec())
+}
+
+fn empty_mask(mask: &UpdateMask) -> UpdateMask {
+    use wow_world_messages::vanilla::{
+        UpdateContainer, UpdateCorpse, UpdateDynamicObject, UpdateGameObject, UpdateItem,
+        UpdatePlayer, UpdateUnit,
+    };
+
+    match mask {
+        UpdateMask::Item(_) => UpdateMask::Item(UpdateItem::default()),
+        UpdateMask::Container(_) => UpdateMask::Container(UpdateContainer::default()),
+        UpdateMask::Unit(_) => UpdateMask::Unit(UpdateUnit::default()),
+        UpdateMask::Player(_) => UpdateMask::Player(UpdatePlayer::default()),
+        UpdateMask::GameObject(_) => UpdateMask::GameObject(UpdateGameObject::default()),
+        UpdateMask::DynamicObject(_) => UpdateMask::DynamicObject(UpdateDynamicObject::default()),
+        UpdateMask::Corpse(_) => UpdateMask::Corpse(UpdateCorpse::default()),
+    }
+}
+
+fn parse_mask(bytes: &[u8]) -> Result<Vec<(u16, u32)>> {
+    let blocks = *bytes.first().context("missing CREATE mask length")? as usize;
+    let header_end = 1 + blocks * 4;
+    let header = bytes.get(1..header_end).context("short CREATE mask")?;
+    let indices: Vec<_> = header
+        .chunks_exact(4)
+        .enumerate()
+        .flat_map(|(block, word)| {
+            let bits = u32::from_le_bytes(word.try_into().expect("four-byte mask word"));
+            (0..32).filter_map(move |bit| {
+                (bits & (1 << bit) != 0).then_some((block * 32 + bit) as u16)
+            })
+        })
+        .collect();
+    ensure!(
+        bytes.len() == header_end + indices.len() * 4,
+        "invalid CREATE mask values"
+    );
+    Ok(indices
+        .into_iter()
+        .zip(bytes[header_end..].chunks_exact(4))
+        .map(|(index, value)| {
+            (
+                index,
+                u32::from_le_bytes(value.try_into().expect("four-byte field")),
+            )
+        })
+        .collect())
+}
+
+fn guid_start(kind: ObjectType, index: u16) -> bool {
+    // Build 5875 GUID field ranges come from UpdateFields_1_12_1.h.
+    if index == 0 {
+        return true;
+    }
+    match kind {
+        ObjectType::Item => matches!(index, 6 | 8 | 10 | 12),
+        ObjectType::Container => {
+            matches!(index, 6 | 8 | 10 | 12)
+                || (50..122).contains(&index) && index.is_multiple_of(2)
+        }
+        ObjectType::Unit | ObjectType::Player
+            if (6..22).contains(&index) && index.is_multiple_of(2) =>
+        {
+            true
+        }
+        ObjectType::Player => {
+            index == 188
+                || (258..=474).contains(&index) && (index - 258).is_multiple_of(12)
+                || [
+                    (486, 532),
+                    (532, 564),
+                    (564, 612),
+                    (612, 624),
+                    (624, 648),
+                    (648, 712),
+                ]
+                .into_iter()
+                .any(|(start, end)| (start..end).contains(&index) && index.is_multiple_of(2))
+                || matches!(index, 712 | 714)
+        }
+        ObjectType::GameObject | ObjectType::DynamicObject | ObjectType::Corpse => index == 6,
+        _ => false,
+    }
 }
 
 pub fn client_frame(opcode: u32, body: &[u8]) -> Result<Vec<u8>> {
@@ -168,7 +337,198 @@ pub fn matches_world_proof(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::codec::{self, CreateKind, EntityView, GameObjectView, ItemInstanceView};
     use wow_world_messages::vanilla::SMSG_PONG;
+
+    fn round_trip_update(update: SMSG_UPDATE_OBJECT) -> SMSG_UPDATE_OBJECT {
+        let living = matches!(
+            &update.objects[0],
+            Object::CreateObject {
+                object_type: ObjectType::Player | ObjectType::Unit,
+                ..
+            } | Object::CreateObject2 {
+                object_type: ObjectType::Player | ObjectType::Unit,
+                ..
+            }
+        );
+        let packet = encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(update))).unwrap();
+        let mut body = packet.body;
+        if living {
+            let flags_index = 8 + body[6].count_ones() as usize;
+            assert_eq!(body[flags_index] & 0x70, 0x70);
+            // gtker reads HAS_POSITION after LIVING, but build 5875 writes only LIVING.
+            body[flags_index] &= !0x40;
+        }
+        let mut frame = Vec::new();
+        frame.extend_from_slice(&((body.len() + 2) as u16).to_be_bytes());
+        frame.extend_from_slice(&packet.opcode.to_le_bytes());
+        frame.extend_from_slice(&body);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(decoded) =
+            ServerOpcodeMessage::read_unencrypted(&mut frame.as_slice()).unwrap()
+        else {
+            panic!("expected CREATE update");
+        };
+        *decoded
+    }
+
+    fn unit_view(type_mask: u32) -> EntityView {
+        EntityView {
+            guid: 1,
+            type_mask,
+            scale_x: 1.0,
+            health: 60,
+            max_health: 60,
+            level: 1,
+            faction_template: 1,
+            unit_bytes_0: 1 | (1 << 8) | (1 << 24),
+            display_id: 49,
+            native_display_id: 49,
+            run_speed_mult_bp: 10_000,
+            offhand_attack_time_ms: (type_mask & lyracore_shared::constants::type_mask::PLAYER
+                != 0)
+                .then_some(2000),
+            ..Default::default()
+        }
+    }
+
+    #[test]
+    fn player_create_mask_keeps_guid_pairs_and_only_nonzero_visible_item_words() {
+        let item = ItemInstanceView {
+            guid: 7,
+            entry: 38,
+            slot: 0,
+            ..Default::default()
+        };
+        for kind in [CreateKind::SelfPlayer, CreateKind::Peer] {
+            let create = codec::build_create_object(
+                &unit_view(lyracore_shared::constants::type_mask::PLAYER),
+                kind,
+                std::slice::from_ref(&item),
+                &[],
+            )
+            .unwrap();
+            let decoded = round_trip_update(create);
+            let mask = match &decoded.objects[0] {
+                Object::CreateObject {
+                    mask2: UpdateMask::Player(mask),
+                    ..
+                }
+                | Object::CreateObject2 {
+                    mask2: UpdateMask::Player(mask),
+                    ..
+                } => mask,
+                other => panic!("expected Character CREATE, got {other:?}"),
+            };
+            assert!(mask.is_bit_dirty(0));
+            assert!(mask.is_bit_dirty(1));
+            assert!(!mask.is_bit_dirty(16));
+            assert!(!mask.is_bit_dirty(17));
+            assert!(mask.is_bit_dirty(127));
+            assert!(!mask.is_bit_dirty(191));
+            assert!(!mask.is_bit_dirty(258));
+            assert!(!mask.is_bit_dirty(259));
+            assert!(mask.is_bit_dirty(260));
+            assert!(!mask.is_bit_dirty(261));
+        }
+    }
+
+    #[test]
+    fn creature_create_mask_omits_zero_target_guid() {
+        let create = codec::build_create_object(
+            &EntityView {
+                base_attack_time_ms: 2000,
+                ..unit_view(lyracore_shared::constants::type_mask::CREATURE)
+            },
+            CreateKind::Peer,
+            &[],
+            &[],
+        )
+        .unwrap();
+        let decoded = round_trip_update(create);
+        let Object::CreateObject {
+            mask2: UpdateMask::Unit(mask),
+            ..
+        } = &decoded.objects[0]
+        else {
+            panic!("expected creature CREATE");
+        };
+        assert!(mask.is_bit_dirty(1));
+        assert!(!mask.is_bit_dirty(16));
+        assert!(!mask.is_bit_dirty(17));
+        assert!(mask.is_bit_dirty(127));
+    }
+
+    #[test]
+    fn player_create_carries_the_offhand_weapon_timer() {
+        let create = codec::build_create_object(
+            &EntityView {
+                offhand_attack_time_ms: Some(1300),
+                ..unit_view(lyracore_shared::constants::type_mask::PLAYER)
+            },
+            CreateKind::Peer,
+            &[],
+            &[],
+        )
+        .unwrap();
+        let decoded = round_trip_update(create);
+        let object = &decoded.objects[0];
+        let mut empty = object.clone();
+        match &mut empty {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => {
+                *mask2 = empty_mask(mask2);
+            }
+            _ => unreachable!(),
+        }
+        let mask_start = encode_object(&empty).unwrap().len() - 1;
+        let fields = parse_mask(&encode_object(object).unwrap()[mask_start..]).unwrap();
+        assert_eq!(
+            fields.into_iter().find(|(index, _)| *index == 127),
+            Some((127, 1300))
+        );
+    }
+
+    #[test]
+    fn gameobject_create_mask_keeps_forced_dynamic_flags() {
+        let create = codec::build_gameobject_create_object(&GameObjectView {
+            guid: 1,
+            size: 1.0,
+            state: 1,
+            ..Default::default()
+        });
+        let decoded = round_trip_update(create);
+        let Object::CreateObject2 {
+            mask2: UpdateMask::GameObject(mask),
+            ..
+        } = &decoded.objects[0]
+        else {
+            panic!("expected GameObject CREATE");
+        };
+        assert!(mask.is_bit_dirty(1));
+        assert!(!mask.is_bit_dirty(9));
+        assert!(mask.is_bit_dirty(19));
+        assert_eq!(mask.gameobject_dyn_flags(), Some(0));
+    }
+
+    #[test]
+    fn transport_gameobject_create_omits_forced_dynamic_flags() {
+        for type_id in [11, 15] {
+            let create = codec::build_gameobject_create_object(&GameObjectView {
+                guid: 1,
+                type_id,
+                size: 1.0,
+                ..Default::default()
+            });
+            let decoded = round_trip_update(create);
+            let Object::CreateObject2 {
+                mask2: UpdateMask::GameObject(mask),
+                ..
+            } = &decoded.objects[0]
+            else {
+                panic!("expected GameObject CREATE");
+            };
+            assert!(!mask.is_bit_dirty(19), "type {type_id}");
+        }
+    }
 
     #[test]
     fn malformed_boolean_and_sized_string_requests_return_errors_without_panicking() {

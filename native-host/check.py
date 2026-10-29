@@ -1609,7 +1609,8 @@ def check_world_objects(host):
     grant = host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}')[0][0]
     outside.send(0xb1, struct.pack('<Q', door))
     toggled = outside.collect()
-    assert values(toggled, door)[14] == 0 and door not in creates(toggled)
+    toggled_values = values(toggled, door)
+    assert toggled_values and toggled_values[14] == 0 and door not in creates(toggled)
     assert host.rows(f'SELECT id FROM game_aoi_grant WHERE viewer_guid = {outside_guid} AND layer = 1 AND entity_guid = {door}') == [[grant]]
     assert not values(first.collect() + second.collect(), door)
     host.sql(f'UPDATE game_gameobject SET rotation_0 = 0.5, rotation_1 = 0.5, rotation_2 = 0.5, rotation_3 = 0.5 WHERE guid = {door}')
@@ -1626,7 +1627,7 @@ def check_world_objects(host):
     host.call('debug_enter_instance', [first_guid, 0])
     joined = first.collect()
     assert door in creates(joined)
-    assert values(joined, door, create=True)[14] == 0
+    assert values(joined, door, create=True).get(14, 0) == 0
     assert [values(joined, door)[i] for i in range(10, 14)] == [0x3f000000] * 4
     create_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == door)
     rotation_index = next(i for i, (opcode, body) in enumerate(joined) if opcode == 0xa9 and body[5] == 0 and packed_guid(body[6:]) == door)
@@ -3960,17 +3961,23 @@ def check_queries(host):
 
 
 def check_visibility(host):
-    client = host.enter_world('Native', at=(0, 0, 0, 0))
-    guid = client.guid
-    peer = host.log_in(host.character('Peer', cls=8, at=(0, 10, 0, 0)))
-    peer_guid = peer.guid
+    guid = host.character('Native', at=(0, 0, 0, 0))
+    peer_guid = host.character('Peer', cls=8, at=(0, 10, 0, 0))
+    for character_guid in (guid, peer_guid):
+        host.sql(f'UPDATE game_character SET xp = 17, money = 1234 WHERE guid = {character_guid}')
+    client = host.log_in(guid)
+    peer = host.log_in(peer_guid)
     initial = peer.entered
     assert creates(initial).count(peer_guid) == 1
     assert creates(initial).count(guid) == 1
     private_fields = {716, 717, 1176, *range(150, 163), 165, 166, 169, 170, 171, *range(486, 612), *range(718, 1102)}
     assert not private_fields.intersection(values(initial, guid, create=True))
     assert {716, 717, 1176}.issubset(values(initial, peer_guid, create=True))
-    assert creates(client.collect()).count(peer_guid) == 1
+    assert values(initial, peer_guid, create=True)[127] == 2000
+    arrival = client.collect()
+    assert creates(arrival).count(peer_guid) == 1
+    assert not private_fields.intersection(values(arrival, peer_guid, create=True))
+    assert values(arrival, peer_guid, create=True)[127] == 2000
     client.send(0x1ca, struct.pack('<II', 0, 9) + b'stuck in\0' + struct.pack('<I', 4) + b'Map\0')
     assert client.collect() == []
     host.call('debug_set_money', [guid, 123456])
@@ -3985,6 +3992,16 @@ def check_visibility(host):
     host.call('debug_set_level', [guid, 1])
     client.collect()
     peer.collect()
+    host.restore('game_item_template', 'entry = 5090050', 'delay_ms')
+    host.sql('UPDATE game_item_template SET delay_ms = 1300 WHERE entry = 5090050')
+    host.call('debug_equip_offhand', [guid, 5090050])
+    client.collect()
+    peer.collect()
+    client.close()
+    host.wait_until(lambda: host.rows(f'SELECT online FROM game_character WHERE guid = {guid}') == [[False]],
+                    'Native did not log out')
+    reentered = host.log_in(guid).entered
+    assert values(reentered, guid, create=True)[127] == 1300
 
 
 def check_inventory(host):

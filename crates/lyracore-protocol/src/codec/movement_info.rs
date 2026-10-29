@@ -211,11 +211,12 @@ pub fn create_with_movement(
     create: &wow_world_messages::vanilla::SMSG_UPDATE_OBJECT,
     movement: &[u8],
 ) -> Result<Vec<u8>> {
-    use wow_world_messages::vanilla::ServerMessage;
+    use wow_world_messages::vanilla::opcodes::ServerOpcodeMessage;
     bytes_to_movement_info(movement)?;
-    let mut framed = Vec::new();
-    create.write_unencrypted_server(&mut framed)?;
-    let mut body = framed.split_off(4);
+    let mut body = crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(
+        create.clone(),
+    )))?
+    .body;
     ensure!(
         body.len() >= 9 && body[..4] == 1u32.to_le_bytes() && matches!(body[5], 2 | 3),
         "expected one CREATE object"

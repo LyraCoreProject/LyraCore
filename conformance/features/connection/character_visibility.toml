@@ -20,13 +20,25 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Peer CREATE VALUES have different health, attack time and packed player fields. The descriptor mask omits off-hand attack time and other expected fields, and includes zero target, player and visible-item words."
-path = "crates/lyracore-protocol/src/codec/entity.rs"
-symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: 18 exact_field and 92 field_shape signatures for both recipients. Off-hand attack time field_127 is absent; target fields_16 and _17 and 48 zero visible-item words are present. Rest flag field_190 and outfit entries 38, 39, 40 and 2362 now match."
+description = "Peer CREATE still carries a 2000 ms main-hand attack time where the reference carries 1900 ms, and omits the Warrior stance aura fields."
+path = "module/src/native/view.rs"
+symbol = "entity"
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: field_126 is 1900 in the reference and 2000 in core; fields_47, _95 and _101 carry 2457, 9 and 1 in the reference and are absent in core, for both recipients."
 
 [[known_gaps]]
-description = "Scenario-author gap: the pinned arrival_max_health data rule is unused because it targets UNIT_FIELD_POWER4 rather than max health. Correct the rule in a separate harness PR."
+description = "The Module sends raw Character health to unrelated viewers instead of projecting health and maximum health as percentages."
+path = "module/src/native/visibility.rs"
+symbol = "create"
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: fields_22 and _28 are 100 in the reference and 60 in core. At d9173eca, Object.cpp Object::BuildValuesUpdate sends percent health and maximum health 100 when ShowHealthValues is false and the recipient cannot see the unit's health. The Module must apply that recipient rule before encoding."
+
+[[known_gaps]]
+description = "Character CREATE omits the model bounding radius and combat reach."
+path = "crates/lyracore-protocol/src/codec/entity.rs"
+symbol = "build_create_object"
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: model radius field_129 is about 0.306 and reach field_130 is 1.5 in the reference; both are absent in core for both recipients. These are CREATE descriptor fields supplied by the codec."
+
+[[known_gaps]]
+description = "Scenario-author gap: arrival_max_health targets UNIT_FIELD_POWER4 instead of UNIT_FIELD_MAXHEALTH. Correct the rule in a separate harness PR."
 path = "conformance/features/connection/character_visibility.toml"
 symbol = "arrival_max_health"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: unused rule declaration at objects.0.values.field_26. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28."
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: the rule declares objects.0.values.field_26, and classifies its 80 expected versus 100 actual difference as data. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28, whose 100 expected versus 60 actual difference remains exact_field."
