@@ -156,7 +156,8 @@ harness's `Transport` over the buffered Operator connection. It decodes replies 
 with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
 ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
 unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
-`wait_for_packets`.
+`wait_for_packets`. At one deadline, the virtual clock orders events by table kind and then row id.
+SpacetimeDB does not guarantee that order in live play.
 
 The schema-3 runner records world-entry packets in the opening phase. Core applies their delivery
 instructions to establish AOI Grants, then retains the packets as opening observations. The harness
