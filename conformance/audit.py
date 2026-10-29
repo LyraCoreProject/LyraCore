@@ -514,14 +514,15 @@ def capture_servers(harness, wire, work, client_data):
 
 def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
+    realm_env = dict(env)
     entry, = json.loads((work / 'catalogue.json').read_text())
     with scenario_realm(key, pins, client_data) as (password, token, host, module, realm_root, fresh):
-        env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
-                   WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
+        realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
+                         WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         if fresh:
             with timed(f'{scenario} Realm prime run'):
                 capture(wire, work, entry, 'lyracore', [3724, 8085],
-                        (password + '\n').encode(), env, progress=sys.stderr)
+                        (password + '\n').encode(), realm_env, progress=sys.stderr)
             cli_env = dict(os.environ)
             cli_env.pop('CARGO_TARGET_DIR', None)
             cli_env['PATH'] = str(SCENARIO_CACHE / 'realm/bin') + ':' + cli_env['PATH']
@@ -539,10 +540,10 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
                 capture(wire, work, entry, 'vmangos', [13724, 18085], passwords,
                         reference_env, progress=sys.stderr)
         with timed(f'{scenario} Realm run'):
-            delete_reference_character(wire, entry['character'], (password + '\n').encode(), env,
+            delete_reference_character(wire, entry['character'], (password + '\n').encode(), realm_env,
                                        endpoints=(3724, 8085))
             capture(wire, work, entry, 'lyracore', [3724, 8085],
-                    (password + '\n').encode(), env, progress=sys.stderr)
+                    (password + '\n').encode(), realm_env, progress=sys.stderr)
         state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
         snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
         if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
@@ -631,15 +632,17 @@ def stop_scenario_cache():
         lock_owned_state(lock, 'scenario Realm')
         cache = SCENARIO_CACHE / 'realm'
         realm_root = cache / 'core'
-        if (cache / 'state.json').is_file():
+        if cache.exists():
             cli_env = dict(os.environ)
             cli_env.pop('CARGO_TARGET_DIR', None)
             cli_env['PATH'] = (str(cache / 'bin') + ':' + str(Path.home() / '.cargo/bin')
                                + ':' + cli_env['PATH'])
-            run([realm_root / 'lyracore', 'dev', 'down'], env=cli_env, cwd=realm_root,
-                stdout=subprocess.DEVNULL)
-            run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
-                stdout=subprocess.DEVNULL)
+            if (realm_root / 'lyracore').is_file() and (realm_root / '.lyracore').exists():
+                run([realm_root / 'lyracore', 'dev', 'down'], env=cli_env, cwd=realm_root,
+                    stdout=subprocess.DEVNULL)
+            if (realm_root / '.git').exists():
+                run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
+                    stdout=subprocess.DEVNULL)
             shutil.rmtree(cache)
         marker = SCENARIO_CACHE / 'reference-state.json'
         if marker.is_file():
