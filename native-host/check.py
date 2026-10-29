@@ -4737,6 +4737,7 @@ def check_progression(host):
     host.call('debug_check_rest_at', [guid, 0, 0, 0])
     unrested = values(client.collect(), guid)[194]
     assert unrested >> 24 == 2 and unrested & 0xffffff == rested & 0xffffff
+    host.sql(f'UPDATE game_world_entity SET z = 0 WHERE guid = {guid}')
     peer.collect()
     host.sql('INSERT INTO game_faction (faction_id,reputation_index,base_standing) VALUES (5090901,62,0)')
     host.call('debug_grant_reputation', [guid, 5090901, 3175])
