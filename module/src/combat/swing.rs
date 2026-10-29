@@ -132,6 +132,8 @@ fn resolve_offhand_swing(
     }
 
     let range = offhand_swing_range(ctx, attacker, (dmin, dmax, delay));
+    #[cfg(feature = "conformance_test_fixture")]
+    crate::debug::record_offhand_roll_range(ctx, range);
     let (rolled, hit_info, blocked) = roll_swing_with_range(ctx, attacker, &target, range, None);
 
     crate::spell::break_stealth(ctx, attacker_guid);

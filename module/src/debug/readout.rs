@@ -40,6 +40,35 @@ pub struct DebugReadout {
     pub defender_defense_skill: u32,
 }
 
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) fn record_offhand_roll_range(ctx: &ReducerContext, (base_min, base_max): (u32, u32)) {
+    let readouts = ctx.db.game_debug_readout();
+    let key = "offhand_roll".to_string();
+    readouts.key().delete(&key);
+    readouts.insert(DebugReadout {
+        key,
+        base_min,
+        base_max,
+        mitigation_pct: 0,
+        final_min: 0,
+        final_max: 0,
+        note: String::new(),
+        dodge_bp: 0,
+        crit_bp: 0,
+        hit_miss_bp: 0,
+        parry_bp: 0,
+        attack_time_ms: 0,
+        spell_crit_bp: 0,
+        spell_hit_normal: 0,
+        spell_hit_crit: 0,
+        damage_taken_pct: 0,
+        block_bp: 0,
+        block_value: 0,
+        attacker_weapon_skill: 0,
+        defender_defense_skill: 0,
+    });
+}
+
 #[reducer]
 pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid: u64) {
     let entities = ctx.db.game_world_entity();
