@@ -112,20 +112,35 @@ fn a_spell_projectile_impacts_at_its_virtual_due_time() {
 fn a_completed_spell_impact_releases_its_arming_row() {
     let shard = fixture("virtual-spell-impact-arming");
     start_clock(&shard);
-    let arming = "SELECT parked_micros FROM game_conformance_arming";
-    let initial_arming_rows = rows(&shard, arming);
+    let now_micros = shard.query_rows("SELECT now_micros FROM game_conformance_clock")[0]
+        ["now_micros"]
+        .parse::<i64>()
+        .unwrap();
     shard.assert_call(
         "debug_stage_virtual_spell_impact",
         &["1", "1", "5", "10000"],
     );
-    assert_eq!(rows(&shard, arming), initial_arming_rows + 1);
+    let impact_arming = shard.query_rows(&format!(
+        "SELECT parked_micros FROM game_conformance_arming WHERE due_micros = {}",
+        now_micros + 10_000
+    ));
+    assert_eq!(impact_arming.len(), 1);
+    let parked_micros = &impact_arming[0]["parked_micros"];
     let mut connection = shard.connect_reducers(&[]);
     advance(&mut connection, 1);
     assert_eq!(
         rows(&shard, "SELECT scheduled_id FROM game_pending_spell_impact"),
         0
     );
-    assert_eq!(rows(&shard, arming), initial_arming_rows);
+    assert_eq!(
+        rows(
+            &shard,
+            &format!(
+                "SELECT parked_micros FROM game_conformance_arming WHERE parked_micros = {parked_micros}"
+            )
+        ),
+        0
+    );
 }
 
 #[test]
