@@ -751,8 +751,12 @@ pub(crate) fn apply_player_login(
         character.resting,
     );
     character.rested_xp = rested;
+    let previous_rest_state = match entry {
+        WorldEntry::Login => lyracore_shared::packing::REST_STATE_NORMAL,
+        WorldEntry::WorldPort => character.rest_state,
+    };
     character.rest_state = crate::rest::rest_state_after_bonus(
-        lyracore_shared::packing::REST_STATE_NORMAL,
+        previous_rest_state,
         character.rested_xp,
         character.level,
     );
