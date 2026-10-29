@@ -226,6 +226,17 @@ class ImportedWorld(unittest.TestCase):
             self.assertEqual(calls, [['dev', 'down'], ['dev', 'up', '--single']])
 
 
+class IncompleteScenarioCache(unittest.TestCase):
+    def test_stop_removes_interrupted_worktree_without_cli(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            cache = Path(directory)
+            (cache / 'realm/core/.lyracore').mkdir(parents=True)
+            with patch.object(audit, 'SCENARIO_CACHE', cache):
+                audit.stop_scenario_cache()
+            self.assertFalse((cache / 'realm').exists())
+
+
 class CleanupAuthentication(unittest.TestCase):
     def test_only_pre_authentication_proof_errors_retry_once(self):
         proof = audit.subprocess.CalledProcessError(1, ['wire'], stderr=b'Error: logon proof rejected\n')
