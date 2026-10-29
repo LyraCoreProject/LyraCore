@@ -190,7 +190,7 @@ pub(crate) fn emit_bot_transfer_intent(
         destination_map: destination.map_id,
         destination_instance: destination.instance_id,
         reason: reason.to_string(),
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         controller_generation,
         claim_token: 0,
         claim_until_micros: 0,
@@ -316,7 +316,7 @@ pub fn claim_bot_transfer_intent(
     if (intent.bot_guid, intent.controller_generation) != (bot_guid, controller_generation) {
         return Err("Transfer Intent identity changed".to_string());
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     if intent.source_module_identity == Identity::ZERO {
         intent.source_module_identity = ctx.database_identity();
     }
@@ -686,7 +686,7 @@ impl ShardLedger for CtxShard<'_> {
         self.ctx.db.game_character().guid().find(guid).is_some()
     }
     fn now_micros(&self) -> i64 {
-        self.ctx.timestamp.to_micros_since_unix_epoch()
+        crate::time::now(self.ctx).to_micros_since_unix_epoch()
     }
 }
 
@@ -945,7 +945,7 @@ pub fn import_character(ctx: &ReducerContext, transfer_id: u64) -> Result<(), St
         transfer_id,
         character_guid: out.character_guid,
         blob: out.blob.clone(),
-        created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         bot_intent_id: 0,
         bot_controller_generation: 0,
         bot_intent_created_micros: 0,

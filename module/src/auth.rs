@@ -122,7 +122,7 @@ pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> 
         sessions
             .iter()
             .map(|s| (s.account_id, s.expires_at.to_micros_since_unix_epoch())),
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
     );
     let active = crate::native::active_session_accounts(ctx);
     for account_id in expired {
@@ -373,7 +373,7 @@ pub fn establish_session(
     acc.identity = Some(bound_identity);
     accounts.id().update(acc);
 
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let expires = now
         .checked_add(TimeDuration::from_micros(SESSION_TTL_MICROS))
         .unwrap_or(now);

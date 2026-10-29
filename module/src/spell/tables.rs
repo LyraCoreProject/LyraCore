@@ -405,7 +405,7 @@ impl SpellCastEvent {
             id: 0,
             caster_guid,
             spell_id,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
             target_guid: 0,
             cast_time_ms: 0,
             is_completion: false,

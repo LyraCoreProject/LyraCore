@@ -62,7 +62,7 @@ pub fn debug_stage_meeting_stone(
         z,
         orientation: 0.0,
         state: 0,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
         grid_x,
@@ -125,8 +125,7 @@ pub fn debug_stage_meeting_stone_claim(
 }
 
 fn stage_claim(ctx: &ReducerContext, guid: u64, account_id: u64) -> Result<(), String> {
-    let expires_micros = ctx
-        .timestamp
+    let expires_micros = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .checked_add(FIXTURE_CLAIM_MICROS)
         .ok_or("claim deadline overflow")?;

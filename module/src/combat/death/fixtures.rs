@@ -69,10 +69,9 @@ pub fn debug_stage_ranged_lethal_damage_floor_fixture(
         .guid()
         .find(target_guid)
         .ok_or_else(|| "fixture ranged target does not exist".to_string())?;
-    let land_at = ctx
-        .timestamp
+    let land_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(i64::from(delay_ms) * 1_000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     ctx.db
         .game_ranged_impact_schedule()
         .insert(crate::RangedImpactSchedule {
@@ -158,7 +157,7 @@ pub fn debug_respawn_lethal_damage_floor_fixture(
         .guid()
         .find(creature_guid)
         .ok_or_else(|| "fixture creature has no spawn".to_string())?;
-    spawn.respawn_at = ctx.timestamp;
+    spawn.respawn_at = crate::time::now(ctx);
     spawns.guid().update(spawn);
     crate::creatures::tick::pass_respawn(ctx);
     entities

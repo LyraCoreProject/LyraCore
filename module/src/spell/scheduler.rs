@@ -95,7 +95,7 @@ pub fn fire_spell_impact(ctx: &ReducerContext, sched: PendingSpellImpact) {
             caster_guid: sched.caster_guid,
             target_guid: sched.target_guid,
             spell_id: sched.spell_id,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
             damage: dealt,
             school: sched.school_index,
             is_crit: sched.is_crit,
@@ -276,7 +276,7 @@ pub fn tick_auras(ctx: &ReducerContext, _schedule: AuraSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let auras = ctx.db.game_aura();
     let entities = ctx.db.game_world_entity();
@@ -593,7 +593,7 @@ pub fn tick_ground_areas(ctx: &ReducerContext, _schedule: GroundAreaSchedule) {
         return;
     }
     const AOE_MAX_TARGETS: usize = 20;
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let areas = ctx.db.game_ground_area();
     let entities = ctx.db.game_world_entity();

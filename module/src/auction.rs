@@ -684,7 +684,7 @@ fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
         bid: draft.bid,
         out_bid: draft.out_bid,
         bidder_guid: draft.bidder_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::auction_notice(ctx, &notice);
 }
@@ -1132,7 +1132,7 @@ impl ListingSource for CtxSource<'_> {
     }
 
     fn now_micros(&self) -> i64 {
-        self.ctx.timestamp.to_micros_since_unix_epoch()
+        crate::time::now(self.ctx).to_micros_since_unix_epoch()
     }
 }
 
@@ -1236,7 +1236,7 @@ impl CtxBidMarket<'_> {
     }
 
     fn now_micros(&self) -> i64 {
-        self.ctx.timestamp.to_micros_since_unix_epoch()
+        crate::time::now(self.ctx).to_micros_since_unix_epoch()
     }
 
     fn apply_decision(

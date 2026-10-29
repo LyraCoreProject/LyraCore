@@ -28,7 +28,7 @@ pub(crate) fn stamp(
         source_sha: source_sha.to_string(),
         file_hash: file_hash.to_string(),
         row_count,
-        imported_at: ctx.timestamp,
+        imported_at: crate::time::now(ctx),
     });
 }
 
@@ -76,7 +76,7 @@ pub fn complete_world_import(ctx: &ReducerContext, map_ids: Vec<u32>) -> Result<
         table.map_id().delete(map_id);
         table.insert(WorldImport {
             map_id,
-            completed_at: ctx.timestamp,
+            completed_at: crate::time::now(ctx),
         });
     }
     Ok(())

@@ -171,7 +171,7 @@ pub fn debug_age_corpse(
         .find(corpse_guid)
         .ok_or("no such Corpse")?;
     corpse.created_at =
-        ctx.timestamp - TimeDuration::from_micros(i64::from(age_seconds) * 1_000_000);
+        crate::time::now(ctx) - TimeDuration::from_micros(i64::from(age_seconds) * 1_000_000);
     corpse.update(ctx);
     crate::corpse::sweep_corpse_decay(ctx);
     Ok(())
@@ -382,7 +382,7 @@ pub fn debug_spawn_ground_area(
         .iter()
         .find(|e| e.spell_id == spell_id && e.period_ms > 0 && e.radius_yd > 0.0)
         .ok_or("spell has no periodic-area effect (radius + period)")?;
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let expires_at = now
         .checked_add(TimeDuration::from_micros(
             (hdr.duration_ms.max(1) as i64) * 1000,
@@ -616,7 +616,7 @@ pub fn debug_spawn_gameobject(
         z,
         orientation: 0.0,
         state: 0,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
         grid_x: lyracore_shared::spatial::grid_cell(x, y).0,
@@ -891,7 +891,7 @@ pub fn debug_fill_aura_slots(
     } else {
         0
     };
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let expires = now
         .checked_add(TimeDuration::from_micros(3_600_000_000))
         .unwrap_or(now);
@@ -1056,7 +1056,7 @@ fn equip_into(
                 slot,
                 stack_count: 1,
                 durability,
-                created_at: ctx.timestamp,
+                created_at: crate::time::now(ctx),
                 enchant_id: 0,
                 soulbound,
                 random_property_id,

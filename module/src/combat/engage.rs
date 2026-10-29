@@ -17,7 +17,7 @@ pub(crate) fn enter_combat(ctx: &ReducerContext, guid: u64) {
     if e.dead {
         return;
     }
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
     let already = e.unit_flags & lyracore_shared::constants::unit_flags::IN_COMBAT != 0;
     if already && e.combat_until_ms > now_ms + COMBAT_DROP_MS / 2 {
         return;
@@ -74,7 +74,7 @@ pub(crate) fn arm_creature_engagement(
 pub(crate) fn refresh_leash(ctx: &ReducerContext, guid_a: u64, guid_b: u64) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     for guid in [guid_a, guid_b] {
         let (Some(mut row), Some(e)) =
             (melee.attacker_guid().find(guid), entities.guid().find(guid))
@@ -356,7 +356,7 @@ impl CombatEvent {
             damage: 0,
             hit_info: 0,
             killing_blow: false,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
             blocked_amount: 0,
             ranged_spell_id: 0,
             ammo_display_id: 0,
@@ -506,7 +506,7 @@ fn face_requested_melee_target(ctx: &ReducerContext, attacker_guid: u64, target_
 
     let splines = ctx.db.game_creature_spline();
     let retained = splines.guid().find(attacker_guid);
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64;
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64;
     if retained.as_ref().is_some_and(|spline| {
         !spline.facing
             && spline.dur_ms > 0
@@ -715,7 +715,7 @@ pub(crate) fn apply_start_ranged_attack(
     }
     crate::mount::dismount(ctx, attacker.guid);
     // Delay the first Auto Shot by its initial wind-up; zero is the immediate-swing sentinel.
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     let ranged_delay = ranged_weapon.2;
     let first_swing_seed = now_ms
         .saturating_sub(ranged_delay.saturating_sub(RANGED_INITIAL_SHOT_MS))

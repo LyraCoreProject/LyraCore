@@ -90,7 +90,7 @@ fn push_trade_event_payload(
         recipient_identity: crate::helpers::event_recipient_identity(bound),
         kind,
         other_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         recipient_guid,
         payload,
     });
@@ -198,7 +198,7 @@ pub(crate) fn apply_initiate_trade(
                 target_accepted: false,
                 initiator_gold: 0,
                 target_gold: 0,
-                created_at: ctx.timestamp,
+                created_at: crate::time::now(ctx),
             });
             push_trade_event(ctx, target_guid, event_kind::BEGIN_TRADE, actor.guid);
         }
@@ -227,7 +227,7 @@ pub(crate) fn offer_slot_view(
 }
 
 fn touch_session(ctx: &ReducerContext, mut session: TradeSession) -> TradeSession {
-    session.created_at = ctx.timestamp;
+    session.created_at = crate::time::now(ctx);
     ctx.db.game_trade_session().id().update(session)
 }
 
@@ -433,7 +433,7 @@ pub(crate) fn apply_begin_trade(
         return Ok(());
     };
     session.open = true;
-    session.created_at = ctx.timestamp;
+    session.created_at = crate::time::now(ctx);
     let (initiator, target) = (session.initiator_guid, session.target_guid);
     sessions.id().update(session);
     push_trade_event(ctx, initiator, event_kind::OPEN_WINDOW, target);

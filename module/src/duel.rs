@@ -230,7 +230,7 @@ fn push_event(
         flag_y: duel.flag_y,
         flag_z: duel.flag_z,
         flag_orientation: duel.flag_orientation,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         winner_name: crate::helpers::character_by_guid(ctx, winner_guid)
             .map(|character| character.name)
             .unwrap_or_default(),
@@ -283,7 +283,7 @@ pub(crate) fn request_duel(
         countdown_deadline_micros: 0,
         initiator_out_of_bounds_deadline_micros: 0,
         challenged_out_of_bounds_deadline_micros: 0,
-        created_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        created_at_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     });
     let mut duel = inserted;
     let Some(flag_guid) = duel_flag_guid(duel.initiator_guid, duel.id) else {
@@ -309,7 +309,8 @@ pub(crate) fn accept_duel(ctx: &ReducerContext, actor_guid: u64, flag_guid: u64)
         return;
     }
     duel.state = duel_state::COUNTDOWN;
-    duel.countdown_deadline_micros = ctx.timestamp.to_micros_since_unix_epoch() + COUNTDOWN_MICROS;
+    duel.countdown_deadline_micros =
+        crate::time::now(ctx).to_micros_since_unix_epoch() + COUNTDOWN_MICROS;
     let duel = ctx.db.game_duel().id().update(duel);
     push_both(ctx, &duel, duel_event_kind::COUNTDOWN);
 }
@@ -518,7 +519,7 @@ pub fn tick_duels(ctx: &ReducerContext, _schedule: DuelSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let live_duels: Vec<Duel> = ctx.db.game_duel().iter().collect();
     let entities = ctx.db.game_world_entity();
     for mut duel in live_duels {

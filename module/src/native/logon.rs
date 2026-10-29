@@ -63,7 +63,7 @@ pub struct NativeLogonReaper {
 const WINDOW_MICROS: i64 = 60_000_000;
 
 fn address(ctx: &ReducerContext, peer: &str) -> NativeLogonAddress {
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut row = ctx
         .db
         .game_native_logon_address()
@@ -224,7 +224,7 @@ fn send(
         opcode: None,
         body,
         close_after,
-        not_before_micros: ctx.timestamp.to_micros_since_unix_epoch() + delay_micros,
+        not_before_micros: crate::time::now(ctx).to_micros_since_unix_epoch() + delay_micros,
         authentication_complete,
     });
     Ok(())
@@ -238,7 +238,7 @@ fn reject(
 ) -> Result<(), String> {
     let mut row = address(ctx, &connection.peer);
     if row.failures == 0 {
-        row.expires_micros = ctx.timestamp.to_micros_since_unix_epoch() + WINDOW_MICROS;
+        row.expires_micros = crate::time::now(ctx).to_micros_since_unix_epoch() + WINDOW_MICROS;
     }
     row.failures += 1;
     let close_after = row.failures >= 10 || connection.attempts >= 3;
@@ -449,7 +449,7 @@ pub fn native_reap_logon_addresses(
     if ctx.sender() != ctx.database_identity() {
         return Err("scheduler only".into());
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let addresses = ctx.db.game_native_logon_address();
     let expired: Vec<_> = addresses.by_expiry().filter(..=now).collect();
     for mut row in expired {

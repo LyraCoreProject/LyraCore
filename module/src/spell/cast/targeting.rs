@@ -256,7 +256,7 @@ pub(crate) fn aura_apply(
     level: u8,
     points: i32,
 ) {
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let points = if e.p0_kind == P_PCT_MAX_POWER {
         let max_power = ctx
             .db
@@ -867,10 +867,9 @@ fn apply_damage_effect(
                             distance_3d(caster.x, caster.y, caster.z, target.x, target.y, target.z);
                         let travel_ms = projectile_travel_ms(dist, PROJECTILE_SPEED_YPS);
                         if travel_ms > 0 {
-                            let fire_at = ctx
-                                .timestamp
+                            let fire_at = crate::time::now(ctx)
                                 .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
-                                .unwrap_or(ctx.timestamp);
+                                .unwrap_or(crate::time::now(ctx));
                             ctx.db
                                 .game_pending_spell_impact()
                                 .insert(PendingSpellImpact {
@@ -1310,7 +1309,7 @@ fn apply_character_effect(
                         caster_guid,
                         caster_name,
                         points,
-                        created_at: ctx.timestamp,
+                        created_at: crate::time::now(ctx),
                     }
                     .insert(ctx);
                 }
@@ -1498,7 +1497,7 @@ fn create_ground_area(
             )
         }
     };
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     if hdr.duration_ms == 0 || hdr.duration_ms == u32::MAX {
         return;
     }
@@ -1567,7 +1566,7 @@ fn charge_to_target(ctx: &ReducerContext, caster_guid: u64, target_guid: u64) {
     }
     let nz = crate::terrain::snap_z(ctx, caster.map_id, caster.instance_id, nx, ny, target.z);
     let duration_ms = ((dist / lyracore_shared::constants::speeds::CHARGE) * 1000.0) as u32;
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     crate::creatures::tick::emit_move_spline(
         ctx,
         caster_guid,

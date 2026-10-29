@@ -219,7 +219,7 @@ pub(crate) fn open(
         owner_name: owner_name.to_string(),
         team,
         name: name.to_string(),
-        created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     });
     crate::native::guild_charter_opened(ctx, &petition);
     petition.petition_id
@@ -267,7 +267,7 @@ pub(crate) fn sign(
                     signer_guid: actor_guid,
                     signer_name: request.actor_name,
                     signer_realm_account: actor_account,
-                    signed_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+                    signed_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
                 });
             event_kind::PETITION_SIGNED
         }

@@ -293,7 +293,7 @@ pub(crate) fn insert_letter(ctx: &ReducerContext, letter: Letter) -> u64 {
         money: letter.money,
         cod: letter.cod,
         was_read: false,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         sender_kind,
         sender_entry,
         check_flags: letter.check_flags,
@@ -308,14 +308,14 @@ pub(crate) fn delivered_mail(ctx: &ReducerContext, mail_id: u64) -> Option<Mail>
         .game_mail()
         .id()
         .find(mail_id)
-        .filter(|m| m.is_delivered(ctx.timestamp))
+        .filter(|m| m.is_delivered(crate::time::now(ctx)))
 }
 pub(crate) fn has_unread(ctx: &ReducerContext, recipient_guid: u64) -> bool {
     ctx.db
         .game_mail()
         .by_recipient()
         .filter(&recipient_guid)
-        .any(|m| !m.was_read && m.is_delivered(ctx.timestamp))
+        .any(|m| !m.was_read && m.is_delivered(crate::time::now(ctx)))
 }
 #[cfg(feature = "debug_reducers")]
 #[spacetimedb::reducer]
@@ -384,7 +384,10 @@ pub(crate) fn apply_send(
     insert_letter(
         ctx,
         Letter::from_character(sender_guid, recipient_guid, subject, body, money, cod, item)
-            .delayed(ctx.timestamp.to_micros_since_unix_epoch(), delay_secs),
+            .delayed(
+                crate::time::now(ctx).to_micros_since_unix_epoch(),
+                delay_secs,
+            ),
     );
     Ok(())
 }
@@ -600,7 +603,7 @@ pub(crate) fn apply_return(
 }
 pub(crate) fn send_back(ctx: &ReducerContext, row: Mail, delay_secs: u32) {
     let arrives = Timestamp::from_micros_since_unix_epoch(after_delay(
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
         delay_secs,
     ));
     let back = ctx.db.game_mail().id().update(returned(row, arrives));

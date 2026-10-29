@@ -281,7 +281,7 @@ fn activate_point(ctx: &ReducerContext, m: &GameObjectPoolMember) {
         z: m.z,
         orientation: m.orientation,
         state: 0,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
         grid_x: lyracore_shared::spatial::grid_cell(m.x, m.y).0,
@@ -661,7 +661,8 @@ fn use_resolved_gameobject(
                 }
                 _ => {
                     go.state = 1;
-                    go.respawn_at_micros = (ctx.timestamp.to_micros_since_unix_epoch() as u64)
+                    go.respawn_at_micros = (crate::time::now(ctx).to_micros_since_unix_epoch()
+                        as u64)
                         + respawn_window_micros(tmpl.respawn_secs);
                     go.update(ctx);
                 }
@@ -741,7 +742,7 @@ pub(crate) fn activate_trap_from_relay(
         .game_gameobject_trap_cooldown()
         .go_guid()
         .find(go_guid)
-        .is_some_and(|cooldown| cooldown.ready_at > ctx.timestamp)
+        .is_some_and(|cooldown| cooldown.ready_at > crate::time::now(ctx))
     {
         return Ok(());
     }
@@ -758,12 +759,11 @@ pub(crate) fn activate_trap_from_relay(
         },
     )?;
     let cooldown_secs = trap_cooldown_secs(trap.cooldown_secs);
-    let ready_at = ctx
-        .timestamp
+    let ready_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(
             i64::from(cooldown_secs) * 1_000_000,
         ))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     let cooldowns = ctx.db.game_gameobject_trap_cooldown();
     let row = GameObjectTrapCooldown {
         go_guid,
@@ -845,7 +845,7 @@ pub fn import_gameobjects_append(ctx: &ReducerContext, packed: String) -> Result
 }
 
 fn load_go_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();

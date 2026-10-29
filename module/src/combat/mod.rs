@@ -46,6 +46,8 @@ pub(crate) use folds::{
 pub(crate) use energy::regenerate_energy;
 pub use energy::{game_energy_clock, EnergyClock};
 pub(crate) use swing::launch_ranged_strike;
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use swing::virtual_melee_tick;
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,

@@ -171,7 +171,7 @@ fn next_crossing(
     Some(TransportCrossing {
         scheduled_id: 0,
         scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(
-            ctx.timestamp.to_micros_since_unix_epoch() + i64::from(wait_ms) * 1000,
+            crate::time::now(ctx).to_micros_since_unix_epoch() + i64::from(wait_ms) * 1000,
         )),
         transport_entry: transport.entry,
         map_id: timetable.pose(progress_ms).map_id,
@@ -264,7 +264,7 @@ fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id
 }
 
 pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
-    u64::try_from(ctx.timestamp.to_micros_since_unix_epoch() / 1000).unwrap_or(0)
+    u64::try_from(crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).unwrap_or(0)
 }
 
 pub(crate) fn find(ctx: &ReducerContext, guid: u64) -> Option<Transport> {

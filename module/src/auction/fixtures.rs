@@ -16,7 +16,7 @@ pub fn debug_auction_due(ctx: &ReducerContext, auction_id: u32) -> Result<(), St
         .operation_id()
         .find(auction.listing_operation_id)
         .ok_or("auction receipt not found")?;
-    let due = ctx.timestamp.to_micros_since_unix_epoch() + 250_000;
+    let due = crate::time::now(ctx).to_micros_since_unix_epoch() + 250_000;
     receipt.created_micros = due - i64::from(receipt.duration_minutes) * MICROS_PER_MINUTE;
     receipt.expires_micros = due;
     auction.created_at = Timestamp::from_micros_since_unix_epoch(receipt.created_micros);
@@ -170,8 +170,7 @@ pub fn debug_stage_auction_expiry_fixture(ctx: &ReducerContext) -> Result<(), St
         clear_auction_notices(ctx, recipient_guid);
     }
 
-    let expires_micros = ctx
-        .timestamp
+    let expires_micros = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .checked_add(500_000)
         .ok_or_else(|| "auction expiry fixture deadline overflow".to_string())?;
@@ -507,7 +506,7 @@ pub fn debug_stage_legacy_auction_mail_fixture(ctx: &ReducerContext) -> Result<(
         .operation_id()
         .delete(LEGACY_MAIL_DECOY_RECEIPT_OPERATION_ID);
 
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let receipt_template = AuctionOperationReceipt {
         operation_id: 0,
         auction_id: 0,

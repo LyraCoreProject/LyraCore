@@ -81,7 +81,7 @@ pub(crate) fn dispel_target(ctx: &ReducerContext, target_guid: u64, category: u8
     let moves_mount = debuffs
         .iter()
         .any(|a| crate::mount::mount_aura_moves_mount(a.eff_kind, a.eff_p0));
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for a in debuffs {
         if let Some(dr_category) = crate::spell::stacking::dr_category_for_effect(
             ctx,

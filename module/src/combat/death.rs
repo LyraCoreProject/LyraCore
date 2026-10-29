@@ -264,16 +264,16 @@ fn kill_creature_with_attribution(
     crate::spell::remove_auras_on_death(ctx, target_guid);
     let spawns = ctx.db.game_creature_spawn();
     if let Some(mut spawn) = spawns.guid().find(target_guid) {
-        spawn.despawn_at = ctx
-            .timestamp
+        spawn.despawn_at = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(CORPSE_DECAY_MICROS))
-            .unwrap_or(ctx.timestamp);
+            .unwrap_or(crate::time::now(ctx));
         spawns.guid().update(spawn);
     }
     if let Some(killer_guid) = killer {
         if !is_engaged(ctx, killer_guid) {
             if let Some(mut k) = entities.guid().find(killer_guid) {
-                k.combat_until_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+                k.combat_until_ms =
+                    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
                 k.update(ctx);
             }
         }
@@ -411,7 +411,7 @@ pub(crate) fn kill_player(ctx: &ReducerContext, victim_guid: u64, killer_guid: u
     victim.health = 0;
     victim.dead = true;
     victim.next_swing_spell = 0;
-    victim.combat_until_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    victim.combat_until_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
     victim.update(ctx);
     let killer = (killer_guid != 0).then_some(killer_guid);
     crate::creatures::begin_death_dispatch(ctx, victim_guid, killer);

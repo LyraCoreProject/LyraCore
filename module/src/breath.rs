@@ -44,7 +44,7 @@ pub(crate) fn clear(ctx: &ReducerContext, guid: u64) {
 
 pub(crate) fn update_breath_edge(ctx: &ReducerContext, mover: &WorldEntity, submerged: bool) {
     let states = ctx.db.game_breath_state();
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     match states.entity_guid().find(mover.guid) {
         None if submerged => {
@@ -95,7 +95,7 @@ pub fn tick_breath(ctx: &ReducerContext, _schedule: BreathSchedule) {
         return;
     }
     crate::fatigue::tick_fatigue(ctx);
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let now_micros = now.to_micros_since_unix_epoch();
     let states = ctx.db.game_breath_state();
     let active: Vec<BreathState> = states.iter().collect();

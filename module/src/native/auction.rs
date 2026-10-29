@@ -46,7 +46,7 @@ pub(super) fn browse(
         ServerOpcodeMessage::SMSG_AUCTION_LIST_RESULT(Box::new(codec::build_auction_list_result(
             &rows,
             total,
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
         ))),
         false,
     )?)
@@ -84,7 +84,7 @@ pub(super) fn receive(
                 codec::build_auction_owner_list_result(
                     &rows,
                     total,
-                    ctx.timestamp.to_micros_since_unix_epoch(),
+                    crate::time::now(ctx).to_micros_since_unix_epoch(),
                 ),
             ))
         }
@@ -99,7 +99,7 @@ pub(super) fn receive(
                 codec::build_auction_bidder_list_result(
                     &rows,
                     total,
-                    ctx.timestamp.to_micros_since_unix_epoch(),
+                    crate::time::now(ctx).to_micros_since_unix_epoch(),
                 ),
             ))
         }
@@ -267,7 +267,7 @@ fn page(
     } else {
         String::new()
     };
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let mut rows = rows
         .into_iter()
         .filter(|row| {

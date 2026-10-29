@@ -82,7 +82,7 @@ fn happiness_after_interval(happiness: u32, loyalty_level: u8, in_combat: bool) 
 }
 
 fn update_care(ctx: &ReducerContext, mut pet: HunterPet) {
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let last = pet.care_updated_at.to_micros_since_unix_epoch();
     let Some(live) = super::pet_of(ctx, pet.owner_guid).filter(|live| {
         ctx.db

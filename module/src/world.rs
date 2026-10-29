@@ -364,7 +364,7 @@ pub(crate) fn score_and_log_movement(ctx: &ReducerContext, guid: u64, delta: &Mo
         x: delta.x,
         y: delta.y,
         z: delta.z,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
 }
 
@@ -561,7 +561,7 @@ fn teleport(
         y,
         z,
         orientation: o,
-        created_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
+        created_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
         cross_map,
     });
     crate::native::teleport_changed(ctx, &event, teleport_counter, aboard.as_ref());
@@ -744,7 +744,7 @@ pub(crate) fn apply_player_login(
     crate::spell::recompute_sheet(ctx, character.guid);
 
     let (rested, consumed) = crate::xp::accrue_rested_on_login(
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
         character.last_logout_micros,
         character.rested_xp,
         character.level as u32,
@@ -755,10 +755,10 @@ pub(crate) fn apply_player_login(
         character.last_logout_micros = 0;
     }
     if character.resting {
-        character.rested_since_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+        character.rested_since_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
     }
 
-    character.session_start_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    character.session_start_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
 
     character.owner_identity = owner;
     character.online = true;
@@ -1112,7 +1112,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Ref
         player.player_bytes,
         player.player_bytes_2,
     );
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let (new_expire, delay_micros) =
         crate::corpse::escalated_reclaim(player.death_expire_micros, now_micros);
 
@@ -1129,7 +1129,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Ref
         display_id: player.native_display_id,
         bytes_1: corpse_bytes_1,
         bytes_2: corpse_bytes_2,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         reclaim_delay_micros: delay_micros,
         is_bones: false,
         instance_id: player.instance_id,
@@ -1276,7 +1276,7 @@ pub(crate) fn do_spirit_healer_res(ctx: &ReducerContext, guid: u64) -> Result<()
     };
     crate::spell::apply_spell_auras(ctx, RESURRECTION_SICKNESS_SPELL, guid, 1, 1);
     let expires_at = spacetimedb::Timestamp::from_micros_since_unix_epoch(
-        ctx.timestamp.to_micros_since_unix_epoch() + sickness_micros,
+        crate::time::now(ctx).to_micros_since_unix_epoch() + sickness_micros,
     );
     let sickness: Vec<_> = ctx
         .db
@@ -1329,7 +1329,7 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.pending_run_speed_mult_bp = pending_speed_bp;
         // Close the played-time span on every persist so relog cannot count it twice.
         c.played_total_secs = accrue_played_on_persist(
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
             c.session_start_micros,
             c.played_total_secs,
         );
@@ -1337,8 +1337,11 @@ pub(crate) fn persist_entity(ctx: &ReducerContext, entity: &WorldEntity, set_off
         c.resting = entity.resting;
         if set_offline {
             c.online = false;
-            c.last_logout_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
-            crate::rest::materialize_on_logout(&mut c, ctx.timestamp.to_micros_since_unix_epoch());
+            c.last_logout_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
+            crate::rest::materialize_on_logout(
+                &mut c,
+                crate::time::now(ctx).to_micros_since_unix_epoch(),
+            );
         }
         chars.guid().update(c);
     }
@@ -1373,10 +1376,13 @@ pub(crate) fn remove_loading_character(ctx: &ReducerContext, guid: u64) {
         return;
     };
     character.online = false;
-    character.last_logout_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    character.last_logout_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
     character.pending_godmode = false;
     character.pending_run_speed_mult_bp = RUN_SPEED_BP_1X;
-    crate::rest::materialize_on_logout(&mut character, ctx.timestamp.to_micros_since_unix_epoch());
+    crate::rest::materialize_on_logout(
+        &mut character,
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
+    );
     let keep_corpse = character.pending_ghost;
     ctx.db.game_character().guid().update(character);
     finish_logout(ctx, guid, keep_corpse);

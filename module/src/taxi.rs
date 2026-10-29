@@ -422,7 +422,7 @@ fn route_is_supported(
 }
 
 const TAXI_SPEED_YARDS_PER_SECOND: f32 = 32.0;
-const TAXI_TICK_MICROS: i64 = 100_000;
+pub(crate) const TAXI_TICK_MICROS: i64 = 100_000;
 const TAXI_MOVEMENT_FORWARD: u32 = 0x0000_0001;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -595,8 +595,7 @@ pub(crate) fn current_create_spline(
         return None;
     }
     let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
-    let elapsed = ctx
-        .timestamp
+    let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(flight.started_micros)
         .max(0);
@@ -677,8 +676,7 @@ pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut c
         return;
     };
     let points = flight_route(&flight, points);
-    let elapsed = ctx
-        .timestamp
+    let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(flight.started_micros);
     if let Some(position) = route_position(&points, elapsed) {
@@ -967,7 +965,7 @@ fn write_reply(ctx: &ReducerContext, reply: TaxiServiceReply) {
         .filter(&character_guid)
         .map(|row| (row.request_id, row.created_micros))
         .collect();
-    for request_id in stale_reply_ids(stale, ctx.timestamp.to_micros_since_unix_epoch()) {
+    for request_id in stale_reply_ids(stale, crate::time::now(ctx).to_micros_since_unix_epoch()) {
         replies.request_id().delete(request_id);
     }
     replies.insert(reply);
@@ -1060,7 +1058,7 @@ pub(crate) fn taxi_node_status(
             source_client_node_id: source.client_node_id,
             available_client_node_ids: Vec::new(),
             refusal: String::new(),
-            created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+            created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
             result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
         },
         Err(denied) => refused_reply(
@@ -1069,7 +1067,7 @@ pub(crate) fn taxi_node_status(
             lyracore_shared::constants::taxi_protocol::REPLY_STATUS,
             npc_guid,
             denied,
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
         ),
     }
 }
@@ -1106,7 +1104,7 @@ pub(crate) fn open_taxi(
                 source_client_node_id: source.client_node_id,
                 available_client_node_ids: available_client_nodes(ctx, character_guid, &source),
                 refusal: String::new(),
-                created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+                created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
                 result_code: lyracore_shared::constants::taxi_protocol::ACTIVATE_OK,
             }
         }
@@ -1116,7 +1114,7 @@ pub(crate) fn open_taxi(
             lyracore_shared::constants::taxi_protocol::REPLY_OPEN,
             npc_guid,
             denied,
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
         ),
     }
 }
@@ -1154,7 +1152,7 @@ pub(crate) fn activate_taxi(
     destination_client_node_id: u32,
     request_id: u64,
 ) -> TaxiServiceReply {
-    let created_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let created_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let attempt = (|| -> Result<(), TaxiGateDenied> {
         let (mut player, source) = resolve_flight_master(ctx, character_guid, npc_guid)?;
         let mut player_state = ActivationPlayerState::from_world(ctx, &player);
@@ -1245,7 +1243,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         clear_flight(ctx, player);
         return;
     }
-    flight.started_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    flight.started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     player.mount_display_id = flight.mount_display_id;
     player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
         | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
@@ -1269,7 +1267,10 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         .game_taxi_flight_schedule()
         .insert(TaxiFlightSchedule {
             scheduled_id: character_guid,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(TAXI_TICK_MICROS)),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(TAXI_TICK_MICROS),
+            ),
         });
 }
 
@@ -1289,6 +1290,15 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    taxi_pass(ctx, schedule);
+}
+
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) fn virtual_taxi_tick(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
+    taxi_pass(ctx, schedule);
+}
+
+fn taxi_pass(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     let character_guid = schedule.scheduled_id;
     let Some(mut flight) = ctx
         .db
@@ -1310,8 +1320,7 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
         return;
     };
     let points = flight_route(&flight, points);
-    let elapsed = ctx
-        .timestamp
+    let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(flight.started_micros);
     let Some(position) = route_position(&points, elapsed) else {

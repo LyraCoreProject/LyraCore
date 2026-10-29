@@ -25,7 +25,7 @@ pub(super) fn receive(
     let id = connection.connection_id;
     match message {
         ClientOpcodeMessage::CMSG_WHO(request) => {
-            let now = ctx.timestamp.to_micros_since_unix_epoch();
+            let now = crate::time::now(ctx).to_micros_since_unix_epoch();
             if now < connection.who_until_micros {
                 return Ok(());
             }

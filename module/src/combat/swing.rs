@@ -10,6 +10,15 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
+    melee_pass(ctx);
+}
+
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) fn virtual_melee_tick(ctx: &ReducerContext, _schedule: MeleeSchedule) {
+    melee_pass(ctx);
+}
+
+fn melee_pass(ctx: &ReducerContext) {
     leash_pass(ctx);
     aggro_pass(ctx);
     resolve_swing(ctx);
@@ -18,7 +27,7 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
 fn leash_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
 
     let mut evaders: Vec<u64> = Vec::new();
     let mut seeds: Vec<(u64, f32, f32)> = Vec::new();
@@ -179,7 +188,7 @@ fn resolve_offhand_swing(
 }
 
 fn resolve_swing(ctx: &ReducerContext) {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
 
@@ -710,10 +719,9 @@ fn schedule_ranged_impact(
     if damage == 0 {
         return;
     }
-    let land_at = ctx
-        .timestamp
+    let land_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     ctx.db
         .game_ranged_impact_schedule()
         .insert(RangedImpactSchedule {

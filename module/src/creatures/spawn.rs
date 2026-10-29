@@ -247,7 +247,7 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
     let mut changed = 0usize;
     let pending: Vec<CreatureSpawn> = spawns
         .iter()
-        .filter(|s| s.respawn_at <= ctx.timestamp || s.despawn_at <= ctx.timestamp)
+        .filter(|s| s.respawn_at <= crate::time::now(ctx) || s.despawn_at <= crate::time::now(ctx))
         .take(cap)
         .collect();
     for mut s in pending {
@@ -255,11 +255,11 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
         let alive = entity.is_some();
         let is_corpse = entity.map(|e| e.dead).unwrap_or(false);
         let mut touched = false;
-        if alive && s.respawn_at <= ctx.timestamp {
+        if alive && s.respawn_at <= crate::time::now(ctx) {
             s.respawn_at = never;
             touched = true;
         }
-        if !is_corpse && s.despawn_at <= ctx.timestamp {
+        if !is_corpse && s.despawn_at <= crate::time::now(ctx) {
             s.despawn_at = never;
             touched = true;
         }
@@ -276,11 +276,11 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
 }
 
 pub(crate) fn timer_never(ctx: &spacetimedb::ReducerContext) -> spacetimedb::Timestamp {
-    ctx.timestamp
+    crate::time::now(ctx)
         .checked_add(spacetimedb::TimeDuration::from_micros(
             u32::MAX as i64 * 1_000_000,
         ))
-        .unwrap_or(ctx.timestamp)
+        .unwrap_or(crate::time::now(ctx))
 }
 
 #[table(accessor = game_creature_spawn_map, public)]
@@ -754,7 +754,7 @@ pub fn import_creature_spawns_append(ctx: &ReducerContext, packed: String) -> Re
 
 fn load_spawn_batch(ctx: &ReducerContext, packed: &str) -> Result<u32, String> {
     let spawns = ctx.db.game_creature_spawn();
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let mut loaded = 0u32;
     for row in packed.split(';').filter(|r| !r.is_empty()) {
         let f: Vec<&str> = row.split(',').collect();

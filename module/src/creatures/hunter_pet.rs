@@ -328,8 +328,7 @@ pub(crate) fn tame_creature(
         } else {
             i64::from(spawn.respawn_secs).saturating_mul(1_000_000)
         };
-        spawn.respawn_at = ctx
-            .timestamp
+        spawn.respawn_at = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(delay_micros))
             .unwrap_or_else(|| super::timer_never(ctx));
         spawn.despawn_at = super::timer_never(ctx);
@@ -338,7 +337,7 @@ pub(crate) fn tame_creature(
     target.guid = pet_guid;
     super::spawn::insert_creature_entity(ctx, target);
 
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let hunter_pet = HunterPet {
         pet_id,
         owner_guid: caster.guid,
@@ -431,8 +430,10 @@ pub(crate) fn rename_hunter_pet(
 
     pet.name = name.to_string();
     pet.rename_allowed = false;
-    pet.name_timestamp =
-        next_name_timestamp(effective_name_timestamp(&pet), unix_seconds(ctx.timestamp));
+    pet.name_timestamp = next_name_timestamp(
+        effective_name_timestamp(&pet),
+        unix_seconds(crate::time::now(ctx)),
+    );
     let pet = ctx.db.game_hunter_pet().pet_id().update(pet);
     publish_hunter_pet_protocol(ctx, &pet, pet_guid);
     Ok(())

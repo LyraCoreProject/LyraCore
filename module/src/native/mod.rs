@@ -456,7 +456,8 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
                 }),
                 ClientOpcodeMessage::CMSG_QUERY_TIME => {
                     ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(SMSG_QUERY_TIME_RESPONSE {
-                        time: (ctx.timestamp.to_micros_since_unix_epoch() / 1_000_000) as u32,
+                        time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000)
+                            as u32,
                     })
                 }
                 ClientOpcodeMessage::CMSG_CHAR_ENUM => {
@@ -540,7 +541,7 @@ fn authenticate(
             SMSG_AUTH_RESPONSE::AuthFailed,
         );
     };
-    if session.expires_at <= ctx.timestamp
+    if session.expires_at <= crate::time::now(ctx)
         || session.identity.is_none()
         || session.identity != account.identity
         || !lyracore_protocol::world::matches_world_proof(

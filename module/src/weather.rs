@@ -285,7 +285,7 @@ pub fn tick_weather(ctx: &ReducerContext, _schedule: WeatherSchedule) {
     if ctx.sender() != ctx.database_identity() {
         return;
     }
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let season = season_of(now_micros);
     let zones: Vec<ZoneWeatherChance> = ctx.db.game_weather().iter().collect();
     for weights in zones {
@@ -313,7 +313,7 @@ pub fn gw_force_zone_weather(
         ctx,
         zone_id,
         state,
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
     );
     Ok(())
 }

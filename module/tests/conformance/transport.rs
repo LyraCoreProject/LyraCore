@@ -1,5 +1,5 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
-use std::time::{Duration, Instant};
+use std::time::Duration;
 
 use anyhow::{anyhow, bail, ensure, Result};
 use lyracore_test_support::{ReducerConnection, Standalone};
@@ -15,6 +15,7 @@ pub struct OperatorTransport {
     opening: Vec<Observation>,
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
+    virtual_micros: u64,
 }
 
 impl OperatorTransport {
@@ -47,6 +48,7 @@ impl OperatorTransport {
             fixtures,
             opening: Vec::new(),
             pending: VecDeque::new(),
+            virtual_micros: 0,
         };
         let setup = transport.connection.drain_packets();
         transport.opening = transport
@@ -213,6 +215,10 @@ fn prepare_fixtures(
 }
 
 impl Transport for OperatorTransport {
+    fn now(&self) -> Duration {
+        Duration::from_micros(self.virtual_micros)
+    }
+
     fn fixture_guids(&self) -> BTreeMap<String, u64> {
         self.fixtures.clone()
     }
@@ -245,22 +251,29 @@ impl Transport for OperatorTransport {
     }
 
     fn receive(&mut self, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
-        let deadline = Instant::now() + timeout;
+        let deadline = self.now() + timeout;
         loop {
             if let Some(packet) = self.pending.pop_front() {
                 return Ok(Some(packet));
             }
-            let Some(remaining) = deadline.checked_duration_since(Instant::now()) else {
+            let rows = self.connection.drain_packets();
+            self.pending.extend(self.delivery.route_rows(rows)?);
+            if let Some(packet) = self.pending.pop_front() {
+                return Ok(Some(packet));
+            }
+            let Some(remaining) = deadline.checked_sub(self.now()) else {
                 return Ok(None);
             };
-            let rows = self
-                .connection
-                .wait_for_packets(remaining)
-                .map_err(|e| anyhow!(e))?;
-            if rows.is_empty() {
+            if remaining.is_zero() {
                 return Ok(None);
             }
-            self.pending.extend(self.delivery.route_rows(rows)?);
+            let to_boundary = 50_000 - self.virtual_micros % 50_000;
+            let delta = remaining.as_micros().min(u128::from(to_boundary));
+            let delta: u64 = delta.try_into()?;
+            self.connection
+                .call("debug_advance_virtual_clock", json!([delta]))
+                .map_err(|e| anyhow!(e))?;
+            self.virtual_micros += delta;
         }
     }
 }
