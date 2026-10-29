@@ -95,12 +95,18 @@ fn create_movement_flags(entity: &EntityView) -> Result<MovementBlock_MovementFl
                     .all(|node| node.x.is_finite() && node.y.is_finite() && node.z.is_finite()),
             "invalid CREATE spline"
         );
+        let mut nodes = spline.nodes.clone();
+        for (index, node) in nodes.iter_mut().enumerate().skip(1) {
+            if spline.nodes[index] == spline.nodes[index - 1] {
+                node.z += if index & 1 == 0 { 0.02 } else { 0.01 };
+            }
+        }
         flags = flags.set_spline_enabled(MovementBlock_MovementFlags_SplineEnabled {
             spline_flags: MovementBlock_SplineFlag::new(0x0000_0300, None),
             time_passed: spline.time_passed_ms,
             duration: spline.duration_ms,
             id: spline.id,
-            nodes: spline.nodes.clone(),
+            nodes,
             final_node: *spline.nodes.last().expect("validated spline has nodes"),
         });
     }
