@@ -8,7 +8,7 @@ dependencies = ["connection_identity"]
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["taxi_single_hop"]
 deliberate_deviations = []
-prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs", "For flight zone and rest checks: game_area rows for Stormwind, Elwynn and Westfall, and terrain chunks along route 6 with those area ids"]
+prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs", "Bundled game_area rows for Stormwind, Elwynn and Westfall, and terrain cells along route 6 with those area ids"]
 tests = []
 
 [vmangos]
@@ -20,13 +20,25 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Tier 1 has no area or terrain rows along route 6, so flight zone transitions cannot resolve and the Elwynn and Westfall world-state and weather packets remain missing."
-path = "conformance/support/taxi_route.rs"
-symbol = "statements"
-evidence = "taxi_single_hop Tier 1 missing_packet / flight / broadcast/zones / 0x02C2 and 0x02F4. module/tests/native_conformance.rs::taxi_crosses_capital_and_zone_boundaries_with_area_data supplies area and terrain rows and verifies both zone entries."
+description = "The Module marks Elwynn and Westfall zone weather as instant, but the Golden Trace marks both changes smooth."
+path = "module/src/native/environment.rs"
+symbol = "enter_zone"
+evidence = "taxi_single_hop Tier 1 exact_field / flight / broadcast/zones / 0x02F4 / instant: expected 0, actual 1 at both zone entries. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Weather.cpp::SendWeatherUpdateToPlayer calls SendWeatherUpdate with instantChange=false."
 
 [[known_gaps]]
-description = "Tier 1 lacks Stormwind capital-area data, so its Character never starts resting and cannot send the PLAYER_FLAGS update on leaving the city."
-path = "conformance/support/taxi_route.rs"
-symbol = "statements"
-evidence = "taxi_single_hop Tier 1 missing_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_190. The Golden Trace opening field_190 is 32 and flight field_190 is 0; module/tests/native_conformance.rs::taxi_crosses_capital_and_zone_boundaries_with_area_data verifies that transition with area and terrain rows."
+description = "When PLAYER_FLAGS changes, the Module also sends the unchanged UNIT_BYTES_1 field."
+path = "crates/lyracore-protocol/src/codec/values.rs"
+symbol = "build_player_flags_values"
+evidence = "taxi_single_hop Tier 1 extra_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_138. The Golden Trace sends only field_190 = 0. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp::SetRestType changes PLAYER_FLAGS without writing UNIT_BYTES_1."
+
+[[known_gaps]]
+description = "The Module sends an empty world-state list when the Character enters Elwynn and Westfall."
+path = "crates/lyracore-protocol/src/codec/char.rs"
+symbol = "build_init_world_states"
+evidence = "taxi_single_hop Tier 1 data signature zone_world_state_catalogue / flight / broadcast/zones / 0x02C2 / states: each Golden Trace list has 164 entries, while the Module serializes a zero count. The first 109 entries match the unconditional def_world_states defaults sent by Player.cpp::SendInitWorldStates at d9173eca3ea08dd985c52dabbcc826898d1d0b77."
+
+[[known_gaps]]
+description = "Leaving Stormwind changes the Module's PLAYER_BYTES_2 rest-state byte, but the Golden Trace does not send that field."
+path = "module/src/rest.rs"
+symbol = "check_rest_state"
+evidence = "taxi_single_hop Tier 1 extra_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_194. The Golden Trace sends only field_190 = 0. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Player.cpp::SetRestBonus changes the rest-state byte when rested XP changes, while SetRestType changes PLAYER_FLAGS."
