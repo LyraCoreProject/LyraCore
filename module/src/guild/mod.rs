@@ -306,7 +306,7 @@ pub(crate) fn create_guild(
         border_style: 0,
         border_color: 0,
         background_color: 0,
-        created_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        created_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     });
     for (rank_id, (rank_name, rights)) in (0u32..).zip(DEFAULT_RANKS) {
         ctx.db.game_guild_rank().insert(GuildRank {
@@ -348,7 +348,7 @@ pub(crate) fn add_member(
         public_note: String::new(),
         officer_note: String::new(),
         realm_account_id,
-        joined_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        joined_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     }
     .insert(ctx);
     Ok(())
@@ -408,7 +408,7 @@ pub(crate) fn push_event(
         subject_guid,
         other_guid,
         strings,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::guild_event(ctx, &event);
 }

@@ -45,7 +45,7 @@ fn insert(
         time_remaining_ms,
         duration_ms,
         damage,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::breath_event(ctx, &row);
 }

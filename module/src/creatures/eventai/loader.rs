@@ -1254,7 +1254,7 @@ pub fn debug_verify_eventai_revision_fixture(
                 rule_states.len()
             ));
         };
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
         if rule_state.source_rule_id != source_rule_id
             || rule_state.consumed
             || rule_state.next_eligible_ms <= now_ms.saturating_add(50_000)

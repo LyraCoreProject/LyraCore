@@ -800,7 +800,7 @@ pub(crate) fn notify(
             channel_flags: notice.channel_flags,
             text: notice.text,
             recipients,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
         });
     crate::native::channel_notice(ctx, &event);
 }

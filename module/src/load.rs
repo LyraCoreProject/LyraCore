@@ -99,7 +99,7 @@ pub fn record_shard_load(
     table.insert(ShardLoad {
         id: 0,
         shard: shard.clone(),
-        sampled_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        sampled_at_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         writer_occupancy_pct,
         sessions,
         gateway_key,
@@ -114,7 +114,7 @@ pub fn record_shard_load(
     let total_row = ShardLoadTotal {
         shard: shard.clone(),
         sessions: total_sessions,
-        updated_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_at_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     };
     if totals.shard().find(&shard).is_some() {
         totals.shard().update(total_row);
@@ -146,7 +146,7 @@ pub fn record_region_load(
         id: 0,
         map_id,
         region_id,
-        sampled_at_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        sampled_at_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         players,
     });
     Ok(())

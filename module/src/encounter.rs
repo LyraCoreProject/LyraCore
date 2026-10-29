@@ -517,12 +517,11 @@ pub(crate) fn spawn_wave(
             z,
             orientation,
 
-            respawn_at: ctx
-                .timestamp
+            respawn_at: crate::time::now(ctx)
                 .checked_add(spacetimedb::TimeDuration::from_micros(
                     u32::MAX as i64 * 1_000_000,
                 ))
-                .unwrap_or(ctx.timestamp),
+                .unwrap_or(crate::time::now(ctx)),
             despawn_at: crate::creatures::timer_never(ctx),
             movement_type: crate::creatures::MOVEMENT_IDLE,
             respawn_secs: u32::MAX,

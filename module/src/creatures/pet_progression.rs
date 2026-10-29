@@ -113,7 +113,7 @@ pub(crate) fn update_pet_loyalty_from_care(
     }
     pet.loyalty_level = next.0;
     pet.loyalty_progress = next.1;
-    pet.loyalty_updated_at = ctx.timestamp;
+    pet.loyalty_updated_at = crate::time::now(ctx);
     pets.pet_id().update(pet);
     true
 }
@@ -222,7 +222,7 @@ pub(crate) fn award_hunter_pet_kill_progression(
     pet.pet_xp = next.xp;
     pet.loyalty_level = loyalty.0;
     pet.loyalty_progress = loyalty.1;
-    pet.loyalty_updated_at = ctx.timestamp;
+    pet.loyalty_updated_at = crate::time::now(ctx);
     if level_changed {
         refresh_live_level(ctx, &pet, next.level);
     }

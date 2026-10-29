@@ -71,7 +71,7 @@ pub(crate) fn check_area_exploration(
                 recipient_identity: mover.owner_identity,
                 killed_guid: 0,
                 total_exp: xp,
-                created_at: ctx.timestamp,
+                created_at: crate::time::now(ctx),
                 is_kill: false,
                 rested_bonus: 0,
             },

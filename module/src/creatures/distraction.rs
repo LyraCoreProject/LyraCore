@@ -19,7 +19,7 @@ fn length_ms(seconds: i32) -> Option<u64> {
 }
 
 fn now_ms(ctx: &ReducerContext) -> u64 {
-    (ctx.timestamp.to_micros_since_unix_epoch() / 1_000) as u64
+    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000) as u64
 }
 
 pub(crate) fn distract(

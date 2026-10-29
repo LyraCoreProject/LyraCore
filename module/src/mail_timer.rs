@@ -91,14 +91,14 @@ fn next_due(mail: &Mail, now: Timestamp) -> Timestamp {
 }
 
 pub(crate) fn start(ctx: &ReducerContext, mail: &Mail) {
-    if mail.is_delivered(ctx.timestamp) {
+    if mail.is_delivered(crate::time::now(ctx)) {
         arrive(ctx, mail.recipient_guid);
     }
     arm_next(ctx, mail);
 }
 
 pub(crate) fn arm_next(ctx: &ReducerContext, mail: &Mail) {
-    arm(ctx, mail.id, next_due(mail, ctx.timestamp));
+    arm(ctx, mail.id, next_due(mail, crate::time::now(ctx)));
 }
 
 pub(crate) fn stop(ctx: &ReducerContext, mail_id: u64) {
@@ -111,7 +111,7 @@ fn arm(ctx: &ReducerContext, mail_id: u64, at: Timestamp) {
     timers.mail_id().delete(mail_id);
     timers.insert(MailTimer {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(at),
+        scheduled_at: crate::time::schedule_time(ctx, at),
         mail_id,
     });
 }
@@ -120,7 +120,7 @@ fn arrive(ctx: &ReducerContext, recipient_guid: u64) {
     ctx.db.game_mail_arrival().insert(MailArrival {
         id: 0,
         recipient_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::mail_arrived(ctx, recipient_guid);
 }
@@ -153,9 +153,9 @@ pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
         .collect();
     let dues: Vec<Timestamp> = untimed
         .iter()
-        .map(|mail| next_due(mail, ctx.timestamp))
+        .map(|mail| next_due(mail, crate::time::now(ctx)))
         .collect();
-    for (mail, at) in untimed.iter().zip(spaced(&dues, ctx.timestamp)) {
+    for (mail, at) in untimed.iter().zip(spaced(&dues, crate::time::now(ctx))) {
         arm(ctx, mail.id, at);
     }
     untimed.len() as u64
@@ -163,7 +163,7 @@ pub(crate) fn arm_missing(ctx: &ReducerContext) -> u64 {
 
 #[reducer]
 pub fn fire_mail_timer(ctx: &ReducerContext, timer: MailTimer) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     fire(ctx, &timer);
@@ -179,10 +179,10 @@ pub(crate) fn fire(ctx: &ReducerContext, timer: &MailTimer) {
         return;
     };
     let due = match timer.scheduled_at {
-        ScheduleAt::Time(at) => at,
-        ScheduleAt::Interval(_) => ctx.timestamp,
+        ScheduleAt::Time(at) => crate::time::scheduled_time(ctx, at),
+        ScheduleAt::Interval(_) => crate::time::now(ctx),
     };
-    match firing(&mail, due, ctx.timestamp) {
+    match firing(&mail, due, crate::time::now(ctx)) {
         Firing::Rearm(at) => arm(ctx, mail.id, at),
         Firing::Deliver { expires } => {
             arrive(ctx, mail.recipient_guid);

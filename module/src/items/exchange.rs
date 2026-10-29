@@ -81,7 +81,7 @@ impl ItemStoragePlan {
         Self::new(
             character_guid,
             owner_identity,
-            ctx.timestamp,
+            crate::time::now(ctx),
             ctx.db
                 .game_item_instance()
                 .by_owner_guid()

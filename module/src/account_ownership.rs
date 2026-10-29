@@ -35,7 +35,7 @@ fn same(token: WorldSessionToken, generation: u64, nonce: u128) -> bool {
 }
 
 fn now(ctx: &ReducerContext) -> i64 {
-    ctx.timestamp.to_micros_since_unix_epoch()
+    crate::time::now(ctx).to_micros_since_unix_epoch()
 }
 
 fn deadline(ctx: &ReducerContext) -> Result<i64, String> {

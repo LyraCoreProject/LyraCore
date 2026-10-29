@@ -1366,8 +1366,8 @@ fn start_relay(
         definition_version: definition.version,
         catalogue_version: definition.catalogue_version,
         next_step: 0,
-        started_at: ctx.timestamp,
-        due_at: ctx.timestamp,
+        started_at: crate::time::now(ctx),
+        due_at: crate::time::now(ctx),
         map_id: source.map_id,
         instance_id: source.instance_id,
         source_guid,
@@ -1410,7 +1410,7 @@ fn advance_run(ctx: &ReducerContext, run_id: u64) -> Result<(), String> {
                 run.definition_version
             )
         })?;
-    let now_ms = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000;
+    let now_ms = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000;
     let start_ms = run.started_at.to_micros_since_unix_epoch().max(0) as u64 / 1000;
     while let Some(step) = definition.steps.get(run.next_step as usize) {
         let due_ms = start_ms.saturating_add(u64::from(step.offset_ms));
@@ -1644,7 +1644,7 @@ fn apply_leaf_for_pair(
                 ..super::EventContext::empty(
                     super::EventKind::OnSpawn,
                     guid,
-                    ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                    crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000,
                 )
             };
             if super::engine::execute_instruction(
@@ -1675,7 +1675,7 @@ fn apply_leaf_for_pair(
                         super::EventKind::OnSpawn
                     },
                     guid,
-                    ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1000,
+                    crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1000,
                 )
             };
             let result = super::combat::cast(
@@ -1908,7 +1908,7 @@ fn schedule_arrival(
         .map_or(run.lifetime, |definition| definition.lifetime);
     let (child_state, parent_state) = next_random(run.saved_random_state);
     run.saved_random_state = parent_state;
-    let (scheduled_at, spline_id) = spline.map_or((ctx.timestamp, 0), |spline| {
+    let (scheduled_at, spline_id) = spline.map_or((crate::time::now(ctx), 0), |spline| {
         let micros = i64::from(spline.dur_ms).saturating_mul(1_000);
         (
             spline
@@ -1916,7 +1916,7 @@ fn schedule_arrival(
                 .checked_add(micros as u64)
                 .and_then(|value| i64::try_from(value).ok())
                 .map(Timestamp::from_micros_since_unix_epoch)
-                .unwrap_or(ctx.timestamp),
+                .unwrap_or(crate::time::now(ctx)),
             spline.spline_id,
         )
     });
@@ -1924,7 +1924,7 @@ fn schedule_arrival(
         .game_creature_ai_relay_arrival()
         .insert(RelayArrival {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(scheduled_at),
+            scheduled_at: crate::time::schedule_time(ctx, scheduled_at),
             map_id: source.map_id,
             instance_id: source.instance_id,
             source_guid,
@@ -1987,7 +1987,7 @@ fn arrival_motion(
 
 #[reducer]
 pub fn resume_relay_arrival(ctx: &ReducerContext, arrival: RelayArrival) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     run_relay_arrival(ctx, arrival);
@@ -2289,14 +2289,14 @@ fn schedule_run(ctx: &ReducerContext, run_id: u64, due_ms: u64) {
     );
     table.insert(RelayContinuation {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(due),
+        scheduled_at: crate::time::schedule_time(ctx, due),
         run_id,
     });
 }
 
 #[reducer]
 pub fn resume_relay_run(ctx: &ReducerContext, continuation: RelayContinuation) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     if let Err(error) = advance_run(ctx, continuation.run_id) {

@@ -36,7 +36,7 @@ using a separate scenario author and independent decoders.
 9. Scenarios are data in the harness repository. Each names its Behavior, Fixture Verbs, typed
    client packets and checkpoints. The harness chose TOML because packet fields and ordered steps
    remain readable in diffs and it matches the Feature Ledger's format. Its
-   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/docs/scenarios.md)
+   [scenario format](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/docs/scenarios.md)
    rejects unknown fields so typos cannot silently change a recording.
 10. Fixture Verbs describe setup: a Character's race, class, level and position; items, money,
     spells and flight nodes to grant; a creature or gameobject at an offset; a quest in the log.
@@ -148,8 +148,8 @@ does not stand in for recordings.
 
 ## Milestone 2 tier 1
 
-Core pins `wire-client` to `v0.2.0-conformance.7`, commit
-`ad27050ef5c91a1f5ba7337dce29d5d31233898b`, through a git dev-dependency at the full SHA in
+Core pins `wire-client` to `v0.2.0-conformance.8`, commit
+`f58d550eb316557b64290f61da26339aa9e09ceb`, through a git dev-dependency at the full SHA in
 `.wire-harness-rev`. An Architecture Test checks agreement and forbids normal or build dependencies
 on `wire-client` in every workspace member. It also checks the source and exact revision
 of every declaration, including renamed, optional and target-specific dependencies. The ledger

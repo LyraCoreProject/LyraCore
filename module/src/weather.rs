@@ -282,10 +282,10 @@ fn draw_weather(ctx: &ReducerContext) -> WeatherDraw {
 
 #[reducer]
 pub fn tick_weather(ctx: &ReducerContext, _schedule: WeatherSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let season = season_of(now_micros);
     let zones: Vec<ZoneWeatherChance> = ctx.db.game_weather().iter().collect();
     for weights in zones {
@@ -313,7 +313,7 @@ pub fn gw_force_zone_weather(
         ctx,
         zone_id,
         state,
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
     );
     Ok(())
 }
@@ -363,7 +363,10 @@ pub(crate) fn rearm_weather_schedule(ctx: &ReducerContext) {
     }
     schedule.insert(WeatherSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(WEATHER_TICK_MICROS)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(WEATHER_TICK_MICROS),
+        ),
     });
 }
 

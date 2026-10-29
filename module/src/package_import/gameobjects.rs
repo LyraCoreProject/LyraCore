@@ -344,7 +344,7 @@ fn blank_spawn(ctx: &ReducerContext, key: PrimaryKey) -> GameObject {
         z: 0.0,
         orientation: 0.0,
         state: 0,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
         grid_x: 0,

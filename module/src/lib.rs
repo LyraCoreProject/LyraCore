@@ -245,6 +245,7 @@ mod terrain;
 #[cfg(test)]
 mod test_scan;
 mod threat;
+mod time;
 mod trade;
 mod trainer;
 mod transfer;

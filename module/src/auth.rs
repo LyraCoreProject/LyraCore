@@ -114,7 +114,7 @@ pub(crate) fn expired_sessions(
 
 #[reducer]
 pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     let sessions = ctx.db.game_session();
@@ -122,7 +122,7 @@ pub fn reap_sessions(ctx: &ReducerContext, _schedule: SessionReaperSchedule) -> 
         sessions
             .iter()
             .map(|s| (s.account_id, s.expires_at.to_micros_since_unix_epoch())),
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
     );
     let active = crate::native::active_session_accounts(ctx);
     for account_id in expired {
@@ -140,7 +140,10 @@ fn ensure_session_reaper_armed(ctx: &ReducerContext) {
     }
     schedule.insert(SessionReaperSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(SESSION_REAP_MICROS)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(SESSION_REAP_MICROS),
+        ),
     });
 }
 
@@ -373,7 +376,7 @@ pub fn establish_session(
     acc.identity = Some(bound_identity);
     accounts.id().update(acc);
 
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let expires = now
         .checked_add(TimeDuration::from_micros(SESSION_TTL_MICROS))
         .unwrap_or(now);

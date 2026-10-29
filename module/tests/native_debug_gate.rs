@@ -63,6 +63,14 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
     assert!(!reducers
         .iter()
         .any(|reducer| reducer["name"] == "debug_native_enter_world"));
+    for name in ["debug_start_virtual_clock", "debug_advance_virtual_clock"] {
+        assert!(!reducers.iter().any(|reducer| reducer["name"] == name));
+    }
+    assert!(!schema["tables"]
+        .as_array()
+        .expect("Module tables")
+        .iter()
+        .any(|table| table["name"] == "game_conformance_clock"));
 }
 
 #[test]

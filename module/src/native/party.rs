@@ -216,7 +216,7 @@ pub(super) fn receive(
         if !connection
             .group_broadcasts
             .get_or_insert_default()
-            .admit(ctx.timestamp.to_micros_since_unix_epoch(), action)
+            .admit(crate::time::now(ctx).to_micros_since_unix_epoch(), action)
         {
             return Ok(());
         }

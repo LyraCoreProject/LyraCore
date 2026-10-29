@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
 
 use crate::spell::SpellCastEventKind;
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
@@ -7,9 +7,13 @@ use super::*;
 
 #[reducer]
 pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
+    melee_pass(ctx);
+}
+
+fn melee_pass(ctx: &ReducerContext) {
     leash_pass(ctx);
     aggro_pass(ctx);
     resolve_swing(ctx);
@@ -18,7 +22,7 @@ pub fn tick_melee(ctx: &ReducerContext, _schedule: MeleeSchedule) {
 fn leash_pass(ctx: &ReducerContext) {
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
 
     let mut evaders: Vec<u64> = Vec::new();
     let mut seeds: Vec<(u64, f32, f32)> = Vec::new();
@@ -179,7 +183,7 @@ fn resolve_offhand_swing(
 }
 
 fn resolve_swing(ctx: &ReducerContext) {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     let melee = ctx.db.game_melee_attack();
     let entities = ctx.db.game_world_entity();
 
@@ -710,15 +714,14 @@ fn schedule_ranged_impact(
     if damage == 0 {
         return;
     }
-    let land_at = ctx
-        .timestamp
+    let land_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros((travel_ms as i64) * 1000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     ctx.db
         .game_ranged_impact_schedule()
         .insert(RangedImpactSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(land_at),
+            scheduled_at: crate::time::schedule_time(ctx, land_at),
             attacker_guid,
             target_guid,
             damage,
@@ -729,7 +732,7 @@ fn schedule_ranged_impact(
 
 #[reducer]
 pub fn ranged_impact(ctx: &ReducerContext, shot: RangedImpactSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let entities = ctx.db.game_world_entity();

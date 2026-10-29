@@ -151,7 +151,7 @@ pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64) 
         let (opcode, body) = equipment_packet(&row, false);
         super::send_raw(ctx, connection, opcode, body, false);
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64;
     if let Some(packet) = ctx
         .db
         .game_creature_spline()

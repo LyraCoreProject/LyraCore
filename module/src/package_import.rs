@@ -496,7 +496,7 @@ fn stamp_provenance(ctx: &ReducerContext, family: Family, packages: &[PlannedPac
             inserted_spells: planned.counts.inserted_spells,
             inserted_effects: planned.counts.inserted_effects,
             base_source_sha: base_source_sha.clone(),
-            applied_at: ctx.timestamp,
+            applied_at: crate::time::now(ctx),
             inserted_rows: planned.counts.inserted_rows,
         });
     }

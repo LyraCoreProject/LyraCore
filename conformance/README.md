@@ -372,7 +372,7 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 ## Conformance Audit
 
 Prepare the pinned Reference Server once with the harness's
-[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md).
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
 Stop it before the audit. The runner requires a clean core working tree and free Reference Server
 ports 13724 and 18085.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.

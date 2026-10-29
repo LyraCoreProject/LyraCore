@@ -118,7 +118,7 @@ pub(crate) fn apply_item_split(
             slot: to_slot,
             stack_count: count,
             durability,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
             enchant_id: 0,
             soulbound,
             random_property_id,

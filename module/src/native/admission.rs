@@ -47,7 +47,7 @@ fn limits(ctx: &ReducerContext) -> NativeAdmissionLimits {
             max_sessions: 0,
             max_entering: 0,
             admissions_per_second: 0,
-            window_started: ctx.timestamp,
+            window_started: crate::time::now(ctx),
             admitted_in_window: 0,
         })
 }
@@ -119,7 +119,7 @@ pub fn native_admission_tick(
     ctx: &ReducerContext,
     _tick: NativeAdmissionTick,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".into());
     }
     drain(ctx, None)
@@ -140,12 +140,11 @@ fn reply(
 
 fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(), String> {
     let mut limits = limits(ctx);
-    if ctx
-        .timestamp
+    if crate::time::now(ctx)
         .duration_since(limits.window_started)
         .is_some_and(|elapsed| elapsed.as_micros() >= 1_000_000)
     {
-        limits.window_started = ctx.timestamp;
+        limits.window_started = crate::time::now(ctx);
         limits.admitted_in_window = 0;
     }
     let mut active = 0;
@@ -157,7 +156,7 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
             entering += u32::from(
                 admission
                     .entering_until
-                    .is_some_and(|until| until > ctx.timestamp),
+                    .is_some_and(|until| until > crate::time::now(ctx)),
             );
         } else {
             waiting.push(admission);
@@ -188,7 +187,8 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
             entering += 1;
             limits.admitted_in_window = limits.admitted_in_window.saturating_add(1);
             admission.admitted = true;
-            admission.entering_until = Some(ctx.timestamp + TimeDuration::from_micros(20_000_000));
+            admission.entering_until =
+                Some(crate::time::now(ctx) + TimeDuration::from_micros(20_000_000));
             connection.state = NativeWorldState::CharacterSelection {
                 account_id: admission.account_id,
             };
@@ -226,7 +226,7 @@ fn drain(ctx: &ReducerContext, new_connection: Option<ConnectionId>) -> Result<(
     } else if ticks.id().find(0).is_none() {
         ticks.insert(NativeAdmissionTick {
             id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(1_000_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000)),
         });
     }
     Ok(())

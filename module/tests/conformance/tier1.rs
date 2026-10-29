@@ -108,11 +108,10 @@ fn run_scenario(
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     setup(&shard, golden.scenario())?;
+    let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
     let mut transport = OperatorTransport::prepare(&shard, golden.scenario())?;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)?
-        .as_millis()
-        .try_into()?;
+    let now = (virtual_start / 1_000).try_into()?;
     let observations = runner::run_on(golden.scenario(), &mut transport)?;
     ensure!(
         observations

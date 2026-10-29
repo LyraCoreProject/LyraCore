@@ -39,7 +39,7 @@ pub fn reap_gateway_leases(
     ctx: &ReducerContext,
     _schedule: GatewayLeaseReaperSchedule,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     crate::account_ownership::reap_account_claims(ctx);

@@ -207,7 +207,7 @@ fn send_to_identity(ctx: &ReducerContext, recipient_identity: Identity, cmd: &st
         recipient_identity,
         cmd: cmd.to_string(),
         payload: payload.to_string(),
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::addon_message(ctx, &row);
 }
@@ -275,7 +275,7 @@ pub(crate) fn apply_client_command(
             });
             match parsed {
                 Some((handler, Ok(command))) => {
-                    let now = ctx.timestamp.to_micros_since_unix_epoch();
+                    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
                     let Some(reply_identity) =
                         crate::helpers::character_by_guid(ctx, character_guid)
                             .map(|character| character.owner_identity)
@@ -417,8 +417,7 @@ fn complete_party_command(
     intent.state = CommandIntentState::Finished(outcome);
     intent.pending = false;
     intent.claim_until_micros = 0;
-    intent.result_reap_micros = ctx
-        .timestamp
+    intent.result_reap_micros = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_add(COMMAND_RESULT_WINDOW_MICROS);
     let response_id = intent.id;
@@ -494,7 +493,7 @@ pub fn defer_party_command_intent(
     if !matches!(intent.state, CommandIntentState::Pending) {
         return Err("Finished".to_string());
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let foreign_live_claim = intent.claim_token != 0
         && intent.claim_token != claim_token
         && intent.claim_until_micros > now;
@@ -540,7 +539,7 @@ pub fn claim_party_command_intent(
     claim_token: u64,
 ) -> Result<(), String> {
     crate::helpers::require_operator(ctx)?;
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let table = ctx.db.game_party_command_intent();
     let mut intent = table
         .id()
@@ -594,7 +593,7 @@ pub fn finish_party_command_intent(
             .then_some(())
             .ok_or_else(|| "Intent already finished with another outcome".to_string());
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     if intent.claim_token != claim_token
         && (now < intent.expires_micros || intent.claim_until_micros > now)
     {
@@ -639,7 +638,7 @@ pub fn apply_admitted_party_command(
     if crate::helpers::character_by_guid(ctx, bot_guid).is_none() {
         return Err("NotCharacterHolder".to_string());
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     if now >= expires_micros {
         return Err(CommandOutcome::Expired.tag().to_string());
     }
@@ -900,7 +899,9 @@ pub fn party_command_fixture_expire(ctx: &ReducerContext, intent_id: u64) -> Res
     if !matches!(intent.state, CommandIntentState::Pending) {
         return Err("fixture command is already terminal".to_string());
     }
-    intent.expires_micros = ctx.timestamp.to_micros_since_unix_epoch().saturating_sub(1);
+    intent.expires_micros = crate::time::now(ctx)
+        .to_micros_since_unix_epoch()
+        .saturating_sub(1);
     table.id().update(intent);
     Ok(())
 }
@@ -917,8 +918,7 @@ pub fn party_command_fixture_expire_after_receipt_window(
     if !matches!(intent.state, CommandIntentState::Pending) {
         return Err("fixture command is already terminal".to_string());
     }
-    intent.expires_micros = ctx
-        .timestamp
+    intent.expires_micros = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(COMMAND_RESULT_WINDOW_MICROS)
         .saturating_sub(1);

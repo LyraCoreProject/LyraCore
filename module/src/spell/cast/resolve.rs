@@ -1,5 +1,5 @@
 use lyracore_shared::spell_custom as custom;
-use spacetimedb::{log, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
@@ -186,7 +186,7 @@ impl CastOrigin {
 pub(crate) fn charge_spell_cost(ctx: &ReducerContext, caster: &mut WorldEntity, hdr: &Spell) {
     caster.power = caster.power.saturating_sub(hdr.cost);
     if hdr.cost > 0 && hdr.power_type == lyracore_shared::packing::power_type::MANA {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
         caster.mana_regen_paused_until_ms = now_ms + 5000;
     }
 }
@@ -200,10 +200,9 @@ pub(crate) fn start_spell_cooldown(
     if cooldown_ms == 0 {
         return;
     }
-    let ready_at = ctx
-        .timestamp
+    let ready_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros((cooldown_ms as i64) * 1000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     let cds = ctx.db.game_spell_cd();
     if let Some(mut row) = cds
         .by_caster()
@@ -842,7 +841,7 @@ fn check_source_cast_position(
 fn check_global_cooldown(ctx: &ReducerContext, caster_guid: u64) -> Result<(), CastGateRefusal> {
     if let Some(cd) = ctx.db.game_spell_cooldown().caster_guid().find(caster_guid) {
         if is_on_cooldown(
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
             cd.ready_at.to_micros_since_unix_epoch(),
         ) {
             return Err(CastGateRefusal::new(
@@ -859,10 +858,9 @@ fn start_global_cooldown(ctx: &ReducerContext, caster_guid: u64, gcd_ms: u32) {
     if gcd_ms == 0 {
         return;
     }
-    let ready_at = ctx
-        .timestamp
+    let ready_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(i64::from(gcd_ms) * 1000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     let cooldowns = ctx.db.game_spell_cooldown();
     let cooldown = SpellCooldown {
         caster_guid,
@@ -1112,7 +1110,7 @@ fn check_cast_gate_suffix(
         .find(|r| {
             r.school == hdr.school_mask
                 && school_locked(
-                    ctx.timestamp.to_micros_since_unix_epoch(),
+                    crate::time::now(ctx).to_micros_since_unix_epoch(),
                     r.until.to_micros_since_unix_epoch(),
                 )
         })
@@ -1136,7 +1134,7 @@ fn check_cast_gate_suffix(
             .find(|r| r.spell_id == spell_id)
         {
             if !is_ready_at(
-                ctx.timestamp.to_micros_since_unix_epoch(),
+                crate::time::now(ctx).to_micros_since_unix_epoch(),
                 cd.ready_at.to_micros_since_unix_epoch(),
             ) {
                 return Err(CastGateRefusal::new(
@@ -1149,7 +1147,7 @@ fn check_cast_gate_suffix(
     }
 
     if hdr.cast_flags & (SPELL_ATTR_REQ_OVERPOWER | SPELL_ATTR_REQ_REVENGE) != 0 {
-        let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+        let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
         if hdr.cast_flags & SPELL_ATTR_REQ_OVERPOWER != 0
             && !crate::combat::react_window_active(caster.overpower_until_ms, now_ms)
         {
@@ -1500,10 +1498,9 @@ pub(crate) fn begin_cast_with_admission(
     } else {
         cast_ms
     };
-    let fire_at = ctx
-        .timestamp
+    let fire_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros((completion_ms as i64) * 1000))
-        .unwrap_or(ctx.timestamp);
+        .unwrap_or(crate::time::now(ctx));
     let pending = ctx.db.game_pending_cast();
     let stale: Vec<u64> = pending
         .by_caster()
@@ -1519,7 +1516,7 @@ pub(crate) fn begin_cast_with_admission(
     };
     let cast = pending.insert(PendingCast {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(fire_at),
+        scheduled_at: crate::time::schedule_time(ctx, fire_at),
         caster_guid,
         spell_id,
         level,
@@ -1539,7 +1536,7 @@ pub(crate) fn begin_cast_with_admission(
             ..SpellCastEvent::signal(ctx, caster_guid, spell_id, SpellCastEventKind::Start)
         },
     );
-    Ok(CastStart::Started(cast.into()))
+    Ok(CastStart::Started(CastHandle::from_row(ctx, cast)))
 }
 
 #[cfg(test)]

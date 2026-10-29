@@ -684,7 +684,7 @@ fn insert_auction_notice(ctx: &ReducerContext, draft: AuctionNoticeDraft) {
         bid: draft.bid,
         out_bid: draft.out_bid,
         bidder_guid: draft.bidder_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     crate::native::auction_notice(ctx, &notice);
 }
@@ -1132,7 +1132,7 @@ impl ListingSource for CtxSource<'_> {
     }
 
     fn now_micros(&self) -> i64 {
-        self.ctx.timestamp.to_micros_since_unix_epoch()
+        crate::time::now(self.ctx).to_micros_since_unix_epoch()
     }
 }
 
@@ -1165,7 +1165,7 @@ fn insert_active_auction(ctx: &ReducerContext, listing: &PreparedListing) -> u32
     });
     ctx.db.game_auction_expiry().insert(AuctionExpiry {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(expires_at),
+        scheduled_at: crate::time::schedule_time(ctx, expires_at),
         auction_id: auction.id,
     });
     auction.id
@@ -1236,7 +1236,7 @@ impl CtxBidMarket<'_> {
     }
 
     fn now_micros(&self) -> i64 {
-        self.ctx.timestamp.to_micros_since_unix_epoch()
+        crate::time::now(self.ctx).to_micros_since_unix_epoch()
     }
 
     fn apply_decision(
@@ -1465,7 +1465,7 @@ impl ExpirySink for CtxExpiry<'_> {
 
 #[reducer]
 pub fn expire_auction(ctx: &ReducerContext, schedule: AuctionExpiry) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     expire_active(&mut CtxExpiry { ctx }, schedule.auction_id)

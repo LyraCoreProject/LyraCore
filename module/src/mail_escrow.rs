@@ -86,7 +86,7 @@ crate::character_owned!(not_transported, fn sweep_transfer_game_mail_delivery())
 // Migration cannot remove a schedule, so a leftover row fires once and deletes itself.
 #[reducer]
 pub fn reap_mail_escrows(ctx: &ReducerContext, schedule: MailEscrowReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     ctx.db

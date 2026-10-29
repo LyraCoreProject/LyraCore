@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, ReducerContext, ScheduleAt, Table, TimeDuration};
+use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
 
 use crate::auth::{game_session, game_session_reaper_schedule};
 
@@ -10,7 +10,8 @@ pub(crate) fn debug_accelerate_session_reaper(ctx: &ReducerContext) -> Result<()
         .iter()
         .next()
         .ok_or_else(|| "Session reaper is not armed".to_string())?;
-    schedule.scheduled_at = ScheduleAt::Interval(TimeDuration::from_micros(1_000_000));
+    schedule.scheduled_at =
+        crate::time::schedule_interval(ctx, TimeDuration::from_micros(1_000_000));
     schedules.scheduled_id().update(schedule);
     Ok(())
 }

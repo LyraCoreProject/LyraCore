@@ -170,9 +170,12 @@ fn next_crossing(
     let (wait_ms, _) = timetable.next_map_change(progress_ms)?;
     Some(TransportCrossing {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(
-            ctx.timestamp.to_micros_since_unix_epoch() + i64::from(wait_ms) * 1000,
-        )),
+        scheduled_at: crate::time::schedule_time(
+            ctx,
+            Timestamp::from_micros_since_unix_epoch(
+                crate::time::now(ctx).to_micros_since_unix_epoch() + i64::from(wait_ms) * 1000,
+            ),
+        ),
         transport_entry: transport.entry,
         map_id: timetable.pose(progress_ms).map_id,
     })
@@ -181,7 +184,7 @@ fn next_crossing(
 /// Moves a Transport that reached another map, its Passengers and its AOI Grants there.
 #[reducer]
 pub fn cross_transport_map(ctx: &ReducerContext, fired: TransportCrossing) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let crossings = ctx.db.game_transport_crossing();
@@ -264,7 +267,7 @@ fn carry_across(ctx: &ReducerContext, passenger: TransportPassenger, from_map_id
 }
 
 pub(crate) fn now_ms(ctx: &ReducerContext) -> u64 {
-    u64::try_from(ctx.timestamp.to_micros_since_unix_epoch() / 1000).unwrap_or(0)
+    u64::try_from(crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).unwrap_or(0)
 }
 
 pub(crate) fn find(ctx: &ReducerContext, guid: u64) -> Option<Transport> {
@@ -363,7 +366,10 @@ pub(crate) fn passenger_moved(
     {
         schedules.insert(TransportCarrySchedule {
             scheduled_id: u64::from(passenger.transport_entry),
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(CARRY_TICK_MICROS)),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(CARRY_TICK_MICROS),
+            ),
         });
     }
     if aboard.is_some() {
@@ -466,7 +472,7 @@ pub(crate) fn passenger(ctx: &ReducerContext, character_guid: u64) -> Option<Tra
 
 #[reducer]
 pub fn carry_transport_passengers(ctx: &ReducerContext, schedule: TransportCarrySchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let passengers: Vec<_> = u32::try_from(schedule.scheduled_id)
