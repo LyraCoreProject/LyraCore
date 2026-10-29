@@ -1,4 +1,5 @@
 // The Operator Content API; read docs/operator-content-api.md before changing a contract.
+mod creatures;
 mod items;
 
 use lyracore_package_delta::{
