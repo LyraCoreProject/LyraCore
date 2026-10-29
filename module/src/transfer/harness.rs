@@ -653,18 +653,31 @@ fn watched_faction_selection_and_clear_cross_with_the_character() {
 fn escrow_from_before_the_watched_column_imports_with_no_selection() {
     let src = FakeDb::populated(GUID);
     let mut blob = export(&src, GUID, XFER, DEST);
-    blob.character_row.truncate(blob.character_row.len() - 4);
+    blob.character_row.truncate(blob.character_row.len() - 5);
     let mut dst = FakeDb::new();
     apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
     assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
+    assert_eq!(dst.with_char(GUID, |c| c.rest_state), 0);
     assert_eq!(dst.with_char(GUID, |c| c.bank_bag_slots), 3);
     assert_eq!(dst.with_char(GUID, |c| c.money), 987_654);
     assert!(dst.has_in_row(XFER));
 }
 
 #[test]
+fn escrow_from_before_the_rest_state_column_imports_with_zero_state() {
+    let src = FakeDb::populated(GUID);
+    let mut blob = export(&src, GUID, XFER, DEST);
+    blob.character_row.truncate(blob.character_row.len() - 1);
+    let mut dst = FakeDb::new();
+    apply_import_blob(&mut dst, XFER, wire(&blob)).unwrap();
+    assert_eq!(dst.with_char(GUID, |c| c.rest_state), 0);
+    assert_eq!(dst.with_char(GUID, |c| c.watched_faction_index), -1);
+    assert!(dst.has_in_row(XFER));
+}
+
+#[test]
 fn partial_watched_columns_and_unknown_trailing_columns_refuse_before_import() {
-    for partial_bytes in [1, 2, 3, 5] {
+    for partial_bytes in [2, 3, 4, 6] {
         let src = FakeDb::populated(GUID);
         let mut blob = export(&src, GUID, XFER, DEST);
         blob.character_row

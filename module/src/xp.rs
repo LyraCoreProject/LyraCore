@@ -366,7 +366,7 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
         }
     }
     if leveled && p.level >= LEVEL_CAP {
-        if let Some(mut character) = ctx.db.game_character().guid().find(p.guid) {
+        if let Some(mut character) = crate::helpers::character_by_guid(ctx, p.guid) {
             character.rest_state = lyracore_shared::packing::REST_STATE_NORMAL;
             ctx.db.game_character().guid().update(character);
         }

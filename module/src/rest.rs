@@ -15,9 +15,7 @@ const AREA_TEAM_NONE: u32 = 0;
 pub(crate) fn rest_state_after_bonus(previous: u8, bonus: u32, level: u8) -> u8 {
     if level >= 60 || bonus <= 1 {
         packing::REST_STATE_NORMAL
-    } else if bonus > 10 {
-        packing::REST_STATE_RESTED
-    } else if previous == packing::REST_STATE_RESTED {
+    } else if bonus > 10 || previous == packing::REST_STATE_RESTED {
         packing::REST_STATE_RESTED
     } else {
         packing::REST_STATE_NORMAL
