@@ -623,7 +623,7 @@ pub(crate) fn current_spline(
         return None;
     }
     let player = ctx.db.game_world_entity().guid().find(character_guid)?;
-    let points = ordered_route(ctx, flight.path_id)?;
+    let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
     let elapsed = ctx
         .timestamp
         .to_micros_since_unix_epoch()
@@ -647,6 +647,7 @@ pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut c
     let Some(points) = ordered_route(ctx, flight.path_id) else {
         return;
     };
+    let points = flight_route(&flight, points);
     let elapsed = ctx
         .timestamp
         .to_micros_since_unix_epoch()
