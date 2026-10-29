@@ -672,7 +672,8 @@ pub(crate) fn build_player_entity(
         .find(character.guid)
     {
         entity.mount_display_id = flight.mount_display_id;
-        entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
     }
     crate::stats::apply_level_stats(ctx, &mut entity, character.race, character.class, level);
     // Persisted health zero means uninitialized; ghosts retain their separate death state.
