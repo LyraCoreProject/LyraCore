@@ -9,7 +9,7 @@ use serde_json::json;
 use wire_client::runner::Transport;
 use wire_client::{catalogue, compare, runner};
 
-use super::transport::OperatorTransport;
+use super::transport::{MultiOperatorTransport, OperatorTransport};
 
 #[path = "../../../conformance/support/ratchet.rs"]
 mod ratchet;
@@ -126,8 +126,18 @@ fn run_scenario(
         now,
         &[],
     )?;
-    update_result(&path, &golden, Some(&comparison), now)?;
-    let report = serde_json::to_string_pretty(&comparison)?;
+    record_and_check(id, &path, &golden, now, &comparison)
+}
+
+fn record_and_check(
+    id: &str,
+    path: &Path,
+    golden: &wire_client::trace::GoldenTrace,
+    now: u64,
+    comparison: &compare::Comparison,
+) -> Result<()> {
+    update_result(path, golden, Some(comparison), now)?;
+    let report = serde_json::to_string_pretty(comparison)?;
     println!("{id}: {report}");
     let baseline = ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?;
     baseline.check(&ratchet::ScenarioBaseline::from_comparison(
@@ -135,9 +145,39 @@ fn run_scenario(
         &golden.scenario().behavior,
         harness_revision()?,
         &golden.trace().header.scenario_sha256,
-        &comparison,
+        comparison,
     ))?;
     Ok(())
+}
+
+fn run_multi_scenario(id: &str) -> Result<()> {
+    let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
+    std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
+    let golden = catalogue::get(id)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    update_result(&path, &golden, None, now)?;
+    let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
+    let mut transport = MultiOperatorTransport::prepare(&shard, golden.scenario())?;
+    let now = (virtual_start / 1_000).try_into()?;
+    let observations = runner::run_multi_on(golden.scenario(), &mut transport)?;
+    let comparison = compare::compare_multi_observations(
+        &golden,
+        &observations,
+        &transport.character_guids(),
+        now,
+        &[],
+    )?;
+    record_and_check(id, &path, &golden, now, &comparison)
 }
 
 #[test]
@@ -159,6 +199,28 @@ fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
         );
         Ok(())
     })
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
+    run_scenario("bank_slot_purchase", |shard, _| {
+        shard.assert_sql(
+            "INSERT INTO game_creature_template \
+             (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
+              creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
+              money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
+              pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
+             VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn two_character_visibility_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("two_character_visibility")
 }
 
 #[test]

@@ -118,7 +118,7 @@ def wait_port(port, world=False):
 
 
 @contextmanager
-def reference_server(harness):
+def reference_server(harness, peer_count):
     adapter = harness / 'adapters/vmangos'
     pins = json.loads((adapter / 'pins.json').read_text())
     runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
@@ -142,22 +142,29 @@ def reference_server(harness):
             wait_port(13724)
             wait_port(18085, world=True)
             run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'])
+            if peer_count:
+                run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)])
             yield provenance
         finally:
             run([*compose, 'down'])
+
+
+def peer_accounts(scenario):
+    return [f'CONFORMANCE{index}' for index in range(2, len(scenario['characters']) + 1)]
 
 
 def capture(wire, work, scenario, adapter, endpoints, password, env):
     print(f"Capturing {scenario['id']} on {adapter}", flush=True)
     run([wire, 'candidate', work / f"{scenario['id']}.toml", work / f"{scenario['id']}-{adapter}.json",
          '--host', '127.0.0.1', '--logon-port', endpoints[0], '--world-port', endpoints[1],
-         '--account', 'CONFORMANCE', '--password-stdin'], input=password, env=dict(env, WIRE_ADAPTER=adapter),
+         '--account', 'CONFORMANCE', '--password-stdin'], input=password,
+        env=dict(env, WIRE_ADAPTER=adapter, WIRE_PEER_ACCOUNTS=','.join(peer_accounts(scenario))),
         stdout=subprocess.DEVNULL, timeout=240)
 
 
-def delete_reference_character(wire, name, password, env):
+def delete_reference_character(wire, name, account, password, env):
     command = [wire, 'scenario', 'char-delete', '--host', '127.0.0.1', '--logon-port', '13724',
-               '--world-port', '18085', '--account', 'CONFORMANCE', '--character', name,
+               '--world-port', '18085', '--account', account, '--character', name,
                '--password-stdin']
     for attempt in range(2):
         try:
@@ -171,7 +178,7 @@ def delete_reference_character(wire, name, password, env):
 
 
 @contextmanager
-def local_realm(work, client_data):
+def local_realm(work, client_data, peer_count):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('commit core changes before starting an isolated audit Realm')
     revision = (ROOT / '.lyracore-cli-rev').read_text().strip()
@@ -218,6 +225,9 @@ def local_realm(work, client_data):
             password = secrets.token_hex(8)
             run([cli, 'account', 'create', 'CONFORMANCE', '--password-stdin'],
                 input=(password + '\n').encode(), env=cli_env, cwd=realm_root)
+            for peer in range(2, peer_count + 2):
+                run([cli, 'account', 'create', f'CONFORMANCE{peer}', '--password-stdin'],
+                    input=(password + '\n').encode(), env=cli_env, cwd=realm_root)
             copied_token = work / 'operator-token'
             copied_token.write_bytes(token.read_bytes())
             copied_token.chmod(0o600)
@@ -234,21 +244,28 @@ def local_realm(work, client_data):
 def capture_servers(harness, wire, work, client_data):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     scenarios = json.loads((work / 'catalogue.json').read_text())
-    with local_realm(work, client_data) as (password, token, host, module, realm_root):
+    peer_count = max(len(scenario['characters']) - 1 for scenario in scenarios)
+    with local_realm(work, client_data, peer_count) as (password, token, host, module, realm_root):
         host_hash = digest(host)
         module_hash = digest(module)
-        with reference_server(harness) as provenance:
-            passwords = b''.join((REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                                 for name in ['player-password', 'gm-password'])
+        with reference_server(harness, peer_count) as provenance:
             reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             for scenario in scenarios:
-                delete_reference_character(wire, scenario['character'], passwords.splitlines()[0] + b'\n', env)
-                capture(wire, work, scenario, 'vmangos', [13724, 18085], passwords, reference_env)
+                accounts = ['CONFORMANCE', *peer_accounts(scenario)]
+                passwords = []
+                for index, account in enumerate(accounts):
+                    name = 'player-password' if index == 0 else f'peer{index + 1}-password'
+                    secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
+                    passwords.append(secret)
+                    character = scenario['characters'][index]
+                    delete_reference_character(wire, character, account, secret, env)
+                passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
+                capture(wire, work, scenario, 'vmangos', [13724, 18085], b''.join(passwords), reference_env)
         env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
                    WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         for scenario in scenarios:
             capture(wire, work, scenario, 'lyracore', [3724, 8085],
-                    (password + '\n').encode(), env)
+                    (password + '\n').encode() * len(scenario['characters']), env)
         if digest(host) != host_hash or digest(module) != module_hash:
             raise RuntimeError('local Realm binaries changed during capture')
         snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())

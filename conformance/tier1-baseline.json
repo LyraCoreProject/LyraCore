@@ -2,9 +2,52 @@
   "schema_version": 1,
   "scenarios": [
     {
+      "scenario": "bank_slot_purchase",
+      "behavior": "bank_slot_purchase",
+      "harness_revision": "166ecd701003b1d8538737d3f95ee0fa345d1779",
+      "scenario_sha256": "d73644183fd921f24df5f209ffe3f79ca4573ff04ea8e41d478a768c98ccf358",
+      "rule": [
+        {
+          "rule": "extra_packet",
+          "checkpoint": "buy_slot",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": []
+        },
+        {
+          "rule": "field_shape",
+          "checkpoint": "buy_slot",
+          "stream": {
+            "kind": "broadcast",
+            "id": "values"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_194"
+          ]
+        },
+        {
+          "rule": "unexpected_packet",
+          "checkpoint": "buy_slot",
+          "stream": {
+            "kind": "unexpected"
+          },
+          "opcode": 442,
+          "field_path": []
+        }
+      ],
+      "data": []
+    },
+    {
       "scenario": "connection_identity",
       "behavior": "connection_identity",
-      "harness_revision": "f58d550eb316557b64290f61da26339aa9e09ceb",
+      "harness_revision": "166ecd701003b1d8538737d3f95ee0fa345d1779",
       "scenario_sha256": "36fc53aa842da673a2c4a91712b163b04f6bbeccb3d96730e3cacd5e90ee9f3e",
       "rule": [],
       "data": []
@@ -12,7 +55,7 @@
     {
       "scenario": "taxi_single_hop",
       "behavior": "taxi_single_hop",
-      "harness_revision": "f58d550eb316557b64290f61da26339aa9e09ceb",
+      "harness_revision": "166ecd701003b1d8538737d3f95ee0fa345d1779",
       "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
       "rule": [],
       "data": [
@@ -29,6 +72,1177 @@
           ]
         }
       ]
+    },
+    {
+      "scenario": "two_character_visibility",
+      "behavior": "character_visibility",
+      "harness_revision": "166ecd701003b1d8538737d3f95ee0fa345d1779",
+      "scenario_sha256": "bf66dad37f56a05871dfbf089ddb30bda4c6b392d36e1ab4244434b79c0efe1a",
+      "rule": [
+        {
+          "rule": "arrival_max_health",
+          "checkpoint": "",
+          "stream": null,
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_26"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "kind"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "movement",
+            "turn_rate"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "movement",
+            "update_flags"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_126"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_138"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_164"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_190"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_194"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_22"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_28"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "kind"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "movement",
+            "turn_rate"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "movement",
+            "update_flags"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_126"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_138"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_164"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_190"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_194"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_22"
+          ]
+        },
+        {
+          "rule": "exact_field",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_28"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_101"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_127"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_129"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_130"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_145"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_16"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_17"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_191"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_192"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_193"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_195"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_24"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_26"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_296"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_32"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_332"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_344"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_438"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_439"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_441"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_442"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_448"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_449"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_452"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_47"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "arriving",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_95"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_101"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_127"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_129"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_130"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_145"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_16"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_17"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_191"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_192"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_193"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_195"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_24"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_26"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_296"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_32"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_332"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_344"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_438"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_439"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_441"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_442"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_448"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_449"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_452"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_47"
+          ]
+        },
+        {
+          "rule": "field_shape",
+          "character": "watcher",
+          "checkpoint": "arrival",
+          "stream": {
+            "kind": "broadcast",
+            "id": "objects"
+          },
+          "opcode": 169,
+          "field_path": [
+            "objects",
+            "0",
+            "values",
+            "field_95"
+          ]
+        }
+      ],
+      "data": []
     }
   ]
 }

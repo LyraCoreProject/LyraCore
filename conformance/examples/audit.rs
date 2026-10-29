@@ -36,11 +36,25 @@ fn export(directory: &Path) -> Result<()> {
     let mut scenarios = Vec::new();
     for entry in catalogue::ENTRIES {
         let golden = catalogue::get(entry.id)?;
-        let FixtureVerb::Character { name, .. } = &golden.scenario().fixtures[0] else {
-            bail!("Character fixture required");
+        let fixtures = if golden.scenario().schema_version == 4 {
+            golden
+                .scenario()
+                .characters
+                .iter()
+                .map(|character| &character.fixtures)
+                .collect::<Vec<_>>()
+        } else {
+            vec![&golden.scenario().fixtures]
         };
+        let characters = fixtures
+            .into_iter()
+            .map(|fixtures| match &fixtures[0] {
+                FixtureVerb::Character { name, .. } => Ok(name.clone()),
+                _ => bail!("Character fixture required"),
+            })
+            .collect::<Result<Vec<_>>>()?;
         std::fs::write(directory.join(format!("{}.toml", entry.id)), entry.scenario)?;
-        scenarios.push(serde_json::json!({"id": entry.id, "character": name}));
+        scenarios.push(serde_json::json!({"id": entry.id, "characters": characters}));
     }
     std::fs::write(
         directory.join("catalogue.json"),
@@ -223,6 +237,18 @@ mod tests {
     fn audit_requires_both_candidates_for_every_catalogue_scenario() -> Result<()> {
         let directory = scratch::Scratch::new("audit-test")?;
         export(&directory)?;
+        let exported: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("catalogue.json"))?)?;
+        let visibility = exported
+            .as_array()
+            .context("exported catalogue")?
+            .iter()
+            .find(|entry| entry["id"] == "two_character_visibility")
+            .context("named Character scenario")?;
+        assert_eq!(
+            visibility["characters"],
+            serde_json::json!(["Watchera", "Arrivera"])
+        );
         let ledger = FeatureLedger::load(&Path::new(env!("CARGO_MANIFEST_DIR")).join("features"))?;
         let golden = catalogue::get(catalogue::ENTRIES[0].id)?;
         let Origin::Golden { provenance } = &golden.trace().header.origin else {
@@ -313,10 +339,15 @@ mod tests {
         )?;
         for entry in catalogue::ENTRIES {
             let name = format!("{}-lyracore.json", entry.id);
-            std::fs::copy(
-                root.join("reports/2026-10-28-c5.traces").join(&name),
-                input.join(name),
-            )?;
+            let recorded = root.join("reports/2026-10-28-c5.traces").join(&name);
+            if recorded.exists() {
+                std::fs::copy(recorded, input.join(name))?;
+            } else {
+                let mut candidate: serde_json::Value = serde_json::from_str(entry.trace)?;
+                candidate["header"]["origin"] =
+                    serde_json::json!({"kind": "candidate", "adapter": "lyracore"});
+                std::fs::write(input.join(name), serde_json::to_vec(&candidate)?)?;
+            }
             let mut reference: serde_json::Value = serde_json::from_str(entry.trace)?;
             reference["header"]["origin"] =
                 serde_json::json!({"kind": "candidate", "adapter": "vmangos"});

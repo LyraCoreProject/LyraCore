@@ -48,7 +48,7 @@ class ReferenceLifetime(unittest.TestCase):
             self.mutations.append('stop')
 
     def reference(self):
-        return audit.reference_server(self.root)
+        return audit.reference_server(self.root, 0)
 
     def test_partial_start_and_capture_failures_stop_owned_services(self):
         for fail_start in [False, True]:
@@ -116,7 +116,7 @@ class LocalRealmLifetime(unittest.TestCase):
             work = Path(directory)
             (work / '.lyracore-cli-rev').write_text('9a00763234f82830a6266b9561a607523f67c2b1')
             with self.assertRaisesRegex(RuntimeError, 'import failed'):
-                with audit.local_realm(work, work / 'client/Data'):
+                with audit.local_realm(work, work / 'client/Data', 0):
                     self.fail('capture must not start')
             self.assertFalse((work / 'core').exists())
         self.assertEqual([call[1:3] for call in calls],
@@ -164,11 +164,22 @@ class CleanupAuthentication(unittest.TestCase):
                                         ([deletion], 1, False)]:
             with self.subTest(succeeds=succeeds, calls=calls), patch.object(audit, 'run', side_effect=errors) as run:
                 if succeeds:
-                    audit.delete_reference_character('wire', 'Fixture', b'password', {})
+                    audit.delete_reference_character('wire', 'Fixture', 'CONFORMANCE', b'password', {})
                 else:
                     with self.assertRaises(RuntimeError):
-                        audit.delete_reference_character('wire', 'Fixture', b'password', {})
+                        audit.delete_reference_character('wire', 'Fixture', 'CONFORMANCE', b'password', {})
                 self.assertEqual(run.call_count, calls)
+
+
+class NamedCharacters(unittest.TestCase):
+    def test_capture_passes_one_account_per_character(self):
+        scenario = {'id': 'two_character_visibility', 'characters': ['Watchera', 'Arrivera']}
+        with patch.object(audit, 'run') as run:
+            audit.capture('wire', Path('/scratch'), scenario, 'lyracore', [3724, 8085],
+                          b'first\nsecond\n', {})
+        self.assertEqual(run.call_args.kwargs['input'], b'first\nsecond\n')
+        self.assertEqual(run.call_args.kwargs['env']['WIRE_PEER_ACCOUNTS'], 'CONFORMANCE2')
+        self.assertEqual(run.call_args.args[0][-2:], ['CONFORMANCE', '--password-stdin'])
 
 
 class CargoPin(unittest.TestCase):

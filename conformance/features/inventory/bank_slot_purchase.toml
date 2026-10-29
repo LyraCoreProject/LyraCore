@@ -1,0 +1,32 @@
+schema_version = 1
+id = "bank_slot_purchase"
+system = "inventory"
+scope = "A Character can open the bank, buy slots and transfer items between bank and bags."
+requests = ["0x01B7", "0x01B9", "0x0282", "0x0283"]
+replies = ["0x01B8", "0x01BA", "0x00A9"]
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = ["bank_slot_purchase"]
+deliberate_deviations = []
+prerequisites = ["A friendly banker template 5099 with the banker NPC flag, within interaction range"]
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/NPCHandler.cpp"
+symbol = "WorldSession::HandleBankerActivateOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "A successful slot purchase sends SMSG_BUY_BANK_SLOT_RESULT(Ok), which vmangos omits."
+path = "module/src/native/economy.rs"
+symbol = "receive"
+evidence = "Tier 1 bank_slot_purchase at harness 166ecd70: unexpected_packet 0x01BA at buy_slot."
+
+[[known_gaps]]
+description = "The bank slot flag arrives in a separate VALUES packet instead of the money update used by vmangos."
+path = "module/src/native/visibility.rs"
+symbol = "entity_changed"
+evidence = "Tier 1 bank_slot_purchase at harness 166ecd70: field_shape objects.0.values.field_194 and extra_packet 0x00A9 at buy_slot."

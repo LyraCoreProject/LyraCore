@@ -1,11 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::time::Duration;
 
-use anyhow::{anyhow, bail, ensure, Result};
+use anyhow::{anyhow, bail, ensure, Context, Result};
 use lyracore_test_support::{ReducerConnection, Standalone};
 use serde::Deserialize;
 use serde_json::{json, value::RawValue};
-use wire_client::runner::Transport;
+use wire_client::runner::{MultiTransport, Transport};
 use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
 pub struct OperatorTransport {
@@ -31,32 +31,9 @@ impl OperatorTransport {
         else {
             bail!("first fixture must be a Character");
         };
-        let guid = prepare_character(shard, name, race, class, *level, at)?;
+        let guid = prepare_character(shard, "CONFORMANCE", name, race, class, *level, at)?;
         let fixtures = prepare_fixtures(shard, guid, &scenario.fixtures[1..], at)?;
-        let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
-        connection
-            .call("native_world_open", json!([42]))
-            .map_err(|e| anyhow!(e))?;
-        connection.drain_packets();
-        connection
-            .call("debug_native_enter_world", json!([guid]))
-            .map_err(|e| anyhow!(e))?;
-        let mut transport = Self {
-            delivery: Delivery::new(connection.connection_id()),
-            connection,
-            guid,
-            fixtures,
-            opening: Vec::new(),
-            pending: VecDeque::new(),
-            virtual_micros: 0,
-        };
-        let setup = transport.connection.drain_packets();
-        transport.opening = transport
-            .delivery
-            .route_rows(setup)?
-            .into_iter()
-            .map(|(opcode, body)| Observation::opening(opcode, &body))
-            .collect();
+        let transport = Self::connect(shard, guid, fixtures)?;
         let character = &shard.query_rows(&format!(
             "SELECT * FROM game_world_entity WHERE guid = {guid}"
         ))[0];
@@ -81,10 +58,39 @@ impl OperatorTransport {
         }
         Ok(transport)
     }
+
+    fn connect(shard: &Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
+        let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+        connection
+            .call("native_world_open", json!([42]))
+            .map_err(|e| anyhow!(e))?;
+        connection.drain_packets();
+        connection
+            .call("debug_native_enter_world", json!([guid]))
+            .map_err(|e| anyhow!(e))?;
+        let mut transport = Self {
+            delivery: Delivery::new(connection.connection_id()),
+            connection,
+            guid,
+            fixtures,
+            opening: Vec::new(),
+            pending: VecDeque::new(),
+            virtual_micros: 0,
+        };
+        let setup = transport.connection.drain_packets();
+        transport.opening = transport
+            .delivery
+            .route_rows(setup)?
+            .into_iter()
+            .map(|(opcode, body)| Observation::opening(opcode, &body))
+            .collect();
+        Ok(transport)
+    }
 }
 
 fn prepare_character(
     shard: &Standalone,
+    account_name: &str,
     name: &str,
     race: &str,
     class: &str,
@@ -94,10 +100,15 @@ fn prepare_character(
     let credentials = serde_json::to_string(&vec![0u8; 32])?;
     shard.assert_call(
         "provision_account",
-        &["\"CONFORMANCE\"", &credentials, &credentials],
+        &[
+            &serde_json::to_string(account_name)?,
+            &credentials,
+            &credentials,
+        ],
     );
-    let account =
-        &shard.query_rows("SELECT id FROM game_account WHERE username = 'CONFORMANCE'")[0]["id"];
+    let account = &shard.query_rows(&format!(
+        "SELECT id FROM game_account WHERE username = '{account_name}'"
+    ))[0]["id"];
     let race = wire_client::cli::parse_race(race)?.as_int().to_string();
     let class = wire_client::cli::parse_class(class)?.as_int().to_string();
     shard.assert_call(
@@ -275,6 +286,154 @@ impl Transport for OperatorTransport {
                 .map_err(|e| anyhow!(e))?;
             self.virtual_micros += delta;
         }
+    }
+}
+
+struct MultiCharacter {
+    guid: u64,
+    fixtures: BTreeMap<String, u64>,
+    transport: Option<OperatorTransport>,
+}
+
+pub struct MultiOperatorTransport<'a> {
+    shard: &'a Standalone,
+    characters: BTreeMap<String, MultiCharacter>,
+    virtual_micros: u64,
+}
+
+impl<'a> MultiOperatorTransport<'a> {
+    pub fn prepare(shard: &'a Standalone, scenario: &Scenario) -> Result<Self> {
+        scenario.validate()?;
+        ensure!(
+            scenario.schema_version == 4,
+            "scenario needs named Characters"
+        );
+        let mut characters = BTreeMap::new();
+        for character in &scenario.characters {
+            let FixtureVerb::Character {
+                name,
+                race,
+                class,
+                level,
+                at,
+            } = &character.fixtures[0]
+            else {
+                bail!("first fixture must be a Character");
+            };
+            let account = format!("CONFORMANCE_{}", character.id.to_ascii_uppercase());
+            let guid = prepare_character(shard, &account, name, race, class, *level, at)?;
+            let fixtures = prepare_fixtures(shard, guid, &character.fixtures[1..], at)?;
+            shard.assert_call("debug_logout_character", &[&guid.to_string()]);
+            characters.insert(
+                character.id.clone(),
+                MultiCharacter {
+                    guid,
+                    fixtures,
+                    transport: None,
+                },
+            );
+        }
+        let mut transport = Self {
+            shard,
+            characters,
+            virtual_micros: 0,
+        };
+        for character in &scenario.characters {
+            if character.initially_connected {
+                transport.connect(&character.id)?;
+            }
+        }
+        Ok(transport)
+    }
+
+    pub fn character_guids(&self) -> BTreeMap<String, u64> {
+        self.characters
+            .iter()
+            .map(|(id, character)| (id.clone(), character.guid))
+            .collect()
+    }
+
+    fn character(&self, id: &str) -> Result<&MultiCharacter> {
+        self.characters
+            .get(id)
+            .context("unknown scenario Character")
+    }
+
+    fn transport(&mut self, id: &str) -> Result<&mut OperatorTransport> {
+        self.characters
+            .get_mut(id)
+            .context("unknown scenario Character")?
+            .transport
+            .as_mut()
+            .context("scenario Character is disconnected")
+    }
+}
+
+impl MultiTransport for MultiOperatorTransport<'_> {
+    fn now(&self) -> Duration {
+        Duration::from_micros(self.virtual_micros)
+    }
+
+    fn character_guid(&self, character: &str) -> Result<u64> {
+        Ok(self.character(character)?.guid)
+    }
+
+    fn fixture_guids(&self, character: &str) -> Result<BTreeMap<String, u64>> {
+        Ok(self.character(character)?.fixtures.clone())
+    }
+
+    fn take_opening(&mut self, character: &str) -> Result<Vec<Observation>> {
+        Ok(self
+            .characters
+            .get_mut(character)
+            .context("unknown scenario Character")?
+            .transport
+            .as_mut()
+            .map_or_else(Vec::new, |transport| transport.take_opening()))
+    }
+
+    fn connected(&self, character: &str) -> bool {
+        self.characters
+            .get(character)
+            .is_some_and(|entry| entry.transport.is_some())
+    }
+
+    fn connect(&mut self, character: &str) -> Result<()> {
+        let entry = self
+            .characters
+            .get_mut(character)
+            .context("unknown scenario Character")?;
+        ensure!(entry.transport.is_none(), "scenario Character is connected");
+        let mut transport =
+            OperatorTransport::connect(self.shard, entry.guid, entry.fixtures.clone())?;
+        transport.virtual_micros = self.virtual_micros;
+        entry.transport = Some(transport);
+        Ok(())
+    }
+
+    fn disconnect(&mut self, character: &str) -> Result<()> {
+        let entry = self
+            .characters
+            .get_mut(character)
+            .context("unknown scenario Character")?;
+        ensure!(
+            entry.transport.take().is_some(),
+            "scenario Character is disconnected"
+        );
+        Ok(())
+    }
+
+    fn send(&mut self, character: &str, opcode: u32, body: &[u8]) -> Result<()> {
+        self.transport(character)?.send(opcode, body)
+    }
+
+    fn receive(&mut self, character: &str, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
+        let now = self.virtual_micros;
+        let transport = self.transport(character)?;
+        transport.virtual_micros = now;
+        let packet = transport.receive(timeout)?;
+        self.virtual_micros = transport.virtual_micros;
+        Ok(packet)
     }
 }
 

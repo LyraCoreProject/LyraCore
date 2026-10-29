@@ -175,7 +175,9 @@ The independent Benilla codec checks and opcode inventory are described in
 Tier 1 starts a disposable local Shard and drives native reducers through an Operator WebSocket
 connection. `connection_identity` compares ping and name-query replies with the pinned harness's
 Golden Trace. `taxi_single_hop` uses the bundled route fixture described in the
-[conformance data setup](../conformance/README.md#taxi-data). The same target checks preserved login
+[conformance data setup](../conformance/README.md#taxi-data). `bank_slot_purchase` uses a
+synthetic banker; `two_character_visibility` uses one Account and fixture connection per
+Character with a shared virtual clock. The same target checks preserved login
 credentials, later-transaction packet delivery and the known-flight-node debug reducer. Fixture
 world entry requires `conformance_test_fixture`; normal publication excludes it.
 See [ADR 0005](adr/0005-1-12-conformance.md) for repository ownership.
@@ -207,7 +209,8 @@ revision, scenario hash, and rule and data signature sets to equal
 `conformance/tier1-baseline.json`. New and removed signatures fail.
 After changing one scenario's signatures, run `./conformance/baseline <scenario>`. It runs that
 scenario's durable test and replaces only its entry from the new comparison. To regenerate every
-entry, run both tier 1 tests, then `./conformance/baseline`. Review the baseline diff in the same PR
+entry, run all tier 1 scenarios, then `./conformance/baseline`. Review the baseline diff in the
+same PR
 as the Behavior change. The baseline does not affect comparator classification or scoreboard results.
 Use `./conformance/run <scenario>` for one tier 1 scenario, or add `--json` for grouped,
 machine-readable differences and baseline changes. It runs only the named durable test. See the

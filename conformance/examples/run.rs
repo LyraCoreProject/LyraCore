@@ -154,7 +154,11 @@ fn signature_text(signature: &ratchet::Signature) -> String {
         signature.field_path.join(".")
     };
     format!(
-        "{} / {} / {} / {} / {}",
+        "{}{} / {} / {} / {} / {}",
+        signature
+            .character
+            .as_deref()
+            .map_or_else(String::new, |character| format!("{character} / ")),
         signature.rule,
         signature.checkpoint,
         stream_text(&signature.stream),
@@ -323,6 +327,7 @@ mod tests {
         let comparison = Comparison {
             differences: vec![Difference {
                 classification: DifferenceClass::Rule,
+                character: None,
                 checkpoint: "flight".into(),
                 stream: Some(Stream::Reply("flight".into())),
                 packet_index: Some(2),

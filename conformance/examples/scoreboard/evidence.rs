@@ -102,6 +102,8 @@ pub struct SignatureCount {
 #[serde(deny_unknown_fields)]
 pub struct Signature {
     pub rule: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub character: Option<String>,
     pub checkpoint: String,
     pub stream: Option<Stream>,
     pub opcode: Option<u16>,
@@ -112,6 +114,7 @@ impl From<&Difference> for Signature {
     fn from(difference: &Difference) -> Self {
         Self {
             rule: difference.rule.clone(),
+            character: difference.character.clone(),
             checkpoint: difference.checkpoint.clone(),
             stream: difference.stream.clone(),
             opcode: difference.opcode,
