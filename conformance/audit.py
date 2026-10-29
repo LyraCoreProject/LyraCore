@@ -523,6 +523,7 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
             with timed(f'{scenario} Realm prime run'):
                 capture(wire, work, entry, 'lyracore', [3724, 8085],
                         (password + '\n').encode(), realm_env, progress=sys.stderr)
+            (work / f'{scenario}-lyracore.json').unlink()
             cli_env = dict(os.environ)
             cli_env.pop('CARGO_TARGET_DIR', None)
             cli_env['PATH'] = str(SCENARIO_CACHE / 'realm/bin') + ':' + cli_env['PATH']
