@@ -43,4 +43,3 @@ rung = "durable_module"
 path = "module/tests/native_conformance.rs"
 function = "world_entry_resets_rest_state_before_bonus_threshold"
 rung = "durable_module"
-
