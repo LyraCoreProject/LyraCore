@@ -1,12 +1,13 @@
 # Operator Content API
 
-The Operator Content API is a set of reducers that create, update or delete one creature spawn or one
-gameobject spawn on a running realm. A world editor or any other tool calls them with the Owner
-Token. Each edit shows in the world at once: the Module removes the old live entity with its normal
-despawn code and the respawn pass makes the new one.
+The Operator Content API edits creature and gameobject spawns, item templates and vendor offers on
+a running Realm. A world editor such as Meld calls it with the Owner Token. Spawn edits despawn the
+old live entity and let the respawn pass make the new one. Item edits refresh connected wearers and
+send new item query answers to clients.
 
-The source is `module/src/operator_content.rs`. The durable tests are in
-`module/tests/operator_content.rs`.
+The source is `module/src/operator_content.rs` and `module/src/operator_content/items.rs`. The
+durable tests are in `module/tests/operator_content.rs` and `module/tests/operator_items.rs`.
+`native-host/operator_items.py` checks item edits with the Headless Client.
 
 ## Which database
 
@@ -29,7 +30,8 @@ safe as that claim. Claim the Operator immediately after each publish.
 | `operator_create_gameobject` | `fields: GameObjectSpawnFields` | Adds a gameobject spawn with a new guid from the Operator Spawn Range. |
 | `operator_update_gameobject` | `guid: u64`, `fields: GameObjectSpawnFields` | Moves or changes one gameobject spawn, including its template. |
 | `operator_delete_gameobject` | `guid: u64` | Removes one gameobject spawn. |
-| `operator_apply_spawn_edits` | `edits: Vec<SpawnEdit>` | Applies a list of the edits above, in order, in one transaction. |
+| `operator_apply_spawn_edits` | `edits: Vec<SpawnEdit>` | Applies a list of spawn edits, in order, in one transaction. |
+| `operator_apply_item_edits` | `edits: Vec<ItemEdit>` | Creates or updates item templates and replaces vendor offers, in order, in one transaction. |
 
 The argument types:
 
@@ -62,6 +64,188 @@ spacetime call <db> operator_apply_spawn_edits -- '[
   {"deleteGameObject": 17370383762768003073}
 ]'
 ```
+
+## Item arguments
+
+```text
+operator_apply_item_edits(edits: Vec<ItemEdit>) -> Result<(), String>
+ItemEdit = createItem      { fields: ItemFields }
+         | updateItem      { entry: u32, fields: ItemFields }
+         | setVendorOffers { creature_entry: u32, offers: Vec<VendorOffer> }
+VendorOffer { item_entry: u32, max_count: u32 }
+ItemFields {
+    class: u8,
+    subclass: u8,
+    name: String,
+    display_id: u32,
+    quality: u8,
+    inventory_type: u8,
+    item_level: u8,
+    required_level: u8,
+    max_durability: u32,
+    buy_price: u32,
+    sell_price: u32,
+    max_stack: u32,
+    damage_min: f32,
+    damage_max: f32,
+    delay_ms: u32,
+    stat_strength: i32,
+    stat_agility: i32,
+    stat_stamina: i32,
+    stat_intellect: i32,
+    stat_spirit: i32,
+    stat_crit: i32,
+    stat_hit: i32,
+    stat_armor: i32,
+    block_value: i32,
+    restores_power: bool,
+    spellid_1: u32,
+    spelltrigger_1: u8,
+    spellid_2: u32,
+    spelltrigger_2: u8,
+    container_slots: u8,
+    sheath: u8,
+    bonding: u8,
+    holy_res: i32,
+    fire_res: i32,
+    nature_res: i32,
+    frost_res: i32,
+    shadow_res: i32,
+    arcane_res: i32,
+    spellid_3: u32,
+    spelltrigger_3: u8,
+    spellid_4: u32,
+    spelltrigger_4: u8,
+    spellid_5: u32,
+    spelltrigger_5: u8,
+    required_skill: u32,
+    required_skill_rank: u32,
+    required_reputation_faction: u32,
+    required_reputation_rank: u32,
+    max_count: u32,
+    item_flags: u32,
+    page_text: u32,
+    start_quest: u32,
+    bag_family: u32,
+    buy_count: u32,
+    food_type: u8,
+    allowed_class: u32,
+    allowed_race: u32,
+    random_property: u32,
+}
+```
+
+Every `ItemFields` member is required. An update replaces every column except `entry`; it is not a
+partial update. Start with the current `game_item_template` row, remove `entry`, and change the
+fields you want. The exhaustive constructor in the Module keeps this type in step with the table.
+There is no item delete. Instances, loot, quests and vendors can refer to an item.
+
+This is a complete create edit. Pass an array of edits as the reducer's sole argument. The HTTP
+call body wraps that argument once more, as `[[edit, ...]]`.
+
+```json
+{
+  "createItem": {
+    "fields": {
+      "class": 2,
+      "subclass": 7,
+      "name": "Meld blade",
+      "display_id": 0,
+      "quality": 1,
+      "inventory_type": 21,
+      "item_level": 0,
+      "required_level": 0,
+      "max_durability": 0,
+      "buy_price": 0,
+      "sell_price": 0,
+      "max_stack": 1,
+      "damage_min": 2.0,
+      "damage_max": 4.0,
+      "delay_ms": 2000,
+      "stat_strength": 0,
+      "stat_agility": 0,
+      "stat_stamina": 0,
+      "stat_intellect": 0,
+      "stat_spirit": 0,
+      "stat_crit": 0,
+      "stat_hit": 0,
+      "stat_armor": 0,
+      "block_value": 0,
+      "restores_power": false,
+      "spellid_1": 0,
+      "spelltrigger_1": 0,
+      "spellid_2": 0,
+      "spelltrigger_2": 0,
+      "container_slots": 0,
+      "sheath": 0,
+      "bonding": 0,
+      "holy_res": 0,
+      "fire_res": 0,
+      "nature_res": 0,
+      "frost_res": 0,
+      "shadow_res": 0,
+      "arcane_res": 0,
+      "spellid_3": 0,
+      "spelltrigger_3": 0,
+      "spellid_4": 0,
+      "spelltrigger_4": 0,
+      "spellid_5": 0,
+      "spelltrigger_5": 0,
+      "required_skill": 0,
+      "required_skill_rank": 0,
+      "required_reputation_faction": 0,
+      "required_reputation_rank": 0,
+      "max_count": 0,
+      "item_flags": 0,
+      "page_text": 0,
+      "start_quest": 0,
+      "bag_family": 0,
+      "buy_count": 1,
+      "food_type": 0,
+      "allowed_class": 1503,
+      "allowed_race": 255,
+      "random_property": 0
+    }
+  }
+}
+```
+
+The other variants have these shapes, with the same complete fields object for an update:
+
+```text
+{"updateItem": {"entry": 5200500, "fields": ItemFields}}
+{"setVendorOffers": {"creature_entry": 620, "offers": [
+  {"item_entry": 5200500, "max_count": 0},
+  {"item_entry": 25, "max_count": 3}
+]}}
+```
+
+An empty `offers` list clears the vendor. `slot` is the zero-based list index. Vendor row IDs are
+explicit `max + 1` values, allocated before deleting the old rows. Imported explicit IDs do not
+advance SpacetimeDB's `auto_inc` sequence. `max_count = 0` means unlimited stock; a positive count
+keeps the current vendor stock behavior. This API does not add stock depletion or restock timers.
+
+## New template entries
+
+A create allocates from the Operator Template Range, **5,200,500 to 5,999,999**. It takes the highest
+item entry in that range plus one, or the floor when no item uses the range. One batch scans the
+non-spatial item table at most once for this high-water mark. Vendor allocation scans the
+non-spatial vendor table at most once. These reads do not change the spatial scan whitelist.
+
+The range starts after the curated range, which ends at 5,200,499. Trainer overrides use
+5,200,000 through 5,200,499. Fixture-Reserved items use 5,090,000 through 5,099,999, and the next
+reserved band is the Package Spell Range at 6,000,000. The local vmangos snapshot at source revision `4641790`
+had 20,034 item rows, a highest entry of 25,818, and no entries in this range. The ceiling also fits
+the 24-bit creature-entry limit, 16,777,215. Creature, gameobject and quest template allocation can
+use this range later; this reducer allocates only item entries.
+
+Imports must not write template entries in this range. The items importer refuses such a source
+row before it emits SQL. An items import still removes Operator-created items when it clears the
+item table. After that import, a later create can reuse their entries.
+
+The reducer returns no entry. Read new rows in the range after the call, or use the create log line
+to distinguish concurrent Operator calls. Later edits in the same batch can refer to an entry that
+earlier edits created, but an editor must not predict the allocated entry across concurrent calls.
 
 ## Guids
 
@@ -131,12 +315,32 @@ the Instance resets.
 
 The Module adds a `game_creature_spawn_map` row when a creature spawn goes onto a map that has none.
 
+**Item create or update.** Gameplay reads the new template on its next use. After all edits apply,
+the Module finds connected Characters through `game_native_player` and their items through
+`by_owner_guid`. For each Character wearing an updated item, it calls `recompute_vitals` before
+`recompute_sheet`, once for the batch. It does not scan all item instances. Offline Characters
+recompute at login. Existing instances keep their durability, soulbound flag and Random Property;
+new grants use the current template. Edits do not move equipped items or recheck their eligibility.
+
+For each distinct created or updated entry, the Module queues a fresh
+`SMSG_ITEM_QUERY_SINGLE_RESPONSE` to each admitted World Session, including Character selection.
+It sends the final row once even if the batch edits that item more than once. The Headless Client
+check confirms arrival without a preceding `CMSG_ITEM_QUERY_SINGLE`. **Whether an unmodified 1.12
+client replaces its cache after this unsolicited response is not verified.** This push does not
+prove that an open tooltip or vendor window redraws.
+
+**Vendor offers.** List and purchase requests read `game_npc_vendor` fresh, so no cache refresh is
+needed. An open list changes when the client requests it again. Interaction uses the live creature
+entity's `npc_flags`. Adding offers to a non-vendor does not give it the VENDOR bit. Editing creature
+templates and refreshing those flags is outside this slice.
+
 ## Refusals
 
 A Refusal changes nothing. In a batch, one Refusal rolls back every edit in the batch, and the
-message names the index of the failed edit (`spawn edit 2: ...`).
+message names the zero-based index of the failed edit, such as `spawn edit 2: ...` or
+`item edit 2: ...`. Item stat refreshes and queued packets roll back too.
 
-The reducers refuse:
+Spawn reducers refuse:
 
 - A guid that is not an Authored Spawn. A creature guid must have the high part `0xF130` and a
   `game_creature_spawn` row with `instance_id = 0` and `source_guid = 0`. A gameobject guid must
@@ -160,7 +364,7 @@ The reducers refuse:
 `respawn_secs` takes any value. `u32::MAX` means the creature does not come back after it dies, the
 same value an encounter wave uses.
 
-## Limits
+## Spawn limits
 
 `operator_apply_spawn_edits` takes at most 256 edits and at most 4,096 waypoints in total. One patrol
 holds at most 256 waypoints. These limits keep one call from stalling the realm tick.
@@ -168,9 +372,9 @@ holds at most 256 waypoints. These limits keep one call from stalling the realm 
 A create scans the spawn table once per transaction to find the highest identifier in the range.
 Send many creates as one batch.
 
-## Log
+## Spawn log
 
-Each edit writes one `info` line to the module log with the caller identity, the guid, and the old
+Each spawn edit writes one `info` line to the Module log with the caller identity, the guid, and the old
 and new values. A batch writes its lines only after every edit applied, so a refused batch writes
 none. The log is the only record of the previous values. Use it to find and undo a wrong
 edit on a live realm:
@@ -179,7 +383,7 @@ edit on a live realm:
 spacetime logs <db> | grep 'operator .* spawn'
 ```
 
-## Durability
+## Spawn durability
 
 The edits change the live database only. They are not a Package and they are not in the import
 data:
@@ -190,3 +394,64 @@ data:
 
 To keep an edit across a new import, put it in a Package. Exporting live edits to a Package is
 separate work.
+
+## Item Refusals and limits
+
+Item edits refuse a missing update target, a Package Item Range entry, or a Fixture-Reserved item.
+Vendor replacement refuses a missing creature template, a missing item, or duplicate item entries.
+Vendor rows are not Package-claimable; offers may refer to Package or Fixture-Reserved items.
+A missing nonzero spell in any of the five spell slots is a Refusal. Range exhaustion is a Refusal.
+
+An update checks only the values it changes. A value the row already holds passes, for example an
+imported spell id the Realm does not have, so an edit of one column is not refused for another. A
+create checks every value.
+
+The item Gates use the same vanilla enum types as the item-query encoder:
+
+| Field | Accepted values |
+| --- | --- |
+| `class`, `subclass` | A pair in `ItemClassAndSubClass`, classes 0 through 15 with that class's subclasses. |
+| `quality` | 0 through 6. |
+| `inventory_type` | 0 through 28. |
+| `bonding` | 0 through 5. |
+| `sheath` | 0 through 7. |
+| `spelltrigger_1` through `spelltrigger_5` | 0 on use, 1 on equip, 2 chance on hit. |
+| `food_type` | 0 through 8. |
+| `required_reputation_rank` | 0 through 7. |
+| `max_stack`, `buy_count` | At least 1. |
+| `damage_min`, `damage_max` | Finite, with `0 <= damage_min <= damage_max`. |
+| `name` | Nonblank, no NUL, at most 255 UTF-8 bytes. |
+
+The accepted class/subclass pairs are:
+
+| Class | Subclass |
+| --- | --- |
+| 0 | 0 through 2 |
+| 1, 6 | 0 through 4 |
+| 2 | 0 through 20 |
+| 3, 5, 8, 10, 12, 14, 15 | 0 |
+| 4, 9 | 0 through 9 |
+| 7, 11 | 0 through 3 |
+| 13 | 0 through 1 |
+
+Other fields retain their table types and current gameplay semantics. This API does not promise
+support for every client feature that an item field describes.
+
+A call accepts at most **64 item edits**, **128 offers per vendor edit**, and **512 offers across
+the batch**. The name length bounds text and log output. The edit and offer caps bound catalogue
+writes and the number of item responses sent per connection. Stat refresh cost depends on the
+number of connected Characters and their owned items; packet cost depends on connected clients.
+Split larger saves into separate transactions. Each transaction is atomic; the whole save is not.
+
+The Module writes one `info` line per item edit only after the entire batch, stat refreshes and
+packet construction succeed. Each line includes the caller identity and item or creature entry.
+Item updates list changed columns as old -> new values; creates list all fields with an absent old
+value. Vendor edits log the old and new ordered offer lists. String values escape line breaks.
+
+## Item edit durability
+
+These rows survive a restart and a plain Module publish. `lyracore import` with the `items` Import
+Family clears and reloads `game_item_template` and `game_npc_vendor`, so it wipes these edits,
+including Operator-created items. Save authored content outside the Realm before that import.
+Item instances can remain after their template disappears. This API adds no import reconciliation
+and no item deletion or reference repair.

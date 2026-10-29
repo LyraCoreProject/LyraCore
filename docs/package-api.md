@@ -557,6 +557,7 @@ apply clears the whole band before it writes.
 
 | Range | Family | Band | Checked against |
 | --- | --- | --- | --- |
+| Operator Template Range | Operator Content API, not a Package band | 5,200,500 to 5,999,999 | Template `entry`; currently item templates only. Imports must not write here. |
 | Package Script Range | script | 100,000 to 999,999 | `game_script` identifier |
 | Package Spell Range | spell | 6,000,000 to 6,999,999 | spell id, for `game_spell` and `game_spell_effect` |
 | Package Item Range | items | 7,000,000 to 7,999,999 | `game_item_template.entry` |

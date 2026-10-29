@@ -320,3 +320,24 @@ fn malformed_item_and_vendor_numbers_stop_before_emitting_an_offer() {
         assert!(error.to_string().contains(column), "{error}");
     }
 }
+
+#[test]
+fn imported_items_cannot_use_the_operator_template_range() {
+    let source = item_source();
+    edit_source(
+        &source,
+        "UPDATE item_template SET entry = 5200500 WHERE entry = 1001",
+    );
+    let refusal = build_items_and_loot(
+        &source,
+        &HashMap::from([(100, 3)]),
+        &HashSet::from([100]),
+        &HashSet::new(),
+        &HashSet::new(),
+    )
+    .unwrap_err();
+    assert!(
+        refusal.to_string().contains("Operator Template Range"),
+        "{refusal}"
+    );
+}

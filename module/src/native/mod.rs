@@ -76,6 +76,7 @@ pub(crate) use party::roster as party_roster;
 pub(crate) use pet::changed as hunter_pet_changed;
 pub(crate) use petition::charter_opened as guild_charter_opened;
 pub(crate) use progression::{explored, levelup, xp};
+pub(crate) use query::broadcast_item_query;
 pub(crate) use quest::{changed as quest_changed, event_credit as quest_event_credit};
 pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
 pub(crate) use spell::{cast_event, spell_impact};

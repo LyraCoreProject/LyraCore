@@ -983,6 +983,9 @@ fn build_items_and_loot(
     for row in parse_table(dump, "item_template")?.iter() {
         let read = |column: &str| it::read(row, column);
         let entry: u64 = row.number(it::ENTRY)?;
+        if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_operator_template_id) {
+            bail!("item_template entry {entry} belongs to the Operator Template Range");
+        }
         if entry == 0 {
             continue;
         }
