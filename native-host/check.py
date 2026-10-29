@@ -378,6 +378,33 @@ def check_death(host):
     peer.collect()
 
 
+# Copied from DEFAULT_WORLD_STATES in crates/lyracore-protocol/src/codec/char.rs.
+DEFAULT_WORLD_STATES = [
+    (0x07AE, 1), (0x0532, 1), (0x0531, 0), (0x052E, 0), (0x06F9, 0),
+    (0x06F3, 0), (0x06F1, 0), (0x06EE, 0), (0x06ED, 0), (0x0571, 0),
+    (0x0570, 0), (0x0567, 1), (0x0566, 1), (0x0550, 1), (0x0544, 0),
+    (0x0536, 0), (0x0535, 1), (0x03C6, 0), (0x03C4, 0), (0x03C2, 0),
+    (0x07A8, 0), (0x07A3, 9999), (0x0574, 0), (0x0573, 0), (0x0572, 0),
+    (0x056F, 0), (0x056E, 0), (0x056D, 0), (0x056C, 0), (0x056B, 0),
+    (0x056A, 1), (0x0569, 1), (0x0568, 1), (0x0565, 0), (0x0564, 0),
+    (0x0563, 0), (0x0562, 0), (0x0561, 0), (0x0560, 0), (0x055F, 0),
+    (0x055E, 0), (0x055D, 0), (0x055C, 0), (0x055B, 0), (0x055A, 0),
+    (0x0559, 0), (0x0558, 0), (0x0557, 0), (0x0556, 0), (0x0555, 0),
+    (0x0554, 1), (0x0553, 1), (0x0552, 1), (0x0551, 1), (0x054F, 0),
+    (0x054E, 0), (0x054D, 1), (0x054C, 0), (0x054B, 0), (0x0545, 0),
+    (0x0543, 1), (0x0542, 0), (0x0540, 0), (0x053F, 0), (0x053E, 0),
+    (0x053D, 0), (0x053C, 0), (0x053B, 0), (0x053A, 1), (0x0539, 0),
+    (0x0538, 0), (0x0537, 0), (0x0534, 0), (0x0533, 0), (0x0530, 0),
+    (0x052F, 0), (0x052D, 1), (0x0516, 1), (0x0515, 0), (0x03B6, 0),
+    (0x0745, 2), (0x0736, 1), (0x0735, 1), (0x0734, 1), (0x0733, 1),
+    (0x0732, 1), (0x0702, 0), (0x0701, 0), (0x0700, 0), (0x06FE, 0),
+    (0x06FD, 0), (0x06FC, 0), (0x06FB, 0), (0x06F8, 0), (0x06F7, 0),
+    (0x06F6, 0), (0x06F4, 2000), (0x06F2, 0), (0x06F0, 0), (0x06EF, 0),
+    (0x06EC, 0), (0x06EA, 0), (0x06E9, 0), (0x06E8, 0), (0x06E7, 0),
+    (0x0518, 0), (0x0517, 0), (0x0703, 0), (0x0000, 0),
+]
+
+
 def check_environment(host):
     client, peer = native_and_peer(host)
     guid, peer_guid = client.guid, peer.guid
@@ -420,9 +447,7 @@ def check_environment(host):
     state_count = struct.unpack_from('<H', world_states[0], 8)[0]
     assert state_count == 109 and len(world_states[0]) == 10 + state_count * 8
     states = [struct.unpack_from('<Ii', world_states[0], 10 + offset * 8) for offset in range(state_count)]
-    assert states[:3] == [(0x07ae, 1), (0x0532, 1), (0x0531, 0)]
-    assert (0x07a3, 9999) in states and (0x06f4, 2000) in states
-    assert states[-1] == (0, 0)
+    assert states == DEFAULT_WORLD_STATES
     assert (0x2f4, struct.pack('<IfIB', 2, 0.25, 8536, 0)) in crossing
     assert not any(opcode in (0x2c2, 0x2f4) for opcode, _ in peer.collect())
     client.send(0x1f4, struct.pack('<I', 12))
