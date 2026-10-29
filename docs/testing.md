@@ -27,7 +27,7 @@ From `.github/workflows/rust.yml`. No SpacetimeDB node runs.
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard --example audit --example run
+cargo test -p lyracore-conformance --example scoreboard --example audit --example run --example baseline
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 python3 -m unittest discover -s importer/scripts/tests -v
@@ -193,7 +193,7 @@ The [Feature Ledger](../conformance/README.md) has its own Architecture Test:
 
 ```bash
 cargo test -p lyracore-conformance -- --nocapture
-cargo test -p lyracore-conformance --example scoreboard --example audit
+cargo test -p lyracore-conformance --example scoreboard --example audit --example run --example baseline
 python3 -B -m unittest discover -s conformance/tests -p 'test_*.py'
 cargo test -p lyracore-protocol --example benilla_inventory
 ```
@@ -222,11 +222,12 @@ latest Conformance Audit report. The scoreboard's example tests check counts, ev
 and failure handling. See the
 [scoreboard contract](../conformance/README.md#scoreboard) for inputs and output meanings.
 
-For each new or changed Behavior, assign two different people or agents. The scenario author
-writes and records the scenario in a harness PR. A different implementer makes tier 1 pass in core.
-Record both assignments and the harness PR in the implementation brief. An implementer reports
-suspected scenario defects to the author; implementation work never edits the scenario, Golden
-Trace or Equivalence Rules to obtain a pass. See [ADR 0005](adr/0005-1-12-conformance.md).
+For each new or changed Behavior, whoever dispatches the work assigns the scenario author and
+implementer to different people or agents. The scenario author records the scenario in a harness
+PR. The implementer's core PR description names the Behavior and role, and links that harness PR
+if one exists. An implementer reports suspected scenario defects to the author. Implementation work
+never edits the scenario, Golden Trace or Equivalence Rules to obtain a pass. See
+[ADR 0005](adr/0005-1-12-conformance.md).
 
 The durable CI target discovery includes `native_conformance` automatically and runs both tier 1
 scenarios. Use the [taxi setup](../conformance/README.md#taxi-data) to run that test.

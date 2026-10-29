@@ -2,6 +2,7 @@
 mod ratchet;
 
 use std::path::Path;
+use std::{fs::OpenOptions, io::Write};
 
 use anyhow::{ensure, Context, Result};
 use serde::Deserialize;
@@ -118,6 +119,33 @@ fn replace_scenario(
     Ok(committed)
 }
 
+fn write_baseline(path: &Path, current: ratchet::Baseline, requested: Option<&str>) -> Result<()> {
+    let lock_path = path.with_extension("json.lock");
+    let lock = OpenOptions::new()
+        .create(true)
+        .truncate(false)
+        .write(true)
+        .open(&lock_path)
+        .with_context(|| format!("open {}", lock_path.display()))?;
+    lock.lock()?;
+    let baseline = match requested {
+        Some(_) => replace_scenario(ratchet::Baseline::read(path)?, current.scenarios[0].clone())?,
+        None => current,
+    };
+    let parent = path.parent().context("baseline parent directory")?;
+    let mut temporary = tempfile::NamedTempFile::new_in(parent)?;
+    temporary.write_all(&baseline.canonical_bytes()?)?;
+    temporary.as_file().sync_all()?;
+    temporary.persist(path)?;
+    #[cfg(unix)]
+    std::fs::File::open(parent)?.sync_all()?;
+    let saved = ratchet::Baseline::read(path)?;
+    for scenario in &baseline.scenarios {
+        saved.check(scenario)?;
+    }
+    Ok(())
+}
+
 fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     ensure!(
@@ -143,18 +171,7 @@ fn main() -> Result<()> {
     let commit = String::from_utf8(output.stdout)?;
     let current = baseline_from_result(result, commit.trim(), requested)?;
     let path = root.join("conformance/tier1-baseline.json");
-    let baseline = match requested {
-        Some(_) => replace_scenario(
-            ratchet::Baseline::read(&path)?,
-            current.scenarios[0].clone(),
-        )?,
-        None => current,
-    };
-    std::fs::write(&path, baseline.canonical_bytes()?)?;
-    let saved = ratchet::Baseline::read(&path)?;
-    for scenario in &baseline.scenarios {
-        saved.check(scenario)?;
-    }
+    write_baseline(&path, current, requested)?;
     println!("wrote {}", path.display());
     Ok(())
 }
@@ -162,6 +179,8 @@ fn main() -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{mpsc, Arc, Barrier};
+    use std::time::Duration;
 
     fn entry(id: &str) -> ratchet::ScenarioBaseline {
         ratchet::ScenarioBaseline::from_comparison(
@@ -224,5 +243,76 @@ mod tests {
             scenarios: vec![],
         };
         assert!(baseline_from_result(result, "commit", Some("taxi_single_hop")).is_err());
+    }
+
+    #[test]
+    fn concurrent_scenario_updates_preserve_both_entries() -> Result<()> {
+        let directory = tempfile::tempdir()?;
+        let path = directory.path().join("tier1-baseline.json");
+        let mut scenarios: Vec<_> = catalogue::ENTRIES
+            .iter()
+            .map(|item| entry(item.id))
+            .collect();
+        scenarios.sort_by(|left, right| left.scenario.cmp(&right.scenario));
+        let original = ratchet::Baseline {
+            schema_version: 1,
+            scenarios,
+        };
+        std::fs::write(&path, original.canonical_bytes()?)?;
+        let lock = OpenOptions::new()
+            .create(true)
+            .truncate(false)
+            .write(true)
+            .open(path.with_extension("json.lock"))?;
+        lock.lock()?;
+
+        let barrier = Arc::new(Barrier::new(3));
+        let (done, completed) = mpsc::channel();
+        let threads: Vec<_> = ["connection_identity", "taxi_single_hop"]
+            .into_iter()
+            .map(|id| {
+                let path = path.clone();
+                let barrier = Arc::clone(&barrier);
+                let done = done.clone();
+                std::thread::spawn(move || {
+                    let mut changed = entry(id);
+                    changed.harness_revision = format!("changed {id}");
+                    barrier.wait();
+                    let result = write_baseline(
+                        &path,
+                        ratchet::Baseline {
+                            schema_version: 1,
+                            scenarios: vec![changed],
+                        },
+                        Some(id),
+                    );
+                    done.send(result).unwrap();
+                })
+            })
+            .collect();
+        barrier.wait();
+        let wrote_without_lock = completed.recv_timeout(Duration::from_secs(1)).is_ok();
+        drop(lock);
+        for thread in threads {
+            thread.join().unwrap();
+        }
+        drop(done);
+        assert!(!wrote_without_lock, "baseline update skipped the lock");
+        for result in completed {
+            result?;
+        }
+        let saved = ratchet::Baseline::read(&path)?;
+        for id in ["connection_identity", "taxi_single_hop"] {
+            assert_eq!(
+                saved
+                    .scenarios
+                    .iter()
+                    .find(|entry| entry.scenario == id)
+                    .unwrap()
+                    .harness_revision,
+                format!("changed {id}")
+            );
+        }
+        Ok(())
     }
 }

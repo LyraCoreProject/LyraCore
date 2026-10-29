@@ -1,4 +1,5 @@
 /target
+/conformance/tier1-baseline.json.lock
 **/*.rs.bk
 
 /.lyracore/
