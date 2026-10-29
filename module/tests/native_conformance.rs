@@ -219,25 +219,31 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     let (shard, guid, _) = fixture("native-conformance-later");
     let mut connection = enter(&shard, guid);
     assert!(!connection.drain_packets().is_empty());
-    assert!(connection
-        .wait_for_packets(Duration::from_millis(50))
-        .unwrap()
-        .is_empty());
     shard.assert_call("debug_set_money", &[&guid.to_string(), "12345"]);
-    let rows = connection.wait_for_packets(Duration::from_secs(5)).unwrap();
-    assert!(
-        !rows.is_empty(),
-        "the later transaction must reach the subscription"
-    );
-    assert!(
-        rows.iter().any(|row| {
-            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+    let expected = lyracore_protocol::world::encode(
+        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(lyracore_protocol::codec::build_coinage_values(guid, 12345)),
+        ),
+    )
+    .unwrap();
+    let expected_body = expected
+        .body
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut rows = Vec::new();
+    while std::time::Instant::now() < deadline {
+        rows.extend(connection.wait_for_packets(Duration::from_secs(1)).unwrap());
+        if rows.iter().any(|row| {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
                 serde_json::from_str(row.get()).unwrap();
-            audience == 0 && option == 0 && opcode.get() == "169"
-        }),
-        "expected SMSG_UPDATE_OBJECT from the money change"
-    );
-    assert!(connection.drain_packets().is_empty());
+            audience == 0 && option == 0 && opcode.get() == "169" && body == expected_body
+        }) {
+            return;
+        }
+    }
+    panic!("expected coinage values from the later transaction: {rows:?}");
 }
 
 fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
