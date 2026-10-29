@@ -42,13 +42,17 @@ pub fn build_health_values(guid: u64, health: u32) -> SMSG_UPDATE_OBJECT {
 
 pub fn build_player_flags_values(
     guid: u64,
-    player_flags: u32,
-    unit_bytes_1: u32,
+    player_flags: Option<u32>,
+    unit_bytes_1: Option<u32>,
 ) -> SMSG_UPDATE_OBJECT {
-    let (b1a, b1b, b1c, b1d) = unpack4(unit_bytes_1);
     player_values(guid, |player| {
-        player.set_player_flags(player_flags as i32);
-        player.set_unit_bytes_1(b1a, b1b, b1c, b1d);
+        if let Some(flags) = player_flags {
+            player.set_player_flags(flags as i32);
+        }
+        if let Some(bytes) = unit_bytes_1 {
+            let (b1a, b1b, b1c, b1d) = unpack4(bytes);
+            player.set_unit_bytes_1(b1a, b1b, b1c, b1d);
+        }
     })
 }
 
@@ -443,7 +447,10 @@ mod lint_tests {
         let g = 0x9u64;
         let msgs: Vec<(&str, SMSG_UPDATE_OBJECT)> = vec![
             ("health", build_health_values(g, 41)),
-            ("player_flags", build_player_flags_values(g, 0x10, 0)),
+            (
+                "player_flags",
+                build_player_flags_values(g, Some(0x10), None),
+            ),
             ("dynamic_flags", build_dynamic_flags_values(g, 1)),
             ("unit_flags", build_unit_flags_values(g, 0x80000)),
             (

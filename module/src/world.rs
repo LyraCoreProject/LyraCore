@@ -751,6 +751,11 @@ pub(crate) fn apply_player_login(
         character.resting,
     );
     character.rested_xp = rested;
+    character.rest_state = crate::rest::rest_state_after_bonus(
+        character.rest_state,
+        character.rested_xp,
+        character.level,
+    );
     if consumed {
         character.last_logout_micros = 0;
     }
@@ -763,22 +768,26 @@ pub(crate) fn apply_player_login(
     character.owner_identity = owner;
     character.online = true;
     character.first_login = false;
+    let rest_state = character.rest_state;
     chars.guid().update(character);
     if let Some(mut entity) = ctx.db.game_world_entity().guid().find(character_guid) {
+        let previous_bytes = entity.player_bytes_2;
+        crate::rest::set_rest_state_byte(&mut entity, rest_state);
         let resolved_area = crate::terrain::area_at(ctx, entity.map_id, entity.x, entity.y);
         let resolved_zone = resolved_area.as_ref().map(crate::terrain::zone_of);
+        let previous_zone = entity.zone_id;
+        let was_resting = entity.resting;
+        let previous_flags = entity.player_flags;
         if resolved_zone.is_some() {
-            let previous_zone = entity.zone_id;
-            let was_resting = entity.resting;
-            let previous_flags = entity.player_flags;
             apply_zone_transition(ctx, &mut entity, resolved_zone);
             crate::rest::check_rest_state(ctx, &mut entity, resolved_area.as_ref());
-            if previous_zone != entity.zone_id
-                || was_resting != entity.resting
-                || previous_flags != entity.player_flags
-            {
-                entity.update(ctx);
-            }
+        }
+        if previous_zone != entity.zone_id
+            || was_resting != entity.resting
+            || previous_flags != entity.player_flags
+            || previous_bytes != entity.player_bytes_2
+        {
+            entity.update(ctx);
         }
     }
     crate::instance::reconcile_instance_removal(ctx, character_guid);

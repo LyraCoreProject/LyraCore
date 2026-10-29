@@ -917,6 +917,7 @@ pub(crate) fn insert_new_character(
         pending_run_speed_mult_bp: crate::world::RUN_SPEED_BP_1X,
         bank_bag_slots: 0,
         watched_faction_index: -1,
+        rest_state: lyracore_shared::packing::REST_STATE_NORMAL,
     };
 
     if chars.try_insert(row).is_err() {

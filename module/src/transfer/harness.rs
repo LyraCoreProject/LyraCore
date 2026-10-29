@@ -484,6 +484,7 @@ fn fixture_character(guid: u64, name: &str) -> crate::character::Character {
         pending_run_speed_mult_bp: 30_000,
         bank_bag_slots: 3,
         watched_faction_index: -1,
+        rest_state: lyracore_shared::packing::REST_STATE_RESTED,
     }
 }
 

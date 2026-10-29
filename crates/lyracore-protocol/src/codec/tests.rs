@@ -542,7 +542,7 @@ fn loot_money_notify_carries_the_share_not_a_hardcoded_total() {
 #[test]
 fn ghost_values_is_player_mask_without_object_type() {
     let guid = 1;
-    let msg = build_player_flags_values(guid, 0x10, 0x0100_0000);
+    let msg = build_player_flags_values(guid, Some(0x10), Some(0x0100_0000));
     match &msg.objects[0] {
         Object::Values { guid1, mask1 } => {
             assert_eq!(guid1.guid(), guid);
@@ -567,6 +567,26 @@ fn ghost_values_is_player_mask_without_object_type() {
         buf
     );
     assert_no_object_type(&buf[4..]);
+}
+
+#[test]
+fn player_flags_values_only_write_changed_fields() {
+    let guid = 0x1234;
+    for (flags, bytes, expected) in [
+        (Some(0x20), None, vec![(190, 0x20)]),
+        (None, Some(0x0100_0000), vec![(138, 0x0100_0000)]),
+        (
+            Some(0x20),
+            Some(0x0100_0000),
+            vec![(138, 0x0100_0000), (190, 0x20)],
+        ),
+    ] {
+        let msg = build_player_flags_values(guid, flags, bytes);
+        let mut packet = Vec::new();
+        msg.write_unencrypted_server(&mut packet).unwrap();
+        let updates = lyracore_shared::values_mask::parse_values_updates(&packet[4..]);
+        assert_eq!(updates[0].fields, expected);
+    }
 }
 
 #[test]

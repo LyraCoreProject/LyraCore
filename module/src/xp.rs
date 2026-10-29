@@ -253,6 +253,8 @@ pub(crate) fn award_xp(
         Some(mut c) if c.rested_xp > 0 => {
             let (granted, drained) = rest_bonus(base, c.rested_xp);
             c.rested_xp = c.rested_xp.saturating_sub(drained);
+            c.rest_state = crate::rest::rest_state_after_bonus(c.rest_state, c.rested_xp, c.level);
+            crate::rest::set_rest_state_byte(&mut p, c.rest_state);
             chars.guid().update(c);
             granted
         }
@@ -362,6 +364,13 @@ pub(crate) fn grant_xp(ctx: &ReducerContext, p: &mut WorldEntity, amount: u32) {
                 *p = fresh;
             }
         }
+    }
+    if leveled && p.level >= LEVEL_CAP {
+        if let Some(mut character) = ctx.db.game_character().guid().find(p.guid) {
+            character.rest_state = lyracore_shared::packing::REST_STATE_NORMAL;
+            ctx.db.game_character().guid().update(character);
+        }
+        crate::rest::set_rest_state_byte(p, lyracore_shared::packing::REST_STATE_NORMAL);
     }
 }
 
