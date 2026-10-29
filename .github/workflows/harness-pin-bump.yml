@@ -67,7 +67,9 @@ jobs:
         if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
         with:
           name: pin-proposal
-          path: ${{ runner.temp }}/pin-proposal/
+          path: |
+            ${{ runner.temp }}/pin-proposal/tier1-baseline.json
+            ${{ runner.temp }}/pin-proposal/summary.json
           if-no-files-found: error
           retention-days: 1
 
