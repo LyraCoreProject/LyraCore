@@ -777,6 +777,10 @@ impl FlightEndSink for CtxFlightEndSink<'_> {
             return;
         };
         project_flight_end(&mut player, landing, zone_id);
+        if landing.is_some() && zone_id.is_some() {
+            let area = crate::terrain::area_at(self.ctx, player.map_id, player.x, player.y);
+            crate::rest::check_rest_state(self.ctx, &mut player, area.as_ref());
+        }
         player.update(self.ctx);
     }
 
@@ -1343,10 +1347,15 @@ fn taxi_pass(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     }
 
     let previous_cell = (player.grid_x, player.grid_y);
-    // A flight explores nothing and keeps its zone until landing.
     player
         .place(position.x, position.y, position.z, MoveClock::Unchanged)
         .unexplored();
+    let area = crate::terrain::area_at(ctx, player.map_id, player.x, player.y);
+    let zone_id = area.as_ref().map(crate::terrain::zone_of);
+    crate::world::apply_zone_transition(ctx, &mut player, zone_id);
+    if zone_id.is_some() {
+        crate::rest::check_rest_state(ctx, &mut player, area.as_ref());
+    }
     let (grid_x, grid_y) = (player.grid_x, player.grid_y);
     player.orientation = position.orientation;
     player.movement_flags = TAXI_MOVEMENT_FORWARD;

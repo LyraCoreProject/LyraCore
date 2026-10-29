@@ -607,7 +607,11 @@ pub(crate) fn build_player_entity(
             character.resting,
         ),
         player_bytes_3: character.gender as u32,
-        player_flags: 0,
+        player_flags: if character.resting {
+            lyracore_shared::constants::player_flags::RESTING
+        } else {
+            0
+        },
         xp: character.xp,
         next_level_xp: character.next_level_xp,
         target_guid: 0,

@@ -122,6 +122,13 @@ maps refuse the import. The gameplay fields are `map_type`, `linked_zone`, `pare
 no entrance. Instance admission, reset schedules and ghost routing do not yet consume these fields.
 This is a new table, so publishing it adds an empty catalogue without changing existing rows.
 
+### Tavern AreaTriggers (`module/src/config.rs`)
+
+`game_tavern_area_trigger` holds the selected vmangos `areatrigger_tavern` ids. Each id resolves
+through `game_area_trigger` for its map and three-dimensional volume. The table is new, so an
+existing Realm gains an empty catalogue until the world import runs again. Inn rest applies only
+inside a selected trigger; a missing geometry row cannot grant rest.
+
 ### Taxi catalogue (`module/src/config.rs`)
 
 `game_taxi_node` comes from vmangos `taxi_nodes`. `game_taxi_path` and `game_taxi_path_node`

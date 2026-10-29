@@ -189,8 +189,8 @@ no mount template or other world data is needed.
 `route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
 destinations exactly against vertices 1 through 27, including their wire precision. The trace
 starts at the passenger's position, which matches node 2, and omits DBC vertex 0 from its
-destinations. Vertex 0 and destination node 4 were checked against the client data; the trace
-does not independently establish those two rows. The test also checks the passenger's mount display.
+destinations. Vertex 0 was checked against the client data. Destination node 4 uses the vmangos `taxi_nodes`
+coordinates the importer reads, which match the Reference Server's landing correction. The test also checks the passenger's mount display.
 
 ```bash
 cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture

@@ -288,6 +288,20 @@ fn build_areatrigger_teleport_sql(
     Ok((stmts, n))
 }
 
+fn build_tavern_area_trigger_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+) -> Result<Vec<String>> {
+    let ids = parse_table(dump, "areatrigger_tavern")?
+        .iter()
+        .map(|row| row.number::<u32>("id"))
+        .collect::<Result<std::collections::BTreeSet<_>>>()?;
+    let rows = ids.iter().map(|id| format!("({id})")).collect::<Vec<_>>();
+    let mut stmts = vec!["DELETE FROM game_tavern_area_trigger WHERE trigger_id >= 0".to_string()];
+    push_insert(&mut stmts, "game_tavern_area_trigger", "trigger_id", &rows);
+    eprintln!("tavern area triggers: {} rows", rows.len());
+    Ok(stmts)
+}
+
 fn distinct_race_class_combos(rows: &[(u32, u32)]) -> usize {
     let mut combos: Vec<(u32, u32)> = rows.to_vec();
     combos.sort_unstable();
@@ -1863,6 +1877,7 @@ pub(crate) fn globals_statements(
     statements.extend(build_createinfo_action_sql(dump)?);
     statements.extend(build_createinfo_item_sql(dump, client)?);
     statements.extend(build_areatrigger_teleport_sql(dump)?.0);
+    statements.extend(build_tavern_area_trigger_sql(dump)?);
     Ok(statements)
 }
 

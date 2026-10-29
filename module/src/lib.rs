@@ -283,9 +283,10 @@ pub use tables::{
 };
 pub use tables::{
     game_area, game_area_trigger, game_char_base_info, game_config, game_map, game_race_info,
-    game_realm, game_start_item, game_start_position, game_taxi_node, game_taxi_path,
-    game_taxi_path_node, CharBaseInfo, GameArea, GameAreaTrigger, GameMap, GameTaxiNode,
-    GameTaxiPath, GameTaxiPathNode, RaceInfo, Realm, ServerConfig, StartItem, StartPosition,
+    game_realm, game_start_item, game_start_position, game_tavern_area_trigger, game_taxi_node,
+    game_taxi_path, game_taxi_path_node, CharBaseInfo, GameArea, GameAreaTrigger, GameMap,
+    GameTavernAreaTrigger, GameTaxiNode, GameTaxiPath, GameTaxiPathNode, RaceInfo, Realm,
+    ServerConfig, StartItem, StartPosition,
 };
 pub use tables::{
     game_areatrigger_teleport, game_character_quest, game_character_quest_event_credit,

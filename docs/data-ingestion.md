@@ -14,6 +14,10 @@ tables. The Operator's own 1.12.1 client supplies the remaining tables, terrain,
 model geometry. `importer/scripts/pull-vmangos.py` fetches the SQLite snapshot into the ignored
 `.import/` directory. LyraCore distributes neither source's data.
 
+The globals pass imports selected `areatrigger_tavern` ids with `patch_min <= 10`. The Module
+matches them to the imported `areatrigger_template` geometry for inn rest. Reimport replaces the
+selected id set.
+
 Exact collision geometry has its own live-acceptance contract in
 [`vmap-rollout.md`](./operations/vmap-rollout.md). Importing it never turns on collision.
 
