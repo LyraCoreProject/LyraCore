@@ -136,7 +136,7 @@ class LocalRealmLifetime(unittest.TestCase):
                 patch.object(audit, 'run', run), patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime'), \
                 patch.object(audit.socket, 'socket'):
             work = Path(directory)
-            (work / '.lyracore-cli-rev').write_text('9a00763234f82830a6266b9561a607523f67c2b1')
+            (work / '.lyracore-cli-rev').write_text('a016c82c6848a098ecbbb07ed53704c2b7dfdff1')
             with self.assertRaisesRegex(RuntimeError, 'import failed'):
                 with audit.local_realm(work, work / 'client/Data', 0):
                     self.fail('capture must not start')
@@ -192,7 +192,7 @@ class ScenarioKey(unittest.TestCase):
             client = root / 'Data'
             client.mkdir()
             (client / 'dbc.MPQ').write_bytes(b'first')
-            with patch.object(audit, 'ROOT', root):
+            with patch.object(audit, 'ROOT', root), patch.object(audit, 'SCENARIO_CACHE', root):
                 first, _ = audit.scenario_key('core', 'harness', harness, client)
                 (client / 'dbc.MPQ').write_bytes(b'other')
                 changed_client, _ = audit.scenario_key('core', 'harness', harness, client)
@@ -201,6 +201,29 @@ class ScenarioKey(unittest.TestCase):
                 changed_pin, _ = audit.scenario_key('core', 'harness', harness, client)
             self.assertNotEqual(first, changed_client)
             self.assertNotEqual(changed_client, changed_pin)
+
+
+class ImportedWorld(unittest.TestCase):
+    def test_restore_discards_previous_scenario_changes_before_restart(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            realm = root / 'core'
+            native_data = realm / '.lyracore/native-data'
+            native_data.mkdir(parents=True)
+            seed = root / 'imported-world'
+            seed.mkdir()
+            (seed / 'world').write_text('imported')
+            (native_data / 'world').write_text('scenario changed')
+            calls = []
+
+            def run(args, **_):
+                calls.append(args[1:])
+
+            with patch.object(audit, 'run', side_effect=run):
+                audit.restore_imported_world(realm, seed, realm / 'lyracore', {})
+            self.assertEqual((native_data / 'world').read_text(), 'imported')
+            self.assertEqual(calls, [['dev', 'down'], ['dev', 'up', '--single']])
 
 
 class CleanupAuthentication(unittest.TestCase):

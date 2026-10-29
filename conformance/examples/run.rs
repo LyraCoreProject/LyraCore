@@ -77,6 +77,11 @@ impl GroupClass {
     }
 }
 
+enum BaselineSource<'a> {
+    Tier1(&'a ratchet::Baseline),
+    Audit(&'a ratchet::Baseline),
+}
+
 fn assemble<'a>(
     scenario: &'a str,
     behavior: &'a str,
@@ -84,9 +89,12 @@ fn assemble<'a>(
     harness_revision: &str,
     scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
-    baseline: &ratchet::Baseline,
-    audit_baseline: bool,
+    source: BaselineSource<'_>,
 ) -> Result<RunOutput<'a>> {
+    let (baseline, audit_baseline) = match source {
+        BaselineSource::Tier1(baseline) => (baseline, false),
+        BaselineSource::Audit(baseline) => (baseline, true),
+    };
     let current = ratchet::ScenarioBaseline::from_comparison(
         scenario,
         behavior,
@@ -311,6 +319,11 @@ fn main() -> Result<()> {
         .map(PathBuf::from)
         .unwrap_or_else(|| root.join("conformance/tier1-baseline.json"));
     let baseline = ratchet::Baseline::read(&baseline_path)?;
+    let source = if audit_baseline.is_some() {
+        BaselineSource::Audit(&baseline)
+    } else {
+        BaselineSource::Tier1(&baseline)
+    };
     let output = assemble(
         &scenario,
         &behavior.id,
@@ -318,8 +331,7 @@ fn main() -> Result<()> {
         &result.harness_revision,
         &entry.scenario_sha256,
         &entry.comparison,
-        &baseline,
-        audit_baseline.is_some(),
+        source,
     )?;
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
@@ -385,8 +397,7 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
-            false,
+            BaselineSource::Tier1(&baseline),
         )?;
         let text = text_output(&output, false)?;
         assert!(text.contains("vmangos: abcdef:src/game/Handlers/TaxiHandler.cpp :: WorldSession::HandleActivateTaxiOpcode"));
@@ -411,8 +422,7 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
-            false,
+            BaselineSource::Tier1(&baseline),
         )?;
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&output)?)?;
@@ -462,8 +472,7 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
-            false,
+            BaselineSource::Tier1(&baseline),
         )?;
         let text = text_output(&output, false)?;
         assert!(text.contains("Tier 1 baseline: differs"));
@@ -483,8 +492,7 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
-            true,
+            BaselineSource::Audit(&baseline),
         )?;
         assert!(output.baseline.matches);
         assert!(text_output(&output, true)?.contains("Audit report: matches"));

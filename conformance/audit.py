@@ -47,14 +47,34 @@ def timed(label):
 
 
 def client_fingerprint(directory):
+    cache = SCENARIO_CACHE / 'client-data-state.json'
+    manifest = file_manifest(directory)
+    if cache.is_file():
+        saved = json.loads(cache.read_text())
+        if saved['directory'] == str(directory) and saved['manifest'] == manifest:
+            return saved['sha256']
     fingerprint = hashlib.sha256()
     for path in sorted(directory.rglob('*')):
-        if path.is_symlink():
-            raise RuntimeError(f'client data contains a symlink: {path}')
         if path.is_file():
             fingerprint.update(str(path.relative_to(directory)).encode())
             fingerprint.update(bytes.fromhex(digest(path)))
-    return fingerprint.hexdigest()
+    if file_manifest(directory) != manifest:
+        raise RuntimeError('client data changed while hashing')
+    checksum = fingerprint.hexdigest()
+    write_state(cache, {'directory': str(directory), 'manifest': manifest, 'sha256': checksum})
+    return checksum
+
+
+def file_manifest(directory):
+    entries = []
+    for path in sorted(directory.rglob('*')):
+        if path.is_symlink():
+            raise RuntimeError(f'cached data contains a symlink: {path}')
+        if path.is_file():
+            stat = path.stat()
+            entries.append([str(path.relative_to(directory)), stat.st_dev, stat.st_ino,
+                            stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns])
+    return entries
 
 
 def scenario_key(core_commit, revision, harness, client_data):
@@ -79,6 +99,22 @@ def write_state(path, value):
     pending = path.with_suffix('.pending')
     pending.write_text(json.dumps(value))
     pending.replace(path)
+
+
+def restore_imported_world(realm_root, seed, cli, env):
+    run([cli, 'dev', 'down'], env=env, cwd=realm_root, stdout=subprocess.DEVNULL)
+    native_data = realm_root / '.lyracore/native-data'
+    shutil.rmtree(native_data)
+    shutil.copytree(seed, native_data)
+    run([cli, 'dev', 'up', '--single'], env=env, cwd=realm_root,
+        stdout=subprocess.DEVNULL)
+
+
+def lock_owned_state(file, name):
+    try:
+        fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    except BlockingIOError as error:
+        raise RuntimeError(f'{name} is busy with another local capture') from error
 
 
 def check_cargo_config(directory):
@@ -176,7 +212,7 @@ def reference_server(harness, peer_count):
         raise RuntimeError('Reference Server provenance does not match its runtime pins')
     compose = [adapter / 'reference.sh']
     with (REFERENCE / '.audit.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_owned_state(lock, 'Reference Server')
         if run([*compose, 'ps', '--status', 'running', '-q'], capture_output=True, text=True).stdout.strip():
             raise RuntimeError('Reference Server is already running; this audit only owns servers it starts')
         for port in [13724, 18085]:
@@ -213,7 +249,7 @@ def scenario_reference_server(harness, key):
     marker = SCENARIO_CACHE / 'reference-state.json'
     compose = [adapter / 'reference.sh']
     with (REFERENCE / '.audit.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_owned_state(lock, 'Reference Server')
         running = set(run([*compose, 'ps', '--status', 'running', '--services'],
                           capture_output=True, text=True).stdout.split())
         owned = json.loads(marker.read_text()) if marker.is_file() else None
@@ -345,17 +381,19 @@ def scenario_realm(key, pins, client_data):
         raise RuntimeError('spacetime CLI is missing')
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
     with (SCENARIO_CACHE / '.realm.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_owned_state(lock, 'scenario Realm')
         cache = SCENARIO_CACHE / 'realm'
         realm_root = cache / 'core'
         marker = cache / 'state.json'
         state = json.loads(marker.read_text()) if marker.is_file() else None
+        seed = cache / 'imported-world'
         cli = realm_root / 'lyracore'
         bin_dir = cache / 'bin'
         cli_env = dict(os.environ)
         cli_env.pop('CARGO_TARGET_DIR', None)
         cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
-        if cache.exists() and (state is None or state['key'] != key):
+        if cache.exists() and (state is None or state['key'] != key
+                               or state.get('seed_manifest') != file_manifest(seed)):
             if realm_root.exists():
                 if (realm_root / '.lyracore').exists():
                     run([cli, 'dev', 'down'], env=cli_env, cwd=realm_root,
@@ -401,8 +439,14 @@ def scenario_realm(key, pins, client_data):
                 snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
                 if snapshot['commit'] != pins['database_commit']:
                     raise RuntimeError('imported vmangos data differs from Reference Server pin')
+                with timed('imported world snapshot'):
+                    run([cli, 'dev', 'down'], env=cli_env, cwd=realm_root,
+                        stdout=subprocess.DEVNULL)
+                    shutil.copytree(realm_root / '.lyracore/native-data', seed)
+                    run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root,
+                        stdout=subprocess.DEVNULL)
                 state = dict(key=key, native_host_sha256=digest(host), module_sha256=digest(module),
-                             database_commit=snapshot['commit'])
+                             database_commit=snapshot['commit'], seed_manifest=file_manifest(seed))
                 write_state(marker, state)
             except BaseException:
                 if (realm_root / '.lyracore').exists():
@@ -414,11 +458,7 @@ def scenario_realm(key, pins, client_data):
                 raise
         else:
             with timed('Realm start'):
-                run([cli, 'dev', 'status'], env=cli_env, cwd=realm_root,
-                    stdout=subprocess.DEVNULL)
-                for port in [3000, 3724, 8085]:
-                    with socket.create_connection(('127.0.0.1', port), timeout=2):
-                        pass
+                restore_imported_world(realm_root, seed, cli, cli_env)
             print('[audit] import: 0.00s (cached)', file=sys.stderr)
         host = realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
         module = realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
@@ -572,7 +612,7 @@ def scenario_main(args):
 def stop_scenario_cache():
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
     with (SCENARIO_CACHE / '.realm.lock').open('w') as lock:
-        fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        lock_owned_state(lock, 'scenario Realm')
         cache = SCENARIO_CACHE / 'realm'
         realm_root = cache / 'core'
         if (cache / 'state.json').is_file():
@@ -587,7 +627,7 @@ def stop_scenario_cache():
         marker = SCENARIO_CACHE / 'reference-state.json'
         if marker.is_file():
             with (REFERENCE / '.audit.lock').open('w') as reference_lock:
-                fcntl.flock(reference_lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                lock_owned_state(reference_lock, 'Reference Server')
                 adapter = json.loads(marker.read_text())['adapter']
                 run([adapter, 'down'], capture_output=True)
                 marker.unlink()

@@ -477,13 +477,15 @@ signatures match and the Reference Server matches its Golden Trace. Exit 1 means
 Exit 2 means setup or capture failed; diagnostics name missing client data, Docker, occupied ports or
 a dirty core tree. The scenario check writes no report or committed trace.
 
-The first check creates a disposable Realm worktree and imports the pinned vmangos world. Later checks
-reuse its running Realm and Reference Server under
-`$HOME/.cache/lyracore-scratch/scenario-audit/`. The cache key covers the core commit, harness and
-vmangos pins, CLI pin, client path and the hashes of every client Data file. The runner also verifies
-the cached Native Host, Module and imported snapshot before capture. A changed key stops the cached
-Realm, removes its worktree and builds a new one. Use `./conformance/audit --stop` to stop both owned
-servers and remove the cached worktree when you need the loopback ports or want a full audit.
+The first check creates a disposable Realm worktree and imports the pinned vmangos world. It saves
+the imported Realm before any scenario runs. Later checks restore that data and restart the Realm,
+while the Reference Server stays running. The cache lives under
+`$HOME/.cache/lyracore-scratch/scenario-audit/`. Its key covers the core commit, harness and vmangos
+pins, CLI pin, client path and hashes of every client Data file. The runner checks file metadata on
+warm runs and hashes client files again when they change. It also verifies the cached Native Host,
+Module and imported snapshot before capture. A changed key removes the cached worktree and imports
+again. Use `./conformance/audit --stop` to stop both owned servers and remove the cached worktree
+when you need the loopback ports or want a full audit.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
