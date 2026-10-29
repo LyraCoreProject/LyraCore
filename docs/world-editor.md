@@ -25,6 +25,10 @@ Open a region (File › Open Region), edit its creatures and gameobjects, then p
 status line says "live now" when the Realm took the edits. The Item Editor and the Creature Editor
 save to the Realm the same way. While a save runs, the Saving bar reads "Updating the realm".
 
+Game › Play Here and Launch-at-camera use
+[`operator_teleport_character`](./operator-content-api.md#character-teleport) for online moves and
+offline saved positions. The Meld caller is delivered in a separate Meld PR.
+
 ## With Development reload
 
 `lyracore dev watch` publishes the Module again with `clear=false`, so the Operator claim and the
