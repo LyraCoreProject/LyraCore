@@ -103,7 +103,7 @@ fn replace_scenario(
         .collect();
     ensure!(
         actual == expected,
-        "committed tier 1 baseline is incomplete"
+        "committed tier 1 baseline does not list every catalogue scenario; run every tier 1 test, then ./conformance/baseline without a scenario"
     );
     let entry = committed
         .scenarios
