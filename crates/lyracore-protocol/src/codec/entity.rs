@@ -119,6 +119,46 @@ pub enum CreateKind {
     Peer,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CreateFreshness {
+    New,
+    Known,
+}
+
+pub fn set_create_freshness(message: &mut SMSG_UPDATE_OBJECT, freshness: CreateFreshness) {
+    for object in &mut message.objects {
+        let (guid3, object_type, movement2, mask2) = match object.clone() {
+            Object::CreateObject {
+                guid3,
+                object_type,
+                movement2,
+                mask2,
+            }
+            | Object::CreateObject2 {
+                guid3,
+                object_type,
+                movement2,
+                mask2,
+            } => (guid3, object_type, movement2, mask2),
+            _ => continue,
+        };
+        *object = match freshness {
+            CreateFreshness::New => Object::CreateObject2 {
+                guid3,
+                object_type,
+                movement2,
+                mask2,
+            },
+            CreateFreshness::Known => Object::CreateObject {
+                guid3,
+                object_type,
+                movement2,
+                mask2,
+            },
+        };
+    }
+}
+
 pub fn visible_item_index(slot: u8) -> Option<VisibleItemIndex> {
     use VisibleItemIndex::*;
     Some(match slot {

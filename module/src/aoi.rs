@@ -117,7 +117,7 @@ pub(crate) fn entity_changed(
     }) {
         return;
     }
-    refresh_entity(ctx, entity.guid);
+    refresh_entity_with_freshness(ctx, entity.guid, old.is_none() && !entity.is_player());
 }
 
 pub(crate) fn enter_viewer(ctx: &ReducerContext, guid: u64) -> Result<(), String> {
@@ -140,6 +140,10 @@ pub(crate) fn enter_viewer(ctx: &ReducerContext, guid: u64) -> Result<(), String
 }
 
 pub(crate) fn refresh_entity(ctx: &ReducerContext, guid: u64) {
+    refresh_entity_with_freshness(ctx, guid, false);
+}
+
+fn refresh_entity_with_freshness(ctx: &ReducerContext, guid: u64, newly_added: bool) {
     if ctx.db.game_aoi_viewer().count() == 0 {
         return;
     }
@@ -152,31 +156,35 @@ pub(crate) fn refresh_entity(ctx: &ReducerContext, guid: u64) {
         .filter(|viewer| viewer.sees_entity(&entity, stealthed))
         .map(|viewer| viewer.guid)
         .collect();
-    replace_subject(ctx, WORLD_ENTITY, guid, wanted);
+    replace_subject(ctx, WORLD_ENTITY, guid, wanted, newly_added);
 }
 
-pub(crate) fn gameobject_changed(ctx: &ReducerContext, object: &GameObject) {
+pub(crate) fn gameobject_changed(ctx: &ReducerContext, object: &GameObject, newly_added: bool) {
     if ctx.db.game_aoi_viewer().count() == 0 {
         return;
     }
     let wanted = nearby_viewers(ctx, object.map_id, object.instance_id, object.cell)
         .map(|viewer| viewer.guid)
         .collect();
-    replace_subject(ctx, GAME_OBJECT, object.guid, wanted);
+    replace_subject(ctx, GAME_OBJECT, object.guid, wanted, newly_added);
 }
 
-pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse) {
+pub(crate) fn corpse_changed(ctx: &ReducerContext, corpse: &Corpse, newly_added: bool) {
     let wanted = nearby_viewers(ctx, corpse.map_id, corpse.instance_id, corpse.cell)
         .map(|viewer| viewer.guid)
         .collect();
-    replace_subject(ctx, CORPSE, corpse.guid, wanted);
+    replace_subject(ctx, CORPSE, corpse.guid, wanted, newly_added);
 }
 
-pub(crate) fn dynamic_object_changed(ctx: &ReducerContext, object: &DynamicObject) {
+pub(crate) fn dynamic_object_changed(
+    ctx: &ReducerContext,
+    object: &DynamicObject,
+    newly_added: bool,
+) {
     let wanted = nearby_viewers(ctx, object.map_id, object.instance_id, object.cell)
         .map(|viewer| viewer.guid)
         .collect();
-    replace_subject(ctx, DYNAMIC_OBJECT, object.guid, wanted);
+    replace_subject(ctx, DYNAMIC_OBJECT, object.guid, wanted, newly_added);
 }
 
 pub(crate) fn nearby_viewers(
@@ -257,11 +265,17 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
             layer,
             entity_guid,
         });
-        crate::native::grant_added(ctx, &grant);
+        crate::native::grant_added(ctx, &grant, false);
     }
 }
 
-fn replace_subject(ctx: &ReducerContext, layer: u8, entity_guid: u64, mut wanted: BTreeSet<u64>) {
+fn replace_subject(
+    ctx: &ReducerContext,
+    layer: u8,
+    entity_guid: u64,
+    mut wanted: BTreeSet<u64>,
+    newly_added: bool,
+) {
     let grants = ctx.db.game_aoi_grant();
     let existing: Vec<_> = grants.by_subject().filter((layer, entity_guid)).collect();
     for grant in existing {
@@ -277,7 +291,7 @@ fn replace_subject(ctx: &ReducerContext, layer: u8, entity_guid: u64, mut wanted
             layer,
             entity_guid,
         });
-        crate::native::grant_added(ctx, &grant);
+        crate::native::grant_added(ctx, &grant, newly_added);
     }
 }
 
@@ -299,7 +313,7 @@ pub(crate) fn transport_moved(
                 .filter(|guid| viewers.guid().find(guid).is_some()),
         )
         .collect();
-    replace_subject(ctx, TRANSPORT, transport_guid, wanted);
+    replace_subject(ctx, TRANSPORT, transport_guid, wanted, false);
 }
 
 pub(crate) fn entity_removed(ctx: &ReducerContext, guid: u64) {
