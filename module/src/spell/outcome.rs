@@ -137,10 +137,12 @@ pub struct CastHandle {
     pub due_micros: i64,
 }
 
-impl From<PendingCast> for CastHandle {
-    fn from(cast: PendingCast) -> Self {
+impl CastHandle {
+    pub(crate) fn from_row(ctx: &ReducerContext, cast: PendingCast) -> Self {
         let due_micros = match cast.scheduled_at {
-            ScheduleAt::Time(at) => at.to_micros_since_unix_epoch(),
+            ScheduleAt::Time(at) => {
+                crate::time::scheduled_time(ctx, at).to_micros_since_unix_epoch()
+            }
             ScheduleAt::Interval(_) => i64::MAX,
         };
         Self {
@@ -234,5 +236,5 @@ pub(crate) fn pending_cast(ctx: &ReducerContext, caster_guid: u64) -> Option<Cas
         .by_caster()
         .filter(caster_guid)
         .next()
-        .map(Into::into)
+        .map(|cast| CastHandle::from_row(ctx, cast))
 }

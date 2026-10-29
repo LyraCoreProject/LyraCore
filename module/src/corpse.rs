@@ -157,8 +157,8 @@ pub(crate) fn apply_reclaim_corpse(
     if dx * dx + dy * dy + dz * dz > RECLAIM_RADIUS_SQ {
         return Err("too far from corpse".into());
     }
-    let elapsed =
-        ctx.timestamp.to_micros_since_unix_epoch() - corpse.created_at.to_micros_since_unix_epoch();
+    let elapsed = crate::time::now(ctx).to_micros_since_unix_epoch()
+        - corpse.created_at.to_micros_since_unix_epoch();
     if elapsed < corpse.reclaim_delay_micros {
         return Err("corpse reclaim delay not elapsed".into());
     }
@@ -172,7 +172,7 @@ pub(crate) fn apply_reclaim_corpse(
 
 pub(crate) fn sweep_corpse_decay(ctx: &ReducerContext) {
     let t = ctx.db.game_corpse();
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let to_bones: Vec<u64> = t
         .by_created_at()
         .filter(..=Timestamp::from_micros_since_unix_epoch(now - CORPSE_DECAY_MICROS))

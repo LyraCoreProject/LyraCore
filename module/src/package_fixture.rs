@@ -148,11 +148,10 @@ pub fn declare_next_movement_tick(ctx: &ReducerContext, delay: TimeDuration) -> 
     if tick.instance_id != GLOBAL_TICK_INSTANCE {
         return Err("fixture requires the catch-all creature movement tick".to_string());
     }
-    let at = ctx
-        .timestamp
+    let at = crate::time::now(ctx)
         .checked_add(delay)
         .ok_or("fixture movement tick timestamp exhausted")?;
-    tick.scheduled_at = ScheduleAt::Time(at);
+    tick.scheduled_at = crate::time::schedule_time(ctx, at);
     schedules.scheduled_id().update(tick);
     Ok(())
 }

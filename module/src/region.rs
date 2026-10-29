@@ -105,7 +105,7 @@ pub fn set_region_assignment(
         region_id,
         shard,
         epoch,
-        updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     };
     if current.is_some() {
         table.key().update(row);

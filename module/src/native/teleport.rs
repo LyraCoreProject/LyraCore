@@ -18,7 +18,7 @@ pub enum NativeTeleport {
 pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<u32> {
     let mut player = ctx.db.game_native_player().character_guid().find(guid)?;
     player.teleport_counter = player.teleport_counter.wrapping_add(1);
-    player.teleport_started_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    player.teleport_started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     player.teleport = Some(if cross_map {
         super::clear_audience(ctx, player.connection_id);
         NativeTeleport::WorldPort
@@ -188,8 +188,7 @@ pub(super) fn expire(ctx: &ReducerContext, player: NativePlayer) -> Result<Nativ
     let Some(NativeTeleport::Near { counter }) = player.teleport else {
         return Ok(player);
     };
-    if ctx
-        .timestamp
+    if crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(player.teleport_started_micros)
         < NEAR_ACK_TIMEOUT_MICROS

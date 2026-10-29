@@ -478,7 +478,7 @@ fn edge_context(
     current_target_guid: Option<u64>,
     assisted: bool,
 ) -> EventContext {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
     EventContext {
         invoker_guid,
         invoker_is_player: invoker_guid.and_then(|guid| {

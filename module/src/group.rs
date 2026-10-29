@@ -343,7 +343,7 @@ pub(crate) fn push_event(
         kind,
         other_guid,
         other_name: String::new(),
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         payload,
         recipient_guid,
     });
@@ -811,7 +811,7 @@ pub(crate) fn party_facts(
         }
     }
     let mut enemies = Vec::new();
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000).max(0) as u64;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000).max(0) as u64;
     for guid in enemy_guids {
         let Some(entity) = ctx.db.game_world_entity().guid().find(guid) else {
             continue;
@@ -1089,7 +1089,7 @@ fn invite_core_on(
         id: 0,
         target_guid,
         inviter_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         group_id: inviter_group_id,
     });
     push_event(

@@ -517,7 +517,7 @@ pub(crate) fn create_instance_with_id(
         instance_id,
         map_id,
         party_id,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         last_empty_at_micros: 0,
         reset_requested: false,
     });
@@ -642,7 +642,7 @@ pub(crate) fn create_instance_with_id(
             z: src.z,
             orientation: src.orientation,
             state: src.state,
-            created_at: ctx.timestamp,
+            created_at: crate::time::now(ctx),
             respawn_at_micros: 0,
             instance_id,
             grid_x: lyracore_shared::spatial::grid_cell(src.x, src.y).0,
@@ -732,14 +732,14 @@ pub fn evict_instance_population(
 
 #[reducer]
 pub fn reap_instances(ctx: &ReducerContext, _schedule: InstanceReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let instances: Vec<GameInstance> = ctx.db.game_instance().iter().collect();
     if instances.is_empty() {
         return;
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let reap_after = empty_reap_micros(hosts_instance_populations(ctx));
     let occupied = occupied_instances(ctx);
     let mut reaped = 0usize;
@@ -995,10 +995,13 @@ pub(crate) fn reconcile_instance_removal(ctx: &ReducerContext, character_guid: u
         InstanceRemoval::delete(ctx, row.character_guid);
     }
     if let Some(standing) = standing.filter(|standing| standing.in_world) {
-        let due = ctx.timestamp.to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
+        let due = crate::time::now(ctx).to_micros_since_unix_epoch() + INSTANCE_REMOVAL_MICROS;
         InstanceRemoval {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Time(Timestamp::from_micros_since_unix_epoch(due)),
+            scheduled_at: crate::time::schedule_time(
+                ctx,
+                Timestamp::from_micros_since_unix_epoch(due),
+            ),
             character_guid,
             instance_id: standing.instance_id,
             group_id: standing.group_id,
@@ -1018,7 +1021,7 @@ pub fn expire_instance_removal(
     ctx: &ReducerContext,
     removal: InstanceRemoval,
 ) -> Result<(), String> {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return Err("scheduler only".to_string());
     }
     fire_instance_removal(ctx, &removal);

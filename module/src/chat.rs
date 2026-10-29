@@ -130,7 +130,7 @@ fn write_chat_event(
         chat_type,
         language,
         message: text,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         target_guid,
     });
     crate::native::speech(ctx, &sender, &event);
@@ -201,7 +201,7 @@ pub(crate) fn apply_send_emote(
         sender_guid: sender.guid,
         text_emote,
         emote_anim,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         target_guid,
         map_id,
         instance_id,
@@ -248,7 +248,7 @@ pub(crate) fn emit_system_message(
 ) -> Result<(), String> {
     let recipient = crate::helpers::character_by_guid(ctx, character_guid)
         .map(|character| (character.owner_identity, character.online));
-    let event = prepare_system_message(character_guid, recipient, &message, ctx.timestamp)?;
+    let event = prepare_system_message(character_guid, recipient, &message, crate::time::now(ctx))?;
     let event = ctx.db.game_system_message_event().insert(event);
     crate::native::system_message(ctx, &event);
     Ok(())

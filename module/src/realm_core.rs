@@ -47,7 +47,7 @@ pub(crate) fn record_shard(
         character_guid,
         map_id,
         instance_id,
-        updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         revision,
         bot_source_identity: current.as_ref().map_or(Identity::ZERO, |row| {
             if same_partition {
@@ -109,7 +109,7 @@ pub fn begin_character_shard_transfer(
             character_guid,
             map_id: source_map_id,
             instance_id: source_instance_id,
-            updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+            updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
             revision: 1,
             bot_source_identity: source_module_identity,
             bot_transfer_intent_id: transfer_intent_id,
@@ -148,7 +148,7 @@ pub fn begin_character_shard_transfer(
         return Err("Transfer Realm locator changed".to_string());
     }
     table.character_guid().update(CharacterShard {
-        updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         bot_source_identity: source_module_identity,
         bot_transfer_intent_id: transfer_intent_id,
         bot_controller_generation: controller_generation,
@@ -226,7 +226,7 @@ pub fn finish_character_shard_transfer(
         character_guid,
         map_id: destination_map_id,
         instance_id: destination_instance_id,
-        updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         revision: source_revision
             .checked_add(1)
             .ok_or_else(|| "Transfer Realm locator revision exhausted".to_string())?,
@@ -290,7 +290,7 @@ pub fn finish_pending_character_shard_transfer(
         character_guid,
         map_id: destination_map_id,
         instance_id: destination_instance_id,
-        updated_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        updated_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
         revision: source_revision
             .checked_add(1)
             .ok_or_else(|| "Transfer Realm locator revision exhausted".to_string())?,
@@ -384,7 +384,7 @@ pub fn claim_guid_range(
         slot,
         base: slot as u64 * GUID_RANGE_SIZE,
         size: GUID_RANGE_SIZE,
-        assigned_micros: ctx.timestamp.to_micros_since_unix_epoch(),
+        assigned_micros: crate::time::now(ctx).to_micros_since_unix_epoch(),
     })
     .map_err(|e| format!("claim_guid_range: slot {slot} was taken concurrently ({e}) — retry"))?;
     spacetimedb::log::info!(

@@ -60,7 +60,8 @@ fn duration(ctx: &ReducerContext, aura: &Aura) -> Option<Packet> {
     if expiry == i64::MAX {
         return None;
     }
-    let remaining = expiry.saturating_sub(ctx.timestamp.to_micros_since_unix_epoch()) / 1_000;
+    let remaining =
+        expiry.saturating_sub(crate::time::now(ctx).to_micros_since_unix_epoch()) / 1_000;
     (remaining > 0).then(|| {
         packet(ServerOpcodeMessage::SMSG_UPDATE_AURA_DURATION(
             codec::build_aura_duration(aura.slot, remaining.min(u32::MAX as i64) as u32),
@@ -111,7 +112,7 @@ fn channel(ctx: &ReducerContext, aura: &Aura, removed: bool) {
         let duration = aura
             .expires_at
             .to_micros_since_unix_epoch()
-            .saturating_sub(ctx.timestamp.to_micros_since_unix_epoch())
+            .saturating_sub(crate::time::now(ctx).to_micros_since_unix_epoch())
             / 1_000;
         ServerOpcodeMessage::MSG_CHANNEL_START(MSG_CHANNEL_START_Server {
             spell: aura.spell_id,

@@ -195,7 +195,7 @@ pub(crate) fn apply_group_loot_rules(ctx: &ReducerContext, corpse_guid: u64, gro
         .filter(&corpse_guid)
         .collect();
     let mut master_rows: Vec<u8> = Vec::new();
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     for mut row in rows {
         if row.quest_only {
             continue;
@@ -330,7 +330,7 @@ pub fn debug_stage_loot_roll_fixture(ctx: &ReducerContext) -> Result<(), String>
         0,
         5_090_002,
         &[5_090_003, 5_090_004, 5_090_005],
-        ctx.timestamp.to_micros_since_unix_epoch(),
+        crate::time::now(ctx).to_micros_since_unix_epoch(),
         117,
     );
     Ok(())
@@ -532,7 +532,7 @@ fn cleanup_roll(ctx: &ReducerContext, roll_id: u64) {
 }
 
 pub(crate) fn sweep_loot_rolls(ctx: &ReducerContext) {
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let due: Vec<LootRoll> = ctx
         .db
         .game_loot_roll()

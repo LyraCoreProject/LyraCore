@@ -103,7 +103,7 @@ pub(crate) fn file_reward_letter(
             letter.item,
         )
         .delayed(
-            ctx.timestamp.to_micros_since_unix_epoch(),
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
             letter.delay_secs,
         ),
     );

@@ -283,7 +283,7 @@ pub(crate) fn run_proc_pass(
             .map(|a| a.base_attack_time_ms)
             .unwrap_or(0),
     };
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for (row, side, counterparty_guid) in candidates {
         let profile = ProcProfile::of(&row);
         let roll_bp = ctx.random::<u32>() % BASIS_POINTS;
@@ -297,7 +297,7 @@ pub(crate) fn run_proc_pass(
             remove_carrier_buff(ctx, row.target_guid, row.spell_id);
         } else if let Some(mut fresh) = ctx.db.game_aura().id().find(row.id) {
             // A refresh in this invocation refills charges and wins over the pre-refresh count.
-            if fresh.applied_at != ctx.timestamp {
+            if fresh.applied_at != crate::time::now(ctx) {
                 fresh.proc_charges = fire.charges_left;
             }
             fresh.proc_ready_micros = fire.ready_micros;
@@ -317,7 +317,9 @@ fn proc_rows(ctx: &ReducerContext, carrier_guid: u64, bits: u32) -> Vec<Aura> {
     }
     auras_on(ctx, carrier_guid)
         .filter(|a| {
-            is_proc_kind(a.eff_kind) && a.applied_at != ctx.timestamp && a.proc_flags & bits != 0
+            is_proc_kind(a.eff_kind)
+                && a.applied_at != crate::time::now(ctx)
+                && a.proc_flags & bits != 0
         })
         .collect()
 }
