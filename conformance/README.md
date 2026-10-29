@@ -119,6 +119,37 @@ harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
 
+### Automated harness pin proposals
+
+After the harness CI passes on a relevant `main` push, its workflow tags that commit with the next
+`v0.2.0-conformance.N` prerelease. A daily core workflow, also available through
+`workflow_dispatch`, compares the newest tag with `.wire-harness-rev`. When the tag is newer, it
+updates that file, the workspace `wire-client` revision and `Cargo.lock`. It builds the disposable
+Module, runs every tier 1 scenario, runs `./conformance/baseline` without an argument, and reruns
+the scenarios against the regenerated baseline. The first run can fail because the committed
+baseline still names the old harness revision. The generator requires a completed result for every
+catalogue scenario; a setup failure stops the proposal.
+
+The workflow opens or updates the single `ci/auto-harness-pin` PR. Its body shows added and removed
+rule and data signatures per scenario, or says when only provenance changed. Signature or scenario
+catalogue changes add the `ready-for-human` label. The workflow never merges the PR. Normal PR checks
+run on the bot PR.
+If the harness catalogue adds a scenario before core has a corresponding tier 1 test, baseline
+regeneration fails and the workflow opens no PR. The scenario author must add that test and its
+Feature Ledger entry; the workflow only handles the pin and baseline once core can run the scenario.
+The maintainer must create the core Actions secret `HARNESS_PIN_TOKEN` as a fine-grained personal
+access token scoped only to `LyraCoreProject/LyraCore`. Give it repository permissions **Contents:
+read and write**, **Pull requests: read and write**, and **Issues: read and write** for the review
+label. The harness uses its default `GITHUB_TOKEN` with `contents: write` to create tags; it needs
+no cross-repository secret. The core token must belong to a principal allowed to open PRs. A PR
+created with the default `GITHUB_TOKEN` would not start the other Actions workflows.
+
+To test the full flow after creating the secret, merge a harness PR that changes a scenario, trace,
+`src/`, adapter, or Cargo manifest or lockfile. Confirm harness CI creates one new tag. Run the
+core `Propose harness pin bump` workflow manually, review its PR body and label, and confirm that
+the normal core checks run. Run the workflow again to check that it updates the same PR without
+making another. Merge remains a human decision.
+
 ### Run one scenario
 
 From the repo root, run `./conformance/run taxi_single_hop` or
