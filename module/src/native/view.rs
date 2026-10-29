@@ -90,6 +90,14 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         unit_flags: e.unit_flags,
         mount_display_id: e.mount_display_id,
         base_attack_time_ms: e.base_attack_time_ms,
+        offhand_attack_time_ms: if e.is_player() {
+            let delay = crate::combat::equipped_offhand_weapon_damage(ctx, e.guid)
+                .map_or(crate::combat::DEFAULT_ATTACK_TIME_MS, |(_, _, delay)| delay);
+            let haste = crate::spell::speed_bonus(ctx, e.guid, crate::spell::SPEED_SWING);
+            Some(crate::combat::swing_time_with_haste(delay, haste))
+        } else {
+            None
+        },
         dynamic_flags: e.dynamic_flags,
         player_bytes: e.player_bytes,
         player_bytes_2: e.player_bytes_2,

@@ -86,19 +86,12 @@ fn encode_create_masks(update: &SMSG_UPDATE_OBJECT) -> Result<Vec<u8>> {
                 selected.set_u32(index, value);
             }
         }
-        if matches!(kind, ObjectType::Unit | ObjectType::Player) && selected.get(127).is_none() {
-            // vmangos initializes a Player's off-hand timer to 2000 ms.
-            let offhand_attack_time_ms = if *kind == ObjectType::Player {
-                2000
-            } else {
-                selected.get(126).unwrap_or(0)
-            };
-            if offhand_attack_time_ms != 0 {
-                selected.set_u32(127, offhand_attack_time_ms);
-            }
-        }
-        if *kind == ObjectType::GameObject && present.get(21).is_none_or(|value| value != 15) {
-            // vmangos forces GAMEOBJECT_DYN_FLAGS into non-Transport CREATE masks.
+        if *kind == ObjectType::GameObject
+            && present
+                .get(21)
+                .is_none_or(|value| !matches!(value, 11 | 15))
+        {
+            // vmangos excludes both Transport types from forced GAMEOBJECT_DYN_FLAGS.
             selected.set_u32(19, present.get(19).unwrap_or(0));
         }
         body.extend_from_slice(&encoded[..mask_start]);
@@ -391,6 +384,9 @@ mod tests {
             display_id: 49,
             native_display_id: 49,
             run_speed_mult_bp: 10_000,
+            offhand_attack_time_ms: (type_mask & lyracore_shared::constants::type_mask::PLAYER
+                != 0)
+                .then_some(2000),
             ..Default::default()
         }
     }
@@ -463,6 +459,35 @@ mod tests {
     }
 
     #[test]
+    fn player_create_carries_the_offhand_weapon_timer() {
+        let create = codec::build_create_object(
+            &EntityView {
+                offhand_attack_time_ms: Some(1300),
+                ..unit_view(lyracore_shared::constants::type_mask::PLAYER)
+            },
+            CreateKind::Peer,
+            &[],
+            &[],
+        )
+        .unwrap();
+        let decoded = round_trip_update(create);
+        let object = &decoded.objects[0];
+        let mut empty = object.clone();
+        match &mut empty {
+            Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => {
+                *mask2 = empty_mask(mask2);
+            }
+            _ => unreachable!(),
+        }
+        let mask_start = encode_object(&empty).unwrap().len() - 1;
+        let fields = parse_mask(&encode_object(object).unwrap()[mask_start..]).unwrap();
+        assert_eq!(
+            fields.into_iter().find(|(index, _)| *index == 127),
+            Some((127, 1300))
+        );
+    }
+
+    #[test]
     fn gameobject_create_mask_keeps_forced_dynamic_flags() {
         let create = codec::build_gameobject_create_object(&GameObjectView {
             guid: 1,
@@ -482,6 +507,27 @@ mod tests {
         assert!(!mask.is_bit_dirty(9));
         assert!(mask.is_bit_dirty(19));
         assert_eq!(mask.gameobject_dyn_flags(), Some(0));
+    }
+
+    #[test]
+    fn transport_gameobject_create_omits_forced_dynamic_flags() {
+        for type_id in [11, 15] {
+            let create = codec::build_gameobject_create_object(&GameObjectView {
+                guid: 1,
+                type_id,
+                size: 1.0,
+                ..Default::default()
+            });
+            let decoded = round_trip_update(create);
+            let Object::CreateObject2 {
+                mask2: UpdateMask::GameObject(mask),
+                ..
+            } = &decoded.objects[0]
+            else {
+                panic!("expected GameObject CREATE");
+            };
+            assert!(!mask.is_bit_dirty(19), "type {type_id}");
+        }
     }
 
     #[test]

@@ -30,6 +30,7 @@ pub struct EntityView {
     pub unit_flags: u32,
     pub mount_display_id: u32,
     pub base_attack_time_ms: u32,
+    pub offhand_attack_time_ms: Option<u32>,
     pub dynamic_flags: u32,
     pub player_bytes: u32,
     pub player_bytes_2: u32,
@@ -538,10 +539,21 @@ pub fn build_create_object(
             mask2,
         },
     };
-    Ok(SMSG_UPDATE_OBJECT {
+    let mut message = SMSG_UPDATE_OBJECT {
         has_transport: 0,
         objects: vec![create],
-    })
+    };
+    let offhand_attack_time_ms = if is_player {
+        entity.offhand_attack_time_ms
+    } else {
+        Some(entity.base_attack_time_ms)
+    };
+    if let Some(delay) = offhand_attack_time_ms {
+        add_create_fields(&mut message, |mask| {
+            mask.set_u32(127, delay);
+        })?;
+    }
+    Ok(message)
 }
 
 pub fn build_self_create_object(
@@ -550,8 +562,6 @@ pub fn build_self_create_object(
     learned_skills: &[(u32, u16, u16)],
     quests: &[update_mask::QuestLogSlot],
 ) -> Result<SMSG_UPDATE_OBJECT> {
-    use wow_world_messages::vanilla::ServerMessage;
-
     let mut create =
         build_create_object(entity, CreateKind::SelfPlayer, inventory, learned_skills)?;
     if quests.is_empty() {
@@ -563,8 +573,26 @@ pub fn build_self_create_object(
             .all(|q| u16::from(q.slot) < update_mask::idx::QUEST_LOG_SLOTS),
         "quest log slot outside the Character descriptor"
     );
-    let Object::CreateObject2 { mask2, .. } = &mut create.objects[0] else {
-        unreachable!("build_create_object returns one CREATE_OBJECT2");
+    add_create_fields(&mut create, |mask| {
+        let quest_mask = update_mask::full_quest_log_mask(quests);
+        for index in update_mask::idx::PLAYER_QUEST_LOG_1_1
+            ..update_mask::quest_log_field(update_mask::idx::QUEST_LOG_SLOTS, 0)
+        {
+            mask.set_u32(index, quest_mask.get(index).unwrap_or(0));
+        }
+    })?;
+    Ok(create)
+}
+
+fn add_create_fields(
+    create: &mut SMSG_UPDATE_OBJECT,
+    add: impl FnOnce(&mut update_mask::UpdateMaskValues),
+) -> Result<()> {
+    use wow_world_messages::vanilla::ServerMessage;
+
+    let mask2 = match &mut create.objects[0] {
+        Object::CreateObject { mask2, .. } | Object::CreateObject2 { mask2, .. } => mask2,
+        _ => unreachable!("build_create_object returns one CREATE"),
     };
     // This local envelope carries OBJECT_FIELD_TYPE and must never reach the client.
     let envelope = SMSG_UPDATE_OBJECT {
@@ -585,12 +613,7 @@ pub fn build_self_create_object(
     for &(index, value) in fields {
         mask.set_u32(index, value);
     }
-    let quest_mask = update_mask::full_quest_log_mask(quests);
-    for index in update_mask::idx::PLAYER_QUEST_LOG_1_1
-        ..update_mask::quest_log_field(update_mask::idx::QUEST_LOG_SLOTS, 0)
-    {
-        mask.set_u32(index, quest_mask.get(index).unwrap_or(0));
-    }
+    add(&mut mask);
     bytes.truncate(4 + 4 + 1 + 1 + 1);
     mask.write_to(&mut bytes);
     let size = u16::try_from(bytes.len() - 2)?;
@@ -604,7 +627,7 @@ pub fn build_self_create_object(
         unreachable!("the local envelope contains one VALUES descriptor");
     };
     *mask2 = mask1;
-    Ok(create)
+    Ok(())
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
