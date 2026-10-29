@@ -16,14 +16,17 @@
       "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
       "rule": [
         {
-          "rule": "missing_packet",
+          "rule": "exact_field",
           "checkpoint": "flight",
           "stream": {
             "kind": "reply",
             "id": "flight"
           },
           "opcode": 199,
-          "field_path": []
+          "field_path": [
+            "position",
+            "x"
+          ]
         },
         {
           "rule": "missing_packet",
