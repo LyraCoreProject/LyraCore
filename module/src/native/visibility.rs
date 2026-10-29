@@ -102,7 +102,6 @@ pub(super) fn create(
             if grant.viewer_guid == grant.entity_guid {
                 recipient_packet(ctx, connection, grant, None, true);
                 super::aura::replay(ctx, connection, grant.entity_guid, true);
-                super::taxi::replay(ctx, connection, grant.entity_guid);
                 super::creature::replay(ctx, connection, grant.entity_guid);
                 if let Some(entity) = ctx.db.game_world_entity().guid().find(grant.entity_guid) {
                     super::book::talent_points(ctx, entity.guid, entity.level);
@@ -116,6 +115,7 @@ pub(super) fn create(
                 .find(grant.entity_guid)
                 .ok_or("AOI Grant refers to missing WorldEntity")?;
             let mut view = super::view::entity(ctx, &entity);
+            super::taxi::create_spline(ctx, entity.guid, &mut view);
             view.dynamic_flags = super::loot::dynamic_flags(ctx, &entity, grant.viewer_guid);
             let items = if entity.is_player() {
                 super::view::items(ctx, entity.guid)
@@ -185,7 +185,6 @@ pub(super) fn create(
         super::pet::replay(ctx, connection, grant.viewer_guid, grant.entity_guid)?;
         super::combat::replay(ctx, connection, grant.entity_guid)?;
         super::aura::replay(ctx, connection, grant.entity_guid, false);
-        super::taxi::replay(ctx, connection, grant.entity_guid);
         super::creature::replay(ctx, connection, grant.entity_guid);
     }
     Ok(())

@@ -93,10 +93,10 @@ pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
     }
 }
 
-pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64) {
-    if let Some(packet) = crate::taxi::current_spline(ctx, guid).and_then(|row| spline_packet(&row))
-    {
-        super::send_raw(ctx, connection, packet.opcode, packet.body, false);
+pub(super) fn create_spline(ctx: &ReducerContext, guid: u64, view: &mut codec::EntityView) {
+    if let Some((spline, pose)) = crate::taxi::current_create_spline(ctx, guid) {
+        [view.x, view.y, view.z, view.orientation] = pose;
+        view.spline = Some(spline);
     }
 }
 

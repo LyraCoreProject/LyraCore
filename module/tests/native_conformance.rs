@@ -283,24 +283,66 @@ fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
     (shard, passenger, observer)
 }
 
-fn taxi_spline_start(rows: &[Box<RawValue>], connection_id: u128, passenger: u64) -> Option<f32> {
-    use wire_client::decode::Field;
-
+fn taxi_create(
+    rows: &[Box<RawValue>],
+    connection_id: u128,
+    passenger: u64,
+) -> Option<(
+    wow_world_messages::vanilla::MovementBlock_MovementFlags_SplineEnabled,
+    wow_world_messages::vanilla::Vector3d,
+)> {
+    use wow_world_messages::vanilla::{
+        opcodes::ServerOpcodeMessage, MovementBlock_UpdateFlag_Living, Object,
+    };
     rows.iter().find_map(|row| {
-        let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+        let Packet(_, (audience, recipient), (option, opcode), body, _, _, _) =
             serde_json::from_str(row.get()).unwrap();
-        if audience != 0 || option != 0 || opcode.get() != "221" {
+        if option != 0 || opcode.get() != "169" {
             return None;
         }
-        let spline = packet(row, connection_id, 0x00dd);
-        assert_eq!(spline.fields["guid"], Field::Guid(passenger));
-        let Field::Object(position) = &spline.fields["position"] else {
-            panic!("taxi spline has no start position");
+        let addressed = match audience {
+            0 => serde_json::from_str::<(u128,)>(recipient.get()).unwrap().0 == connection_id,
+            2 => serde_json::from_str::<((u128,), u8, u64)>(recipient.get())
+                .is_ok_and(|((id,), _, guid)| id == connection_id && guid == passenger),
+            _ => false,
         };
-        let Field::Float(x) = position["x"] else {
-            panic!("taxi spline has no x coordinate");
+        if !addressed {
+            return None;
+        }
+        let bytes: Vec<u8> = body
+            .as_bytes()
+            .chunks_exact(2)
+            .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
+            .collect();
+        let mut frame = Vec::with_capacity(bytes.len() + 4);
+        frame.extend_from_slice(&u16::try_from(bytes.len() + 2).unwrap().to_be_bytes());
+        frame.extend_from_slice(&0x00a9u16.to_le_bytes());
+        frame.extend_from_slice(&bytes);
+        let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(update) =
+            ServerOpcodeMessage::read_unencrypted(&mut frame.as_slice()).unwrap()
+        else {
+            unreachable!();
         };
-        Some(x as f32)
+        update.objects.into_iter().find_map(|object| {
+            let Object::CreateObject2 {
+                guid3, movement2, ..
+            } = object
+            else {
+                return None;
+            };
+            if guid3.guid() != passenger {
+                return None;
+            }
+            let MovementBlock_UpdateFlag_Living::Living {
+                flags,
+                living_position,
+                ..
+            } = movement2.update_flag.get_living()?
+            else {
+                return None;
+            };
+            Some((flags.get_spline_enabled()?.clone(), *living_position))
+        })
     })
 }
 
@@ -320,16 +362,26 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
     viewer.drain_packets();
 
     let mut spline = None;
+    let mut observed = Vec::new();
     let deadline = std::time::Instant::now() + Duration::from_secs(6);
     while spline.is_none() && std::time::Instant::now() < deadline {
-        spline = taxi_spline_start(
-            &viewer.wait_for_packets(Duration::from_secs(1)).unwrap(),
-            viewer.connection_id(),
-            passenger,
-        );
+        let rows = viewer.wait_for_packets(Duration::from_secs(1)).unwrap();
+        spline = taxi_create(&rows, viewer.connection_id(), passenger);
+        observed.extend(rows);
     }
-    let x = spline.expect("observer did not receive a taxi spline");
+    let (spline, position) = spline
+        .unwrap_or_else(|| panic!("observer did not receive a taxi CREATE spline: {observed:?}"));
+    let x = position.x;
     assert!((66.0..200.0).contains(&x), "obsolete spline start: {x}");
+    assert_eq!(spline.nodes.len(), 4);
+    assert_eq!((spline.nodes[1].x, spline.nodes[2].x), (0.0, 200.0));
+    assert_eq!(spline.final_node.x, 200.0);
+    assert!(spline.time_passed > 0);
+    assert!(!observed.iter().any(|row| {
+        let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+            serde_json::from_str(row.get()).unwrap();
+        audience == 0 && option == 0 && opcode.get() == "221"
+    }));
     assert_eq!(
         shard
             .query_rows(&format!(
@@ -350,10 +402,16 @@ fn login_near_a_flyer_replays_its_current_spline() {
     ));
 
     let mut viewer = enter(&shard, observer);
-    let x = taxi_spline_start(&viewer.drain_packets(), viewer.connection_id(), passenger)
-        .expect("login did not replay the flyer's spline");
-    assert!(x > 20.0, "login replay started at {x}");
-    assert!((x - taxi_x(&shard, passenger)).abs() < 5.0);
+    let (spline, position) =
+        taxi_create(&viewer.drain_packets(), viewer.connection_id(), passenger)
+            .expect("login did not create the flyer with its spline");
+    assert!(
+        position.x > 20.0,
+        "login CREATE placed flyer at {}",
+        position.x
+    );
+    assert!(spline.time_passed > 0);
+    assert!((position.x - taxi_x(&shard, passenger)).abs() < 5.0);
 }
 
 #[test]
@@ -382,8 +440,11 @@ fn flyer_reconnect_restores_position_and_replays_current_spline() {
 
     let mut second = enter(&shard, passenger);
     let world_x = taxi_x(&shard, passenger);
-    let replay_x = taxi_spline_start(&second.drain_packets(), second.connection_id(), passenger)
-        .expect("reconnect did not replay the flyer's spline");
+    let (spline, position) =
+        taxi_create(&second.drain_packets(), second.connection_id(), passenger)
+            .expect("reconnect did not create the flyer with its spline");
+    let replay_x = position.x;
+    assert!(spline.time_passed > 0);
     assert!(
         world_x > saved_x + 15.0,
         "saved {saved_x}, reconnected {world_x}"

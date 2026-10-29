@@ -80,7 +80,8 @@ pub(super) fn enter_character(
         .guid()
         .find(guid)
         .ok_or("world entry did not create a player")?;
-    let entity = super::view::entity(ctx, &live);
+    let mut entity = super::view::entity(ctx, &live);
+    super::taxi::create_spline(ctx, guid, &mut entity);
     let items = super::view::items(ctx, guid);
     let learned = ctx
         .db

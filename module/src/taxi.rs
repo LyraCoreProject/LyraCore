@@ -580,6 +580,57 @@ fn ordered_route(ctx: &ReducerContext, path_id: u32) -> Option<Vec<GameTaxiPathN
     (points.len() >= 2 && complete).then_some(points)
 }
 
+pub(crate) fn current_create_spline(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Option<(lyracore_protocol::codec::CreateSpline, [f32; 4])> {
+    use lyracore_protocol::messages::vanilla::Vector3d;
+
+    let flight = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character_guid)?;
+    if flight.started_micros == 0 {
+        return None;
+    }
+    let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
+    let elapsed = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(flight.started_micros)
+        .max(0);
+    let position = route_position(&points, elapsed)?;
+    if position.complete {
+        return None;
+    }
+    let duration_ms =
+        (route_duration_micros(&points)? / 1_000).clamp(1, i64::from(u32::MAX)) as u32;
+    let start = &points[0];
+    let next = &points[1];
+    let mut nodes = Vec::with_capacity(points.len() + 2);
+    nodes.push(Vector3d {
+        x: 2.0 * start.x - next.x,
+        y: 2.0 * start.y - next.y,
+        z: 2.0 * start.z - next.z,
+    });
+    nodes.extend(points.iter().map(|point| Vector3d {
+        x: point.x,
+        y: point.y,
+        z: point.z,
+    }));
+    nodes.push(*nodes.last()?);
+    Some((
+        lyracore_protocol::codec::CreateSpline {
+            nodes,
+            time_passed_ms: (elapsed / 1_000).clamp(0, i64::from(duration_ms - 1)) as u32,
+            duration_ms,
+            id: flight.started_micros as u64 as u32,
+        },
+        [position.x, position.y, position.z, position.orientation],
+    ))
+}
+
 fn remaining_spline(
     flight: &ActiveTaxiFlight,
     player: &WorldEntity,
@@ -608,28 +659,6 @@ fn remaining_spline(
         duration_ms: (duration_micros / 1_000).clamp(1, i64::from(u32::MAX)) as u32,
         spline_id: (flight.started_micros as u64 as u32).wrapping_add(position.point_index as u32),
     }
-}
-
-pub(crate) fn current_spline(
-    ctx: &ReducerContext,
-    character_guid: u64,
-) -> Option<TaxiPassengerSpline> {
-    let flight = ctx
-        .db
-        .game_active_taxi_flight()
-        .character_guid()
-        .find(character_guid)?;
-    if flight.started_micros == 0 {
-        return None;
-    }
-    let player = ctx.db.game_world_entity().guid().find(character_guid)?;
-    let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
-    let elapsed = ctx
-        .timestamp
-        .to_micros_since_unix_epoch()
-        .saturating_sub(flight.started_micros);
-    let position = route_position(&points, elapsed)?;
-    (!position.complete).then(|| remaining_spline(&flight, &player, &points, position, elapsed))
 }
 
 pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut crate::Character) {
