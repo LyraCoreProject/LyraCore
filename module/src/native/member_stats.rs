@@ -77,7 +77,7 @@ pub(super) fn start(ctx: &ReducerContext, connection_id: ConnectionId, owner_gui
     if records.connection_id().find(connection_id).is_none() {
         records.insert(NativeMemberStats {
             id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(5_000_000)),
+            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(5_000_000)),
             connection_id,
             owner_guid,
             snapshots: Vec::new(),
@@ -275,7 +275,7 @@ pub(super) fn request(
 
 #[reducer]
 pub fn tick_native_member_stats(ctx: &ReducerContext, record: NativeMemberStats) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     let Some(mut record) = ctx.db.game_native_member_stats().id().find(record.id) else {

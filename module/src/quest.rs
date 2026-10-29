@@ -698,7 +698,7 @@ pub(crate) fn accept_offered_quest(
         return Err(AcceptQuestRefusal::LogFull);
     }
     let deadline_micros = if tmpl.limit_time > 0 {
-        ctx.timestamp.to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
+        crate::time::now(ctx).to_micros_since_unix_epoch() + (tmpl.limit_time as i64) * 1_000_000
     } else {
         0
     };
@@ -946,7 +946,7 @@ pub(crate) fn request_turn_in_quest(
                 recipient_identity: player.owner_identity,
                 killed_guid: 0,
                 total_exp: xp,
-                created_at: ctx.timestamp,
+                created_at: crate::time::now(ctx),
                 is_kill: false,
                 rested_bonus: 0,
             },
@@ -1640,7 +1640,7 @@ fn is_expired(now_micros: i64, deadline_micros: i64, rewarded: bool, failed: boo
 }
 
 crate::game_tick_pass!(fn quest_timer_pass(ctx) {
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let log = ctx.db.game_character_quest();
     let expired: Vec<CharacterQuest> = log
 .iter()

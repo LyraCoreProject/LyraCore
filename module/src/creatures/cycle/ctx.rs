@@ -56,7 +56,7 @@ impl CtxWorld<'_> {
     // Restoring the stored row in the same transaction leaves no commit-log entry.
     fn settle_advances(self) {
         let entities = self.ctx.db.game_world_entity();
-        let now_micros = self.ctx.timestamp.to_micros_since_unix_epoch() as u64;
+        let now_micros = crate::time::now(self.ctx).to_micros_since_unix_epoch() as u64;
         for (stored, advanced) in self.advances {
             let Some(settled) = entities.guid().find(stored.guid) else {
                 continue;
@@ -92,7 +92,7 @@ impl CtxWorld<'_> {
 }
 
 pub(crate) fn stop_on_stored_leg(ctx: &ReducerContext, leg: CreatureSpline) -> Option<Stop> {
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
     let world = CtxWorld {
         ctx,
         regen_window: crate::combat::RegenWindow::new(now_micros / 1_000, 0),
@@ -234,8 +234,10 @@ impl MotionSink for CtxWorld<'_> {
             .guid()
             .find(guid)
             .and_then(|s| {
-                as_leg(s, false)
-                    .heading_on_path(at, self.ctx.timestamp.to_micros_since_unix_epoch() as u64)
+                as_leg(s, false).heading_on_path(
+                    at,
+                    crate::time::now(self.ctx).to_micros_since_unix_epoch() as u64,
+                )
             });
         let stored = self.ctx.db.game_world_entity().guid().find(guid);
         if let (Some(stored), Some(advanced)) =
@@ -843,7 +845,7 @@ impl ThreatSink for CtxWorld<'_> {
         crate::threat::forced_target(
             self.ctx,
             guid,
-            (self.ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64,
+            (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64,
         )
     }
     fn top_threat(&self, guid: u64) -> Option<u64> {

@@ -107,8 +107,7 @@ pub(crate) fn corpse_created(ctx: &ReducerContext, corpse: &Corpse) {
     if corpse.is_bones {
         return;
     }
-    let elapsed = ctx
-        .timestamp
+    let elapsed = crate::time::now(ctx)
         .to_micros_since_unix_epoch()
         .saturating_sub(corpse.created_at.to_micros_since_unix_epoch())
         .max(0);

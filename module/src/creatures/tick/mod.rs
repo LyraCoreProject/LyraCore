@@ -110,9 +110,13 @@ pub struct CreatureMoveSchedule {
 
 #[reducer]
 pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
+    creature_pass(ctx, schedule);
+}
+
+fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     let scope = TickScope::from_rows(
         schedule.instance_id,
         ctx.db
@@ -124,7 +128,7 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
         ScheduleAt::Interval(d) => d.to_micros(),
         ScheduleAt::Time(_) => MOVE_TICK_MICROS,
     };
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let tick = crate::creatures::cycle::TickContext {
         now_micros: now_micros as u64,
         now_ms: (now_micros / 1000) as u32,
@@ -170,7 +174,7 @@ pub(crate) fn active_cell_creatures(
     let entities = ctx.db.game_world_entity();
     let consents = ctx.db.game_sessionless_action_consent();
     let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     let radius = active_cell_radius(ctx);
     let mut out = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
@@ -273,7 +277,7 @@ fn log_pass_stats(
     rows_visited: &[(&'static str, u64)],
     interval_micros: i64,
 ) {
-    let us = ctx.timestamp.to_micros_since_unix_epoch();
+    let us = crate::time::now(ctx).to_micros_since_unix_epoch();
     if us.rem_euclid(ACTIVE_CELL_LOG_PERIOD_MICROS) >= interval_micros.max(MOVE_TICK_MICROS) {
         return;
     }
@@ -333,7 +337,7 @@ fn move_spline_row(
 ) -> CreatureSpline {
     CreatureSpline {
         guid,
-        start_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
+        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
         dur_ms,
         sx: start.0,
         sy: start.1,
@@ -368,7 +372,7 @@ pub(crate) fn emit_facing_spline(
 ) {
     let row = CreatureSpline {
         guid,
-        start_micros: ctx.timestamp.to_micros_since_unix_epoch() as u64,
+        start_micros: crate::time::now(ctx).to_micros_since_unix_epoch() as u64,
         dur_ms: 0,
         sx: pos.0,
         sy: pos.1,
@@ -601,7 +605,7 @@ pub(crate) fn next_spline_id(now_ms: u32, previous: u32) -> u32 {
 }
 
 pub(crate) fn now_ms(ctx: &ReducerContext) -> u32 {
-    (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32
+    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32
 }
 
 pub(crate) fn place_stopped(mover: &mut WorldEntity, stop: super::cycle::Stop, clock: MoveClock) {
@@ -657,7 +661,7 @@ pub(crate) fn rout_eligible(ctx: &ReducerContext, c: &WorldEntity) -> bool {
 }
 
 pub(crate) fn creature_is_routing(ctx: &ReducerContext, c: &WorldEntity) -> bool {
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u32;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     ctx.db
         .game_melee_attack()
         .attacker_guid()

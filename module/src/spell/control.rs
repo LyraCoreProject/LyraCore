@@ -221,14 +221,14 @@ fn break_flagged_auras(ctx: &ReducerContext, target_guid: u64, breaks: fn(u16) -
     let spells = ctx.db.game_spell();
     let to_break: Vec<_> = auras_on(ctx, target_guid)
         .filter(|a| {
-            a.applied_at != ctx.timestamp
+            a.applied_at != crate::time::now(ctx)
                 && spells
                     .spell_id()
                     .find(a.spell_id)
                     .is_some_and(|s| breaks(s.aura_interrupt))
         })
         .collect();
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for a in &to_break {
         if let Some(category) = crate::spell::stacking::dr_category_for_effect(
             ctx,
@@ -299,15 +299,15 @@ pub(crate) fn pushback_cast(ctx: &ReducerContext, caster_guid: u64) {
         let ScheduleAt::Time(fire_at) = p.scheduled_at else {
             continue;
         };
-        let Some(new_fire_at) =
-            fire_at.checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
+        let Some(new_fire_at) = crate::time::scheduled_time(ctx, fire_at)
+            .checked_add(TimeDuration::from_micros(CAST_PUSHBACK_MS * 1000))
         else {
             continue;
         };
         let spell_id = p.spell_id;
         p.pushback_count += 1;
         let new_count = p.pushback_count;
-        p.scheduled_at = ScheduleAt::Time(new_fire_at);
+        p.scheduled_at = crate::time::schedule_time(ctx, new_fire_at);
         pending.scheduled_id().update(p);
         crate::spell::SpellCastEvent::insert(
             ctx,
@@ -398,7 +398,7 @@ pub(crate) fn expire_cast_attempt(
     scheduled_id: u64,
     deadline_micros: i64,
 ) -> bool {
-    if ctx.timestamp.to_micros_since_unix_epoch() < deadline_micros
+    if crate::time::now(ctx).to_micros_since_unix_epoch() < deadline_micros
         || pending_cast(ctx, caster_guid).is_none_or(|cast| cast.scheduled_id != scheduled_id)
     {
         return false;
@@ -442,10 +442,9 @@ pub(crate) fn interrupt_cast_and_lock(
         .collect();
     let interrupted = interrupt_cast(ctx, target_guid);
     if interrupted {
-        let until = ctx
-            .timestamp
+        let until = crate::time::now(ctx)
             .checked_add(TimeDuration::from_micros(lockout_ms * 1000))
-            .unwrap_or(ctx.timestamp);
+            .unwrap_or(crate::time::now(ctx));
         let locks = ctx.db.game_school_lockout();
         for spell_id in spell_ids {
             let Some(school) = ctx

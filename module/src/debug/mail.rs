@@ -106,7 +106,7 @@ fn stage(ctx: &ReducerContext, staged: Staged, deliver_micros: i64) -> Mail {
 fn age(ctx: &ReducerContext, mail: Mail, age_micros: i64) -> Mail {
     let aged = ctx.db.game_mail().id().update(Mail {
         created_at: Timestamp::from_micros_since_unix_epoch(
-            ctx.timestamp.to_micros_since_unix_epoch() - age_micros,
+            crate::time::now(ctx).to_micros_since_unix_epoch() - age_micros,
         ),
         ..mail
     });
@@ -152,7 +152,9 @@ fn armed_micros(ctx: &ReducerContext, mail_id: u64) -> Option<i64> {
         .find(mail_id)?
         .scheduled_at
     {
-        ScheduleAt::Time(at) => Some(at.to_micros_since_unix_epoch()),
+        ScheduleAt::Time(at) => {
+            Some(crate::time::scheduled_time(ctx, at).to_micros_since_unix_epoch())
+        }
         ScheduleAt::Interval(_) => None,
     }
 }
@@ -180,7 +182,7 @@ fn check_returned(ctx: &ReducerContext, subject: &str) -> Result<(), String> {
         || back.cod != 0
         || back.was_read
         || back.snapshot() != ITEM
-        || !back.is_delivered(ctx.timestamp)
+        || !back.is_delivered(crate::time::now(ctx))
     {
         return Err(format!("{subject} returned in the wrong shape"));
     }
@@ -242,7 +244,7 @@ pub fn debug_stage_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Strin
     for letter in visible {
         stage(ctx, letter, 0);
     }
-    let deliver_micros = ctx.timestamp.to_micros_since_unix_epoch() + DELAY_MICROS;
+    let deliver_micros = crate::time::now(ctx).to_micros_since_unix_epoch() + DELAY_MICROS;
     let delayed = stage(
         ctx,
         Staged {
@@ -301,7 +303,7 @@ pub fn debug_verify_mail_expiry_fixture(ctx: &ReducerContext) -> Result<(), Stri
         COD_LIFE_MICROS,
     )?;
     let delayed = find(ctx, DELAYED_RECIPIENT, DELAYED).ok_or("the delayed letter is gone")?;
-    if !delayed.is_delivered(ctx.timestamp) {
+    if !delayed.is_delivered(crate::time::now(ctx)) {
         return Err("the delayed letter is not delivered yet".to_string());
     }
     check_armed(ctx, &delayed, delayed.deliver_micros, LIFE_MICROS)?;
@@ -338,7 +340,7 @@ pub fn debug_replay_mail_timer_fixture(ctx: &ReducerContext) -> Result<(), Strin
             ctx,
             &MailTimer {
                 scheduled_id: 0,
-                scheduled_at: ScheduleAt::Time(ctx.timestamp),
+                scheduled_at: crate::time::schedule_time(ctx, crate::time::now(ctx)),
                 mail_id,
             },
         );
@@ -454,11 +456,11 @@ pub fn debug_deliver_mail_fixture(
     crate::helpers::require_operator(ctx)?;
     let mail = find(ctx, recipient_guid, &subject)
         .filter(|mail| mail.subject.starts_with("delivery: "))
-        .filter(|mail| !mail.is_delivered(ctx.timestamp))
+        .filter(|mail| !mail.is_delivered(crate::time::now(ctx)))
         .ok_or_else(|| format!("no delayed fixture letter {subject} for {recipient_guid}"))?;
     // Delivery requires the timer to fire at deliver_micros, so keep it after this transaction.
     let arrives = ctx.db.game_mail().id().update(Mail {
-        deliver_micros: ctx.timestamp.to_micros_since_unix_epoch() + 1,
+        deliver_micros: crate::time::now(ctx).to_micros_since_unix_epoch() + 1,
         ..mail
     });
     crate::mail_timer::arm_next(ctx, &arrives);

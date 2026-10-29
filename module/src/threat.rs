@@ -234,7 +234,7 @@ pub(crate) fn taunt(ctx: &ReducerContext, creature_guid: u64, source_guid: u64) 
     if current < target {
         add_threat(ctx, creature_guid, source_guid, target - current);
     }
-    let now_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
     let locks = ctx.db.game_taunt_lock();
     let row = TauntLock {
         creature_guid,

@@ -983,7 +983,7 @@ pub fn debug_stage_instance_removal_fixture(
         instance_id: REMOVAL_FIXTURE_INSTANCE,
         map_id: REMOVAL_FIXTURE_INSIDE.0,
         party_id,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         last_empty_at_micros: 0,
         reset_requested: false,
     });
@@ -1033,13 +1033,13 @@ pub fn debug_hold_instance_removals(ctx: &ReducerContext) -> Result<(), String> 
     crate::helpers::require_operator(ctx)?;
     const DAY_MICROS: i64 = 24 * 60 * 60 * 1_000_000;
     let due = spacetimedb::Timestamp::from_micros_since_unix_epoch(
-        ctx.timestamp.to_micros_since_unix_epoch() + DAY_MICROS,
+        crate::time::now(ctx).to_micros_since_unix_epoch() + DAY_MICROS,
     );
     let removals = ctx.db.game_instance_removal();
     for mut removal in removals.iter().collect::<Vec<_>>() {
         crate::InstanceRemoval::delete(ctx, removal.character_guid);
         removal.scheduled_id = 0;
-        removal.scheduled_at = spacetimedb::ScheduleAt::Time(due);
+        removal.scheduled_at = crate::time::schedule_time(ctx, due);
         removal.insert(ctx);
     }
     Ok(())

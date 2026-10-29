@@ -178,7 +178,7 @@ pub(super) fn write_row(ctx: &ReducerContext, row: &TracedRow) -> Result<(), Str
             apply_fields(row, |field, value| {
                 apply_spawn_field(&mut spawn, field, value)
             })?;
-            spawn.respawn_at = ctx.timestamp;
+            spawn.respawn_at = crate::time::now(ctx);
             spawns.guid().update(spawn);
         }
         (other, _) => unreachable!(
@@ -293,7 +293,7 @@ fn blank_spawn(ctx: &ReducerContext, key: PrimaryKey) -> CreatureSpawn {
         y: 0.0,
         z: 0.0,
         orientation: 0.0,
-        respawn_at: ctx.timestamp,
+        respawn_at: crate::time::now(ctx),
         despawn_at: timer_never(ctx),
         movement_type: 0,
         respawn_secs: 0,

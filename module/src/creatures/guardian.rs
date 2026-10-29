@@ -105,7 +105,7 @@ pub(crate) fn die(ctx: &ReducerContext, guid: u64) -> bool {
     entity.dynamic_flags = 0;
     entity = entity.update(ctx);
     expiry.remaining_ms = 15_000;
-    expiry.last_checked_ms = (ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64;
+    expiry.last_checked_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u64;
     expiries.scheduled_id().update(expiry);
     crate::spell::break_channel(ctx, entity.guid);
     crate::spell::remove_auras_on_death(ctx, entity.guid);

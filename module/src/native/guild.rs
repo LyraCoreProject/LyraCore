@@ -391,7 +391,7 @@ fn view(ctx: &ReducerContext, id: u32) -> Option<codec::GuildView> {
 }
 
 fn roster_lines(ctx: &ReducerContext, id: u32) -> Vec<codec::GuildRosterLine> {
-    let now = ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64;
     ctx.db
         .game_guild_member()
         .by_guild()

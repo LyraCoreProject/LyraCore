@@ -26,10 +26,10 @@ pub struct EventReaperSchedule {
 
 #[reducer]
 pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let cutoff = ctx.timestamp.to_micros_since_unix_epoch() - EVENT_TTL_MICROS;
+    let cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - EVENT_TTL_MICROS;
 
     macro_rules! reap {
         ($accessor:ident) => {{
@@ -71,7 +71,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
 
     {
         let t = ctx.db.game_group_invite();
-        let invite_cutoff = ctx.timestamp.to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
+        let invite_cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
         let stale: Vec<u64> = t
             .iter()
             .filter(|e| e.created_at.to_micros_since_unix_epoch() < invite_cutoff)
@@ -84,7 +84,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
 
     {
         let t = ctx.db.game_guild_invite();
-        let invite_cutoff = ctx.timestamp.to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
+        let invite_cutoff = crate::time::now(ctx).to_micros_since_unix_epoch() - INVITE_TTL_MICROS;
         let stale: Vec<u64> = t
             .iter()
             .filter(|e| e.created_at.to_micros_since_unix_epoch() < invite_cutoff)
@@ -97,7 +97,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
 
     {
         let sessions = ctx.db.game_trade_session();
-        let now = ctx.timestamp.to_micros_since_unix_epoch();
+        let now = crate::time::now(ctx).to_micros_since_unix_epoch();
         let stale: Vec<u64> = sessions
             .iter()
             .filter(|s| {
@@ -128,7 +128,7 @@ pub fn reap_movement_events(ctx: &ReducerContext, _schedule: EventReaperSchedule
 
     // Pending commands retain i64::MAX; only terminal results enter this bounded expiry prefix.
     const COMMAND_REAP_LIMIT: usize = 64;
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let intents = ctx.db.game_party_command_intent();
     for intent in intents
         .by_result_reap()

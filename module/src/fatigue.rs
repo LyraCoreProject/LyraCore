@@ -29,7 +29,7 @@ pub(crate) fn feels_fatigue(entity: &WorldEntity) -> bool {
 // Exhaustion is left to the tick: the caller still holds the mover and writes it back.
 pub(crate) fn update_fatigue_edge(ctx: &ReducerContext, mover: &WorldEntity, in_deep_water: bool) {
     let states = ctx.db.game_fatigue_state();
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let Some(mut state) = states.entity_guid().find(mover.guid) else {
         if in_deep_water {
             states.insert(FatigueState {
@@ -63,7 +63,7 @@ pub(crate) fn update_fatigue_edge(ctx: &ReducerContext, mover: &WorldEntity, in_
 }
 
 pub(crate) fn tick_fatigue(ctx: &ReducerContext) {
-    let now = ctx.timestamp;
+    let now = crate::time::now(ctx);
     let states = ctx.db.game_fatigue_state();
     for mut state in states.iter().collect::<Vec<_>>() {
         let guid = state.entity_guid;

@@ -324,7 +324,7 @@ pub(crate) fn power_regen_rate(ctx: &ReducerContext, unit_guid: u64, power_type:
             .filter(|a| {
                 a.eff_kind == A_MOD_POWER_REGEN_PCT
                     && a.eff_p0 == i32::from(power_type)
-                    && !is_due_for_expiry(a.eff_kind, a.expires_at, ctx.timestamp)
+                    && !is_due_for_expiry(a.eff_kind, a.expires_at, crate::time::now(ctx))
             })
             .map(|a| stacked_amount(&a)),
     )

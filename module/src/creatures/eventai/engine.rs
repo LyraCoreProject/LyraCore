@@ -953,7 +953,7 @@ impl<'a> DatabaseWorld<'a> {
     }
 
     fn now_ms(&self) -> u64 {
-        (self.ctx.timestamp.to_micros_since_unix_epoch() / 1000) as u64
+        (crate::time::now(self.ctx).to_micros_since_unix_epoch() / 1000) as u64
     }
 
     fn state_row(&self, creature_guid: u64) -> Option<CreatureAiState> {

@@ -265,7 +265,7 @@ pub(crate) fn drop_forced_despawn(ctx: &ReducerContext, creature_guid: u64) {
 
 #[reducer]
 pub fn fire_eventai_forced_despawn(ctx: &ReducerContext, row: CreatureAiForcedDespawn) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     if ctx
@@ -620,20 +620,19 @@ pub(crate) fn summon_lifetime_after(
 }
 
 fn schedule_after(ctx: &ReducerContext, delay_ms: u32) -> ScheduleAt {
-    let fire_at = ctx
-        .timestamp
+    let fire_at = crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(i64::from(delay_ms) * 1_000))
-        .unwrap_or(ctx.timestamp);
-    ScheduleAt::Time(fire_at)
+        .unwrap_or(crate::time::now(ctx));
+    crate::time::schedule_time(ctx, fire_at)
 }
 
 fn timestamp_ms(ctx: &ReducerContext) -> u64 {
-    (ctx.timestamp.to_micros_since_unix_epoch() / 1_000) as u64
+    (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000) as u64
 }
 
 #[reducer]
 pub fn expire_eventai_summon(ctx: &ReducerContext, expiry: CreatureAiSummonExpiry) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     apply_summon_expiry(ctx, expiry);

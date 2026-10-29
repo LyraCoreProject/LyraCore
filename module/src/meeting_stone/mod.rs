@@ -265,7 +265,7 @@ pub(crate) fn join(
 }
 
 fn first_reminder_at(ctx: &ReducerContext) -> Result<Timestamp, String> {
-    ctx.timestamp
+    crate::time::now(ctx)
         .checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
         .ok_or_else(|| "reminder time overflow".to_string())
 }
@@ -281,7 +281,7 @@ fn queue_party(
         group_id,
         area_id: bucket.area_id,
         team: bucket.team,
-        queued_at: ctx.timestamp,
+        queued_at: crate::time::now(ctx),
         next_reminder_at,
     };
     let parties = ctx.db.game_meeting_stone_party();
@@ -321,7 +321,7 @@ fn upsert_seeker(
         team: bucket.team,
         class,
         group_id,
-        queued_at: ctx.timestamp,
+        queued_at: crate::time::now(ctx),
     };
     let seekers = ctx.db.game_meeting_stone_seeker();
     if seekers.character_guid().find(character_guid).is_some() {
@@ -484,7 +484,7 @@ fn seeker_is_online(ctx: &ReducerContext, character_guid: u64) -> bool {
     if crate::native::is_player(ctx, character_guid) {
         return true;
     }
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     ctx.db
         .game_account_claim()
         .by_character()
@@ -728,12 +728,11 @@ pub(crate) fn party_disbanded(ctx: &ReducerContext, group_id: u64, former_member
 
 #[reducer]
 pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneReminderSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
-    let Some(next_reminder_at) = ctx
-        .timestamp
-        .checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
+    let Some(next_reminder_at) =
+        crate::time::now(ctx).checked_add(TimeDuration::from_micros(REMINDER_INTERVAL_MICROS))
     else {
         spacetimedb::log::error!("meeting stone reminder time overflow");
         return;
@@ -741,7 +740,7 @@ pub fn remind_queued_parties(ctx: &ReducerContext, _schedule: MeetingStoneRemind
     let parties = ctx.db.game_meeting_stone_party();
     let due: Vec<MeetingStoneParty> = parties
         .iter()
-        .filter(|party| party.next_reminder_at <= ctx.timestamp)
+        .filter(|party| party.next_reminder_at <= crate::time::now(ctx))
         .collect();
     for party in due {
         let members = member_guids(ctx, party.group_id);
@@ -761,7 +760,10 @@ pub(crate) fn rearm_reminder_schedule(ctx: &ReducerContext) {
     }
     schedule.insert(MeetingStoneReminderSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(REMINDER_TICK_MICROS)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(REMINDER_TICK_MICROS),
+        ),
     });
 }
 

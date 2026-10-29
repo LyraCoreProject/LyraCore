@@ -55,7 +55,7 @@ pub(crate) fn invite(
         target_guid: request.target_guid,
         guild_id: actor.guild_id,
         inviter_guid: actor_guid,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
     push_event(
         ctx,

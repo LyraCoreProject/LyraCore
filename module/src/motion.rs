@@ -173,7 +173,7 @@ pub(crate) fn drop_pending(ctx: &ReducerContext, guid: u64) {
 
 #[reducer]
 pub fn publish_motion(ctx: &ReducerContext, _schedule: MotionPublishSchedule) {
-    if ctx.sender() != ctx.database_identity() {
+    if !crate::time::scheduler_authorized(ctx) {
         return;
     }
     publish_staged(ctx);
@@ -202,7 +202,10 @@ fn ensure_schedule_armed(ctx: &ReducerContext) {
     if sched.iter().next().is_none() {
         sched.insert(MotionPublishSchedule {
             scheduled_id: 0,
-            scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(MOTION_TICK_MICROS)),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(MOTION_TICK_MICROS),
+            ),
         });
         log::warn!(
             "motion publish tick was NOT armed — armed it at the {MOTION_TICK_MICROS}us default. \
@@ -234,7 +237,10 @@ pub fn set_motion_tick_ms(ctx: &ReducerContext, tick_ms: u64) -> Result<(), Stri
     }
     sched.insert(MotionPublishSchedule {
         scheduled_id: 0,
-        scheduled_at: ScheduleAt::Interval(TimeDuration::from_micros(tick_ms as i64 * 1000)),
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(tick_ms as i64 * 1000),
+        ),
     });
     log::info!("set_motion_tick_ms: motion republish re-armed at {tick_ms}ms");
     Ok(())

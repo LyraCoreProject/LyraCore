@@ -251,7 +251,7 @@ pub(crate) fn emit(ctx: &ReducerContext, line: RealmChatLine) {
         message: line.message,
         recipients: line.recipients,
         ignorable: line.ignorable,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
 }
 

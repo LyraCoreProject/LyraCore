@@ -17,7 +17,13 @@ pub(crate) fn removal_changed(ctx: &ReducerContext, guid: u64, row: Option<&Inst
         return;
     };
     let timer = row.map_or(0, |row| {
-        remaining_ms(row.scheduled_at, ctx.timestamp.to_micros_since_unix_epoch())
+        remaining_ms(
+            match row.scheduled_at {
+                ScheduleAt::Time(at) => ScheduleAt::Time(crate::time::scheduled_time(ctx, at)),
+                interval => interval,
+            },
+            crate::time::now(ctx).to_micros_since_unix_epoch(),
+        )
     });
     let (opcode, body) = codec::build_raid_group_only(timer);
     super::send_raw(ctx, connection.connection_id, opcode, body, false);

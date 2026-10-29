@@ -23,7 +23,7 @@ pub(crate) fn despawn_creature_entity(ctx: &ReducerContext, guid: u64) {
 }
 
 pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
-    let now_ts = ctx.timestamp;
+    let now_ts = crate::time::now(ctx);
     let entities = ctx.db.game_world_entity();
     let spawns = ctx.db.game_creature_spawn();
 
@@ -95,7 +95,7 @@ pub(crate) fn pass_decay(ctx: &ReducerContext) -> usize {
 }
 
 pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
-    let now_ts = ctx.timestamp;
+    let now_ts = crate::time::now(ctx);
     let entities = ctx.db.game_world_entity();
     let spawns = ctx.db.game_creature_spawn();
     let templates = ctx.db.game_creature_template();
@@ -161,7 +161,7 @@ pub(crate) fn pass_respawn(ctx: &ReducerContext) -> usize {
 }
 
 pub(crate) fn pass_gameobject_respawn(ctx: &ReducerContext) -> usize {
-    let now = ctx.timestamp.to_micros_since_unix_epoch() as u64;
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
     let gos = ctx.db.game_gameobject();
     let members = ctx.db.game_gameobject_pool_member();
     let mut visited = 0usize;

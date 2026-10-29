@@ -482,7 +482,7 @@ pub(crate) fn dr_window_on_removal(
 }
 
 pub(crate) fn sweep_dr_state(ctx: &ReducerContext) {
-    let now_micros = ctx.timestamp.to_micros_since_unix_epoch();
+    let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     let table = ctx.db.game_dr_state();
     let stale: Vec<u64> = table
         .iter()

@@ -82,7 +82,7 @@ pub(crate) fn check_rest_state(
     }
     mover.resting = now_resting;
 
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let chars = ctx.db.game_character();
     if let Some(mut c) = chars.guid().find(mover.guid) {
         c.resting = now_resting;
@@ -107,7 +107,7 @@ pub(crate) fn check_rest_state(
         id: 0,
         character_guid: mover.guid,
         player_bytes_2: mover.player_bytes_2,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
     });
 }
 
@@ -140,7 +140,7 @@ pub fn debug_check_rest_at(
 }
 
 crate::game_tick_pass!(fn rested_accrue_pass(ctx) {
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     const QUANTUM_MICROS: i64 = 30_000_000;
     const TICK_MICROS: i64 = 500_000;
     if now.rem_euclid(QUANTUM_MICROS) >= TICK_MICROS {

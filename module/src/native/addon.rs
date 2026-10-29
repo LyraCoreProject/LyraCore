@@ -37,7 +37,7 @@ pub(super) fn receive(
     text: &str,
 ) -> Result<(), Rollback> {
     super::actor(ctx, guid)?;
-    let now = ctx.timestamp.to_micros_since_unix_epoch();
+    let now = crate::time::now(ctx).to_micros_since_unix_epoch();
     let admitted = connection
         .addon_limit
         .get_or_insert_with(|| AddonLimit::new(now))

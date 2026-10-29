@@ -120,7 +120,7 @@ pub(super) fn enter_character(
             crate::world::WorldEntry::Login => codec::WorldEntry::FreshLogin,
             crate::world::WorldEntry::WorldPort => codec::WorldEntry::WorldPort,
         },
-        ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1_000_000,
+        crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000_000,
     )
     .map_err(|error| error.to_string())?;
     for message in messages {
@@ -649,7 +649,7 @@ pub(super) fn receive(
             let entity = ctx.db.game_world_entity().guid().find(guid);
             if entity.is_some_and(|entity| {
                 entity.combat_until_ms
-                    > ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64 / 1_000
+                    > crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64 / 1_000
             }) {
                 ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(codec::logout_denied_in_combat())
             } else {
@@ -682,7 +682,7 @@ pub(super) fn receive(
         }
         ClientOpcodeMessage::CMSG_QUERY_TIME => ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(
             lyracore_protocol::messages::vanilla::SMSG_QUERY_TIME_RESPONSE {
-                time: (ctx.timestamp.to_micros_since_unix_epoch() / 1_000_000) as u32,
+                time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000) as u32,
             },
         ),
         ClientOpcodeMessage::CMSG_PLAYED_TIME => {
@@ -691,7 +691,7 @@ pub(super) fn receive(
             ServerOpcodeMessage::SMSG_PLAYED_TIME(codec::build_played_time(
                 character.played_total_secs,
                 character.session_start_micros,
-                ctx.timestamp.to_micros_since_unix_epoch().max(0) as u64,
+                crate::time::now(ctx).to_micros_since_unix_epoch().max(0) as u64,
             ))
         }
         ClientOpcodeMessage::CMSG_LOGOUT_CANCEL => ServerOpcodeMessage::SMSG_LOGOUT_CANCEL_ACK,

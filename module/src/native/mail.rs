@@ -37,12 +37,12 @@ pub(super) fn receive(
                 .game_mail()
                 .by_recipient()
                 .filter(guid)
-                .filter(|mail| mail.is_delivered(ctx.timestamp))
+                .filter(|mail| mail.is_delivered(crate::time::now(ctx)))
                 .map(|mail| view(ctx, mail))
                 .collect::<Vec<_>>();
             ServerOpcodeMessage::SMSG_MAIL_LIST_RESULT(Box::new(codec::build_mail_list(
                 &mails,
-                ctx.timestamp
+                crate::time::now(ctx)
                     .to_micros_since_unix_epoch()
                     .div_euclid(1_000_000),
             )))

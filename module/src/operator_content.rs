@@ -328,8 +328,8 @@ fn create_creature(
         y: 0.0,
         z: 0.0,
         orientation: 0.0,
-        respawn_at: ctx.timestamp,
-        despawn_at: ctx.timestamp,
+        respawn_at: crate::time::now(ctx),
+        despawn_at: crate::time::now(ctx),
         movement_type: MOVEMENT_IDLE,
         respawn_secs: 0,
         life_seq: 0,
@@ -635,7 +635,7 @@ fn rearm_respawn(ctx: &ReducerContext, spawn: &mut CreatureSpawn) {
     spawn.respawn_at = if lyracore_shared::instance::has_instance_population(spawn.map_id) {
         crate::creatures::timer_never(ctx)
     } else {
-        ctx.timestamp
+        crate::time::now(ctx)
     };
     spawn.despawn_at = crate::creatures::timer_never(ctx);
 }
@@ -674,7 +674,7 @@ fn insert_gameobject(
         z: fields.z,
         orientation: fields.orientation,
         state: fields.state,
-        created_at: ctx.timestamp,
+        created_at: crate::time::now(ctx),
         respawn_at_micros: 0,
         instance_id: 0,
         grid_x,
