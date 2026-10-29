@@ -18,6 +18,8 @@ jobs:
     timeout-minutes: 60
     outputs:
       propose: ${{ steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false' }}
+      sha: ${{ steps.proposal.outputs.sha }}
+      baseline: ${{ steps.proposal.outputs.baseline }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -59,19 +61,8 @@ jobs:
           cargo test -p lyracore-module --test native_conformance tier1:: -- --ignored --test-threads=1
       - name: Save the pin proposal data
         if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
-        run: |
-          mkdir -p "$RUNNER_TEMP/pin-proposal"
-          cp conformance/tier1-baseline.json "$RUNNER_TEMP/pin-proposal/tier1-baseline.json"
-          python3 conformance/pin_bump.py describe --summary "$RUNNER_TEMP/pin-proposal/summary.json" --output "$GITHUB_OUTPUT"
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
-        with:
-          name: pin-proposal
-          path: |
-            ${{ runner.temp }}/pin-proposal/tier1-baseline.json
-            ${{ runner.temp }}/pin-proposal/summary.json
-          if-no-files-found: error
-          retention-days: 1
+        id: proposal
+        run: python3 conformance/pin_bump.py proposal --output "$GITHUB_OUTPUT"
 
   publish:
     needs: prepare
@@ -81,6 +72,8 @@ jobs:
     permissions:
       contents: read
     env:
+      PROPOSAL_SHA: ${{ needs.prepare.outputs.sha }}
+      BASELINE_B64: ${{ needs.prepare.outputs.baseline }}
       GIT_AUTHOR_NAME: LyraCore harness pin bot
       GIT_AUTHOR_EMAIL: harness-pin-bot@users.noreply.github.com
       GIT_COMMITTER_NAME: LyraCore harness pin bot
@@ -91,16 +84,10 @@ jobs:
           ref: main
           fetch-depth: 0
           persist-credentials: false
-      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
-        with:
-          name: pin-proposal
-          path: ${{ runner.temp }}/pin-proposal
       - name: Validate and apply the proposal
         id: proposal
         run: |
           python3 conformance/pin_bump.py publish \
-            --baseline "$RUNNER_TEMP/pin-proposal/tier1-baseline.json" \
-            --summary "$RUNNER_TEMP/pin-proposal/summary.json" \
             --body "$RUNNER_TEMP/pin-bump.md" --output "$GITHUB_OUTPUT"
       - name: Resolve the lockfile and save the proposed files
         env:
@@ -130,16 +117,7 @@ jobs:
           export GIT_ASKPASS="$RUNNER_TEMP/pin-askpass"
           export GIT_TERMINAL_PROMPT=0
           branch=ci/auto-harness-pin
-          if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
-            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
-            git switch -c pin-proposal "origin/$branch"
-            git -c core.hooksPath=/dev/null merge --no-edit origin/main
-          else
-            git switch -c pin-proposal origin/main
-          fi
-          cp "$RUNNER_TEMP/proposal-files/.wire-harness-rev" "$RUNNER_TEMP/proposal-files/Cargo.toml" \
-            "$RUNNER_TEMP/proposal-files/Cargo.lock" .
-          cp "$RUNNER_TEMP/proposal-files/conformance/tier1-baseline.json" conformance/
+          python3 conformance/pin_bump.py checkout --saved "$RUNNER_TEMP/proposal-files"
           git add .wire-harness-rev Cargo.toml Cargo.lock conformance/tier1-baseline.json
           if ! git diff --cached --quiet; then
             git -c core.hooksPath=/dev/null commit -m "chore(conformance): propose harness pin $HARNESS_TAG"

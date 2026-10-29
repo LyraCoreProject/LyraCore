@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 import argparse
+import base64
+import binascii
 import json
 import os
 from pathlib import Path
@@ -18,6 +20,9 @@ DEPENDENCY = re.compile(
 SHA = re.compile(r"[0-9a-f]{40}")
 DIGEST = re.compile(r"[0-9a-f]{64}")
 TAG_NAME = re.compile(r"v0\.2\.0-conformance\.[0-9]+")
+MAX_BASELINE_BYTES = 64_000
+PROPOSAL_FILES = (".wire-harness-rev", "Cargo.toml", "Cargo.lock",
+                  "conformance/tier1-baseline.json")
 
 
 def latest_tag(refs):
@@ -127,10 +132,7 @@ def signature_changes(before, after):
     return changes
 
 
-def strict_json(path):
-    if path.stat().st_size > 1_000_000:
-        raise ValueError(f"artifact file is too large: {path}")
-
+def strict_json_text(source):
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -139,7 +141,13 @@ def strict_json(path):
             result[key] = value
         return result
 
-    return json.loads(path.read_text(), object_pairs_hook=unique)
+    return json.loads(source, object_pairs_hook=unique)
+
+
+def strict_json(path):
+    if path.stat().st_size > MAX_BASELINE_BYTES:
+        raise ValueError(f"baseline file is too large: {path}")
+    return strict_json_text(path.read_text())
 
 
 def validate_baseline(before, after, sha):
@@ -205,15 +213,7 @@ def validate_baseline(before, after, sha):
         raise ValueError("Tier 1 baseline scenarios must be unique and sorted")
 
 
-def summary_data(before, after, tag, sha):
-    changes = [{"scenario": scenario, "classification": classification,
-                "added": [json.loads(item) for item in added],
-                "removed": [json.loads(item) for item in removed]}
-               for scenario, classification, added, removed in signature_changes(before, after)]
-    return {"tag": tag, "sha": sha, "changes": changes, "human_review": bool(changes)}
-
-
-def describe(body_path, output, summary_path):
+def describe(body_path, output):
     before = json.loads(subprocess.check_output(
         ["git", "show", "origin/main:conformance/tier1-baseline.json"], text=True,
     ))
@@ -221,9 +221,6 @@ def describe(body_path, output, summary_path):
     pin = next(line for line in (ROOT / ".wire-harness-rev").read_text().splitlines()
                if line and not line.startswith("#"))
     tag, sha = pin.split()
-    summary = summary_data(before, after, tag, sha)
-    if summary_path:
-        Path(summary_path).write_text(json.dumps(summary, indent=2) + "\n")
     changes = signature_changes(before, after)
     old_scenarios = {entry["scenario"] for entry in before["scenarios"]}
     new_scenarios = {entry["scenario"] for entry in after["scenarios"]}
@@ -269,51 +266,93 @@ def describe(body_path, output, summary_path):
         stream.write(f"human_review={str(bool(changes or catalogue_changes)).lower()}\n")
 
 
-def publish(baseline_path, summary_path, body_path, output):
-    summary = strict_json(Path(summary_path))
-    if not isinstance(summary, dict) or set(summary) != {"tag", "sha", "changes", "human_review"}:
-        raise ValueError("invalid pin proposal summary")
+def proposal(output):
+    baseline = (ROOT / "conformance/tier1-baseline.json").read_bytes()
+    if len(baseline) > MAX_BASELINE_BYTES:
+        raise ValueError("Tier 1 baseline exceeds job output limit")
+    pin = next(line for line in (ROOT / ".wire-harness-rev").read_text().splitlines()
+               if line and not line.startswith("#"))
+    _, sha = pin.split()
+    if not SHA.fullmatch(sha):
+        raise ValueError("invalid harness revision")
+    with open(output, "a") as stream:
+        stream.write(f"sha={sha}\nbaseline={base64.b64encode(baseline).decode('ascii')}\n")
+
+
+def publish(baseline_b64, proposed_sha, body_path, output):
+    if len(baseline_b64) > 4 * ((MAX_BASELINE_BYTES + 2) // 3):
+        raise ValueError("Tier 1 baseline exceeds job output limit")
+    try:
+        baseline = base64.b64decode(baseline_b64, validate=True)
+        baseline_text = baseline.decode("utf-8")
+    except (binascii.Error, UnicodeDecodeError) as error:
+        raise ValueError("invalid encoded Tier 1 baseline") from error
+    if len(baseline) > MAX_BASELINE_BYTES:
+        raise ValueError("Tier 1 baseline exceeds job output limit")
     tag, sha = remote_tag()
-    if (summary["tag"], summary["sha"]) != (tag, sha) or not SHA.fullmatch(sha):
+    if proposed_sha != sha or not SHA.fullmatch(sha):
         raise ValueError("pin proposal does not match the latest conformance tag")
     before = strict_json(ROOT / "conformance/tier1-baseline.json")
-    after = strict_json(Path(baseline_path))
+    after = strict_json_text(baseline_text)
     validate_baseline(before, after, sha)
-    if Path(baseline_path).read_text() != json.dumps(after, indent=2, ensure_ascii=False) + "\n":
+    if baseline_text != json.dumps(after, indent=2, ensure_ascii=False) + "\n":
         raise ValueError("Tier 1 baseline is not canonical")
-    expected_summary = summary_data(before, after, tag, sha)
-    if summary != expected_summary:
-        raise ValueError("pin proposal summary disagrees with the baseline")
-    if Path(summary_path).read_text() != json.dumps(expected_summary, indent=2) + "\n":
-        raise ValueError("pin proposal summary is not canonical")
     if not apply_pin(tag, sha):
         raise ValueError("pin proposal is already current")
-    shutil.copyfile(baseline_path, ROOT / "conformance/tier1-baseline.json")
-    describe(body_path, output, None)
+    (ROOT / "conformance/tier1-baseline.json").write_bytes(baseline)
+    describe(body_path, output)
     with open(output, "a") as stream:
         stream.write(f"tag={tag}\nsha={sha}\n")
 
 
+def checkout_proposal(saved):
+    subprocess.run(["git", "reset", "--hard", "HEAD"], cwd=ROOT, check=True)
+    branch = "ci/auto-harness-pin"
+    exists = subprocess.run(
+        ["git", "ls-remote", "--exit-code", "--heads", "origin", branch],
+        cwd=ROOT, stdout=subprocess.DEVNULL, check=False,
+    ).returncode
+    if exists == 0:
+        subprocess.run(["git", "fetch", "origin", f"refs/heads/{branch}:refs/remotes/origin/{branch}"],
+                       cwd=ROOT, check=True)
+        subprocess.run(["git", "switch", "-c", "pin-proposal", f"origin/{branch}"],
+                       cwd=ROOT, check=True)
+        subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-edit", "origin/main"],
+                       cwd=ROOT, check=True)
+    elif exists == 2:
+        subprocess.run(["git", "switch", "-c", "pin-proposal", "origin/main"],
+                       cwd=ROOT, check=True)
+    else:
+        raise RuntimeError(f"could not check bot branch: git ls-remote exited {exists}")
+    for name in PROPOSAL_FILES:
+        destination = ROOT / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(saved / name, destination)
+
+
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("command", choices=("prepare", "catalogue", "describe", "publish"))
-    parser.add_argument("--output", required=True)
+    parser.add_argument("command", choices=("prepare", "catalogue", "proposal", "publish", "checkout"))
+    parser.add_argument("--output")
     parser.add_argument("--body")
-    parser.add_argument("--summary")
-    parser.add_argument("--baseline")
+    parser.add_argument("--saved", type=Path)
     args = parser.parse_args()
+    if args.command != "checkout" and not args.output:
+        parser.error(f"{args.command} requires --output")
     if args.command == "prepare":
         prepare(args.output)
     elif args.command == "catalogue":
         check_catalogue(args.output)
-    elif args.command == "describe":
-        if not (args.body or args.summary):
-            parser.error("describe requires --body or --summary")
-        describe(args.body, args.output, args.summary)
+    elif args.command == "proposal":
+        proposal(args.output)
+    elif args.command == "checkout":
+        if not args.saved:
+            parser.error("checkout requires --saved")
+        checkout_proposal(args.saved)
     else:
-        if not args.body or not args.summary or not args.baseline:
-            parser.error("publish requires --body, --summary and --baseline")
-        publish(args.baseline, args.summary, args.body, args.output)
+        if not args.body:
+            parser.error("publish requires --body")
+        publish(os.environ["BASELINE_B64"], os.environ["PROPOSAL_SHA"], args.body, args.output)
 
 
 if __name__ == "__main__":

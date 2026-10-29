@@ -1,7 +1,10 @@
 import importlib.util
+import base64
 import copy
 import json
+import os
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -58,48 +61,117 @@ class PinBumpTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "baseline schema"):
             PIN_BUMP.validate_baseline(before, after, revision)
 
-    def test_summary_is_derived_from_the_baseline(self):
-        before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
-        after = copy.deepcopy(before)
-        after["scenarios"][0]["rule"] = [{
-            "rule": "missing_reply", "checkpoint": "opening", "stream": None,
-            "opcode": None, "field_path": [],
-        }]
-        summary = PIN_BUMP.summary_data(before, after, "v0.2.0-conformance.9", "b" * 40)
-        self.assertTrue(summary["human_review"])
-        self.assertEqual(summary["changes"][0]["added"], after["scenarios"][0]["rule"])
-
-    def test_publish_rejects_a_summary_that_disagrees_with_the_baseline(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"
+    def test_publish_validates_job_output_before_writing(self):
+        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)
             (root / "conformance").mkdir()
             before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
-            (root / "conformance/tier1-baseline.json").write_text(
-                json.dumps(before, indent=2) + "\n"
-            )
+            baseline = root / "conformance/tier1-baseline.json"
+            baseline.write_text(json.dumps(before, indent=2) + "\n")
             after = copy.deepcopy(before)
             revision = "b" * 40
             for entry in after["scenarios"]:
                 entry["harness_revision"] = revision
-            baseline = root / "artifact-baseline.json"
-            baseline.write_text(json.dumps(after, indent=2) + "\n")
-            summary = PIN_BUMP.summary_data(before, after, "v0.2.0-conformance.9", revision)
-            summary["human_review"] = True
-            summary_path = root / "summary.json"
-            summary_path.write_text(json.dumps(summary))
+            encoded = base64.b64encode((json.dumps(after, indent=2) + "\n").encode()).decode()
             with mock.patch.object(PIN_BUMP, "ROOT", root):
                 with mock.patch.object(PIN_BUMP, "remote_tag",
-                                       return_value=(summary["tag"], revision)):
+                                       return_value=("v0.2.0-conformance.9", revision)):
                     with mock.patch.object(PIN_BUMP, "apply_pin") as apply_pin:
-                        with self.assertRaisesRegex(ValueError, "summary disagrees"):
-                            PIN_BUMP.publish(baseline, summary_path, root / "body.md", root / "output")
-                        summary["human_review"] = 0
-                        summary_path.write_text(json.dumps(summary, indent=2) + "\n")
-                        with self.assertRaisesRegex(ValueError, "not canonical"):
-                            PIN_BUMP.publish(baseline, summary_path, root / "body.md", root / "output")
+                        with self.assertRaisesRegex(ValueError, "latest conformance tag"):
+                            PIN_BUMP.publish(encoded, "c" * 40, root / "body.md", root / "output")
+                        duplicate = base64.b64encode(b'{"schema_version":1,"schema_version":1}').decode()
+                        with self.assertRaisesRegex(ValueError, "duplicate JSON key"):
+                            PIN_BUMP.publish(duplicate, revision, root / "body.md", root / "output")
+                        with self.assertRaisesRegex(ValueError, "job output limit"):
+                            PIN_BUMP.publish("a" * (4 * ((PIN_BUMP.MAX_BASELINE_BYTES + 2) // 3) + 1),
+                                             revision, root / "body.md", root / "output")
+                        with self.assertRaisesRegex(ValueError, "encoded Tier 1 baseline"):
+                            PIN_BUMP.publish("../../../", revision, root / "body.md", root / "output")
                         apply_pin.assert_not_called()
+                    with mock.patch.object(PIN_BUMP, "describe"):
+                        with mock.patch.object(PIN_BUMP, "apply_pin", return_value=True):
+                            PIN_BUMP.publish(encoded, revision, root / "body.md", root / "output")
+            self.assertEqual(baseline.read_text(), json.dumps(after, indent=2) + "\n")
+
+    def test_proposal_exports_only_revision_and_bounded_baseline(self):
+        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            root = Path(directory)
+            (root / "conformance").mkdir()
+            (root / ".wire-harness-rev").write_text("v0.2.0-conformance.9 " + "b" * 40 + "\n")
+            baseline = b'{"schema_version": 1, "scenarios": []}\n'
+            (root / "conformance/tier1-baseline.json").write_bytes(baseline)
+            with mock.patch.object(PIN_BUMP, "ROOT", root):
+                PIN_BUMP.proposal(root / "output")
+                (root / "conformance/tier1-baseline.json").write_bytes(
+                    b" " * (PIN_BUMP.MAX_BASELINE_BYTES + 1)
+                )
+                with self.assertRaisesRegex(ValueError, "job output limit"):
+                    PIN_BUMP.proposal(root / "output")
+            self.assertEqual((root / "output").read_text(),
+                             "sha=" + "b" * 40 + "\nbaseline="
+                             + base64.b64encode(baseline).decode() + "\n")
+
+    def test_checkout_updates_existing_bot_branch_with_matching_pin(self):
+        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
+        scratch.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=scratch) as directory:
+            root = Path(directory) / "core"
+            remote = Path(directory) / "origin.git"
+            saved = Path(directory) / "saved"
+            root.mkdir()
+            saved.mkdir()
+            subprocess.run(["git", "init", "--bare", "--initial-branch=main", str(remote)],
+                           check=True, capture_output=True)
+            subprocess.run(["git", "init", "--initial-branch=main", str(root)],
+                           check=True, capture_output=True)
+            env = dict(os.environ, GIT_AUTHOR_NAME="Pin test", GIT_AUTHOR_EMAIL="pin@test.invalid",
+                       GIT_COMMITTER_NAME="Pin test", GIT_COMMITTER_EMAIL="pin@test.invalid")
+
+            def git(*args):
+                return subprocess.run(["git", *args], cwd=root, env=env, check=True,
+                                      capture_output=True, text=True).stdout.strip()
+
+            git("remote", "add", "origin", str(remote))
+            for name in PIN_BUMP.PROPOSAL_FILES:
+                path = root / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_text("main\n")
+            git("add", ".")
+            git("commit", "-m", "main")
+            git("push", "origin", "main")
+
+            def stage_proposal(lock):
+                for name in PIN_BUMP.PROPOSAL_FILES:
+                    content = lock if name == "Cargo.lock" else "proposal\n"
+                    path = saved / name
+                    path.parent.mkdir(parents=True, exist_ok=True)
+                    path.write_text(content)
+                    (root / name).write_text(content)
+
+            with mock.patch.object(PIN_BUMP, "ROOT", root):
+                stage_proposal("first\n")
+                PIN_BUMP.checkout_proposal(saved)
+                self.assertEqual(git("branch", "--show-current"), "pin-proposal")
+                self.assertEqual((root / "Cargo.lock").read_text(), "first\n")
+                git("add", ".")
+                git("commit", "-m", "first proposal")
+                git("push", "origin", "HEAD:refs/heads/ci/auto-harness-pin")
+                git("switch", "main")
+                git("branch", "-D", "pin-proposal")
+                stage_proposal("second\n")
+                PIN_BUMP.checkout_proposal(saved)
+                self.assertEqual((root / ".wire-harness-rev").read_text(), "proposal\n")
+                self.assertEqual((root / "Cargo.lock").read_text(), "second\n")
+                self.assertEqual(git("branch", "--show-current"), "pin-proposal")
+                git("add", ".")
+                git("commit", "-m", "second proposal")
+                git("push", "origin", "HEAD:refs/heads/ci/auto-harness-pin")
+                self.assertEqual(git("rev-parse", "HEAD"),
+                                 git("ls-remote", "origin", "refs/heads/ci/auto-harness-pin").split()[0])
 
     def test_latest_tag_uses_annotated_tag_commit_and_numeric_order(self):
         refs = (

@@ -130,8 +130,10 @@ the scenarios against the regenerated baseline. The first run can fail because t
 baseline still names the old harness revision. The generator requires a completed result for every
 catalogue scenario; a setup failure stops the proposal.
 
-The workflow runs comparisons without a credential. A separate runner validates the baseline and
-signature summary before using `HARNESS_PIN_TOKEN` to open or update the single
+The workflow runs comparisons without a credential. It passes the harness revision and a
+base64-encoded Tier 1 baseline, capped at 64 KiB before encoding, as job outputs. A separate
+runner fetches the tag, validates the baseline and derives its signature summary before using
+`HARNESS_PIN_TOKEN` to open or update the single
 `ci/auto-harness-pin` PR. Its body shows added and removed rule and data signatures per scenario,
 or says when only provenance changed. Signature changes add the `ready-for-human` label. The
 workflow never merges the PR. Normal PR checks run on the bot PR.
