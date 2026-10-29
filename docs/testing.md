@@ -1,7 +1,7 @@
 # Testing
 
-CI runs four workflows on every pull request, forks included. This page lists their commands in
-the order to run them locally. A green unit tier does not prove the durable tier, and neither proves
+CI runs four workflows on every pull request, forks included. This page lists their commands so you
+can reproduce a CI failure. Do not run them all before a PR; CI does. A green unit tier does not prove the durable tier, and neither proves
 what a real client shows.
 
 ## Prerequisites
