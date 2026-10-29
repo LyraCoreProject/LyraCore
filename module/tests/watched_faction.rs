@@ -195,8 +195,8 @@ fn a_character_can_choose_the_watched_faction_during_a_taxi_flight() {
     shard.assert_sql(
         "INSERT INTO game_active_taxi_flight \
          (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,\
-          current_node_index,started_micros) \
-         VALUES (1,5090102,5090100,5090101,1147,25,0,1)",
+          current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) \
+         VALUES (1,5090102,5090100,5090101,1147,25,0,1,0,0,0,false)",
     );
     select(&shard, 19);
     assert_eq!(watched(&shard, CHARACTER), 19);
