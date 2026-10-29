@@ -155,7 +155,9 @@ primary key. A successful activation creates the row in the same transaction tha
 fare, so a duplicate activation sees the row before it can charge again. The Module queues the
 activation reply before it arms the flight schedule. `game_taxi_flight_schedule` drives the 250 ms
 route clock. The public `game_taxi_passenger_spline` row carries the remaining route to the owner
-and AOI observers, and is refreshed when the passenger changes AOI cell.
+and AOI observers, and is refreshed when the passenger changes AOI cell. The active flight also
+records its takeoff position, so a new viewer's CREATE carries the original spline path with elapsed
+time even after the passenger has crossed a cell boundary.
 
 ### `game_world_entity` (`module/src/world.rs`)
 
