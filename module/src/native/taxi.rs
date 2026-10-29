@@ -10,7 +10,7 @@ use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback};
-use crate::taxi::{game_taxi_passenger_spline, TaxiPassengerSpline};
+use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
 
 fn spline_packet(row: &TaxiPassengerSpline) -> Option<Packet> {
@@ -71,12 +71,7 @@ pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
 }
 
 pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64) {
-    if let Some(packet) = ctx
-        .db
-        .game_taxi_passenger_spline()
-        .character_guid()
-        .find(guid)
-        .and_then(|row| spline_packet(&row))
+    if let Some(packet) = crate::taxi::current_spline(ctx, guid).and_then(|row| spline_packet(&row))
     {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);
     }

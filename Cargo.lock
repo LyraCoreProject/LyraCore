@@ -1204,6 +1204,7 @@ dependencies = [
  "serde",
  "serde_json",
  "syn 2.0.119",
+ "tempfile",
  "toml",
  "wire-client",
  "wow_world_base 0.2.0",

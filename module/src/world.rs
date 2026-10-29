@@ -700,6 +700,8 @@ pub(crate) fn apply_player_login(
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));
     }
 
+    crate::taxi::sync_flight_on_world_entry(ctx, &mut character);
+
     let mut entity = crate::creatures::build_player_entity(ctx, &character, owner);
     if character.pending_ghost {
         let (dead, health, player_flags, unit_bytes_1) =

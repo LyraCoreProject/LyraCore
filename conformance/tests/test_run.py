@@ -55,6 +55,33 @@ class RunFailureTests(unittest.TestCase):
         self.assertEqual(output["error"]["kind"], "setup_failed")
         self.assertIn("could not start cargo", output["error"]["diagnostic"])
 
+    def test_completed_comparison_is_captured_even_when_baseline_differs(self):
+        def cargo(command, **kwargs):
+            if command[1] == "test":
+                Path(kwargs["env"]["LYRACORE_CONFORMANCE_RESULT"]).write_text(
+                    json.dumps({
+                        "scenarios": [{"id": "taxi_single_hop", "comparison": {"differences": []}}]
+                    })
+                )
+                return subprocess.CompletedProcess(command, 101, "", "")
+            return subprocess.CompletedProcess(command, 1)
+
+        with tempfile.TemporaryDirectory() as scratch:
+            captured = Path(scratch) / "captured.json"
+            with mock.patch.dict(os.environ, {"LYRACORE_CONFORMANCE_SCRATCH": scratch}):
+                with mock.patch.object(
+                    sys, "argv", ["run", "taxi_single_hop", "--result", str(captured)]
+                ):
+                    with mock.patch.object(subprocess, "run", side_effect=cargo) as run:
+                        with contextlib.redirect_stderr(io.StringIO()):
+                            code = RUN["main"]()
+
+            self.assertEqual(code, 1)
+            self.assertEqual(run.call_count, 2)
+            self.assertEqual(
+                json.loads(captured.read_text())["scenarios"][0]["id"], "taxi_single_hop"
+            )
+
 
 if __name__ == "__main__":
     unittest.main()
