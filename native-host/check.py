@@ -414,7 +414,15 @@ def check_environment(host):
     client.collect()
     client.send(0xee, struct.pack('<IIffffI', 0, 102000, -31, -1, 0, 0, 0))
     crossing = client.collect()
-    assert (0x2c2, struct.pack('<IIH', 0, 40, 0)) in crossing
+    world_states = [body for opcode, body in crossing if opcode == 0x2c2]
+    assert len(world_states) == 1
+    assert world_states[0][:8] == struct.pack('<II', 0, 40)
+    state_count = struct.unpack_from('<H', world_states[0], 8)[0]
+    assert state_count == 109 and len(world_states[0]) == 10 + state_count * 8
+    states = [struct.unpack_from('<Ii', world_states[0], 10 + offset * 8) for offset in range(state_count)]
+    assert states[:3] == [(0x07ae, 1), (0x0532, 1), (0x0531, 0)]
+    assert (0x07a3, 9999) in states and (0x06f4, 2000) in states
+    assert states[-1] == (0, 0)
     assert (0x2f4, struct.pack('<IfIB', 2, 0.25, 8536, 0)) in crossing
     assert not any(opcode in (0x2c2, 0x2f4) for opcode, _ in peer.collect())
     client.send(0x1f4, struct.pack('<I', 12))
