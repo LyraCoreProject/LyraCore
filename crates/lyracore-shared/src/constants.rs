@@ -82,6 +82,7 @@ pub mod sheath_state {
 }
 
 pub mod unit_flags {
+    pub const REMOVE_CLIENT_CONTROL: u32 = 0x0000_0004;
     pub const PLAYER_CONTROLLED: u32 = 0x0000_0008;
     pub const NOT_SELECTABLE: u32 = 0x0200_0000;
     pub const IN_COMBAT: u32 = 0x0008_0000;

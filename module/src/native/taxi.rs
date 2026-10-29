@@ -2,14 +2,14 @@ use lyracore_protocol::{
     codec,
     messages::vanilla::{
         opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
-        Vector3d,
+        DismountResult, MountResult, Vector3d, SMSG_DISMOUNTRESULT, SMSG_MOUNTRESULT,
     },
     world::Packet,
 };
 use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
-use super::Rollback;
+use super::{game_native_player, Rollback};
 use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
 
@@ -43,6 +43,53 @@ fn spline_packet(row: &TaxiPassengerSpline) -> Option<Packet> {
 pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
     if let Some(packet) = spline_packet(row) {
         super::visibility::broadcast(ctx, row.character_guid, packet.opcode, packet.body, false);
+    }
+}
+
+fn dismount_result(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    result: DismountResult,
+) -> Option<ConnectionId> {
+    let owner = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(character_guid)?;
+    if let Err(error) = super::send(
+        ctx,
+        owner.connection_id,
+        ServerOpcodeMessage::SMSG_DISMOUNTRESULT(SMSG_DISMOUNTRESULT { result }),
+        false,
+    ) {
+        spacetimedb::log::error!("taxi dismount delivery failed for {character_guid}: {error}");
+        super::disconnect(ctx, owner.connection_id);
+        return None;
+    }
+    Some(owner.connection_id)
+}
+
+pub(crate) fn aborted(ctx: &ReducerContext, character_guid: u64, mounted: bool) {
+    let result = if mounted {
+        DismountResult::Ok
+    } else {
+        DismountResult::NotMounted
+    };
+    dismount_result(ctx, character_guid, result);
+}
+
+pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
+    let Some(connection) = dismount_result(ctx, character_guid, DismountResult::Ok) else {
+        return;
+    };
+    if let Err(error) = super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+        false,
+    ) {
+        spacetimedb::log::error!("taxi landing delivery failed for {character_guid}: {error}");
+        super::disconnect(ctx, connection);
     }
 }
 
@@ -116,6 +163,15 @@ pub(super) fn receive(
                 c.destination_node,
                 0,
             );
+            let accepted = reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK;
+            if accepted {
+                super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
+                    false,
+                )?;
+            }
             super::send(
                 ctx,
                 connection,
@@ -127,7 +183,15 @@ pub(super) fn receive(
                 false,
             )?;
             // The ordered feed must deliver the paid reply before the first flight spline.
-            if reply.accepted && reply.result_code == taxi_protocol::ACTIVATE_OK {
+            if accepted {
+                super::send(
+                    ctx,
+                    connection,
+                    ServerOpcodeMessage::SMSG_MOUNTRESULT(SMSG_MOUNTRESULT {
+                        result: MountResult::Ok,
+                    }),
+                    false,
+                )?;
                 crate::taxi::arm_taxi_flight(ctx, guid);
             }
             Ok(())

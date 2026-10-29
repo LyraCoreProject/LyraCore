@@ -335,7 +335,8 @@ impl ActivationPlayerState {
         self.has_active_flight = true;
         self.money = remaining_money;
         self.mount_display_id = mount_display_id;
-        self.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        self.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
         Ok(())
     }
 }
@@ -702,7 +703,8 @@ fn project_flight_end(
         }
     }
     player.mount_display_id = 0;
-    player.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    player.unit_flags &= !(lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL);
     player.movement_flags = 0;
 }
 
@@ -780,6 +782,8 @@ fn finish_flight(ctx: &ReducerContext, player: WorldEntity, plan: FlightEndPlan)
 }
 
 fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
+    let character_guid = player.guid;
+    let mounted = player.mount_display_id != 0;
     finish_flight(
         ctx,
         player,
@@ -789,6 +793,7 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
             zone_id: None,
         },
     );
+    crate::native::taxi_aborted(ctx, character_guid, mounted);
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {
@@ -807,6 +812,7 @@ fn land_flight(
     destination: &GameTaxiNode,
     orientation: f32,
 ) {
+    let character_guid = player.guid;
     let landing = exact_landing(destination, orientation);
     let zone_id = crate::terrain::zone_id_at(ctx, destination.map_id, destination.x, destination.y);
     let instance_id = player.instance_id;
@@ -819,6 +825,7 @@ fn land_flight(
             zone_id,
         },
     );
+    crate::native::taxi_landed(ctx, character_guid);
 }
 
 pub(crate) fn is_in_flight(ctx: &ReducerContext, character_guid: u64) -> bool {
@@ -1175,7 +1182,8 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     }
     flight.started_micros = ctx.timestamp.to_micros_since_unix_epoch();
     player.mount_display_id = flight.mount_display_id;
-    player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
     player.movement_flags = TAXI_MOVEMENT_FORWARD;
     let start = route_position(&points, 0).expect("validated route has a start");
     let start = RoutePosition {
