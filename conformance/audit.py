@@ -182,7 +182,7 @@ def local_realm(work, client_data, peer_count):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('commit core changes before starting an isolated audit Realm')
     revision = (ROOT / '.lyracore-cli-rev').read_text().strip()
-    if revision != '9a00763234f82830a6266b9561a607523f67c2b1':
+    if revision != 'a016c82c6848a098ecbbb07ed53704c2b7dfdff1':
         raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
     for port in [3000, 3724, 8085]:
         with socket.socket() as listener:
