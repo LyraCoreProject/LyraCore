@@ -718,34 +718,29 @@ fn audit_name_skips_existing_report_parts() -> Result<()> {
 }
 
 #[test]
-fn tier1_next_command_uses_runner_cli() -> Result<()> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .parent()
-        .context("root")?;
-    let help = Command::new(root.join("conformance/run"))
-        .arg("--help")
-        .output()?;
-    ensure!(help.status.success(), "conformance/run --help failed");
-    let help = String::from_utf8(help.stdout)?;
-    assert!(help.contains("scenario"));
-    assert!(help.contains("--json"));
-    let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
+fn clean_baseline_without_report_requests_audit() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
     let work = open_work(&ledger, None, None, "head", "head", "pin")?;
-    for scenario in ["taxi_single_hop", "connection_identity"] {
-        let item = work.iter().find(|item| item.behavior == scenario).unwrap();
-        assert_eq!(item.next_command, format!("./conformance/run {scenario}"));
+    for behavior in ["connection_identity", "taxi_single_hop"] {
+        let item = work.iter().find(|item| item.behavior == behavior).unwrap();
+        assert_eq!(item.kind, "evidence_refresh");
+        assert!(item.next_command.starts_with("./conformance/audit --date "));
     }
     Ok(())
 }
 
 #[test]
-fn clean_tier1_with_stale_audit_follows_implementation_work() -> Result<()> {
+fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR"));
     let ledger = FeatureLedger::load(&root.join("features"))?;
     let (_, audit) = evidence::latest_audit(&root.join("reports"), None)?.context("audit")?;
     let mut tier1_value = serde_json::to_value(&audit)?;
     tier1_value["tier"] = json!("tier1");
     tier1_value["audit"] = Value::Null;
+    for scenario in tier1_value["scenarios"].as_array_mut().unwrap() {
+        scenario["comparison"]["differences"] = json!([]);
+    }
     let tier1: Report = serde_json::from_value(tier1_value)?;
     let work = open_work(
         &ledger,
