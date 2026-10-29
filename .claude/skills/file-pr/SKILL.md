@@ -28,7 +28,9 @@ GOOD
 
 ## Description
 
-Fill `.github/PULL_REQUEST_TEMPLATE.md` and delete the sections that do not apply. Write in ASD-STE100
+Fill the repository's `.github/PULL_REQUEST_TEMPLATE.md` and delete the sections that do not apply. When
+the repository has none, use the sections "What and why", "What you verified", "What you did NOT
+verify" and "Risk". Write in ASD-STE100
 Simplified Technical English with the glossary terms.
 
 "What and why" opens with a simple explanation of the problem, based on the user's original prompt,
