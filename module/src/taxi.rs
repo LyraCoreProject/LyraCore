@@ -780,7 +780,8 @@ impl FlightEndSink for CtxFlightEndSink<'_> {
         };
         project_flight_end(&mut player, landing, zone_id);
         if landing.is_some() && zone_id.is_some() {
-            crate::rest::check_rest_state(self.ctx, &mut player);
+            let area = crate::terrain::area_at(self.ctx, player.map_id, player.x, player.y);
+            crate::rest::check_rest_state(self.ctx, &mut player, area.as_ref());
         }
         player.update(self.ctx);
     }
@@ -1345,10 +1346,11 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     player
         .place(position.x, position.y, position.z, MoveClock::Unchanged)
         .unexplored();
-    let zone_id = crate::terrain::zone_id_at(ctx, player.map_id, player.x, player.y);
+    let area = crate::terrain::area_at(ctx, player.map_id, player.x, player.y);
+    let zone_id = area.as_ref().map(crate::terrain::zone_of);
     crate::world::apply_zone_transition(ctx, &mut player, zone_id);
     if zone_id.is_some() {
-        crate::rest::check_rest_state(ctx, &mut player);
+        crate::rest::check_rest_state(ctx, &mut player, area.as_ref());
     }
     let (grid_x, grid_y) = (player.grid_x, player.grid_y);
     player.orientation = position.orientation;

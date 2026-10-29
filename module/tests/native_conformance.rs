@@ -816,6 +816,102 @@ fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
     assert_eq!(ending[0]["player_flags"], "0");
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn rest_area_rejects_hostile_characters_in_an_enemy_capital() {
+    let (shard, alliance, account) = fixture("capital-rest-teams");
+    shard.assert_call(
+        "create_character",
+        &[
+            &account,
+            "\"Horde\"",
+            "2",
+            "1",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let horde: u64 = shard.query_rows("SELECT guid FROM game_character WHERE name = 'Horde'")[0]
+        ["guid"]
+        .parse()
+        .unwrap();
+    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (1519,0,0,1,256,0,2,'Stormwind')");
+    let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+    let heights = vec!["0"; 145].join(":");
+    shard.assert_call(
+        "import_terrain_chunks",
+        &[&format!("0,{cell},{cell},0,0,0,1519,{heights}")],
+    );
+
+    for guid in [alliance, horde] {
+        shard.assert_call("debug_spawn_player_entity", &[&guid.to_string()]);
+        shard.assert_call("debug_check_rest_at", &[&guid.to_string(), "0", "0", "0"]);
+    }
+    let rest = |guid| {
+        shard.query_rows(&format!(
+            "SELECT resting,player_flags FROM game_world_entity WHERE guid = {guid}"
+        ))[0]
+            .clone()
+    };
+    assert_eq!(rest(alliance)["resting"], "true");
+    assert_eq!(rest(alliance)["player_flags"], "32");
+    assert_eq!(rest(horde)["resting"], "false");
+    assert_eq!(rest(horde)["player_flags"], "0");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
+    use std::collections::BTreeSet;
+
+    let (shard, passenger, _) = fixture("inn-overflight");
+    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (12,0,0,1,0,0,2,'Elwynn Forest')");
+    let y_cell = lyracore_shared::terrain::cell_index(42.0).unwrap();
+    let heights = vec!["0"; 145].join(":");
+    let chunks = (-9500..=-9440)
+        .step_by(5)
+        .map(|x| lyracore_shared::terrain::cell_index(x as f32).unwrap())
+        .collect::<BTreeSet<_>>()
+        .into_iter()
+        .map(|x_cell| format!("0,{x_cell},{y_cell},0,0,0,12,{heights}"))
+        .collect::<Vec<_>>()
+        .join(";");
+    shard.assert_call("import_terrain_chunks", &[&chunks]);
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET map_id = 0, x = -9500, y = 42, z = 1000 WHERE guid = {passenger}"
+    ));
+    let _connection = enter(&shard, passenger);
+    let route = std::iter::once((-9500.0, 42.0, 1000.0))
+        .chain((0..20).map(|index| {
+            if index % 2 == 0 {
+                (-9470.0, 42.0, 1000.0)
+            } else {
+                (-9458.0, 42.0, 1000.0)
+            }
+        }))
+        .collect::<Vec<_>>();
+    start_taxi_flight_on_route(&shard, passenger, &route);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || {
+            let row = &shard.query_rows(&format!(
+                "SELECT x,z FROM game_world_entity WHERE guid = {passenger}"
+            ))[0];
+            (row["x"].parse::<f32>().unwrap() + 9464.0).abs() < 10.0
+        }
+    ));
+    let flyer = &shard.query_rows(&format!(
+        "SELECT z,resting,player_flags FROM game_world_entity WHERE guid = {passenger}"
+    ))[0];
+    assert!((flyer["z"].parse::<f32>().unwrap() - 1000.0).abs() < 0.01);
+    assert_eq!(flyer["resting"], "false");
+    assert_eq!(flyer["player_flags"], "0");
+}
+
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
     start_taxi_flight_on_route(
         shard,
