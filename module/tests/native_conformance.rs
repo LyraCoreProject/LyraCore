@@ -285,16 +285,7 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
         ))
         .is_empty());
 
-    shard.assert_sql("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,200,0,0,'End',0,1147)");
-    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
-    shard.assert_sql("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,200,0,0,0,0)");
-    shard.assert_sql(&format!(
-        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0)"
-    ));
-    shard.assert_call(
-        "gw_arm_taxi_flight",
-        &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
-    );
+    start_taxi_flight(&shard, passenger, 200);
 
     let mut spline = None;
     let deadline = std::time::Instant::now() + Duration::from_secs(6);
@@ -325,4 +316,53 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
             .len(),
         1
     );
+}
+
+fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
+    shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,{destination_x},0,0,'End',0,1147)"));
+    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
+    shard.assert_sql(&format!("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,{destination_x},0,0,0,0)"));
+    shard.assert_sql(&format!(
+        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0)"
+    ));
+    shard.assert_call(
+        "gw_arm_taxi_flight",
+        &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_reconnecting_passenger_keeps_both_taxi_flags() {
+    use lyracore_shared::constants::unit_flags;
+
+    let (shard, passenger, _) = fixture("taxi-reconnect");
+    let first = enter(&shard, passenger);
+    start_taxi_flight(&shard, passenger, 2000);
+    let flags = |shard: &Standalone| -> u32 {
+        shard.query_rows(&format!(
+            "SELECT unit_flags FROM game_world_entity WHERE guid = {passenger}"
+        ))[0]["unit_flags"]
+            .parse()
+            .unwrap()
+    };
+    let taxi_flags = unit_flags::TAXI_FLIGHT | unit_flags::REMOVE_CLIENT_CONTROL;
+    assert_eq!(flags(&shard) & taxi_flags, taxi_flags);
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows("SELECT * FROM game_native_player")
+            .is_empty()
+    ));
+    assert_eq!(
+        shard
+            .query_rows(&format!(
+                "SELECT * FROM game_active_taxi_flight WHERE character_guid = {passenger}"
+            ))
+            .len(),
+        1
+    );
+    let _second = enter(&shard, passenger);
+    assert_eq!(flags(&shard) & taxi_flags, taxi_flags);
 }
