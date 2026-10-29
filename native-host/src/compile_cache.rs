@@ -115,8 +115,7 @@ mod tests {
         config
             .cranelift_opt_level(wasmtime::OptLevel::None)
             .consume_fuel(true)
-            .epoch_interruption(true)
-            .parallel_compilation(false);
+            .epoch_interruption(true);
         config
             .enable_incremental_compilation(cache.clone())
             .unwrap();
