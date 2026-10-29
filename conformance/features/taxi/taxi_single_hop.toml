@@ -20,12 +20,6 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module marks Elwynn and Westfall zone weather as instant, but the Golden Trace marks both changes smooth."
-path = "module/src/native/environment.rs"
-symbol = "enter_zone"
-evidence = "taxi_single_hop Tier 1 exact_field / flight / broadcast/zones / 0x02F4 / instant: expected 0, actual 1 at both zone entries. At d9173eca3ea08dd985c52dabbcc826898d1d0b77, Weather.cpp::SendWeatherUpdateToPlayer calls SendWeatherUpdate with instantChange=false."
-
-[[known_gaps]]
 description = "When PLAYER_FLAGS changes, the Module also sends the unchanged UNIT_BYTES_1 field."
 path = "crates/lyracore-protocol/src/codec/values.rs"
 symbol = "build_player_flags_values"
