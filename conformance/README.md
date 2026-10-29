@@ -179,8 +179,9 @@ requires the Operator, an existing Character and a storage id in `game_taxi_node
 ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
 
 The tier 1 test installs the hand-written fixture in
-`conformance/support/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
-its 28 vertices, and a minimal synthetic template for the scenario's flight master. The template
+`conformance/support/taxi_route.rs`. It contains nodes 2 and 4, path 6 with fare 110,
+its 28 vertices, three area rows, 91 flat terrain cells, and a minimal synthetic template for the
+scenario's flight master. The template
 entry comes from the pinned scenario's Creature Fixture Verb, currently 523.
 The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
 `TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
@@ -189,8 +190,23 @@ no mount template or other world data is needed.
 `route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
 destinations exactly against vertices 1 through 27, including their wire precision. The trace
 starts at the passenger's position, which matches node 2, and omits DBC vertex 0 from its
-destinations. Vertex 0 was checked against the client data. Destination node 4 uses the vmangos `taxi_nodes`
-coordinates the importer reads, which match the Reference Server's landing correction. The test also checks the passenger's mount display.
+destinations. Vertex 0 was checked against the client data. Destination node 4 uses the vmangos
+`taxi_nodes` coordinates the importer reads, which match the Reference Server's landing correction.
+The test also checks the passenger's mount display.
+
+The area ids and flags come from build-5875 `AreaTable.dbc`: Stormwind City is 1519 with the
+capital flag `0x100`; Elwynn Forest is 12 and Westfall is 40, both without that flag. All three
+are on map 0 and use Alliance faction group 2. The area bits 1, 2 and 3 are fixture values;
+exploration bit numbering is outside this scenario. Each terrain cell has zero height and no
+liquid or holes. These values only let the Module resolve area and rest state during the flight;
+they are not client terrain data.
+
+The Golden Trace starts in zone 1519 with `field_190 = 32`. It reports Elwynn world states and
+weather at 10,583 ms, then Westfall world states and weather at 47,692 ms. Those changes fall
+between route vertices 40 and 41, then 2922 and 2923. The hand-chosen boundary cells are
+`(785,498)` for Elwynn and `(812,489)` for Westfall. The spline first enters them at about
+10,285 ms and 47,369 ms. The other cells follow the route spline between its recorded vertices.
+This is a small route-only area map, not a claim about the full zone borders.
 
 ```bash
 cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture
@@ -198,8 +214,7 @@ cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ign
 
 This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
 Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
-baseline. The eight known gameplay gaps remain comparator differences. Known gaps never excuse a
-difference or supply a passing result.
+baseline. Known gaps never excuse a difference or supply a passing result.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)

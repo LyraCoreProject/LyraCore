@@ -8,7 +8,7 @@ dependencies = ["connection_identity"]
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["taxi_single_hop"]
 deliberate_deviations = []
-prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs", "For flight zone and rest checks: game_area rows for Stormwind, Elwynn and Westfall, and terrain chunks along route 6 with those area ids"]
+prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs", "Bundled game_area rows for Stormwind, Elwynn and Westfall, and terrain cells along route 6 with those area ids"]
 tests = []
 
 [vmangos]
@@ -20,13 +20,19 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Tier 1 has no area or terrain rows along route 6, so flight zone transitions cannot resolve and the Elwynn and Westfall world-state and weather packets remain missing."
-path = "conformance/support/taxi_route.rs"
-symbol = "statements"
-evidence = "taxi_single_hop Tier 1 missing_packet / flight / broadcast/zones / 0x02C2 and 0x02F4. module/tests/native_conformance.rs::taxi_crosses_capital_and_zone_boundaries_with_area_data supplies area and terrain rows and verifies both zone entries."
+description = "The Module marks Elwynn and Westfall zone weather as instant, but the Golden Trace marks both changes smooth."
+path = "module/src/native/environment.rs"
+symbol = "enter_zone"
+evidence = "taxi_single_hop Tier 1 exact_field / flight / broadcast/zones / 0x02F4 / instant: expected 0, actual 1 at both zone entries after area and terrain rows were added."
 
 [[known_gaps]]
-description = "Tier 1 lacks Stormwind capital-area data, so its Character never starts resting and cannot send the PLAYER_FLAGS update on leaving the city."
+description = "Leaving Stormwind clears PLAYER_FLAGS as recorded, but the Module also sends UNIT_BYTES_1 and PLAYER_BYTES_2 updates that the Golden Trace does not contain."
+path = "module/src/native/visibility.rs"
+symbol = "entity_changed"
+evidence = "taxi_single_hop Tier 1 extra_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_138 and field_194 after area and terrain rows were added. The Golden Trace has field_190 = 0 only."
+
+[[known_gaps]]
+description = "The bundled fixture has no world-state catalogue, so its Elwynn and Westfall state lists are empty."
 path = "conformance/support/taxi_route.rs"
 symbol = "statements"
-evidence = "taxi_single_hop Tier 1 missing_packet / flight / broadcast/values / 0x00A9 / objects.0.values.field_190. The Golden Trace opening field_190 is 32 and flight field_190 is 0; module/tests/native_conformance.rs::taxi_crosses_capital_and_zone_boundaries_with_area_data verifies that transition with area and terrain rows."
+evidence = "taxi_single_hop Tier 1 data signature zone_world_state_catalogue / flight / broadcast/zones / 0x02C2 / states: Golden Trace has zone-specific state lists; actual lists are empty. The harness marks this field as data-dependent."
