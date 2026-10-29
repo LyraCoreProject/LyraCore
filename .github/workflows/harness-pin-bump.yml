@@ -13,19 +13,12 @@ permissions:
   contents: read
 
 jobs:
-  propose:
+  prepare:
     runs-on: ubuntu-latest
     timeout-minutes: 60
-    env:
-      GIT_AUTHOR_NAME: LyraCore harness pin bot
-      GIT_AUTHOR_EMAIL: harness-pin-bot@users.noreply.github.com
-      GIT_COMMITTER_NAME: LyraCore harness pin bot
-      GIT_COMMITTER_EMAIL: harness-pin-bot@users.noreply.github.com
+    outputs:
+      propose: ${{ steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false' }}
     steps:
-      - name: Check the bot credential
-        env:
-          GH_TOKEN: ${{ secrets.HARNESS_PIN_TOKEN }}
-        run: test -n "$GH_TOKEN"
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           ref: main
@@ -38,40 +31,92 @@ jobs:
       - name: Find the latest harness tag
         id: pin
         run: python3 conformance/pin_bump.py prepare --output "$GITHUB_OUTPUT"
+      - name: Resolve the harness without running its code
+        if: steps.pin.outputs.new == 'true'
+        env:
+          HARNESS_SHA: ${{ steps.pin.outputs.sha }}
+        run: cargo update -p wire-client --precise "$HARNESS_SHA"
+      - name: Check for scenarios without core tests
+        if: steps.pin.outputs.new == 'true'
+        id: catalogue
+        run: python3 conformance/pin_bump.py catalogue --output "$GITHUB_OUTPUT"
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        if: steps.pin.outputs.new == 'true'
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
       - uses: ./.github/actions/setup-spacetime
-        if: steps.pin.outputs.new == 'true'
-      - name: Regenerate the lockfile and record the tested commit
-        if: steps.pin.outputs.new == 'true'
-        run: |
-          cargo update -p wire-client
-          git add .wire-harness-rev Cargo.toml Cargo.lock
-          git commit -m "chore(conformance): test ${{ steps.pin.outputs.tag }}"
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
       - name: Build the disposable Module
-        if: steps.pin.outputs.new == 'true'
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
         run: cargo build --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture,conformance_test_fixture
       - name: Collect every tier 1 comparison
-        if: steps.pin.outputs.new == 'true'
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
         run: |
           mkdir -p "$LYRACORE_CONFORMANCE_SCRATCH"
           cargo test -p lyracore-module --test native_conformance tier1:: -- --ignored --test-threads=1 || test "$?" -eq 101
       - name: Regenerate and verify the Tier 1 baseline
-        if: steps.pin.outputs.new == 'true'
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
         run: |
           ./conformance/baseline
           cargo test -p lyracore-module --test native_conformance tier1:: -- --ignored --test-threads=1
-      - name: Describe the comparison
-        if: steps.pin.outputs.new == 'true'
-        id: comparison
-        run: python3 conformance/pin_bump.py describe --body "$RUNNER_TEMP/pin-bump.md" --output "$GITHUB_OUTPUT"
-      - name: Open or update one pull request
-        if: steps.pin.outputs.new == 'true'
+      - name: Save the pin proposal data
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
+        run: |
+          mkdir -p "$RUNNER_TEMP/pin-proposal"
+          cp conformance/tier1-baseline.json "$RUNNER_TEMP/pin-proposal/tier1-baseline.json"
+          python3 conformance/pin_bump.py describe --summary "$RUNNER_TEMP/pin-proposal/summary.json" --output "$GITHUB_OUTPUT"
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: steps.pin.outputs.new == 'true' && steps.catalogue.outputs.missing == 'false'
+        with:
+          name: pin-proposal
+          path: ${{ runner.temp }}/pin-proposal/
+          if-no-files-found: error
+          retention-days: 1
+
+  publish:
+    needs: prepare
+    if: needs.prepare.outputs.propose == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    env:
+      GIT_AUTHOR_NAME: LyraCore harness pin bot
+      GIT_AUTHOR_EMAIL: harness-pin-bot@users.noreply.github.com
+      GIT_COMMITTER_NAME: LyraCore harness pin bot
+      GIT_COMMITTER_EMAIL: harness-pin-bot@users.noreply.github.com
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: main
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4.3.0
+        with:
+          name: pin-proposal
+          path: ${{ runner.temp }}/pin-proposal
+      - name: Validate and apply the proposal
+        id: proposal
+        run: |
+          python3 conformance/pin_bump.py publish \
+            --baseline "$RUNNER_TEMP/pin-proposal/tier1-baseline.json" \
+            --summary "$RUNNER_TEMP/pin-proposal/summary.json" \
+            --body "$RUNNER_TEMP/pin-bump.md" --output "$GITHUB_OUTPUT"
+      - name: Resolve the lockfile and save the proposed files
+        env:
+          HARNESS_SHA: ${{ steps.proposal.outputs.sha }}
+        run: |
+          cargo update -p wire-client --precise "$HARNESS_SHA"
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' .wire-harness-rev Cargo.lock Cargo.toml conformance/tier1-baseline.json | sort)"
+          mkdir -p "$RUNNER_TEMP/proposal-files/conformance"
+          cp .wire-harness-rev Cargo.toml Cargo.lock "$RUNNER_TEMP/proposal-files/"
+          cp conformance/tier1-baseline.json "$RUNNER_TEMP/proposal-files/conformance/"
+      - name: Push and open the pull request
         env:
           GH_TOKEN: ${{ secrets.HARNESS_PIN_TOKEN }}
-          HUMAN_REVIEW: ${{ steps.comparison.outputs.human_review }}
+          HUMAN_REVIEW: ${{ steps.proposal.outputs.human_review }}
+          HARNESS_TAG: ${{ steps.proposal.outputs.tag }}
         run: |
           set -euo pipefail
+          test -n "$GH_TOKEN"
           cat > "$RUNNER_TEMP/pin-askpass" <<'SH'
           #!/bin/sh
           case "$1" in
@@ -83,29 +128,33 @@ jobs:
           export GIT_ASKPASS="$RUNNER_TEMP/pin-askpass"
           export GIT_TERMINAL_PROMPT=0
           branch=ci/auto-harness-pin
-          git reset --soft origin/main
-          git add .wire-harness-rev Cargo.toml Cargo.lock conformance/tier1-baseline.json
-          git commit -m "chore(conformance): propose harness pin ${{ steps.pin.outputs.tag }}"
           if git ls-remote --exit-code --heads origin "$branch" >/dev/null; then
             git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
-            if [ "$(git rev-parse HEAD^{tree})" != "$(git rev-parse "origin/$branch^{tree}")" ]; then
-              git push --force-with-lease origin "HEAD:refs/heads/$branch"
-            fi
+            git switch -c pin-proposal "origin/$branch"
+            git -c core.hooksPath=/dev/null merge --no-edit origin/main
           else
+            git switch -c pin-proposal origin/main
+          fi
+          cp "$RUNNER_TEMP/proposal-files/.wire-harness-rev" "$RUNNER_TEMP/proposal-files/Cargo.toml" \
+            "$RUNNER_TEMP/proposal-files/Cargo.lock" .
+          cp "$RUNNER_TEMP/proposal-files/conformance/tier1-baseline.json" conformance/
+          git add .wire-harness-rev Cargo.toml Cargo.lock conformance/tier1-baseline.json
+          if ! git diff --cached --quiet; then
+            git -c core.hooksPath=/dev/null commit -m "chore(conformance): propose harness pin $HARNESS_TAG"
             git push origin "HEAD:refs/heads/$branch"
           fi
           number=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')
           if [ -z "$number" ]; then
             gh pr create --head "$branch" --base main \
-              --title "chore(conformance): propose harness pin ${{ steps.pin.outputs.tag }}" \
+              --title "chore(conformance): propose harness pin $HARNESS_TAG" \
               --body-file "$RUNNER_TEMP/pin-bump.md"
             number=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')
           else
-            gh pr edit "$number" --title "chore(conformance): propose harness pin ${{ steps.pin.outputs.tag }}" \
+            gh pr edit "$number" --title "chore(conformance): propose harness pin $HARNESS_TAG" \
               --body-file "$RUNNER_TEMP/pin-bump.md"
           fi
           if [ "$HUMAN_REVIEW" = true ]; then
-            gh pr edit "$number" --add-label ready-for-human
+            gh api -X POST "repos/$GITHUB_REPOSITORY/issues/$number/labels" -f 'labels[]=ready-for-human' >/dev/null
           elif gh pr view "$number" --json labels --jq '.labels[].name' | grep -qx ready-for-human; then
-            gh pr edit "$number" --remove-label ready-for-human
+            gh api -X DELETE "repos/$GITHUB_REPOSITORY/issues/$number/labels/ready-for-human" >/dev/null
           fi

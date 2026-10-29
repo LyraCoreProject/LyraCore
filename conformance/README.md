@@ -130,25 +130,32 @@ the scenarios against the regenerated baseline. The first run can fail because t
 baseline still names the old harness revision. The generator requires a completed result for every
 catalogue scenario; a setup failure stops the proposal.
 
-The workflow opens or updates the single `ci/auto-harness-pin` PR. Its body shows added and removed
-rule and data signatures per scenario, or says when only provenance changed. Signature or scenario
-catalogue changes add the `ready-for-human` label. The workflow never merges the PR. Normal PR checks
-run on the bot PR.
-If the harness catalogue adds a scenario before core has a corresponding tier 1 test, baseline
-regeneration fails and the workflow opens no PR. The scenario author must add that test and its
-Feature Ledger entry; the workflow only handles the pin and baseline once core can run the scenario.
+The workflow runs comparisons without a credential. A separate runner validates the baseline and
+signature summary before using `HARNESS_PIN_TOKEN` to open or update the single
+`ci/auto-harness-pin` PR. Its body shows added and removed rule and data signatures per scenario,
+or says when only provenance changed. Signature changes add the `ready-for-human` label. The
+workflow never merges the PR. Normal PR checks run on the bot PR.
+
+If the harness catalogue adds a scenario without a core tier 1 test, the workflow names the missing
+scenarios in its run summary and opens no PR. The scenario author makes one core PR that advances
+the harness pin and `wire-client` revision, updates `Cargo.lock`, adds the test and Feature Ledger
+entry, and regenerates the Tier 1 baseline. The separate pin proposal workflow resumes for later
+harness revisions that core can already test.
+
 The maintainer must create the core Actions secret `HARNESS_PIN_TOKEN` as a fine-grained personal
 access token scoped only to `LyraCoreProject/LyraCore`. Give it repository permissions **Contents:
-read and write**, **Pull requests: read and write**, and **Issues: read and write** for the review
-label. The harness uses its default `GITHUB_TOKEN` with `contents: write` to create tags; it needs
+read and write** and **Pull requests: read and write**. The label endpoint accepts Pull requests:
+write. The harness uses its default `GITHUB_TOKEN` with `contents: write` to create tags; it needs
 no cross-repository secret. The core token must belong to a principal allowed to open PRs. A PR
 created with the default `GITHUB_TOKEN` would not start the other Actions workflows.
 
-To test the full flow after creating the secret, merge a harness PR that changes a scenario, trace,
-`src/`, adapter, or Cargo manifest or lockfile. Confirm harness CI creates one new tag. Run the
-core `Propose harness pin bump` workflow manually, review its PR body and label, and confirm that
-the normal core checks run. Run the workflow again to check that it updates the same PR without
-making another. Merge remains a human decision.
+To test the full flow after creating the secret, merge a harness PR that changes an existing
+scenario, trace, `src/`, adapter, or Cargo manifest or lockfile. Confirm harness CI creates one new
+tag. Run the core `Propose harness pin bump` workflow manually, review its PR body and label, and
+confirm that the normal core checks run. Run the workflow again to check that it updates the same
+PR without making another. For a new catalogue scenario, confirm the workflow names the missing
+core test and opens no PR; then use the combined core PR described above. Merge remains a human
+decision.
 
 ### Run one scenario
 
