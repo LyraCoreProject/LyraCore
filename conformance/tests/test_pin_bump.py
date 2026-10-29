@@ -14,11 +14,13 @@ SCRIPT = Path(__file__).resolve().parents[1] / "pin_bump.py"
 SPEC = importlib.util.spec_from_file_location("pin_bump", SCRIPT)
 PIN_BUMP = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(PIN_BUMP)
+SCRATCH = Path(os.environ.get("LYRACORE_PIN_TEST_SCRATCH",
+                              Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"))
 
 
 class PinBumpTests(unittest.TestCase):
     def test_catalogue_skips_new_scenarios_without_core_evidence(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"
+        scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)
@@ -61,8 +63,26 @@ class PinBumpTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "baseline schema"):
             PIN_BUMP.validate_baseline(before, after, revision)
 
+    def test_publish_accepts_empty_checkpoint_but_requires_rule_name(self):
+        before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
+        after = copy.deepcopy(before)
+        revision = "b" * 40
+        for entry in after["scenarios"]:
+            entry["harness_revision"] = revision
+        signature = {"rule": "unmatched_declaration", "checkpoint": "", "stream": None,
+                     "opcode": None, "field_path": []}
+        after["scenarios"][0]["rule"] = [signature]
+        PIN_BUMP.validate_baseline(before, after, revision)
+        signature["rule"] = ""
+        with self.assertRaisesRegex(ValueError, "signature names"):
+            PIN_BUMP.validate_baseline(before, after, revision)
+        signature["rule"] = "unmatched_declaration"
+        signature["checkpoint"] = None
+        with self.assertRaisesRegex(ValueError, "signature names"):
+            PIN_BUMP.validate_baseline(before, after, revision)
+
     def test_publish_validates_job_output_before_writing(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
+        scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)
@@ -96,7 +116,7 @@ class PinBumpTests(unittest.TestCase):
             self.assertEqual(baseline.read_text(), json.dumps(after, indent=2) + "\n")
 
     def test_proposal_exports_only_revision_and_bounded_baseline(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
+        scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)
@@ -116,7 +136,7 @@ class PinBumpTests(unittest.TestCase):
                              + base64.b64encode(baseline).decode() + "\n")
 
     def test_checkout_updates_existing_bot_branch_with_matching_pin(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/fix-909b"
+        scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory) / "core"
@@ -139,21 +159,21 @@ class PinBumpTests(unittest.TestCase):
             for name in PIN_BUMP.PROPOSAL_FILES:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
-                path.write_text("main\n")
+                path.write_text("v0.2.0-conformance.8\n")
             git("add", ".")
             git("commit", "-m", "main")
             git("push", "origin", "main")
 
-            def stage_proposal(lock):
+            def stage_proposal(lock, tag):
                 for name in PIN_BUMP.PROPOSAL_FILES:
-                    content = lock if name == "Cargo.lock" else "proposal\n"
+                    content = lock if name == "Cargo.lock" else f"v0.2.0-conformance.{tag}\n"
                     path = saved / name
                     path.parent.mkdir(parents=True, exist_ok=True)
                     path.write_text(content)
                     (root / name).write_text(content)
 
             with mock.patch.object(PIN_BUMP, "ROOT", root):
-                stage_proposal("first\n")
+                stage_proposal("first\n", 9)
                 PIN_BUMP.checkout_proposal(saved)
                 self.assertEqual(git("branch", "--show-current"), "pin-proposal")
                 self.assertEqual((root / "Cargo.lock").read_text(), "first\n")
@@ -162,16 +182,58 @@ class PinBumpTests(unittest.TestCase):
                 git("push", "origin", "HEAD:refs/heads/ci/auto-harness-pin")
                 git("switch", "main")
                 git("branch", "-D", "pin-proposal")
-                stage_proposal("second\n")
+                for name in PIN_BUMP.PROPOSAL_FILES:
+                    (root / name).write_text("v0.2.0-conformance.10\n")
+                git("add", ".")
+                git("commit", "-m", "combined main update")
+                git("push", "origin", "main")
+                stage_proposal("second\n", 11)
                 PIN_BUMP.checkout_proposal(saved)
-                self.assertEqual((root / ".wire-harness-rev").read_text(), "proposal\n")
+                self.assertEqual((root / ".wire-harness-rev").read_text(),
+                                 "v0.2.0-conformance.11\n")
                 self.assertEqual((root / "Cargo.lock").read_text(), "second\n")
                 self.assertEqual(git("branch", "--show-current"), "pin-proposal")
-                git("add", ".")
-                git("commit", "-m", "second proposal")
+                self.assertEqual(git("rev-list", "--parents", "-n", "1", "HEAD").count(" "), 2)
+                self.assertEqual(git("diff", "--cached", "--name-only"), "")
                 git("push", "origin", "HEAD:refs/heads/ci/auto-harness-pin")
                 self.assertEqual(git("rev-parse", "HEAD"),
                                  git("ls-remote", "origin", "refs/heads/ci/auto-harness-pin").split()[0])
+                git("switch", "main")
+                git("branch", "-D", "pin-proposal")
+                (root / "unrelated").write_text("new main content\n")
+                git("add", "unrelated")
+                git("commit", "-m", "unrelated main update")
+                git("push", "origin", "main")
+                stage_proposal("second\n", 11)
+                PIN_BUMP.checkout_proposal(saved)
+                self.assertEqual(git("diff", "--name-only"), "")
+                self.assertEqual(git("diff", "--cached", "--name-only"), "")
+                self.assertNotEqual(git("rev-parse", "HEAD"),
+                                    git("rev-parse", "origin/ci/auto-harness-pin"))
+                branch = "ci/auto-harness-pin"
+                subprocess.run(
+                    ["bash", "-euo", "pipefail", "-c",
+                     'if ! git show-ref --verify --quiet "refs/remotes/origin/$branch" || '
+                     '[ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$branch")" ]; then '
+                     'git push origin "HEAD:refs/heads/$branch"; fi'],
+                    cwd=root, env=dict(env, branch=branch), check=True, capture_output=True,
+                )
+                self.assertEqual(git("rev-parse", "HEAD"),
+                                 git("ls-remote", "origin", f"refs/heads/{branch}").split()[0])
+                (root / "unrelated").write_text("bot edit\n")
+                git("add", "unrelated")
+                git("commit", "-m", "bot edit outside proposal")
+                git("push", "origin", "HEAD:refs/heads/ci/auto-harness-pin")
+                git("switch", "main")
+                git("branch", "-D", "pin-proposal")
+                (root / "unrelated").write_text("main edit\n")
+                git("add", "unrelated")
+                git("commit", "-m", "main edit outside proposal")
+                git("push", "origin", "main")
+                stage_proposal("second\n", 11)
+                with self.assertRaisesRegex(RuntimeError, "unrelated"):
+                    PIN_BUMP.checkout_proposal(saved)
+                self.assertEqual(git("status", "--porcelain"), "")
 
     def test_latest_tag_uses_annotated_tag_commit_and_numeric_order(self):
         refs = (
@@ -186,7 +248,7 @@ class PinBumpTests(unittest.TestCase):
         )
 
     def test_prepare_changes_both_pins_once_and_is_idempotent(self):
-        scratch = Path.home() / ".cache/lyracore-scratch/conformance-pin-tests"
+        scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)
         with tempfile.TemporaryDirectory(dir=scratch) as directory:
             root = Path(directory)

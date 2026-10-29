@@ -121,6 +121,9 @@ jobs:
           git add .wire-harness-rev Cargo.toml Cargo.lock conformance/tier1-baseline.json
           if ! git diff --cached --quiet; then
             git -c core.hooksPath=/dev/null commit -m "chore(conformance): propose harness pin $HARNESS_TAG"
+          fi
+          if ! git show-ref --verify --quiet "refs/remotes/origin/$branch" || \
+              [ "$(git rev-parse HEAD)" != "$(git rev-parse "origin/$branch")" ]; then
             git push origin "HEAD:refs/heads/$branch"
           fi
           number=$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')

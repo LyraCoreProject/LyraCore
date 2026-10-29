@@ -183,8 +183,8 @@ def validate_baseline(before, after, sha):
                     "rule", "checkpoint", "stream", "opcode", "field_path"
                 }:
                     raise ValueError(f"{scenario}: invalid signature")
-                if not all(isinstance(signature[field], str) and signature[field]
-                           for field in ("rule", "checkpoint")):
+                if (not isinstance(signature["rule"], str) or not signature["rule"]
+                        or not isinstance(signature["checkpoint"], str)):
                     raise ValueError(f"{scenario}: invalid signature names")
                 stream = signature["stream"]
                 stream_order = {"opening": 0, "reply": 1, "broadcast": 2,
@@ -317,8 +317,20 @@ def checkout_proposal(saved):
                        cwd=ROOT, check=True)
         subprocess.run(["git", "switch", "-c", "pin-proposal", f"origin/{branch}"],
                        cwd=ROOT, check=True)
-        subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-edit", "origin/main"],
-                       cwd=ROOT, check=True)
+        merge = subprocess.run(
+            ["git", "-c", "core.hooksPath=/dev/null", "merge", "--no-edit", "origin/main"],
+            cwd=ROOT, check=False,
+        )
+        if merge.returncode:
+            conflicts = subprocess.check_output(
+                ["git", "diff", "--name-only", "--diff-filter=U", "-z"], cwd=ROOT,
+            ).decode().split("\0")[:-1]
+            if (merge.returncode != 1 or not conflicts
+                    or not set(conflicts) <= set(PROPOSAL_FILES)):
+                if subprocess.run(["git", "rev-parse", "-q", "--verify", "MERGE_HEAD"],
+                                  cwd=ROOT, stdout=subprocess.DEVNULL, check=False).returncode == 0:
+                    subprocess.run(["git", "merge", "--abort"], cwd=ROOT, check=True)
+                raise RuntimeError(f"could not merge main into bot branch: {conflicts}")
     elif exists == 2:
         subprocess.run(["git", "switch", "-c", "pin-proposal", "origin/main"],
                        cwd=ROOT, check=True)
@@ -328,6 +340,10 @@ def checkout_proposal(saved):
         destination = ROOT / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(saved / name, destination)
+    if exists == 0 and merge.returncode:
+        subprocess.run(["git", "add", "--", *PROPOSAL_FILES], cwd=ROOT, check=True)
+        subprocess.run(["git", "-c", "core.hooksPath=/dev/null", "commit", "--no-edit"],
+                       cwd=ROOT, check=True)
 
 
 def main():
