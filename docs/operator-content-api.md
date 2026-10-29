@@ -77,9 +77,8 @@ operator_teleport_character(name: String, map_id: u32, x: f32, y: f32, z: f32, o
 ```
 
 The Operator calls this with the Owner Token. Meld's Game › Play Here and Launch-at-camera
-can use the same call. Play Here moves the Character in the world. Launch must close the game
-and wait for logout before the call, then start the game after success. The Meld caller ships
-in a separate PR.
+use this call. Play Here moves the Character in the world. Launch closes the game, calls again
+while the Realm refuses with "retry after logout", then starts the game after success.
 
 Names match without ASCII case distinctions, so `Tester`, `tester` and `TESTER` match the same
 Character. Whitespace is significant; non-ASCII letters must match exactly. The Module's
