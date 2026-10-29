@@ -131,16 +131,7 @@ fn resolve_offhand_swing(
         return;
     }
 
-    let class = attacker.class();
-    let ap = melee_attack_power_for(
-        class,
-        effective_strength(ctx, attacker),
-        effective_agility(ctx, attacker),
-        attacker.level,
-    ) + aura_attack_power_bonus(ctx, attacker.guid);
-    let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
-    let range = apply_offhand_penalty(raw_min, raw_max);
-
+    let range = offhand_swing_range(ctx, attacker, (dmin, dmax, delay));
     let (rolled, hit_info, blocked) = roll_swing_with_range(ctx, attacker, &target, range, None);
 
     crate::spell::break_stealth(ctx, attacker_guid);
@@ -176,6 +167,21 @@ fn resolve_offhand_swing(
         fresh.last_offhand_swing_ms = now_ms;
         crate::combat::MeleeAttack::update(ctx, fresh);
     }
+}
+
+pub(crate) fn offhand_swing_range(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    (dmin, dmax, delay): (u32, u32, u32),
+) -> (u32, u32) {
+    let ap = melee_attack_power_for(
+        attacker.class(),
+        effective_strength(ctx, attacker),
+        effective_agility(ctx, attacker),
+        attacker.level,
+    ) + aura_attack_power_bonus(ctx, attacker.guid);
+    let (raw_min, raw_max) = weapon_swing_range_ap(ap, dmin, dmax, delay);
+    apply_offhand_penalty(raw_min, raw_max)
 }
 
 fn resolve_swing(ctx: &ReducerContext) {

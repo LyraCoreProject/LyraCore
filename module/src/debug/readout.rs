@@ -97,6 +97,33 @@ pub fn debug_compute_swing(ctx: &ReducerContext, attacker_guid: u64, target_guid
         attacker_weapon_skill,
         defender_defense_skill,
     });
+    let offhand_key = "offhand_swing".to_string();
+    readouts.key().delete(&offhand_key);
+    if let Some(weapon) = crate::combat::equipped_offhand_weapon_damage(ctx, attacker_guid) {
+        let (base_min, base_max) = crate::combat::offhand_swing_range(ctx, &attacker, weapon);
+        readouts.insert(DebugReadout {
+            key: offhand_key,
+            base_min,
+            base_max,
+            mitigation_pct: 0,
+            final_min: 0,
+            final_max: 0,
+            note: String::new(),
+            dodge_bp: 0,
+            crit_bp: 0,
+            hit_miss_bp: 0,
+            parry_bp: 0,
+            attack_time_ms: 0,
+            spell_crit_bp: 0,
+            spell_hit_normal: 0,
+            spell_hit_crit: 0,
+            damage_taken_pct: 0,
+            block_bp: 0,
+            block_value: 0,
+            attacker_weapon_skill: 0,
+            defender_defense_skill: 0,
+        });
+    }
 }
 
 #[reducer]
