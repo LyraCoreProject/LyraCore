@@ -89,11 +89,14 @@ and record each Behavior; they are not a claim that the original nine conform to
 checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
 
 The build-5875 request inventory is `client-requests-5875.tsv`, transcribed from the pinned
-vmangos `Opcodes_1_12_1.h`. Each row has one opcode number and name. `opcodes-out-of-scope.toml`
-records requests used only for GM commands, debug, obsolete or server-origin traffic, with a
-reason for each. Every other inventory opcode must be claimed by at least one Behavior. The
-scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks that
-every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
+[vmangos opcode table](https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes_1_12_1.h).
+Its 465 sorted `(id, name)` rows have SHA-256
+`2ac5acc43e5e0f8eea113ec75626640557e801194324b6af08d561e5a9d8a216`. The coverage test
+checks both values so a removed row fails even if its Behavior claim is removed too.
+`opcodes-out-of-scope.toml` holds only requests with a cited administrator gate.
+`unverified_client_use` keeps requests with uncertain stock-client use in the denominator.
+The scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks
+that every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
 
 `tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
 files from the pinned vmangos raw sources and the core opcode dependency. Its

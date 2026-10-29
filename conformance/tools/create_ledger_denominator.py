@@ -1,8 +1,5 @@
 #!/usr/bin/env python3
-"""Create the initial Behavior files from the pinned client and vmangos opcode tables.
-
-Run once from the repository root. The generated files are hand-maintained after creation.
-"""
+"""Create the initial ledger denominator from pinned opcode sources."""
 
 import pathlib
 import re
@@ -69,7 +66,7 @@ GROUPS = {
     "actions/stand_state": "CMSG_STANDSTATECHANGE",
     "reputation/faction_preferences": "CMSG_SET_FACTION_ATWAR CMSG_SET_FACTION_INACTIVE CMSG_SET_WATCHED_FACTION",
     "pvp/pvp_flags_and_honor": "CMSG_TOGGLE_PVP MSG_INSPECT_HONOR_STATS",
-    "pets/pet_commands": "CMSG_PET_SET_ACTION CMSG_PET_ACTION CMSG_PET_ABANDON CMSG_PET_CAST_SPELL CMSG_PET_STOP_ATTACK CMSG_PET_UNLEARN CMSG_PET_SPELL_AUTOCAST CMSG_PET_CANCEL_AURA CMSG_REQUEST_PET_INFO",
+    "pets/pet_commands": "CMSG_PET_SET_ACTION CMSG_PET_ACTION CMSG_PET_CAST_SPELL CMSG_PET_STOP_ATTACK CMSG_PET_UNLEARN CMSG_PET_SPELL_AUTOCAST CMSG_PET_CANCEL_AURA CMSG_REQUEST_PET_INFO",
     "pets/pet_stables": "MSG_LIST_STABLED_PETS CMSG_STABLE_PET CMSG_UNSTABLE_PET CMSG_BUY_STABLE_SLOT CMSG_STABLE_REVIVE_PET CMSG_STABLE_SWAP_PET",
     "gossip/npc_dialogue": "CMSG_GOSSIP_HELLO CMSG_GOSSIP_SELECT_OPTION",
     "quests/quest_offers": "CMSG_QUEST_QUERY CMSG_QUESTGIVER_STATUS_QUERY CMSG_QUESTGIVER_HELLO CMSG_QUESTGIVER_QUERY_QUEST CMSG_QUESTGIVER_QUEST_AUTOLAUNCH CMSG_QUESTGIVER_CANCEL",
@@ -89,48 +86,10 @@ GROUPS = {
 }
 
 OUT_OF_SCOPE = {
-    "MSG_NULL_ACTION": "Reserved null action; vmangos marks it invalid.",
-    "CMSG_BOOTME": "Developer disconnect command; the normal client does not send it during play.",
-    "CMSG_DBLOOKUP": "GM lookup command; vmangos marks it unhandled.",
-    "CMSG_WORLD_TELEPORT": "GM teleport command; normal play uses area and taxi travel.",
-    "CMSG_TELEPORT_TO_UNIT": "GM teleport command; normal play uses area and taxi travel.",
-    "CMSG_WHOIS": "GM account lookup command, outside player interaction coverage.",
-    "CMSG_MOVE_SET_RAW_POSITION": "Debug coordinate setter, outside stock client movement.",
-    "MSG_MOVE_WATER_WALK": "Obsolete movement message; vmangos marks it unhandled.",
-    "MSG_UPDATE_GROUP_MEMBERS": "Server-origin group update; vmangos marks it unhandled as a client request.",
-    "MSG_UPDATE_GUILD": "Server-origin guild update; vmangos marks it unhandled as a client request.",
-    "MSG_CHANNEL_START": "Unused channel control message; vmangos marks it unhandled.",
-    "MSG_CHANNEL_UPDATE": "Unused channel control message; vmangos marks it unhandled.",
-    "MSG_SET_DUNGEON_DIFFICULTY": "Later client difficulty control; build 5875 has no player difficulty choice.",
-    "MSG_DELAY_GHOST_TELEPORT": "Unused ghost relocation control; vmangos marks it unhandled.",
-    "CMSG_AUTOEQUIP_GROUND_ITEM": "Ground-item storage request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM.",
-    "CMSG_AUTOSTORE_GROUND_ITEM": "Ground-item storage request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM.",
-    "CMSG_STORE_LOOT_IN_SLOT": "Unused loot-slot store request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM.",
-    "CMSG_SKILL_BUY_STEP": "Unused skill-point purchase request; 1.12.1 trainers use CMSG_TRAINER_BUY_SPELL.",
-    "CMSG_SKILL_BUY_RANK": "Unused skill-point purchase request; 1.12.1 trainers use CMSG_TRAINER_BUY_SPELL.",
-    "CMSG_AUTH_SRP6_BEGIN": "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION.",
-    "CMSG_AUTH_SRP6_PROOF": "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION.",
-    "CMSG_AUTH_SRP6_RECODE": "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION.",
-    "CMSG_UNLEARN_TALENTS": "Unused talent reset request; 1.12.1 uses MSG_TALENT_WIPE_CONFIRM.",
-    "CMSG_UNLEARN_SPELL": "Unused spell removal request; vmangos marks it unhandled.",
-    "CMSG_LUA_USAGE": "Client telemetry, not a player-visible gameplay request; vmangos marks it unhandled.",
-    "CMSG_CHAT_FILTERED": "Unused chat-filter notification; vmangos marks it unhandled.",
+    "CMSG_WORLD_TELEPORT": "HandleWorldTeleportOpcode requires SEC_ADMINISTRATOR.",
+    "CMSG_MOVE_SET_RAW_POSITION": "HandleMoveSetRawPosition requires SEC_ADMINISTRATOR.",
+    "CMSG_WHOIS": "HandleWhoisOpcode requires SEC_ADMINISTRATOR.",
 }
-
-def out_of_scope_reason(name, dispatch):
-    if name in OUT_OF_SCOPE:
-        return OUT_OF_SCOPE[name]
-    if "_OBSOLETE" in name:
-        return "Obsolete in build 5875; vmangos marks this request unhandled."
-    if "CHEAT" in name or name.startswith(("CMSG_GM_", "MSG_GM_")):
-        return "GM or debug command, outside normal client play."
-    if name.startswith("MSG_MOVE_"):
-        return "Server-origin or obsolete movement message; vmangos marks it unhandled."
-    if name.startswith(("CMSG_DEBUG_", "CMSG_CREATE", "CMSG_DESTROYMONSTER", "CMSG_FORCEACTION")):
-        return "Developer command; vmangos marks it unhandled."
-    if name in dispatch and dispatch[name] in ("Unhandled", "Invalid"):
-        return "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
-    raise AssertionError((name, dispatch.get(name)))
 
 SCOPES = {
     "character_management": "A Realm Account can list, create, delete and rename its 1.12.1 Characters.",
@@ -185,8 +144,8 @@ SCOPES = {
     "stand_state": "A Character can change its standing or sitting state.",
     "faction_preferences": "A Character can change war, inactive and watched faction preferences.",
     "pvp_flags_and_honor": "A Character can toggle its PvP flag and inspect honor statistics.",
-    "pet_commands": "A Character can command, cast through, edit and dismiss its controlled pet.",
-    "pet_stables": "A hunter can list, store, retrieve, revive and swap pets at a stable master.",
+    "pet_commands": "A Character can cast pet spells, stop pet attacks, change autocast, unlearn pet talents, cancel pet auras and request pet information.",
+    "pet_stables": "A hunter can list, store, retrieve and swap pets at a stable master; a revival request produces no response or state change.",
     "npc_dialogue": "A Character can open and choose a gossip option from an NPC.",
     "quest_offers": "A Character can query available quests and inspect their offered requirements.",
     "quest_log": "A Character can reorder and abandon quests in its quest log.",
@@ -253,9 +212,13 @@ def main():
             assigned[name] = group
     assert all_ids.keys() >= assigned.keys()
     assert all_ids.keys() >= OUT_OF_SCOPE.keys()
-    assert names <= set(assigned) | set(OUT_OF_SCOPE) | {name for name, number in ids.items() if number in claimed}
     assert not (set(OUT_OF_SCOPE) & set(assigned))
-    out_of_scope = {name: out_of_scope_reason(name, invalid) for name in all_ids.keys() - assigned.keys() if all_ids[name] not in claimed}
+    unverified = sorted(
+        (name for name, number in all_ids.items()
+         if name not in assigned and name not in OUT_OF_SCOPE and number not in claimed),
+        key=all_ids.get,
+    )
+    out_of_scope = {name: OUT_OF_SCOPE[name] for name in OUT_OF_SCOPE if all_ids[name] not in claimed}
     output.mkdir(parents=True, exist_ok=True)
     inventory = output / "client-requests-5875.tsv"
     assert not inventory.exists(), inventory
@@ -285,17 +248,51 @@ def main():
         gaps = [name for name in requested if name in unavailable_names or all_ids[name] in unavailable_numbers]
         if gaps:
             lines += ["", "[[known_gaps]]", f"description = {quoted('The Module returns an unavailable response for ' + ', '.join(gaps) + '.')}", 'path = "module/src/native/unavailable.rs"', f"symbol = {quoted('responses' if any(name in unavailable_names for name in gaps) else 'raw_responses')}", 'evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"']
-        if behavior == "pet_stables":
-            lines += ["", "[[known_gaps]]", 'description = "Stable pet revival has no native request decoder or response."', 'path = "module/src/native/mod.rs"', 'symbol = "receive"', 'evidence = "Build-5875 CMSG_STABLE_REVIVE_PET is absent from ClientOpcodeMessage and module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"']
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n")
+    target = output / "features/unverified/unverified_client_use.toml"
+    assert not target.exists(), target
+    target.parent.mkdir(parents=True, exist_ok=True)
+    opcode_rows = ["requests = ["]
+    for start in range(0, len(unverified), 8):
+        names = unverified[start:start + 8]
+        opcode_rows.append("    " + ", ".join(quoted(f"0x{all_ids[name]:04X}") for name in names) + ",")
+    opcode_rows.append("]")
+    target.write_text("\n".join([
+        "schema_version = 1",
+        'id = "unverified_client_use"',
+        'system = "unverified"',
+        'scope = "Identify whether the stock build-5875 client sends these requests and preserve any observable result."',
+        *opcode_rows,
+        "replies = []",
+        "dependencies = []",
+        'required_rungs = ["tier1", "conformance_audit", "real_client"]',
+        "scenarios = []",
+        "deliberate_deviations = []",
+        "prerequisites = []",
+        "tests = []",
+        "",
+        "[vmangos]",
+        f"commit = {quoted(SHA)}",
+        'path = "src/game/Server/Protocol/Opcodes.cpp"',
+        'symbol = "BuildOpcodeList"',
+        "",
+        "[real_client]",
+        'status = "unverified"',
+        "",
+        "[[known_gaps]]",
+        'description = "Stock-client use and expected responses for these request ids are unverified."',
+        'path = "module/src/native/mod.rs"',
+        'symbol = "receive"',
+        'evidence = "Pinned vmangos Opcodes_1_12_1.h and Opcodes.cpp enumerate the requests; no stock-client trace confirms their use."',
+    ]) + "\n")
     out = output / "opcodes-out-of-scope.toml"
     assert not out.exists(), out
     lines = ["[out_of_scope]"]
     for name, reason in sorted(out_of_scope.items(), key=lambda entry: all_ids[entry[0]]):
-        lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted('https://github.com/vmangos/core/blob/' + SHA + '/src/game/Server/Protocol/Opcodes.cpp')}"]
+        lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted('https://github.com/vmangos/core/blob/' + SHA + '/src/game/Handlers/MiscHandler.cpp')}"]
     out.write_text("\n".join(lines) + "\n")
-    print(f"Created {len(GROUPS)} Behavior groups; {len(out_of_scope)} out-of-scope opcodes")
+    print(f"Created {len(GROUPS) + 1} Behavior groups; {len(unverified)} unverified requests; {len(out_of_scope)} out-of-scope opcodes")
 
 
 if __name__ == "__main__":

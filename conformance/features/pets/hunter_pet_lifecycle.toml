@@ -2,7 +2,7 @@ schema_version = 1
 id = "hunter_pet_lifecycle"
 system = "pets"
 scope = "A Hunter tames an eligible creature and commands, dismisses or abandons the pet with the corresponding ownership and persistence rules. Stables and action-bar editing are separate Behaviors."
-requests = ["0x0175"]
+requests = ["0x0175", "0x0176"]
 replies = ["0x0179"]
 dependencies = []
 required_rungs = ["durable_module", "tier1", "conformance_audit", "real_client"]
@@ -17,6 +17,12 @@ symbol = "WorldSession::HandlePetAction"
 
 [real_client]
 status = "unverified"
+
+[[known_gaps]]
+description = "The Module returns an unavailable response for CMSG_PET_ABANDON."
+path = "module/src/native/unavailable.rs"
+symbol = "responses"
+evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
 
 [[tests]]
 path = "module/tests/hunter_pet.rs"

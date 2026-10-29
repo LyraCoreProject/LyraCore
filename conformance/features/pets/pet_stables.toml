@@ -1,7 +1,7 @@
 schema_version = 1
 id = "pet_stables"
 system = "pets"
-scope = "A hunter can list, store, retrieve, revive and swap pets at a stable master."
+scope = "A hunter can list, store, retrieve and swap pets at a stable master; a revival request produces no response or state change."
 requests = ["0x026F", "0x0270", "0x0271", "0x0272", "0x0274", "0x0275"]
 replies = []
 dependencies = []
@@ -24,9 +24,3 @@ description = "The Module returns an unavailable response for MSG_LIST_STABLED_P
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"
-
-[[known_gaps]]
-description = "Stable pet revival has no native request decoder or response."
-path = "module/src/native/mod.rs"
-symbol = "receive"
-evidence = "Build-5875 CMSG_STABLE_REVIVE_PET is absent from ClientOpcodeMessage and module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

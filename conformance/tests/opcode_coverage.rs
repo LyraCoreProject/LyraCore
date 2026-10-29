@@ -1,10 +1,12 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::process::Command;
+use std::sync::OnceLock;
 
 use anyhow::{ensure, Result};
 use lyracore_conformance::FeatureLedger;
 use serde::Deserialize;
+use sha2::{Digest, Sha256};
 
 #[path = "../support/opcodes.rs"]
 mod opcodes;
@@ -301,6 +303,8 @@ MSG_TALENT_WIPE_CONFIRM
 const INITIAL_OUT_OF_SCOPE: &[&str] = &[];
 const EXCLUSIONS: &str = "conformance/opcodes-out-of-scope.toml";
 const ALLOWLIST: &str = "conformance/opcodes-unclaimed.txt";
+const INVENTORY_COUNT: usize = 465;
+const INVENTORY_SHA256: &str = "2ac5acc43e5e0f8eea113ec75626640557e801194324b6af08d561e5a9d8a216";
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -334,15 +338,50 @@ fn scope_source(root: &Path, opcode: &str, source: &str) -> bool {
     let Some((sha, path)) = reference.split_once('/') else {
         return false;
     };
-    wire_client::catalogue::ENTRIES.iter().all(|entry| {
-        wire_client::catalogue::get(entry.id).is_ok_and(|golden| {
-            matches!(&golden.trace().header.origin, wire_client::trace::Origin::Golden { provenance } if provenance.source_commit == sha)
-        })
-    })
+    pinned_source_commits().contains(sha)
         && path.starts_with("src/")
         && Path::new(path)
             .components()
             .all(|c| matches!(c, std::path::Component::Normal(_)))
+}
+
+fn pinned_source_commits() -> &'static BTreeSet<String> {
+    static COMMITS: OnceLock<BTreeSet<String>> = OnceLock::new();
+    COMMITS.get_or_init(|| {
+        let commits: Option<BTreeSet<_>> = wire_client::catalogue::ENTRIES
+            .iter()
+            .map(|entry| {
+                let golden = wire_client::catalogue::get(entry.id).ok()?;
+                match &golden.trace().header.origin {
+                    wire_client::trace::Origin::Golden { provenance } => {
+                        Some(provenance.source_commit.clone())
+                    }
+                    _ => None,
+                }
+            })
+            .collect();
+        commits
+            .filter(|commits| commits.len() == 1)
+            .unwrap_or_default()
+    })
+}
+
+fn inventory_matches_pin(variants: &BTreeMap<String, u16>) -> Result<()> {
+    let mut rows: Vec<_> = variants
+        .iter()
+        .map(|(name, value)| (*value, name))
+        .collect();
+    rows.sort_unstable();
+    let canonical = rows
+        .iter()
+        .map(|(value, name)| format!("0x{value:04X} {name}\n"))
+        .collect::<String>();
+    ensure!(
+        rows.len() == INVENTORY_COUNT
+            && format!("{:x}", Sha256::digest(canonical.as_bytes())) == INVENTORY_SHA256,
+        "client request inventory differs from pinned vmangos Opcodes_1_12_1.h"
+    );
+    Ok(())
 }
 
 fn scope_additions_have_sources(
@@ -503,6 +542,7 @@ fn history(root: &Path, path: &str) -> Result<Vec<String>> {
 fn every_client_request_has_a_behavior_scope_decision_or_remaining_allowance() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
     let variants = opcodes::read_inventory(root)?;
+    inventory_matches_pin(&variants)?;
     for (name, value) in opcodes::read(root)? {
         ensure!(
             variants.get(&name) == Some(&value),
@@ -542,6 +582,16 @@ fn every_client_request_has_a_behavior_scope_decision_or_remaining_allowance() -
         excluded.out_of_scope.len(),
         unclaimed.len()
     );
+    Ok(())
+}
+
+#[test]
+fn removing_an_inventory_row_fails() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
+    let mut variants = opcodes::read_inventory(root)?;
+    inventory_matches_pin(&variants)?;
+    variants.remove("CMSG_STABLE_REVIVE_PET");
+    assert!(inventory_matches_pin(&variants).is_err());
     Ok(())
 }
 
