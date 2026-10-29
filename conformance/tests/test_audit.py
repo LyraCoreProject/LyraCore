@@ -82,6 +82,28 @@ class ReferenceLifetime(unittest.TestCase):
                     self.fail('must refuse changed provenance')
         self.assertEqual(self.mutations, [])
 
+    def test_scenario_reference_reuses_matching_pin_and_restarts_for_changed_key(self):
+        cache = self.root / 'scenario-cache'
+        cache.mkdir()
+
+        def docker(args, **_):
+            if args[1] == 'ps':
+                return type('Output', (), {'stdout': 'auth\ndatabase\nworld' if self.running else ''})()
+            if args[1] == 'up':
+                self.running = True
+                self.mutations.append('start')
+            if args[1] == 'down':
+                self.running = False
+                self.mutations.append('stop')
+
+        with patch.object(audit, 'REFERENCE', self.root), patch.object(audit, 'SCENARIO_CACHE', cache), \
+                patch.object(audit, 'run', side_effect=docker), patch.object(audit, 'wait_port'), \
+                patch.object(audit.socket, 'socket'):
+            for key in ['first', 'first', 'second']:
+                with audit.scenario_reference_server(self.root, key):
+                    self.assertTrue(self.running)
+        self.assertEqual(self.mutations, ['start', 'stop', 'start'])
+
 
 class WorldReadiness(unittest.TestCase):
     def test_accept_without_an_auth_challenge_is_not_ready(self):
@@ -154,6 +176,31 @@ class ClientDataPath(unittest.TestCase):
                     patch.object(audit, 'capture_servers', side_effect=capture_servers):
                 audit.main()
             self.assertEqual(captured, [str(client_data.resolve())])
+
+
+class ScenarioKey(unittest.TestCase):
+    def test_client_bytes_and_vmangos_pin_invalidate_cached_realm(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            harness = root / 'harness'
+            adapter = harness / 'adapters/vmangos'
+            adapter.mkdir(parents=True)
+            pins = {'database_commit': 'a' * 40}
+            (adapter / 'pins.json').write_text(json.dumps(pins))
+            (root / '.lyracore-cli-rev').write_text('cli')
+            client = root / 'Data'
+            client.mkdir()
+            (client / 'dbc.MPQ').write_bytes(b'first')
+            with patch.object(audit, 'ROOT', root):
+                first, _ = audit.scenario_key('core', 'harness', harness, client)
+                (client / 'dbc.MPQ').write_bytes(b'other')
+                changed_client, _ = audit.scenario_key('core', 'harness', harness, client)
+                pins['database_commit'] = 'b' * 40
+                (adapter / 'pins.json').write_text(json.dumps(pins))
+                changed_pin, _ = audit.scenario_key('core', 'harness', harness, client)
+            self.assertNotEqual(first, changed_client)
+            self.assertNotEqual(changed_client, changed_pin)
 
 
 class CleanupAuthentication(unittest.TestCase):
