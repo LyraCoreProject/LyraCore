@@ -432,3 +432,42 @@ game. Milestone 4 starts after `feat/conformance` merges into `main`, and branch
 - **M4f (first climb).** The 8 taxi gaps, through the skill, by an implementer who did not write
   the scenario. Each fix shrinks the ratchet baseline. The orchestrator merges these PRs into
   `main` after tests and review.
+
+### Milestone 5: checks instead of review
+
+Added 2026-10-29. After the taxi and visibility climbs, about half the real defects came from
+`gpt-6.1-sol` review rather than the comparator. The user's direction: if the system is not
+deterministic and programmatic, it loses its value, and it must not depend on human checks. Every
+kind of finding review made gets a programmatic replacement.
+
+| Review finding kind | Replacement |
+|---|---|
+| A situation no scenario covers (late observer, reconnect, other faction, spawn beside a viewer) | Scenario variants generated on fixed axes and recorded against the Reference Server |
+| A rule looser than it looks | Strictness score (harness, merged) |
+| Fixture data posing as a Module gap | Tier 1 versus audit agreement per scenario |
+| An invariant broken outside the recorded moments (private fields to peers, partial updates that drop a changed field, CREATE kind vs freshness) | Global property checks over every tier 1 packet |
+| A client that rejects what we send | Client acceptance through Benilla with a reporting addon |
+
+**Rules:**
+
+- Every review finding becomes an automated check that fails on the old code before its fix
+  merges: a scenario variant, a property check, a strictness mutation or a fixture check.
+- The reviewer's job is to find what the checks cannot see and name the check that would.
+- Each PR description lists review findings that CI missed, tagged with the kind above. The count
+  per PR is the metric; it should fall toward zero.
+
+**Slices, in order:**
+
+- **M5a (core).** Property checks over every tier 1 run: no self-only update field in a peer's
+  packets; every partial VALUES update carries each field that changed; CREATE kind matches
+  freshness and recipient; one documented module per property, deterministic, run in CI.
+- **M5b (harness).** Variant generation: each scenario declares which axes apply (observer, late
+  arrival, reconnect mid-step, opposite faction); the recorder records each variant with
+  `record-checked`; the catalogue and strictness gate cover them.
+- **M5c (core).** The audit keys an immutable imported-world snapshot on import inputs (importer
+  code, schema, vmangos and client data pins), shared across gameplay commits; then lifecycle
+  safety; then the tier 1 versus audit agreement check. Supersedes #911's cache.
+- **M5d (core + Benilla).** A client-acceptance rung: an addon in Benilla runs a flow and writes
+  the client's view (visible units, positions, flags, spline played, crash) for a check to
+  compare.
+- **M5e.** The rule and metric in `climb-conformance` and the PR template.
