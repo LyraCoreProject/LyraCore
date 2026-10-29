@@ -46,13 +46,28 @@ pub fn markdown(report: &Report, date: &str) -> Result<String> {
             if summary == &Summary::default() {
                 continue;
             }
-            text.push_str("| Class | Rule | Checkpoint | Stream | Opcode | Field path | Raw records |\n| --- | --- | --- | --- | --- | --- | ---: |\n");
+            let named = summary
+                .rule
+                .signatures
+                .iter()
+                .chain(&summary.data.signatures)
+                .any(|entry| entry.signature.character.is_some());
+            if named {
+                text.push_str("| Class | Character | Rule | Checkpoint | Stream | Opcode | Field path | Raw records |\n| --- | --- | --- | --- | --- | --- | --- | ---: |\n");
+            } else {
+                text.push_str("| Class | Rule | Checkpoint | Stream | Opcode | Field path | Raw records |\n| --- | --- | --- | --- | --- | --- | ---: |\n");
+            }
             for (class, counts) in [("rule", &summary.rule), ("data", &summary.data)] {
                 for entry in &counts.signatures {
                     let signature = &entry.signature;
+                    let character = if named {
+                        format!("`{}` | ", signature.character.as_deref().unwrap_or("-"))
+                    } else {
+                        String::new()
+                    };
                     writeln!(
                         text,
-                        "| {class} | `{}` | `{}` | `{}` | {} | `{}` | {} |",
+                        "| {class} | {character}`{}` | `{}` | `{}` | {} | `{}` | {} |",
                         signature.rule,
                         signature.checkpoint,
                         serde_json::to_string(&signature.stream)?,

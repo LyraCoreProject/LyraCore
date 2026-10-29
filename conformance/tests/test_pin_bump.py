@@ -81,6 +81,18 @@ class PinBumpTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "signature names"):
             PIN_BUMP.validate_baseline(before, after, revision)
 
+    def test_publish_validates_named_character_signatures(self):
+        before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
+        after = copy.deepcopy(before)
+        revision = "b" * 40
+        for entry in after["scenarios"]:
+            entry["harness_revision"] = revision
+        PIN_BUMP.validate_baseline(before, after, revision)
+        signature = after["scenarios"][-1]["rule"][1]
+        signature["character"] = ""
+        with self.assertRaisesRegex(ValueError, "signature Character"):
+            PIN_BUMP.validate_baseline(before, after, revision)
+
     def test_publish_validates_job_output_before_writing(self):
         scratch = SCRATCH
         scratch.mkdir(parents=True, exist_ok=True)

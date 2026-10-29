@@ -179,13 +179,16 @@ def validate_baseline(before, after, sha):
                 raise ValueError(f"{scenario}: invalid {classification} signatures")
             keys = []
             for signature in signatures:
-                if not isinstance(signature, dict) or set(signature) != {
-                    "rule", "checkpoint", "stream", "opcode", "field_path"
-                }:
+                required = {"rule", "checkpoint", "stream", "opcode", "field_path"}
+                if (not isinstance(signature, dict) or not required <= set(signature)
+                        or set(signature) - required - {"character"}):
                     raise ValueError(f"{scenario}: invalid signature")
                 if (not isinstance(signature["rule"], str) or not signature["rule"]
                         or not isinstance(signature["checkpoint"], str)):
                     raise ValueError(f"{scenario}: invalid signature names")
+                character = signature.get("character")
+                if "character" in signature and (not isinstance(character, str) or not character):
+                    raise ValueError(f"{scenario}: invalid signature Character")
                 stream = signature["stream"]
                 stream_order = {"opening": 0, "reply": 1, "broadcast": 2,
                                 "unexpected": 3, "malformed": 4}
@@ -203,7 +206,8 @@ def validate_baseline(before, after, sha):
                 path = signature["field_path"]
                 if not isinstance(path, list) or not all(isinstance(part, str) for part in path):
                     raise ValueError(f"{scenario}: invalid field path")
-                keys.append((signature["rule"], signature["checkpoint"],
+                keys.append((signature["rule"], (0, "") if character is None else (1, character),
+                             signature["checkpoint"],
                              (-1, "") if stream is None else (stream_order[stream["kind"]], stream.get("id", "")),
                              -1 if opcode is None else opcode, tuple(path)))
             if any(left >= right for left, right in zip(keys, keys[1:])):

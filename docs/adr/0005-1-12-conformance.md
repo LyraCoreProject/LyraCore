@@ -84,9 +84,12 @@ It drives the Module through native reducers and compares emitted packets with G
 It bypasses WoW TCP, SRP and the header cipher. The initial mechanism test must prove that an
 Operator WebSocket connection can enter the world through a feature-gated debug reducer,
 call `native_world_receive`, and subscribe to `game_native_packet`.
-The tier 1 runner compares `connection_identity` and `taxi_single_hop` with their Golden Traces.
-Its hand-written fixture holds path 6 with 28 vertices, nodes 2 and 4, and a minimal flight-master
-template. The eight known gameplay gaps remain. Each scenario's rule and data signature sets must
+The tier 1 runner compares `connection_identity`, `taxi_single_hop`, `bank_slot_purchase` and
+`two_character_visibility` with their Golden Traces. Named Characters use separate fixture
+connections and a shared virtual clock.
+The taxi fixture holds path 6 with 28 vertices, nodes 2 and 4, and a minimal flight-master
+template. The Feature Ledger records known gameplay gaps. Each scenario's rule and data signature
+sets must
 equal the committed tier 1 baseline. A changed set requires regeneration from the comparator
 result in the same PR. The baseline does not change classification, scoreboard status or audit
 findings.
@@ -200,7 +203,8 @@ then stops both servers. Earlier audit reports remain in canonical history.
 The Reference Server comparison and recorded provenance establish reference stability separately.
 
 The Rust audit example and scoreboard share evidence validation. Both count differences by
-`(rule, checkpoint, stream, opcode, field_path)` and show raw counts. Fixed and regressed sets use
+`(rule, recipient Character, checkpoint, stream, opcode, field_path)` and show raw counts. Fixed
+and regressed sets use
 these signatures. The first audit has no baseline. A report-only descendant commit remains current;
 any other core change makes it stale. See the [audit command](../../conformance/README.md#conformance-audit)
 for prerequisites, cleanup and the report contract.

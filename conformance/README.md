@@ -133,13 +133,21 @@ checkout is read and no catalogue check can skip. The pinned harness enables
 values. Core needs no feature override.
 
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+The tier 1 runner supports schema 3 single-Character scenarios and schema 4 named-Character
+scenarios. Schema 4 uses one fixture connection and Account per Character. All connections share
+the same virtual clock, and each receives only packets addressed to it. Reconnecting a Character
+keeps its GUID. `bank_slot_purchase` uses a synthetic friendly banker template with NPC flag
+`0x100`; `two_character_visibility` checks each recipient's peer CREATE update.
+The pinned `run_on` builds step observations with `Observation::from_frame_with_rules`, so
+subject-filtered unexpected-packet rules inspect decoded subjects.
 The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
-and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
-opcode and field path. It holds no reason or packet values. The durable test checks provenance and
+and data signature sets for every catalogue scenario. A signature is the rule, receiving Character
+when named, checkpoint, stream, opcode and field path. It holds no reason or packet values. The
+durable test checks provenance and
 requires exact set equality, including when a difference disappears. After one scenario changes,
 use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and replaces its
 entry from the comparison made in that invocation. Other entries stay byte-identical. To regenerate
-every entry, run both tier 1 tests, then `./conformance/baseline`. Both forms check the core commit,
+every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms check the core commit,
 harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
@@ -211,7 +219,7 @@ Groups sort rule before data, then by signature. Records retain comparator order
 | `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
 | `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
 | `groups[]` | `classification` (`rule` or `data`), `signature` and `records` |
-| `groups[].signature` | `rule`, `checkpoint`, `stream`, `opcode`, `field_path` |
+| `groups[].signature` | `rule`, optional receiving `character`, `checkpoint`, `stream`, `opcode`, `field_path` |
 | `groups[].records[]` | `packet_index`, rule `reason`, `expected` and `actual` values from the comparator |
 
 Expected and actual values use the harness's tagged field JSON and may be null. The text view
@@ -282,6 +290,14 @@ cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ign
 This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
 Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
 baseline. Known gaps never excuse a difference or supply a passing result.
+
+`two_character_visibility` uses the same Stormwind area row and flat terrain cell `(777,497)`
+as the taxi fixture. Both scenario positions fall in that cell. Its human warrior starting outfit
+uses item entries 25, 38, 39, 40 and 2362. The pinned Golden Trace records the four visible
+armor entries in each peer CREATE update; the fixture supplies only the item template fields
+needed to equip them. Entry 25 already has a template in the disposable Shard. The fixture adds
+these rows before creating either Character, so area rest state and visible equipment are present
+on both arrival streams.
 
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
@@ -385,8 +401,9 @@ Both tiers retain the complete harness `Comparison`. Each record requires the co
 `classification` tag, `rule` or `data`. There is no separate `data_differences` array. Version 1
 results lack tags and must be rerun. Summary counts never supply classification.
 
-A signature is `(rule, checkpoint, stream, opcode, field_path)`. Packet indices, reasons and
-values do not belong to it. The scoreboard groups signatures across all scenarios of a Behavior
+A signature is `(rule, character, checkpoint, stream, opcode, field_path)`. `character` is absent
+for single-Character scenarios. Packet indices, reasons and values do not belong to it. The
+scoreboard groups signatures across all scenarios of a Behavior
 and shows distinct signatures and raw records separately for rules and data. Known gaps remain a
 separate descriptive count. Missing or unknown tags, unknown Behaviors, unlisted scenarios,
 duplicate results and malformed reports fail before freshness checks.
@@ -469,7 +486,8 @@ pinned checkout only to build `vanilla-wire` and run its server adapters.
 
 The command builds `vanilla-wire` and the audit example. It starts an owned local Realm with
 `lyracore dev up`, runs `lyracore import --accept` using the supplied client path,
-and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
+and provisions enough disposable Accounts for the largest named-Character scenario. The import
+selects the current vmangos `db_latest` snapshot
 under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
 and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
 The audit starts with an empty Shard and retains imported creature spawns. The taxi scenario uses
@@ -478,8 +496,9 @@ fixture spawn during setup. Tier 1 still uses the bundled route
 fixture.
 
 All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
-pins and provenance, starts its compose services, and resets only the catalogue Characters on the
-disposable Reference Server. Every scenario produces both a LyraCore and vmangos candidate in scratch. Both
+pins and provenance, starts its compose services, prepares peer Accounts, and resets each catalogue
+Character on its own Account in the disposable Reference Server. Every scenario produces both a
+LyraCore and vmangos candidate in scratch. Both
 compare with their embedded Golden Trace; the Reference Server must also retain its recorded
 provenance. Reference rule and data counts remain visible even when LyraCore fails.
 

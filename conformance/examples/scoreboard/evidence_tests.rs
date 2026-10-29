@@ -84,10 +84,18 @@ fn signatures_ignore_indices_values_and_multiplicity_but_preserve_every_key() {
     assert_eq!(summary.rule.raw_records, 2);
     assert_eq!(summary.rule.signatures.len(), 1);
     assert_eq!(summary.rule.signatures[0].raw_records, 2);
-    for key in ["rule", "checkpoint", "stream", "opcode", "field_path"] {
+    for key in [
+        "rule",
+        "character",
+        "checkpoint",
+        "stream",
+        "opcode",
+        "field_path",
+    ] {
         let mut changed = difference("rule");
         changed[key] = match key {
             "stream" => json!({"kind":"reply", "id":"zones"}),
+            "character" => json!("watcher"),
             "opcode" => json!(706),
             "field_path" => json!(["weather_type"]),
             _ => json!("another"),

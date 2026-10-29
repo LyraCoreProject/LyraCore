@@ -7,9 +7,10 @@ use anyhow::{ensure, Context, Result};
 use lyracore_test_support::{core_root, Standalone};
 use serde_json::json;
 use wire_client::runner::Transport;
+use wire_client::scenario::FixtureVerb;
 use wire_client::{catalogue, compare, runner};
 
-use super::transport::OperatorTransport;
+use super::transport::{MultiOperatorTransport, OperatorTransport};
 
 #[path = "../../../conformance/support/ratchet.rs"]
 mod ratchet;
@@ -126,8 +127,18 @@ fn run_scenario(
         now,
         &[],
     )?;
-    update_result(&path, &golden, Some(&comparison), now)?;
-    let report = serde_json::to_string_pretty(&comparison)?;
+    record_and_check(id, &path, &golden, now, &comparison)
+}
+
+fn record_and_check(
+    id: &str,
+    path: &Path,
+    golden: &wire_client::trace::GoldenTrace,
+    now: u64,
+    comparison: &compare::Comparison,
+) -> Result<()> {
+    update_result(path, golden, Some(comparison), now)?;
+    let report = serde_json::to_string_pretty(comparison)?;
     println!("{id}: {report}");
     let baseline = ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?;
     baseline.check(&ratchet::ScenarioBaseline::from_comparison(
@@ -135,8 +146,131 @@ fn run_scenario(
         &golden.scenario().behavior,
         harness_revision()?,
         &golden.trace().header.scenario_sha256,
-        &comparison,
+        comparison,
     ))?;
+    Ok(())
+}
+
+fn run_multi_scenario(
+    id: &str,
+    setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
+) -> Result<()> {
+    let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
+    std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
+    let golden = catalogue::get(id)?;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)?
+        .as_millis()
+        .try_into()?;
+    update_result(&path, &golden, None, now)?;
+    let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
+    shard.publish_module();
+    shard.assert_call("claim_operator", &[]);
+    shard.assert_call("install_guid_range", &["0"]);
+    setup(&shard, golden.scenario())?;
+    let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
+    let mut transport = MultiOperatorTransport::prepare(&shard, golden.scenario())?;
+    let now = (virtual_start / 1_000).try_into()?;
+    let observations = runner::run_multi_on(golden.scenario(), &mut transport)?;
+    let comparison = compare::compare_multi_observations(
+        &golden,
+        &observations,
+        &transport.character_guids(),
+        now,
+        &[],
+    )?;
+    record_and_check(id, &path, &golden, now, &comparison)
+}
+
+fn seed_visibility_world(
+    shard: &Standalone,
+    scenario: &wire_client::scenario::Scenario,
+) -> Result<()> {
+    let cell = super::taxi_route::STORMWIND_CELL;
+    let mut race_class = None;
+    for character in &scenario.characters {
+        let FixtureVerb::Character {
+            race, class, at, ..
+        } = character
+            .fixtures
+            .first()
+            .context("visibility Character fixture")?
+        else {
+            anyhow::bail!("first fixture must be a Character");
+        };
+        let race = wire_client::cli::parse_race(race)?.as_int();
+        let class = wire_client::cli::parse_class(class)?.as_int();
+        ensure!(
+            race == 1 && class == 1,
+            "visibility outfit needs a human warrior"
+        );
+        race_class = Some(lyracore_package_delta::packed_race_class_id(race, class));
+        ensure!(
+            at.map == 0
+                && lyracore_shared::terrain::cell_index(at.x) == Some(cell.0)
+                && lyracore_shared::terrain::cell_index(at.y) == Some(cell.1),
+            "visibility Character is outside the Stormwind fixture cell"
+        );
+    }
+
+    shard.assert_sql(super::taxi_route::stormwind_area_statement());
+    shard.assert_call(
+        "import_terrain_chunks",
+        &[&super::taxi_route::stormwind_terrain_chunk()],
+    );
+    let base = shard
+        .query_rows("SELECT * FROM game_item_template WHERE entry = 51")
+        .into_iter()
+        .next()
+        .context("seeded item template 51")?;
+    let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
+    for (entry, name, subclass, inventory_type) in [
+        (38, "Outfit shirt", 0, 4),
+        (39, "Outfit pants", 0, 7),
+        (40, "Outfit boots", 0, 8),
+        (2362, "Outfit shield", 6, 14),
+    ] {
+        let mut template = base.clone();
+        for (field, value) in [
+            ("entry", entry.to_string()),
+            ("name", name.into()),
+            ("subclass", subclass.to_string()),
+            ("inventory_type", inventory_type.to_string()),
+            ("display_id", "0".into()),
+            ("quality", "0".into()),
+            ("item_level", "1".into()),
+            ("max_durability", "0".into()),
+            ("buy_price", "0".into()),
+            ("sell_price", "0".into()),
+        ] {
+            template.insert(field.into(), value);
+        }
+        let values = columns
+            .split(',')
+            .map(|field| {
+                let value = &template[field];
+                if field == "name" {
+                    format!("'{value}'")
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        shard.assert_sql(&format!(
+            "INSERT INTO game_item_template ({columns}) VALUES ({values})"
+        ));
+    }
+    let race_class = race_class.context("visibility Character fixture")?;
+    for (id, entry) in [25, 38, 39, 40, 2362].into_iter().enumerate() {
+        shard.assert_sql(&format!(
+            "INSERT INTO game_start_item (id,race_class,item_entry) VALUES ({},{race_class},{entry})",
+            id + 1
+        ));
+    }
     Ok(())
 }
 
@@ -159,6 +293,28 @@ fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
         );
         Ok(())
     })
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
+    run_scenario("bank_slot_purchase", |shard, _| {
+        shard.assert_sql(
+            "INSERT INTO game_creature_template \
+             (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
+              creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
+              money_max,max_level,max_level_health,aggro_range,damage_min,damage_max,armor,\
+              pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
+             VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
+        );
+        Ok(())
+    })
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn two_character_visibility_matches_its_golden_trace() -> Result<()> {
+    run_multi_scenario("two_character_visibility", seed_visibility_world)
 }
 
 #[test]
