@@ -194,12 +194,12 @@ destinations. Vertex 0 was checked against the client data. Destination node 4 u
 `taxi_nodes` coordinates the importer reads, which match the Reference Server's landing correction.
 The test also checks the passenger's mount display.
 
-The area ids and flags come from build-5875 `AreaTable.dbc`: Stormwind City is 1519 with the
-capital flag `0x100`; Elwynn Forest is 12 and Westfall is 40, both without that flag. All three
-are on map 0 and use Alliance faction group 2. The area bits 1, 2 and 3 are fixture values;
-exploration bit numbering is outside this scenario. Each terrain cell has zero height and no
-liquid or holes. These values only let the Module resolve area and rest state during the flight;
-they are not client terrain data.
+The area ids, flags and exploration levels come from build-5875 `AreaTable.dbc`. Stormwind City
+is 1519 with flags 312 (`0x138`) and exploration level 10. Elwynn Forest is 12 and Westfall is 40;
+both have flags 64 (`0x40`) and exploration level 0. All three are on map 0 and use Alliance
+faction group 2. The area bits 1, 2 and 3 are fixture values; exploration bit numbering is outside
+this scenario. Each terrain cell has zero height and no liquid or holes. These values only let the
+Module resolve area and rest state during the flight; they are not client terrain data.
 
 The Golden Trace starts in zone 1519 with `field_190 = 32`. It reports Elwynn world states and
 weather at 10,583 ms, then Westfall world states and weather at 47,692 ms. Those changes fall

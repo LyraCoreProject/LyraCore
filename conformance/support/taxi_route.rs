@@ -229,8 +229,8 @@ pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<
     statements.push(
         "INSERT INTO game_area \
         (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
-        VALUES (1519,0,0,1,256,0,2,'Stormwind City'),\
-        (12,0,0,2,0,0,2,'Elwynn Forest'),(40,0,0,3,0,0,2,'Westfall')"
+        VALUES (1519,0,0,1,312,10,2,'Stormwind City'),\
+        (12,0,0,2,64,0,2,'Elwynn Forest'),(40,0,0,3,64,0,2,'Westfall')"
             .into(),
     );
     for (id, [x, y, z]) in NODES {
