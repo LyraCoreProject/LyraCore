@@ -37,7 +37,7 @@ entry in both files.
 
 **N** [Native Host](CORE_TERMS.md#native-host) · [Navigation Inputs](#bots)
 
-**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](CORE_TERMS.md#operator) · [Operator Content API](#requests-and-delivery) · [Operator Spawn Range](#requests-and-delivery) · [Owner Token](#requests-and-delivery)
+**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](CORE_TERMS.md#operator) · [Operator Content API](#requests-and-delivery) · [Operator Spawn Range](#requests-and-delivery) · [Operator Template Range](#requests-and-delivery) · [Owner Token](#requests-and-delivery)
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Public Note](#guilds)
 
@@ -171,18 +171,24 @@ The client object that draws a ground spell effect. It has its own GUID, map, In
 The ground area's timer removes the DynamicObject when the effect expires.
 
 **Operator Content API**:
-The `operator_*` reducers that create, update or delete one creature spawn or gameobject spawn on a
-running Realm, or apply a batch of those edits in one transaction. The world shows each edit at
-once. A later full import replaces their rows. `docs/operator-content-api.md` gives the contracts.
+The `operator_*` reducers that edit creature and gameobject spawns, item and creature templates,
+vendor offers, creature displays, loot and spells on a running Realm. Only the Operator can call
+them. Edits apply in one transaction and refresh connected clients where needed. A later import of the same Import Family replaces the rows.
+`docs/operator-content-api.md` gives the contracts.
 _Avoid_: editor API, world editor reducers
 
 **Authored Spawn**:
 An instance-zero creature or gameobject spawn row that no Package, population copy, Instance or
-pool owns. The Operator Content API changes only an Authored Spawn.
+pool owns. Spawn edits through the Operator Content API change only an Authored Spawn.
 
 **Operator Spawn Range**:
 The creature and gameobject spawn identifiers the Operator Content API allocates. No import and no
 Package spawn uses it. `docs/operator-content-api.md` gives the band.
+
+**Operator Template Range**:
+Template entries 5,200,500 through 5,999,999, reserved for allocation by the Operator Content API.
+Imports and Packages must not insert templates here. Item and creature creation use this range;
+gameobject and quest template creation can use it later. It fits the creature-entry 24-bit limit.
 
 ### Accounts, characters and sessions
 

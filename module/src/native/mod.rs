@@ -76,13 +76,16 @@ pub(crate) use party::roster as party_roster;
 pub(crate) use pet::changed as hunter_pet_changed;
 pub(crate) use petition::charter_opened as guild_charter_opened;
 pub(crate) use progression::{explored, levelup, xp};
+pub(crate) use query::{broadcast_creature_query, broadcast_item_query};
 pub(crate) use quest::{changed as quest_changed, event_credit as quest_event_credit};
 pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
 pub(crate) use spell::{cast_event, spell_impact};
 pub(crate) use taxi::{
     aborted as taxi_aborted, landed as taxi_landed, spline_changed as taxi_spline_changed,
 };
-pub(crate) use teleport::{begin as begin_teleport, changed as teleport_changed};
+pub(crate) use teleport::{
+    begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,
+};
 pub(crate) use trade::event as trade_event;
 pub(crate) use visibility::{entity_changed, grant_added, grant_removed, loot_flags, motion};
 
@@ -183,6 +186,8 @@ pub struct NativePlayer {
     pub zone_id: u32,
     #[default(0u32)]
     pub gossip_root_menu_id: u32,
+    #[default(0i64)]
+    pub teleport_started_micros: i64,
 }
 
 pub(crate) fn group_event(

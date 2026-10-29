@@ -1003,7 +1003,50 @@ fn flying_create_carries_full_spline_and_elapsed_time_on_the_wire() {
     assert_eq!(spline.time_passed, 12_500);
     assert_eq!(spline.duration, 60_000);
     assert_eq!(spline.id, 42);
-    assert_eq!(spline.nodes, nodes);
+    assert_eq!(&spline.nodes[..4], &nodes[..4]);
+    assert_eq!(spline.nodes[4].z, 60.0 + 0.02);
+    assert_eq!(spline.final_node, nodes[4]);
+}
+
+#[test]
+fn flying_create_offsets_consecutive_identical_controls_but_not_the_destination() {
+    let mut entity = warrior_entity();
+    let nodes = [
+        (0.0, 0.0, 0.0),
+        (1.0, 1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (1.0, 1.0, 1.0),
+        (2.0, 2.0, 2.0),
+    ]
+    .map(|(x, y, z)| Vector3d { x, y, z });
+    entity.spline = Some(CreateSpline {
+        nodes: nodes.to_vec(),
+        time_passed_ms: 1,
+        duration_ms: 100,
+        id: 7,
+    });
+
+    let create = build_create_object(&entity, CreateKind::Peer, &[], &[]).unwrap();
+    let mut wire = Vec::new();
+    create.write_unencrypted_server(&mut wire).unwrap();
+    let ServerOpcodeMessage::SMSG_UPDATE_OBJECT(decoded) =
+        ServerOpcodeMessage::read_unencrypted(&mut wire.as_slice()).unwrap()
+    else {
+        panic!("expected CREATE update");
+    };
+    let Object::CreateObject2 { movement2, .. } = &decoded.objects[0] else {
+        panic!("expected CREATE_OBJECT2");
+    };
+    let MovementBlock_UpdateFlag_Living::Living { flags, .. } =
+        movement2.update_flag.get_living().unwrap()
+    else {
+        panic!("expected living movement");
+    };
+    let spline = flags.get_spline_enabled().unwrap();
+    assert_eq!(spline.nodes[1], nodes[1]);
+    assert_eq!(spline.nodes[2].z, 1.0 + 0.02);
+    assert_eq!(spline.nodes[3].z, 1.0 + 0.01);
+    assert_eq!(spline.nodes[4], nodes[4]);
     assert_eq!(spline.final_node, nodes[4]);
 }
 

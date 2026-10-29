@@ -10,6 +10,7 @@ use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback};
+use crate::game_world_entity;
 use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
 
@@ -89,6 +90,30 @@ pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
         false,
     ) {
         spacetimedb::log::error!("taxi landing delivery failed for {character_guid}: {error}");
+        super::disconnect(ctx, connection);
+        return;
+    }
+    let Some(entity) = ctx.db.game_world_entity().guid().find(character_guid) else {
+        return;
+    };
+    let Some(counter) = super::teleport::begin(ctx, character_guid, false) else {
+        return;
+    };
+    let correction = codec::build_teleport_ack(
+        character_guid,
+        counter,
+        entity.x,
+        entity.y,
+        entity.z,
+        entity.orientation,
+    );
+    if let Err(error) = super::send(
+        ctx,
+        connection,
+        ServerOpcodeMessage::MSG_MOVE_TELEPORT_ACK(Box::new(correction)),
+        false,
+    ) {
+        spacetimedb::log::error!("taxi landing correction failed for {character_guid}: {error}");
         super::disconnect(ctx, connection);
     }
 }
