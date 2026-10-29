@@ -3,7 +3,6 @@ use spacetimedb::{ReducerContext, ScheduleAt, TimeDuration, Timestamp};
 pub(crate) fn now(ctx: &ReducerContext) -> Timestamp {
     #[cfg(feature = "conformance_test_fixture")]
     {
-        use spacetimedb::Table;
         if let Some(clock) = ctx.db.game_conformance_clock().id().find(0) {
             return Timestamp::from_micros_since_unix_epoch(clock.now_micros);
         }
