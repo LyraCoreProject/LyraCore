@@ -30,7 +30,7 @@ pub(super) fn enter_zone(ctx: &ReducerContext, connection: ConnectionId, map: u3
             intensity: row.intensity,
         })
         .unwrap_or_default();
-    let packet = weather_packet(weather, WeatherChangeType::Instant);
+    let packet = weather_packet(weather, WeatherChangeType::Smooth);
     super::send_raw(ctx, connection, packet.opcode, packet.body, false);
 }
 

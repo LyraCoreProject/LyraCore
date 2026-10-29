@@ -415,7 +415,7 @@ def check_environment(host):
     client.send(0xee, struct.pack('<IIffffI', 0, 102000, -31, -1, 0, 0, 0))
     crossing = client.collect()
     assert (0x2c2, struct.pack('<IIH', 0, 40, 0)) in crossing
-    assert (0x2f4, struct.pack('<IfIB', 2, 0.25, 8536, 1)) in crossing
+    assert (0x2f4, struct.pack('<IfIB', 2, 0.25, 8536, 0)) in crossing
     assert not any(opcode in (0x2c2, 0x2f4) for opcode, _ in peer.collect())
     client.send(0x1f4, struct.pack('<I', 12))
     client.collect()
@@ -432,7 +432,7 @@ def check_environment(host):
     assert not any(opcode == 0x2f4 for opcode, _ in client.collect() + peer.collect())
     client.send(0x3d, struct.pack('<Q', guid))
     entered = client.collect()
-    assert (0x2f4, struct.pack('<IfIB', 1, 0.5, 8534, 1)) in entered
+    assert (0x2f4, struct.pack('<IfIB', 1, 0.5, 8534, 0)) in entered
     assert [opcode for opcode, _ in entered if opcode in (0x2c2, 0x2f4)] == [0x2c2, 0x2f4]
     health = host.rows(f'SELECT max_health FROM game_world_entity WHERE guid = {guid}')[0][0]
     host.call('debug_set_health', [guid, health])
@@ -3887,7 +3887,7 @@ def check_character_create(host):
     assert not host.rows('SELECT * FROM game_native_player')
     client.send(0x3d, struct.pack('<Q', guid))
     initial = client.collect()
-    assert (0x2f4, bytes(12) + bytes([1])) in initial
+    assert (0x2f4, bytes(12) + bytes([0])) in initial
     assert initial[0][0] == 0x236, [hex(opcode) for opcode, _ in initial]
     assert creates(initial).count(guid) == 1
 

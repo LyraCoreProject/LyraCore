@@ -16,18 +16,6 @@
       "scenario_sha256": "264f82f2ae727eb2be18ca11e7d6b73aaad304c49ae31edcf8aadb072f1e095a",
       "rule": [
         {
-          "rule": "exact_field",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "zones"
-          },
-          "opcode": 756,
-          "field_path": [
-            "instant"
-          ]
-        },
-        {
           "rule": "extra_packet",
           "checkpoint": "flight",
           "stream": {
