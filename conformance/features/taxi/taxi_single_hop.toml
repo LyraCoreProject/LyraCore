@@ -20,12 +20,6 @@ symbol = "WorldSession::HandleActivateTaxiOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Landing correction X differs: the route fixture node 4 has -10628.8896484375, while the vmangos Golden Trace has -10628.900390625."
-path = "conformance/support/taxi_route.rs"
-symbol = "NODES"
-evidence = "taxi_single_hop Tier 1 exact_field / flight / reply/flight / 0x00C7 / position.x. Fixture node 4 was checked against build-5875 TaxiNodes.dbc (conformance/README.md#taxi-data); the Golden Trace records vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 with database 464179081673cfd240f7ffe7f0daf96bca0b5a70."
-
-[[known_gaps]]
 description = "Tier 1 has no area or terrain rows along route 6, so flight zone transitions cannot resolve and the Elwynn and Westfall world-state and weather packets remain missing."
 path = "conformance/support/taxi_route.rs"
 symbol = "statements"
