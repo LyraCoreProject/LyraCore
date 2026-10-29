@@ -111,9 +111,11 @@ Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#co
 The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
 and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
 opcode and field path. It holds no reason or packet values. The durable test checks provenance and
-requires exact set equality, including when a difference disappears. After both tier 1 tests run,
-use `./conformance/baseline` to regenerate it from `.lyracore/conformance/tier1.json`. The command
-checks the core commit, harness revision and scenario hashes, then rewrites the canonical file.
+requires exact set equality, including when a difference disappears. After one scenario changes,
+use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and replaces its
+entry from the comparison made in that invocation. Other entries stay byte-identical. To regenerate
+every entry, run both tier 1 tests, then `./conformance/baseline`. Both forms check the core commit,
+harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
 
@@ -235,7 +237,7 @@ differences reproduces them with `./conformance/audit`. An audit-only difference
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
 matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
-After an improvement, run both tier 1 tests and `./conformance/baseline`, then review the changed
+After an improvement, run `./conformance/baseline <scenario>`, then review the changed
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
 `prerequisites`. The command chooses an unused report name; audit history is append-only.
 

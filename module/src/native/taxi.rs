@@ -10,7 +10,7 @@ use lyracore_shared::constants::taxi_protocol;
 use spacetimedb::{ConnectionId, ReducerContext};
 
 use super::{game_native_player, Rollback};
-use crate::taxi::{game_taxi_passenger_spline, TaxiPassengerSpline};
+use crate::taxi::TaxiPassengerSpline;
 use crate::Refusal;
 
 fn spline_packet(row: &TaxiPassengerSpline) -> Option<Packet> {
@@ -46,37 +46,55 @@ pub(crate) fn spline_changed(ctx: &ReducerContext, row: &TaxiPassengerSpline) {
     }
 }
 
-pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
-    let Some(owner) = ctx
+fn dismount_result(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    result: DismountResult,
+) -> Option<ConnectionId> {
+    let owner = ctx
         .db
         .game_native_player()
         .character_guid()
-        .find(character_guid)
-    else {
+        .find(character_guid)?;
+    if let Err(error) = super::send(
+        ctx,
+        owner.connection_id,
+        ServerOpcodeMessage::SMSG_DISMOUNTRESULT(SMSG_DISMOUNTRESULT { result }),
+        false,
+    ) {
+        spacetimedb::log::error!("taxi dismount delivery failed for {character_guid}: {error}");
+        super::disconnect(ctx, owner.connection_id);
+        return None;
+    }
+    Some(owner.connection_id)
+}
+
+pub(crate) fn aborted(ctx: &ReducerContext, character_guid: u64, mounted: bool) {
+    let result = if mounted {
+        DismountResult::Ok
+    } else {
+        DismountResult::NotMounted
+    };
+    dismount_result(ctx, character_guid, result);
+}
+
+pub(crate) fn landed(ctx: &ReducerContext, character_guid: u64) {
+    let Some(connection) = dismount_result(ctx, character_guid, DismountResult::Ok) else {
         return;
     };
-    let messages = [
-        ServerOpcodeMessage::SMSG_DISMOUNTRESULT(SMSG_DISMOUNTRESULT {
-            result: DismountResult::Ok,
-        }),
+    if let Err(error) = super::send(
+        ctx,
+        connection,
         ServerOpcodeMessage::SMSG_CANCEL_COMBAT,
-    ];
-    for message in messages {
-        if let Err(error) = super::send(ctx, owner.connection_id, message, false) {
-            spacetimedb::log::error!("taxi landing delivery failed for {character_guid}: {error}");
-            super::disconnect(ctx, owner.connection_id);
-            break;
-        }
+        false,
+    ) {
+        spacetimedb::log::error!("taxi landing delivery failed for {character_guid}: {error}");
+        super::disconnect(ctx, connection);
     }
 }
 
 pub(super) fn replay(ctx: &ReducerContext, connection: ConnectionId, guid: u64) {
-    if let Some(packet) = ctx
-        .db
-        .game_taxi_passenger_spline()
-        .character_guid()
-        .find(guid)
-        .and_then(|row| spline_packet(&row))
+    if let Some(packet) = crate::taxi::current_spline(ctx, guid).and_then(|row| spline_packet(&row))
     {
         super::send_raw(ctx, connection, packet.opcode, packet.body, false);
     }

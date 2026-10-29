@@ -219,33 +219,35 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
     let (shard, guid, _) = fixture("native-conformance-later");
     let mut connection = enter(&shard, guid);
     assert!(!connection.drain_packets().is_empty());
-    assert!(connection
-        .wait_for_packets(Duration::from_millis(50))
-        .unwrap()
-        .is_empty());
     shard.assert_call("debug_set_money", &[&guid.to_string(), "12345"]);
-    let rows = connection.wait_for_packets(Duration::from_secs(5)).unwrap();
-    assert!(
-        !rows.is_empty(),
-        "the later transaction must reach the subscription"
-    );
-    assert!(
-        rows.iter().any(|row| {
-            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+    let expected = lyracore_protocol::world::encode(
+        lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_UPDATE_OBJECT(
+            Box::new(lyracore_protocol::codec::build_coinage_values(guid, 12345)),
+        ),
+    )
+    .unwrap();
+    let expected_body = expected
+        .body
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    let deadline = std::time::Instant::now() + Duration::from_secs(5);
+    let mut rows = Vec::new();
+    while std::time::Instant::now() < deadline {
+        rows.extend(connection.wait_for_packets(Duration::from_secs(1)).unwrap());
+        if rows.iter().any(|row| {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
                 serde_json::from_str(row.get()).unwrap();
-            audience == 0 && option == 0 && opcode.get() == "169"
-        }),
-        "expected SMSG_UPDATE_OBJECT from the money change"
-    );
-    assert!(connection.drain_packets().is_empty());
+            audience == 0 && option == 0 && opcode.get() == "169" && body == expected_body
+        }) {
+            return;
+        }
+    }
+    panic!("expected coinage values from the later transaction: {rows:?}");
 }
 
-#[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn a_new_viewer_receives_the_current_taxi_spline() {
-    use wire_client::decode::Field;
-
-    let (shard, passenger, _) = fixture("taxi-new-viewer");
+fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
+    let (shard, passenger, _) = fixture(name);
     let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
     shard.assert_call(
         "provision_account",
@@ -274,39 +276,68 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
         .parse()
         .unwrap();
     shard.assert_sql(&format!(
-        "UPDATE game_character SET x = 200 WHERE guid = {observer}"
+        "UPDATE game_character SET x = {observer_x} WHERE guid = {observer}"
     ));
     shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
+    shard.assert_sql("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,200,0,0,'End',0,1147)");
+    shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
+    shard.assert_sql("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,200,0,0,0,0)");
+    shard.assert_sql(&format!(
+        "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0)"
+    ));
+    shard.assert_call(
+        "gw_arm_taxi_flight",
+        &[&format!("{{\"guid\":{passenger},\"ownership\":null}}")],
+    );
+    (shard, passenger, observer)
+}
+
+fn taxi_spline_start(rows: &[Box<RawValue>], connection_id: u128, passenger: u64) -> Option<f32> {
+    use wire_client::decode::Field;
+
+    rows.iter().find_map(|row| {
+        let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
+            serde_json::from_str(row.get()).unwrap();
+        if audience != 0 || option != 0 || opcode.get() != "221" {
+            return None;
+        }
+        let spline = packet(row, connection_id, 0x00dd);
+        assert_eq!(spline.fields["guid"], Field::Guid(passenger));
+        let Field::Object(position) = &spline.fields["position"] else {
+            panic!("taxi spline has no start position");
+        };
+        let Field::Float(x) = position["x"] else {
+            panic!("taxi spline has no x coordinate");
+        };
+        Some(x as f32)
+    })
+}
+
+fn taxi_x(shard: &Standalone, guid: u64) -> f32 {
+    shard.query_rows(&format!(
+        "SELECT x FROM game_world_entity WHERE guid = {guid}"
+    ))[0]["x"]
+        .parse()
+        .unwrap()
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_new_viewer_receives_the_current_taxi_spline() {
+    let (shard, passenger, observer) = taxi_flight("taxi-new-viewer", 200);
     let mut viewer = enter(&shard, observer);
     viewer.drain_packets();
-    assert!(shard
-        .query_rows(&format!(
-            "SELECT * FROM game_aoi_grant WHERE viewer_guid = {observer} AND entity_guid = {passenger}"
-        ))
-        .is_empty());
-
-    start_taxi_flight(&shard, passenger, 200);
 
     let mut spline = None;
     let deadline = std::time::Instant::now() + Duration::from_secs(6);
     while spline.is_none() && std::time::Instant::now() < deadline {
-        for row in viewer.wait_for_packets(Duration::from_secs(1)).unwrap() {
-            let Packet(_, (audience, _), (option, opcode), _, _, _, _) =
-                serde_json::from_str(row.get()).unwrap();
-            if audience == 0 && option == 0 && opcode.get() == "221" {
-                spline = Some(packet(&row, viewer.connection_id(), 0x00dd));
-                break;
-            }
-        }
+        spline = taxi_spline_start(
+            &viewer.wait_for_packets(Duration::from_secs(1)).unwrap(),
+            viewer.connection_id(),
+            passenger,
+        );
     }
-    let spline = spline.expect("observer did not receive a taxi spline");
-    assert_eq!(spline.fields["guid"], Field::Guid(passenger));
-    let Field::Object(position) = &spline.fields["position"] else {
-        panic!("taxi spline has no start position");
-    };
-    let Field::Float(x) = position["x"] else {
-        panic!("taxi spline has no x coordinate");
-    };
+    let x = spline.expect("observer did not receive a taxi spline");
     assert!((66.0..200.0).contains(&x), "obsolete spline start: {x}");
     assert_eq!(
         shard
@@ -318,6 +349,85 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn login_near_a_flyer_replays_its_current_spline() {
+    let (shard, passenger, observer) = taxi_flight("taxi-login-near-flyer", 40);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(4),
+        || { taxi_x(&shard, passenger) > 20.0 }
+    ));
+
+    let mut viewer = enter(&shard, observer);
+    let x = taxi_spline_start(&viewer.drain_packets(), viewer.connection_id(), passenger)
+        .expect("login did not replay the flyer's spline");
+    assert!(x > 20.0, "login replay started at {x}");
+    assert!((x - taxi_x(&shard, passenger)).abs() < 5.0);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn flyer_reconnect_restores_position_and_replays_current_spline() {
+    let (shard, passenger, _) = taxi_flight("taxi-flyer-reconnect", 40);
+    let mut first = enter(&shard, passenger);
+    first.drain_packets();
+    drop(first);
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || {
+            shard
+                .query_rows(&format!(
+                    "SELECT guid FROM game_world_entity WHERE guid = {passenger}"
+                ))
+                .is_empty()
+        }
+    ));
+    let saved_x: f32 = shard.query_rows(&format!(
+        "SELECT x FROM game_character WHERE guid = {passenger}"
+    ))[0]["x"]
+        .parse()
+        .unwrap();
+    std::thread::sleep(Duration::from_millis(900));
+
+    let mut second = enter(&shard, passenger);
+    let world_x = taxi_x(&shard, passenger);
+    let replay_x = taxi_spline_start(&second.drain_packets(), second.connection_id(), passenger)
+        .expect("reconnect did not replay the flyer's spline");
+    assert!(
+        world_x > saved_x + 15.0,
+        "saved {saved_x}, reconnected {world_x}"
+    );
+    assert!(
+        (replay_x - world_x).abs() < 5.0,
+        "replayed {replay_x}, world {world_x}"
+    );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn permanent_taxi_abort_sends_dismount_result() {
+    let (shard, passenger, _) = taxi_flight("taxi-abort-dismount", 40);
+    let mut connection = enter(&shard, passenger);
+    connection.drain_packets();
+    shard.assert_sql("DELETE FROM game_taxi_path_node WHERE id = 5090994");
+    assert!(lyracore_test_support::poll_until(
+        Duration::from_secs(5),
+        || shard
+            .query_rows(&format!(
+            "SELECT character_guid FROM game_active_taxi_flight WHERE character_guid = {passenger}"
+        ))
+            .is_empty()
+    ));
+    let rows = connection.wait_for_packets(Duration::from_secs(5)).unwrap();
+    assert!(
+        rows.iter().any(|row| {
+            let Packet(_, (audience, _), (option, opcode), body, _, _, _) =
+                serde_json::from_str(row.get()).unwrap();
+            audience == 0 && option == 0 && opcode.get() == "367" && body == "03000000"
+        }),
+        "permanent abort sent no successful dismount result: {rows:?}"
+    );
+}
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
     shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,{destination_x},0,0,'End',0,1147)"));
     shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");

@@ -610,6 +610,53 @@ fn remaining_spline(
     }
 }
 
+pub(crate) fn current_spline(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Option<TaxiPassengerSpline> {
+    let flight = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character_guid)?;
+    if flight.started_micros == 0 {
+        return None;
+    }
+    let player = ctx.db.game_world_entity().guid().find(character_guid)?;
+    let points = ordered_route(ctx, flight.path_id)?;
+    let elapsed = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(flight.started_micros);
+    let position = route_position(&points, elapsed)?;
+    (!position.complete).then(|| remaining_spline(&flight, &player, &points, position, elapsed))
+}
+
+pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut crate::Character) {
+    let Some(flight) = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character.guid)
+    else {
+        return;
+    };
+    if flight.started_micros == 0 {
+        return;
+    }
+    let Some(points) = ordered_route(ctx, flight.path_id) else {
+        return;
+    };
+    let elapsed = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(flight.started_micros);
+    if let Some(position) = route_position(&points, elapsed) {
+        (character.x, character.y, character.z) = (position.x, position.y, position.z);
+        character.orientation = position.orientation;
+    }
+}
+
 fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
     let splines = ctx.db.game_taxi_passenger_spline();
     if splines.character_guid().find(row.character_guid).is_some() {
@@ -770,6 +817,8 @@ fn finish_flight(ctx: &ReducerContext, player: WorldEntity, plan: FlightEndPlan)
 }
 
 fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
+    let character_guid = player.guid;
+    let mounted = player.mount_display_id != 0;
     finish_flight(
         ctx,
         player,
@@ -779,6 +828,7 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
             zone_id: None,
         },
     );
+    crate::native::taxi_aborted(ctx, character_guid, mounted);
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {
