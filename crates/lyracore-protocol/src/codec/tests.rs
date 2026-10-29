@@ -1,5 +1,87 @@
 use super::*;
 
+#[test]
+fn a_new_object_beside_a_viewer_uses_create_kind_three_for_every_world_type() {
+    for (name, mut message) in visibility_create_examples() {
+        set_create_freshness(&mut message, CreateFreshness::New);
+        assert!(
+            matches!(message.objects[0], Object::CreateObject2 { .. }),
+            "{name}"
+        );
+        assert_eq!(
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap()
+                .body[5],
+            3,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_later_sighting_uses_create_kind_two_for_every_world_type() {
+    for (name, mut message) in visibility_create_examples() {
+        set_create_freshness(&mut message, CreateFreshness::Known);
+        assert!(
+            matches!(message.objects[0], Object::CreateObject { .. }),
+            "{name}"
+        );
+        assert_eq!(
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap()
+                .body[5],
+            2,
+            "{name}"
+        );
+    }
+}
+
+fn visibility_create_examples() -> Vec<(&'static str, SMSG_UPDATE_OBJECT)> {
+    let player = warrior_entity();
+    let creature = EntityView {
+        type_mask: 0,
+        ..warrior_entity()
+    };
+    vec![
+        (
+            "self",
+            build_create_object(&player, CreateKind::SelfPlayer, &[], &[]).unwrap(),
+        ),
+        (
+            "peer",
+            build_create_object(&player, CreateKind::Peer, &[], &[]).unwrap(),
+        ),
+        (
+            "creature",
+            build_create_object(&creature, CreateKind::Peer, &[], &[]).unwrap(),
+        ),
+        (
+            "item",
+            build_item_create_object(&ItemInstanceView::default()),
+        ),
+        (
+            "container",
+            build_item_create_object(&ItemInstanceView {
+                container_slots: 8,
+                ..Default::default()
+            }),
+        ),
+        (
+            "transport",
+            build_transport_create_object(&TransportView::default()),
+        ),
+        (
+            "gameobject",
+            build_gameobject_create_object(&GameObjectView::default()),
+        ),
+        ("corpse", build_corpse_create_object(&CorpseView::default())),
+        (
+            "dynamic object",
+            build_dynamicobject_create_object(1, 2, 3, 0.0, 0.0, 0.0, 1.0),
+        ),
+    ]
+}
+
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{
     EnvironmentalDamageType, MSG_MOVE_HEARTBEAT_Client, SMSG_LOOT_RESPONSE_LootMethod, TimerType,
@@ -1816,7 +1898,7 @@ fn item_create_object_is_item_typed_and_serializes() {
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             object_type,
             mask2: UpdateMask::Item(it),
             ..
@@ -1828,7 +1910,7 @@ fn item_create_object_is_item_typed_and_serializes() {
             assert_eq!(it.item_maxdurability(), Some(20));
             assert_eq!(it.item_random_properties_id(), Some(509_0101));
         }
-        other => panic!("expected an Item CreateObject2, got {other:?}"),
+        other => panic!("expected an Item CreateObject, got {other:?}"),
     }
 }
 
@@ -1849,18 +1931,18 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         enchantment: 0,
     };
     match &build_item_create_object(&inst).objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Item(it),
             ..
         } => assert_eq!(it.item_item_text_id(), Some(7)),
-        other => panic!("expected an Item CreateObject2, got {other:?}"),
+        other => panic!("expected an Item CreateObject, got {other:?}"),
     }
     let plain = ItemInstanceView {
         item_text_id: 0,
         ..inst
     };
     match &build_item_create_object(&plain).objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Item(it),
 ..
         } => assert_eq!(
@@ -3461,7 +3543,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             object_type,
             mask2: UpdateMask::Container(c),
             ..
@@ -3480,7 +3562,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
                 "the bag window needs its slot count"
             );
         }
-        other => panic!("expected a Container CreateObject2, got {other:?}"),
+        other => panic!("expected a Container CreateObject, got {other:?}"),
     }
 }
 
@@ -4035,7 +4117,7 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
                 panic!("expected item object update");
             };
             match &decoded.objects[0] {
-                Object::CreateObject2 {
+                Object::CreateObject {
                     guid3,
                     object_type: ObjectType::Item,
                     mask2: UpdateMask::Item(fields),
@@ -4044,7 +4126,7 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
                     assert_eq!(guid3.guid(), guid);
                     assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
                 }
-                Object::CreateObject2 {
+                Object::CreateObject {
                     guid3,
                     object_type: ObjectType::Container,
                     mask2: UpdateMask::Container(fields),

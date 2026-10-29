@@ -99,7 +99,7 @@ impl Corpse {
     pub(crate) fn insert(mut self, ctx: &ReducerContext) -> Self {
         self.cell = self.position_cell();
         let row = ctx.db.game_corpse().insert(self);
-        crate::aoi::corpse_changed(ctx, &row);
+        crate::aoi::corpse_changed(ctx, &row, true);
         crate::native::corpse_created(ctx, &row);
         row
     }
@@ -108,7 +108,7 @@ impl Corpse {
         self.cell = self.position_cell();
         let previous = ctx.db.game_corpse().guid().find(self.guid);
         let row = ctx.db.game_corpse().guid().update(self);
-        crate::aoi::corpse_changed(ctx, &row);
+        crate::aoi::corpse_changed(ctx, &row, previous.is_none());
         if previous.is_some_and(|old| old.is_bones != row.is_bones) {
             crate::native::corpse_changed(ctx, &row);
         }

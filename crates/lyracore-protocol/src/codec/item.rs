@@ -402,7 +402,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
         }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
-            objects: vec![Object::CreateObject2 {
+            objects: vec![Object::CreateObject {
                 guid3,
                 object_type: ObjectType::Container,
                 movement2: MovementBlock { update_flag },
@@ -429,7 +429,7 @@ pub fn build_item_create_object(inst: &ItemInstanceView) -> SMSG_UPDATE_OBJECT {
         }
         SMSG_UPDATE_OBJECT {
             has_transport: 0,
-            objects: vec![Object::CreateObject2 {
+            objects: vec![Object::CreateObject {
                 guid3,
                 object_type: ObjectType::Item,
                 movement2: MovementBlock { update_flag },
@@ -578,7 +578,7 @@ mod tests {
 
     fn item_mask(inst: &ItemInstanceView) -> wow_world_messages::vanilla::UpdateItem {
         match build_item_create_object(inst).objects.as_slice() {
-            [Object::CreateObject2 {
+            [Object::CreateObject {
                 mask2: UpdateMask::Item(item),
                 ..
             }] => item.clone(),

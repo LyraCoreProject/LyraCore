@@ -516,14 +516,14 @@ impl DynamicObject {
     pub(crate) fn insert(mut self, ctx: &ReducerContext) {
         self.cell = self.position_cell();
         let object = ctx.db.game_dynamic_object().insert(self);
-        crate::aoi::dynamic_object_changed(ctx, &object);
+        crate::aoi::dynamic_object_changed(ctx, &object, true);
     }
 
     #[cfg(feature = "debug_reducers")]
     pub(crate) fn repair_cell(mut self, ctx: &ReducerContext) {
         self.cell = self.position_cell();
         let object = ctx.db.game_dynamic_object().guid().update(self);
-        crate::aoi::dynamic_object_changed(ctx, &object);
+        crate::aoi::dynamic_object_changed(ctx, &object, false);
     }
 
     pub(crate) fn delete(ctx: &ReducerContext, guid: u64) {

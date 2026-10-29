@@ -7,7 +7,7 @@ use super::{game_native_packet, NativeAudience, NativePacket};
 use crate::aoi::{AoiGrant, CORPSE, DYNAMIC_OBJECT, GAME_OBJECT, TRANSPORT, WORLD_ENTITY};
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity, WorldEntity};
 
-pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant) {
+pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant, newly_added: bool) {
     if let Some(player) = ctx
         .db
         .game_native_player()
@@ -17,7 +17,7 @@ pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant) {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
-        if let Err(error) = create(ctx, player.connection_id, grant) {
+        if let Err(error) = create(ctx, player.connection_id, grant, newly_added) {
             spacetimedb::log::error!(
                 "native CREATE failed for entity {}: {error}",
                 grant.entity_guid
@@ -94,10 +94,11 @@ pub(super) fn create(
     ctx: &ReducerContext,
     connection: ConnectionId,
     grant: &AoiGrant,
+    newly_added: bool,
 ) -> Result<(), String> {
     let mut rotation = None;
     let mut passenger_movement = None;
-    let message = match grant.layer {
+    let mut message = match grant.layer {
         WORLD_ENTITY => {
             if grant.viewer_guid == grant.entity_guid {
                 recipient_packet(ctx, connection, grant, None, true);
@@ -166,6 +167,14 @@ pub(super) fn create(
         TRANSPORT => super::transport::create(ctx, grant.entity_guid)?,
         _ => return Err("unknown AOI layer".into()),
     };
+    codec::set_create_freshness(
+        &mut message,
+        if newly_added {
+            codec::CreateFreshness::New
+        } else {
+            codec::CreateFreshness::Known
+        },
+    );
     let packet = match passenger_movement {
         Some(movement) => lyracore_protocol::world::Packet {
             opcode: codec::SMSG_UPDATE_OBJECT_OPCODE,
