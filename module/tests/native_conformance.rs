@@ -367,7 +367,7 @@ fn taxi_create(
             .chunks_exact(2)
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect();
-        if bytes.get(5) != Some(&2) {
+        if !matches!(bytes.get(5), Some(2 | 3)) {
             return None;
         }
         let type_index = 7 + bytes[6].count_ones() as usize;
@@ -388,11 +388,14 @@ fn taxi_create(
             unreachable!();
         };
         update.objects.into_iter().find_map(|object| {
-            let Object::CreateObject {
-                guid3, movement2, ..
-            } = object
-            else {
-                return None;
+            let (guid3, movement2) = match object {
+                Object::CreateObject {
+                    guid3, movement2, ..
+                }
+                | Object::CreateObject2 {
+                    guid3, movement2, ..
+                } => (guid3, movement2),
+                _ => return None,
             };
             if guid3.guid() != passenger {
                 return None;
