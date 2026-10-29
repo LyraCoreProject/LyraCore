@@ -946,7 +946,7 @@ fn tavern_rest_uses_imported_trigger_geometry() {
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn neutral_capital_does_not_rest_on_ffa_pvp_realm() {
     let (shard, character, _) = fixture("ffa-capital-rest");
-    shard.assert_sql("INSERT INTO game_realm (id,name,address,realm_type,flags,population,timezone) VALUES (1,'FFA','127.0.0.1',16,0,0,0)");
+    shard.assert_sql("UPDATE game_realm SET realm_type = 16 WHERE id = 1");
     shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (5090901,0,0,1,256,0,0,'Neutral capital')");
     let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
     let heights = vec!["0"; 145].join(":");
