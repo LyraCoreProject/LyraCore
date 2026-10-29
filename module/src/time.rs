@@ -198,7 +198,8 @@ macro_rules! capture_schedule {
             table.$id().update(row);
             let record = ConformanceSchedule { key, due_micros, interval_micros, parked_micros };
             let schedules = $ctx.db.game_conformance_schedule();
-            if previous.is_some() {
+            if let Some(previous) = previous {
+                $ctx.db.game_conformance_arming().parked_micros().delete(previous.parked_micros);
                 schedules.key().update(record);
             } else {
                 schedules.insert(record);
@@ -250,6 +251,12 @@ macro_rules! fire_schedule {
                 if $interval > 0 && table.$id().find($row_id).is_none() {
                     $ctx.db.game_conformance_schedule().key().delete((($kind as u128) << 64) | u128::from($row_id));
                 }
+                if $interval == 0 || table.$id().find($row_id).is_none() {
+                    $ctx.db.game_conformance_arming().parked_micros().delete($parked);
+                }
+            } else {
+                $ctx.db.game_conformance_schedule().key().delete((($kind as u128) << 64) | u128::from($row_id));
+                $ctx.db.game_conformance_arming().parked_micros().delete($parked);
             }
             return Ok(());
         }
