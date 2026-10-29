@@ -1,0 +1,20 @@
+schema_version = 1
+id = "connection_identity"
+system = "connection"
+scope = "An in-world Character receives the ping sequence and its own name, race, gender and class from a name query. This Behavior does not cover authentication or world-entry packets."
+requests = ["0x0050", "0x01DC"]
+replies = ["0x0051", "0x01DD"]
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = ["connection_identity"]
+deliberate_deviations = []
+prerequisites = ["A human warrior at the position declared by the scenario"]
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/QueryHandler.cpp"
+symbol = "WorldSession::HandleQueryPlayerNameOpcode"
+
+[real_client]
+status = "unverified"

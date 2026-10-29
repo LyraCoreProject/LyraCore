@@ -1,19 +1,3 @@
-# The pinned wire-harness release this checkout consumes (#246).
-#
-# The harness — the headless build-5875 wire client and the LyraCore orchestrators around it — used
-# to be `tools/wire-client/` in this workspace. It is its own repository now,
-# LyraCoreProject/wire-harness, because it is a SERVER-AGNOSTIC protocol tool: nothing in it depends
-# on a LyraCore crate, and a workspace membership was the coupling that made "would this run against
-# any other 5875 core?" unanswerable.
-#
-# ONE line: `<tag> <full commit sha>`, and BOTH halves are load-bearing.
-#   * the TAG is what `lyracore dev smoke` checks out — a release, not a branch. There is
-#     deliberately no way to say "main" here.
-#   * the SHA is what it then VERIFIES the checkout resolved to. A git tag is a mutable ref; a
-#     re-pointed tag would otherwise change what this checkout builds without changing this file,
-#     which is the one thing a pin exists to prevent.
-#
-# To bump: put the new tag + the commit it resolves to on the line below and commit it. See
-# the `lyracore-cli` repository's `docs/commands.md` ("dev smoke") first — a bump is a behaviour change to every live wire
-# test.
-v0.1.0-alpha.13 68f4a0dec63feaba330efbb15f7730ccc4c1d805
+# Tag and verified commit used by dev smoke and the conformance library.
+# Before bumping, read lyracore-cli/docs/commands.md under dev smoke.
+v0.2.0-conformance.7 ad27050ef5c91a1f5ba7337dce29d5d31233898b

@@ -1,0 +1,80 @@
+schema_version = 1
+id = "gameobject_world"
+system = "gameobjects"
+scope = "A GameObject appears and responds according to its source placement and state."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/Objects/GameObject.cpp"
+symbol = "GameObject::Update"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "gameobjects.animation full-world 4325, alliance-single 1414: The catalogue does not carry source animation progress."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.animation; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.fishinghole full-world 24, alliance-single 24: Real type 25 conflicts with the Module's synthetic gather type and is omitted."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.fishinghole; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.game-event full-world 12102, alliance-single 4844: Event schedules do not control these placements."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.game-event; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.gather-loot full-world 8, alliance-single 8: Authored gather nodes keep their fixed primary item."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.gather-loot; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.pool full-world 29465, alliance-single 5874: Pool membership does not select these placements."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.pool; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.respawn-range full-world 10903, alliance-single 2054: Source spawn respawn ranges are not represented."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.respawn-range; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.script full-world 207, alliance-single 207: Source script names have no importer behavior."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.script; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.spawn-flags full-world 440, alliance-single 123: Active, random and dynamic flags are not represented. Disabled spawns are omitted."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.spawn-flags; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.summoned-spawn full-world 467, alliance-single 52: Negative respawn times do not restrict placement to a summon."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.summoned-spawn; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "gameobjects.visibility full-world 4, alliance-single 0: Per-spawn visibility distance is not represented."
+path = "importer/src/world_import.rs"
+symbol = "collect_gameobject_spawns"
+evidence = "Compatibility Manifest gameobjects.visibility; conformance/vmangos-port-census/gameobjects.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

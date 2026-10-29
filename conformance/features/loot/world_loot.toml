@@ -1,0 +1,56 @@
+schema_version = 1
+id = "world_loot"
+system = "loot"
+scope = "A loot source applies item conditions, counts and source type."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/LootMgr.cpp"
+symbol = "LootTemplate::Process"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "loot.condition selected 4085: The loot tables have no runtime condition field. Static WOW_PATCH conditions are applied before expansion."
+path = "importer/src/world_import_loot.rs"
+symbol = "parse"
+evidence = "Compatibility Manifest loot.condition; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "loot.count-range selected 5960: The current import stores the maximum count."
+path = "importer/src/world_import_loot.rs"
+symbol = "parse"
+evidence = "Compatibility Manifest loot.count-range; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "loot.quest-only selected 35: Fishing and skinning tables have no quest-only flag."
+path = "importer/src/world_import_loot.rs"
+symbol = "parse"
+evidence = "Compatibility Manifest loot.quest-only; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "loot.unconsumed-table selected 2741: Item-container and disenchant source tables have no world import path."
+path = "importer/src/world_import_loot.rs"
+symbol = "parse"
+evidence = "Compatibility Manifest loot.unconsumed-table; conformance/vmangos-port-census/loot.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Quest reward mail with more than one item or a conditional item is unsupported."
+path = "importer/src/world_import_quests.rs"
+symbol = "plan"
+evidence = "conformance/vmangos-port-census/quests.md: used mail loot has only one unconditional item."
+
+[[known_gaps]]
+description = "An independent positive loot chance below one basis point is clamped to one basis point."
+path = "importer/src/world_import_loot.rs"
+symbol = "basis_points"
+evidence = "conformance/vmangos-port-census/loot.md: source chance conversion."

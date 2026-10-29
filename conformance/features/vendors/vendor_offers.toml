@@ -1,0 +1,38 @@
+schema_version = 1
+id = "vendor_offers"
+system = "vendors"
+scope = "A vendor shows available items, conditions and restock state."
+requests = []
+replies = []
+dependencies = []
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = []
+deliberate_deviations = []
+prerequisites = []
+tests = []
+
+[vmangos]
+commit = "464179081673cfd240f7ffe7f0daf96bca0b5a70"
+path = "src/game/ObjectMgr.cpp"
+symbol = "ObjectMgr::LoadVendors"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "items.vendor-condition: The source behavior is not represented by the current import."
+path = "importer/src/world_import.rs"
+symbol = "vmangos_items_plan"
+evidence = "Compatibility Manifest items.vendor-condition; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "items.vendor-item-flags: The source behavior is not represented by the current import."
+path = "importer/src/world_import.rs"
+symbol = "vmangos_items_plan"
+evidence = "Compatibility Manifest items.vendor-item-flags; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "items.vendor-restock: The source behavior is not represented by the current import."
+path = "importer/src/world_import.rs"
+symbol = "vmangos_items_plan"
+evidence = "Compatibility Manifest items.vendor-restock; conformance/vmangos-port-census/items.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

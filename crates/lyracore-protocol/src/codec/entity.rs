@@ -64,6 +64,53 @@ pub struct EntityView {
     pub home_z: f32,
     pub guild_id: u32,
     pub guild_rank: u32,
+    pub spline: Option<CreateSpline>,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct CreateSpline {
+    pub nodes: Vec<Vector3d>,
+    pub time_passed_ms: u32,
+    pub duration_ms: u32,
+    pub id: u32,
+}
+
+fn create_movement_flags(entity: &EntityView) -> Result<MovementBlock_MovementFlags> {
+    let mut flags = MovementBlock_MovementFlags::new(
+        entity.movement_flags & super::movement_info::SIMPLE_MOVE_MASK,
+        None,
+        None,
+        None,
+        None,
+        None,
+    );
+    if let Some(spline) = &entity.spline {
+        anyhow::ensure!(
+            spline.nodes.len() >= 4
+                && spline.duration_ms > 0
+                && spline.time_passed_ms < spline.duration_ms
+                && spline
+                    .nodes
+                    .iter()
+                    .all(|node| node.x.is_finite() && node.y.is_finite() && node.z.is_finite()),
+            "invalid CREATE spline"
+        );
+        let mut nodes = spline.nodes.clone();
+        for (index, node) in nodes.iter_mut().enumerate().skip(1) {
+            if spline.nodes[index] == spline.nodes[index - 1] {
+                node.z += if index & 1 == 0 { 0.02 } else { 0.01 };
+            }
+        }
+        flags = flags.set_spline_enabled(MovementBlock_MovementFlags_SplineEnabled {
+            spline_flags: MovementBlock_SplineFlag::new(0x0000_0300, None),
+            time_passed: spline.time_passed_ms,
+            duration: spline.duration_ms,
+            id: spline.id,
+            nodes,
+            final_node: *spline.nodes.last().expect("validated spline has nodes"),
+        });
+    }
+    Ok(flags)
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -395,14 +442,7 @@ pub fn build_create_object(
     let mut update_flag = MovementBlock_UpdateFlag::empty()
         .set_all(MovementBlock_UpdateFlag_All { unknown1: 1 })
         .set_living(MovementBlock_UpdateFlag_Living::Living {
-            flags: MovementBlock_MovementFlags::new(
-                entity.movement_flags & super::movement_info::SIMPLE_MOVE_MASK,
-                None,
-                None,
-                None,
-                None,
-                None,
-            ),
+            flags: create_movement_flags(entity)?,
             timestamp: entity.last_move_ms,
             living_position: Vector3d {
                 x: entity.x,

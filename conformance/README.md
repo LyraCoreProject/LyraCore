@@ -1,0 +1,482 @@
+# Feature Ledger
+
+Each `features/<system>/<behavior>.toml` describes one Behavior's 1.12.1 scope and evidence
+requirements. `lyracore-conformance` loads all entries together and refuses malformed fields,
+unknown fields, mismatched paths, duplicate ids, unknown dependencies and dependency cycles.
+[ADR 0005](../docs/adr/0005-1-12-conformance.md) defines repository ownership and verification tiers.
+Use [climb-conformance](../.claude/skills/climb-conformance/SKILL.md) for the separate implementation
+and scenario-author loops.
+
+```bash
+cargo test -p lyracore-conformance -- --nocapture
+cargo test -p lyracore-protocol --example benilla_inventory
+cargo run -p lyracore-protocol --example benilla_inventory
+```
+
+The first command checks every ledger file and its scenario references. The second checks retained
+Rust evidence declarations. The inventory command reads these same files
+and adds source-presence facts. It never runs the named evidence tests.
+
+## Schema version 1
+
+All fields below except `known_gaps` are required. Use an empty array when no
+entry exists yet.
+All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `id` | Globally unique Behavior id, matching the filename without `.toml` |
+| `system` | Scoreboard group, matching the directory name |
+| `scope` | The 1.12.1 result in plain words, including boundaries that matter |
+| `requests`, `replies` | Client and server opcode claims, written as strings such as `0x018E` |
+| `dependencies` | Other Behavior ids that this Behavior requires |
+| `vmangos` | Source reference with `commit`, `path` and `symbol`; the commit is a full SHA |
+| `required_rungs` | Evidence needed to count the Behavior as done |
+| `scenarios` | Plain string ids in the pinned harness catalogue; empty until authored |
+| `deliberate_deviations` | Intentional result differences, each with an `id`, `result`, `reason` and HTTPS `source` |
+| `known_gaps` | Optional list of defects with `description`, relative core `path`, `symbol` and `evidence`; no status or classification effect |
+| `real_client` | A human-maintained check, described below |
+| `prerequisites` | Fixture or world-data requirements in plain words |
+| `tests` | Retained Rust evidence, each with a source `path`, test `function` and `rung` |
+
+Ids for Behaviors, systems and deviations start with a lowercase ASCII letter and contain only
+lowercase letters, digits and underscores. Scenario ids have no prescribed naming syntax. Empty
+and duplicate scenario ids fail. Opcode strings use `0x` and four uppercase hexadecimal digits.
+A Behavior must claim a request or reply unless it records a known world-data gap with no opcode
+claim. Claims need not be exclusive across Behaviors.
+
+The rungs are `unit`, `codec`, `durable_module`, `tier1`, `conformance_audit` and `real_client`.
+A required rung is an obligation, not a result. The `tests` array names Rust source evidence from
+the first three rungs. Harness scenarios supply tier 1 and audit evidence. The scoreboard joins
+those results to the ledger.
+
+Until a person checks the Behavior in a build-5875 client, write:
+
+```toml
+[real_client]
+status = "unverified"
+```
+
+After that check, use `status = "verified"` with a valid `date` in `YYYY-MM-DD` form, `checked_by`
+and `evidence`. The last field names the recorded observations. Audits never update this table.
+No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
+Deviation; that field records a result LyraCore has chosen to keep different.
+
+Known gaps record observed defects and their comparison evidence. They neither excuse differences
+nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
+separately. Each entry requires nonempty description, symbol and evidence fields and a relative
+source path. Unknown fields, including status, fail.
+
+### Data-dependent fields
+
+The scenario author declares data-dependent fields in the harness scenario's `[[rules.data_fields]]`.
+The scenario hash covers them. The comparator emits tagged records for changed data values and
+keeps presence, shape, identity, ordering and timing failures as rule records. Core never declares
+or reclassifies data fields. Known gaps cannot change a tag or excuse a failure.
+
+## Migration and source evidence
+
+The original nine entries replace the former `benilla_inventory/behaviors.json`. They retain Behavior ids,
+opcode claims, prerequisites and all eight Rust evidence links. The old `support`, `remaining` and
+`durable_operations` fields do not belong to this schema. Scope states the required result; test
+presence does not certify it. Native Python checks remain in place until a recorded conformance
+scenario replaces each one.
+
+The vmangos references name reviewed functions at one full commit. They point to sources, and
+contain no copied implementation or world data. Those references identify where to investigate
+and record each Behavior; they are not a claim that the original nine conform today. Their real-client
+checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
+
+## Scenario catalogue and tier 1
+
+`wire_client::catalogue` embeds the scenarios and Golden Traces at the revision in
+`.wire-harness-rev`. The workspace pins `wire-client` to that full commit SHA. The Module tests
+and ledger tests use it only as a dev-dependency. The `harness_pin` Architecture Test checks
+that both consumers inherit the same revision as `dev smoke`, and that every workspace member
+keeps `wire-client` out of normal and build dependencies, including renamed and target-specific uses.
+It also requires exactly one resolved package with the pinned git source and commit. Workspace
+manifests cannot patch `wire-client`. Every `config*` file in workspace ancestors' `.cargo/`
+directories and `$CARGO_HOME` must be free of `paths`, `[source.*]` and `replace-with` overrides.
+The resolved `manifest_path` must remain inside `$CARGO_HOME/git/checkouts/` after resolving
+symlinks, and its checkout's `HEAD` must equal the pin. The audit applies these checks too.
+
+Every scenario reference must exist in that catalogue and name the Behavior that lists it.
+A missing id, mismatched Behavior or invalid Golden Trace fails the ledger check. No local harness
+checkout is read and no catalogue check can skip. The pinned harness enables
+`serde_json/float_roundtrip` itself, so loading a Golden Trace preserves exact wire-coordinate
+values. Core needs no feature override.
+
+Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
+The committed `tier1-baseline.json` contains the harness revision, scenario hash, and sorted rule
+and data signature sets for every catalogue scenario. A signature is the rule, checkpoint, stream,
+opcode and field path. It holds no reason or packet values. The durable test checks provenance and
+requires exact set equality, including when a difference disappears. After one scenario changes,
+use `./conformance/baseline <scenario>`. It runs only that scenario's tier 1 test and replaces its
+entry from the comparison made in that invocation. Other entries stay byte-identical. To regenerate
+every entry, run both tier 1 tests, then `./conformance/baseline`. Both forms check the core commit,
+harness revision and scenario hashes before writing the canonical file.
+Review the changed signatures with the behavior change. This baseline does not change comparator
+tags, scoreboard pass/fail or the Conformance Audit.
+
+### Run one scenario
+
+From the repo root, run `./conformance/run taxi_single_hop` or
+`./conformance/run taxi_single_hop --json`. The command runs only that scenario's tier 1 durable
+test through a disposable Shard. It captures the comparator result in an isolated scratch file,
+then prints differences grouped by signature. Each record shows the expected and actual scrubbed
+values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
+the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
+exact signature and provenance equality. The command exits with code 1 when the baseline differs
+and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
+case it prints the test diagnostic. Code 0 means the run completed and the Tier 1 baseline matches.
+Taxi can exit successfully while its known rule differences remain visible.
+
+`--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
+with `scenario`, `error.kind = "setup_failed"`, and `error.diagnostic` from the test output.
+Groups sort rule before data, then by signature. Records retain comparator order. The fields are:
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `1` |
+| `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
+| `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
+| `conforms` | True when the comparator reports no rule differences |
+| `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
+| `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
+| `groups[]` | `classification` (`rule` or `data`), `signature` and `records` |
+| `groups[].signature` | `rule`, `checkpoint`, `stream`, `opcode`, `field_path` |
+| `groups[].records[]` | `packet_index`, rule `reason`, `expected` and `actual` values from the comparator |
+
+Expected and actual values use the harness's tagged field JSON and may be null. The text view
+prints the same information, including every signature that regeneration would add or remove.
+
+The runner prepares the scenario's Character through debug reducers, then runs the
+harness's `Transport` over the buffered Operator connection. It decodes replies and compares them
+with the Golden Trace using the harness library. Direct and AOI delivery follow the Module's
+ordered grants, revokes and clears. Transport Loss, an unexpected close, a cipher transition or
+unsupported delayed Host delivery fails the test. Scheduled transactions remain observable through
+`wait_for_packets`.
+
+The schema-3 runner records world-entry packets in the opening phase. Core applies their delivery
+instructions to establish AOI Grants, then retains the packets as opening observations. The harness
+excludes opening observations from comparison and starts comparison at the first step. Core never
+filters packets during the scenario or changes its Equivalence Rules.
+
+The test writes `.lyracore/conformance/tier1.json` with the core commit, working-tree state, harness
+revision, capture time and the harness comparison. It removes the scenario's previous result before
+setup, so a setup failure leaves no old pass. Tests in one process update the report under a lock
+and preserve other scenarios from the same revision. Both difference classes remain in the report.
+The comparator marks a Behavior as nonconforming when it finds rule records. The tier 1 baseline
+check fails when either signature set changes or provenance differs, regardless of that result.
+No packet text enters this result. The scoreboard consumes it.
+
+## Taxi data
+
+`taxi_single_hop` uses the harness's money, known-flight-node and creature Fixture Verbs. The
+Operator transport calls the same debug reducers as the wire adapter. `debug_learn_taxi_node`
+requires the Operator, an existing Character and a storage id in `game_taxi_node`. Imported storage
+ids equal client node ids. Learning is idempotent and sends no packets or flight requests.
+
+The tier 1 test installs the hand-written fixture in
+`conformance/support/taxi_route.rs`. It contains only nodes 2 and 4, path 6 with fare 110,
+its 28 vertices, and a minimal synthetic template for the scenario's flight master. The template
+entry comes from the pinned scenario's Creature Fixture Verb, currently 523.
+The node and route numbers were checked against build-5875 `TaxiNodes.dbc`, `TaxiPath.dbc` and
+`TaxiPathNode.dbc`. Node text is fixture-authored. Mount display 6852 agrees with the Golden Trace;
+no mount template or other world data is needed.
+
+`route_fixture_matches_every_recorded_route_point_and_mount` checks all 27 serialized spline
+destinations exactly against vertices 1 through 27, including their wire precision. The trace
+starts at the passenger's position, which matches node 2, and omits DBC vertex 0 from its
+destinations. Vertex 0 and destination node 4 were checked against the client data; the trace
+does not independently establish those two rows. The test also checks the passenger's mount display.
+
+```bash
+cargo test -p lyracore-module --test native_conformance taxi_single_hop -- --ignored --nocapture
+```
+
+This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its own disposable
+Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
+baseline. The eight known gameplay gaps remain comparator differences. Known gaps never excuse a
+difference or supply a passing result.
+
+The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
+and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
+retains the earlier conformance.3 evidence. Their imported-data setup describes those historical
+runs; tier 1 now uses the bundled fixture.
+
+## Scoreboard
+
+From the repo root:
+
+```bash
+./conformance/scoreboard
+./conformance/scoreboard --json
+cargo test -p lyracore-conformance --example scoreboard
+```
+
+The script runs the Rust example `scoreboard`. It reads the Feature Ledger and prints system totals
+and a row for each Behavior. Tier 1, Conformance Audit and real-client checks have separate columns.
+It does not infer a pass from a test declaration or claim overall completion from these columns.
+The ledger's other required rungs remain obligations.
+
+The system table counts Behaviors with and without scenarios. The open-work list includes every
+Behavior without a scenario and every scenario-backed Behavior without a clean tier 1 and audit
+pass, or with known gaps. A scenario author takes an entry without a scenario. An implementer takes
+an entry with one when its evidence still points to implementation work. If tier 1 passes, or a
+stale audit measured no rule signatures and the ledger has no known gaps, an entry with a missing,
+stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
+`./conformance/audit`.
+Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
+command. The scenario-author command opens the ledger entry. An implementer normally runs the first
+listed scenario; further scenarios are in the Behavior's `scenarios` field.
+Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
+when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
+differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
+the tier 1 fixture misses something; a scenario author can fix that fixture.
+Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
+matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
+After an improvement, run `./conformance/baseline <scenario>`, then review the changed
+signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
+`prerequisites`. The command chooses an unused report name; audit history is append-only.
+
+Within those groups, the list sorts by descending number of other Behaviors that directly depend
+on the entry, then descending measured rule-signature count, then descending number of distinct
+claimed request opcodes, then ascending Behavior id. It uses the committed audit's signature count
+when available, otherwise tier 1's count. If neither measured the Behavior, it uses the number of
+distinct known gaps. Repeating a known gap does not increase priority. Dependency edits change the
+ranking and receive review as such in their PRs. The formula uses no assigned priority or tier 1
+baseline.
+
+`--json` emits one JSON object and no text. Schema version 1 has `systems` and `behaviors` objects
+keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `trainable_spells`,
+`tier1_evidence` and `audit_evidence`. Evidence is null when absent; otherwise it has `path` and
+the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
+Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
+`real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
+`scenarios`, `dependencies`, `required_rungs`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
+`unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
+measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
+`unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
+record counts. Spell counts give build, source path or missing expected path, and per-class
+trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
+`kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
+`scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
+is the measured signature count or the distinct-gap fallback. Counts and state names have the same
+meaning as the text scoreboard.
+
+The default tier 1 input is `.lyracore/conformance/tier1.json`. The latest audit is the JSON report
+under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit has a Markdown report beside its JSON result. To select inputs explicitly:
+
+```bash
+./conformance/scoreboard --tier1 /path/to/tier1.json --audit /path/to/audit.json
+```
+
+Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
+explicit input or malformed report fails the command. A changed core, harness revision
+or scenario hash shows `stale`. A descendant core commit that changes only `conformance/reports/`
+remains current, so committing the report does not invalidate its measurement. A pass requires every scenario listed by the Behavior. Any rule
+difference, including a counted Deliberate Deviation, prevents a pass. Rule differences in the Reference Server
+comparison also prevent an audit pass. A matching run made with
+uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
+Real-client cells come only from the ledger, never from a report.
+
+Counts use unique opcode values. The denominator is every variant of the pinned core
+`ClientOpcodeMessage` enum, read from Cargo's dependency source. Claims outside that enum have
+a separate count. System totals count shared claims once. The unavailable count includes request
+patterns in `responses` and `raw_responses` in `module/src/native/unavailable.rs`. It excludes
+control receipts, tests, comments, imports and explicit empty responses for ignored requests.
+Per-system and per-Behavior unavailable counts intersect those requests with ledger claims.
+Neither opcode claims nor these source counts prove conformance.
+
+### Result schema version 2
+
+Both tiers retain the complete harness `Comparison`. Each record requires the comparator's
+`classification` tag, `rule` or `data`. There is no separate `data_differences` array. Version 1
+results lack tags and must be rerun. Summary counts never supply classification.
+
+A signature is `(rule, checkpoint, stream, opcode, field_path)`. Packet indices, reasons and
+values do not belong to it. The scoreboard groups signatures across all scenarios of a Behavior
+and shows distinct signatures and raw records separately for rules and data. Known gaps remain a
+separate descriptive count. Missing or unknown tags, unknown Behaviors, unlisted scenarios,
+duplicate results and malformed reports fail before freshness checks.
+
+| Field | Meaning |
+| --- | --- |
+| `schema_version` | `2` |
+| `tier` | `tier1` or `conformance_audit` |
+| `core_commit` | Full core commit measured by the run |
+| `working_tree_dirty` | Whether the run included uncommitted changes |
+| `harness_revision` | Full pinned harness commit |
+| `recorded_at_unix_ms` | Capture time used to choose the latest report |
+| `scenarios` | Result array, with unique scenario ids |
+| `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
+| `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
+| `scenarios[].comparison` | Complete tagged comparison of LyraCore with the Golden Trace |
+| `scenarios[].reference_comparison` | Audit-only reference-stability comparison of vmangos with that same Golden Trace |
+| `scenarios[].reference_sha256` | SHA-256 of the Reference Server candidate, retained only in scratch |
+| `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |
+| `audit` | Audit-only server provenance and per-Behavior summaries |
+
+`audit` records the Native Host and Module binary hashes, imported world description, and vmangos
+binary release, archive hash, source commit and database commit. Its `behaviors` map holds each
+Behavior's `candidate` and `reference` summaries. Each summary has `rule` and `data` groups with
+`raw_records` and a `signatures` array of `{signature, raw_records}`. The scoreboard recomputes
+the LyraCore comparison by replaying its scrubbed candidates in `<date>.traces/` against the
+pinned catalogue. Every stored LyraCore difference must equal the recomputed record, including its
+tag and values. Reference Server candidates remain in scratch; core retains their SHA-256 and
+reference-stability comparison only.
+Data tags also require a matching scenario data-field declaration, and checkpoints must exist.
+The comparator's empty checkpoint denotes an unmatched rule declaration, not a scenario step.
+The scoreboard then checks the summaries and verifies that Markdown equals its JSON rendering.
+The `committed_audit_report_replays` test loads the newest committed report and runs validation,
+change validation and candidate replay in the Rust workflow's unit-test job. This checks report
+integrity, not whether every audited Behavior conforms.
+
+Each LyraCore candidate's bytes must match `capture.sha256`, and its core commit and binary hashes
+must match the audit run. At the pinned harness revision, the candidate header has no slot for
+those three provenance values; it records only the adapter and scenario metadata. The report
+binding cannot prove that a relabeled Golden Trace came from LyraCore. A pass is corroborated by
+the durable tier-1 check, which recomputes LyraCore's behavior in CI. The taxi comparison runs in
+durable CI against its signature baseline. Its rule differences still prevent a passing result.
+
+`audit.previous_report` is the JSON filename of the newest `conformance_audit` report in
+`conformance/reports/` with a strictly earlier `recorded_at_unix_ms`, or null when none exists.
+Equal earlier timestamps use filename order; the report being checked is never excluded by name.
+Each Behavior's
+`changes` has `rule` and `data` sets of `fixed` and `regressed` signatures. It is null when no
+earlier audit exists or the harness revision or any scenario hash for that Behavior differs. In the
+latter case the report says comparison is not possible. Multiplicity and values cannot fix or
+regress a signature. The scoreboard derives the predecessor from the reports directory and checks
+these sets against it. It also
+replays that earlier report's LyraCore candidates when its harness revision matches the current pin.
+Older reports receive structure checks; the newest report receives current ledger checks, so a
+Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes are not audit baselines.
+
+## Conformance Audit
+
+Prepare the pinned Reference Server once with the harness's
+[setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/ad27050ef5c91a1f5ba7337dce29d5d31233898b/adapters/vmangos/README.md).
+Stop it before the audit. The runner requires a clean core working tree and free Reference Server
+ports 13724 and 18085.
+Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
+The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
+
+```bash
+./conformance/audit --date 2026-10-28-c5 --client-data /path/to/client/Data
+./conformance/scoreboard
+```
+
+The Python command creates a disposable Git worktree under
+`$HOME/.cache/lyracore-scratch/conformance/` and manages its own Realm through `lyracore dev`.
+It refuses a changed CLI pin until the isolation contract has been reviewed. The worktree owns
+its `.lyracore/native-data`, JWT keys and Operator token; the audit stops its Native Host and
+deletes the worktree after capture. Its loopback ports 3000, 3724 and 8085 must be free.
+The Rust `audit` example exports catalogue scenarios, compares candidates through the pinned library, and
+writes the reports. It shares counting and evidence validation with the scoreboard. Neither core
+command reads scenarios or Golden Traces from a harness checkout. Cargo metadata locates the
+pinned checkout only to build `vanilla-wire` and run its server adapters.
+
+The command builds `vanilla-wire` and the audit example. It starts an owned local Realm with
+`lyracore dev up`, runs `lyracore import --accept` using the supplied client path,
+and provisions a disposable Account. The import selects the current vmangos `db_latest` snapshot
+under `.import/vmangos/` and loads the `alliance-single` world profile. It uses normal SRP login
+and encrypted world TCP sessions. Fixture world-entry bypasses are not compiled into this Module.
+The audit starts with an empty Shard and retains imported creature spawns. The taxi scenario uses
+flight-master entry 523 because an imported entry 352 in the same cell could be mistaken for its
+fixture spawn during setup. Tier 1 still uses the bundled route
+fixture.
+
+All Docker commands run inside a `newgrp docker` heredoc. The command checks the prepared runtime's
+pins and provenance, starts its compose services, and resets only the catalogue Characters on the
+disposable Reference Server. Every scenario produces both a LyraCore and vmangos candidate in scratch. Both
+compare with their embedded Golden Trace; the Reference Server must also retain its recorded
+provenance. Reference rule and data counts remain visible even when LyraCore fails.
+
+The command writes `conformance/reports/<date>.md`, `<date>.json` and `<date>.traces/`. Audit
+history is append-only: each run needs a new date or suffix, such as `2026-10-28-c6`, and the
+command refuses existing outputs. The trace directory contains only LyraCore candidates. Reference
+Server candidates stay in the audit's scratch directory and are deleted with it at exit; the report
+keeps their SHA-256 and reference-stability results. `--output DIRECTORY` selects another report
+destination. Rule differences are audit findings and do not make the command fail; missing
+captures, infrastructure errors and invalid evidence do. A failed run cannot write a partial
+success report. No scenario is skipped, including taxi.
+Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
+
+The runner stops both servers on exit, including capture failures and normal interrupts. Credentials
+and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted when
+the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
+stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
+counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain
+numbers and text digests, with the same scrubbed field types as Golden Traces. Never commit a
+Reference Server candidate; Golden Traces belong in the harness. Commit the implementation before
+capturing a report for current evidence, then commit only the report and its candidates. Dirty
+captures remain unverified.
+
+## Opcode coverage
+
+`tests/opcode_coverage.rs` checks every variant of the pinned `ClientOpcodeMessage` against ledger
+request claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. Out-of-scope entries map a
+variant name to a table with `reason` and an optional `source`. That list is currently empty. The
+initial allowlist has 285 variants. Adding a Behavior or a scope decision requires removing its
+opcodes from the allowlist in the same change. Unknown names, duplicate allowances and overlapping
+categories fail.
+
+The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
+set as constants. Current unclaimed membership must be a subset of that initial set. An
+out-of-scope addition requires `source` to name an existing `docs/adr/*.md` that mentions the opcode
+by name, or `https://github.com/vmangos/core/blob/<SHA>/src/<path>` with the same `source_commit`
+as the pinned Golden Traces.
+
+The test also compares both scope files with earlier versions reachable from `HEAD`. This extra
+history check needs no particular commit SHA. It catches restored allowances, exchanges of one
+opcode for another, and deletion followed by recreation. Scope files keep their canonical paths;
+renames cannot reset the embedded initial sets. A shallow checkout fails with an instruction to
+fetch full history; Rust CI uses `fetch-depth: 0`. The scanner uses `cargo metadata --locked`,
+which can download missing workspace dependency sources on a fresh checkout. It never changes
+the dependency lockfile.
+
+`feat/conformance` merges into `main` with a merge commit to retain the intermediate scope history.
+The embedded initial sets still enforce the starting limit after a squash or rebase merge.
+
+## Trainable spells
+
+The scoreboard uses `.import/vmangos/current.json`, the same snapshot selection as `lyracore
+import`, or accepts `--vmangos /path/to/mangos.sqlite`. It opens SQLite with `mode=ro` and
+`query_only`. A missing snapshot prints `Trainable spells: no data` with the expected path and
+leaves the rest of the scoreboard usable. A snapshot path outside `.import/vmangos/`, unreadable
+files, malformed schemas and dangling teaching-spell references fail. No vmangos rows enter git.
+
+For each class, "trainable" is the union of:
+
+- Spells offered by class trainers, `trainer_type = 0`, using `trainer_class` from the latest
+  `creature_template.patch <= 10`, the 1.12 patch. Join direct `npc_trainer.entry` to that creature
+  and `npc_trainer_template.entry` to its `trainer_id`. Keep offers whose inclusive build range
+  contains 5875 and whose required level is at most 60. Pet and profession trainers are excluded.
+- Spells automatically learned on a class skill line, `learn_on_get_skill` 1 or 2, from the latest
+  `skill_line_ability.build <= 5875` per id. The row's `class_mask` must be zero or include that
+  class. Class lines are the three class specializations, plus Rogue poisons and lockpicking.
+  Hunter pet-training lines, weapons, professions and racials are excluded. A talent or quest-only
+  spell without either learning source is outside this denominator.
+
+Use the largest `spell_template.build <= 5875` per entry. Resolve teaching spells through each
+`LEARN_SPELL` effect, raw id 36, to its `effectTriggerSpell` before counting. Count each learned id
+once per class, keeping ranks separate. A spell must have at least one nonzero effect. Every
+nonzero effect must map to a supported kind through the importer rules, in all three slots.
+
+The scoreboard reads trainable spell rows from the selected vmangos SQLite file and calls
+`lyracore-importer::spell_kind::supported_effect` for each nonempty effect slot. The importer
+uses the same kind mappings and name corrections when building the spell catalogue. The counter
+therefore has no copied Rust mapping or Python list of script-name exceptions. Raw 5, 29 and 96
+are not blanket support for Blink or Charge. Raw 59, 63 and 91 use importer mappings. Unknown
+kinds stay unsupported unless the importer has a named correction.
+
+Class skill lines follow vmangos at
+[`d9173eca`](https://github.com/vmangos/core/tree/d9173eca3ea08dd985c52dabbcc826898d1d0b77),
+`src/game/SharedDefines.h`.
+
+The Module dispatch is `module/src/spell/cast/targeting.rs::apply_effect`; aura consumers live in
+`module/src/spell/` and `crates/lyracore-shared/src/aura.rs`. This is a kind-coverage count. It does
+not verify parameters, targeting, triggered spell dependencies, quests, talents or complete spell
+behavior. Only counts are printed; spell names and SQLite records stay local.

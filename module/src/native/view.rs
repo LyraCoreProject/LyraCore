@@ -128,6 +128,7 @@ pub(super) fn entity(ctx: &ReducerContext, e: &WorldEntity) -> codec::EntityView
         home_z: character.as_ref().map_or(0.0, |c| c.home_z),
         guild_id: guild.as_ref().map_or(0, |g| g.guild_id),
         guild_rank: guild.as_ref().map_or(0, |g| g.rank_id),
+        spline: None,
     }
 }
 

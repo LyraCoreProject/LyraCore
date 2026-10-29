@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "conformance",
     "crates/lyracore-package-delta",
     "crates/lyracore-protocol",
     "crates/lyracore-shared",
@@ -23,6 +24,8 @@ publish = false
 too_many_lines = "warn"
 
 [workspace.dependencies]
+wire-client = { git = "https://github.com/LyraCoreProject/wire-harness", rev = "ad27050ef5c91a1f5ba7337dce29d5d31233898b" }
+lyracore-conformance = { path = "conformance" }
 lyracore-shared = { path = "crates/lyracore-shared" }
 lyracore-protocol = { path = "crates/lyracore-protocol" }
 lyracore-test-support = { path = "crates/lyracore-test-support" }

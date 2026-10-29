@@ -1037,7 +1037,7 @@ mod partition_discipline_tripwire {
     const WHITELIST: &[(&str, usize, &str)] = &[
         ("module/src/debug/mod.rs", 11, "Debug fixture and Operator migration reducers inspect the whole Shard, including the DynamicObject cell backfill."),
         ("module/src/debug/instance.rs", 3, "Debug fixture setup and floor validation inspect template populations and guid allocation."),
-        ("module/src/creatures/spawn.rs", 4, "World imports replace all authored spawns. Timer normalization and region retirement inspect the complete spawn catalogue."),
+        ("module/src/creatures/spawn.rs", 3, "World import replaces authored spawns and entities; timer normalization scans all spawns."),
         ("module/src/go_collider.rs", 1, "Operator reconciliation rebuilds derived colliders for every hosted partition"),
         ("module/src/gameobject.rs", 2, "`import_gameobjects` drops every gameobject row before reloading the world; plus one by-`template_entry` lookup (an entry-keyed find, not a spatial query — no index on that column)"),
         ("module/src/package_import/creatures.rs", 1, "a Package Delta apply clears the whole Package creature range before it writes, so a Package that left the enabled set takes its spawns with it — realm-wide reconciliation, and the band has no index"),

@@ -80,7 +80,8 @@ pub(super) fn enter_character(
         .guid()
         .find(guid)
         .ok_or("world entry did not create a player")?;
-    let entity = super::view::entity(ctx, &live);
+    let mut entity = super::view::entity(ctx, &live);
+    super::taxi::create_spline(ctx, guid, &mut entity);
     let items = super::view::items(ctx, guid);
     let learned = ctx
         .db
@@ -203,6 +204,7 @@ pub(super) fn enter_character(
         teleport: None,
         teleport_counter,
         zone_id: entity.zone_id,
+        teleport_started_micros: 0,
     });
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant)?;
@@ -271,6 +273,7 @@ pub(super) fn receive(
         .find(connection.connection_id)
         .filter(|player| player.character_guid == guid)
         .ok_or("native World Session is no longer current")?;
+    let player = super::teleport::expire(ctx, player)?;
     if matches!(opcode, 0x00c7 | 0x00dc) {
         return Ok(super::teleport::acknowledge(
             ctx, connection, player, opcode, body,

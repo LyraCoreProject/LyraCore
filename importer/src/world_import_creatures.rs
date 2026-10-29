@@ -163,6 +163,9 @@ fn templates(
     let mut displays = Vec::new();
     for row in dump.rows("creature_template")?.iter() {
         let entry: u64 = row.number("entry")?;
+        if u32::try_from(entry).is_ok_and(lyracore_package_delta::ids::is_operator_template_id) {
+            bail!("creature_template entry {entry} belongs to the Operator Template Range");
+        }
         if !entries.contains(&entry) {
             continue;
         }
@@ -880,6 +883,31 @@ mod tests {
         assert_eq!(flags(&row, 0x20).unwrap().0, 0x100);
         assert_eq!(flags(&row, 0x40).unwrap().0, 0x200);
     }
+    #[test]
+    fn imported_creatures_cannot_use_the_operator_template_range() {
+        let source = template_source();
+        let WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection
+            .execute_batch("UPDATE creature_template SET entry = 5200500")
+            .unwrap();
+        let refusal = templates(
+            &source,
+            &HashSet::from([5200500]),
+            &HashSet::new(),
+            None,
+            &mut Vec::new(),
+            &mut Findings::new(),
+            &BTreeMap::new(),
+        )
+        .unwrap_err();
+        assert!(
+            refusal.to_string().contains("Operator Template Range"),
+            "{refusal}"
+        );
+    }
+
     #[test]
     fn selected_model_gender_follows_the_display_and_build() {
         let source = template_source();

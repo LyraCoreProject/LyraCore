@@ -28,6 +28,10 @@ entry menu. Submenu selections keep this root so a Runtime Script menu replaceme
 the open menu. SpacetimeDB disconnects clients for this schema update; reconnect starts at the
 entry menu. The Host does not decode this table, and its delivery layouts do not change.
 
+`game_native_player.teleport_started_micros` records when a native teleport began. Its typed zero
+default expires a near teleport already pending at migration on the next tick. World ports do not
+use this timeout.
+
 `game_creature_level_stats` holds final health, damage and armor by template and level.
 `game_creature_display` holds weighted display choices by template. Both are new tables, so an
 existing Realm migrates without changing stored template rows. A template stat change takes
@@ -153,9 +157,11 @@ reads.
 `game_active_taxi_flight` has at most one row per Character, because `character_guid` is its
 primary key. A successful activation creates the row in the same transaction that deducts the
 fare, so a duplicate activation sees the row before it can charge again. The Module queues the
-activation reply before it arms the flight schedule. `game_taxi_flight_schedule` drives the 250 ms
+activation reply before it arms the flight schedule. `game_taxi_flight_schedule` drives the 100 ms
 route clock. The public `game_taxi_passenger_spline` row carries the remaining route to the owner
-and AOI observers, and is refreshed when the passenger changes AOI cell.
+and AOI observers, and is refreshed when the passenger changes AOI cell or route point. The active
+flight also records its takeoff position, so a new viewer's CREATE carries the original spline path
+with elapsed time even after the passenger has crossed a cell boundary.
 
 ### `game_world_entity` (`module/src/world.rs`)
 
@@ -462,7 +468,7 @@ rg -n 'scheduled\(' module/src --glob '*.rs'
 | `game_motion_publish_schedule` | `publish_motion` | 50 ms (20 Hz) | `motion.rs` |
 | `game_melee_schedule` | `tick_melee` | 100 ms | `combat/engage.rs` |
 | `game_duel_schedule` | `tick_duels` | 250 ms | `duel.rs` |
-| `game_taxi_flight_schedule` | `advance_taxi_flight` | 250 ms while a passenger is active | `taxi.rs` |
+| `game_taxi_flight_schedule` | `advance_taxi_flight` | 100 ms while a passenger is active | `taxi.rs` |
 | `game_transport_carry_schedule` | `carry_transport_passengers` | 500 ms per Transport while it has Passengers, armed by boarding | `transport/mod.rs` |
 | `game_transport_crossing` | `cross_transport_map` | one-shot at a route's next map change, armed by world entry | `transport/mod.rs` |
 | `game_creature_move_schedule` | `tick_creatures` | 500 ms (sensing every 8th pass, about 4 s) | `creatures/tick/mod.rs` |

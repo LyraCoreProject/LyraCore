@@ -1,8 +1,6 @@
 use lyracore_shared::{constants, packing, spatial};
 use spacetimedb::{reducer, table, Identity, ReducerContext, Table, Timestamp};
 
-#[cfg(feature = "debug_reducers")]
-use crate::creatures::tick::game_creature_spline;
 use crate::{game_active_taxi_flight, game_race_info, game_world_entity, Character, WorldEntity};
 
 #[table(
@@ -273,43 +271,6 @@ pub fn debug_normalize_spawn_timers(ctx: &ReducerContext, limit: u32) -> Result<
     spacetimedb::log::info!(
         "debug_normalize_spawn_timers: disarmed {changed} spawn row(s) (limit {limit}); \
          re-run until it reports 0"
-    );
-    Ok(())
-}
-
-#[cfg(feature = "debug_reducers")]
-#[reducer]
-pub fn debug_retire_region_creatures(
-    ctx: &ReducerContext,
-    map_id: u32,
-    gx_min: i32,
-    gx_max: i32,
-    gy_min: i32,
-    gy_max: i32,
-) -> Result<(), String> {
-    crate::helpers::require_operator(ctx)?;
-    let spawns = ctx.db.game_creature_spawn();
-    let splines = ctx.db.game_creature_spline();
-    let doomed: Vec<u64> = spawns
-        .iter()
-        .filter(|s| {
-            let (gx, gy) = lyracore_shared::spatial::grid_cell(s.x, s.y);
-            s.map_id == map_id && gx >= gx_min && gx <= gx_max && gy >= gy_min && gy <= gy_max
-        })
-        .map(|s| s.guid)
-        .collect();
-    for g in &doomed {
-        crate::WorldEntity::delete(ctx, g);
-        splines.guid().delete(g);
-        spawns.guid().delete(g);
-    }
-    if !doomed.is_empty() {
-        crate::threat::clear_all(ctx);
-    }
-    spacetimedb::log::info!(
-        "debug_retire_region_creatures: retired {} creature(s) in map {map_id} cells \
-         ({gx_min}..{gx_max}, {gy_min}..{gy_max})",
-        doomed.len()
     );
     Ok(())
 }
@@ -711,7 +672,8 @@ pub(crate) fn build_player_entity(
         .find(character.guid)
     {
         entity.mount_display_id = flight.mount_display_id;
-        entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        entity.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
     }
     crate::stats::apply_level_stats(ctx, &mut entity, character.race, character.class, level);
     // Persisted health zero means uninitialized; ghosts retain their separate death state.

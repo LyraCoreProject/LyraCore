@@ -33,6 +33,14 @@ pub struct ActiveTaxiFlight {
     pub fare: u32,
     pub current_node_index: u32,
     pub started_micros: i64,
+    #[default(0.0f32)]
+    pub origin_x: f32,
+    #[default(0.0f32)]
+    pub origin_y: f32,
+    #[default(0.0f32)]
+    pub origin_z: f32,
+    #[default(false)]
+    pub origin_recorded: bool,
 }
 
 #[table(accessor = game_taxi_flight_schedule, scheduled(advance_taxi_flight))]
@@ -327,7 +335,8 @@ impl ActivationPlayerState {
         self.has_active_flight = true;
         self.money = remaining_money;
         self.mount_display_id = mount_display_id;
-        self.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+        self.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+            | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
         Ok(())
     }
 }
@@ -382,14 +391,18 @@ fn is_known(ctx: &ReducerContext, character_guid: u64, node_id: u32) -> bool {
         .any(|row| row.node_id == node_id)
 }
 
-fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
-    if !is_known(ctx, character_guid, node_id) {
+pub(crate) fn discover(ctx: &ReducerContext, character_guid: u64, node_id: u32) {
+    if should_insert_discovery(is_known(ctx, character_guid, node_id)) {
         ctx.db.game_character_taxi_node().insert(CharacterTaxiNode {
             id: 0,
             character_guid,
             node_id,
         });
     }
+}
+
+fn should_insert_discovery(already_known: bool) -> bool {
+    !already_known
 }
 
 fn route_is_supported(
@@ -408,8 +421,8 @@ fn route_is_supported(
     })
 }
 
-const TAXI_SPEED_YARDS_PER_SECOND: f64 = 32.0;
-const TAXI_TICK_MICROS: i64 = 250_000;
+const TAXI_SPEED_YARDS_PER_SECOND: f32 = 32.0;
+const TAXI_TICK_MICROS: i64 = 100_000;
 const TAXI_MOVEMENT_FORWARD: u32 = 0x0000_0001;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -422,26 +435,103 @@ struct RoutePosition {
     complete: bool,
 }
 
-fn segment_micros(a: &GameTaxiPathNode, b: &GameTaxiPathNode) -> i64 {
-    let dx = f64::from(b.x - a.x);
-    let dy = f64::from(b.y - a.y);
-    let dz = f64::from(b.z - a.z);
-    let travel = ((dx * dx + dy * dy + dz * dz).sqrt() / TAXI_SPEED_YARDS_PER_SECOND * 1_000_000.0)
-        .round() as i64;
-    travel.max(1)
+fn flight_route(
+    flight: &ActiveTaxiFlight,
+    mut points: Vec<GameTaxiPathNode>,
+) -> Vec<GameTaxiPathNode> {
+    if flight.origin_recorded {
+        points[0].x = flight.origin_x;
+        points[0].y = flight.origin_y;
+        points[0].z = flight.origin_z;
+    }
+    points
 }
 
-fn route_duration_micros(points: &[GameTaxiPathNode]) -> Option<i64> {
-    (points.len() >= 2).then(|| {
-        points
-            .windows(2)
-            .map(|pair| segment_micros(&pair[0], &pair[1]))
-            .fold(0i64, i64::saturating_add)
+fn spline_controls(points: &[GameTaxiPathNode], index: usize) -> [[f32; 3]; 4] {
+    let coords = |point: &GameTaxiPathNode| [point.x, point.y, point.z];
+    let current = coords(&points[index]);
+    let next = coords(&points[index + 1]);
+    let prior = if index == 0 {
+        std::array::from_fn(|axis| current[axis] - (next[axis] - current[axis]))
+    } else {
+        coords(&points[index - 1])
+    };
+    let after = points.get(index + 2).map_or(next, coords);
+    [prior, current, next, after]
+}
+
+fn spline_position(controls: &[[f32; 3]; 4], t: f32) -> [f32; 3] {
+    let t2 = t * t;
+    let t3 = t2 * t;
+    let weights = [
+        -0.5 * t3 + t2 - 0.5 * t,
+        1.5 * t3 - 2.5 * t2 + 1.0,
+        -1.5 * t3 + 2.0 * t2 + 0.5 * t,
+        0.5 * t3 - 0.5 * t2,
+    ];
+    std::array::from_fn(|axis| {
+        controls
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[axis] * weight)
+            .sum()
     })
 }
 
+fn spline_direction(controls: &[[f32; 3]; 4], t: f32) -> [f32; 3] {
+    let t2 = t * t;
+    let weights = [
+        -1.5 * t2 + 2.0 * t - 0.5,
+        4.5 * t2 - 5.0 * t,
+        -4.5 * t2 + 4.0 * t + 0.5,
+        1.5 * t2 - t,
+    ];
+    std::array::from_fn(|axis| {
+        controls
+            .iter()
+            .zip(weights)
+            .map(|(point, weight)| point[axis] * weight)
+            .sum()
+    })
+}
+
+fn route_timestamps_micros(points: &[GameTaxiPathNode]) -> Option<Vec<i64>> {
+    (points.len() >= 2).then(|| {
+        // vmangos starts at 1 ms and truncates the clock after each float segment duration.
+        let mut elapsed_ms = 1i64;
+        let mut times = vec![0];
+        for index in 0..points.len() - 1 {
+            let controls = spline_controls(points, index);
+            let mut previous = controls[1];
+            let mut length = 0.0f64;
+            for step in 1..=3 {
+                let current = spline_position(&controls, step as f32 / 3.0);
+                let delta: [f32; 3] = std::array::from_fn(|axis| current[axis] - previous[axis]);
+                length += f64::from(
+                    delta
+                        .iter()
+                        .map(|component| component * component)
+                        .sum::<f32>()
+                        .sqrt(),
+                );
+                previous = current;
+            }
+            elapsed_ms = (elapsed_ms as f32
+                + (length as f32) * (1_000.0 / TAXI_SPEED_YARDS_PER_SECOND))
+                as i64;
+            times.push(elapsed_ms.saturating_mul(1_000));
+        }
+        times
+    })
+}
+
+fn route_duration_micros(points: &[GameTaxiPathNode]) -> Option<i64> {
+    route_timestamps_micros(points).and_then(|times| times.last().copied())
+}
+
 fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<RoutePosition> {
-    let total = route_duration_micros(points)?;
+    let times = route_timestamps_micros(points)?;
+    let total = *times.last()?;
     let elapsed = elapsed_micros.max(0);
     if elapsed >= total {
         let last = points.last()?;
@@ -456,22 +546,22 @@ fn route_position(points: &[GameTaxiPathNode], elapsed_micros: i64) -> Option<Ro
         });
     }
 
-    let mut segment_start = 0i64;
-    for (index, pair) in points.windows(2).enumerate() {
-        let duration = segment_micros(&pair[0], &pair[1]);
-        if elapsed < segment_start.saturating_add(duration) {
-            let travel_elapsed = elapsed.saturating_sub(segment_start);
-            let t = (travel_elapsed as f64 / duration as f64).clamp(0.0, 1.0) as f32;
+    for index in 0..points.len() - 1 {
+        if elapsed < times[index + 1] {
+            let duration = times[index + 1] - times[index];
+            let t = ((elapsed - times[index]) as f32 / duration as f32).clamp(0.0, 1.0);
+            let controls = spline_controls(points, index);
+            let position = spline_position(&controls, t);
+            let direction = spline_direction(&controls, t);
             return Some(RoutePosition {
                 point_index: index,
-                x: pair[0].x + (pair[1].x - pair[0].x) * t,
-                y: pair[0].y + (pair[1].y - pair[0].y) * t,
-                z: pair[0].z + (pair[1].z - pair[0].z) * t,
-                orientation: (pair[1].y - pair[0].y).atan2(pair[1].x - pair[0].x),
+                x: position[0],
+                y: position[1],
+                z: position[2],
+                orientation: direction[1].atan2(direction[0]),
                 complete: false,
             });
         }
-        segment_start = segment_start.saturating_add(duration);
     }
     None
 }
@@ -488,6 +578,57 @@ fn ordered_route(ctx: &ReducerContext, path_id: u32) -> Option<Vec<GameTaxiPathN
         point.node_index == index as u32 && point.delay_ms == 0 && point.flags == 0
     });
     (points.len() >= 2 && complete).then_some(points)
+}
+
+pub(crate) fn current_create_spline(
+    ctx: &ReducerContext,
+    character_guid: u64,
+) -> Option<(lyracore_protocol::codec::CreateSpline, [f32; 4])> {
+    use lyracore_protocol::messages::vanilla::Vector3d;
+
+    let flight = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character_guid)?;
+    if flight.started_micros == 0 {
+        return None;
+    }
+    let points = flight_route(&flight, ordered_route(ctx, flight.path_id)?);
+    let elapsed = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(flight.started_micros)
+        .max(0);
+    let position = route_position(&points, elapsed)?;
+    if position.complete {
+        return None;
+    }
+    let duration_ms =
+        (route_duration_micros(&points)? / 1_000).clamp(1, i64::from(u32::MAX)) as u32;
+    let start = &points[0];
+    let next = &points[1];
+    let mut nodes = Vec::with_capacity(points.len() + 2);
+    nodes.push(Vector3d {
+        x: 2.0 * start.x - next.x,
+        y: 2.0 * start.y - next.y,
+        z: 2.0 * start.z - next.z,
+    });
+    nodes.extend(points.iter().map(|point| Vector3d {
+        x: point.x,
+        y: point.y,
+        z: point.z,
+    }));
+    nodes.push(*nodes.last()?);
+    Some((
+        lyracore_protocol::codec::CreateSpline {
+            nodes,
+            time_passed_ms: (elapsed / 1_000).clamp(0, i64::from(duration_ms - 1)) as u32,
+            duration_ms,
+            id: flight.started_micros as u64 as u32,
+        },
+        [position.x, position.y, position.z, position.orientation],
+    ))
 }
 
 fn remaining_spline(
@@ -520,8 +661,33 @@ fn remaining_spline(
     }
 }
 
+pub(crate) fn sync_flight_on_world_entry(ctx: &ReducerContext, character: &mut crate::Character) {
+    let Some(flight) = ctx
+        .db
+        .game_active_taxi_flight()
+        .character_guid()
+        .find(character.guid)
+    else {
+        return;
+    };
+    if flight.started_micros == 0 {
+        return;
+    }
+    let Some(points) = ordered_route(ctx, flight.path_id) else {
+        return;
+    };
+    let points = flight_route(&flight, points);
+    let elapsed = ctx
+        .timestamp
+        .to_micros_since_unix_epoch()
+        .saturating_sub(flight.started_micros);
+    if let Some(position) = route_position(&points, elapsed) {
+        (character.x, character.y, character.z) = (position.x, position.y, position.z);
+        character.orientation = position.orientation;
+    }
+}
+
 fn write_passenger_spline(ctx: &ReducerContext, row: TaxiPassengerSpline) {
-    crate::native::taxi_spline_changed(ctx, &row);
     let splines = ctx.db.game_taxi_passenger_spline();
     if splines.character_guid().find(row.character_guid).is_some() {
         splines.character_guid().update(row);
@@ -602,7 +768,8 @@ fn project_flight_end(
         }
     }
     player.mount_display_id = 0;
-    player.unit_flags &= !lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    player.unit_flags &= !(lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL);
     player.movement_flags = 0;
 }
 
@@ -680,6 +847,8 @@ fn finish_flight(ctx: &ReducerContext, player: WorldEntity, plan: FlightEndPlan)
 }
 
 fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
+    let character_guid = player.guid;
+    let mounted = player.mount_display_id != 0;
     finish_flight(
         ctx,
         player,
@@ -689,6 +858,7 @@ fn clear_flight(ctx: &ReducerContext, player: WorldEntity) {
             zone_id: None,
         },
     );
+    crate::native::taxi_aborted(ctx, character_guid, mounted);
 }
 
 fn exact_landing(destination: &GameTaxiNode, orientation: f32) -> LandingPosition {
@@ -707,6 +877,7 @@ fn land_flight(
     destination: &GameTaxiNode,
     orientation: f32,
 ) {
+    let character_guid = player.guid;
     let landing = exact_landing(destination, orientation);
     let zone_id = crate::terrain::zone_id_at(ctx, destination.map_id, destination.x, destination.y);
     let instance_id = player.instance_id;
@@ -719,6 +890,7 @@ fn land_flight(
             zone_id,
         },
     );
+    crate::native::taxi_landed(ctx, character_guid);
 }
 
 pub(crate) fn is_in_flight(ctx: &ReducerContext, character_guid: u64) -> bool {
@@ -1017,6 +1189,10 @@ pub(crate) fn activate_taxi(
             current_node_index: 0,
             // Queue the paid reply before arming motion so movement cannot overtake it.
             started_micros: 0,
+            origin_x: player.x,
+            origin_y: player.y,
+            origin_z: player.z,
+            origin_recorded: true,
         };
         ctx.db.game_active_taxi_flight().insert(flight);
         player.money = player_state.money;
@@ -1053,6 +1229,7 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
         clear_flight(ctx, player);
         return;
     };
+    let points = flight_route(&flight, points);
     let Some(destination) = ctx
         .db
         .game_taxi_node()
@@ -1070,15 +1247,23 @@ pub(crate) fn arm_taxi_flight(ctx: &ReducerContext, character_guid: u64) {
     }
     flight.started_micros = ctx.timestamp.to_micros_since_unix_epoch();
     player.mount_display_id = flight.mount_display_id;
-    player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT;
+    player.unit_flags |= lyracore_shared::constants::unit_flags::TAXI_FLIGHT
+        | lyracore_shared::constants::unit_flags::REMOVE_CLIENT_CONTROL;
     player.movement_flags = TAXI_MOVEMENT_FORWARD;
     let start = route_position(&points, 0).expect("validated route has a start");
+    let start = RoutePosition {
+        x: player.x,
+        y: player.y,
+        z: player.z,
+        ..start
+    };
     let spline = remaining_spline(&flight, &player, &points, start, 0);
     ctx.db
         .game_active_taxi_flight()
         .character_guid()
         .update(flight);
     player.update(ctx);
+    crate::native::taxi_spline_changed(ctx, &spline);
     write_passenger_spline(ctx, spline);
     ctx.db
         .game_taxi_flight_schedule()
@@ -1124,6 +1309,7 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
         clear_flight(ctx, player);
         return;
     };
+    let points = flight_route(&flight, points);
     let elapsed = ctx
         .timestamp
         .to_micros_since_unix_epoch()
@@ -1164,14 +1350,14 @@ pub fn advance_taxi_flight(ctx: &ReducerContext, schedule: TaxiFlightSchedule) {
     flight.current_node_index = position.point_index as u32;
     let spline = should_refresh_spline(previous_cell, (grid_x, grid_y), crossed_point)
         .then(|| remaining_spline(&flight, &player, &points, position, elapsed));
+    if let Some(spline) = spline {
+        write_passenger_spline(ctx, spline);
+    }
     player.update(ctx);
     ctx.db
         .game_active_taxi_flight()
         .character_guid()
-        .update(flight.clone());
-    if let Some(spline) = spline {
-        write_passenger_spline(ctx, spline);
-    }
+        .update(flight);
 }
 
 #[spacetimedb::reducer]
@@ -1549,8 +1735,9 @@ mod tests {
     #[test]
     fn authoritative_route_clock_covers_start_progress_and_exact_landing() {
         let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0), point(3, 99, 2, 0)];
-        let first_leg = segment_micros(&points[0], &points[1]);
+        let first_leg = route_timestamps_micros(&points).unwrap()[1];
         let total = route_duration_micros(&points).unwrap();
+        assert_eq!(total, 63_000);
 
         let start = route_position(&points, 0).unwrap();
         assert_eq!(
@@ -1581,6 +1768,55 @@ mod tests {
             ),
             (0, -9443.5, 58.25, 56.75, 1.25)
         );
+    }
+
+    #[test]
+    fn curved_route_uses_float_segment_lengths_and_accumulated_milliseconds() {
+        let coordinates = [
+            (5.0, -16.0, -1.0),
+            (9.0, -14.0, -28.0),
+            (27.0, 8.0, -6.0),
+            (2.0, -19.0, -8.0),
+        ];
+        let points: Vec<_> = coordinates
+            .into_iter()
+            .enumerate()
+            .map(|(index, (x, y, z))| {
+                let mut point = point(index as u32 + 1, 99, index as u32, 0);
+                (point.x, point.y, point.z) = (x, y, z);
+                point
+            })
+            .collect();
+        assert_eq!(
+            route_timestamps_micros(&points),
+            Some(vec![0, 874_000, 2_016_000, 3_173_000])
+        );
+    }
+
+    #[test]
+    fn a_recorded_departure_replaces_the_first_route_point() {
+        let mut flight = ActiveTaxiFlight {
+            character_guid: 1,
+            path_id: 99,
+            source_node_id: 2,
+            destination_node_id: 4,
+            mount_display_id: 6852,
+            fare: 110,
+            current_node_index: 0,
+            started_micros: 1,
+            origin_x: 10.0,
+            origin_y: 20.0,
+            origin_z: 30.0,
+            origin_recorded: false,
+        };
+
+        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
+        assert_eq!(flight_route(&flight, points)[0].x, 0.0);
+        flight.origin_recorded = true;
+        let points = vec![point(1, 99, 0, 0), point(2, 99, 1, 0)];
+        let route = flight_route(&flight, points);
+        assert_eq!((route[0].x, route[0].y, route[0].z), (10.0, 20.0, 30.0));
+        assert_eq!((route[1].x, route[1].y, route[1].z), (1.0, 0.0, 0.0));
     }
 
     #[test]

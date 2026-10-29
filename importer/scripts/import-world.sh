@@ -101,12 +101,15 @@ if [ -n "$WORLD_PROFILE" ]; then
 else
   SCOPE_FLAGS=(--map "$MAP" --box "$BOX" ${INC_MAP_FLAGS[@]+"${INC_MAP_FLAGS[@]}"} ${INC_CREATURE_FLAGS[@]+"${INC_CREATURE_FLAGS[@]}"} ${CENTER_FLAGS[@]+"${CENTER_FLAGS[@]}"})
 fi
-# comm requires both map lists in lexical order.
-if [ -n "$WORLD_PROFILE" ]; then
-  EXPECTED_MAPS="$(printf '%s\n' $PROFILE_MAPS | sort -u)"
-else
-  EXPECTED_MAPS="$(printf '%s\n' "$MAP" ${INCLUDE_MAPS//,/ } | sort -u)"
+cargo build -q --bin lyracore-importer || exit 1
+# The source decides which maps an all-maps scope such as full-world owns.
+if ! EXPECTED_MAPS="$(./target/debug/lyracore-importer --dump "$DUMP" "${SCOPE_FLAGS[@]}" --print-scope-maps)" \
+  || [ -z "$EXPECTED_MAPS" ]; then
+  echo "[world] ABORT — could not read this run's map scope from $DUMP" >&2
+  exit 1
 fi
+# comm requires both map lists in lexical order.
+EXPECTED_MAPS="$(printf '%s\n' $EXPECTED_MAPS | sort -u)"
 
 # GUARD HELPERS BEGIN
 db_spatial_probe() {
@@ -174,7 +177,6 @@ if [ -n "${PRE_FOREIGN// /}" ]; then
   echo "[world] ALLOW_MAP_SWITCH=1 — overwriting '$DB' with map(s) $(echo "$EXPECTED_MAPS" | tr '\n' ' ') anyway"
 fi
 
-cargo build -q --bin lyracore-importer || exit 1
 if [ -n "$WORLD_PROFILE" ]; then
   echo "[world] ETL  --world-profile $WORLD_PROFILE  → $DB"
 else

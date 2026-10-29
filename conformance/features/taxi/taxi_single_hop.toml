@@ -1,0 +1,38 @@
+schema_version = 1
+id = "taxi_single_hop"
+system = "taxi"
+scope = "A Character queries a known flight master, sees known flight nodes, pays for a direct flight from Stormwind to Sentinel Hill, follows its mount spline and lands. Taxi chains are outside this Behavior."
+requests = ["0x00C7", "0x01AA", "0x01AC", "0x01AD"]
+replies = ["0x00A9", "0x00C7", "0x00DD", "0x014E", "0x016E", "0x016F", "0x01A9", "0x01AB", "0x01AE"]
+dependencies = ["connection_identity"]
+required_rungs = ["tier1", "conformance_audit", "real_client"]
+scenarios = ["taxi_single_hop"]
+deliberate_deviations = []
+prerequisites = ["Bundled tier 1 fixture: taxi nodes 2 and 4, route 6 with all 28 vertices, mount display 6852 and the flight-master entry from the pinned scenario", "The scenario's money, known-node and creature Fixture Verbs"]
+tests = []
+
+[vmangos]
+commit = "d9173eca3ea08dd985c52dabbcc826898d1d0b77"
+path = "src/game/Handlers/TaxiHandler.cpp"
+symbol = "WorldSession::HandleActivateTaxiOpcode"
+
+[real_client]
+status = "unverified"
+
+[[known_gaps]]
+description = "Landing correction X differs: the route fixture node 4 has -10628.8896484375, while the vmangos Golden Trace has -10628.900390625."
+path = "conformance/support/taxi_route.rs"
+symbol = "NODES"
+evidence = "taxi_single_hop Tier 1 exact_field / flight / reply/flight / 0x00C7 / position.x. Fixture node 4 was checked against build-5875 TaxiNodes.dbc (conformance/README.md#taxi-data); the Golden Trace records vmangos d9173eca3ea08dd985c52dabbcc826898d1d0b77 with database 464179081673cfd240f7ffe7f0daf96bca0b5a70."
+
+[[known_gaps]]
+description = "Flight movement keeps the old zone and omits the Elwynn and Westfall world-state and weather packets."
+path = "module/src/taxi.rs"
+symbol = "advance_taxi_flight"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire records 88-91, missing zone packets; this route-only fixture has no terrain import."
+
+[[known_gaps]]
+description = "The passenger PLAYER_FLAGS update when leaving Stormwind is absent. Rest-state changes update player_bytes_2, not player_flags, and flight ticks do not call the rest-state check."
+path = "module/src/rest.rs"
+symbol = "check_rest_state"
+evidence = "conformance/reports/2026-10-27-t2g.md: wire record 85 and tier 1 record 88, missing_packet for passenger field_190; module/src/taxi.rs::advance_taxi_flight does not check rest state."

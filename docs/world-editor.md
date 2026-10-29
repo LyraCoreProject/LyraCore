@@ -1,9 +1,9 @@
 # World Editor
 
 The World Editor is [Meld](https://github.com/LyraCoreProject/Meld/tree/lyracore), a 1.12.1 map editor. Its
-`lyracore` branch reads spawns from a Realm and saves spawn edits through the
-[Operator Content API](./operator-content-api.md), so a moved, added or deleted spawn shows in the
-world at once.
+`lyracore` branch reads spawns, items and creatures from a Realm and saves their edits through the
+[Operator Content API](./operator-content-api.md), so a moved spawn, a renamed item or a creature's
+new look shows in the world at once.
 
 ## Run it
 
@@ -22,7 +22,8 @@ folder is the parent of the configured `client-data` path (`./lyracore config se
 These settings hold for that Meld session only and change nothing in Meld's own config.
 
 Open a region (File › Open Region), edit its creatures and gameobjects, then press Save Spawns. The
-status line says "live now" when the Realm took the edits.
+status line says "live now" when the Realm took the edits. The Item Editor and the Creature Editor
+save to the Realm the same way. While a save runs, the Saving bar reads "Updating the realm".
 
 ## With Development reload
 
@@ -42,15 +43,31 @@ Refusal rolls back the whole save, and Meld shows its message.
   pools) are listed as not written.
 - A save over the call's limits (256 edits, 4,096 waypoints) is refused. Save fewer spawns at a time.
 
+## Item and creature saves
+
+- An item save calls `operator_apply_item_edits` with the full template row, and the creature
+  editor's Shop tab saves the vendor offers in the same call. Players who wear the item get its new
+  stats, and connected clients receive the new item query response.
+- A creature save calls `operator_apply_creature_edits` with the template, its display rows and its
+  spell list. The Realm respawns the live creatures of that entry, so they come back with the edit.
+- New items and creatures get entries in the Operator Template Range. Meld has no delete for either.
+- Fields the Realm has no column for are listed as not written. Meld's
+  [client notes](https://github.com/LyraCoreProject/Meld/blob/lyracore/docs/architecture/client.md#lyracore-items-and-vendors)
+  list them.
+
+[Item Refusals and limits](./operator-content-api.md#item-refusals-and-limits) and
+[Creature templates](./operator-content-api.md#creature-templates) give the limits.
+
 Saved edits change the live database only. `lyracore import` removes them. To keep an edit across an
 import, put it in a Package ([durability](./operator-content-api.md#durability)).
 
 ## Known gaps
 
-- Meld's terrain and client patch writes go to `patch-3.MPQ`, which `lyracore client sync` also
-  writes. The terrain import does not read patches above `patch-2.MPQ`, so terrain edits do not reach
-  the Realm.
-- Meld's creature, quest, item and spell editors still write a VMaNGOS world database.
+- On a Realm, Meld writes its terrain and client file edits to `patch-4.MPQ`, beside the
+  `patch-3.MPQ` that `lyracore client sync` writes. The terrain import does not read patches above
+  `patch-2.MPQ`, so terrain edits do not reach the Realm.
+- The gameobject, quest, gossip, loot and spell editors do not write a Realm yet. On a Realm they say
+  so and save nothing.
 
 ## Change the pinned build
 

@@ -349,3 +349,32 @@ const _: () = assert!(OPERATOR_SPAWN_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT);
 pub const fn is_operator_spawn_id(id: u32) -> bool {
     id >= OPERATOR_SPAWN_ID_FLOOR && id <= OPERATOR_SPAWN_ID_CEIL
 }
+
+// Template entries are separate from the Operator Spawn Range's spawn identifiers.
+pub const OPERATOR_TEMPLATE_ID_FLOOR: u32 = 5_200_500;
+pub const OPERATOR_TEMPLATE_ID_CEIL: u32 = 5_999_999;
+
+const _: () = assert!(RESERVED_ID_CEIL < OPERATOR_TEMPLATE_ID_FLOOR);
+const _: () = assert!(OPERATOR_TEMPLATE_ID_FLOOR <= OPERATOR_TEMPLATE_ID_CEIL);
+const _: () = assert!(OPERATOR_TEMPLATE_ID_CEIL < PACKAGE_SPELL_ID_FLOOR);
+const _: () = assert!(OPERATOR_TEMPLATE_ID_CEIL <= MAX_CREATURE_GUID_COMPONENT);
+
+#[must_use]
+pub const fn is_operator_template_id(entry: u32) -> bool {
+    entry >= OPERATOR_TEMPLATE_ID_FLOOR && entry <= OPERATOR_TEMPLATE_ID_CEIL
+}
+
+#[cfg(test)]
+mod operator_template_tests {
+    use super::*;
+
+    #[test]
+    fn operator_templates_exclude_adjacent_ranges() {
+        assert!(!is_operator_template_id(CURATED_RESERVED_ID_CEIL));
+        assert!(is_operator_template_id(5_200_500));
+        assert!(is_operator_template_id(5_999_999));
+        assert!(!is_operator_template_id(PACKAGE_SPELL_ID_FLOOR));
+        assert!(!is_operator_template_id(FIXTURE_RESERVED_ID_FLOOR));
+        assert!(!is_operator_template_id(PACKAGE_ITEM_ID_FLOOR));
+    }
+}
