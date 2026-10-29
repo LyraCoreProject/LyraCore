@@ -154,6 +154,10 @@ fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
         for statement in super::taxi_route::statements(scenario)? {
             shard.assert_sql(&statement);
         }
+        shard.assert_call(
+            "import_terrain_chunks",
+            &[&super::taxi_route::terrain_chunks()],
+        );
         Ok(())
     })
 }

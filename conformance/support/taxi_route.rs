@@ -92,6 +92,130 @@ const NODES: [(u32, [f64; 3]); 2] = [
 ];
 const MOUNT_DISPLAY: u32 = 6852;
 
+// See conformance/README.md#taxi-data for the route-cell boundary choices.
+const AREA_CELLS: &[(u32, &[(u16, u16)])] = &[
+    (
+        1519,
+        &[
+            (777, 497),
+            (778, 497),
+            (778, 498),
+            (779, 498),
+            (780, 498),
+            (781, 498),
+            (781, 497),
+            (782, 497),
+            (782, 496),
+            (783, 496),
+            (783, 497),
+            (784, 497),
+            (785, 497),
+        ],
+    ),
+    (
+        12,
+        &[
+            (785, 498),
+            (786, 498),
+            (786, 499),
+            (787, 499),
+            (788, 499),
+            (788, 500),
+            (789, 500),
+            (790, 500),
+            (790, 499),
+            (791, 499),
+            (791, 498),
+            (792, 498),
+            (793, 498),
+            (793, 499),
+            (794, 499),
+            (794, 500),
+            (795, 500),
+            (796, 500),
+            (797, 500),
+            (798, 500),
+            (799, 500),
+            (799, 499),
+            (800, 499),
+            (801, 499),
+            (801, 498),
+            (802, 498),
+            (802, 497),
+            (803, 497),
+            (803, 496),
+            (803, 495),
+            (804, 495),
+            (804, 494),
+            (804, 493),
+            (804, 492),
+            (805, 492),
+            (806, 492),
+            (807, 492),
+            (807, 493),
+            (808, 493),
+            (809, 493),
+            (810, 493),
+            (810, 492),
+            (811, 492),
+            (811, 491),
+            (812, 491),
+            (812, 490),
+        ],
+    ),
+    (
+        40,
+        &[
+            (812, 489),
+            (812, 488),
+            (813, 488),
+            (813, 487),
+            (813, 486),
+            (813, 485),
+            (814, 485),
+            (814, 484),
+            (815, 484),
+            (816, 484),
+            (816, 483),
+            (817, 483),
+            (818, 483),
+            (818, 482),
+            (819, 482),
+            (820, 482),
+            (820, 481),
+            (820, 480),
+            (821, 480),
+            (821, 479),
+            (822, 479),
+            (822, 478),
+            (823, 478),
+            (824, 478),
+            (825, 478),
+            (826, 478),
+            (826, 479),
+            (827, 479),
+            (828, 479),
+            (829, 479),
+            (830, 479),
+            (830, 480),
+        ],
+    ),
+];
+
+pub fn terrain_chunks() -> String {
+    let heights = vec!["0"; 145].join(":");
+    let heights = heights.as_str();
+    AREA_CELLS
+        .iter()
+        .flat_map(|(area, cells)| {
+            cells
+                .iter()
+                .map(move |(x, y)| format!("0,{x},{y},0,0,0,{area},{heights}"))
+        })
+        .collect::<Vec<_>>()
+        .join(";")
+}
+
 pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<Vec<String>> {
     use anyhow::Context;
     use wire_client::scenario::FixtureVerb;
@@ -102,6 +226,13 @@ pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<
     });
     let flight_master = flight_master.context("taxi scenario flight master fixture")?;
     let mut statements = Vec::new();
+    statements.push(
+        "INSERT INTO game_area \
+        (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
+        VALUES (1519,0,0,1,312,10,2,'Stormwind City'),\
+        (12,0,0,2,64,0,2,'Elwynn Forest'),(40,0,0,3,64,0,2,'Westfall')"
+            .into(),
+    );
     for (id, [x, y, z]) in NODES {
         statements.push(format!(
             "INSERT INTO game_taxi_node \
