@@ -15,6 +15,8 @@ pub use fingerprint::{game_catalogue_fingerprint, CatalogueFingerprint};
 
 pub use instance::debug_set_vmap_enabled;
 
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use readout::record_offhand_roll_range;
 pub use readout::{game_debug_readout, DebugReadout};
 
 use lyracore_package_delta::{packed_creature_spawn_guid, packed_gameobject_spawn_guid};

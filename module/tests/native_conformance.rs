@@ -948,7 +948,7 @@ fn tavern_rest_uses_imported_trigger_geometry() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
-fn world_entry_keeps_the_rest_state_in_the_bonus_hysteresis_band() {
+fn world_entry_resets_rest_state_before_bonus_threshold() {
     let (shard, character, _) = fixture("rest-state-login");
     shard.assert_sql(&format!(
         "UPDATE game_character SET rested_xp = 5, rest_state = 1 WHERE guid = {character}"
@@ -957,11 +957,11 @@ fn world_entry_keeps_the_rest_state_in_the_bonus_hysteresis_band() {
     let entity = &shard.query_rows(&format!(
         "SELECT player_bytes_2 FROM game_world_entity WHERE guid = {character}"
     ))[0];
-    assert_eq!(entity["player_bytes_2"].parse::<u32>().unwrap() >> 24, 1);
+    assert_eq!(entity["player_bytes_2"].parse::<u32>().unwrap() >> 24, 2);
     let saved = &shard.query_rows(&format!(
         "SELECT rest_state FROM game_character WHERE guid = {character}"
     ))[0];
-    assert_eq!(saved["rest_state"], "1");
+    assert_eq!(saved["rest_state"], "2");
 }
 
 #[test]

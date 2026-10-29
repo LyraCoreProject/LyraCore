@@ -109,6 +109,27 @@ fn a_spell_projectile_impacts_at_its_virtual_due_time() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_completed_spell_impact_releases_its_arming_row() {
+    let shard = fixture("virtual-spell-impact-arming");
+    start_clock(&shard);
+    let arming = "SELECT parked_micros FROM game_conformance_arming";
+    let initial_arming_rows = rows(&shard, arming);
+    shard.assert_call(
+        "debug_stage_virtual_spell_impact",
+        &["1", "1", "5", "10000"],
+    );
+    assert_eq!(rows(&shard, arming), initial_arming_rows + 1);
+    let mut connection = shard.connect_reducers(&[]);
+    advance(&mut connection, 1);
+    assert_eq!(
+        rows(&shard, "SELECT scheduled_id FROM game_pending_spell_impact"),
+        0
+    );
+    assert_eq!(rows(&shard, arming), initial_arming_rows);
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn a_taxi_started_off_phase_waits_for_its_own_first_tick() {
     let shard = fixture("virtual-taxi-phase");
     start_clock(&shard);
