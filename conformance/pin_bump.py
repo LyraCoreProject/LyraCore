@@ -143,7 +143,8 @@ def strict_json(path):
 
 
 def validate_baseline(before, after, sha):
-    if set(after) != {"schema_version", "scenarios"} or after["schema_version"] != 1:
+    if (not isinstance(after, dict) or set(after) != {"schema_version", "scenarios"}
+            or type(after["schema_version"]) is not int or after["schema_version"] != 1):
         raise ValueError("invalid Tier 1 baseline schema")
     if not isinstance(after["scenarios"], list) or len(after["scenarios"]) != len(before["scenarios"]):
         raise ValueError("Tier 1 baseline scenario set changed")
@@ -280,8 +281,11 @@ def publish(baseline_path, summary_path, body_path, output):
     validate_baseline(before, after, sha)
     if Path(baseline_path).read_text() != json.dumps(after, indent=2, ensure_ascii=False) + "\n":
         raise ValueError("Tier 1 baseline is not canonical")
-    if summary != summary_data(before, after, tag, sha):
+    expected_summary = summary_data(before, after, tag, sha)
+    if summary != expected_summary:
         raise ValueError("pin proposal summary disagrees with the baseline")
+    if Path(summary_path).read_text() != json.dumps(expected_summary, indent=2) + "\n":
+        raise ValueError("pin proposal summary is not canonical")
     if not apply_pin(tag, sha):
         raise ValueError("pin proposal is already current")
     shutil.copyfile(baseline_path, ROOT / "conformance/tier1-baseline.json")

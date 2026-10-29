@@ -53,6 +53,10 @@ class PinBumpTests(unittest.TestCase):
         after["scenarios"][0]["extra"] = "untrusted"
         with self.assertRaisesRegex(ValueError, "scenario entry"):
             PIN_BUMP.validate_baseline(before, after, revision)
+        del after["scenarios"][0]["extra"]
+        after["schema_version"] = True
+        with self.assertRaisesRegex(ValueError, "baseline schema"):
+            PIN_BUMP.validate_baseline(before, after, revision)
 
     def test_summary_is_derived_from_the_baseline(self):
         before = json.loads((SCRIPT.parent / "tier1-baseline.json").read_text())
@@ -90,6 +94,10 @@ class PinBumpTests(unittest.TestCase):
                                        return_value=(summary["tag"], revision)):
                     with mock.patch.object(PIN_BUMP, "apply_pin") as apply_pin:
                         with self.assertRaisesRegex(ValueError, "summary disagrees"):
+                            PIN_BUMP.publish(baseline, summary_path, root / "body.md", root / "output")
+                        summary["human_review"] = 0
+                        summary_path.write_text(json.dumps(summary, indent=2) + "\n")
+                        with self.assertRaisesRegex(ValueError, "not canonical"):
                             PIN_BUMP.publish(baseline, summary_path, root / "body.md", root / "output")
                         apply_pin.assert_not_called()
 
