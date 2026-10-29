@@ -46,6 +46,8 @@ pub(crate) use folds::{
 pub(crate) use energy::regenerate_energy;
 pub use energy::{game_energy_clock, EnergyClock};
 pub(crate) use swing::launch_ranged_strike;
+#[cfg(feature = "debug_reducers")]
+pub(crate) use swing::offhand_swing_range;
 pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,
