@@ -232,7 +232,7 @@ def values(packets, guid, create=False):
             offset += 2 + 16 + 4
         elif create:
             assert body[offset] == 4  # TYPEID_PLAYER.
-            assert body[offset + 1] in (0x30, 0x31)  # LIVING, ALL and optional SELF.
+            assert body[offset + 1] in (0x70, 0x71)  # LIVING, HAS_POSITION, ALL and optional SELF.
             flags = struct.unpack_from('<I', body, offset + 2)[0]
             assert flags & ~0x13f == 0, 'Character fixture must have a flat movement block'
             offset += 2 + 52 + 4

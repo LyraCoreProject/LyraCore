@@ -362,11 +362,22 @@ fn taxi_create(
         if !addressed {
             return None;
         }
-        let bytes: Vec<u8> = body
+        let mut bytes: Vec<u8> = body
             .as_bytes()
             .chunks_exact(2)
             .map(|pair| u8::from_str_radix(std::str::from_utf8(pair).unwrap(), 16).unwrap())
             .collect();
+        if bytes.get(5) != Some(&2) {
+            return None;
+        }
+        let type_index = 7 + bytes[6].count_ones() as usize;
+        if bytes.get(type_index) != Some(&4) {
+            return None;
+        }
+        let flags_index = type_index + 1;
+        assert_eq!(bytes[flags_index] & 0x70, 0x70);
+        // gtker reads HAS_POSITION after LIVING, but build 5875 writes only LIVING.
+        bytes[flags_index] &= !0x40;
         let mut frame = Vec::with_capacity(bytes.len() + 4);
         frame.extend_from_slice(&u16::try_from(bytes.len() + 2).unwrap().to_be_bytes());
         frame.extend_from_slice(&0x00a9u16.to_le_bytes());
@@ -377,7 +388,7 @@ fn taxi_create(
             unreachable!();
         };
         update.objects.into_iter().find_map(|object| {
-            let Object::CreateObject2 {
+            let Object::CreateObject {
                 guid3, movement2, ..
             } = object
             else {
