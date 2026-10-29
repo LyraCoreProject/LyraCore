@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use lyracore_conformance::FeatureLedger;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wire_client::{
     catalogue, compare,
     scenario::FixtureVerb,
@@ -13,9 +13,6 @@ use wire_client::{
 #[path = "scoreboard/evidence.rs"]
 mod evidence;
 use evidence::{Audit, BehaviorAudit, CandidateCapture, Report, ScenarioResult};
-
-#[path = "../support/ratchet.rs"]
-mod ratchet;
 
 #[cfg(test)]
 #[path = "../support/scratch.rs"]
@@ -32,6 +29,22 @@ struct Run {
     module_sha256: Sha256Digest,
     content: String,
     reference: Provenance,
+}
+
+#[derive(Serialize)]
+struct AuditBaseline<'a> {
+    schema_version: u32,
+    scenarios: Vec<AuditScenarioBaseline<'a>>,
+}
+
+#[derive(Serialize)]
+struct AuditScenarioBaseline<'a> {
+    scenario: &'a str,
+    behavior: &'a str,
+    harness_revision: &'a str,
+    scenario_sha256: &'a Sha256Digest,
+    rule: Vec<evidence::Signature>,
+    data: Vec<evidence::Signature>,
 }
 
 fn export(directory: &Path, selected: Option<&str>) -> Result<()> {
@@ -130,17 +143,31 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
         }],
     });
     std::fs::write(directory.join("result.json"), serde_json::to_vec(&result)?)?;
-    let baseline = ratchet::Baseline {
+    let summary = evidence::Summary::collect(previous.comparison.differences.iter());
+    let baseline = AuditBaseline {
         schema_version: 1,
-        scenarios: vec![ratchet::ScenarioBaseline::from_comparison(
+        scenarios: vec![AuditScenarioBaseline {
             scenario,
-            &previous.behavior,
-            &committed.harness_revision,
-            &previous.scenario_sha256,
-            &previous.comparison,
-        )],
+            behavior: &previous.behavior,
+            harness_revision: &committed.harness_revision,
+            scenario_sha256: &previous.scenario_sha256,
+            rule: summary
+                .rule
+                .signatures
+                .into_iter()
+                .map(|item| item.signature)
+                .collect(),
+            data: summary
+                .data
+                .signatures
+                .into_iter()
+                .map(|item| item.signature)
+                .collect(),
+        }],
     };
-    std::fs::write(directory.join("baseline.json"), baseline.canonical_bytes()?)?;
+    let mut bytes = serde_json::to_vec_pretty(&baseline)?;
+    bytes.push(b'\n');
+    std::fs::write(directory.join("baseline.json"), bytes)?;
     Ok(())
 }
 
@@ -346,15 +373,16 @@ mod tests {
         check(&directory, scenario)?;
         let result: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("result.json"))?)?;
-        let baseline = ratchet::Baseline::read(&directory.join("baseline.json"))?;
+        let baseline: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("baseline.json"))?)?;
         assert_eq!(result["scenarios"][0]["id"], scenario);
         assert_eq!(
-            baseline.scenarios[0].harness_revision,
+            baseline["scenarios"][0]["harness_revision"],
             report.harness_revision
         );
         assert_eq!(
-            baseline.scenarios[0].scenario_sha256,
-            golden.trace().header.scenario_sha256
+            baseline["scenarios"][0]["scenario_sha256"],
+            String::from(golden.trace().header.scenario_sha256.clone())
         );
         Ok(())
     }
