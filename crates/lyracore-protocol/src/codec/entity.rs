@@ -279,6 +279,25 @@ pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill
     lines
 }
 
+fn create_packed_bytes(entity: &EntityView, power: u8) -> (u32, u32, u32) {
+    let player_bytes_2 = if entity.player_bytes_2 & 0x0000_ff00 == 0 {
+        entity.player_bytes_2 | 0x0000_ee00
+    } else {
+        entity.player_bytes_2
+    };
+    let unit_bytes_1 = if matches!(power, 0 | 1) && entity.unit_bytes_1 & 0x0000_ff00 == 0 {
+        entity.unit_bytes_1 | 0x0000_ee00
+    } else {
+        entity.unit_bytes_1
+    };
+    let unit_bytes_2 = if entity.unit_bytes_2 & 0x0000_ff00 == 0 {
+        entity.unit_bytes_2 | 0x0000_2800
+    } else {
+        entity.unit_bytes_2
+    };
+    (player_bytes_2, unit_bytes_1, unit_bytes_2)
+}
+
 pub fn build_create_object(
     entity: &EntityView,
     kind: CreateKind,
@@ -294,23 +313,9 @@ pub fn build_create_object(
     let is_player = entity.type_mask & lyracore_shared::constants::type_mask::PLAYER_BIT != 0;
     let (object_type, mask2) = if is_player {
         let (skin, face, hair_style, hair_color) = unpack4(entity.player_bytes);
-        let player_bytes_2 = if entity.player_bytes_2 & 0x0000_ff00 == 0 {
-            entity.player_bytes_2 | 0x0000_ee00
-        } else {
-            entity.player_bytes_2
-        };
+        let (player_bytes_2, unit_bytes_1, unit_bytes_2) = create_packed_bytes(entity, power_b);
         let (facial_hair, pb2_b, pb2_c, pb2_d) = unpack4(player_bytes_2);
         let (pb3_a, pb3_b, pb3_c, pb3_d) = unpack4(entity.player_bytes_3);
-        let unit_bytes_1 = if matches!(power_b, 0 | 1) && entity.unit_bytes_1 & 0x0000_ff00 == 0 {
-            entity.unit_bytes_1 | 0x0000_ee00
-        } else {
-            entity.unit_bytes_1
-        };
-        let unit_bytes_2 = if entity.unit_bytes_2 & 0x0000_ff00 == 0 {
-            entity.unit_bytes_2 | 0x0000_2800
-        } else {
-            entity.unit_bytes_2
-        };
         let (ub1_a, ub1_b, ub1_c, ub1_d) = unpack4(unit_bytes_1);
         let (ub2_a, ub2_b, ub2_c, ub2_d) = unpack4(unit_bytes_2);
 

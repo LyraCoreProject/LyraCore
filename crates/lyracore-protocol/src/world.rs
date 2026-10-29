@@ -174,12 +174,17 @@ fn guid_start(kind: ObjectType, index: u16) -> bool {
     match kind {
         ObjectType::Item => matches!(index, 6 | 8 | 10 | 12),
         ObjectType::Container => {
-            matches!(index, 6 | 8 | 10 | 12) || (50..122).contains(&index) && index % 2 == 0
+            matches!(index, 6 | 8 | 10 | 12)
+                || (50..122).contains(&index) && index.is_multiple_of(2)
         }
-        ObjectType::Unit | ObjectType::Player if (6..22).contains(&index) && index % 2 == 0 => true,
+        ObjectType::Unit | ObjectType::Player
+            if (6..22).contains(&index) && index.is_multiple_of(2) =>
+        {
+            true
+        }
         ObjectType::Player => {
             index == 188
-                || (258..=474).contains(&index) && (index - 258) % 12 == 0
+                || (258..=474).contains(&index) && (index - 258).is_multiple_of(12)
                 || [
                     (486, 532),
                     (532, 564),
@@ -189,7 +194,7 @@ fn guid_start(kind: ObjectType, index: u16) -> bool {
                     (648, 712),
                 ]
                 .into_iter()
-                .any(|(start, end)| (start..end).contains(&index) && index % 2 == 0)
+                .any(|(start, end)| (start..end).contains(&index) && index.is_multiple_of(2))
                 || matches!(index, 712 | 714)
         }
         ObjectType::GameObject | ObjectType::DynamicObject | ObjectType::Corpse => index == 6,
@@ -402,7 +407,7 @@ mod tests {
             let create = codec::build_create_object(
                 &unit_view(lyracore_shared::constants::type_mask::PLAYER),
                 kind,
-                &[item.clone()],
+                std::slice::from_ref(&item),
                 &[],
             )
             .unwrap();
@@ -434,7 +439,10 @@ mod tests {
     #[test]
     fn creature_create_mask_omits_zero_target_guid() {
         let create = codec::build_create_object(
-            &unit_view(lyracore_shared::constants::type_mask::CREATURE),
+            &EntityView {
+                base_attack_time_ms: 2000,
+                ..unit_view(lyracore_shared::constants::type_mask::CREATURE)
+            },
             CreateKind::Peer,
             &[],
             &[],
