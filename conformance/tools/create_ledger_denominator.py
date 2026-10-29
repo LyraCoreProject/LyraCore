@@ -289,11 +289,11 @@ def main():
             lines += ["", "[[known_gaps]]", 'description = "Stable pet revival has no native request decoder or response."', 'path = "module/src/native/mod.rs"', 'symbol = "receive"', 'evidence = "Build-5875 CMSG_STABLE_REVIVE_PET is absent from ClientOpcodeMessage and module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"']
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n")
-    out = output / "out-of-scope-opcodes.toml"
+    out = output / "opcodes-out-of-scope.toml"
     assert not out.exists(), out
-    lines = ["schema_version = 1"]
+    lines = ["[out_of_scope]"]
     for name, reason in sorted(out_of_scope.items(), key=lambda entry: all_ids[entry[0]]):
-        lines += ["", "[[opcode]]", f"name = {quoted(name)}", f"value = {quoted(f'0x{all_ids[name]:04X}')}", f"reason = {quoted(reason)}"]
+        lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted('https://github.com/vmangos/core/blob/' + SHA + '/src/game/Server/Protocol/Opcodes.cpp')}"]
     out.write_text("\n".join(lines) + "\n")
     print(f"Created {len(GROUPS)} Behavior groups; {len(out_of_scope)} out-of-scope opcodes")
 

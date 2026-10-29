@@ -1,1 +1,641 @@
 [out_of_scope]
+
+[out_of_scope.MSG_NULL_ACTION]
+reason = "Reserved null action; vmangos marks it invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_BOOTME]
+reason = "Developer disconnect command; the normal client does not send it during play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DBLOOKUP]
+reason = "GM lookup command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_QUERY_OBJECT_POSITION]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_QUERY_OBJECT_ROTATION]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_WORLD_TELEPORT]
+reason = "GM teleport command; normal play uses area and taxi travel."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TELEPORT_TO_UNIT]
+reason = "GM teleport command; normal play uses area and taxi travel."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_ZONE_MAP]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DEBUG_CHANGECELLZONE]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_EMBLAZON_TABARD_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_UNEMBLAZON_TABARD_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_RECHARGE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_LEARN_SPELL]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CREATEMONSTER]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DESTROYMONSTER]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CREATEITEM]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CREATEGAMEOBJECT]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MAKEMONSTERATTACKGUID]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_BOT_DETECTED2]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_FORCEACTION]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_FORCEACTIONONOTHER]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_FORCEACTIONSHOW]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_PETGODMODE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_WEATHER_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_UNDRESSPLAYER]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_BEASTMASTER]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GODMODE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CHEAT_SETMONEY]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_LEVEL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_PET_LEVEL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_WORLDSTATE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_COOLDOWN_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_USE_SKILL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_FLAG_QUEST]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_FLAG_QUEST_FINISH]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CLEAR_QUEST]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SEND_EVENT]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DEBUG_AISTATE]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DISABLE_PVP_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_ADVANCE_SPAWN_TIME]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_PVP_PORT_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_AUTH_SRP6_BEGIN]
+reason = "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_AUTH_SRP6_PROOF]
+reason = "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_AUTH_SRP6_RECODE]
+reason = "Old world SRP exchange; build 5875 uses CMSG_AUTH_SESSION."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GAMETIME_SET]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GAMESPEED_SET]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SERVERTIME]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_WHOIS]
+reason = "GM account lookup command, outside player interaction coverage."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_UPDATE_GROUP_MEMBERS]
+reason = "Server-origin group update; vmangos marks it unhandled as a client request."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_UPDATE_GUILD]
+reason = "Server-origin guild update; vmangos marks it unhandled as a client request."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GAMEOBJ_CHAIR_USE_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TOGGLE_LOGGING]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TELEPORT]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TELEPORT_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TOGGLE_FALL_LOGGING]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_RUN_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_RUN_SPEED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_RUN_BACK_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_RUN_BACK_SPEED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_WALK_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_WALK_SPEED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_SWIM_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_SWIM_SPEED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_SWIM_BACK_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_SWIM_BACK_SPEED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_ALL_SPEED_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_TURN_RATE_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_TURN_RATE]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TOGGLE_COLLISION_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_SET_RAW_POSITION_ACK]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MOVE_SET_RAW_POSITION]
+reason = "Debug coordinate setter, outside stock client movement."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_ROOT]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_UNROOT]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_KNOCK_BACK]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_HOVER]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TRIGGER_CINEMATIC_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_AUTOEQUIP_GROUND_ITEM]
+reason = "Ground-item storage request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_AUTOSTORE_GROUND_ITEM]
+reason = "Ground-item storage request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_STORE_LOOT_IN_SLOT]
+reason = "Unused loot-slot store request; normal 1.12.1 loot uses CMSG_AUTOSTORE_LOOT_ITEM."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DROP_ITEM]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_FACTION_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_NEW_SPELL_SLOT]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_CHANNEL_START]
+reason = "Unused channel control message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_CHANNEL_UPDATE]
+reason = "Unused channel control message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SHEATHE_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SAVE_PLAYER]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SETDEATHBINDPOINT]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GETDEATHBINDZONE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TAXICLEARALLNODES]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TAXIENABLEALLNODES]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TAXISHOWNODES]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_SKILL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_PLAYER_MACRO_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GHOST]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_INVIS]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_GM_BIND_OTHER]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_GM_SUMMON]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_GM_SHOWLABEL]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_SET_SECURITY_GROUP]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_NUKE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_RWHOIS]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_UNLEARN_SPELL]
+reason = "Unused spell removal request; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DECHARGE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_TEACH]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_CREATE_ITEM_TARGET]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_UNLEARN_TALENTS]
+reason = "Unused talent reset request; 1.12.1 uses MSG_TALENT_WIPE_CONFIRM."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_STAT_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SKILL_BUY_STEP]
+reason = "Unused skill-point purchase request; 1.12.1 trainers use CMSG_TRAINER_BUY_SPELL."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SKILL_BUY_RANK]
+reason = "Unused skill-point purchase request; 1.12.1 trainers use CMSG_TRAINER_BUY_SPELL."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_XP_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CHARACTER_POINT_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_VISION]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SERVER_COMMAND]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_SILENCE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_REVEALTO]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_RESURRECT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_SUMMONMOB]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_MOVECORPSE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_FREEZE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_UBERINVIS]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_REQUEST_PLAYER_INFO]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CLEAR_EXPLORATION]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TAXICLEARNODE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_TAXIENABLENODE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_PLAYER_AI_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_GM_ACCOUNT_ONLINE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_ENABLE_DAMAGE_LOG]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_RESET_FACTION_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_DURABILITY_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_PVP_RANK_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_ADD_PVP_MEDAL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DEL_PVP_MEDAL_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_PVP_TITLE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MEETINGSTONE_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GMTICKETSYSTEM_TOGGLE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TOGGLE_GRAVITY_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_FEATHER_FALL]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_WATER_WALK]
+reason = "Obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SERVER_BROADCAST]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_RUN_SCRIPT]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_EXPLORATION]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MOVE_START_SWIM_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MOVE_STOP_SWIM_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_UNTEACH]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_MINIGAME_MOVE]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_NUKE_ACCOUNT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_GM_DESTROY_CORPSE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_DESTROY_ONLINE_CORPSE]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DEBUG_ACTIONS_START]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_DEBUG_ACTIONS_STOP]
+reason = "Developer command; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_MOVE_TIME_SKIPPED]
+reason = "Server-origin or obsolete movement message; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_SET_EXPLORATION_ALL]
+reason = "No normal-play UI use identified; vmangos marks this request unhandled or invalid."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_LUA_USAGE]
+reason = "Client telemetry, not a player-visible gameplay request; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_GM_UPDATE_TICKET_STATUS]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_SET_DUNGEON_DIFFICULTY]
+reason = "Later client difficulty control; build 5875 has no player difficulty choice."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_IGNORE_KNOCKBACK_CHEAT]
+reason = "GM or debug command, outside normal client play."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.MSG_DELAY_GHOST_TELEPORT]
+reason = "Unused ghost relocation control; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_CHAT_FILTERED]
+reason = "Unused chat-filter notification; vmangos marks it unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_LOTTERY_QUERY_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"
+
+[out_of_scope.CMSG_BUY_LOTTERY_TICKET_OBSOLETE]
+reason = "Obsolete in build 5875; vmangos marks this request unhandled."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp"

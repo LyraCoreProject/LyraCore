@@ -89,17 +89,17 @@ and record each Behavior; they are not a claim that the original nine conform to
 checks remain unverified and their scenario lists are empty. Port-gap Behaviors are recorded beside them.
 
 The build-5875 request inventory is `client-requests-5875.tsv`, transcribed from the pinned
-vmangos `Opcodes_1_12_1.h`. Each row has one opcode number and name. `out-of-scope-opcodes.toml`
+vmangos `Opcodes_1_12_1.h`. Each row has one opcode number and name. `opcodes-out-of-scope.toml`
 records requests used only for GM commands, debug, obsolete or server-origin traffic, with a
 reason for each. Every other inventory opcode must be claimed by at least one Behavior. The
 scoreboard fails when a request is unclaimed or both claimed and out of scope. It also checks that
 every variant in the core `ClientOpcodeMessage` enum has the same number in the inventory.
 
-`tools/create_ledger_denominator.py` created the initial request Behaviors and both inventory
+`tools/create_ledger_denominator.py` created the initial request Behaviors, inventory and scope
 files from the pinned vmangos raw sources and the core opcode dependency. Its
 `tools/ledger-denominator-base.txt` input names the 23 Behaviors that already existed. Run it with
 `--output-dir` pointing to scratch to reproduce the initial set; it refuses to overwrite files.
-After creation, maintain the Behavior TOML files and the two inventory files by hand. The coverage
+After creation, maintain the Behavior TOML files, inventory and scope decisions by hand. The coverage
 check catches an inventory request with no Behavior or out-of-scope reason. New entries can leave
 `replies` empty until a scenario author
 checks the packets returned by the Reference Server. A vmangos dispatch entry marked unhandled
@@ -453,12 +453,12 @@ captures remain unverified.
 
 ## Opcode coverage
 
-`tests/opcode_coverage.rs` checks every variant of the pinned `ClientOpcodeMessage` against ledger
-request claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. Out-of-scope entries map a
-variant name to a table with `reason` and an optional `source`. That list is currently empty. The
-initial allowlist has 285 variants. Adding a Behavior or a scope decision requires removing its
-opcodes from the allowlist in the same change. Unknown names, duplicate allowances and overlapping
-categories fail.
+`tests/opcode_coverage.rs` checks every row of `client-requests-5875.tsv` against ledger request
+claims, `opcodes-out-of-scope.toml`, and `opcodes-unclaimed.txt`. It also checks every variant in
+the pinned `ClientOpcodeMessage` enum against the inventory. Out-of-scope entries map an opcode
+name to a reason and a pinned source. The initial allowance had 285 variants; it is now empty.
+Adding a Behavior or a scope decision requires removing its opcodes from the allowance in the same
+change. Unknown names, duplicate allowances and overlapping categories fail.
 
 The Architecture Test embeds the initial 285 unclaimed names and the initially empty out-of-scope
 set as constants. Current unclaimed membership must be a subset of that initial set. An

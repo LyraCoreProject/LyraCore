@@ -500,9 +500,15 @@ fn history(root: &Path, path: &str) -> Result<Vec<String>> {
 }
 
 #[test]
-fn every_client_variant_has_a_behavior_scope_decision_or_remaining_allowance() -> Result<()> {
+fn every_client_request_has_a_behavior_scope_decision_or_remaining_allowance() -> Result<()> {
     let root = Path::new(env!("CARGO_MANIFEST_DIR")).parent().unwrap();
-    let variants = opcodes::read(root)?;
+    let variants = opcodes::read_inventory(root)?;
+    for (name, value) in opcodes::read(root)? {
+        ensure!(
+            variants.get(&name) == Some(&value),
+            "core opcode differs from build 5875: {name}"
+        );
+    }
     let ledger = FeatureLedger::load(&root.join("conformance/features"))?;
     let claimed = ledger
         .behaviors()
@@ -527,7 +533,7 @@ fn every_client_variant_has_a_behavior_scope_decision_or_remaining_allowance() -
         scope_additions_have_sources(root, &excluded.out_of_scope, &previous.out_of_scope)?;
     }
     println!(
-        "{} client variants: {} claimed, {} out of scope, {} allowlisted",
+        "{} client requests: {} claimed, {} out of scope, {} allowlisted",
         variants.len(),
         variants
             .values()

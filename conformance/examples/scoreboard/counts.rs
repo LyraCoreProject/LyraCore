@@ -18,23 +18,19 @@ pub struct Counts {
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Exclusions {
-    schema_version: u32,
-    opcode: Vec<Exclusion>,
+    out_of_scope: BTreeMap<String, Exclusion>,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Exclusion {
-    name: String,
-    value: String,
     reason: String,
+    source: Option<String>,
 }
 
 pub fn read(root: &Path) -> Result<Counts> {
     let opcodes = opcodes::read(root)?;
-    let inventory = read_inventory(&std::fs::read_to_string(
-        root.join("conformance/client-requests-5875.tsv"),
-    )?)?;
+    let inventory = opcodes::read_inventory(root)?;
     for (name, value) in &opcodes {
         ensure!(
             inventory.get(name) == Some(value),
@@ -53,39 +49,27 @@ pub fn read(root: &Path) -> Result<Counts> {
         &all_opcodes,
     )?;
     let exclusions: Exclusions = toml::from_str(&std::fs::read_to_string(
-        root.join("conformance/out-of-scope-opcodes.toml"),
+        root.join("conformance/opcodes-out-of-scope.toml"),
     )?)?;
-    ensure!(
-        exclusions.schema_version == 1,
-        "unsupported opcode exclusion schema"
-    );
     let mut out_of_scope = BTreeSet::new();
-    for exclusion in exclusions.opcode {
+    for (name, exclusion) in exclusions.out_of_scope {
         ensure!(
             !exclusion.reason.trim().is_empty(),
-            "missing reason for {}",
-            exclusion.name
+            "missing reason for {name}"
         );
-        let value = exclusion
-            .value
-            .strip_prefix("0x")
-            .filter(|value| {
-                value.len() == 4
-                    && value
-                        .bytes()
-                        .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase())
-            })
-            .context("out-of-scope opcode must use 0x and four uppercase hexadecimal digits")?;
-        let value = u16::from_str_radix(value, 16)?;
         ensure!(
-            inventory.get(&exclusion.name) == Some(&value),
-            "out-of-scope opcode name/value mismatch: {}",
-            exclusion.name
+            exclusion
+                .source
+                .as_deref()
+                .is_some_and(|source| !source.is_empty()),
+            "missing source for {name}"
         );
+        let value = *inventory
+            .get(&name)
+            .with_context(|| format!("unknown out-of-scope opcode: {name}"))?;
         ensure!(
             out_of_scope.insert(value),
-            "duplicate out-of-scope opcode: {}",
-            exclusion.name
+            "duplicate out-of-scope opcode: {name}"
         );
     }
     Ok(Counts {
@@ -94,42 +78,6 @@ pub fn read(root: &Path) -> Result<Counts> {
         unavailable,
         out_of_scope,
     })
-}
-
-fn read_inventory(source: &str) -> Result<BTreeMap<String, u16>> {
-    let mut names = BTreeMap::new();
-    let mut values = BTreeSet::new();
-    for line in source.lines() {
-        let (value, name) = line
-            .split_once(' ')
-            .context("invalid client opcode inventory row")?;
-        ensure!(
-            value.len() == 6
-                && value.starts_with("0x")
-                && value[2..]
-                    .bytes()
-                    .all(|byte| byte.is_ascii_hexdigit() && !byte.is_ascii_lowercase()),
-            "invalid client opcode number: {value}"
-        );
-        ensure!(
-            (name.starts_with("CMSG_") || name.starts_with("MSG_"))
-                && name
-                    .bytes()
-                    .all(|byte| byte.is_ascii_uppercase() || byte.is_ascii_digit() || byte == b'_'),
-            "invalid client opcode name: {name}"
-        );
-        let value = u16::from_str_radix(&value[2..], 16)?;
-        ensure!(
-            values.insert(value),
-            "duplicate client opcode number: {value:#06X}"
-        );
-        ensure!(
-            names.insert(name.to_owned(), value).is_none(),
-            "duplicate client opcode name: {name}"
-        );
-    }
-    ensure!(!names.is_empty(), "empty client opcode inventory");
-    Ok(names)
 }
 
 #[derive(Default)]
@@ -258,11 +206,4 @@ fn counts_only_unavailable_request_patterns() {
         [1, 2, 3].into()
     );
     assert!(unavailable_requests("fn unrelated() {}", &opcodes).is_err());
-}
-
-#[test]
-fn inventory_refuses_duplicate_values_and_invalid_names() {
-    assert!(read_inventory("0x0001 CMSG_ONE\n0x0002 MSG_TWO\n").is_ok());
-    assert!(read_inventory("0x0001 CMSG_ONE\n0x0001 MSG_TWO\n").is_err());
-    assert!(read_inventory("0x0001 SMSG_ONE\n").is_err());
 }
