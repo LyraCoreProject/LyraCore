@@ -478,7 +478,8 @@ Exit 2 means setup or capture failed; diagnostics name missing client data, Dock
 a dirty core tree. The scenario check writes no report or committed trace.
 
 The first check creates a disposable Realm worktree and imports the pinned vmangos world. It saves
-the imported Realm before any scenario runs. Later checks restore that data and restart the Realm,
+the imported Realm before any scenario runs. It primes the fresh Realm once, restores the saved
+world, then records the check. Later checks restore that data and restart the Realm,
 while the Reference Server stays running. The cache lives under
 `$HOME/.cache/lyracore-scratch/scenario-audit/`. Its key covers the core commit, harness and vmangos
 pins, CLI pin, client path and hashes of every client Data file. The runner checks file metadata on

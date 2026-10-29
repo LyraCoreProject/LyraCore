@@ -219,12 +219,13 @@ def reference_server(harness, peer_count):
             with socket.socket() as listener:
                 listener.bind(('127.0.0.1', port))
         try:
-            run([*compose, 'up', '-d', '--wait', '--wait-timeout', '180'])
-            wait_port(13724)
-            wait_port(18085, world=True)
-            run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'])
-            if peer_count:
-                run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)])
+            with timed('Reference Server start'):
+                run([*compose, 'up', '-d', '--wait', '--wait-timeout', '180'])
+                wait_port(13724)
+                wait_port(18085, world=True)
+                run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'])
+                if peer_count:
+                    run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)])
             yield provenance
         finally:
             run([*compose, 'down'])
@@ -345,9 +346,11 @@ def local_realm(work, client_data, peer_count):
         raise
     try:
         try:
-            run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root)
-            run([cli, 'import', '--accept', '--client-data', client_data],
-                env=cli_env, cwd=realm_root)
+            with timed('Realm start'):
+                run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root)
+            with timed('import'):
+                run([cli, 'import', '--accept', '--client-data', client_data],
+                    env=cli_env, cwd=realm_root)
             token = realm_root / '.lyracore/native-owner-token'
             if not token.is_file():
                 raise RuntimeError('isolated Realm has no Operator token')
@@ -402,6 +405,7 @@ def scenario_realm(key, pins, client_data):
                     stdout=subprocess.DEVNULL)
             shutil.rmtree(cache)
             state = None
+        fresh = state is None
         if state is None:
             for port in [3000, 3724, 8085]:
                 free_port(port)
@@ -470,7 +474,7 @@ def scenario_realm(key, pins, client_data):
         if not token.is_file():
             raise RuntimeError('cached Realm has no Operator token')
         password = (cache / 'password').read_text().strip()
-        yield password, token, host, module, realm_root
+        yield password, token, host, module, realm_root, fresh
 
 
 def capture_servers(harness, wire, work, client_data):
@@ -483,21 +487,23 @@ def capture_servers(harness, wire, work, client_data):
         with reference_server(harness, peer_count) as provenance:
             reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             for scenario in scenarios:
-                accounts = ['CONFORMANCE', *peer_accounts(scenario)]
-                passwords = []
-                for index, account in enumerate(accounts):
-                    name = 'player-password' if index == 0 else f'peer{index + 1}-password'
-                    secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                    passwords.append(secret)
-                    character = scenario['characters'][index]
-                    delete_reference_character(wire, character, account, secret, env)
-                passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
-                capture(wire, work, scenario, 'vmangos', [13724, 18085], b''.join(passwords), reference_env)
+                with timed(f"{scenario['id']} Reference Server run"):
+                    accounts = ['CONFORMANCE', *peer_accounts(scenario)]
+                    passwords = []
+                    for index, account in enumerate(accounts):
+                        name = 'player-password' if index == 0 else f'peer{index + 1}-password'
+                        secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
+                        passwords.append(secret)
+                        character = scenario['characters'][index]
+                        delete_reference_character(wire, character, account, secret, env)
+                    passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
+                    capture(wire, work, scenario, 'vmangos', [13724, 18085], b''.join(passwords), reference_env)
         env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
                    WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         for scenario in scenarios:
-            capture(wire, work, scenario, 'lyracore', [3724, 8085],
-                    (password + '\n').encode() * len(scenario['characters']), env)
+            with timed(f"{scenario['id']} Realm run"):
+                capture(wire, work, scenario, 'lyracore', [3724, 8085],
+                        (password + '\n').encode() * len(scenario['characters']), env)
         if digest(host) != host_hash or digest(module) != module_hash:
             raise RuntimeError('local Realm binaries changed during capture')
         snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
@@ -509,7 +515,19 @@ def capture_servers(harness, wire, work, client_data):
 def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     entry, = json.loads((work / 'catalogue.json').read_text())
-    with scenario_realm(key, pins, client_data) as (password, token, host, module, realm_root):
+    with scenario_realm(key, pins, client_data) as (password, token, host, module, realm_root, fresh):
+        env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
+                   WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
+        if fresh:
+            with timed(f'{scenario} Realm prime run'):
+                capture(wire, work, entry, 'lyracore', [3724, 8085],
+                        (password + '\n').encode(), env, progress=sys.stderr)
+            cli_env = dict(os.environ)
+            cli_env.pop('CARGO_TARGET_DIR', None)
+            cli_env['PATH'] = str(SCENARIO_CACHE / 'realm/bin') + ':' + cli_env['PATH']
+            with timed('Realm reset after prime'):
+                restore_imported_world(realm_root, SCENARIO_CACHE / 'realm/imported-world',
+                                       realm_root / 'lyracore', cli_env)
         with scenario_reference_server(harness, key) as provenance:
             (work / 'reference.json').write_text(json.dumps(provenance))
             passwords = b''.join((REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
@@ -520,8 +538,6 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
                                            passwords.splitlines()[0] + b'\n', env)
                 capture(wire, work, entry, 'vmangos', [13724, 18085], passwords,
                         reference_env, progress=sys.stderr)
-        env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
-                   WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         with timed(f'{scenario} Realm run'):
             delete_reference_character(wire, entry['character'], (password + '\n').encode(), env,
                                        endpoints=(3724, 8085))
@@ -618,7 +634,8 @@ def stop_scenario_cache():
         if (cache / 'state.json').is_file():
             cli_env = dict(os.environ)
             cli_env.pop('CARGO_TARGET_DIR', None)
-            cli_env['PATH'] = str(cache / 'bin') + ':' + cli_env['PATH']
+            cli_env['PATH'] = (str(cache / 'bin') + ':' + str(Path.home() / '.cargo/bin')
+                               + ':' + cli_env['PATH'])
             run([realm_root / 'lyracore', 'dev', 'down'], env=cli_env, cwd=realm_root,
                 stdout=subprocess.DEVNULL)
             run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
@@ -713,7 +730,8 @@ def main():
             core_commit=core_commit, working_tree_dirty=bool(dirty), harness_revision=revision,
             recorded_at_unix_ms=time.time_ns() // 1_000_000, native_host_sha256=host_hash,
             module_sha256=module_hash, content=content, reference=provenance)))
-        run([audit, 'report', work, args.output, args.date])
+        with timed('report'):
+            run([audit, 'report', work, args.output, args.date])
 
 
 if __name__ == '__main__':
