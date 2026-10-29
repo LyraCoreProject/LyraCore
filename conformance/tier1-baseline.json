@@ -59,48 +59,6 @@
           },
           "opcode": 756,
           "field_path": []
-        },
-        {
-          "rule": "passenger_update_delivery",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_133"
-          ]
-        },
-        {
-          "rule": "passenger_update_delivery",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "broadcast",
-            "id": "values"
-          },
-          "opcode": 169,
-          "field_path": [
-            "objects",
-            "0",
-            "values",
-            "field_46"
-          ]
-        },
-        {
-          "rule": "time_tolerance",
-          "checkpoint": "flight",
-          "stream": {
-            "kind": "reply",
-            "id": "flight"
-          },
-          "opcode": 221,
-          "field_path": [
-            "duration"
-          ]
         }
       ],
       "data": []
