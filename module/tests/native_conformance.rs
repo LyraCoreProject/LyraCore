@@ -247,6 +247,15 @@ fn a_later_transaction_delivers_packets_without_another_client_request() {
 }
 
 fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
+    taxi_flight_on_route(name, observer_x, 0, &[(0.0, 0.0, 0.0), (200.0, 0.0, 0.0)])
+}
+
+fn taxi_flight_on_route(
+    name: &str,
+    observer_x: i32,
+    observer_y: i32,
+    route: &[(f32, f32, f32)],
+) -> (Standalone, u64, u64) {
     let (shard, passenger, _) = fixture(name);
     let credentials = serde_json::to_string(&vec![0u8; 32]).unwrap();
     shard.assert_call(
@@ -276,10 +285,10 @@ fn taxi_flight(name: &str, observer_x: i32) -> (Standalone, u64, u64) {
         .parse()
         .unwrap();
     shard.assert_sql(&format!(
-        "UPDATE game_character SET x = {observer_x} WHERE guid = {observer}"
+        "UPDATE game_character SET x = {observer_x}, y = {observer_y} WHERE guid = {observer}"
     ));
     shard.assert_call("debug_spawn_player_entity", &[&passenger.to_string()]);
-    start_taxi_flight(&shard, passenger, 200);
+    start_taxi_flight_on_route(&shard, passenger, route);
     (shard, passenger, observer)
 }
 
@@ -346,6 +355,53 @@ fn taxi_create(
     })
 }
 
+fn client_spline_position(
+    spline: &wow_world_messages::vanilla::MovementBlock_MovementFlags_SplineEnabled,
+    elapsed_ms: u32,
+) -> [f32; 3] {
+    let curve = |segment: usize, t: f32| {
+        let points = &spline.nodes[segment..segment + 4];
+        std::array::from_fn(|axis| {
+            let value = |index: usize| match axis {
+                0 => points[index].x,
+                1 => points[index].y,
+                _ => points[index].z,
+            };
+            let (a, b, c, d) = (value(0), value(1), value(2), value(3));
+            b + 0.5
+                * t
+                * (c - a + t * (2.0 * a - 5.0 * b + 4.0 * c - d + t * (3.0 * (b - c) + d - a)))
+        })
+    };
+    let mut from_ms = 0u32;
+    let mut to_ms = 1u32;
+    for segment in 0..spline.nodes.len() - 3 {
+        let mut previous = curve(segment, 0.0);
+        let mut length = 0.0f64;
+        for step in 1..=3 {
+            let current = curve(segment, step as f32 / 3.0);
+            length += f64::from(
+                current
+                    .iter()
+                    .zip(previous)
+                    .map(|(next, old)| (next - old).powi(2))
+                    .sum::<f32>()
+                    .sqrt(),
+            );
+            previous = current;
+        }
+        to_ms = (to_ms as f32 + length as f32 * 31.25) as u32;
+        if elapsed_ms < to_ms {
+            let t = (elapsed_ms.saturating_sub(from_ms) as f32 / (to_ms - from_ms) as f32)
+                .clamp(0.0, 1.0);
+            return curve(segment, t);
+        }
+        from_ms = to_ms;
+    }
+    let last = spline.final_node;
+    [last.x, last.y, last.z]
+}
+
 fn taxi_x(shard: &Standalone, guid: u64) -> f32 {
     shard.query_rows(&format!(
         "SELECT x FROM game_world_entity WHERE guid = {guid}"
@@ -390,6 +446,96 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
             .len(),
         1
     );
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_late_viewers_create_follows_the_authoritative_curved_flight() {
+    let route = [
+        (0.0, 0.0, 0.0),
+        (250.0, 40.0, 0.0),
+        (500.0, -40.0, 0.0),
+        (750.0, 40.0, 0.0),
+        (1000.0, -40.0, 0.0),
+        (1250.0, 40.0, 0.0),
+        (1400.0, -40.0, 0.0),
+        (1550.0, 40.0, 0.0),
+        (1700.0, -40.0, 0.0),
+        (1850.0, 40.0, 0.0),
+        (2000.0, 0.0, 0.0),
+    ];
+    let (shard, passenger, observer) = taxi_flight_on_route("taxi-curved-replay", 1550, 40, &route);
+    let mut viewer = enter(&shard, observer);
+    viewer.drain_packets();
+    let original_start: i64 = shard.query_rows(&format!(
+        "SELECT started_micros FROM game_active_taxi_flight WHERE character_guid = {passenger}"
+    ))[0]["started_micros"]
+        .parse()
+        .unwrap();
+    let total_ms: u32 = shard.query_rows(&format!(
+        "SELECT duration_ms FROM game_taxi_passenger_spline WHERE character_guid = {passenger}"
+    ))[0]["duration_ms"]
+        .parse()
+        .unwrap();
+    let accelerated_start = original_start - i64::from(total_ms) * 600;
+    shard.assert_sql(&format!(
+        "UPDATE game_active_taxi_flight SET started_micros = {accelerated_start} WHERE character_guid = {passenger}"
+    ));
+
+    let mut replay = None;
+    let deadline = std::time::Instant::now() + Duration::from_secs(20);
+    while replay.is_none() && std::time::Instant::now() < deadline {
+        replay = taxi_create(
+            &viewer.wait_for_packets(Duration::from_secs(1)).unwrap(),
+            viewer.connection_id(),
+            passenger,
+        );
+    }
+    let (spline, position) = replay.expect("late viewer received no flying CREATE");
+    assert!(
+        position.x < 1550.0,
+        "viewer saw flight too late: {}",
+        position.x
+    );
+    assert_eq!(spline.nodes.len(), route.len() + 2);
+    assert_eq!(spline.nodes[1].x, 0.0);
+    assert_eq!(spline.final_node.x, 2000.0);
+    assert!(spline.duration >= total_ms);
+    assert!(spline.time_passed > 0);
+
+    for threshold in [1550.0, 1700.0, 1850.0] {
+        let deadline = std::time::Instant::now() + Duration::from_secs(40);
+        loop {
+            let row = &shard.query_rows(&format!(
+                "SELECT start_x,start_y,start_z,duration_ms FROM game_taxi_passenger_spline WHERE character_guid = {passenger}"
+            ))[0];
+            let authoritative: [f32; 3] =
+                ["start_x", "start_y", "start_z"].map(|field| row[field].parse().unwrap());
+            if authoritative[0] >= threshold {
+                assert!(authoritative[0] < threshold + 60.0);
+                let remaining_ms: u32 = row["duration_ms"].parse().unwrap();
+                let elapsed_ms = spline.duration - remaining_ms;
+                assert!(elapsed_ms > spline.time_passed);
+                let client = client_spline_position(&spline, elapsed_ms);
+                let distance = client
+                    .iter()
+                    .zip(authoritative)
+                    .map(|(a, b)| (a - b).powi(2))
+                    .sum::<f32>()
+                    .sqrt();
+                assert!(
+                    distance <= 1.0,
+                    "at {threshold} yd: client {client:?}, flight {authoritative:?}, separation {distance} yd"
+                );
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "flight never reached {threshold}"
+            );
+            std::thread::sleep(Duration::from_millis(50));
+        }
+    }
 }
 
 #[test]
@@ -481,9 +627,27 @@ fn permanent_taxi_abort_sends_dismount_result() {
     );
 }
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {
-    shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,0,0,0,'Start',0,1147),(5090991,101,0,{destination_x},0,0,'End',0,1147)"));
+    start_taxi_flight_on_route(
+        shard,
+        passenger,
+        &[(0.0, 0.0, 0.0), (destination_x as f32, 0.0, 0.0)],
+    );
+}
+
+fn start_taxi_flight_on_route(shard: &Standalone, passenger: u64, route: &[(f32, f32, f32)]) {
+    let &(start_x, start_y, start_z) = route.first().expect("taxi route has a start");
+    let &(end_x, end_y, end_z) = route.last().expect("taxi route has an end");
+    shard.assert_sql(&format!("INSERT INTO game_taxi_node (id,client_node_id,map_id,x,y,z,name,mount_display_horde,mount_display_alliance) VALUES (5090990,100,0,{start_x},{start_y},{start_z},'Start',0,1147),(5090991,101,0,{end_x},{end_y},{end_z},'End',0,1147)"));
     shard.assert_sql("INSERT INTO game_taxi_path (id,source_node_id,destination_node_id,fare) VALUES (5090992,5090990,5090991,0)");
-    shard.assert_sql(&format!("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES (5090993,5090992,0,0,0,0,0,0,0),(5090994,5090992,1,0,{destination_x},0,0,0,0)"));
+    let values = route
+        .iter()
+        .enumerate()
+        .map(|(index, &(x, y, z))| {
+            format!("({},5090992,{index},0,{x},{y},{z},0,0)", 5090993 + index)
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    shard.assert_sql(&format!("INSERT INTO game_taxi_path_node (id,path_id,node_index,map_id,x,y,z,flags,delay_ms) VALUES {values}"));
     shard.assert_sql(&format!(
         "INSERT INTO game_active_taxi_flight (character_guid,path_id,source_node_id,destination_node_id,mount_display_id,fare,current_node_index,started_micros,origin_x,origin_y,origin_z,origin_recorded) VALUES ({passenger},5090992,5090990,5090991,1147,0,0,0,0,0,0,false)"
     ));
