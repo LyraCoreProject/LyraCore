@@ -172,7 +172,7 @@ class PinBumpTests(unittest.TestCase):
                     path.write_text(content)
                     (root / name).write_text(content)
 
-            with mock.patch.object(PIN_BUMP, "ROOT", root):
+            with mock.patch.object(PIN_BUMP, "ROOT", root), mock.patch.dict(os.environ, env):
                 stage_proposal("first\n", 9)
                 PIN_BUMP.checkout_proposal(saved)
                 self.assertEqual(git("branch", "--show-current"), "pin-proposal")
