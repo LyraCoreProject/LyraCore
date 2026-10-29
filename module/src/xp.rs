@@ -193,7 +193,10 @@ fn rest_bonus(base_xp: u32, pool: u32) -> (u32, u32) {
 
 fn rest_pool_after(pool: u32, offline_micros: u64, level: u32) -> u32 {
     let level_xp = xp_to_next_level(level) as u64;
-    if level_xp == 0 || offline_micros == 0 {
+    if level_xp == 0 {
+        return 0;
+    }
+    if offline_micros == 0 {
         return pool;
     }
     // Widen before multiplying; long offline spans overflow u64 before the rested cap applies.
@@ -480,7 +483,8 @@ mod tests {
         assert_eq!(rest_pool_after(100, REST_EIGHT_HOURS_MICROS, 1), 110);
         assert_eq!(rest_pool_after(0, 10_000 * REST_EIGHT_HOURS_MICROS, 1), 300);
         assert_eq!(rest_pool_after(123, 0, 1), 123);
-        assert_eq!(rest_pool_after(123, REST_EIGHT_HOURS_MICROS, 60), 123);
+        assert_eq!(rest_pool_after(123, REST_EIGHT_HOURS_MICROS, 60), 0);
+        assert_eq!(rest_pool_after(123, 0, 60), 0);
     }
 
     #[test]
