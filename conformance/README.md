@@ -332,13 +332,14 @@ implementer normally runs the first
 listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
 when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
-differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
+differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
 matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
 After an improvement, run `./conformance/baseline <scenario>`, then review the changed
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
-`prerequisites`. The command chooses an unused report name; audit history is append-only.
+`prerequisites`. Implementer items run one scenario without a report. Evidence refresh items use
+the full audit command, which chooses an unused report name; audit history is append-only.
 
 The scope-verification group contains Behaviors marked `stock_client_use_unverified`. Its next
 command opens the ledger entry so the request-use question can be checked. Within each group, the
@@ -462,9 +463,31 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 
 ## Conformance Audit
 
+Run one scenario while climbing a Behavior:
+
+```bash
+./conformance/audit --scenario taxi_single_hop --check --client-data /path/to/client/Data
+./conformance/audit --scenario taxi_single_hop --check --json --client-data /path/to/client/Data
+```
+
+The local check captures the scenario on both servers and compares each candidate with its Golden
+Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
+compares rule and data signatures with the newest committed full audit report. Exit 0 means those
+signatures match and the Reference Server matches its Golden Trace. Exit 1 means signatures differ.
+Exit 2 means setup or capture failed; diagnostics name missing client data, Docker, occupied ports or
+a dirty core tree. The scenario check writes no report or committed trace.
+
+The first check creates a disposable Realm worktree and imports the pinned vmangos world. Later checks
+reuse its running Realm and Reference Server under
+`$HOME/.cache/lyracore-scratch/scenario-audit/`. The cache key covers the core commit, harness and
+vmangos pins, CLI pin, client path and the hashes of every client Data file. The runner also verifies
+the cached Native Host, Module and imported snapshot before capture. A changed key stops the cached
+Realm, removes its worktree and builds a new one. Use `./conformance/audit --stop` to stop both owned
+servers and remove the cached worktree when you need the loopback ports or want a full audit.
+
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
-Stop it before the audit. The runner requires a clean core working tree and free Reference Server
+Stop it before a full audit. The full runner requires a clean core working tree and free Reference Server
 ports 13724 and 18085.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
 The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
@@ -512,7 +535,7 @@ captures, infrastructure errors and invalid evidence do. A failed run cannot wri
 success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The runner stops both servers on exit, including capture failures and normal interrupts. Credentials
+The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
 and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted when
 the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,

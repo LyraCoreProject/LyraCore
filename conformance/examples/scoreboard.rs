@@ -150,7 +150,11 @@ fn open_work(
             Some("tier1")
         };
         let next_command = match reproduce_with {
-            Some("audit") => audit_command()?,
+            Some("audit") if kind == "evidence_refresh" => audit_command()?,
+            Some("audit") => format!(
+                "./conformance/audit --scenario {} --check --client-data /path/to/client/Data",
+                behavior.scenarios[0]
+            ),
             Some("tier1") => format!("./conformance/run {}", behavior.scenarios[0]),
             _ => format!(
                 "cat conformance/features/{}/{}.toml",
@@ -871,7 +875,10 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
         .unwrap();
     assert_eq!(taxi.kind, "implementer");
     assert_eq!(taxi.reproduce_with, Some("audit"));
-    assert!(taxi.next_command.starts_with("./conformance/audit --date "));
+    assert_eq!(
+        taxi.next_command,
+        "./conformance/audit --scenario taxi_single_hop --check --client-data /path/to/client/Data"
+    );
     assert_eq!(taxi.prerequisites.len(), 5);
     assert!(taxi
         .prerequisites

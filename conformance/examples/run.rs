@@ -85,6 +85,7 @@ fn assemble<'a>(
     scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
     baseline: &ratchet::Baseline,
+    audit_baseline: bool,
 ) -> Result<RunOutput<'a>> {
     let current = ratchet::ScenarioBaseline::from_comparison(
         scenario,
@@ -94,7 +95,14 @@ fn assemble<'a>(
         comparison,
     );
     let regeneration = baseline.changes(&current)?;
-    let matches = baseline.check(&current).is_ok();
+    let matches = if audit_baseline {
+        regeneration.is_empty()
+            && baseline.scenarios.iter().any(|entry| {
+                entry.scenario == scenario && entry.scenario_sha256 == *scenario_sha256
+            })
+    } else {
+        baseline.check(&current).is_ok()
+    };
     let mut grouped = BTreeMap::<(GroupClass, ratchet::Signature), Vec<Record>>::new();
     for difference in &comparison.differences {
         let class = match difference.classification {
@@ -167,7 +175,7 @@ fn signature_text(signature: &ratchet::Signature) -> String {
     )
 }
 
-fn text_output(output: &RunOutput<'_>) -> Result<String> {
+fn text_output(output: &RunOutput<'_>, audit_baseline: bool) -> Result<String> {
     let mut text = String::new();
     writeln!(text, "Scenario: {}", output.scenario)?;
     writeln!(text, "Behavior: {}", output.behavior)?;
@@ -187,7 +195,12 @@ fn text_output(output: &RunOutput<'_>) -> Result<String> {
     )?;
     writeln!(
         text,
-        "Tier 1 baseline: {}",
+        "{}: {}",
+        if audit_baseline {
+            "Audit report"
+        } else {
+            "Tier 1 baseline"
+        },
         if output.baseline.matches {
             "matches"
         } else {
@@ -292,7 +305,12 @@ fn main() -> Result<()> {
         entry.scenario_sha256 == golden.trace().header.scenario_sha256,
         "tier 1 result uses another scenario revision"
     );
-    let baseline = ratchet::Baseline::read(&root.join("conformance/tier1-baseline.json"))?;
+    let audit_baseline = std::env::var_os("LYRACORE_CONFORMANCE_AUDIT_BASELINE");
+    let baseline_path = audit_baseline
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("conformance/tier1-baseline.json"));
+    let baseline = ratchet::Baseline::read(&baseline_path)?;
     let output = assemble(
         &scenario,
         &behavior.id,
@@ -301,11 +319,12 @@ fn main() -> Result<()> {
         &entry.scenario_sha256,
         &entry.comparison,
         &baseline,
+        audit_baseline.is_some(),
     )?;
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        print!("{}", text_output(&output)?);
+        print!("{}", text_output(&output, audit_baseline.is_some())?);
     }
     if !output.baseline.matches {
         std::process::exit(1);
@@ -367,8 +386,9 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            false,
         )?;
-        let text = text_output(&output)?;
+        let text = text_output(&output, false)?;
         assert!(text.contains("vmangos: abcdef:src/game/Handlers/TaxiHandler.cpp :: WorldSession::HandleActivateTaxiOpcode"));
         assert!(text.contains(
             "[rule] exact_field / flight / reply/flight / 0x00DD / duration (2 records)"
@@ -392,6 +412,7 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            false,
         )?;
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&output)?)?;
@@ -442,11 +463,31 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            false,
         )?;
-        let text = text_output(&output)?;
+        let text = text_output(&output, false)?;
         assert!(text.contains("Tier 1 baseline: differs"));
         assert!(text.contains("Regeneration would change:"));
         assert!(text.contains("+ rule: exact_field / flight / reply/flight / 0x00DD / duration"));
+        Ok(())
+    }
+
+    #[test]
+    fn audit_uses_committed_signatures_when_harness_revision_changes() -> Result<()> {
+        let (source, comparison, mut baseline) = fixture();
+        baseline.scenarios[0].harness_revision = "older revision".into();
+        let output = assemble(
+            "taxi_single_hop",
+            "taxi_single_hop",
+            &source,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
+            &comparison,
+            &baseline,
+            true,
+        )?;
+        assert!(output.baseline.matches);
+        assert!(text_output(&output, true)?.contains("Audit report: matches"));
         Ok(())
     }
 }
