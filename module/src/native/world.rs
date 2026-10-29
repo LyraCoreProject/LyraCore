@@ -137,8 +137,9 @@ pub(super) fn enter_character(
         )?;
     }
     let quests = super::view::quests(ctx, guid);
-    let self_create = codec::build_self_create_object(&entity, &items, &skills, &quests)
+    let mut self_create = codec::build_self_create_object(&entity, &items, &skills, &quests)
         .map_err(|error| error.to_string())?;
+    codec::set_create_freshness(&mut self_create, codec::CreateFreshness::Known);
     crate::aoi::enter_viewer(ctx, guid)?;
     let mut grants: Vec<_> = ctx.db.game_aoi_grant().by_viewer().filter(guid).collect();
     grants.sort_by_key(|grant| grant.layer != crate::aoi::TRANSPORT);
@@ -152,7 +153,7 @@ pub(super) fn enter_character(
     let movement = carrier.and_then(|_| super::transport::passenger_movement(ctx, &live));
     match (carrier, movement) {
         (Some(index), Some(movement)) => {
-            super::visibility::create(ctx, connection.connection_id, &grants.remove(index))?;
+            super::visibility::create(ctx, connection.connection_id, &grants.remove(index), false)?;
             let body = codec::create_with_movement(&self_create, &movement)
                 .map_err(|error| error.to_string())?;
             super::send_raw(
@@ -207,7 +208,7 @@ pub(super) fn enter_character(
         teleport_started_micros: 0,
     });
     for grant in grants {
-        super::visibility::create(ctx, connection.connection_id, &grant)?;
+        super::visibility::create(ctx, connection.connection_id, &grant, false)?;
     }
     if carrier.is_none() {
         crate::transport::rejoin(ctx, guid);

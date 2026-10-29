@@ -1,5 +1,109 @@
 use super::*;
 
+#[test]
+fn a_new_map_object_beside_a_viewer_uses_create_kind_three() {
+    for (name, mut message) in visibility_create_examples()
+        .into_iter()
+        .filter(|(name, _)| {
+            matches!(
+                *name,
+                "creature" | "gameobject" | "corpse" | "dynamic object"
+            )
+        })
+    {
+        set_create_freshness(&mut message, CreateFreshness::New);
+        assert!(
+            matches!(message.objects[0], Object::CreateObject2 { .. }),
+            "{name}"
+        );
+        assert_eq!(
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap()
+                .body[5],
+            3,
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_later_sighting_uses_create_kind_two_for_every_world_type() {
+    for (name, mut message) in visibility_create_examples() {
+        set_create_freshness(&mut message, CreateFreshness::Known);
+        assert!(
+            matches!(message.objects[0], Object::CreateObject { .. }),
+            "{name}"
+        );
+        assert_eq!(
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap()
+                .body[5],
+            2,
+            "{name}"
+        );
+    }
+}
+
+fn visibility_create_examples() -> Vec<(&'static str, SMSG_UPDATE_OBJECT)> {
+    let player = warrior_entity();
+    let creature = EntityView {
+        type_mask: 0,
+        ..warrior_entity()
+    };
+    vec![
+        (
+            "self",
+            build_create_object(&player, CreateKind::SelfPlayer, &[], &[]).unwrap(),
+        ),
+        (
+            "peer",
+            build_create_object(&player, CreateKind::Peer, &[], &[]).unwrap(),
+        ),
+        (
+            "creature",
+            build_create_object(&creature, CreateKind::Peer, &[], &[]).unwrap(),
+        ),
+        (
+            "item",
+            build_item_create_object(&ItemInstanceView::default()),
+        ),
+        (
+            "container",
+            build_item_create_object(&ItemInstanceView {
+                container_slots: 8,
+                ..Default::default()
+            }),
+        ),
+        (
+            "transport",
+            build_transport_create_object(&TransportView::default()),
+        ),
+        (
+            "gameobject",
+            build_gameobject_create_object(&GameObjectView::default()),
+        ),
+        (
+            "elevator",
+            build_gameobject_create_object(&GameObjectView {
+                type_id: lyracore_shared::constants::go_type::ELEVATOR,
+                ..Default::default()
+            }),
+        ),
+        (
+            "moving transport",
+            build_gameobject_create_object(&GameObjectView {
+                type_id: lyracore_shared::constants::go_type::MO_TRANSPORT,
+                ..Default::default()
+            }),
+        ),
+        ("corpse", build_corpse_create_object(&CorpseView::default())),
+        (
+            "dynamic object",
+            build_dynamicobject_create_object(1, 2, 3, 0.0, 0.0, 0.0, 1.0),
+        ),
+    ]
+}
+
 use wow_world_messages::vanilla::ServerMessage;
 use wow_world_messages::vanilla::{
     EnvironmentalDamageType, MSG_MOVE_HEARTBEAT_Client, SMSG_LOOT_RESPONSE_LootMethod, TimerType,
@@ -93,10 +197,14 @@ fn character_create_restores_the_private_watched_faction() {
             (CreateKind::Peer, None),
         ] {
             let message = build_create_object(&entity, kind, &[], &[]).unwrap();
-            let Object::CreateObject2 {
+            let (Object::CreateObject2 {
                 mask2: UpdateMask::Player(fields),
                 ..
-            } = &message.objects[0]
+            }
+            | Object::CreateObject {
+                mask2: UpdateMask::Player(fields),
+                ..
+            }) = &message.objects[0]
             else {
                 panic!("expected Character CREATE");
             };
@@ -884,7 +992,7 @@ fn create_object_builds_unit_for_a_creature() {
     let msg = build_create_object(&chicken, CreateKind::Peer, &[], &[]).unwrap();
     assert_eq!(msg.objects.len(), 1);
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             guid3,
             object_type,
             mask2,
@@ -897,7 +1005,7 @@ fn create_object_builds_unit_for_a_creature() {
                 "expected a Unit update mask"
             );
         }
-        other => panic!("expected CreateObject2, got {other:?}"),
+        other => panic!("expected CreateObject, got {other:?}"),
     }
 }
 
@@ -925,13 +1033,13 @@ fn creature_create_carries_npc_flags() {
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Unit(u),
             ..
         } => {
             assert_eq!(u.unit_npc_flags(), Some(0x1 | 0x4));
         }
-        other => panic!("expected a Unit CreateObject2, got {other:?}"),
+        other => panic!("expected a Unit CreateObject, got {other:?}"),
     }
     let player = build_create_object(&warrior_entity(), CreateKind::SelfPlayer, &[], &[]).unwrap();
     match &player.objects[0] {
@@ -973,7 +1081,37 @@ fn create_object_carries_guid_position_speeds() {
             assert_eq!(*turn_rate, speeds::TURN_RATE);
             assert_eq!(*running_speed, speeds::RUN);
         }
-        other => panic!("expected CreateObject2, got {other:?}"),
+        other => panic!("expected Character CREATE, got {other:?}"),
+    }
+}
+
+#[test]
+fn peer_create_uses_existing_object_type_and_unit_movement_flags() {
+    for entity in [
+        warrior_entity(),
+        EntityView {
+            type_mask: lyracore_shared::constants::type_mask::CREATURE,
+            ..warrior_entity()
+        },
+    ] {
+        let message = build_create_object(&entity, CreateKind::Peer, &[], &[]).unwrap();
+        let Object::CreateObject { movement2, .. } = &message.objects[0] else {
+            panic!("an existing peer must use CREATE_OBJECT");
+        };
+        let flags = &movement2.update_flag;
+        assert!(flags.get_living().is_some());
+        assert_eq!(flags.get_all().map(|all| all.unknown1), Some(1));
+        assert_eq!(
+            flags.get_living().and_then(|living| match living {
+                MovementBlock_UpdateFlag_Living::Living { turn_rate, .. } => Some(*turn_rate),
+                _ => None,
+            }),
+            Some(3.141_594_f32)
+        );
+        let packet =
+            crate::world::encode(ServerOpcodeMessage::SMSG_UPDATE_OBJECT(Box::new(message)))
+                .unwrap();
+        assert_eq!(packet.body[9], 0x70);
     }
 }
 
@@ -1005,8 +1143,8 @@ fn flying_create_carries_full_spline_and_elapsed_time_on_the_wire() {
     else {
         panic!("expected CREATE update");
     };
-    let Object::CreateObject2 { movement2, .. } = &decoded.objects[0] else {
-        panic!("expected CREATE_OBJECT2");
+    let Object::CreateObject { movement2, .. } = &decoded.objects[0] else {
+        panic!("expected CREATE_OBJECT");
     };
     let MovementBlock_UpdateFlag_Living::Living {
         living_position,
@@ -1054,8 +1192,8 @@ fn flying_create_offsets_consecutive_identical_controls_but_not_the_destination(
     else {
         panic!("expected CREATE update");
     };
-    let Object::CreateObject2 { movement2, .. } = &decoded.objects[0] else {
-        panic!("expected CREATE_OBJECT2");
+    let Object::CreateObject { movement2, .. } = &decoded.objects[0] else {
+        panic!("expected CREATE_OBJECT");
     };
     let MovementBlock_UpdateFlag_Living::Living { flags, .. } =
         movement2.update_flag.get_living().unwrap()
@@ -1129,7 +1267,9 @@ fn self_and_peer_create_carry_the_self_flag_on_only_the_self_side() {
     let me = build_create_object(&e, CreateKind::SelfPlayer, &[], &[]).unwrap();
     let peer = build_create_object(&e, CreateKind::Peer, &[], &[]).unwrap();
     let self_flag = |msg: &SMSG_UPDATE_OBJECT| match &msg.objects[0] {
-        Object::CreateObject2 { movement2, .. } => movement2.update_flag.get_self(),
+        Object::CreateObject2 { movement2, .. } | Object::CreateObject { movement2, .. } => {
+            movement2.update_flag.get_self()
+        }
         other => panic!("expected CreateObject2, got {other:?}"),
     };
     assert!(
@@ -1780,7 +1920,7 @@ fn item_create_object_is_item_typed_and_serializes() {
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             object_type,
             mask2: UpdateMask::Item(it),
             ..
@@ -1792,7 +1932,7 @@ fn item_create_object_is_item_typed_and_serializes() {
             assert_eq!(it.item_maxdurability(), Some(20));
             assert_eq!(it.item_random_properties_id(), Some(509_0101));
         }
-        other => panic!("expected an Item CreateObject2, got {other:?}"),
+        other => panic!("expected an Item CreateObject, got {other:?}"),
     }
 }
 
@@ -1813,18 +1953,18 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         enchantment: 0,
     };
     match &build_item_create_object(&inst).objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Item(it),
             ..
         } => assert_eq!(it.item_item_text_id(), Some(7)),
-        other => panic!("expected an Item CreateObject2, got {other:?}"),
+        other => panic!("expected an Item CreateObject, got {other:?}"),
     }
     let plain = ItemInstanceView {
         item_text_id: 0,
         ..inst
     };
     match &build_item_create_object(&plain).objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Item(it),
 ..
         } => assert_eq!(
@@ -1927,7 +2067,7 @@ fn create_object_carries_the_sheath_state_for_player_and_creature() {
     c.unit_bytes_2 = 1;
     let msg = build_create_object(&c, CreateKind::Peer, &[], &[]).unwrap();
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             mask2: UpdateMask::Unit(u),
             ..
         } => assert_eq!(
@@ -1935,7 +2075,7 @@ fn create_object_carries_the_sheath_state_for_player_and_creature() {
             Some((1, 0, 0, 0)),
             "creature CREATE must carry the sheath state too"
         ),
-        other => panic!("expected a Unit CreateObject2, got {other:?}"),
+        other => panic!("expected a Unit CreateObject, got {other:?}"),
     }
 }
 
@@ -2965,6 +3105,10 @@ fn a_land_mount_display_is_present_in_the_peer_create_mask() {
             Object::CreateObject2 {
                 mask2: UpdateMask::Player(player),
                 ..
+            }
+            | Object::CreateObject {
+                mask2: UpdateMask::Player(player),
+                ..
             } => {
                 assert_eq!(player.unit_mountdisplayid(), Some(1147), "{kind:?}");
                 assert_eq!(
@@ -2973,7 +3117,7 @@ fn a_land_mount_display_is_present_in_the_peer_create_mask() {
                     "a land mount must not set TAXI_FLIGHT ({kind:?})"
                 );
             }
-            other => panic!("expected a Player CreateObject2, got {other:?}"),
+            other => panic!("expected a Character CREATE, got {other:?}"),
         }
     }
 }
@@ -3421,7 +3565,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
     msg.write_unencrypted_server(&mut buf).unwrap();
     assert!(!buf.is_empty());
     match &msg.objects[0] {
-        Object::CreateObject2 {
+        Object::CreateObject {
             object_type,
             mask2: UpdateMask::Container(c),
             ..
@@ -3440,7 +3584,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
                 "the bag window needs its slot count"
             );
         }
-        other => panic!("expected a Container CreateObject2, got {other:?}"),
+        other => panic!("expected a Container CreateObject, got {other:?}"),
     }
 }
 
@@ -3629,13 +3773,17 @@ fn player_create_carries_each_worn_items_permanent_enchant_for_self_and_peer() {
             Object::CreateObject2 {
                 mask2: UpdateMask::Player(p),
                 ..
+            }
+            | Object::CreateObject {
+                mask2: UpdateMask::Player(p),
+                ..
             } => {
                 let vi = p
                     .player_visible_item(VisibleItemIndex::Index8)
                     .expect("wrist VISIBLE_ITEM set");
                 assert_eq!((vi.item, vi.enchants), (25, [724, 0]), "{kind:?}");
             }
-            other => panic!("expected a Player CreateObject2, got {other:?}"),
+            other => panic!("expected a Character CREATE, got {other:?}"),
         }
     }
 }
@@ -3991,7 +4139,7 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
                 panic!("expected item object update");
             };
             match &decoded.objects[0] {
-                Object::CreateObject2 {
+                Object::CreateObject {
                     guid3,
                     object_type: ObjectType::Item,
                     mask2: UpdateMask::Item(fields),
@@ -4000,7 +4148,7 @@ fn item_guid_allocation_bits_survive_item_and_container_wire_updates() {
                     assert_eq!(guid3.guid(), guid);
                     assert_eq!(fields.object_guid(), Some(Guid::new(guid)));
                 }
-                Object::CreateObject2 {
+                Object::CreateObject {
                     guid3,
                     object_type: ObjectType::Container,
                     mask2: UpdateMask::Container(fields),

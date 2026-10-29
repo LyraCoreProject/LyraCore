@@ -217,8 +217,8 @@ pub fn create_with_movement(
     create.write_unencrypted_server(&mut framed)?;
     let mut body = framed.split_off(4);
     ensure!(
-        body.len() >= 9 && body[..4] == 1u32.to_le_bytes() && body[5] == 3,
-        "expected one CREATE_OBJECT2"
+        body.len() >= 9 && body[..4] == 1u32.to_le_bytes() && matches!(body[5], 2 | 3),
+        "expected one CREATE object"
     );
     let living = 9 + body[6].count_ones() as usize;
     ensure!(

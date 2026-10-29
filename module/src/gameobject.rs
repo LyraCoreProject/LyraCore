@@ -149,13 +149,13 @@ pub struct GameObject {
 impl GameObject {
     pub(crate) fn try_insert(self, ctx: &ReducerContext) -> Result<Self, String> {
         let object = ctx.db.game_gameobject().try_insert(self)?;
-        crate::aoi::gameobject_changed(ctx, &object);
+        crate::aoi::gameobject_changed(ctx, &object, true);
         Ok(object)
     }
 
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let object = ctx.db.game_gameobject().insert(self);
-        crate::aoi::gameobject_changed(ctx, &object);
+        crate::aoi::gameobject_changed(ctx, &object, true);
         object
     }
 
@@ -166,7 +166,7 @@ impl GameObject {
             (old.map_id, old.instance_id, old.cell)
                 != (object.map_id, object.instance_id, object.cell)
         }) {
-            crate::aoi::gameobject_changed(ctx, &object);
+            crate::aoi::gameobject_changed(ctx, &object, old.is_none());
         }
         if let Some(old) = old {
             crate::native::gameobject_changed(ctx, &old, &object);

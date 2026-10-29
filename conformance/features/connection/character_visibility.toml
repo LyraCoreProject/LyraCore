@@ -20,12 +20,6 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Both recipients see peer CREATE packets, but core uses CreateObject2 kind 3, omits HAS_POSITION from the movement flags and uses a different turn-rate constant."
-path = "crates/lyracore-protocol/src/codec/entity.rs"
-symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: kind 2→3, movement.update_flags 112→48 and movement.turn_rate 3.1415939331054688→3.1415927410125732 for arriving and watcher."
-
-[[known_gaps]]
 description = "Peer CREATE VALUES have different health, attack time and packed player fields. The descriptor mask omits off-hand attack time and other expected fields, and includes zero target, player and visible-item words."
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"

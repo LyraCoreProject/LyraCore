@@ -57,6 +57,7 @@ pub mod npc_flags {
 pub mod go_type {
     pub const QUESTGIVER: u8 = 2;
     pub const CHEST: u8 = 3;
+    pub const ELEVATOR: u8 = 11;
     pub const MO_TRANSPORT: u8 = 15;
     // Meeting Stones send CMSG_MEETINGSTONE_JOIN, not CMSG_GAMEOBJ_USE.
     pub const MEETINGSTONE: u8 = 23;
@@ -146,7 +147,7 @@ pub mod speeds {
     pub const RUN_BACK: f32 = 4.5;
     pub const SWIM: f32 = 4.722_222;
     pub const SWIM_BACK: f32 = 2.5;
-    pub const TURN_RATE: f32 = std::f32::consts::PI;
+    pub const TURN_RATE: f32 = 3.141_594;
 }
 
 pub mod start_human_warrior {
