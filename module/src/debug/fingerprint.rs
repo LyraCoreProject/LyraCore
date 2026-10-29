@@ -8,6 +8,7 @@ use crate::{
     game_level_stats, game_lock, game_race_info, game_skill_ability, game_skill_availability,
     game_skill_line, game_spell, game_spell_chain, game_spell_effect, game_spell_learn,
     game_spell_reagent, game_start_item, game_start_position, game_talent, game_talent_tab,
+    game_tavern_area_trigger,
 };
 
 #[table(accessor = game_catalogue_fingerprint, public)]
@@ -94,6 +95,7 @@ pub fn debug_catalogue_fingerprint(ctx: &ReducerContext) {
         let tables = fold_family!(ctx, h, n;
             game_area,
             game_area_trigger,
+            game_tavern_area_trigger,
             game_areatrigger_teleport,
             game_faction,
             game_faction_template,

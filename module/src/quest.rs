@@ -1390,7 +1390,7 @@ impl AreaTriggerRoute {
 }
 
 #[derive(Clone, Copy)]
-struct AreaTriggerVolume {
+pub(crate) struct AreaTriggerVolume {
     radius: f32,
     length: f32,
     width: f32,
@@ -1399,7 +1399,7 @@ struct AreaTriggerVolume {
 }
 
 impl AreaTriggerVolume {
-    fn of(trigger: &crate::config::GameAreaTrigger) -> Self {
+    pub(crate) fn of(trigger: &crate::config::GameAreaTrigger) -> Self {
         Self {
             radius: trigger.radius,
             length: trigger.box_length,
@@ -1420,7 +1420,7 @@ impl AreaTriggerVolume {
                     && self.height > 0.0))
     }
 
-    fn contains(self, origin: [f32; 3], point: [f32; 3]) -> bool {
+    pub(crate) fn contains(self, origin: [f32; 3], point: [f32; 3]) -> bool {
         if !self.valid() || !origin.into_iter().chain(point).all(f32::is_finite) {
             return false;
         }

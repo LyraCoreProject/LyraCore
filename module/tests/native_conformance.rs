@@ -869,6 +869,8 @@ fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
     use std::collections::BTreeSet;
 
     let (shard, passenger, _) = fixture("inn-overflight");
+    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5090902,0,-9464,42,56,20,0,0,0,0)");
+    shard.assert_sql("INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (5090902)");
     shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (12,0,0,1,0,0,2,'Elwynn Forest')");
     let y_cell = lyracore_shared::terrain::cell_index(42.0).unwrap();
     let heights = vec!["0"; 145].join(":");
@@ -910,6 +912,58 @@ fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
     assert!((flyer["z"].parse::<f32>().unwrap() - 1000.0).abs() < 0.01);
     assert_eq!(flyer["resting"], "false");
     assert_eq!(flyer["player_flags"], "0");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn tavern_rest_uses_imported_trigger_geometry() {
+    let (shard, character, _) = fixture("tavern-rest");
+    shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5090902,0,-9464,42,56,0,8,6,4,0)");
+    shard.assert_sql("INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (5090902)");
+    shard.assert_sql(&format!(
+        "UPDATE game_character SET map_id = 0, x = -9459, y = 42, z = 56 WHERE guid = {character}"
+    ));
+    let _connection = enter(&shard, character);
+    shard.assert_call(
+        "debug_check_rest_at",
+        &[&character.to_string(), "0", "-9464", "42"],
+    );
+    let rest = || {
+        shard.query_rows(&format!(
+            "SELECT resting FROM game_world_entity WHERE guid = {character}"
+        ))[0]["resting"]
+            .clone()
+    };
+    assert_eq!(rest(), "true");
+    shard.assert_call(
+        "debug_check_rest_at",
+        &[&character.to_string(), "0", "-9459", "42"],
+    );
+    assert_eq!(rest(), "false");
+}
+
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn neutral_capital_does_not_rest_on_ffa_pvp_realm() {
+    let (shard, character, _) = fixture("ffa-capital-rest");
+    shard.assert_sql("INSERT INTO game_realm (id,name,address,realm_type,flags,population,timezone) VALUES (1,'FFA','127.0.0.1',16,0,0,0)");
+    shard.assert_sql("INSERT INTO game_area (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) VALUES (5090901,0,0,1,256,0,0,'Neutral capital')");
+    let cell = lyracore_shared::terrain::cell_index(0.0).unwrap();
+    let heights = vec!["0"; 145].join(":");
+    shard.assert_call(
+        "import_terrain_chunks",
+        &[&format!("0,{cell},{cell},0,0,0,5090901,{heights}")],
+    );
+    let _connection = enter(&shard, character);
+    shard.assert_call(
+        "debug_check_rest_at",
+        &[&character.to_string(), "0", "0", "0"],
+    );
+    let row = &shard.query_rows(&format!(
+        "SELECT resting,player_flags FROM game_world_entity WHERE guid = {character}"
+    ))[0];
+    assert_eq!(row["resting"], "false");
+    assert_eq!(row["player_flags"], "0");
 }
 
 fn start_taxi_flight(shard: &Standalone, passenger: u64, destination_x: u32) {

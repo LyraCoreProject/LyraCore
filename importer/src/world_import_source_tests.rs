@@ -1,6 +1,21 @@
 use super::*;
 use crate::standalone_support;
 
+#[test]
+fn tavern_import_selects_patch_and_replaces_rows() {
+    let connection = rusqlite::Connection::open_in_memory().unwrap();
+    connection.execute_batch("CREATE TABLE areatrigger_tavern (id INTEGER, patch_min INTEGER, PRIMARY KEY (id, patch_min)); INSERT INTO areatrigger_tavern VALUES (71,0),(71,10),(72,10),(73,11)").unwrap();
+    let source = WorldSource::Vmangos(connection);
+    let statements = build_tavern_area_trigger_sql(&source).unwrap();
+    assert_eq!(
+        statements,
+        vec![
+            "DELETE FROM game_tavern_area_trigger WHERE trigger_id >= 0".to_string(),
+            "INSERT INTO game_tavern_area_trigger (trigger_id) VALUES (71),(72)".to_string(),
+        ]
+    );
+}
+
 fn source_args(profile: &str) -> (WorldSource, WorldImportArgs) {
     let path = std::env::var("LYRACORE_VMANGOS_SQLITE").unwrap();
     let client = std::env::var("LYRACORE_TEST_DBC").unwrap();

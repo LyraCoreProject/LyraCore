@@ -1,7 +1,9 @@
 use spacetimedb::{table, ReducerContext, Table, Timestamp};
 
 use crate::world::WorldEntity;
-use crate::{game_area, game_character, game_realm, GameArea};
+use crate::{
+    game_area, game_area_trigger, game_character, game_realm, game_tavern_area_trigger, GameArea,
+};
 use lyracore_shared::{constants::player_flags, faction, packing};
 
 const AREA_FLAG_CAPITAL: u32 = 0x0000_0100;
@@ -9,31 +11,19 @@ const AREA_TEAM_ALLIANCE: u32 = 2;
 const AREA_TEAM_HORDE: u32 = 4;
 const AREA_TEAM_NONE: u32 = 0;
 
-struct RestTrigger {
-    map_id: u32,
-    x: f32,
-    y: f32,
-    z: f32,
-    radius: f32,
-}
-
-const REST_TRIGGERS: &[RestTrigger] = &[
-    // Goldshire's 3D volume is estimated until the tavern trigger ids are imported.
-    RestTrigger {
-        map_id: 0,
-        x: -9464.0,
-        y: 42.0,
-        z: 56.0,
-        radius: 20.0,
-    },
-];
-
 fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameArea>) -> bool {
-    if REST_TRIGGERS.iter().any(|t| {
-        t.map_id == mover.map_id && {
-            let (dx, dy, dz) = (mover.x - t.x, mover.y - t.y, mover.z - t.z);
-            dx * dx + dy * dy + dz * dz <= t.radius * t.radius
-        }
+    if ctx.db.game_tavern_area_trigger().iter().any(|tavern| {
+        ctx.db
+            .game_area_trigger()
+            .id()
+            .find(tavern.trigger_id)
+            .is_some_and(|trigger| {
+                trigger.map_id == mover.map_id
+                    && crate::quest::AreaTriggerVolume::of(&trigger).contains(
+                        [trigger.x, trigger.y, trigger.z],
+                        [mover.x, mover.y, mover.z],
+                    )
+            })
     }) {
         return true;
     }
@@ -53,7 +43,7 @@ fn in_rest_area(ctx: &ReducerContext, mover: &WorldEntity, area: Option<&GameAre
             .db
             .game_realm()
             .iter()
-            .any(|realm| matches!(realm.realm_type, 1 | 8)),
+            .any(|realm| matches!(realm.realm_type, 1 | 8 | 16)),
         _ => true,
     }
 }
