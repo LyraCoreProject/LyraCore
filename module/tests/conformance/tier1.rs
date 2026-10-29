@@ -7,6 +7,7 @@ use anyhow::{ensure, Context, Result};
 use lyracore_test_support::{core_root, Standalone};
 use serde_json::json;
 use wire_client::runner::Transport;
+use wire_client::scenario::FixtureVerb;
 use wire_client::{catalogue, compare, runner};
 
 use super::transport::{MultiOperatorTransport, OperatorTransport};
@@ -150,7 +151,10 @@ fn record_and_check(
     Ok(())
 }
 
-fn run_multi_scenario(id: &str) -> Result<()> {
+fn run_multi_scenario(
+    id: &str,
+    setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
+) -> Result<()> {
     let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
         .map(PathBuf::from)
         .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
@@ -165,6 +169,7 @@ fn run_multi_scenario(id: &str) -> Result<()> {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
+    setup(&shard, golden.scenario())?;
     let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
     shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
     let mut transport = MultiOperatorTransport::prepare(&shard, golden.scenario())?;
@@ -178,6 +183,95 @@ fn run_multi_scenario(id: &str) -> Result<()> {
         &[],
     )?;
     record_and_check(id, &path, &golden, now, &comparison)
+}
+
+fn seed_visibility_world(
+    shard: &Standalone,
+    scenario: &wire_client::scenario::Scenario,
+) -> Result<()> {
+    let cell = super::taxi_route::STORMWIND_CELL;
+    let mut race_class = None;
+    for character in &scenario.characters {
+        let FixtureVerb::Character {
+            race, class, at, ..
+        } = character
+            .fixtures
+            .first()
+            .context("visibility Character fixture")?
+        else {
+            anyhow::bail!("first fixture must be a Character");
+        };
+        let race = wire_client::cli::parse_race(race)?.as_int();
+        let class = wire_client::cli::parse_class(class)?.as_int();
+        ensure!(
+            race == 1 && class == 1,
+            "visibility outfit needs a human warrior"
+        );
+        race_class = Some(lyracore_package_delta::packed_race_class_id(race, class));
+        ensure!(
+            at.map == 0
+                && lyracore_shared::terrain::cell_index(at.x) == Some(cell.0)
+                && lyracore_shared::terrain::cell_index(at.y) == Some(cell.1),
+            "visibility Character is outside the Stormwind fixture cell"
+        );
+    }
+
+    shard.assert_sql(super::taxi_route::stormwind_area_statement());
+    shard.assert_call(
+        "import_terrain_chunks",
+        &[&super::taxi_route::stormwind_terrain_chunk()],
+    );
+    let base = shard
+        .query_rows("SELECT * FROM game_item_template WHERE entry = 51")
+        .into_iter()
+        .next()
+        .context("seeded item template 51")?;
+    let columns = "entry,class,subclass,name,display_id,quality,inventory_type,item_level,required_level,max_durability,buy_price,sell_price,max_stack,damage_min,damage_max,delay_ms,stat_strength,stat_agility,stat_stamina,stat_intellect,stat_spirit,stat_crit,stat_hit,stat_armor,block_value,restores_power,spellid_1,spelltrigger_1,spellid_2,spelltrigger_2,container_slots,sheath,bonding,holy_res,fire_res,nature_res,frost_res,shadow_res,arcane_res,spellid_3,spelltrigger_3,spellid_4,spelltrigger_4,spellid_5,spelltrigger_5,required_skill,required_skill_rank,required_reputation_faction,required_reputation_rank,max_count,item_flags,page_text,start_quest,bag_family,buy_count,food_type,allowed_class,allowed_race,random_property";
+    for (entry, name, subclass, inventory_type) in [
+        (38, "Outfit shirt", 0, 4),
+        (39, "Outfit pants", 0, 7),
+        (40, "Outfit boots", 0, 8),
+        (2362, "Outfit shield", 6, 14),
+    ] {
+        let mut template = base.clone();
+        for (field, value) in [
+            ("entry", entry.to_string()),
+            ("name", name.into()),
+            ("subclass", subclass.to_string()),
+            ("inventory_type", inventory_type.to_string()),
+            ("display_id", "0".into()),
+            ("quality", "0".into()),
+            ("item_level", "1".into()),
+            ("max_durability", "0".into()),
+            ("buy_price", "0".into()),
+            ("sell_price", "0".into()),
+        ] {
+            template.insert(field.into(), value);
+        }
+        let values = columns
+            .split(',')
+            .map(|field| {
+                let value = &template[field];
+                if field == "name" {
+                    format!("'{value}'")
+                } else {
+                    value.clone()
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(",");
+        shard.assert_sql(&format!(
+            "INSERT INTO game_item_template ({columns}) VALUES ({values})"
+        ));
+    }
+    let race_class = race_class.context("visibility Character fixture")?;
+    for (id, entry) in [25, 38, 39, 40, 2362].into_iter().enumerate() {
+        shard.assert_sql(&format!(
+            "INSERT INTO game_start_item (id,race_class,item_entry) VALUES ({},{race_class},{entry})",
+            id + 1
+        ));
+    }
+    Ok(())
 }
 
 #[test]
@@ -220,7 +314,7 @@ fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn two_character_visibility_matches_its_golden_trace() -> Result<()> {
-    run_multi_scenario("two_character_visibility")
+    run_multi_scenario("two_character_visibility", seed_visibility_world)
 }
 
 #[test]

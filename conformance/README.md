@@ -291,6 +291,14 @@ This command needs no imported data or `LYRACORE_TEST_TAXI_SQL`. It starts its o
 Shard. Durable CI compares its current rule and data signature sets with the committed tier 1
 baseline. Known gaps never excuse a difference or supply a passing result.
 
+`two_character_visibility` uses the same Stormwind area row and flat terrain cell `(777,497)`
+as the taxi fixture. Both scenario positions fall in that cell. Its human warrior starting outfit
+uses item entries 25, 38, 39, 40 and 2362. The pinned Golden Trace records the four visible
+armor entries in each peer CREATE update; the fixture supplies only the item template fields
+needed to equip them. Entry 25 already has a template in the disposable Shard. The fixture adds
+these rows before creating either Character, so area rest state and visible equipment are present
+on both arrival streams.
+
 The [T2g comparison](reports/2026-10-27-t2g.md) records the conformance.4 aligned differences
 and maps them to the taxi entry's known gaps. The [T2d comparison](reports/2026-10-27-t2d.md)
 retains the earlier conformance.3 evidence. Their imported-data setup describes those historical

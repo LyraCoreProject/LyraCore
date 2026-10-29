@@ -323,6 +323,16 @@ impl<'a> MultiOperatorTransport<'a> {
             let account = format!("CONFORMANCE_{}", character.id.to_ascii_uppercase());
             let guid = prepare_character(shard, &account, name, race, class, *level, at)?;
             let fixtures = prepare_fixtures(shard, guid, &character.fixtures[1..], at)?;
+            // Resolve rest before logout so peer CREATE uses the persisted flag.
+            shard.assert_call(
+                "debug_check_rest_at",
+                &[
+                    &guid.to_string(),
+                    &at.map.to_string(),
+                    &at.x.to_string(),
+                    &at.y.to_string(),
+                ],
+            );
             shard.assert_call("debug_logout_character", &[&guid.to_string()]);
             characters.insert(
                 character.id.clone(),

@@ -8,7 +8,7 @@ dependencies = ["world_entry"]
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = ["two_character_visibility"]
 deliberate_deviations = []
-prerequisites = ["Two human warrior Characters on separate Accounts at the scenario positions"]
+prerequisites = ["Two human warrior Characters on separate Accounts at the scenario positions", "Bundled Stormwind area row and terrain cell under both Characters", "Bundled human warrior starting outfit and item templates for entries 38, 39, 40 and 2362"]
 tests = []
 
 [vmangos]
@@ -20,13 +20,19 @@ symbol = "WorldSession::HandlePlayerLoginOpcode"
 status = "unverified"
 
 [[known_gaps]]
-description = "Both recipients see peer CREATE packets, but core uses CREATE kind 3 and different movement flags and turn rate."
+description = "Both recipients see peer CREATE packets, but core uses CreateObject2 kind 3, omits HAS_POSITION from the movement flags and uses a different turn-rate constant."
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: exact_field kind, movement.update_flags and movement.turn_rate for arriving and watcher."
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: kind 2→3, movement.update_flags 112→48 and movement.turn_rate 3.1415939331054688→3.1415927410125732 for arriving and watcher."
 
 [[known_gaps]]
-description = "Peer CREATE VALUES omit some vmangos fields, include extra zero fields and give different health, attack time and player flag values."
+description = "Peer CREATE VALUES have different health, attack time and packed player fields. The descriptor mask omits off-hand attack time and other expected fields, and includes zero target, player and visible-item words."
 path = "crates/lyracore-protocol/src/codec/entity.rs"
 symbol = "build_create_object"
-evidence = "Tier 1 two_character_visibility at harness 166ecd70: 73 rule records, including field_shape and exact_field on VALUES for both recipients and an unused arrival_max_health data rule."
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: 18 exact_field and 92 field_shape signatures for both recipients. Off-hand attack time field_127 is absent; target fields_16 and _17 and 48 zero visible-item words are present. Rest flag field_190 and outfit entries 38, 39, 40 and 2362 now match."
+
+[[known_gaps]]
+description = "Scenario-author gap: the pinned arrival_max_health data rule is unused because it targets UNIT_FIELD_POWER4 rather than max health. Correct the rule in a separate harness PR."
+path = "conformance/features/connection/character_visibility.toml"
+symbol = "arrival_max_health"
+evidence = "Tier 1 two_character_visibility at harness 166ecd70: unused rule declaration at objects.0.values.field_26. UpdateFields_1_12_1.h identifies field_26 as UNIT_FIELD_POWER4; UNIT_FIELD_MAXHEALTH is field_28."

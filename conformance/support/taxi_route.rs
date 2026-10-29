@@ -91,13 +91,29 @@ const NODES: [(u32, [f64; 3]); 2] = [
     ),
 ];
 const MOUNT_DISPLAY: u32 = 6852;
+pub const STORMWIND_CELL: (u16, u16) = (777, 497);
+
+pub fn stormwind_area_statement() -> &'static str {
+    "INSERT INTO game_area \
+     (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
+     VALUES (1519,0,0,1,312,10,2,'Stormwind City')"
+}
+
+fn terrain_chunk(area: u32, (x, y): (u16, u16)) -> String {
+    let heights = vec!["0"; 145].join(":");
+    format!("0,{x},{y},0,0,0,{area},{heights}")
+}
+
+pub fn stormwind_terrain_chunk() -> String {
+    terrain_chunk(1519, STORMWIND_CELL)
+}
 
 // See conformance/README.md#taxi-data for the route-cell boundary choices.
 const AREA_CELLS: &[(u32, &[(u16, u16)])] = &[
     (
         1519,
         &[
-            (777, 497),
+            STORMWIND_CELL,
             (778, 497),
             (778, 498),
             (779, 498),
@@ -203,15 +219,9 @@ const AREA_CELLS: &[(u32, &[(u16, u16)])] = &[
 ];
 
 pub fn terrain_chunks() -> String {
-    let heights = vec!["0"; 145].join(":");
-    let heights = heights.as_str();
     AREA_CELLS
         .iter()
-        .flat_map(|(area, cells)| {
-            cells
-                .iter()
-                .map(move |(x, y)| format!("0,{x},{y},0,0,0,{area},{heights}"))
-        })
+        .flat_map(|(area, cells)| cells.iter().map(move |cell| terrain_chunk(*area, *cell)))
         .collect::<Vec<_>>()
         .join(";")
 }
@@ -226,11 +236,11 @@ pub fn statements(scenario: &wire_client::scenario::Scenario) -> anyhow::Result<
     });
     let flight_master = flight_master.context("taxi scenario flight master fixture")?;
     let mut statements = Vec::new();
+    statements.push(stormwind_area_statement().into());
     statements.push(
         "INSERT INTO game_area \
-        (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
-        VALUES (1519,0,0,1,312,10,2,'Stormwind City'),\
-        (12,0,0,2,64,0,2,'Elwynn Forest'),(40,0,0,3,64,0,2,'Westfall')"
+         (id,map_id,parent_area_id,area_bit,flags,exploration_level,faction_group,name) \
+         VALUES (12,0,0,2,64,0,2,'Elwynn Forest'),(40,0,0,3,64,0,2,'Westfall')"
             .into(),
     );
     for (id, [x, y, z]) in NODES {
