@@ -1,5 +1,6 @@
 #!/usr/bin/env python3
 import argparse
+import json
 import os
 from pathlib import Path
 import re
@@ -18,6 +19,20 @@ def host_toolchain():
     return match[1]
 
 
+def prepare_cranelift(checkout):
+    target = checkout / '.lyracore-patched/cranelift-codegen'
+    if target.exists():
+        return
+    metadata = subprocess.check_output(
+        ['cargo', f'+{host_toolchain()}', 'metadata', '--format-version', '1', '--locked'],
+        cwd=checkout, text=True)
+    packages = json.loads(metadata)['packages']
+    source = next(Path(package['manifest_path']).parent for package in packages
+        if package['name'] == 'cranelift-codegen' and package['version'] == '0.126.1'
+        and package['source'].startswith('registry+'))
+    shutil.copytree(source, target)
+
+
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--checkout', type=Path, required=True)
@@ -30,6 +45,7 @@ def main():
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
     if revision != REVISION:
         raise RuntimeError(f'expected SpacetimeDB {REVISION}, got {revision}')
+    prepare_cranelift(checkout)
     changes = {
         'crates/standalone/Cargo.toml': ('[dependencies]', '[dependencies]\nwow_srp = "=0.7.0"\nspacetimedb-auth.workspace = true'),
         'crates/standalone/src/lib.rs': ('mod control_db;', 'mod control_db;\npub mod native_world;'),
@@ -47,8 +63,8 @@ def main():
             raise RuntimeError(f'refusing to overwrite unrelated changes in {target}')
         if current != desired:
             target.write_text(desired)
-    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch', 'retention.patch',
-            'independent-snapshots.patch'):
+    for name in ('host-lock.patch', 'dev-reload.patch', 'compile-cache.patch',
+            'cranelift-exception-tables.patch', 'retention.patch', 'independent-snapshots.patch'):
         patch = str(ROOT / name)
         check = subprocess.run(['git', 'apply', '--check', patch], cwd=checkout, capture_output=True)
         if check.returncode == 0:

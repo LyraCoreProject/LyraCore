@@ -1,0 +1,41 @@
+# Cranelift 0.126.1 reuses this graph; stale exception tables change cache keys.
+diff --git i/Cargo.lock w/Cargo.lock
+index 24f385f..f6632dc 100644
+--- i/Cargo.lock
++++ w/Cargo.lock
+@@ -1656,8 +1656,6 @@ dependencies = [
+ [[package]]
+ name = "cranelift-codegen"
+ version = "0.126.1"
+-source = "registry+https://github.com/rust-lang/crates.io-index"
+-checksum = "6eeccfc043d599b0ef1806942707fc51cdd1c3965c343956dc975a55d82a920f"
+ dependencies = [
+  "bumpalo",
+  "cranelift-assembler-x64",
+diff --git i/Cargo.toml w/Cargo.toml
+index 50e137f..99fcc78 100644
+--- i/Cargo.toml
++++ w/Cargo.toml
+@@ -1,5 +1,5 @@
+ [workspace]
+-exclude = ["crates/smoketests/modules"]
++exclude = ["crates/smoketests/modules", ".lyracore-patched/cranelift-codegen"]
+ members = [
+   "crates/auth",
+   "crates/bench",
+@@ -431,3 +432,6 @@ result_large_err = "allow"
+ # This silences a warning in our Nix flake, which otherwise would be upset that our call to `crateNameFromCargoToml`
+ # is running against a file that doesn't have a name in it.
+ crane.name = "spacetimedb"
++
++[patch.crates-io]
++cranelift-codegen = { path = ".lyracore-patched/cranelift-codegen" }
+--- a/.lyracore-patched/cranelift-codegen/src/ir/dfg.rs
++++ b/.lyracore-patched/cranelift-codegen/src/ir/dfg.rs
+@@ -207,5 +207,6 @@
+         self.constants.clear();
+         self.immediates.clear();
+         self.jump_tables.clear();
++        self.exception_tables.clear();
+         self.facts.clear();
+     }
