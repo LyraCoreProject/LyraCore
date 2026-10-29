@@ -4,6 +4,7 @@ system = "quests"
 scope = "Legacy quest flag, completion and clearing requests receive vmangos's unhandled result."
 requests = ["0x002A", "0x002B", "0x002C"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

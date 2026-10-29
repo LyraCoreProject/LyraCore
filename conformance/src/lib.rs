@@ -1,7 +1,8 @@
 mod schema;
 
 pub use schema::{
-    Behavior, DeliberateDeviation, KnownGap, RealClient, Rung, SourceReference, TestEvidence,
+    Behavior, DeliberateDeviation, KnownGap, RealClient, Rung, ScopeVerification, SourceReference,
+    TestEvidence,
 };
 
 use std::collections::{BTreeMap, BTreeSet};

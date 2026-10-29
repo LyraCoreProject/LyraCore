@@ -4,6 +4,7 @@ system = "taxi"
 scope = "Legacy taxi-node edit requests receive vmangos's unhandled result."
 requests = ["0x01A6", "0x01A7", "0x01A8", "0x0241", "0x0242"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

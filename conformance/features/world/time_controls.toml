@@ -4,6 +4,7 @@ system = "world"
 scope = "Legacy game-time, speed and Realm-time edit requests receive vmangos's unhandled result."
 requests = ["0x0044", "0x0046", "0x0048"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

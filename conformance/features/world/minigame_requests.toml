@@ -4,6 +4,7 @@ system = "world"
 scope = "The minigame move request receives vmangos's unhandled result."
 requests = ["0x02F8"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

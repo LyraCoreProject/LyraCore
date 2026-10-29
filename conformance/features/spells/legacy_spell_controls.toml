@@ -4,6 +4,7 @@ system = "spells"
 scope = "Legacy spell charge, learning and slot requests receive vmangos's unhandled result."
 requests = ["0x000F", "0x0010", "0x012D", "0x0201", "0x0204"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

@@ -4,6 +4,7 @@ system = "administration"
 scope = "Legacy Character location, visibility and online-state requests receive vmangos's unhandled result."
 requests = ["0x01E6", "0x01E8", "0x01E9", "0x01EF", "0x0226", "0x0228", "0x0229", "0x022D", "0x022E", "0x022F", "0x026E"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

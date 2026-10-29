@@ -4,6 +4,7 @@ system = "pets"
 scope = "Legacy pet level and invulnerability requests receive vmangos's unhandled result."
 requests = ["0x001C", "0x0026"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

@@ -4,6 +4,7 @@ system = "support"
 scope = "Legacy ticket intake and status edit requests receive vmangos's unhandled result."
 requests = ["0x029A", "0x0327"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

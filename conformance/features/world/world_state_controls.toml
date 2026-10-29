@@ -4,6 +4,7 @@ system = "world"
 scope = "Legacy world-state and exploration edit requests receive vmangos's unhandled result."
 requests = ["0x0027", "0x0237", "0x02BE", "0x031B"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

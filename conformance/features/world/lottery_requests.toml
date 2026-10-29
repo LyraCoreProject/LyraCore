@@ -4,6 +4,7 @@ system = "world"
 scope = "Legacy lottery query and ticket purchase requests receive vmangos's unhandled result."
 requests = ["0x0334", "0x0336"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

@@ -4,6 +4,7 @@ system = "administration"
 scope = "Legacy Account security, lookup and removal requests receive vmangos's unhandled result."
 requests = ["0x01F9", "0x01FA", "0x01FD", "0x030F"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

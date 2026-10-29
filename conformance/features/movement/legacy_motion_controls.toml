@@ -4,6 +4,7 @@ system = "movement"
 scope = "Legacy speed, root, knockback, hover and water-movement requests receive vmangos's unhandled result."
 requests = ["0x00CD", "0x00CF", "0x00D1", "0x00D3", "0x00D5", "0x00D8", "0x00EC", "0x00ED", "0x00F1", "0x00F7", "0x02B0", "0x02B1"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

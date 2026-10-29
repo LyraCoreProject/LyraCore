@@ -4,6 +4,7 @@ system = "administration"
 scope = "Legacy command, broadcast and script requests receive vmangos's unhandled result."
 requests = ["0x0227", "0x02B2", "0x02B5"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

@@ -4,6 +4,7 @@ system = "support"
 scope = "Client diagnostics, damage logging and Lua usage requests receive vmangos's unhandled result."
 requests = ["0x0017", "0x027D", "0x0315", "0x0316", "0x0323"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

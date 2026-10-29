@@ -4,6 +4,7 @@ system = "administration"
 scope = "Legacy item creation, money, durability and undress requests receive vmangos's unhandled result."
 requests = ["0x0013", "0x0020", "0x0024", "0x0210", "0x0287"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

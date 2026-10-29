@@ -11,6 +11,8 @@ pub struct Behavior {
     pub id: String,
     pub system: String,
     pub scope: String,
+    #[serde(default)]
+    pub scope_verification: ScopeVerification,
     pub requests: Vec<String>,
     pub replies: Vec<String>,
     pub dependencies: Vec<String>,
@@ -49,6 +51,14 @@ pub struct KnownGap {
     pub path: String,
     pub symbol: String,
     pub evidence: String,
+}
+
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Deserialize, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScopeVerification {
+    #[default]
+    Established,
+    StockClientUseUnverified,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -92,6 +102,11 @@ impl Behavior {
         identifier(&self.id)?;
         identifier(&self.system)?;
         nonempty(&self.scope, "scope")?;
+        ensure!(
+            self.scope_verification != ScopeVerification::StockClientUseUnverified
+                || !self.requests.is_empty(),
+            "scope_verification requires at least one request"
+        );
         ensure!(
             !self.requests.is_empty() || !self.replies.is_empty() || !self.known_gaps.is_empty(),
             "Behavior has neither opcodes nor known gaps"

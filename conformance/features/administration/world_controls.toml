@@ -4,6 +4,7 @@ system = "administration"
 scope = "Teleport-to-unit follows vmangos's command path; legacy weather, event and spawn controls stay unhandled."
 requests = ["0x0009", "0x000C", "0x001F", "0x002D", "0x0031"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

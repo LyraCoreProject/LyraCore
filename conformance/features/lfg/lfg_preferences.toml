@@ -4,6 +4,7 @@ system = "lfg"
 scope = "A Character can save looking-for-group preferences from the 1.12.1 client."
 requests = ["0x0200"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

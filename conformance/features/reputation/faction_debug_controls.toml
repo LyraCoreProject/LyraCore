@@ -4,6 +4,7 @@ system = "reputation"
 scope = "Legacy faction standing edit requests receive vmangos's unhandled result."
 requests = ["0x0126", "0x0281"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

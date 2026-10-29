@@ -4,6 +4,7 @@ system = "administration"
 scope = "Legacy resurrection and Corpse edit requests receive vmangos's unhandled result."
 requests = ["0x022A", "0x022C", "0x0310", "0x0311"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

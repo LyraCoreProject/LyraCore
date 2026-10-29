@@ -89,6 +89,7 @@ GROUPS = {
 OUT_OF_SCOPE = {
     "CMSG_WORLD_TELEPORT": "HandleWorldTeleportOpcode requires SEC_ADMINISTRATOR.",
     "CMSG_MOVE_SET_RAW_POSITION": "HandleMoveSetRawPosition requires SEC_ADMINISTRATOR.",
+    "MSG_MOVE_TELEPORT_CHEAT": "Opcodes.cpp routes MSG_MOVE_TELEPORT_CHEAT to HandleMoveSetRawPosition, which requires SEC_ADMINISTRATOR.",
     "CMSG_WHOIS": "HandleWhoisOpcode requires SEC_ADMINISTRATOR.",
 }
 
@@ -188,7 +189,7 @@ RESTORED_REQUESTS = {
     "gameobjects/gameobject_interaction": "00B2",
     "movement/character_movement": "00C5 02D8 02D9",
     "movement/legacy_motion_controls": "00CD 00CF 00D1 00D3 00D5 00D8 00EC 00ED 00F1 00F7 02B0 02B1",
-    "movement/debug_motion_controls": "00C4 00C6 00C8 00CC 00CE 00D0 00D2 00D4 00D6 00D7 00D9 02AD 032C",
+    "movement/debug_motion_controls": "00C4 00C8 00CC 00CE 00D0 00D2 00D4 00D6 00D7 00D9 02AD 032C",
     "movement/movement_receipts": "00E0 0319",
     "world/cinematics": "00F8",
     "inventory/bag_management": "0106 0107 0110",
@@ -228,7 +229,7 @@ RESTORED_SCOPES = {
     "quest_debug_controls": "Legacy quest flag, completion and clearing requests receive vmangos's unhandled result.",
     "pvp_debug_controls": "Legacy PvP rank, medal, title and flag edit requests receive vmangos's unhandled result.",
     "legacy_motion_controls": "Legacy speed, root, knockback, hover and water-movement requests receive vmangos's unhandled result.",
-    "debug_motion_controls": "Raw-position teleport is administrator-gated; other legacy movement debug requests stay unhandled.",
+    "debug_motion_controls": "Legacy movement debug requests stay unhandled.",
     "faction_debug_controls": "Legacy faction standing edit requests receive vmangos's unhandled result.",
     "taxi_node_controls": "Legacy taxi-node edit requests receive vmangos's unhandled result.",
     "legacy_macro_request": "The obsolete macro request receives vmangos's unhandled result.",
@@ -335,9 +336,10 @@ def main():
         if gaps:
             lines += ["", "[[known_gaps]]", f"description = {quoted('The Module returns an unavailable response for ' + ', '.join(gaps) + '.')}", 'path = "module/src/native/unavailable.rs"', f"symbol = {quoted('responses' if any(name in unavailable_names for name in gaps) else 'raw_responses')}", 'evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"']
         uncertain = [name for name in requested if name in restored or name in invalid]
-        for reason in ["Invalid", "Unhandled", "Handled", "AdminGated"]:
+        if len(uncertain) == len(requested):
+            lines.insert(6, 'scope_verification = "stock_client_use_unverified"')
+        for reason in ["Invalid", "Unhandled", "Handled"]:
             names = [name for name in uncertain if (
-                "AdminGated" if name == "MSG_MOVE_TELEPORT_CHEAT" else
                 invalid.get(name, "Handled")) == reason]
             if not names:
                 continue
@@ -346,19 +348,21 @@ def main():
                 "Invalid": "marks them invalid" if plural else "marks it invalid",
                 "Unhandled": "marks them unhandled" if plural else "marks it unhandled",
                 "Handled": "dispatches them to handlers" if plural else "dispatches it to a handler",
-                "AdminGated": "requires administrator access for raw-position teleport",
             }[reason]
             lines += ["", "[[known_gaps]]",
                       f"description = {quoted('Stock-client use of ' + ', '.join(names) + ' is unverified; vmangos ' + result + '. Check whether the client sends ' + ('any of them' if plural else 'it') + ' and what result to preserve.')}",
                       'path = "module/src/native/mod.rs"', 'symbol = "receive"',
-                      f"evidence = {quoted(RAW + 'src/game/Server/Protocol/Opcodes.cpp' + ('; ' + RAW + 'src/game/Handlers/MiscHandler.cpp' if reason == 'AdminGated' else ''))}"]
+                      f"evidence = {quoted(RAW + 'src/game/Server/Protocol/Opcodes.cpp')}"]
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_text("\n".join(lines) + "\n")
     out = output / "opcodes-out-of-scope.toml"
     assert not out.exists(), out
     lines = ["[out_of_scope]"]
     for name, reason in sorted(out_of_scope.items(), key=lambda entry: all_ids[entry[0]]):
-        lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted('https://github.com/vmangos/core/blob/' + SHA + '/src/game/Handlers/MiscHandler.cpp')}"]
+        source = 'https://github.com/vmangos/core/blob/' + SHA + '/src/game/Handlers/MiscHandler.cpp'
+        if name == 'MSG_MOVE_TELEPORT_CHEAT':
+            source = 'https://github.com/vmangos/core/blob/' + SHA + '/src/game/Server/Protocol/Opcodes.cpp; ' + source
+        lines += ["", f"[out_of_scope.{name}]", f"reason = {quoted(reason)}", f"source = {quoted(source)}"]
     out.write_text("\n".join(lines) + "\n")
     print(f"Created {len(grouped)} Behavior groups; {len(restored)} restored requests; {len(out_of_scope)} out-of-scope opcodes")
 

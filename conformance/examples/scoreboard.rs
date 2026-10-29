@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 
 use anyhow::{bail, ensure, Context, Result};
-use lyracore_conformance::{Behavior, FeatureLedger, RealClient};
+use lyracore_conformance::{Behavior, FeatureLedger, RealClient, ScopeVerification};
 use serde::Serialize;
 use serde_json::{json, Value};
 
@@ -88,6 +88,7 @@ fn open_work(
             && tier1_state.is_match()
             && audit_state.is_match()
             && behavior.known_gaps.is_empty()
+            && behavior.scope_verification == ScopeVerification::Established
         {
             continue;
         }
@@ -123,7 +124,9 @@ fn open_work(
             .map(|gap| (&gap.description, &gap.path, &gap.symbol, &gap.evidence))
             .collect::<BTreeSet<_>>()
             .len();
-        let kind = if behavior.scenarios.is_empty() {
+        let kind = if behavior.scope_verification == ScopeVerification::StockClientUseUnverified {
+            "scope_verification"
+        } else if behavior.scenarios.is_empty() {
             "scenario_author"
         } else if matches!(
             audit_state,
@@ -137,7 +140,7 @@ fn open_work(
         } else {
             "implementer"
         };
-        let reproduce_with = if kind == "scenario_author" {
+        let reproduce_with = if kind == "scenario_author" || kind == "scope_verification" {
             None
         } else if kind == "evidence_refresh"
             || (tier1_state.is_match() && matches!(audit_state, State::Different(_)))
@@ -181,16 +184,19 @@ fn open_work(
             claimed_opcodes: requests(&[behavior])?.len(),
         });
     }
+    let group = |kind| match kind {
+        "scope_verification" => 1,
+        "evidence_refresh" => 2,
+        _ => 0,
+    };
     work.sort_by(|a, b| {
-        (a.kind == "evidence_refresh")
-            .cmp(&(b.kind == "evidence_refresh"))
-            .then_with(|| {
-                b.dependents
-                    .cmp(&a.dependents)
-                    .then_with(|| b.open_signatures_or_gaps.cmp(&a.open_signatures_or_gaps))
-                    .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
-                    .then_with(|| a.behavior.cmp(&b.behavior))
-            })
+        group(a.kind).cmp(&group(b.kind)).then_with(|| {
+            b.dependents
+                .cmp(&a.dependents)
+                .then_with(|| b.open_signatures_or_gaps.cmp(&a.open_signatures_or_gaps))
+                .then_with(|| b.claimed_opcodes.cmp(&a.claimed_opcodes))
+                .then_with(|| a.behavior.cmp(&b.behavior))
+        })
     });
     Ok(work)
 }
@@ -231,6 +237,7 @@ fn scoreboard_json(data: &ScoreboardData<'_>) -> Result<Value> {
         };
         behaviors.insert(behavior.id.clone(), json!({
             "system": behavior.system, "scenarios": behavior.scenarios,
+            "scope_verification": behavior.scope_verification,
             "dependencies": behavior.dependencies, "required_rungs": behavior.required_rungs,
             "tier1": state_json(&state(tier1.map(|(_, report)| report), behavior, tier1_head, revision)?),
             "audit": state_json(&state(audit.map(|(_, report)| report), behavior, audit_head, revision)?),
@@ -573,7 +580,7 @@ fn print_text(data: &ScoreboardData<'_>) -> Result<()> {
         }
     }
     spells::print(spells);
-    println!("\nOpen work, with evidence refresh last; ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
+    println!("\nOpen work: established Behaviors, scope verification, evidence refresh; within each group ranked by dependents, measured rule signatures or distinct known gaps, claimed request opcodes, then Behavior id:");
     for (index, item) in work.iter().enumerate() {
         println!(
             "{}. {} / {}: {} (dependents {}, signatures or gaps {}, opcodes {}); reproduce with {}; {}",
@@ -671,7 +678,13 @@ status = "unverified"
         ),
         (
             "sample/tie.toml",
-            format!("{}{gap}{gap}", source("tie", "[]", "[]", "[\"0x0050\"]")),
+            format!(
+                "{}{gap}{gap}",
+                source("tie", "[]", "[]", "[\"0x0050\"]").replace(
+                    "replies = []",
+                    "replies = []\nscope_verification = \"stock_client_use_unverified\""
+                )
+            ),
         ),
         (
             "sample/more.toml",
@@ -695,14 +708,30 @@ fn open_work_ranks_synthetic_ledger_deterministically() -> Result<()> {
         work.iter()
             .map(|item| item.behavior.as_str())
             .collect::<Vec<_>>(),
-        ["root", "branch", "tie", "more", "leaf", "zoo"]
+        ["root", "branch", "more", "leaf", "zoo", "tie"]
     );
     assert_eq!(work[0].dependents, 2);
     assert_eq!(work[1].kind, "implementer");
     assert_eq!(work[1].next_command, "./conformance/run branch");
     assert!(work[1].prerequisites.is_empty());
     assert_eq!(work[2].kind, "scenario_author");
-    assert_eq!(work[2].open_signatures_or_gaps, 1);
+    assert_eq!(work[5].open_signatures_or_gaps, 1);
+    Ok(())
+}
+
+#[test]
+fn unverified_request_scope_follows_established_work_before_evidence_refresh() -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let ledger = FeatureLedger::load(&root.join("features"))?;
+    let work = open_work(&ledger, None, None, "head", "head", "pin")?;
+    let position = |id| work.iter().position(|item| item.behavior == id).unwrap();
+    assert!(position("direct_trade") < position("debug_motion_controls"));
+    assert!(position("cast_and_interrupt") < position("debug_motion_controls"));
+    assert!(position("debug_motion_controls") < position("connection_identity"));
+    assert_eq!(
+        work[position("debug_motion_controls")].kind,
+        "scope_verification"
+    );
     Ok(())
 }
 

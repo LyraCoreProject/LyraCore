@@ -4,6 +4,7 @@ system = "pvp"
 scope = "Legacy PvP rank, medal, title and flag edit requests receive vmangos's unhandled result."
 requests = ["0x0030", "0x0288", "0x0289", "0x028A", "0x028B"]
 replies = []
+scope_verification = "stock_client_use_unverified"
 dependencies = []
 required_rungs = ["tier1", "conformance_audit", "real_client"]
 scenarios = []

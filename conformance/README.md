@@ -19,8 +19,8 @@ and adds source-presence facts. It never runs the named evidence tests.
 
 ## Schema version 1
 
-All fields below except `known_gaps` are required. Use an empty array when no
-entry exists yet.
+All fields below except `known_gaps` and `scope_verification` are required. Use an empty array
+when no entry exists yet.
 All nested tables refuse unknown fields too. Paths are relative, without parent-directory components.
 
 | Field | Meaning |
@@ -29,6 +29,7 @@ All nested tables refuse unknown fields too. Paths are relative, without parent-
 | `id` | Globally unique Behavior id, matching the filename without `.toml` |
 | `system` | Scoreboard group, matching the directory name |
 | `scope` | The 1.12.1 result in plain words, including boundaries that matter |
+| `scope_verification` | Optional `stock_client_use_unverified` when every request in the Behavior still needs a stock-client-use check; otherwise defaults to `established` |
 | `requests`, `replies` | Client and server opcode claims, written as strings such as `0x018E` |
 | `dependencies` | Other Behavior ids that this Behavior requires |
 | `vmangos` | Source reference with `commit`, `path` and `symbol`; the commit is a full SHA |
@@ -63,10 +64,12 @@ and `evidence`. The last field names the recorded observations. Audits never upd
 No other handwritten status is accepted. A missing implementation is a gap, not a Deliberate
 Deviation; that field records a result LyraCore has chosen to keep different.
 
-Known gaps record observed defects or open stock-client questions and their evidence. They neither excuse differences
-nor change rule/data classification, pass counts or freshness. The scoreboard shows their count
-separately. Each entry requires nonempty description, symbol and evidence fields and a relative
-source path. Unknown fields, including status, fail.
+Known gaps record observed defects or open stock-client questions and their evidence. They neither
+excuse differences nor change rule/data classification, pass counts or freshness.
+`scope_verification` marks Behaviors whose every request has unverified stock-client use. It
+requires at least one request and does not change the denominator. The scoreboard shows known-gap
+counts separately. Each entry requires nonempty description, symbol and evidence fields and a
+relative source path. Unknown fields, including status, fail.
 
 ### Data-dependent fields
 
@@ -266,8 +269,9 @@ an entry with one when its evidence still points to implementation work. If tier
 best available rule-signature count is zero and the ledger has no known gaps, an entry with a missing,
 stale, unverified or reference-unstable audit calls for evidence refresh by a maintainer through
 `./conformance/audit`.
-Evidence refresh follows implementation and scenario work in the ranking. Each entry gives a next
-command. The scenario-author command opens the ledger entry. An implementer normally runs the first
+Scope verification follows established implementation and scenario work; evidence refresh comes
+last. Each entry gives a next command. The scenario-author command opens the ledger entry. An
+implementer normally runs the first
 listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
 when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
@@ -279,8 +283,10 @@ After an improvement, run `./conformance/baseline <scenario>`, then review the c
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
 `prerequisites`. The command chooses an unused report name; audit history is append-only.
 
-Within those groups, the list sorts by descending number of other Behaviors that directly depend
-on the entry, then descending measured rule-signature count, then descending number of distinct
+The scope-verification group contains Behaviors marked `stock_client_use_unverified`. Its next
+command opens the ledger entry so the request-use question can be checked. Within each group, the
+list sorts by descending number of other Behaviors that directly depend on the entry, then
+descending measured rule-signature count, then descending number of distinct
 claimed request opcodes, then ascending Behavior id. It uses the committed tier 1 baseline's
 distinct rule signatures when the Behavior has one, then the audit count, then a local tier 1
 count. If none exists, it uses the number of distinct known gaps. Repeating a known gap does not
@@ -293,14 +299,14 @@ keyed by their ledger ids, `open_work` in rank order, `opcode_coverage`, `traina
 the complete validated schema-2 `report`, including scenario comparisons and audit summaries.
 Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`, `audit_pass`,
 `real_client_waiting`, `claimed_opcodes` and `unavailable`. Each Behavior gives its `system`,
-`scenarios`, `dependencies`, `required_rungs`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
+`scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
 `unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
 measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
 `unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
 record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
-`scenario_author`, `implementer` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
+`scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
 is the measured signature count or the distinct-gap fallback. Counts and state names have the same
 meaning as the text scoreboard.
 `opcode_coverage` reports `claimed`, `out_of_scope`, `unclaimed` and `total` for the build-5875

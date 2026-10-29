@@ -8,6 +8,10 @@ source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898
 reason = "HandleWhoisOpcode requires SEC_ADMINISTRATOR."
 source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MiscHandler.cpp"
 
+[out_of_scope.MSG_MOVE_TELEPORT_CHEAT]
+reason = "Opcodes.cpp routes MSG_MOVE_TELEPORT_CHEAT to HandleMoveSetRawPosition, which requires SEC_ADMINISTRATOR."
+source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Server/Protocol/Opcodes.cpp; https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MiscHandler.cpp"
+
 [out_of_scope.CMSG_MOVE_SET_RAW_POSITION]
 reason = "HandleMoveSetRawPosition requires SEC_ADMINISTRATOR."
 source = "https://github.com/vmangos/core/blob/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Handlers/MiscHandler.cpp"
