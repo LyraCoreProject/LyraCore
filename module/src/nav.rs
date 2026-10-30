@@ -851,24 +851,59 @@ pub(crate) fn nav_step(
     stop_dist: f32,
     z: f32,
 ) -> (f32, f32) {
-    let stepped = if !nav_enabled(ctx) {
-        crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+    nav_step_within(
+        ctx,
+        map_id,
+        instance_id,
+        cur,
+        dest,
+        (max_step, stop_dist),
+        z,
+        LEG_MAX_EXPANSIONS,
+    )
+    .0
+}
+
+/// Steps toward `dest` with at most `max_expansions` path-search nodes; returns the nodes spent.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn nav_step_within(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    cur: (f32, f32),
+    dest: (f32, f32),
+    (max_step, stop_dist): (f32, f32),
+    z: f32,
+    max_expansions: u32,
+) -> ((f32, f32), u32) {
+    let (stepped, expansions) = if !nav_enabled(ctx) {
+        (
+            crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
+            0,
+        )
     } else {
-        match lyracore_shared::nav::find_leg_in_range(
+        let search = lyracore_shared::nav::find_leg_in_range_ex(
             &mut fetcher(ctx, map_id),
             cur,
             dest,
             stop_dist,
-            LEG_MAX_EXPANSIONS,
-        ) {
-            Some(path) => {
+            max_expansions,
+        );
+        let stepped = match search.outcome {
+            nav::LegOutcome::Complete(path) | nav::LegOutcome::Partial(path) => {
                 let wp = path[0];
                 crate::creatures::chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
             }
-            None => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
-        }
+            nav::LegOutcome::Blocked => {
+                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+            }
+        };
+        (stepped, search.expansions)
     };
-    step_gate(ctx, map_id, instance_id, cur, stepped, z)
+    (
+        step_gate(ctx, map_id, instance_id, cur, stepped, z),
+        expansions,
+    )
 }
 
 const GATE_CLEARANCE_YD: f32 = 1.0;

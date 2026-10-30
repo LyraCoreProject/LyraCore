@@ -492,6 +492,16 @@ pub(crate) trait CreatureWorld:
     fn pass_timer(&self, _pass: &'static str) -> Option<PassTimer> {
         None
     }
+    /// A chase step, or None when this tick's path-search budget is spent.
+    fn chase_navigate(
+        &self,
+        guid: u64,
+        to: (f32, f32),
+        max_step: f32,
+        stop_dist: f32,
+    ) -> Option<(f32, f32)> {
+        Some(self.navigate(guid, to, max_step, stop_dist))
+    }
 }
 
 /// Logs a pass's elapsed time when dropped. Native test builds have no Host timer to call.
@@ -1089,7 +1099,8 @@ fn angle_diff(from: f32, to: f32) -> f32 {
 
 fn chase<W: CreatureWorld>(w: &mut W, tick: &TickContext) -> usize {
     let mut pursuits = timed(w, "chase.pursuits", |w| w.pursuits(&tick.scope));
-    pursuits.sort_unstable_by_key(|c| c.guid);
+    // A creature without a leg stands still, so it searches before one that is still moving.
+    pursuits.sort_unstable_by_key(|c| (c.leg.is_some(), c.guid));
     let visited = pursuits.len();
     for c in pursuits {
         let gated = timed(w, "chase.gates", |w| {
@@ -1162,9 +1173,12 @@ fn commit_chase_leg<W: CreatureWorld>(
     if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
         return;
     }
-    let step = timed(w, "chase.navigate", |w| {
-        w.navigate(c.guid, (target.x, target.y), gap, stop_dist)
-    });
+    // Out of budget, the creature keeps its current leg until a later tick.
+    let Some(step) = timed(w, "chase.navigate", |w| {
+        w.chase_navigate(c.guid, (target.x, target.y), gap, stop_dist)
+    }) else {
+        return;
+    };
     if step == (c.at.x, c.at.y) {
         w.target_not_reachable(c.guid);
         return;
