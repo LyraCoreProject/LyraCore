@@ -21,16 +21,21 @@ const MAX_BATCH_OFFERS: usize = 512;
 const MAX_ITEM_NAME_BYTES: usize = 255;
 
 // The exhaustive constructor makes a new ItemTemplate column a compile failure here.
+// A kept column is not editable: an update keeps its value and a create takes its default.
 macro_rules! item_fields {
-    ($($field:ident: $ty:ty),* $(,)?) => {
+    ($($field:ident: $ty:ty),* $(,)?; kept: $($kept:ident),* $(,)?) => {
         #[derive(SpacetimeType, Clone, Default)]
         pub struct ItemFields {
             $(pub $field: $ty,)*
         }
 
         impl ItemFields {
-            fn into_template(self, entry: u32) -> ItemTemplate {
-                ItemTemplate { entry, $($field: self.$field,)* }
+            fn into_template(self, entry: u32, old: Option<&ItemTemplate>) -> ItemTemplate {
+                ItemTemplate {
+                    entry,
+                    $($field: self.$field,)*
+                    $($kept: old.map(|old| old.$kept).unwrap_or_default(),)*
+                }
             }
 
             fn of_template(template: &ItemTemplate) -> Self {
@@ -107,7 +112,8 @@ item_fields! {
     food_type: u8,
     allowed_class: u32,
     allowed_race: u32,
-    random_property: u32,
+    random_property: u32;
+    kept: spellppmrate_1, spellppmrate_2, spellppmrate_3, spellppmrate_4, spellppmrate_5,
 }
 
 #[derive(SpacetimeType, Clone)]
@@ -261,7 +267,7 @@ fn apply(
             let changes = create.fields.changes(None);
             ctx.db
                 .game_item_template()
-                .try_insert(create.fields.into_template(entry))
+                .try_insert(create.fields.into_template(entry, None))
                 .map_err(|reason| format!("item {entry} cannot be inserted: {reason}"))?;
             changed.insert(entry);
             Ok(format!("create item {entry}: {changes}"))
@@ -285,7 +291,7 @@ fn apply(
             ctx.db
                 .game_item_template()
                 .entry()
-                .update(update.fields.into_template(entry));
+                .update(update.fields.into_template(entry, Some(&old)));
             changed.insert(entry);
             updated.insert(entry);
             Ok(format!("update item {entry}: {changes}"))
@@ -593,8 +599,22 @@ mod tests {
     }
 
     #[test]
+    fn an_update_keeps_the_chance_on_hit_rates_and_a_create_has_none() {
+        let old = ItemTemplate {
+            spellppmrate_1: 9.5,
+            ..fields().into_template(25, None)
+        };
+        let renamed = ItemFields {
+            name: "Renamed".into(),
+            ..fields()
+        };
+        assert_eq!(renamed.into_template(25, Some(&old)).spellppmrate_1, 9.5);
+        assert_eq!(fields().into_template(26, None).spellppmrate_1, 0.0);
+    }
+
+    #[test]
     fn update_log_contains_only_changed_columns_and_escapes_newlines() {
-        let old = fields().into_template(25);
+        let old = fields().into_template(25, None);
         let fields = ItemFields {
             name: "Changed\nname".into(),
             ..fields()

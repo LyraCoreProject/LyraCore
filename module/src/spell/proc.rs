@@ -24,7 +24,7 @@ pub(crate) const PROC_EX_CRITICAL_HIT: u32 = 0x0000_0002;
 
 const SCHOOL_MASK_PHYSICAL: u8 = 0x01;
 
-const BASIS_POINTS: u32 = 10_000;
+pub(crate) const BASIS_POINTS: u32 = 10_000;
 
 // Vanilla chance_pct = ppm * attack_time_ms / 600.
 const PPM_DIVISOR_PCT: f32 = 600.0;
@@ -253,6 +253,27 @@ pub(crate) fn run_proc_pass(
     if dealer_bits == 0 && victim_bits == 0 {
         return;
     }
+    fire_aura_procs(
+        ctx,
+        attacker_guid,
+        target_guid,
+        hit,
+        target_survived,
+        (dealer_bits, victim_bits),
+    );
+    if target_survived {
+        super::chance_on_hit::roll_chance_on_hit(ctx, attacker_guid, target_guid, hit);
+    }
+}
+
+fn fire_aura_procs(
+    ctx: &ReducerContext,
+    attacker_guid: u64,
+    target_guid: u64,
+    hit: &Hit,
+    target_survived: bool,
+    (dealer_bits, victim_bits): (u32, u32),
+) {
     // Triggered Casts can change aura rows, so snapshot all candidates before firing any.
     let mut candidates: Vec<(Aura, ProcSide, u64)> = Vec::new();
     // Guid zero targets the Carrier, so a missing Counterparty must not trigger a cast.

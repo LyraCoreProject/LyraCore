@@ -498,6 +498,11 @@ pub(crate) fn base_item(entry: u32, name: &str) -> ItemTemplate {
         allowed_class: ALL_PLAYABLE_CLASS_MASK,
         allowed_race: ALL_PLAYABLE_RACE_MASK,
         random_property: 0,
+        spellppmrate_1: 0.0,
+        spellppmrate_2: 0.0,
+        spellppmrate_3: 0.0,
+        spellppmrate_4: 0.0,
+        spellppmrate_5: 0.0,
     }
 }
 

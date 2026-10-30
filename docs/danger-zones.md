@@ -18,6 +18,9 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
 2. **Migrations:**
    - A new column goes at the END of the struct with a `#[default(...)]`. That is an additive
      auto-migrate. A column anywhere else makes the publish abort.
+   - SpacetimeDB SQL INSERT needs every column. When an existing INSERT can omit the new column,
+     add its default to `crates/lyracore-shared/src/import_sql_defaults.txt`; the importer, the
+     durable tests and the native check fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.
@@ -108,6 +111,14 @@ spell rows mark only Slice and Dice with `SPELL_ATTR_COMBO_FINISHER`. Until spel
 the other finishers skip the combo-point Gate and keep their points, no finisher scales with combo
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
+
+### Chance on Hit migration
+
+`game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
+lack `SPELL_ATTR_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
+proc chance, which is one proc per minute for most weapons, and only white swings roll it. After you
+publish this schema to an existing Shard, reimport the `items` and `spell` families before play
+resumes.
 
 ### Native Relay events
 
