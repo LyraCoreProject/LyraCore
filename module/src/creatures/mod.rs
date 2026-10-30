@@ -25,7 +25,7 @@ pub(crate) use ai::{
     beyond_combat_backstop, chase_step, combat_active_radius, flee_eligible,
     is_sense_tick_for_interval, pursuit_deadline_ms, rout_window_open,
     sense_period_secs_for_interval, should_evade, should_flee, tick_secs_for_interval, TickScope,
-    GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS,
+    TickSlice, GLOBAL_TICK_INSTANCE, MOVE_TICK_MICROS, SLICED_TICK_MICROS,
 };
 #[cfg(test)]
 pub(crate) use ai::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};

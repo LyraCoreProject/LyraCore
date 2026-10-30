@@ -50,7 +50,7 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
         regen_window,
         advances: Vec::new(),
         profile: tick.now_micros % PROFILE_PERIOD_MICROS < PROFILE_WINDOW_MICROS,
-        chase_expansions: std::cell::Cell::new(CHASE_TICK_EXPANSIONS),
+        chase_expansions: std::cell::Cell::new(CHASE_TICK_EXPANSIONS / tick.scope.slice().count),
     };
     let outcome = crate::vmap::with_query_cache(|| {
         crate::nav::with_cell_cache(|| run_cycle(&mut world, tick))
@@ -230,7 +230,7 @@ impl MotionSink for CtxWorld<'_> {
             TickScope::CatchAll { .. } => Box::new(
                 splines
                     .iter()
-                    .filter(|spline| scope.covers(spline.instance_id)),
+                    .filter(|spline| scope.owns(spline.guid, spline.instance_id)),
             ),
         };
         rows.map(|s| {
@@ -1098,7 +1098,7 @@ impl PetSink for CtxWorld<'_> {
         candidates
             .iter()
             .filter_map(|guid| entities.guid().find(guid))
-            .filter(|p| scope.covers(p.instance_id))
+            .filter(|p| scope.owns(p.guid, p.instance_id))
             .filter(|p| !p.dead || !crate::creatures::guardian::is_guardian(self.ctx, p.guid))
             .map(|p| {
                 let guardian = crate::creatures::guardian::is_guardian(self.ctx, p.guid);

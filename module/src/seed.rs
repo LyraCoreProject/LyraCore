@@ -1170,7 +1170,10 @@ fn seed_scheduler_arming(ctx: &ReducerContext) {
         .game_creature_move_schedule()
         .insert(CreatureMoveSchedule {
             scheduled_id: 0,
-            scheduled_at: crate::time::schedule_interval(ctx, TimeDuration::from_micros(500_000)),
+            scheduled_at: crate::time::schedule_interval(
+                ctx,
+                TimeDuration::from_micros(crate::creatures::SLICED_TICK_MICROS),
+            ),
             instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
         });
 

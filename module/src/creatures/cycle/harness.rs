@@ -1325,6 +1325,7 @@ impl CreatureWorld for Scenario {
         let awake = self.awake.borrow();
         TickSweep {
             active: awake.active.clone(),
+            awake: awake.active.clone(),
             pets: awake.pets.clone(),
             in_combat: awake.in_combat.clone(),
         }

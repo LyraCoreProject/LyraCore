@@ -527,6 +527,7 @@ fn timed<W: CreatureWorld, T>(w: &mut W, pass: &'static str, f: impl FnOnce(&mut
 pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> CycleOutcome {
     let TickSweep {
         active,
+        awake,
         pets,
         in_combat,
     } = timed(w, "sweep", |w| w.awake_creatures(&tick.scope, tick.sense));
@@ -550,7 +551,7 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         rows.push(("aggro", seen as u64));
         rows.push((
             "assist",
-            timed(w, "assist", |w| assist(w, &active, pulls)) as u64,
+            timed(w, "assist", |w| assist(w, &awake, pulls)) as u64,
         ));
         rows.push((
             "pet",
@@ -1270,7 +1271,7 @@ fn combat_entry<W: EngageSink>(w: &mut W, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let mut units: Vec<u64> = Vec::new();
     for e in w.engagements() {
-        if !scope.covers(e.instance_id) || e.player_never_swung {
+        if !scope.owns(e.attacker, e.instance_id) || e.player_never_swung {
             continue;
         }
         visited += 1;

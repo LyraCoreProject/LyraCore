@@ -13,6 +13,7 @@ fn point(x: f32, y: f32) -> Point {
 fn scope() -> TickScope {
     TickScope::CatchAll {
         dedicated: HashSet::new(),
+        slice: crate::creatures::TickSlice::WHOLE,
     }
 }
 
