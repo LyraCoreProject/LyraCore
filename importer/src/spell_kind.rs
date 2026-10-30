@@ -25,11 +25,16 @@ pub fn instant_effect_to_kind(effect_id: i32) -> u8 {
         80 => E_ADD_COMBO,
         94 => E_SELF_RESURRECT,
         18 | 113 => E_RESURRECT,
+        19 => E_ADD_EXTRA_ATTACKS,
         _ => E_SCRIPTED,
     }
 }
 
 pub fn correct_script_effect_kind(name: &str, kind: u8) -> u8 {
+    // vmangos scripts Reckoning: crits taken stack up to four swings that follow the next swing.
+    if kind == E_ADD_EXTRA_ATTACKS && name == "Reckoning" {
+        return E_SCRIPTED;
+    }
     if kind == E_TAUNT && name == "Feint" {
         return E_REDUCE_THREAT;
     }

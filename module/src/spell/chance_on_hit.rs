@@ -1,7 +1,7 @@
 use lyracore_shared::constants::starter_item::{CLASS_WEAPON, MAINHAND_SLOT};
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    STANCE_BEAR, STANCE_DIRE_BEAR, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ENEMY,
+    E_ADD_EXTRA_ATTACKS, STANCE_BEAR, STANCE_DIRE_BEAR, T_AREA_ENEMY, T_CHAIN_ENEMY, T_TARGET_ENEMY,
 };
 use spacetimedb::{log, table, ReducerContext};
 
@@ -61,6 +61,13 @@ pub(crate) fn roll_chance_on_hit(
         let Some(spell) = known_spell(ctx, spell_id, || format!("item {}", weapon.entry)) else {
             continue;
         };
+        // vmangos skips the rest of the roll, enchantments included, while the wielder holds Extra
+        // Attacks.
+        if grants_extra_attacks(ctx, spell_id)
+            && crate::combat::has_extra_attacks(ctx, attacker_guid)
+        {
+            return;
+        }
         let chance_bp = chance_bp(spell.proc_chance, ppm, weapon.delay_ms);
         cast_on_roll(ctx, &attacker, spell_id, chance_bp, target_guid);
     }
@@ -103,6 +110,14 @@ fn cast_on_roll(
     ) {
         log::info!("chance on hit: could not cast {spell_id}: {err}");
     }
+}
+
+pub(crate) fn grants_extra_attacks(ctx: &ReducerContext, spell_id: u32) -> bool {
+    ctx.db
+        .game_spell_effect()
+        .by_spell()
+        .filter(&spell_id)
+        .any(|effect| effect.kind == E_ADD_EXTRA_ATTACKS)
 }
 
 fn known_spell(

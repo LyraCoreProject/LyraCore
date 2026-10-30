@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, ReducerContext, Table, TimeDuration};
+use spacetimedb::{reducer, table, ReducerContext, Table, TimeDuration};
 
 use crate::spell::SpellCastEventKind;
 use crate::{game_item_template, game_spell, game_world_entity, SpellCastEvent, WorldEntity};
@@ -205,7 +205,7 @@ fn resolve_swing(ctx: &ReducerContext) {
     let entities = ctx.db.game_world_entity();
 
     let attacks: Vec<MeleeAttack> = melee.iter().collect();
-    for atk in attacks {
+    for mut atk in attacks {
         let Some(attacker) = entities.guid().find(atk.attacker_guid) else {
             crate::combat::MeleeAttack::delete(ctx, atk.attacker_guid);
             continue;
@@ -288,6 +288,13 @@ fn resolve_swing(ctx: &ReducerContext) {
             continue;
         }
 
+        if ranged.is_none() && has_extra_attacks(ctx, atk.attacker_guid) {
+            if !spend_extra_attacks(ctx, &attacker, &target, now_ms) {
+                continue;
+            }
+            atk.last_swing_ms = now_ms;
+        }
+
         if ranged.is_none() {
             resolve_offhand_swing(ctx, atk.attacker_guid, atk.target_guid, &attacker, now_ms);
             if melee.attacker_guid().find(atk.attacker_guid).is_none() {
@@ -324,7 +331,97 @@ fn resolve_swing(ctx: &ReducerContext) {
                 dist_sq,
                 now_ms,
             ),
-            None => fire_melee_swing(ctx, &attacker, &target, now_ms),
+            None => fire_melee_swing(ctx, &attacker, &target, now_ms, false),
+        }
+    }
+}
+
+/// Main-hand swings granted by an extra-attack effect; the next melee tick spends them. They belong
+/// to the melee auto-attack: stopping it drops them.
+#[table(accessor = game_extra_attack)]
+pub struct ExtraAttack {
+    #[primary_key]
+    pub attacker_guid: u64,
+    pub count: u8,
+}
+
+// vmangos SPELL_EFFECT_ADD_EXTRA_ATTACKS: a unit that still holds Extra Attacks gains none.
+pub(crate) fn grant_extra_attacks(ctx: &ReducerContext, guid: u64, count: i32) {
+    let alive = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .is_some_and(|unit| !unit.dead);
+    let meleeing = ctx
+        .db
+        .game_melee_attack()
+        .attacker_guid()
+        .find(guid)
+        .is_some_and(|atk| atk.ranged_spell_id == 0);
+    if !alive || !meleeing || count <= 0 || has_extra_attacks(ctx, guid) {
+        return;
+    }
+    ctx.db.game_extra_attack().insert(ExtraAttack {
+        attacker_guid: guid,
+        count: count.min(i32::from(u8::MAX)) as u8,
+    });
+}
+
+pub(crate) fn has_extra_attacks(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_extra_attack()
+        .attacker_guid()
+        .find(guid)
+        .is_some()
+}
+
+pub(crate) fn drop_extra_attacks(ctx: &ReducerContext, guid: u64) {
+    ctx.db.game_extra_attack().attacker_guid().delete(guid);
+}
+
+// Swings the main hand once per held Extra Attack. Each count is spent after its swing, so a
+// proc during an Extra Attack finds attacks still held and grants none, as in vmangos.
+// Returns false when the engagement ended.
+fn spend_extra_attacks(
+    ctx: &ReducerContext,
+    attacker: &WorldEntity,
+    target: &WorldEntity,
+    now_ms: u32,
+) -> bool {
+    let held = ctx.db.game_extra_attack();
+    let entities = ctx.db.game_world_entity();
+    let meleeing = || {
+        ctx.db
+            .game_melee_attack()
+            .attacker_guid()
+            .find(attacker.guid)
+            .is_some()
+    };
+    loop {
+        if !has_extra_attacks(ctx, attacker.guid) {
+            return meleeing();
+        }
+        let (Some(attacker), Some(target)) = (
+            entities.guid().find(attacker.guid),
+            entities.guid().find(target.guid),
+        ) else {
+            drop_extra_attacks(ctx, attacker.guid);
+            return false;
+        };
+        if attacker.dead || target.dead {
+            drop_extra_attacks(ctx, attacker.guid);
+            continue;
+        }
+        fire_melee_swing(ctx, &attacker, &target, now_ms, true);
+        let Some(mut extra) = held.attacker_guid().find(attacker.guid) else {
+            return meleeing();
+        };
+        extra.count = extra.count.saturating_sub(1);
+        if extra.count == 0 {
+            drop_extra_attacks(ctx, attacker.guid);
+        } else {
+            held.attacker_guid().update(extra);
         }
     }
 }
@@ -464,17 +561,19 @@ fn arms_revenge(hit_info: u8, blocked: u32) -> bool {
     matches!(hit_info, HIT_DODGE | HIT_PARRY | HIT_BLOCK) || blocked > 0
 }
 
+// vmangos AttackerStateUpdate; an extra attack never fires the queued strike.
 fn fire_melee_swing(
     ctx: &ReducerContext,
     attacker: &WorldEntity,
     target: &WorldEntity,
     now_ms: u32,
+    extra: bool,
 ) {
     let attacker_guid = attacker.guid;
     let target_guid = target.guid;
     let melee = ctx.db.game_melee_attack();
 
-    let queued_spell = attacker.next_swing_spell;
+    let queued_spell = if extra { 0 } else { attacker.next_swing_spell };
     let queued_header = ctx.db.game_spell().spell_id().find(queued_spell);
     let swing_is_spell = queued_spell != 0
         && charge_queued_strike(ctx, attacker, queued_spell, queued_header.as_ref());
@@ -501,7 +600,9 @@ fn fire_melee_swing(
     }
 
     let queued_fired = swing_is_spell && rolled > 0;
-    clear_queued_strike(ctx, attacker_guid);
+    if !extra {
+        clear_queued_strike(ctx, attacker_guid);
+    }
 
     crate::spell::break_stealth(ctx, attacker_guid);
 

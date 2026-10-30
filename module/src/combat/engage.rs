@@ -292,6 +292,7 @@ impl MeleeAttack {
             return false;
         };
         table.attacker_guid().delete(guid);
+        crate::combat::drop_extra_attacks(ctx, guid);
         crate::native::engagement_changed(ctx, Some(&old), None);
         true
     }
