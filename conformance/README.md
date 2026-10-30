@@ -246,8 +246,9 @@ then prints differences grouped by signature. Each record shows the expected and
 values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
 the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
 exact signature and provenance equality. The command exits with code 1 when the baseline differs
-and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
-case it prints the test diagnostic. Code 0 means the run completed and the Tier 1 baseline matches.
+or a property fails, and code 2 when `cargo` cannot start or the test produces no completed
+comparison. In the latter case it prints the test diagnostic. Code 0 means the run completed,
+all properties passed, and the Tier 1 baseline matches.
 Taxi can exit successfully while its known rule differences remain visible.
 
 `--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
@@ -259,6 +260,7 @@ Groups sort rule before data, then by signature. Records retain comparator order
 | `schema_version` | `1` |
 | `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
 | `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
+| `properties` | Property violations with stable name, recipient, object GUID, field and detail; empty on success |
 | `conforms` | True when the comparator reports no rule differences |
 | `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
 | `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
@@ -379,7 +381,8 @@ when no scenario exists. An implementer whose tier 1 result passes but whose aud
 differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
-matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
+matches the Tier 1 baseline and all properties passed. Code 1 means a baseline change or property
+failure, and 2 means setup failed before comparison.
 After an improvement, run `./conformance/baseline <scenario>`, then review the changed
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
 `prerequisites`. The command chooses an unused report name; audit history is append-only.
