@@ -96,7 +96,6 @@ fn assemble<'a>(
     scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
     baseline: &ratchet::Baseline,
-    properties: &'a [PropertyViolation],
 ) -> Result<RunOutput<'a>> {
     let current = ratchet::ScenarioBaseline::from_comparison(
         scenario,
@@ -142,7 +141,7 @@ fn assemble<'a>(
             regeneration,
         },
         groups,
-        properties,
+        properties: &[],
     })
 }
 
@@ -326,16 +325,18 @@ fn main() -> Result<()> {
         "tier 1 result uses another scenario revision"
     );
     let baseline = ratchet::Baseline::read(&root.join("conformance/tier1-baseline.json"))?;
-    let output = assemble(
-        &scenario,
-        &behavior.id,
-        &behavior.vmangos,
-        &result.harness_revision,
-        &entry.scenario_sha256,
-        &entry.comparison,
-        &baseline,
-        &entry.properties,
-    )?;
+    let output = RunOutput {
+        properties: &entry.properties,
+        ..assemble(
+            &scenario,
+            &behavior.id,
+            &behavior.vmangos,
+            &result.harness_revision,
+            &entry.scenario_sha256,
+            &entry.comparison,
+            &baseline,
+        )?
+    };
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
@@ -401,7 +402,6 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
-            &[],
         )?;
         let text = text_output(&output)?;
         assert!(text.contains("vmangos: abcdef:src/game/Handlers/TaxiHandler.cpp :: WorldSession::HandleActivateTaxiOpcode"));
@@ -427,7 +427,6 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
-            &[],
         )?;
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&output)?)?;
@@ -478,7 +477,6 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
-            &[],
         )?;
         let text = text_output(&output)?;
         assert!(text.contains("Tier 1 baseline: differs"));

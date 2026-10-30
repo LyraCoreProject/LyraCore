@@ -16,6 +16,13 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &[
+                "game_native_conformance_projection",
+                "game_native_conformance_birth",
+            ],
+            "fixture-only evidence confined to a disposable tier 1 Shard",
+        ),
+        (
             &["game_account_claim"],
             "Account Claim keyed by Account and retained across Character deletion",
         ),
