@@ -21,13 +21,13 @@ fn permits(
         match field {
             128 => return false,
             134..=137 | 155..=161 => return owner || projection.special_info,
-            141..=142 | 149..=154 | 162..=163 | 165..=180 => return owner,
+            141..=142 | 149..=154 | 162..=163 | 165..=186 => return owner,
             _ => (),
         }
     }
     if object_type == 4 {
         if (198..=257).contains(&field) {
-            return field % 3 == 0 && projection.same_raid;
+            return field.is_multiple_of(3) && projection.same_raid;
         }
         if (486..=1281).contains(&field) {
             return false;
@@ -149,5 +149,22 @@ mod tests {
             ..Default::default()
         };
         assert!(check(7, &player, &projection).is_empty());
+    }
+
+    #[test]
+    fn all_power_cost_multipliers_require_self_or_owner() {
+        let update = Update {
+            kind: 0,
+            guid: 90,
+            object_type: None,
+            fields: (180..=186).map(|field| (field, 1)).collect(),
+        };
+        let projection = Projection {
+            object_type: 3,
+            owner_guid: 7,
+            ..Default::default()
+        };
+        assert_eq!(check(9, &update, &projection).len(), 7);
+        assert!(check(7, &update, &projection).is_empty());
     }
 }

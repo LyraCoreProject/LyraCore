@@ -69,4 +69,30 @@ mod tests {
             1
         );
     }
+
+    #[test]
+    fn known_objects_and_transport_exceptions_require_kind_two() {
+        for (object_type, layer, gameobject_type, newly_added) in [
+            (3, 0, 0, false),
+            (4, 0, 0, true),
+            (5, 1, 11, true),
+            (5, 1, 15, true),
+            (5, 4, 0, true),
+        ] {
+            let context = Some(CreateContext {
+                newly_added,
+                layer,
+                gameobject_type,
+            });
+            let mut update = Update {
+                kind: 3,
+                guid: 8,
+                object_type: Some(object_type),
+                fields: BTreeMap::new(),
+            };
+            assert_eq!(check(7, &update, context).len(), 1);
+            update.kind = 2;
+            assert!(check(7, &update, context).is_empty());
+        }
+    }
 }

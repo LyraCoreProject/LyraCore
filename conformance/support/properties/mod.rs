@@ -182,3 +182,103 @@ pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
     violations.dedup();
     Ok(violations)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn packet(id: u64, kind: u8, guid: u8, object_type: u8, fields: &[(u16, u32)]) -> Packet {
+        let mut body = vec![1, 0, 0, 0, 0, kind, 1, guid];
+        if kind >= 2 {
+            body.extend([object_type, 0]);
+        }
+        let blocks = fields
+            .iter()
+            .map(|(field, _)| field / 32 + 1)
+            .max()
+            .unwrap_or(0);
+        body.push(blocks as u8);
+        for block in 0..blocks {
+            let mask = fields
+                .iter()
+                .filter(|(field, _)| field / 32 == block)
+                .fold(0u32, |mask, (field, _)| mask | 1 << (field % 32));
+            body.extend(mask.to_le_bytes());
+        }
+        for (_, value) in fields {
+            body.extend(value.to_le_bytes());
+        }
+        Packet {
+            id,
+            opcode: 0x00a9,
+            body,
+        }
+    }
+
+    fn batch(packets: Vec<Packet>, object_type: u8, fields: &[(u16, u32)]) -> Batch {
+        Batch {
+            recipient: 7,
+            reset: false,
+            packets,
+            projections: BTreeMap::from([(
+                9,
+                Projection {
+                    fields: fields.iter().copied().collect(),
+                    object_type,
+                    ..Default::default()
+                },
+            )]),
+            creates: BTreeMap::from([(
+                1,
+                CreateContext {
+                    newly_added: false,
+                    layer: 0,
+                    gameobject_type: 0,
+                },
+            )]),
+        }
+    }
+
+    #[test]
+    fn private_field_in_a_peer_values_packet_fails_the_pass() -> Result<()> {
+        let opening = batch(vec![packet(1, 2, 9, 4, &[])], 4, &[]);
+        let change = batch(vec![packet(2, 0, 9, 4, &[(1176, 42)])], 4, &[]);
+        let violations = run(&[opening, change])?;
+        assert!(violations.iter().any(|violation| violation.property
+            == "private_fields_stay_private"
+            && violation.field == Some(1176)));
+        Ok(())
+    }
+
+    #[test]
+    fn an_omitted_zero_is_reported_before_a_later_update_repairs_it() -> Result<()> {
+        let opening = batch(vec![packet(1, 2, 9, 5, &[(14, 1)])], 5, &[(14, 1)]);
+        let change = batch(vec![packet(2, 0, 9, 5, &[(8, 4)])], 5, &[(8, 4), (14, 0)]);
+        let repair = batch(vec![packet(3, 0, 9, 5, &[(14, 0)])], 5, &[(8, 4), (14, 0)]);
+        let violations = run(&[opening, change, repair])?;
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].property, "client_view_consistency");
+        assert_eq!(violations[0].field, Some(14));
+        Ok(())
+    }
+
+    #[test]
+    fn an_entirely_missing_update_fails_even_without_a_packet() -> Result<()> {
+        let opening = batch(vec![packet(1, 2, 9, 5, &[(14, 1)])], 5, &[(14, 1)]);
+        let change = batch(vec![], 5, &[(14, 0)]);
+        let violations = run(&[opening, change])?;
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].field, Some(14));
+        Ok(())
+    }
+
+    #[test]
+    fn a_new_creature_encoded_as_known_fails_the_pass() -> Result<()> {
+        let mut spawn = batch(vec![packet(1, 2, 9, 3, &[])], 3, &[]);
+        spawn.creates.get_mut(&1).unwrap().newly_added = true;
+        let violations = run(&[spawn])?;
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].property, "create_kind_matches_freshness");
+        Ok(())
+    }
+}

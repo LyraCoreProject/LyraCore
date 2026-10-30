@@ -165,24 +165,30 @@ The checks live in `conformance/support/properties/`, one module per stable prop
   [update-field flags](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/UpdateFields_1_12_1.h)
   and [recipient rules](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp).
   A Character sees its private fields, an item's or pet's owner
-  sees owner-only fields, and members of the same Raid see group-only fields. The Module does not
-  implement vmangos's Empathy aura or debug target-info cheat, so neither grants special-info
+  sees owner-only fields, and members of the same Party or Raid see group-only fields. The Module
+  does not implement vmangos's Empathy aura or debug target-info cheat, so neither grants special-info
   visibility in tier 1.
 - `client_view_consistency` applies each CREATE and partial VALUES update to the recipient's
-  accumulated view. An omitted field keeps its previous value. After a delivery batch, the view
-  must equal a fresh full projection at that moment for every visible object. The
+  accumulated view. An omitted field keeps its previous value. After a reducer's delivery batch,
+  the view must equal a fresh full projection at that moment for every visible object. The
   `conformance_test_fixture` reducer builds that projection with the recipient's CREATE
   visibility rules. This checks incremental updates against the full projection; it does not
   establish that the projection matches 1.12.1. The Golden Trace comparison checks recorded
-  moments against the Reference Server.
+  moments against the Reference Server. The runner captures every connected recipient after
+  each request, connection change and virtual-clock step, including recipients with no packets.
+  The hook discovers visible objects from AOI Grants and owned items, so an omitted CREATE or
+  entire VALUES packet cannot remove the object from the check. Packets from one reducer form
+  one batch because a CREATE and its supplemental VALUES describe one committed state.
 - `create_kind_matches_freshness` checks kind 3 only when the object was newly added to the world
   while the recipient was viewing it, as vmangos's
   [Map::Add](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Map.cpp)
   and [Object.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp)
   do. A known object entering view uses kind 2. Characters,
   Transports, elevators and moving Transports use kind 2 as vmangos does. The fixture records
-  which AOI viewers existed when each object entered the world, then joins that fact to each
-  recipient packet id. The check does not take freshness from the CREATE encoder.
+  which connected AOI viewers existed when each object entered the world, then joins that fact
+  to each recipient packet id in the same transaction. Later sightings use kind 2. The check
+  does not take freshness from the CREATE encoder. The bank fixture also spawns a creature
+  after the recorded steps to exercise kind 3 without changing Golden Trace observations.
 
 The projection reducer and its private tables exist only with `conformance_test_fixture`.
 `native_debug_gate` checks that a build with only `debug_reducers` exports none of them. To add a

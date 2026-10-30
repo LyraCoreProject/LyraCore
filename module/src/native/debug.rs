@@ -41,6 +41,7 @@ pub struct NativeConformanceBirth {
     #[primary_key]
     pub guid: u64,
     pub viewers: Vec<u64>,
+    pub added_at: spacetimedb::Timestamp,
 }
 
 pub(crate) fn record_birth(
@@ -56,15 +57,24 @@ pub(crate) fn record_birth(
         .is_some_and(|_| crate::spell::is_stealthed(ctx, guid));
     let viewers = crate::aoi::nearby_viewers(ctx, map_id, instance_id, cell)
         .filter(|viewer| {
-            entity
-                .as_ref()
-                .is_none_or(|entity| viewer.sees_entity(entity, stealthed))
+            ctx.db
+                .game_native_player()
+                .character_guid()
+                .find(viewer.guid)
+                .is_some()
+                && entity
+                    .as_ref()
+                    .is_none_or(|entity| viewer.sees_entity(entity, stealthed))
         })
         .map(|viewer| viewer.guid)
         .collect();
     let births = ctx.db.game_native_conformance_birth();
     births.guid().delete(guid);
-    births.insert(NativeConformanceBirth { guid, viewers });
+    births.insert(NativeConformanceBirth {
+        guid,
+        viewers,
+        added_at: ctx.timestamp,
+    });
 }
 
 pub(super) fn note_create(
@@ -78,6 +88,9 @@ pub(super) fn note_create(
     let births = ctx.db.game_native_conformance_birth();
     let mut birth = births.guid().find(object_guid);
     let newly_added = birth.as_mut().is_some_and(|birth| {
+        if birth.added_at != ctx.timestamp {
+            return false;
+        }
         if let Some(index) = birth
             .viewers
             .iter()
@@ -107,7 +120,7 @@ fn hex(bytes: &[u8]) -> String {
 }
 
 #[reducer]
-pub fn debug_native_project(ctx: &ReducerContext, guids: Vec<u64>) -> Result<(), String> {
+pub fn debug_native_project(ctx: &ReducerContext) -> Result<(), String> {
     let connection_id = super::connection_id(ctx)?;
     let viewer = ctx
         .db
@@ -116,6 +129,20 @@ pub fn debug_native_project(ctx: &ReducerContext, guids: Vec<u64>) -> Result<(),
         .find(connection_id)
         .ok_or("conformance Character is not in world")?
         .character_guid;
+    let guids = ctx
+        .db
+        .game_aoi_grant()
+        .by_viewer()
+        .filter(viewer)
+        .map(|grant| grant.entity_guid)
+        .chain(
+            ctx.db
+                .game_item_instance()
+                .by_owner_guid()
+                .filter(viewer)
+                .map(|item| item.guid),
+        )
+        .collect::<std::collections::BTreeSet<_>>();
     let table = ctx.db.game_native_conformance_projection();
     for old in table.iter().collect::<Vec<_>>() {
         table.guid().delete(old.guid);

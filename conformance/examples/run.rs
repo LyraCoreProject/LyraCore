@@ -484,4 +484,35 @@ mod tests {
         assert!(text.contains("+ rule: exact_field / flight / reply/flight / 0x00DD / duration"));
         Ok(())
     }
+
+    #[test]
+    fn a_property_failure_is_reported_even_when_the_baseline_matches() -> Result<()> {
+        let (source, comparison, baseline) = fixture();
+        let violations = [PropertyViolation {
+            property: "client_view_consistency".into(),
+            recipient: 7,
+            guid: 9,
+            field: Some(14),
+            detail: "client has 1, fresh projection has 0".into(),
+        }];
+        let output = RunOutput {
+            properties: &violations,
+            ..assemble(
+                "taxi_single_hop",
+                "taxi_single_hop",
+                &source,
+                "revision",
+                &Sha256Digest::of(b"scenario"),
+                &comparison,
+                &baseline,
+            )?
+        };
+        assert!(output.baseline.matches);
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["properties"][0]["field"], 14);
+        let text = text_output(&output)?;
+        assert!(text.contains("Properties: fail"));
+        assert!(text.contains("client_view_consistency: recipient 7 object 9"));
+        Ok(())
+    }
 }

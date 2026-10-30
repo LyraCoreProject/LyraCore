@@ -18,7 +18,6 @@ pub struct OperatorTransport<'a> {
     opening: Vec<Observation>,
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
-    visible: BTreeSet<u64>,
     batches: Vec<Batch>,
     virtual_micros: u64,
 }
@@ -81,16 +80,14 @@ impl<'a> OperatorTransport<'a> {
             fixtures,
             opening: Vec::new(),
             pending: VecDeque::new(),
-            visible: BTreeSet::new(),
             batches: Vec::new(),
             virtual_micros: 0,
         };
-        let setup = transport.connection.drain_packets();
-        let opening = transport.delivery.route_rows(setup)?;
-        transport.capture(&opening)?;
-        transport.opening = opening
-            .into_iter()
-            .map(|packet| Observation::opening(packet.opcode, &packet.body))
+        transport.capture()?;
+        transport.opening = transport
+            .pending
+            .drain(..)
+            .map(|(opcode, body)| Observation::opening(opcode, &body))
             .collect();
         Ok(transport)
     }
@@ -99,42 +96,13 @@ impl<'a> OperatorTransport<'a> {
         &self.batches
     }
 
-    fn capture(&mut self, packets: &[Packet]) -> Result<()> {
-        if packets.is_empty() {
-            return Ok(());
-        }
-        for packet in packets {
-            for update in properties::updates(packet.opcode, &packet.body)? {
-                match update.kind {
-                    2 | 3 => {
-                        self.visible.insert(update.guid);
-                    }
-                    4 => {
-                        self.visible.remove(&update.guid);
-                    }
-                    _ => (),
-                }
-            }
-            if matches!(packet.opcode, 0x00aa | 0x0215) {
-                let decoded = wire_client::decode::decode(packet.opcode, &packet.body)?;
-                if let Some(wire_client::decode::Field::Guid(guid)) = decoded.fields.get("guid") {
-                    self.visible.remove(guid);
-                }
-            }
-        }
-        let mut project_guids = self.visible.clone();
-        for row in self.shard.query_rows(&format!(
-            "SELECT entity_guid FROM game_aoi_grant WHERE viewer_guid = {}",
-            self.guid
-        )) {
-            project_guids.insert(row["entity_guid"].parse()?);
-        }
+    fn capture(&mut self) -> Result<()> {
+        // The projection call also drains earlier transactions from this recipient's socket.
         self.connection
-            .call(
-                "debug_native_project",
-                json!([project_guids.into_iter().collect::<Vec<_>>()]),
-            )
+            .call("debug_native_project", json!([]))
             .map_err(|error| anyhow!(error))?;
+        let rows = self.connection.drain_packets();
+        let packets = self.delivery.route_rows(rows)?;
         let mut projections = BTreeMap::new();
         for row in self
             .shard
@@ -180,17 +148,22 @@ impl<'a> OperatorTransport<'a> {
         self.batches.push(Batch {
             recipient: self.guid,
             reset: self.batches.is_empty(),
-            packets: packets.to_vec(),
+            packets: packets.clone(),
             projections,
             creates,
         });
+        self.pending.extend(
+            packets
+                .into_iter()
+                .map(|packet| (packet.opcode, packet.body)),
+        );
         Ok(())
     }
 }
 
 fn decode_hex(encoded: &str) -> Result<Vec<u8>> {
     ensure!(
-        encoded.is_ascii() && encoded.len() % 2 == 0,
+        encoded.is_ascii() && encoded.len().is_multiple_of(2),
         "invalid packet hex"
     );
     (0..encoded.len())
@@ -358,7 +331,7 @@ impl Transport for OperatorTransport<'_> {
             .connection
             .call("native_world_receive", json!([opcode, body]))
         {
-            Ok(_) => Ok(()),
+            Ok(_) => (),
             Err(reason) => {
                 let Some(reply) = reason.strip_prefix("native_reply:") else {
                     bail!(reason)
@@ -367,25 +340,14 @@ impl Transport for OperatorTransport<'_> {
                 self.connection
                     .call("native_world_reply", json!([packets]))
                     .map_err(|e| anyhow!(e))?;
-                Ok(())
             }
         }
+        self.capture()
     }
 
     fn receive(&mut self, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
         let deadline = self.now() + timeout;
         loop {
-            if let Some(packet) = self.pending.pop_front() {
-                return Ok(Some(packet));
-            }
-            let rows = self.connection.drain_packets();
-            let packets = self.delivery.route_rows(rows)?;
-            self.capture(&packets)?;
-            self.pending.extend(
-                packets
-                    .into_iter()
-                    .map(|packet| (packet.opcode, packet.body)),
-            );
             if let Some(packet) = self.pending.pop_front() {
                 return Ok(Some(packet));
             }
@@ -402,6 +364,7 @@ impl Transport for OperatorTransport<'_> {
                 .call("debug_advance_virtual_clock", json!([delta]))
                 .map_err(|e| anyhow!(e))?;
             self.virtual_micros += delta;
+            self.capture()?;
         }
     }
 }
@@ -497,6 +460,15 @@ impl<'a> MultiOperatorTransport<'a> {
             .collect()
     }
 
+    fn capture_all(&mut self) -> Result<()> {
+        for character in self.characters.values_mut() {
+            if let Some(transport) = &mut character.transport {
+                transport.capture()?;
+            }
+        }
+        Ok(())
+    }
+
     fn character(&self, id: &str) -> Result<&MultiCharacter<'a>> {
         self.characters
             .get(id)
@@ -552,7 +524,7 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             OperatorTransport::connect(self.shard, entry.guid, entry.fixtures.clone())?;
         transport.virtual_micros = self.virtual_micros;
         entry.transport = Some(transport);
-        Ok(())
+        self.capture_all()
     }
 
     fn disconnect(&mut self, character: &str) -> Result<()> {
@@ -560,25 +532,47 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             .characters
             .get_mut(character)
             .context("unknown scenario Character")?;
-        let transport = entry
+        let mut transport = entry
             .transport
             .take()
             .context("scenario Character is disconnected")?;
+        transport.capture()?;
         entry.completed.extend_from_slice(transport.batches());
-        Ok(())
+        self.shard
+            .assert_call("debug_logout_character", &[&entry.guid.to_string()]);
+        drop(transport);
+        self.capture_all()
     }
 
     fn send(&mut self, character: &str, opcode: u32, body: &[u8]) -> Result<()> {
-        self.transport(character)?.send(opcode, body)
+        self.transport(character)?.send(opcode, body)?;
+        self.capture_all()
     }
 
     fn receive(&mut self, character: &str, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
-        let now = self.virtual_micros;
-        let transport = self.transport(character)?;
-        transport.virtual_micros = now;
-        let packet = transport.receive(timeout)?;
-        self.virtual_micros = transport.virtual_micros;
-        Ok(packet)
+        let deadline = self.now() + timeout;
+        loop {
+            if let Some(packet) = self.transport(character)?.pending.pop_front() {
+                return Ok(Some(packet));
+            }
+            let Some(remaining) = deadline.checked_sub(self.now()) else {
+                return Ok(None);
+            };
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let to_boundary = 50_000 - self.virtual_micros % 50_000;
+            let delta: u64 = remaining
+                .as_micros()
+                .min(u128::from(to_boundary))
+                .try_into()?;
+            self.transport(character)?
+                .connection
+                .call("debug_advance_virtual_clock", json!([delta]))
+                .map_err(|error| anyhow!(error))?;
+            self.virtual_micros += delta;
+            self.capture_all()?;
+        }
     }
 }
 
@@ -678,11 +672,7 @@ impl Delivery {
         );
         match option {
             0 => {
-                ensure!(body.is_ascii() && body.len() % 2 == 0, "invalid packet hex");
-                let bytes = (0..body.len())
-                    .step_by(2)
-                    .map(|offset| u8::from_str_radix(&body[offset..offset + 2], 16))
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
+                let bytes = decode_hex(&body)?;
                 Ok(Some(Packet {
                     id,
                     opcode: serde_json::from_str(opcode.get())?,
