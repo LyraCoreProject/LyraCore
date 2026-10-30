@@ -3,7 +3,7 @@ use std::path::Path;
 
 use anyhow::{bail, ensure, Context, Result};
 use lyracore_conformance::FeatureLedger;
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use wire_client::{
     catalogue, compare,
     scenario::FixtureVerb,
@@ -29,6 +29,22 @@ struct Run {
     module_sha256: Sha256Digest,
     content: String,
     reference: Provenance,
+}
+
+#[derive(Serialize)]
+struct AuditBaseline<'a> {
+    schema_version: u32,
+    scenarios: Vec<AuditScenarioBaseline<'a>>,
+}
+
+#[derive(Serialize)]
+struct AuditScenarioBaseline<'a> {
+    scenario: &'a str,
+    behavior: &'a str,
+    harness_revision: &'a str,
+    scenario_sha256: &'a Sha256Digest,
+    rule: Vec<evidence::Signature>,
+    data: Vec<evidence::Signature>,
 }
 
 fn export(directory: &Path) -> Result<()> {
@@ -60,6 +76,99 @@ fn export(directory: &Path) -> Result<()> {
         directory.join("catalogue.json"),
         serde_json::to_vec_pretty(&scenarios)?,
     )?;
+    Ok(())
+}
+
+fn check(directory: &Path, scenario: &str) -> Result<()> {
+    let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+    let golden = catalogue::get(scenario)?;
+    let (_, committed) = evidence::latest_audit(&root.join("reports"), None)?
+        .context("no committed full Conformance Audit report")?;
+    let previous = committed
+        .scenarios
+        .iter()
+        .find(|entry| entry.id == scenario)
+        .filter(|entry| {
+            entry.scenario_sha256 == golden.trace().header.scenario_sha256
+                && entry.behavior == golden.scenario().behavior
+        });
+    let Origin::Golden { provenance } = &golden.trace().header.origin else {
+        bail!("expected Golden Trace");
+    };
+    let candidate = |adapter: &str| -> Result<_> {
+        let bytes = std::fs::read(directory.join(format!("{scenario}-{adapter}.json")))?;
+        let trace = Trace::parse(&bytes)?;
+        ensure!(
+            matches!(&trace.header.origin, Origin::Candidate { adapter: recorded } if recorded == adapter),
+            "wrong {adapter} candidate origin"
+        );
+        compare::compare(&golden, &trace, &[])
+    };
+    let comparison = candidate("lyracore")?;
+    let reference = candidate("vmangos")?;
+    let head = std::process::Command::new("git")
+        .args(["rev-parse", "HEAD"])
+        .current_dir(root)
+        .output()?;
+    ensure!(head.status.success(), "git rev-parse HEAD failed");
+    let core_commit = String::from_utf8(head.stdout)?.trim().to_owned();
+    let result = serde_json::json!({
+        "schema_version": 2,
+        "tier": "tier1",
+        "core_commit": core_commit,
+        "harness_revision": evidence::harness_revision(),
+        "scenarios": [{
+            "id": scenario,
+            "behavior": golden.scenario().behavior.clone(),
+            "scenario_sha256": golden.trace().header.scenario_sha256.clone(),
+            "comparison": comparison,
+            "properties": [],
+        }],
+    });
+    std::fs::write(directory.join("result.json"), serde_json::to_vec(&result)?)?;
+    std::fs::write(
+        directory.join("reference-comparison.json"),
+        serde_json::to_vec_pretty(&reference)?,
+    )?;
+    ensure!(
+        reference.is_match(),
+        "Reference Server differs from its Golden Trace:\n{}",
+        serde_json::to_string_pretty(&reference)?
+    );
+    let runtime: Provenance =
+        serde_json::from_slice(&std::fs::read(directory.join("reference.json"))?)?;
+    ensure!(
+        &runtime == provenance,
+        "Reference Server provenance differs from the Golden Trace"
+    );
+    let summary = previous.map_or_else(evidence::Summary::default, |entry| {
+        evidence::Summary::collect(entry.comparison.differences.iter())
+    });
+    let unrecorded = Sha256Digest::of(b"not in the latest full audit");
+    let baseline = AuditBaseline {
+        schema_version: 1,
+        scenarios: vec![AuditScenarioBaseline {
+            scenario,
+            behavior: previous.map_or(golden.scenario().behavior.as_str(), |entry| &entry.behavior),
+            harness_revision: &committed.harness_revision,
+            scenario_sha256: previous.map_or(&unrecorded, |entry| &entry.scenario_sha256),
+            rule: summary
+                .rule
+                .signatures
+                .into_iter()
+                .map(|item| item.signature)
+                .collect(),
+            data: summary
+                .data
+                .signatures
+                .into_iter()
+                .map(|item| item.signature)
+                .collect(),
+        }],
+    };
+    let mut bytes = serde_json::to_vec_pretty(&baseline)?;
+    bytes.push(b'\n');
+    std::fs::write(directory.join("baseline.json"), bytes)?;
     Ok(())
 }
 
@@ -224,8 +333,9 @@ fn main() -> Result<()> {
     let args: Vec<_> = std::env::args().skip(1).collect();
     match args.as_slice() {
         [mode, directory] if mode == "export" => export(Path::new(directory)),
+        [mode, directory, scenario] if mode == "check" => check(Path::new(directory), scenario),
         [mode, directory, output, date] if mode == "report" => write_report(Path::new(directory), Path::new(output), date),
-        _ => bail!("audit export DIRECTORY | report DIRECTORY OUTPUT_DIRECTORY DATE; use conformance/audit for a full run"),
+        _ => bail!("audit export DIRECTORY | check DIRECTORY SCENARIO | report DIRECTORY OUTPUT_DIRECTORY DATE; use conformance/audit"),
     }
 }
 
@@ -233,6 +343,84 @@ fn main() -> Result<()> {
 mod tests {
     use super::*;
     use evidence::Summary;
+
+    #[test]
+    fn scenario_check_uses_committed_audit_signatures() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let directory = scratch::Scratch::new("scenario-check-test")?;
+        let (path, report) =
+            evidence::latest_audit(&root.join("reports"), None)?.context("committed audit")?;
+        let scenario = "taxi_single_hop";
+        let golden = catalogue::get(scenario)?;
+        let Origin::Golden { provenance } = &golden.trace().header.origin else {
+            bail!("Golden Trace");
+        };
+        std::fs::write(
+            directory.join("reference.json"),
+            serde_json::to_vec(provenance)?,
+        )?;
+        let traces = path.with_extension("traces");
+        std::fs::copy(
+            traces.join(format!("{scenario}-lyracore.json")),
+            directory.join(format!("{scenario}-lyracore.json")),
+        )?;
+        let mut reference = serde_json::to_value(golden.trace())?;
+        reference["header"]["origin"] =
+            serde_json::json!({"kind": "candidate", "adapter": "vmangos"});
+        std::fs::write(
+            directory.join(format!("{scenario}-vmangos.json")),
+            serde_json::to_vec(&reference)?,
+        )?;
+        check(&directory, scenario)?;
+        let result: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("result.json"))?)?;
+        let baseline: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("baseline.json"))?)?;
+        assert_eq!(result["scenarios"][0]["id"], scenario);
+        assert_eq!(result["scenarios"][0]["properties"], serde_json::json!([]));
+        assert_eq!(
+            baseline["scenarios"][0]["harness_revision"],
+            report.harness_revision
+        );
+        assert_eq!(
+            baseline["scenarios"][0]["scenario_sha256"],
+            String::from(golden.trace().header.scenario_sha256.clone())
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn reference_drift_retains_both_comparisons_with_scrubbed_values() -> Result<()> {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR"));
+        let directory = scratch::Scratch::new("reference-drift")?;
+        let scenario = "taxi_single_hop";
+        let (path, _) =
+            evidence::latest_audit(&root.join("reports"), None)?.context("committed audit")?;
+        let bytes = std::fs::read(
+            path.with_extension("traces")
+                .join(format!("{scenario}-lyracore.json")),
+        )?;
+        std::fs::write(directory.join(format!("{scenario}-lyracore.json")), &bytes)?;
+        let mut reference: serde_json::Value = serde_json::from_slice(&bytes)?;
+        reference["header"]["origin"] =
+            serde_json::json!({"kind": "candidate", "adapter": "vmangos"});
+        std::fs::write(
+            directory.join(format!("{scenario}-vmangos.json")),
+            serde_json::to_vec(&reference)?,
+        )?;
+        let error = check(&directory, scenario).unwrap_err().to_string();
+        assert!(error.contains("Reference Server differs"));
+        for field in ["rule", "checkpoint", "field_path", "expected", "actual"] {
+            assert!(error.contains(field), "missing {field}: {error}");
+        }
+        let candidate: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("result.json"))?)?;
+        let reference: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(directory.join("reference-comparison.json"))?)?;
+        assert_eq!(candidate["scenarios"][0]["comparison"], reference);
+        assert!(!directory.join("baseline.json").exists());
+        Ok(())
+    }
 
     #[test]
     fn audit_requires_both_candidates_for_every_catalogue_scenario() -> Result<()> {

@@ -83,6 +83,11 @@ impl GroupClass {
     }
 }
 
+enum BaselineSource<'a> {
+    Tier1(&'a ratchet::Baseline),
+    Audit(&'a ratchet::Baseline),
+}
+
 fn assemble<'a>(
     scenario: &'a str,
     behavior: &'a str,
@@ -90,8 +95,12 @@ fn assemble<'a>(
     harness_revision: &str,
     scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
-    baseline: &ratchet::Baseline,
+    source: BaselineSource<'_>,
 ) -> Result<RunOutput<'a>> {
+    let (baseline, audit_baseline) = match source {
+        BaselineSource::Tier1(baseline) => (baseline, false),
+        BaselineSource::Audit(baseline) => (baseline, true),
+    };
     let current = ratchet::ScenarioBaseline::from_comparison(
         scenario,
         behavior,
@@ -100,7 +109,14 @@ fn assemble<'a>(
         comparison,
     );
     let regeneration = baseline.changes(&current)?;
-    let matches = baseline.check(&current).is_ok();
+    let matches = if audit_baseline {
+        regeneration.is_empty()
+            && baseline.scenarios.iter().any(|entry| {
+                entry.scenario == scenario && entry.scenario_sha256 == *scenario_sha256
+            })
+    } else {
+        baseline.check(&current).is_ok()
+    };
     let mut grouped = BTreeMap::<(GroupClass, ratchet::Signature), Vec<Record>>::new();
     for difference in &comparison.differences {
         let class = match difference.classification {
@@ -174,7 +190,7 @@ fn signature_text(signature: &ratchet::Signature) -> String {
     )
 }
 
-fn text_output(output: &RunOutput<'_>) -> Result<String> {
+fn text_output(output: &RunOutput<'_>, audit_baseline: bool) -> Result<String> {
     let mut text = String::new();
     writeln!(text, "Scenario: {}", output.scenario)?;
     writeln!(text, "Behavior: {}", output.behavior)?;
@@ -194,7 +210,12 @@ fn text_output(output: &RunOutput<'_>) -> Result<String> {
     )?;
     writeln!(
         text,
-        "Tier 1 baseline: {}",
+        "{}: {}",
+        if audit_baseline {
+            "Audit report"
+        } else {
+            "Tier 1 baseline"
+        },
         if output.baseline.matches {
             "matches"
         } else {
@@ -319,7 +340,17 @@ fn main() -> Result<()> {
         entry.scenario_sha256 == golden.trace().header.scenario_sha256,
         "tier 1 result uses another scenario revision"
     );
-    let baseline = ratchet::Baseline::read(&root.join("conformance/tier1-baseline.json"))?;
+    let audit_baseline = std::env::var_os("LYRACORE_CONFORMANCE_AUDIT_BASELINE");
+    let baseline_path = audit_baseline
+        .as_ref()
+        .map(PathBuf::from)
+        .unwrap_or_else(|| root.join("conformance/tier1-baseline.json"));
+    let baseline = ratchet::Baseline::read(&baseline_path)?;
+    let source = if audit_baseline.is_some() {
+        BaselineSource::Audit(&baseline)
+    } else {
+        BaselineSource::Tier1(&baseline)
+    };
     let output = RunOutput {
         properties: &entry.properties,
         ..assemble(
@@ -329,13 +360,13 @@ fn main() -> Result<()> {
             &result.harness_revision,
             &entry.scenario_sha256,
             &entry.comparison,
-            &baseline,
+            source,
         )?
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
-        print!("{}", text_output(&output)?);
+        print!("{}", text_output(&output, audit_baseline.is_some())?);
     }
     if !output.baseline.matches || !output.properties.is_empty() {
         std::process::exit(1);
@@ -396,9 +427,9 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
+            BaselineSource::Tier1(&baseline),
         )?;
-        let text = text_output(&output)?;
+        let text = text_output(&output, false)?;
         assert!(text.contains("vmangos: abcdef:src/game/Handlers/TaxiHandler.cpp :: WorldSession::HandleActivateTaxiOpcode"));
         assert!(text.contains(
             "[rule] exact_field / flight / reply/flight / 0x00DD / duration (2 records)"
@@ -421,7 +452,7 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
+            BaselineSource::Tier1(&baseline),
         )?;
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&output)?)?;
@@ -471,12 +502,30 @@ mod tests {
             "revision",
             &Sha256Digest::of(b"scenario"),
             &comparison,
-            &baseline,
+            BaselineSource::Tier1(&baseline),
         )?;
-        let text = text_output(&output)?;
+        let text = text_output(&output, false)?;
         assert!(text.contains("Tier 1 baseline: differs"));
         assert!(text.contains("Regeneration would change:"));
         assert!(text.contains("+ rule: exact_field / flight / reply/flight / 0x00DD / duration"));
+        Ok(())
+    }
+
+    #[test]
+    fn audit_uses_committed_signatures_when_harness_revision_changes() -> Result<()> {
+        let (source, comparison, mut baseline) = fixture();
+        baseline.scenarios[0].harness_revision = "older revision".into();
+        let output = assemble(
+            "taxi_single_hop",
+            "taxi_single_hop",
+            &source,
+            "revision",
+            &Sha256Digest::of(b"scenario"),
+            &comparison,
+            BaselineSource::Audit(&baseline),
+        )?;
+        assert!(output.baseline.matches);
+        assert!(text_output(&output, true)?.contains("Audit report: matches"));
         Ok(())
     }
 
@@ -499,13 +548,13 @@ mod tests {
                 "revision",
                 &Sha256Digest::of(b"scenario"),
                 &comparison,
-                &baseline,
+                BaselineSource::Tier1(&baseline),
             )?
         };
         assert!(output.baseline.matches);
         let json = serde_json::to_value(&output)?;
         assert_eq!(json["properties"][0]["field"], 14);
-        let text = text_output(&output)?;
+        let text = text_output(&output, false)?;
         assert!(text.contains("Properties: fail"));
         assert!(text.contains("client_view_consistency: recipient 7 object 9"));
         Ok(())

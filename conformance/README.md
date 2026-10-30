@@ -395,14 +395,15 @@ implementer normally runs the first
 listed scenario; further scenarios are in the Behavior's `scenarios` field.
 Each open-work item also has `reproduce_with`: `tier1` or `audit` for work with a scenario, and null
 when no scenario exists. An implementer whose tier 1 result passes but whose audit reports
-differences reproduces them with `./conformance/audit`. An audit-only difference usually also means
+differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
 matches the Tier 1 baseline and all properties passed. Code 1 means a baseline change or property
 failure, and 2 means setup failed before comparison.
 After an improvement, run `./conformance/baseline <scenario>`, then review the changed
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
-`prerequisites`. The command chooses an unused report name; audit history is append-only.
+`prerequisites`. Implementer items run one scenario without a report. Evidence refresh items use
+the full audit command, which chooses an unused report name; audit history is append-only.
 
 The scope-verification group contains Behaviors marked `stock_client_use_unverified`. Its next
 command opens the ledger entry so the request-use question can be checked. Within each group, the
@@ -529,9 +530,102 @@ Behavior rename cannot invalidate old reports. Earlier T2d/T2g narrative notes a
 
 ## Conformance Audit
 
+Run one scenario while climbing a Behavior:
+
+```bash
+./conformance/audit --scenario taxi_single_hop --check --client-data /path/to/client/Data
+./conformance/audit --scenario taxi_single_hop --check --json --client-data /path/to/client/Data
+./conformance/audit --scenario taxi_single_hop --check --agreement --json --client-data /path/to/client/Data
+```
+
+The local check captures the scenario on both servers and compares each candidate with its Golden
+Trace. It prints the same grouped text or JSON fields as `./conformance/run`. Its `baseline` field
+compares rule and data signatures with the newest committed full audit report. Exit 0 means those
+signatures match and the Reference Server matches its Golden Trace. Exit 1 means signatures differ.
+Exit 2 means setup or capture failed; diagnostics name missing client data, Docker, occupied ports or
+a dirty core tree. The scenario check writes no report or committed trace.
+If the latest full report has no entry for the scenario or has an older scenario revision, the
+check compares against an empty signature set and exits 1.
+
+`--agreement` also runs the scenario in tier 1. Its JSON output has `audit` with the normal
+scenario comparison and `agreement` with `tier1_only` and `audit_only` signature arrays. A
+`tier1_only` signature points to a likely fixture artefact. An `audit_only` signature points to a
+fixture blind spot. The command exits 1 when either array is nonempty or either tier's baseline
+differs. A tier 1 setup failure exits 2 with its diagnostic.
+
+The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
+the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the explicit
+import contract below, the full Module schema extracted from the deployment WASM, the vmangos
+database pin, the client Data bytes, and the CLI pin. Gameplay edits outside the import contract
+reuse the snapshot. Schema hashing includes table defaults, access and event flags. It normalizes
+type references and unordered definitions while preserving column and enum variant order. Later
+checks copy the snapshot into a new worktree at the current core commit; `dev up` publishes the
+current Module through SpacetimeDB's migration check. A schema change changes the key and requires a
+new import. The store retains the newest two snapshots and removes older ones after a successful
+seal. Abandoned `.pending` directories are removed under the shared snapshot-store lock. Copying
+requires the world size plus 10% or 256 MiB of free space, whichever reserve is larger. A failed
+seal retains the stopped imported world and its password. The next check retries sealing without
+importing again. An interrupted import requires inspection before cleanup. Do not edit a sealed
+snapshot. Add `--require-snapshot` to forbid a cold import. A missing or changed import key then
+exits 2.
+
+Each check restores the imported data before capture. The active Realm, target directory and
+temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`, or `LYRACORE_AUDIT_SCRATCH` when
+set. The runner waits for its Native Host to exit before replacing or deleting data. It records
+process ownership before startup and checks the CLI's PID identities before stopping it. It retains
+those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
+output survives gameplay checkout changes; `dev up` still checks the current Host source and
+patches. Tier 1 agreement builds use a separate persistent Cargo target directory at
+`scenario-audit/tier1-target/` under the audit scratch directory. This keeps their WASM feature set
+from replacing deployment build output between checks.
+
+The Reference Server marker records a unique Docker Compose project and container IDs before any
+service starts. The clean baseline comes from the pinned, checksum-verified database archive in a
+new MariaDB volume. Preparation creates and verifies the two initial Accounts without starting world
+timers, then seals a dump with its checksum and password hashes. An existing prepared volume never
+supplies this baseline. Every owned check restores it before starting the world. Ownership lasts
+through reference comparison and provenance checks. Any failure leaves the marker invalid and stops
+the owned containers. Recovery keeps the same container IDs and can retry an interrupted restore.
+Changed IDs stop the command before it touches the containers. `./conformance/audit --stop` restores
+the Reference Server, stops owned services and removes the active worktree; it retains the sealed
+snapshots and build output. The full audit uses the same Reference Server recovery and stops it on
+exit. Required LyraCore Accounts are provisioned after every restore with the sealed password, so a
+larger scenario catalogue needs no new import.
+
+Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
+hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
+reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
+extraction, preflight bindings and publication. With at least four available CPUs, the two wire
+captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)`.
+
+A failed reference comparison prints its scrubbed differences, including signatures and expected and
+actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
+`$HOME/.cache/lyracore/conformance-worlds/diagnostics/`; stderr prints the exact directory. These
+diagnostics do not count as a completed audit. Password and Operator token files stay private to the
+Realm and snapshot directories.
+
+### Import contract
+
+This is a base-world audit. It imports the vmangos world and client data; it applies no Package
+Deltas. `IMPORT_CONTRACT` in `audit.py` names the source paths that produce the stored rows. It
+includes the importer sources, scripts and manifests; shared, Package Delta and protocol crates; the
+workspace manifest, lockfile and toolchain; and Module initialization, import reducers and their
+row-building dependencies. Initialization data includes the `game_config` values in `seed.rs`.
+Publishing onto a restored snapshot does not rerun `init`. The contract includes `operations.rs`
+and automatically includes each listed Rust file's child-module directory, including
+`seed/fixtures.rs`. It follows external `#[path]` module declarations recursively. Crate roots
+such as `module/src/lib.rs` are hashed as files; their ordinary declarations do not pull unrelated
+gameplay modules into the contract. The module-coverage test walks the import entry modules and
+checks that every reachable child module is hashed.
+
+Files shared by import and gameplay are conservatively included in full. Taxi request handling and
+other gameplay outside these paths do not invalidate the snapshot. Extend the contract when an
+import or initialization call gains another dependency or data file. A schema change always
+invalidates it, even when the changed table is outside these paths.
+
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
-Stop it before the audit. The runner requires a clean core working tree and free Reference Server
+Stop it before a full audit. The full runner requires a clean core working tree and free Reference Server
 ports 13724 and 18085.
 Pass the client Data path directly, or set it with `./lyracore config set client-data PATH`.
 The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
@@ -542,7 +636,7 @@ The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 ```
 
 The Python command creates a disposable Git worktree under
-`$HOME/.cache/lyracore-scratch/conformance/` and manages its own Realm through `lyracore dev`.
+`$HOME/.cache/lyracore-scratch/m5c/` and manages its own Realm through `lyracore dev`.
 It refuses a changed CLI pin until the isolation contract has been reviewed. The worktree owns
 its `.lyracore/native-data`, JWT keys and Operator token; the audit stops its Native Host and
 deletes the worktree after capture. Its loopback ports 3000, 3724 and 8085 must be free.
@@ -579,8 +673,8 @@ captures, infrastructure errors and invalid evidence do. A failed run cannot wri
 success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
-The runner stops both servers on exit, including capture failures and normal interrupts. Credentials
-and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted when
+The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
+and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/m5c/` and are deleted when
 the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
 counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain

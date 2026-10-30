@@ -103,7 +103,7 @@ else
 fi
 cargo build -q --bin lyracore-importer || exit 1
 # The source decides which maps an all-maps scope such as full-world owns.
-if ! EXPECTED_MAPS="$(./target/debug/lyracore-importer --dump "$DUMP" "${SCOPE_FLAGS[@]}" --print-scope-maps)" \
+if ! EXPECTED_MAPS="$(./target/debug/lyracore-importer --db "$DB" --dump "$DUMP" "${SCOPE_FLAGS[@]}" --print-scope-maps)" \
   || [ -z "$EXPECTED_MAPS" ]; then
   echo "[world] ABORT — could not read this run's map scope from $DUMP" >&2
   exit 1

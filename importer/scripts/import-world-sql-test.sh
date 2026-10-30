@@ -210,7 +210,7 @@ for profile in full-world full-eastern full-kalimdor full-instances; do
     check "$profile retains the final map ownership assertion" contains "$out" 'ok    one continent per database: spatial rows only on map(s)'
     check "$profile does not report its own maps as contamination" not_contains "$out" 'cross-continent contamination'
     check "$profile reads its map scope from the source" \
-        grep -q -- "lyracore-importer --dump .*--world-profile $profile --print-scope-maps$" "$stub_log"
+        grep -q -- "lyracore-importer --db .* --dump .*--world-profile $profile --print-scope-maps$" "$stub_log"
     check "$profile passes the name to the dump importer" \
         grep -q -- "lyracore-importer .*--dump .*--world-profile $profile .*--apply" "$stub_log"
     dump_passes="$(grep -v -- '--print-scope-maps' "$stub_log" | grep -c -- "^lyracore-importer .*--dump .*--world-profile $profile ")"
@@ -275,7 +275,7 @@ done
 : >"$stub_log"
 STUB_MODE=succeed STUB_ROW_COUNT=150 run_import
 check "a legacy run reads its map scope with its slice flags" \
-    grep -q -- 'lyracore-importer --dump .* --map 0 --box -11400,-8000,-3100,2000 --include-map 36 .*--print-scope-maps$' "$stub_log"
+    grep -q -- 'lyracore-importer --db .* --dump .* --map 0 --box -11400,-8000,-3100,2000 --include-map 36 .*--print-scope-maps$' "$stub_log"
 
 echo
 echo "import-world.sh — python3 absent from PATH"
