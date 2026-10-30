@@ -1,7 +1,7 @@
 use crate::aoi::game_aoi_grant;
 use crate::group::game_group_member;
 use crate::items::game_item_instance;
-use crate::native::game_native_player;
+use crate::native::{self, game_native_player};
 use crate::skill::game_player_skill;
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity};
 use lyracore_protocol::{
@@ -80,6 +80,92 @@ fn hex(bytes: &[u8]) -> String {
     bytes.iter().map(|byte| format!("{byte:02x}")).collect()
 }
 
+fn entity_projection(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    guid: u64,
+    viewer: u64,
+    full: bool,
+) -> Result<(String, String, u8, u64), String> {
+    let entity = ctx
+        .db
+        .game_world_entity()
+        .guid()
+        .find(guid)
+        .ok_or("projected WorldEntity is missing")?;
+    let mut view = native::view::entity(ctx, &entity);
+    let items = if entity.is_player() {
+        native::view::items(ctx, guid)
+    } else {
+        Vec::new()
+    };
+    let skills = if viewer == guid {
+        ctx.db
+            .game_player_skill()
+            .by_character()
+            .filter(guid)
+            .map(|skill| (skill.skill_line, skill.current, skill.max_rank))
+            .collect::<Vec<_>>()
+    } else {
+        Vec::new()
+    };
+    let quests = if viewer == guid {
+        native::view::quests(ctx, guid)
+    } else {
+        Vec::new()
+    };
+    if viewer != guid {
+        view.dynamic_flags = native::loot::dynamic_flags(ctx, &entity, viewer);
+    }
+    // These properties compare update fields, not CREATE movement blocks.
+    view.x = 0.0;
+    view.y = 0.0;
+    view.z = 0.0;
+    view.orientation = 0.0;
+    view.last_move_ms = 0;
+    view.movement_flags = 0;
+    view.run_speed_mult_bp = 10_000;
+    let stats = (viewer == guid).then(|| native::view::sheet_stats(&entity));
+    let (body, extra) = encoded(
+        ctx,
+        connection_id,
+        guid,
+        full,
+        &(
+            &view,
+            view.scale_x.to_bits(),
+            &items,
+            &skills,
+            &quests,
+            &stats,
+            stats.as_ref().map(|stats| stats.crit_pct.to_bits()),
+        ),
+        || {
+            let message = if viewer == guid {
+                codec::build_self_create_object(&view, &items, &skills, &quests)
+            } else {
+                codec::build_create_object(&view, codec::CreateKind::Peer, &items, &[])
+            }
+            .map_err(|error| error.to_string())?;
+            let extra = stats
+                .as_ref()
+                .map(|stats| encode(codec::build_sheet_stats_values(guid, stats)))
+                .transpose()?;
+            Ok((message, extra))
+        },
+    )?;
+    Ok((
+        body,
+        extra,
+        if entity.is_player() { 4 } else { 3 },
+        if entity.is_player() {
+            guid
+        } else {
+            entity.owner_guid
+        },
+    ))
+}
+
 #[reducer]
 pub fn debug_native_project(
     ctx: &ReducerContext,
@@ -94,7 +180,7 @@ pub fn debug_native_project(
                 .map_err(|_| "clock advance overflows")?,
         )?;
     }
-    let connection_id = super::super::connection_id(ctx)?;
+    let connection_id = native::connection_id(ctx)?;
     let viewer = ctx
         .db
         .game_native_player()
@@ -133,89 +219,7 @@ pub fn debug_native_project(
         let (body_hex, extra_hex, object_type, owner_guid) = if let Some(grant) = grant {
             match grant.layer {
                 crate::aoi::WORLD_ENTITY => {
-                    let entity = ctx
-                        .db
-                        .game_world_entity()
-                        .guid()
-                        .find(guid)
-                        .ok_or("projected WorldEntity is missing")?;
-                    let mut view = super::super::view::entity(ctx, &entity);
-                    let items = if entity.is_player() {
-                        super::super::view::items(ctx, guid)
-                    } else {
-                        Vec::new()
-                    };
-                    let skills = if viewer == guid {
-                        ctx.db
-                            .game_player_skill()
-                            .by_character()
-                            .filter(guid)
-                            .map(|skill| (skill.skill_line, skill.current, skill.max_rank))
-                            .collect::<Vec<_>>()
-                    } else {
-                        Vec::new()
-                    };
-                    let quests = if viewer == guid {
-                        super::super::view::quests(ctx, guid)
-                    } else {
-                        Vec::new()
-                    };
-                    if viewer != guid {
-                        view.dynamic_flags =
-                            super::super::loot::dynamic_flags(ctx, &entity, viewer);
-                    }
-                    // These properties compare update fields, not CREATE movement blocks.
-                    view.x = 0.0;
-                    view.y = 0.0;
-                    view.z = 0.0;
-                    view.orientation = 0.0;
-                    view.last_move_ms = 0;
-                    view.movement_flags = 0;
-                    view.run_speed_mult_bp = 10_000;
-                    let stats = (viewer == guid).then(|| super::super::view::sheet_stats(&entity));
-                    let (body, extra) = encoded(
-                        ctx,
-                        connection_id,
-                        guid,
-                        full,
-                        &(
-                            &view,
-                            view.scale_x.to_bits(),
-                            &items,
-                            &skills,
-                            &quests,
-                            &stats,
-                            stats.as_ref().map(|stats| stats.crit_pct.to_bits()),
-                        ),
-                        || {
-                            let message = if viewer == guid {
-                                codec::build_self_create_object(&view, &items, &skills, &quests)
-                            } else {
-                                codec::build_create_object(
-                                    &view,
-                                    codec::CreateKind::Peer,
-                                    &items,
-                                    &[],
-                                )
-                            }
-                            .map_err(|error| error.to_string())?;
-                            let extra = stats
-                                .as_ref()
-                                .map(|stats| encode(codec::build_sheet_stats_values(guid, stats)))
-                                .transpose()?;
-                            Ok((message, extra))
-                        },
-                    )?;
-                    (
-                        body,
-                        extra,
-                        if entity.is_player() { 4 } else { 3 },
-                        if entity.is_player() {
-                            guid
-                        } else {
-                            entity.owner_guid
-                        },
-                    )
+                    entity_projection(ctx, connection_id, guid, viewer, full)?
                 }
                 crate::aoi::GAME_OBJECT => {
                     let object = ctx
@@ -224,7 +228,7 @@ pub fn debug_native_project(
                         .guid()
                         .find(guid)
                         .ok_or("projected GameObject is missing")?;
-                    let view = super::super::object::view(ctx, &object)?;
+                    let view = native::object::view(ctx, &object)?;
                     let (body, extra) = encoded(
                         ctx,
                         connection_id,
@@ -266,7 +270,7 @@ pub fn debug_native_project(
                             spacetimedb::sats::bsatn::to_vec(&corpse).map_err(|e| e.to_string())?;
                         let (body, extra) =
                             encoded(ctx, connection_id, guid, full, &source, || {
-                                Ok((super::super::death::create(&corpse), None))
+                                Ok((native::death::create(&corpse), None))
                             })?;
                         (body, extra, 7, corpse.owner_guid)
                     }
@@ -297,7 +301,7 @@ pub fn debug_native_project(
                     (body, extra, 6, object.caster_guid)
                 }
                 crate::aoi::TRANSPORT => (
-                    hex(&encode(super::super::transport::create(ctx, guid)?)?),
+                    hex(&encode(native::transport::create(ctx, guid)?)?),
                     String::new(),
                     5,
                     0,
@@ -308,7 +312,7 @@ pub fn debug_native_project(
             if item.owner_guid != viewer {
                 return Err("item is not visible to conformance Character".into());
             }
-            let view = super::super::view::item(ctx, &item);
+            let view = native::view::item(ctx, &item);
             let (body, extra) = encoded(ctx, connection_id, guid, full, &view, || {
                 Ok((codec::build_item_create_object(&view), None))
             })?;
