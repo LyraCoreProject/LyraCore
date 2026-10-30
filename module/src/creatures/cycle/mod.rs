@@ -192,6 +192,16 @@ pub(crate) trait IdleSink {
     fn engaged(&self, guid: u64) -> bool;
     fn speed_of(&self, guid: u64, gait: Gait) -> f32;
     fn navigate(&self, guid: u64, to: (f32, f32), max_step: f32, stop_dist: f32) -> (f32, f32);
+    /// A chase step, or None when this tick's path-search budget is spent.
+    fn chase_navigate(
+        &self,
+        guid: u64,
+        to: (f32, f32),
+        max_step: f32,
+        stop_dist: f32,
+    ) -> Option<(f32, f32)> {
+        Some(self.navigate(guid, to, max_step, stop_dist))
+    }
     fn roll(&self) -> u32;
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
     fn reached_home(&mut self, guid: u64);
@@ -1092,7 +1102,8 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
     tick: &TickContext,
 ) -> usize {
     let mut pursuits = w.pursuits(&tick.scope);
-    pursuits.sort_unstable_by_key(|c| c.guid);
+    // A creature without a leg stands still, so it searches before one that is still moving.
+    pursuits.sort_unstable_by_key(|c| (c.leg.is_some(), c.guid));
     let visited = pursuits.len();
     for c in pursuits {
         if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
@@ -1155,7 +1166,10 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
     if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
         return;
     }
-    let step = w.navigate(c.guid, (target.x, target.y), gap, stop_dist);
+    // Out of budget, the creature keeps its current leg until a later tick.
+    let Some(step) = w.chase_navigate(c.guid, (target.x, target.y), gap, stop_dist) else {
+        return;
+    };
     if step == (c.at.x, c.at.y) {
         w.target_not_reachable(c.guid);
         return;

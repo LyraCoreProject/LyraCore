@@ -25,6 +25,11 @@ use crate::{
 };
 use lyracore_shared::movement_flags::FORWARD;
 
+// Path search dominates a crowded tick. One chase search and one tick's chase searches are bounded
+// so the tick's cost stays flat as players and pursuing creatures grow.
+const CHASE_SEARCH_EXPANSIONS: u32 = 4_096;
+const CHASE_TICK_EXPANSIONS: u32 = 32_768;
+
 // Pass timings are logged for the first five seconds of each minute.
 const PROFILE_PERIOD_MICROS: u64 = 60_000_000;
 const PROFILE_WINDOW_MICROS: u64 = 5_000_000;
@@ -45,6 +50,7 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
         regen_window,
         advances: Vec::new(),
         profile: tick.now_micros % PROFILE_PERIOD_MICROS < PROFILE_WINDOW_MICROS,
+        chase_expansions: std::cell::Cell::new(CHASE_TICK_EXPANSIONS),
     };
     let outcome = crate::vmap::with_query_cache(|| {
         crate::nav::with_cell_cache(|| run_cycle(&mut world, tick))
@@ -58,6 +64,7 @@ struct CtxWorld<'a> {
     regen_window: crate::combat::RegenWindow,
     advances: Vec<(WorldEntity, WorldEntity)>,
     profile: bool,
+    chase_expansions: std::cell::Cell<u32>,
 }
 
 impl CtxWorld<'_> {
@@ -106,6 +113,7 @@ pub(crate) fn stop_on_stored_leg(ctx: &ReducerContext, leg: CreatureSpline) -> O
         regen_window: crate::combat::RegenWindow::new(now_micros / 1_000, 0),
         advances: Vec::new(),
         profile: false,
+        chase_expansions: std::cell::Cell::new(0),
     };
     super::stop_on_leg(&world, &as_leg(leg, false), now_micros)
 }
@@ -462,6 +470,33 @@ impl IdleSink for CtxWorld<'_> {
                 Gait::Run => constants::speeds::RUN,
             },
         )
+    }
+    fn chase_navigate(
+        &self,
+        guid: u64,
+        to: (f32, f32),
+        max_step: f32,
+        stop_dist: f32,
+    ) -> Option<(f32, f32)> {
+        let left = self.chase_expansions.get();
+        if left == 0 {
+            return None;
+        }
+        let Some(c) = self.ctx.db.game_world_entity().guid().find(guid) else {
+            return Some(to);
+        };
+        let (step, spent) = crate::nav::nav_step_within(
+            self.ctx,
+            c.map_id,
+            c.instance_id,
+            (c.x, c.y),
+            to,
+            (max_step, stop_dist),
+            c.z,
+            CHASE_SEARCH_EXPANSIONS,
+        );
+        self.chase_expansions.set(left.saturating_sub(spent));
+        Some(step)
     }
     fn navigate(&self, guid: u64, to: (f32, f32), max_step: f32, stop_dist: f32) -> (f32, f32) {
         self.ctx
