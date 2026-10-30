@@ -1222,8 +1222,7 @@ impl CreatureWorld for CtxWorld<'_> {
     fn run_package_passes(&mut self) {
         crate::hooks::run_package_tick_passes(self.ctx);
     }
-    fn pass_timer(&self, pass: &'static str) -> Option<spacetimedb::log_stopwatch::LogStopwatch> {
-        self.profile
-            .then(|| spacetimedb::log_stopwatch::LogStopwatch::new(pass))
+    fn pass_timer(&self, pass: &'static str) -> Option<super::PassTimer> {
+        self.profile.then(|| super::PassTimer::start(pass))
     }
 }

@@ -489,8 +489,23 @@ pub(crate) trait CreatureWorld:
     fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64;
     fn run_package_passes(&mut self);
     /// Times one pass when this tick is sampled for profiling.
-    fn pass_timer(&self, _pass: &'static str) -> Option<spacetimedb::log_stopwatch::LogStopwatch> {
+    fn pass_timer(&self, _pass: &'static str) -> Option<PassTimer> {
         None
+    }
+}
+
+/// Logs a pass's elapsed time when dropped. Native test builds have no Host timer to call.
+pub(crate) struct PassTimer {
+    #[cfg(target_arch = "wasm32")]
+    _stopwatch: spacetimedb::log_stopwatch::LogStopwatch,
+}
+
+impl PassTimer {
+    pub(crate) fn start(_pass: &'static str) -> Self {
+        Self {
+            #[cfg(target_arch = "wasm32")]
+            _stopwatch: spacetimedb::log_stopwatch::LogStopwatch::new(_pass),
+        }
     }
 }
 
