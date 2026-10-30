@@ -288,6 +288,7 @@ fn defensive_creatures_assist_but_passive_creatures_do_not() {
         true,
         TickScope::CatchAll {
             dedicated: HashSet::new(),
+            slice: crate::creatures::TickSlice::WHOLE,
         },
     );
     run_cycle(&mut defensive, tick);
@@ -298,6 +299,7 @@ fn defensive_creatures_assist_but_passive_creatures_do_not() {
         true,
         TickScope::CatchAll {
             dedicated: HashSet::new(),
+            slice: crate::creatures::TickSlice::WHOLE,
         },
     );
     run_cycle(&mut passive, tick);
@@ -412,6 +414,7 @@ fn a_zone_combat_pulse_keeps_distant_instance_members_in_combat() {
     scenario.now_micros.set(20_000_000);
     let scope = TickScope::CatchAll {
         dedicated: HashSet::new(),
+        slice: crate::creatures::TickSlice::WHOLE,
     };
     super::super::combat_entry(&mut scenario, &scope);
     assert_eq!(scenario.combat_flags.borrow().get(&far), Some(&26_000));
