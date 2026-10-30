@@ -121,8 +121,9 @@ publish this schema to an existing Shard, reimport the `items` and `spell` famil
 resumes.
 
 Enchantment Chance on Hit needs the combat-spell Stat Kind on `game_item_enchantment` rows and the
-`game_enchant_proc_rate` table. Until you reimport the `items` family with `--dbc` and the
-`spellmeta` family, Crusader, Fiery Weapon and the other combat-spell enchantments never roll.
+`game_enchant_proc_rate` table. Crusader, Fiery Weapon and the other combat-spell enchantments
+never roll until you reimport the `items` family with `--dbc`. Fiery Weapon, Lifestealing and Icy
+Chill roll at the wrong rate until you also reimport the `spellmeta` family.
 
 ### Native Relay events
 
