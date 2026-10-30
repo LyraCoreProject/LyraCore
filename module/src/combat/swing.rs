@@ -157,6 +157,7 @@ fn resolve_offhand_swing(
         },
     );
 
+    let dealt = damage.amount;
     if apply_hit(
         ctx,
         attacker_guid,
@@ -168,7 +169,7 @@ fn resolve_offhand_swing(
     {
         return;
     }
-    if !is_avoided(hit_info) {
+    if affects_victim(hit_info, dealt, blocked) {
         crate::spell::chance_on_hit::roll_chance_on_hit(
             ctx,
             attacker_guid,
@@ -552,6 +553,7 @@ fn fire_melee_swing(
         );
     }
 
+    let dealt = damage.amount;
     let combat_ended = apply_hit(
         ctx,
         attacker_guid,
@@ -579,13 +581,13 @@ fn fire_melee_swing(
     if combat_ended {
         return;
     }
-    // vmangos rolls a white swing that connected, and a weapon-proc strike even when avoided.
+    // vmangos: a weapon-proc strike rolls even when avoided; a white swing must affect the victim.
     let rolls_weapon = if swing_is_spell {
         queued_header
             .as_ref()
             .is_some_and(|strike| strike.cast_flags & crate::spell::SPELL_ATTR_WEAPON_PROCS != 0)
     } else {
-        !is_avoided(hit_info)
+        affects_victim(hit_info, dealt, blocked)
     };
     if rolls_weapon {
         crate::spell::chance_on_hit::roll_chance_on_hit(
@@ -611,6 +613,11 @@ fn fire_melee_swing(
     // Enter combat after entity writes so a stale snapshot cannot erase the flag.
     enter_combat(ctx, attacker_guid);
     enter_combat(ctx, target_guid);
+}
+
+// vmangos HITINFO_AFFECTS_VICTIM: the swing connected and either dealt damage or was blocked.
+fn affects_victim(hit_info: u8, dealt: u32, blocked: u32) -> bool {
+    !is_avoided(hit_info) && (dealt > 0 || blocked > 0)
 }
 
 fn split_damage_projection(final_damage: u32, seal_portion: u32) -> (u32, u32) {
@@ -841,5 +848,20 @@ mod revenge_tests {
         assert!(arms_revenge(HIT_CRIT, 30));
         assert!(arms_revenge(HIT_DODGE, 0));
         assert!(!arms_revenge(HIT_NORMAL, 0));
+    }
+}
+
+#[cfg(test)]
+mod chance_on_hit_tests {
+    use super::{affects_victim, HIT_BLOCK, HIT_DODGE, HIT_MISS, HIT_NORMAL, HIT_PARRY};
+
+    #[test]
+    fn a_white_swing_affects_the_victim_when_it_deals_damage_or_is_blocked() {
+        assert!(affects_victim(HIT_NORMAL, 12, 0));
+        assert!(affects_victim(HIT_BLOCK, 0, 30));
+        assert!(!affects_victim(HIT_NORMAL, 0, 0), "a fully absorbed swing");
+        for avoided in [HIT_MISS, HIT_DODGE, HIT_PARRY] {
+            assert!(!affects_victim(avoided, 0, 0));
+        }
     }
 }

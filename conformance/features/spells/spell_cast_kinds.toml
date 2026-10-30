@@ -20,7 +20,7 @@ symbol = "Spell::cast"
 status = "unverified"
 
 [[known_gaps]]
-description = "spells.custom-flags: SEND_CHANNEL_VISUAL is held on 17 spells; TRIGGER_WEAPON_PROCS is held on 30 spells."
+description = "spells.custom-flags: SEND_CHANNEL_VISUAL is held on 17 spells."
 path = "importer/src/vmangos_spell.rs"
 symbol = "read"
 evidence = "Compatibility Manifest spells.custom-flags; conformance/vmangos-port-census/spell.md; vmangos 464179081673cfd240f7ffe7f0daf96bca0b5a70."

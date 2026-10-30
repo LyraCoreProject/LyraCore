@@ -282,7 +282,7 @@ fn run_spell_effects(
     let weapon_strike = matches!(table, HitTable::Weapon { .. });
     let rolls_hit = weapon_strike || effects.iter().any(|e| e.kind == E_DAMAGE);
     let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
-    // vmangos rolls the main hand per target, landed or avoided; a Chance on Hit cast rolls none.
+    // vmangos rolls the main hand per target, landed or avoided. LyraCore skips a Chance on Hit cast.
     let rolls_weapon =
         hdr.cast_flags & SPELL_ATTR_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
     let mut weapon_targets = Vec::new();

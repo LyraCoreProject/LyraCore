@@ -29,8 +29,8 @@ No existing field moves.
 | 0x1000 | SEPARATE_AURA_PER_CASTER | 3 | Different casters get separate aura rows and slots. The native check verifies both. |
 | 0x2000 | TRIGGER_WEAPON_PROCS | 30 | Each target, landed or avoided, rolls the caster's main-hand Chance on Hit, Triggered Casts included. Durable `chance_on_hit` covers an avoided strike. |
 
-The held bit remains in the catalogue and the manifest reports 17 affected entries. Its
-behavior stays unsupported. Unknown bits fail the source reader.
+The held bit remains in the catalogue and its behavior stays unsupported. A fresh import reports 17
+affected entries; the census reports here predate the weapon-procs support and show 47. Unknown bits fail the source reader.
 
 The source has 24,689 nonnegative effect coefficients, including unused effect slots.
 An explicit coefficient scales the caster's spell or healing power without the automatic
