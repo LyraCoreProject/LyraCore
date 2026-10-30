@@ -494,6 +494,7 @@ change this key. Later checks copy the snapshot into a new worktree at the curre
 `dev up` publishes the current Module through SpacetimeDB's migration check. A schema change
 changes the key and requires a new import. The store retains the newest two snapshots and removes
 older ones after a successful import. Do not edit a sealed snapshot.
+Add `--require-snapshot` to forbid a cold import. A missing or changed import key then exits 2.
 
 Each check restores the imported data before capture. The active Realm, target directory and
 temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`. The runner waits for its Native
@@ -565,7 +566,7 @@ success report. No scenario is skipped, including taxi.
 Real-client fields, Equivalence Rules and Deliberate Deviations are untouched.
 
 The full audit runner stops both servers on exit, including capture failures and normal interrupts. Credentials
-and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/conformance/` and are deleted when
+and crash diagnostics stay under `$HOME/.cache/lyracore-scratch/m5c/` and are deleted when
 the run ends. Build output uses its `target/` directory. The prepared Reference Server's runtime
 stays under `$HOME/.cache/lyracore-scratch/reference-server/`. Reports contain only provenance,
 counts, signatures and scrubbed difference values. Committed LyraCore candidate traces contain

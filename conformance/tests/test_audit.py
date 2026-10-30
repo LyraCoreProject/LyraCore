@@ -687,6 +687,14 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.assertFalse(self.realm.exists())
         self.assertTrue(audit.validate_snapshot(self.store / 'key', 'key'))
 
+    def test_required_snapshot_never_falls_back_to_an_import(self):
+        with self.assertRaisesRegex(RuntimeError, 'forbids an import'):
+            with audit.scenario_realm('missing', self.pins, self.root, 0, require_snapshot=True):
+                self.fail('snapshot missing')
+        self.assertEqual(self.imports, 0)
+        self.assertFalse(self.running)
+        self.assertFalse(self.realm.exists())
+
 
 class FullAuditCleanup(unittest.TestCase):
     def test_startup_marker_keeps_worktree_when_host_exit_is_unconfirmed(self):

@@ -658,7 +658,7 @@ def local_realm(work, client_data, peer_count):
 
 
 @contextmanager
-def scenario_realm(key, pins, client_data, peer_count):
+def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     if (ROOT / '.lyracore-cli-rev').read_text().strip() != 'a016c82c6848a098ecbbb07ed53704c2b7dfdff1':
@@ -679,6 +679,8 @@ def scenario_realm(key, pins, client_data, peer_count):
         cli_env['PATH'] = str(bin_dir) + ':' + cli_env['PATH']
         snapshot = snapshot_path(key)
         saved = validate_snapshot(snapshot, key)
+        if require_snapshot and not saved:
+            raise RuntimeError(f'no imported-world snapshot for {key}; --require-snapshot forbids an import')
         current = git('rev-parse', 'HEAD')
         state = json.loads(marker.read_text()) if marker.is_file() else None
         if cache.exists() and state is None:
@@ -807,7 +809,7 @@ def capture_servers(harness, wire, work, client_data):
         return provenance, host_hash, module_hash, content
 
 
-def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
+def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     realm_env = dict(env)
     catalogue = json.loads((work / 'catalogue.json').read_text())
@@ -817,7 +819,8 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data):
     characters = entry['characters']
     peer_count = len(characters) - 1
     max_peer_count = max(len(item['characters']) - 1 for item in catalogue)
-    with scenario_realm(key, pins, client_data, max_peer_count) as (password, token, host, module, realm_root):
+    with scenario_realm(key, pins, client_data, max_peer_count,
+                        require_snapshot=require_snapshot) as (password, token, host, module, realm_root):
         realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
                          WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
         with scenario_reference_server(harness, key, peer_count) as provenance:
@@ -911,7 +914,8 @@ def run_scenario(args, harness, target, core_commit):
                 raise RuntimeError('tier 1 did not produce a comparison: '
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
-        capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data))
+        capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
+                         require_snapshot=args.require_snapshot)
         if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
             raise RuntimeError('core changed during scenario capture; commit and rerun')
         with timed('comparison and output'):
@@ -1033,11 +1037,13 @@ def main():
     parser.add_argument('--check', action='store_true')
     parser.add_argument('--json', action='store_true')
     parser.add_argument('--agreement', action='store_true')
+    parser.add_argument('--require-snapshot', action='store_true',
+                        help='fail instead of importing when no matching snapshot exists')
     parser.add_argument('--stop', action='store_true')
     args = parser.parse_args(json.loads(os.environ.get('LYRACORE_AUDIT_ARGS', '[]')))
     if args.stop:
-        if args.scenario or args.check or args.json or args.agreement:
-            parser.error('--stop cannot be combined with --scenario, --check, --json or --agreement')
+        if args.scenario or args.check or args.json or args.agreement or args.require_snapshot:
+            parser.error('--stop cannot be combined with scenario check options')
         stop_scenario_cache()
         return 0
     if args.check != bool(args.scenario):
@@ -1046,6 +1052,8 @@ def main():
         parser.error('--json requires --scenario ID --check')
     if args.agreement and not args.scenario:
         parser.error('--agreement requires --scenario ID --check')
+    if args.require_snapshot and not args.scenario:
+        parser.error('--require-snapshot requires --scenario ID --check')
     if args.client_data is None:
         config = ROOT / '.lyracore/config.json'
         if config.is_file():
