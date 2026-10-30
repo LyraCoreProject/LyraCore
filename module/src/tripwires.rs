@@ -18,6 +18,7 @@ pub(crate) mod character_owned_tripwire {
         (
             &[
                 "game_native_conformance_projection",
+                "game_native_conformance_cache",
                 "game_native_conformance_birth",
             ],
             "fixture-only evidence confined to a disposable tier 1 Shard",

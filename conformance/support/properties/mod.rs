@@ -3,6 +3,7 @@ mod create_kind_matches_freshness;
 mod private_fields_stay_private;
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use anyhow::{bail, Context, Result};
 use wire_client::decode::{self, Field};
@@ -15,7 +16,7 @@ pub use property_violation::Violation;
 
 #[derive(Clone, Debug, Default)]
 pub struct Projection {
-    pub fields: BTreeMap<u16, u32>,
+    pub fields: Arc<BTreeMap<u16, u32>>,
     pub object_type: u8,
     pub owner_guid: u64,
     pub same_raid: bool,
@@ -209,7 +210,7 @@ mod tests {
             projections: BTreeMap::from([(
                 9,
                 Projection {
-                    fields: fields.iter().copied().collect(),
+                    fields: fields.iter().copied().collect::<BTreeMap<_, _>>().into(),
                     object_type,
                     ..Default::default()
                 },
@@ -233,6 +234,18 @@ mod tests {
         assert!(violations.iter().any(|violation| violation.property
             == "private_fields_stay_private"
             && violation.field == Some(1176)));
+        Ok(())
+    }
+
+    #[test]
+    fn values_are_checked_even_when_the_projection_is_reused() -> Result<()> {
+        let opening = batch(vec![packet(1, 2, 9, 5, &[(14, 1)])], 5, &[(14, 1)]);
+        let mut change = opening.clone();
+        change.packets = vec![packet(2, 0, 9, 5, &[(14, 0)])];
+        let violations = run(&[opening, change])?;
+        assert_eq!(violations.len(), 1);
+        assert_eq!(violations[0].property, "client_view_consistency");
+        assert_eq!(violations[0].field, Some(14));
         Ok(())
     }
 

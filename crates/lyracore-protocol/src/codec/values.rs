@@ -253,7 +253,7 @@ pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPD
     })
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct SheetStatsValues {
     pub strength: u32,
     pub agility: u32,

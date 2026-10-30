@@ -180,9 +180,20 @@ The checks live in `conformance/support/properties/`, one module per stable prop
   entire VALUES packet cannot remove the object from the check. Packets from one reducer form
   one batch because a CREATE and its supplemental VALUES describe one committed state.
   Projection rows are events returned by that reducer on the existing WebSocket. Capture uses
-  only that call's projection rows, while buffering CREATE context across earlier transactions.
-  This avoids SQL CLI processes at each virtual-clock step and still projects every visible
-  object, including unchanged objects and objects whose updates were entirely omitted.
+  only that call's rows, while buffering CREATE context across earlier transactions. Each call
+  still enumerates AOI Grants and owned items. The fixture compares all codec inputs with the
+  previous inputs for that connection and object before rebuilding an encoding. These disposable
+  cache keys use derived Debug text plus float bits where update fields carry floats. They are
+  equality keys, not hashes or persisted evidence. Entity movement-block inputs are neutralized
+  because this property compares update fields. Transport projections remain time-dependent.
+  Unchanged rows carry an empty body to reuse the previous decoded fields. Source changes therefore
+  trigger a fresh projection even when no packet was delivered. Every delivered update is checked
+  against the current projection; objects with neither changed fields nor an update reuse their
+  previous comparison. Visibility membership is checked on every batch.
+  Clock advancement and the receiving Character's projection share one reducer call. Other connected
+  recipients are captured once after that tick. Set `LYRACORE_CONFORMANCE_FULL_PROJECTION=1` on
+  `./conformance/run <scenario>` to rebuild, decode and compare every projection for an equivalence
+  check. This mode uses the same visibility discovery and batch boundaries.
 - `create_kind_matches_freshness` checks kind 3 only when the object was newly added to the world
   while the recipient was viewing it, as vmangos's
   [Map::Add](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Map.cpp)

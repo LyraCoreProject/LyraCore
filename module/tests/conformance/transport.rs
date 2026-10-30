@@ -18,6 +18,7 @@ pub struct OperatorTransport {
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
     batches: Vec<Batch>,
+    projections: BTreeMap<u64, Projection>,
     virtual_micros: u64,
 }
 
@@ -83,6 +84,7 @@ impl OperatorTransport {
             opening: Vec::new(),
             pending: VecDeque::new(),
             batches: Vec::new(),
+            projections: BTreeMap::new(),
             virtual_micros: 0,
         };
         transport.capture()?;
@@ -99,10 +101,20 @@ impl OperatorTransport {
     }
 
     pub(super) fn capture(&mut self) -> Result<()> {
+        self.capture_after(0)
+    }
+
+    fn capture_after(&mut self, advance_micros: u64) -> Result<()> {
         // The call is a barrier for earlier packet transactions on this recipient's socket.
         let projected = self
             .connection
-            .call("debug_native_project", json!([]))
+            .call(
+                "debug_native_project",
+                json!([
+                    std::env::var_os("LYRACORE_CONFORMANCE_FULL_PROJECTION").is_some(),
+                    advance_micros
+                ]),
+            )
             .map_err(|error| anyhow!(error))?;
         self.connection
             .drain_inserts("game_native_conformance_projection");
@@ -118,14 +130,23 @@ impl OperatorTransport {
                 String,
                 String,
             ) = serde_json::from_str(row.get())?;
-            let mut fields = BTreeMap::new();
-            for body in [&body, &extra] {
-                if !body.is_empty() {
-                    for update in properties::updates(0x00a9, &decode_hex(body)?)? {
-                        fields.extend(update.fields);
+            let fields = if body.is_empty() {
+                self.projections
+                    .get(&guid)
+                    .context("projection reused before its first encoding")?
+                    .fields
+                    .clone()
+            } else {
+                let mut fields = BTreeMap::new();
+                for body in [&body, &extra] {
+                    if !body.is_empty() {
+                        for update in properties::updates(0x00a9, &decode_hex(body)?)? {
+                            fields.extend(update.fields);
+                        }
                     }
                 }
-            }
+                fields.into()
+            };
             projections.insert(
                 guid,
                 Projection {
@@ -154,6 +175,7 @@ impl OperatorTransport {
                 ))
             })
             .collect::<Result<BTreeMap<_, _>>>()?;
+        self.projections = projections.clone();
         self.batches.push(Batch {
             recipient: self.guid,
             reset: self.batches.is_empty(),
@@ -369,11 +391,8 @@ impl Transport for OperatorTransport {
             let to_boundary = 50_000 - self.virtual_micros % 50_000;
             let delta = remaining.as_micros().min(u128::from(to_boundary));
             let delta: u64 = delta.try_into()?;
-            self.connection
-                .call("debug_advance_virtual_clock", json!([delta]))
-                .map_err(|e| anyhow!(e))?;
+            self.capture_after(delta)?;
             self.virtual_micros += delta;
-            self.capture()?;
         }
     }
 }
@@ -469,8 +488,11 @@ impl<'a> MultiOperatorTransport<'a> {
             .collect()
     }
 
-    fn capture_all(&mut self) -> Result<()> {
-        for character in self.characters.values_mut() {
+    fn capture_except(&mut self, captured: Option<&str>) -> Result<()> {
+        for (id, character) in &mut self.characters {
+            if captured == Some(id.as_str()) {
+                continue;
+            }
             if let Some(transport) = &mut character.transport {
                 transport.capture()?;
             }
@@ -533,7 +555,7 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             OperatorTransport::connect(self.shard, entry.guid, entry.fixtures.clone())?;
         transport.virtual_micros = self.virtual_micros;
         entry.transport = Some(transport);
-        self.capture_all()
+        self.capture_except(Some(character))
     }
 
     fn disconnect(&mut self, character: &str) -> Result<()> {
@@ -550,12 +572,12 @@ impl MultiTransport for MultiOperatorTransport<'_> {
         self.shard
             .assert_call("debug_logout_character", &[&entry.guid.to_string()]);
         drop(transport);
-        self.capture_all()
+        self.capture_except(None)
     }
 
     fn send(&mut self, character: &str, opcode: u32, body: &[u8]) -> Result<()> {
         self.transport(character)?.send(opcode, body)?;
-        self.capture_all()
+        self.capture_except(Some(character))
     }
 
     fn receive(&mut self, character: &str, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
@@ -575,12 +597,9 @@ impl MultiTransport for MultiOperatorTransport<'_> {
                 .as_micros()
                 .min(u128::from(to_boundary))
                 .try_into()?;
-            self.transport(character)?
-                .connection
-                .call("debug_advance_virtual_clock", json!([delta]))
-                .map_err(|error| anyhow!(error))?;
+            self.transport(character)?.capture_after(delta)?;
             self.virtual_micros += delta;
-            self.capture_all()?;
+            self.capture_except(Some(character))?;
         }
     }
 }

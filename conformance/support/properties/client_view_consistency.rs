@@ -1,38 +1,48 @@
 use std::collections::{BTreeMap, BTreeSet};
+use std::sync::Arc;
 
 use super::{Projection, Update, Violation};
 
 pub const NAME: &str = "client_view_consistency";
 
 #[derive(Default)]
-pub struct ClientViews(BTreeMap<u64, BTreeMap<u16, u32>>);
+pub struct ClientViews {
+    objects: BTreeMap<u64, BTreeMap<u16, u32>>,
+    compared: BTreeMap<u64, Arc<BTreeMap<u16, u32>>>,
+    changed: BTreeSet<u64>,
+}
 
 impl ClientViews {
     pub fn remove(&mut self, guid: u64) {
-        self.0.remove(&guid);
+        self.objects.remove(&guid);
     }
 
     pub fn apply(&mut self, update: &Update) {
+        self.changed.insert(update.guid);
         match update.kind {
             2 | 3 => {
-                self.0.insert(update.guid, update.fields.clone());
+                self.objects.insert(update.guid, update.fields.clone());
             }
             0 => {
-                if let Some(fields) = self.0.get_mut(&update.guid) {
+                if let Some(fields) = self.objects.get_mut(&update.guid) {
                     fields.extend(&update.fields);
                 }
             }
             4 => {
-                self.0.remove(&update.guid);
+                self.objects.remove(&update.guid);
             }
             _ => (),
         }
     }
 
-    pub fn check(&self, recipient: u64, projections: &BTreeMap<u64, Projection>) -> Vec<Violation> {
+    pub fn check(
+        &mut self,
+        recipient: u64,
+        projections: &BTreeMap<u64, Projection>,
+    ) -> Vec<Violation> {
         let mut violations = Vec::new();
         for &guid in projections.keys() {
-            if !self.0.contains_key(&guid) {
+            if !self.objects.contains_key(&guid) {
                 violations.push(Violation {
                     property: NAME.into(),
                     recipient,
@@ -42,7 +52,7 @@ impl ClientViews {
                 });
             }
         }
-        for (&guid, actual) in &self.0 {
+        for (&guid, actual) in &self.objects {
             let Some(expected) = projections.get(&guid) else {
                 violations.push(Violation {
                     property: NAME.into(),
@@ -53,11 +63,23 @@ impl ClientViews {
                 });
                 continue;
             };
+            if !self.changed.contains(&guid)
+                && self
+                    .compared
+                    .get(&guid)
+                    .is_some_and(|previous| Arc::ptr_eq(previous, &expected.fields))
+            {
+                continue;
+            }
             let fields = actual
                 .keys()
-                .chain(expected.fields.keys())
-                .copied()
-                .collect::<BTreeSet<_>>();
+                .chain(
+                    expected
+                        .fields
+                        .keys()
+                        .filter(|field| !actual.contains_key(*field)),
+                )
+                .copied();
             for field in fields {
                 let observed = actual.get(&field).copied().unwrap_or(0);
                 let fresh = expected.fields.get(&field).copied().unwrap_or(0);
@@ -72,6 +94,11 @@ impl ClientViews {
                 }
             }
         }
+        self.compared = projections
+            .iter()
+            .map(|(&guid, projection)| (guid, projection.fields.clone()))
+            .collect();
+        self.changed.clear();
         violations
     }
 }
@@ -98,7 +125,7 @@ mod tests {
         let projections = BTreeMap::from([(
             10,
             Projection {
-                fields: BTreeMap::from([(8, 4), (14, 0)]),
+                fields: BTreeMap::from([(8, 4), (14, 0)]).into(),
                 ..Default::default()
             },
         )]);

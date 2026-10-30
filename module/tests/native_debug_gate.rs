@@ -76,6 +76,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
         .any(|table| table["name"] == "game_conformance_clock"));
     for name in [
         "game_native_conformance_projection",
+        "game_native_conformance_cache",
         "game_native_conformance_create",
         "game_native_conformance_birth",
     ] {
