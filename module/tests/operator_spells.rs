@@ -132,7 +132,7 @@ fn invalid_spell_batches_leave_templates_and_sources_unchanged() {
     for (id, create, message) in [
         (6_000_000, true, "Package-owned"),
         (50_000, false, "Fixture-Reserved"),
-        (40_000, true, "Operator Template Range"),
+        (40_000, true, "Operator Spell Range"),
         (40_000, false, "does not exist"),
     ] {
         refusal(&shard, json!([first, edit(&shard, id, create)]), message);
