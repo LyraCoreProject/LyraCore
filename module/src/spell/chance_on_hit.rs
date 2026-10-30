@@ -28,7 +28,7 @@ pub(crate) fn roll_chance_on_hit(
     let Some(attacker) = entities.guid().find(attacker_guid) else {
         return;
     };
-    if !attacker.is_player() || !entities.guid().find(target_guid).is_some_and(|t| !t.dead) {
+    if !attacker.is_player() || entities.guid().find(target_guid).is_none_or(|t| t.dead) {
         return;
     }
     let spell_cast_flags = if hit.spell_id == 0 {
@@ -94,7 +94,10 @@ fn weapon_slot(hit: &Hit, spell_cast_flags: u32) -> Option<u8> {
 
 // vmangos CanUseEquippedWeapon: a feral form sets weapons aside and Disarm takes the main hand.
 fn holds_weapon(stance: u8, slot: u8, disarmed: impl FnOnce() -> bool) -> bool {
-    !(STANCE_BEAR..=STANCE_DIRE_BEAR).contains(&stance) && !(slot == MAINHAND_SLOT && disarmed())
+    if (STANCE_BEAR..=STANCE_DIRE_BEAR).contains(&stance) {
+        return false;
+    }
+    slot != MAINHAND_SLOT || !disarmed()
 }
 
 fn weapon_in_slot(ctx: &ReducerContext, player_guid: u64, slot: u8) -> Option<ItemTemplate> {
