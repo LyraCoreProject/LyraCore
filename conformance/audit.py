@@ -163,11 +163,15 @@ def realm_processes(realm_root):
 
 
 def stop_realm(realm_root, cli, env):
-    owned = realm_processes(realm_root)
+    marker = realm_root / '.lyracore/audit-stopping.json'
+    owned = json.loads(marker.read_text()) if marker.is_file() else realm_processes(realm_root)
     for record in owned:
         live = process_identity(record['pid'])
         if live and live != record['identity']:
             raise RuntimeError(f"audit Realm PID {record['pid']} changed identity")
+    # The CLI clears its PID records even when its 15-second shutdown wait expires.
+    if owned:
+        write_state(marker, owned)
     run([cli, 'dev', 'down'], env=env, cwd=realm_root, stdout=subprocess.DEVNULL)
     deadline = time.monotonic() + 120
     for record in owned:
@@ -179,6 +183,7 @@ def stop_realm(realm_root, cli, env):
             time.sleep(0.2)
     for port in [3000, 3724, 8085]:
         free_port(port)
+    marker.unlink(missing_ok=True)
 
 
 def writable_tree(root):
@@ -274,10 +279,24 @@ def restore_imported_world(realm_root, seed, cli, env):
         stdout=subprocess.DEVNULL)
 
 
-def lock_owned_state(file, name):
+def retain_host_build(realm_root):
+    native = realm_root / '.lyracore/native-host'
+    cached = SCENARIO_CACHE / 'native-host'
+    if native.is_dir() and not native.is_symlink():
+        if cached.exists():
+            raise RuntimeError('two Native Host build caches exist; inspect before cleanup')
+        native.rename(cached)
+        native.symlink_to(cached, target_is_directory=True)
+
+
+def lock_owned_state(file, name, *, wait=False):
     try:
         fcntl.flock(file, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as error:
+        if wait:
+            print(f'[audit] waiting for {name} ownership lock', file=sys.stderr, flush=True)
+            fcntl.flock(file, fcntl.LOCK_EX)
+            return
         raise RuntimeError(f'{name} is busy with another local capture') from error
 
 
@@ -364,35 +383,8 @@ def wait_port(port, world=False):
 
 @contextmanager
 def reference_server(harness, peer_count):
-    adapter = harness / 'adapters/vmangos'
-    pins = json.loads((adapter / 'pins.json').read_text())
-    runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
-    if pins != runtime or (REFERENCE / 'binaries/.verified').read_text() != pins['binary_sha256']:
-        raise RuntimeError('prepare the Reference Server with the pinned adapter first')
-    provenance = json.loads((REFERENCE / 'provenance.json').read_text())
-    expected = dict(server='vmangos', binary_release=pins['binary_tag'] + '/' + pins['binary_asset'],
-                    **{key: pins[key] for key in ['binary_sha256', 'source_commit', 'database_commit']})
-    if provenance != expected:
-        raise RuntimeError('Reference Server provenance does not match its runtime pins')
-    compose = [adapter / 'reference.sh']
-    with (REFERENCE / '.audit.lock').open('w') as lock:
-        lock_owned_state(lock, 'Reference Server')
-        if run([*compose, 'ps', '--status', 'running', '-q'], capture_output=True, text=True).stdout.strip():
-            raise RuntimeError('Reference Server is already running; this audit only owns servers it starts')
-        for port in [13724, 18085]:
-            with socket.socket() as listener:
-                listener.bind(('127.0.0.1', port))
-        try:
-            with timed('Reference Server start'):
-                run([*compose, 'up', '-d', '--wait', '--wait-timeout', '180'])
-                wait_port(13724)
-                wait_port(18085, world=True)
-                run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'])
-                if peer_count:
-                    run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)])
-            yield provenance
-        finally:
-            run([*compose, 'down'])
+    with scenario_reference_server(harness, 'full-audit', peer_count, keep=False) as provenance:
+        yield provenance
 
 
 def peer_accounts(scenario):
@@ -441,41 +433,53 @@ def reference_dump(compose, env, path):
         pending.unlink(missing_ok=True)
 
 
-def restore_reference_world(compose, env, dump):
-    if not dump.is_file():
-        raise RuntimeError('Reference Server has no clean database snapshot')
-    run([*compose, 'down'], env=env, capture_output=True)
-    run([*compose, 'up', '-d', '--wait', '--wait-timeout', '180', 'database'],
-        env=env, capture_output=True)
-    database, configured = reference_database_command(compose, env)
-    try:
-        with dump.open('rb') as source:
-            run([*database, 'exec', '-T', 'database', 'sh', '-c',
-                 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot'],
-                env=configured, stdin=source, capture_output=True)
-    finally:
-        run([*compose, 'down'], env=env, capture_output=True)
-
-
 def validate_reference_ownership(owned, ids):
-    expected = owned['containers']
-    if ids and (not expected or ids != expected):
+    if ids != owned['containers']:
         raise RuntimeError('Reference Server container identities changed')
-    if expected and not ids and owned['phase'] == 'ready':
-        raise RuntimeError('Reference Server containers vanished; inspect before reuse')
 
 
 def owned_reference_ids(marker, owned, compose, env):
     ids = reference_ids(compose, env)
     if ids and not owned['containers'] and owned['phase'] == 'starting':
+        for service, identity in ids.items():
+            labels = json.loads(run(['docker', 'inspect', '--format', '{{json .Config.Labels}}', identity],
+                                    env=env, capture_output=True, text=True).stdout)
+            if (labels.get('com.docker.compose.project') != owned['project']
+                    or labels.get('com.docker.compose.service') != service):
+                raise RuntimeError('Reference Server startup container has another owner')
         owned['containers'] = ids
         write_state(marker, owned)
     validate_reference_ownership(owned, ids)
     return ids
 
 
+def stop_reference(marker, owned, compose, env):
+    ids = owned_reference_ids(marker, owned, compose, env)
+    if ids:
+        run(['docker', 'stop', *ids.values()], env=env, capture_output=True)
+
+
+def restore_reference_world(marker, owned, compose, env):
+    dump = Path(owned['dump'])
+    if not dump.is_file():
+        raise RuntimeError('Reference Server has no clean database snapshot')
+    owned['phase'] = 'restoring'
+    write_state(marker, owned)
+    stop_reference(marker, owned, compose, env)
+    database, configured = reference_database_command(compose, env)
+    try:
+        run([*database, 'start', '--wait', '--wait-timeout', '180', 'database'],
+            env=configured, capture_output=True)
+        with dump.open('rb') as source:
+            run(['docker', 'exec', '-i', owned['containers']['database'], 'sh', '-c',
+                 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb -uroot'],
+                env=configured, stdin=source, capture_output=True)
+    finally:
+        stop_reference(marker, owned, compose, env)
+
+
 @contextmanager
-def scenario_reference_server(harness, key, peer_count=0):
+def scenario_reference_server(harness, key, peer_count=0, *, keep=True):
     adapter = harness / 'adapters/vmangos'
     pins = json.loads((adapter / 'pins.json').read_text())
     runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
@@ -489,73 +493,71 @@ def scenario_reference_server(harness, key, peer_count=0):
     marker = SCENARIO_CACHE / 'reference-state.json'
     compose = [adapter / 'reference.sh']
     with (REFERENCE / '.audit.lock').open('w') as lock:
-        lock_owned_state(lock, 'Reference Server')
+        lock_owned_state(lock, 'Reference Server', wait=True)
         owned = json.loads(marker.read_text()) if marker.is_file() else None
         if owned:
             env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
-            ids = owned_reference_ids(marker, owned, compose, env)
-            unhealthy = owned['phase'] == 'ready' and reference_running(compose, env) != {'auth', 'database', 'world'}
-            if owned['phase'] in ['starting', 'invalid'] or owned['key'] != key or unhealthy:
-                if owned['phase'] == 'starting' and not Path(owned['dump']).is_file():
-                    run([*compose, 'down'], env=env, capture_output=True)
-                    owned['phase'] = 'invalid'
-                    owned['containers'] = {}
-                    write_state(marker, owned)
-                    raise RuntimeError('Reference Server startup has no clean world snapshot')
-                restore_reference_world(compose, env, Path(owned['dump']))
-                marker.unlink()
-                owned = None
-        if not owned:
+            owned_reference_ids(marker, owned, compose, env)
+            if owned['phase'] != 'ready' or owned['key'] != key:
+                if Path(owned['dump']).is_file():
+                    restore_reference_world(marker, owned, compose, env)
+                elif owned['phase'] != 'starting':
+                    raise RuntimeError('Reference Server has no clean database snapshot')
+        else:
             if reference_running(compose, os.environ):
                 raise RuntimeError('Reference Server is already running outside this scenario cache')
             for port in [13724, 18085]:
                 free_port(port)
-            project = 'lyracore-audit-' + secrets.token_hex(16)
-            env = dict(os.environ, COMPOSE_PROJECT_NAME=project)
-            dump = SNAPSHOT_STORE / ('reference-' + pins['database_commit'] + '.sql')
-            write_state(marker, dict(phase='starting', key=key, project=project,
-                                     adapter=str(compose[0]), containers={}, dump=str(dump)))
-            try:
-                with timed('Reference Server start'):
-                    run([*compose, 'up', '-d', '--wait', '--wait-timeout', '180'],
-                        env=env, capture_output=True)
-                    ids = reference_ids(compose, env)
-                    write_state(marker, dict(phase='starting', key=key, project=project,
-                                             adapter=str(compose[0]), containers=ids, dump=str(dump)))
-                    wait_port(13724)
-                    wait_port(18085, world=True)
-                    run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'],
-                        env=env, capture_output=True)
-                    if peer_count:
-                        run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)],
-                            env=env, capture_output=True)
-                    if not dump.is_file():
-                        reference_dump(compose, env, dump)
-            except BaseException:
-                write_state(marker, dict(phase='invalid',
-                                         key=key, project=project,
-                                         adapter=str(compose[0]), containers=reference_ids(compose, env),
-                                         dump=str(dump)))
-                run([*compose, 'down'], env=env, capture_output=True)
-                raise
-            write_state(marker, dict(phase='ready', key=key, project=project,
-                                     adapter=str(compose[0]), containers=ids, dump=str(dump)))
-        else:
+            owned = dict(phase='starting', key=key, project='lyracore-audit-' + secrets.token_hex(16),
+                         adapter=str(compose[0]), containers={},
+                         dump=str(SNAPSHOT_STORE / ('reference-' + pins['database_commit'] + '.sql')))
+            env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
+            write_state(marker, owned)
+        try:
             with timed('Reference Server start'):
-                env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
+                if not owned['containers']:
+                    run([*compose, 'up', '--no-start'], env=env, capture_output=True)
+                    owned_reference_ids(marker, owned, compose, env)
+                if set(owned['containers']) != {'auth', 'database', 'world'}:
+                    raise RuntimeError('Reference Server startup did not create all containers')
+                database, configured = reference_database_command(compose, env)
+                if not Path(owned['dump']).is_file():
+                    run([*database, 'start', '--wait', '--wait-timeout', '180', 'database'],
+                        env=configured, capture_output=True)
+                    reference_dump(compose, env, Path(owned['dump']))
+                # Persist dirtiness before starting world timers or allowing fixture writes.
+                owned.update(phase='invalid', key=key)
+                write_state(marker, owned)
+                run([*database, 'start', '--wait', '--wait-timeout', '180'],
+                    env=configured, capture_output=True)
                 wait_port(13724)
                 wait_port(18085, world=True)
+                run([sys.executable, adapter / 'setup.py', '--verify-account', 'CONFORMANCE'],
+                    env=env, capture_output=True)
                 if peer_count:
                     run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)],
                         env=env, capture_output=True)
-        try:
             yield provenance
+            owned['phase'] = 'ready'
+            write_state(marker, owned)
         except BaseException:
-            write_state(marker, dict(phase='invalid', key=key, project=env['COMPOSE_PROJECT_NAME'],
-                                     adapter=str(compose[0]), containers=reference_ids(compose, env),
-                                     dump=str(dump if not owned else owned['dump'])))
-            run([*compose, 'down'], env=env, capture_output=True)
+            # A failed marker write must still stop the containers whose IDs we already own.
+            stop_reference(marker, owned, compose, env)
             raise
+        finally:
+            if not keep:
+                release_reference(marker, owned, compose, env)
+
+
+def release_reference(marker, owned, compose, env):
+    owned_reference_ids(marker, owned, compose, env)
+    if Path(owned['dump']).is_file():
+        restore_reference_world(marker, owned, compose, env)
+    elif owned['phase'] != 'starting':
+        raise RuntimeError('Reference Server has no clean database snapshot')
+    stop_reference(marker, owned, compose, env)
+    run([*compose, 'down'], env=env, capture_output=True)
+    marker.unlink()
 
 
 def capture(wire, work, scenario, adapter, endpoints, password, env, progress=sys.stdout):
@@ -685,6 +687,7 @@ def scenario_realm(key, pins, client_data, peer_count):
                       or state['phase'] != 'ready'):
             if (realm_root / '.lyracore').exists():
                 stop_realm(realm_root, cli, cli_env)
+                retain_host_build(realm_root)
             if (realm_root / '.git').exists():
                 run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
                     stdout=subprocess.DEVNULL)
@@ -712,6 +715,10 @@ def scenario_realm(key, pins, client_data, peer_count):
                 isolated.chmod(0o700)
                 if saved:
                     copy_snapshot(snapshot, realm_root)
+                native = realm_root / '.lyracore'
+                native.mkdir(exist_ok=True)
+                (SCENARIO_CACHE / 'native-host').mkdir(exist_ok=True)
+                (native / 'native-host').symlink_to(SCENARIO_CACHE / 'native-host', target_is_directory=True)
                 with timed('Realm start'):
                     run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root,
                         stdout=subprocess.DEVNULL)
@@ -882,7 +889,7 @@ def agreement_result(tier1, audit, scenario):
                 audit_only=[json.loads(item) for item in sorted(second - first)])
 
 
-def run_scenario(args, harness, target, core_commit, revision):
+def run_scenario(args, harness, target, core_commit):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     with timed('Module schema fingerprint'):
@@ -894,11 +901,12 @@ def run_scenario(args, harness, target, core_commit, revision):
         audit = target / 'debug/examples/audit'
         wire = target / 'debug/vanilla-wire'
         if args.agreement:
-            tier1 = subprocess.run([str(ROOT / 'conformance/run'), args.scenario, '--json',
-                                    '--result', str(work / 'tier1.json')],
-                                   cwd=ROOT, env=dict(os.environ,
-                                                      LYRACORE_CONFORMANCE_SCRATCH=str(SCRATCH / 'tier1')),
-                                   capture_output=True, text=True)
+            with timed('tier 1 agreement run'):
+                tier1 = subprocess.run([str(ROOT / 'conformance/run'), args.scenario, '--json',
+                                        '--result', str(work / 'tier1.json')],
+                                       cwd=ROOT, env=dict(os.environ,
+                                                          LYRACORE_CONFORMANCE_SCRATCH=str(SCRATCH / 'tier1')),
+                                       capture_output=True, text=True)
             if tier1.returncode not in [0, 1] or not (work / 'tier1.json').is_file():
                 raise RuntimeError('tier 1 did not produce a comparison: '
                                    + (tier1.stderr + tier1.stdout).strip())
@@ -969,7 +977,7 @@ def scenario_main(args):
              '--example', 'audit', '--example', 'run'], stdout=subprocess.DEVNULL)
         run(['cargo', 'build', '--locked', '--manifest-path', harness / 'Cargo.toml',
              '--bin', 'vanilla-wire'], stdout=subprocess.DEVNULL)
-    return run_scenario(args, harness, target, core_commit, revision)
+    return run_scenario(args, harness, target, core_commit)
 
 
 def stop_scenario_cache():
@@ -1000,17 +1008,11 @@ def stop_scenario_cache():
         marker = SCENARIO_CACHE / 'reference-state.json'
         if marker.is_file():
             with (REFERENCE / '.audit.lock').open('w') as reference_lock:
-                lock_owned_state(reference_lock, 'Reference Server')
+                lock_owned_state(reference_lock, 'Reference Server', wait=True)
                 owned = json.loads(marker.read_text())
                 env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
                 compose = [owned['adapter']]
-                ids = owned_reference_ids(marker, owned, compose, env)
-                if owned['phase'] != 'starting' or Path(owned['dump']).is_file():
-                    restore_reference_world(compose, env, Path(owned['dump']))
-                else:
-                    run([*compose, 'down'], env=env, capture_output=True)
-                    raise RuntimeError('Reference Server startup has no clean world snapshot')
-                marker.unlink()
+                release_reference(marker, owned, compose, env)
 
 
 def cleanup_audit_work(work):
@@ -1054,7 +1056,8 @@ def main():
                                  'client data missing; pass --client-data with an existing 1.12.1 client Data directory')
         args.client_data = Path(args.client_data).resolve()
         try:
-            return scenario_main(args)
+            with timed('total scenario check'):
+                return scenario_main(args)
         except Exception as error:
             return setup_failure(args.scenario, args.json, str(error))
     if not re.fullmatch(r'\d{4}-\d{2}-\d{2}(?:-[a-z0-9]+)?', args.date):

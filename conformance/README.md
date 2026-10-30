@@ -498,10 +498,21 @@ older ones after a successful import. Do not edit a sealed snapshot.
 Each check restores the imported data before capture. The active Realm, target directory and
 temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`. The runner waits for its Native
 Host to exit before replacing or deleting data. It records process ownership before startup and
-checks the CLI's PID identities before stopping it. The Reference Server marker records its Docker
-Compose project and container IDs. A failed capture makes that server unusable until its saved
-database dump has restored the clean world. `./conformance/audit --stop` stops owned servers and
-removes the active worktree; it retains the sealed snapshots.
+checks the CLI's PID identities before stopping it. It retains those records across a shutdown
+timeout, even when the CLI clears its own records. Native Host build output survives gameplay
+checkout changes; `dev up` still checks the current Host source and patches.
+
+The Reference Server marker records a unique Docker Compose project and container IDs before any
+service starts. A failed capture or readiness check makes that server unusable until its saved
+database dump has restored the clean world. Recovery keeps the same container IDs and can retry an
+interrupted restore. Changed IDs stop the command before it touches the containers.
+`./conformance/audit --stop` restores the Reference Server, stops owned services and removes the
+active worktree; it retains the sealed snapshots and build output. The full audit uses the same
+Reference Server recovery and stops it on exit.
+
+Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction,
+client hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement
+also reports its tier 1 time. A warm check prints `import: 0.00s (cached snapshot)`.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).

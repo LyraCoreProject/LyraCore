@@ -12,113 +12,6 @@ audit = importlib.util.module_from_spec(SPEC)
 SPEC.loader.exec_module(audit)
 
 
-class ReferenceLifetime(unittest.TestCase):
-    def setUp(self):
-        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
-        self.directory = tempfile.TemporaryDirectory(dir=audit.SCRATCH)
-        self.addCleanup(self.directory.cleanup)
-        self.root = Path(self.directory.name)
-        self.adapter = self.root / 'adapters/vmangos'
-        self.adapter.mkdir(parents=True)
-        (self.root / 'binaries').mkdir()
-        pins = dict(binary_sha256='a' * 64, binary_tag='latest', binary_asset='binary.tar.gz',
-                    source_commit='b' * 40, database_commit='c' * 40)
-        for path in [self.adapter / 'pins.json', self.root / 'runtime-pins.json']:
-            path.write_text(json.dumps(pins))
-        (self.root / 'binaries/.verified').write_text(pins['binary_sha256'])
-        (self.root / 'provenance.json').write_text(json.dumps(dict(
-            server='vmangos', binary_release='latest/binary.tar.gz', binary_sha256='a' * 64,
-            source_commit='b' * 40, database_commit='c' * 40)))
-        self.running = False
-        self.fail_start = False
-        self.mutations = []
-
-    def docker(self, args, **_):
-        if args[1] == 'ps':
-            class Output:
-                stdout = 'owned-elsewhere' if self.running else ''
-            return Output()
-        if args[1] == 'up':
-            self.running = True
-            self.mutations.append('start')
-            if self.fail_start:
-                raise RuntimeError('compose failed after starting the database')
-        if args[1] == 'down':
-            self.running = False
-            self.mutations.append('stop')
-
-    def reference(self):
-        return audit.reference_server(self.root, 0)
-
-    def test_partial_start_and_capture_failures_stop_owned_services(self):
-        for fail_start in [False, True]:
-            with self.subTest(fail_start=fail_start), patch.object(audit, 'REFERENCE', self.root), \
-                    patch.object(audit, 'run', self.docker), patch.object(audit, 'wait_port'), \
-                    patch.object(audit.socket, 'socket'):
-                self.fail_start = fail_start
-                with self.assertRaises(RuntimeError):
-                    with self.reference():
-                        self.assertTrue(self.running)
-                        raise RuntimeError('capture failed')
-                self.assertFalse(self.running)
-
-    def test_running_reference_is_refused_without_mutation(self):
-        self.running = True
-        with patch.object(audit, 'REFERENCE', self.root), patch.object(audit, 'run', self.docker):
-            with self.assertRaisesRegex(RuntimeError, 'already running'):
-                with self.reference():
-                    self.fail('must refuse an unowned Reference Server')
-        self.assertTrue(self.running)
-        self.assertEqual(self.mutations, [])
-
-    def test_provenance_mismatch_starts_nothing(self):
-        provenance = self.root / 'provenance.json'
-        value = json.loads(provenance.read_text())
-        value['database_commit'] = 'd' * 40
-        provenance.write_text(json.dumps(value))
-        with patch.object(audit, 'REFERENCE', self.root), patch.object(audit, 'run', self.docker):
-            with self.assertRaisesRegex(RuntimeError, 'provenance'):
-                with self.reference():
-                    self.fail('must refuse changed provenance')
-        self.assertEqual(self.mutations, [])
-
-    def test_scenario_reference_reuses_matching_pin_and_restarts_for_changed_key(self):
-        cache = self.root / 'scenario-cache'
-        cache.mkdir()
-        store = self.root / 'snapshots'
-        store.mkdir()
-
-        def docker(args, **_):
-            if args[1] == 'ps':
-                if '--services' in args:
-                    value = 'auth\ndatabase\nworld' if self.running else ''
-                else:
-                    value = {'auth': 'a' * 64, 'database': 'b' * 64,
-                             'world': 'c' * 64}[args[-1]] if self.running else ''
-                return type('Output', (), {'stdout': value})()
-            if args[1] == 'up':
-                self.running = True
-                self.mutations.append('start')
-            if args[1] == 'down':
-                self.running = False
-                self.mutations.append('stop')
-
-        def dump(_compose, _env, path):
-            path.write_text('clean world')
-
-        with patch.object(audit, 'REFERENCE', self.root), patch.object(audit, 'SCENARIO_CACHE', cache), \
-                patch.object(audit, 'SNAPSHOT_STORE', store), patch.object(audit, 'reference_dump', side_effect=dump), \
-                patch.object(audit, 'run', side_effect=docker), patch.object(audit, 'wait_port'), \
-                patch.object(audit.socket, 'socket'), \
-                patch.object(audit, 'restore_reference_world',
-                             side_effect=lambda *_: (setattr(self, 'running', False),
-                                                     self.mutations.append('stop'))):
-            for key in ['first', 'first', 'second']:
-                with audit.scenario_reference_server(self.root, key):
-                    self.assertTrue(self.running)
-        self.assertEqual(self.mutations, ['start', 'stop', 'start'])
-
-
 class WorldReadiness(unittest.TestCase):
     def test_accept_without_an_auth_challenge_is_not_ready(self):
         early = MagicMock()
@@ -251,7 +144,7 @@ class ImportedWorld(unittest.TestCase):
             def run(args, **_):
                 calls.append(args[1:])
 
-            with patch.object(audit, 'run', side_effect=run):
+            with patch.object(audit, 'run', side_effect=run), patch.object(audit, 'free_port'):
                 audit.restore_imported_world(realm, seed, realm / 'lyracore', {})
             self.assertEqual((native_data / 'world').read_text(), 'imported')
             self.assertEqual(calls, [['dev', 'down'], ['dev', 'up', '--single']])
@@ -265,7 +158,7 @@ class IncompleteScenarioCache(unittest.TestCase):
             (cache / 'realm/core/.lyracore').mkdir(parents=True)
             (cache / 'realm/state.json').write_text(json.dumps(dict(phase='starting', key='test',
                                                                   core_commit='test')))
-            with patch.object(audit, 'SCENARIO_CACHE', cache):
+            with patch.object(audit, 'SCENARIO_CACHE', cache), patch.object(audit, 'free_port'):
                 audit.stop_scenario_cache()
             self.assertFalse((cache / 'realm').exists())
 
@@ -401,6 +294,25 @@ class HostExit(unittest.TestCase):
                 audit.restore_imported_world(self.realm, seed, self.realm / 'lyracore', {})
         self.assertEqual((native / 'world').read_text(), 'changed')
 
+    def test_retry_retains_pid_after_cli_forgets_a_slow_host(self):
+        with patch.object(audit, 'process_identity', return_value='started host'), \
+                patch.object(audit.time, 'monotonic', side_effect=[0, 121, 0, 121]), \
+                patch.object(audit, 'run'), patch.object(audit.time, 'sleep'):
+            for _ in range(2):
+                with self.assertRaisesRegex(RuntimeError, 'did not exit'):
+                    audit.stop_realm(self.realm, self.realm / 'lyracore', {})
+                (self.realm / '.lyracore/state.json').write_text('{}')
+        self.assertEqual(json.loads((self.realm / '.lyracore/audit-stopping.json').read_text()),
+                         [{'pid': 42, 'identity': 'started host'}])
+
+    def test_shutdown_marker_failure_does_not_signal_host(self):
+        with patch.object(audit, 'process_identity', return_value='started host'), \
+                patch.object(audit, 'write_state', side_effect=OSError('disk full')), \
+                patch.object(audit, 'run') as run:
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                audit.stop_realm(self.realm, self.realm / 'lyracore', {})
+        run.assert_not_called()
+
 
 class ReferenceOwnership(unittest.TestCase):
     def setUp(self):
@@ -425,71 +337,188 @@ class ReferenceOwnership(unittest.TestCase):
         self.store.mkdir()
         (self.store / ('reference-' + pins['database_commit'] + '.sql')).write_text('clean world')
         self.ids = {}
+        self.running = set()
+        self.world = 'clean world'
+        self.restores = 0
+        self.fail_restore = False
+        self.fail_start = False
+        self.project = None
+        self.marker = self.cache / 'reference-state.json'
+        for name, value in [('REFERENCE', self.root), ('SCENARIO_CACHE', self.cache),
+                            ('SNAPSHOT_STORE', self.store)]:
+            patched = patch.object(audit, name, value)
+            patched.start()
+            self.addCleanup(patched.stop)
+        for patched in [patch.object(audit, 'run', side_effect=self.fake_run),
+                        patch.object(audit, 'free_port'), patch.object(audit, 'wait_port')]:
+            patched.start()
+            self.addCleanup(patched.stop)
 
-    def fake_run(self, args, **_):
-        if args[1] == 'up':
-            self.assertTrue((self.cache / 'reference-state.json').is_file())
-            self.ids = {'auth': 'auth-id', 'database': 'db-id', 'world': 'world-id'}
-        elif args[1] == 'down':
-            self.ids = {}
-        return type('Output', (), {'stdout': ''})()
+    def fake_run(self, args, **options):
+        args = [str(arg) for arg in args]
+        command = args[4:] if args[:2] == ['docker', 'compose'] else args[1:]
+        output = ''
+        if command[0] == 'ps':
+            if '--services' in command:
+                output = '\n'.join(self.running)
+            else:
+                output = self.ids.get(command[-1], '')
+        elif command[0] == 'up':
+            self.assertTrue(self.marker.is_file())
+            self.assertIn('--no-start', command)
+            self.project = options['env']['COMPOSE_PROJECT_NAME']
+            self.ids = dict(zip(['auth', 'database', 'world'], ['a' * 64, 'b' * 64, 'c' * 64]))
+        elif command[0] == 'inspect':
+            service = next(name for name, identity in self.ids.items() if identity == command[-1])
+            output = json.dumps({'com.docker.compose.project': self.project,
+                                 'com.docker.compose.service': service})
+        elif command[0] == 'start':
+            saved = json.loads(self.marker.read_text())
+            self.assertEqual(saved['containers'], self.ids)
+            self.running = {'database'} if command[-1] == 'database' else set(self.ids)
+            if self.fail_start:
+                raise RuntimeError('start failed after database started')
+        elif command[0] == 'stop':
+            self.assertEqual(set(command[1:]), set(self.ids.values()))
+            self.running.clear()
+        elif command[0] == 'down':
+            self.running.clear()
+            self.ids.clear()
+        elif command[0] == 'exec':
+            self.assertEqual(self.running, {'database'})
+            if self.fail_restore:
+                self.world = 'partly restored'
+                raise RuntimeError('restore failed')
+            self.world = options['stdin'].read().decode()
+            self.restores += 1
+        return audit.subprocess.CompletedProcess(args, 0, stdout=output)
 
-    def context(self):
-        return audit.scenario_reference_server(self.root, 'key')
+    def context(self, key='key'):
+        return audit.scenario_reference_server(self.root, key)
 
-    def test_failed_capture_restores_database_before_reuse(self):
-        with patch.object(audit, 'REFERENCE', self.root), \
-                patch.object(audit, 'SCENARIO_CACHE', self.cache), \
-                patch.object(audit, 'SNAPSHOT_STORE', self.store), \
-                patch.object(audit, 'reference_ids', side_effect=lambda *_: self.ids.copy()), \
-                patch.object(audit, 'reference_running', side_effect=lambda *_: set(self.ids)), \
-                patch.object(audit, 'run', side_effect=self.fake_run), \
-                patch.object(audit, 'free_port'), patch.object(audit, 'wait_port'), \
-                patch.object(audit, 'restore_reference_world') as restore:
-            with self.assertRaisesRegex(RuntimeError, 'capture failed'):
+    def test_failed_and_timed_out_captures_restore_clean_world_before_reuse(self):
+        for failure in [RuntimeError('capture failed'), audit.subprocess.TimeoutExpired(['wire'], 240)]:
+            with self.subTest(failure=failure):
+                with self.assertRaises(type(failure)):
+                    with self.context():
+                        self.world = 'fixture changed'
+                        raise failure
+                self.assertEqual(json.loads(self.marker.read_text())['phase'], 'invalid')
+                self.assertFalse(self.running)
                 with self.context():
-                    raise RuntimeError('capture failed')
-            self.assertEqual(json.loads((self.cache / 'reference-state.json').read_text())['phase'],
-                             'invalid')
+                    self.assertEqual(self.world, 'clean world')
+                self.assertEqual(json.loads(self.marker.read_text())['phase'], 'ready')
+
+    def test_ready_cache_reuses_ids_and_changed_key_restores_world(self):
+        with self.context():
+            pass
+        identities = self.ids.copy()
+        with self.context():
+            self.world = 'fixture changed'
+        self.assertEqual(self.restores, 0)
+        with self.context('another key'):
+            self.assertEqual(self.world, 'clean world')
+        self.assertEqual(self.ids, identities)
+        self.assertEqual(self.restores, 1)
+
+    def test_interrupted_restore_is_retryable_with_the_same_container_ids(self):
+        with self.assertRaises(RuntimeError):
             with self.context():
-                pass
-            restore.assert_called_once()
-            self.assertEqual(json.loads((self.cache / 'reference-state.json').read_text())['phase'],
-                             'ready')
+                raise RuntimeError('capture failed')
+        identities = self.ids.copy()
+        self.fail_restore = True
+        with self.assertRaisesRegex(RuntimeError, 'restore failed'):
+            with self.context():
+                self.fail('cannot capture a partial restore')
+        self.assertFalse(self.running)
+        self.assertEqual(json.loads(self.marker.read_text())['phase'], 'restoring')
+        self.fail_restore = False
+        with self.context():
+            self.assertEqual(self.world, 'clean world')
+        self.assertEqual(self.ids, identities)
 
-    def test_timed_out_capture_marks_reference_unusable(self):
-        with patch.object(audit, 'REFERENCE', self.root), \
-                patch.object(audit, 'SCENARIO_CACHE', self.cache), \
-                patch.object(audit, 'SNAPSHOT_STORE', self.store), \
-                patch.object(audit, 'reference_ids', side_effect=lambda *_: self.ids.copy()), \
-                patch.object(audit, 'reference_running', side_effect=lambda *_: set(self.ids)), \
-                patch.object(audit, 'run', side_effect=self.fake_run), \
-                patch.object(audit, 'free_port'), patch.object(audit, 'wait_port'):
-            with self.assertRaises(audit.subprocess.TimeoutExpired):
+    def test_partial_start_and_readiness_failures_stop_owned_ids(self):
+        self.fail_start = True
+        with self.assertRaisesRegex(RuntimeError, 'start failed'):
+            with self.context():
+                self.fail('startup failed')
+        self.assertFalse(self.running)
+        self.fail_start = False
+        with self.context():
+            pass
+        with patch.object(audit, 'wait_port', side_effect=RuntimeError('not ready')):
+            with self.assertRaisesRegex(RuntimeError, 'not ready'):
                 with self.context():
-                    raise audit.subprocess.TimeoutExpired(['wire'], 240)
-        self.assertEqual(json.loads((self.cache / 'reference-state.json').read_text())['phase'],
-                         'invalid')
+                    self.fail('readiness failed')
+        self.assertEqual(json.loads(self.marker.read_text())['phase'], 'invalid')
+        self.assertFalse(self.running)
+
+    def test_ready_marker_failure_stops_services_and_keeps_recoverable_state(self):
+        write = audit.write_state
+        def fail_ready(path, state):
+            if state.get('phase') == 'ready':
+                raise OSError('disk full')
+            write(path, state)
+        with patch.object(audit, 'write_state', side_effect=fail_ready):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                with self.context():
+                    self.world = 'changed'
+        self.assertFalse(self.running)
+        self.assertEqual(json.loads(self.marker.read_text())['phase'], 'invalid')
+        with self.context():
+            self.assertEqual(self.world, 'clean world')
 
     def test_changed_container_identity_refuses_reuse_and_stop(self):
+        with self.context():
+            pass
         for phase in ['ready', 'starting']:
             with self.subTest(phase=phase):
-                marker = self.cache / 'reference-state.json'
-                marker.write_text(json.dumps(dict(phase=phase, key='key', project='audit-owned',
-                                                  adapter=str(self.root / 'adapters/vmangos/reference.sh'),
-                                                  containers={'world': 'old-id'}, dump='clean.sql')))
-                self.ids = {'world': 'new-id'}
-                with patch.object(audit, 'REFERENCE', self.root), \
-                        patch.object(audit, 'SCENARIO_CACHE', self.cache), \
-                        patch.object(audit, 'reference_ids', side_effect=lambda *_: self.ids.copy()), \
-                        patch.object(audit, 'run', side_effect=self.fake_run) as run:
-                    with self.assertRaisesRegex(RuntimeError, 'container identities changed'):
-                        with self.context():
-                            pass
-                    with self.assertRaisesRegex(RuntimeError, 'container identities changed'):
-                        audit.stop_scenario_cache()
-                    run.assert_not_called()
-                    self.assertTrue(marker.exists())
+                state = json.loads(self.marker.read_text())
+                state['phase'] = phase
+                self.marker.write_text(json.dumps(state))
+                self.ids['world'] = 'd' * 64
+                with self.assertRaisesRegex(RuntimeError, 'container identities changed'):
+                    with self.context():
+                        self.fail('foreign container')
+                with self.assertRaisesRegex(RuntimeError, 'container identities changed'):
+                    audit.stop_scenario_cache()
+                self.assertEqual(self.running, {'auth', 'database', 'world'})
+                self.assertTrue(self.marker.exists())
+
+    def test_full_audit_restores_world_and_stops_after_capture_failure(self):
+        with self.assertRaisesRegex(RuntimeError, 'capture failed'):
+            with audit.reference_server(self.root, 0):
+                self.world = 'changed'
+                raise RuntimeError('capture failed')
+        self.assertEqual(self.world, 'clean world')
+        self.assertFalse(self.ids)
+        self.assertFalse(self.marker.exists())
+
+    def test_provenance_mismatch_starts_nothing(self):
+        provenance = self.root / 'provenance.json'
+        value = json.loads(provenance.read_text())
+        value['database_commit'] = 'd' * 40
+        provenance.write_text(json.dumps(value))
+        with self.assertRaisesRegex(RuntimeError, 'provenance'):
+            with self.context():
+                self.fail('changed provenance')
+        self.assertFalse(self.ids)
+
+    def test_running_reference_is_refused_without_mutation(self):
+        self.running = {'auth', 'database', 'world'}
+        with self.assertRaisesRegex(RuntimeError, 'already running'):
+            with self.context():
+                self.fail('unowned Reference Server')
+        self.assertEqual(self.running, {'auth', 'database', 'world'})
+        self.assertFalse(self.marker.exists())
+
+    def test_stop_restores_clean_world_and_removes_owned_containers(self):
+        with self.context():
+            self.world = 'changed'
+        audit.stop_scenario_cache()
+        self.assertEqual(self.world, 'clean world')
+        self.assertFalse(self.ids)
+        self.assertFalse(self.marker.exists())
 
 
 class ComparisonOutput(unittest.TestCase):
@@ -567,6 +596,96 @@ class SnapshotStore(unittest.TestCase):
             (root / 'key').mkdir()
             with self.assertRaisesRegex(RuntimeError, 'no seal'):
                 audit.validate_snapshot(root / 'key', 'key')
+
+
+class ScenarioRealmReuse(unittest.TestCase):
+    def setUp(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        temporary = tempfile.TemporaryDirectory(dir=audit.SCRATCH)
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.cache = self.root / 'cache'
+        self.cache.mkdir()
+        self.store = self.root / 'store'
+        self.realm = self.cache / 'realm/core'
+        self.commit = 'first-gameplay'
+        self.running = False
+        self.imports = 0
+        self.pins = {'database_commit': 'pin'}
+        (self.root / '.lyracore-cli-rev').write_text('a016c82c6848a098ecbbb07ed53704c2b7dfdff1')
+        for name, value in [('ROOT', self.root), ('SCENARIO_CACHE', self.cache),
+                            ('SNAPSHOT_STORE', self.store)]:
+            patched = patch.object(audit, name, value)
+            patched.start()
+            self.addCleanup(patched.stop)
+        for patched in [patch.object(audit, 'run', side_effect=self.fake_run),
+                        patch.object(audit, 'free_port'),
+                        patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime')]:
+            patched.start()
+            self.addCleanup(patched.stop)
+
+    def fake_run(self, args, **options):
+        args = [str(arg) for arg in args]
+        output = ''
+        if args[:2] == ['git', 'rev-parse']:
+            output = self.commit
+        elif args[:3] == ['git', 'worktree', 'add']:
+            self.realm.mkdir()
+            (self.realm / '.git').write_text('gitdir: fake')
+            (self.realm / 'lyracore').write_text('CLI')
+        elif args[:3] == ['git', 'worktree', 'remove']:
+            self.assertFalse(self.running)
+            shutil.rmtree(self.realm)
+        elif args[1:3] == ['dev', 'up']:
+            self.assertTrue((self.cache / 'realm/state.json').is_file())
+            self.running = True
+            native = self.realm / '.lyracore'
+            native.mkdir(exist_ok=True)
+            for directory in ['native-data', 'native-jwt']:
+                (native / directory).mkdir(exist_ok=True)
+            (native / 'native-jwt/key').write_text('key')
+            (native / 'native-owner-token').write_text('token')
+            (native / 'native-cli.toml').write_text('publisher')
+            module = self.realm / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
+            module.parent.mkdir(parents=True, exist_ok=True)
+            module.write_text(self.commit)
+            host = native / 'native-host/SpacetimeDB/target/release/spacetimedb-standalone'
+            host.parent.mkdir(parents=True, exist_ok=True)
+            host.write_text('host')
+        elif args[1:3] == ['dev', 'down']:
+            self.running = False
+        elif args[1] == 'import':
+            self.imports += 1
+            (self.realm / '.lyracore/native-data/world').write_text('imported')
+            current = self.realm / '.import/vmangos/current.json'
+            current.parent.mkdir(parents=True)
+            current.write_text(json.dumps({'commit': 'pin'}))
+        return audit.subprocess.CompletedProcess(args, 0, stdout=output)
+
+    def test_gameplay_commit_copies_snapshot_and_publishes_current_module(self):
+        with audit.scenario_realm('key', self.pins, self.root, 0) as (_, _, _, module, realm):
+            self.assertEqual(module.read_text(), self.commit)
+            (realm / '.lyracore/native-data/world').write_text('changed by scenario')
+        self.commit = 'second-gameplay'
+        with audit.scenario_realm('key', self.pins, self.root, 0) as (_, _, _, module, realm):
+            self.assertEqual(module.read_text(), self.commit)
+            self.assertEqual((realm / '.lyracore/native-data/world').read_text(), 'imported')
+        self.assertEqual(self.imports, 1)
+        self.assertTrue(audit.validate_snapshot(self.store / 'key', 'key'))
+
+    def test_ready_marker_failure_stops_realm_and_keeps_snapshot(self):
+        write = audit.write_state
+        def fail_ready(path, state):
+            if state.get('phase') == 'ready':
+                raise OSError('disk full')
+            write(path, state)
+        with patch.object(audit, 'write_state', side_effect=fail_ready):
+            with self.assertRaisesRegex(OSError, 'disk full'):
+                with audit.scenario_realm('key', self.pins, self.root, 0):
+                    self.fail('marker failed')
+        self.assertFalse(self.running)
+        self.assertFalse(self.realm.exists())
+        self.assertTrue(audit.validate_snapshot(self.store / 'key', 'key'))
 
 
 class FullAuditCleanup(unittest.TestCase):
