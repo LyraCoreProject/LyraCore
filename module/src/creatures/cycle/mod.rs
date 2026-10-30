@@ -1150,13 +1150,14 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
         return;
     }
     let dir = ((target.x - c.at.x) / gap, (target.y - c.at.y) / gap);
+    let stop_at = (target.x - dir.0 * stop_dist, target.y - dir.1 * stop_dist);
+    // Path search dominates the tick, so a leg that still leads to the victim is kept unsearched.
+    if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
+        return;
+    }
     let step = w.navigate(c.guid, (target.x, target.y), gap, stop_dist);
     if step == (c.at.x, c.at.y) {
         w.target_not_reachable(c.guid);
-        return;
-    }
-    let stop_at = (target.x - dir.0 * stop_dist, target.y - dir.1 * stop_dist);
-    if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
         return;
     }
     let gait = w.chase_gait(c.guid);
