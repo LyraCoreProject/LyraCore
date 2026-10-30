@@ -177,9 +177,16 @@ fn compile(
         value["id"] = json!(effect.row_id());
         effects.insert(effect.row_id(), value);
     }
+    let mut sources = source
+        .into_iter()
+        .map(|row| Ok((source_entry(&row)?, row)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
     let mut edits = Vec::new();
-    for (header, source) in rows.headers.iter().zip(source) {
+    for header in &rows.headers {
         let id = header.spell_id;
+        let source = sources
+            .remove(&id)
+            .with_context(|| format!("spell {id} compiled without a source row"))?;
         let offers = trainers.iter().filter(|r| r.spell_id == id).map(|row| {
             let mut row = row.clone();
             if curated(&&row) {
@@ -200,8 +207,20 @@ fn compile(
             "source": source.into_iter().map(|(name, value)| json!({"name":name,"value":value})).collect::<Vec<_>>()
         }));
     }
+    ensure!(
+        sources.is_empty(),
+        "spells {:?} did not compile",
+        sources.keys().collect::<Vec<_>>()
+    );
     eprintln!("{}", serde_json::to_string(&manifest)?);
     Ok(Value::Array(edits))
+}
+
+fn source_entry(row: &BTreeMap<String, String>) -> Result<u32> {
+    row.get("entry")
+        .context("spell source has no entry")?
+        .parse()
+        .context("spell source entry is not a spell id")
 }
 
 fn table<T: DbcTable>(dir: &Path) -> Result<T> {
@@ -242,15 +261,21 @@ pub(crate) fn run(input: &str, dbc: &str) -> Result<()> {
         tables,
         &trainers,
     )?;
-    for (edit, request) in output
+    let mut requests = requests
+        .into_iter()
+        .map(|request| Ok((source_entry(&request.source)?, request)))
+        .collect::<Result<BTreeMap<_, _>>>()?;
+    for edit in output
         .as_array_mut()
         .context("compiled spell array")?
         .iter_mut()
-        .zip(requests)
     {
         let id = edit["spell"]["spell_id"]
             .as_u64()
             .context("compiled spell id")? as u32;
+        let request = requests
+            .remove(&id)
+            .with_context(|| format!("spell {id} compiled without a request"))?;
         ensure!(
             request.trainers.iter().all(|r| r.spell_id == id),
             "trainer offer belongs to another spell"

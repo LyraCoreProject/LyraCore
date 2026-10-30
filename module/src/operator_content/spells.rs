@@ -1,7 +1,7 @@
 use std::collections::BTreeSet;
 
 use lyracore_package_delta::ids::{
-    is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id, is_operator_template_id,
+    is_fixture_reserved_spell_id, is_fixture_reserved_trainer_id, is_operator_spell_id,
     is_package_spell_id, is_package_trainer_id, packed_spell_effect_id,
 };
 use lyracore_shared::spell::taxonomy::{EffectKind, P_RAW, T_SCRIPTED};
@@ -103,8 +103,8 @@ fn check_edit(ctx: &ReducerContext, edit: &SpellEdit, ids: &BTreeSet<u32>) -> Re
     }
     let exists = ctx.db.game_spell().spell_id().find(id).is_some();
     if edit.create {
-        if !is_operator_template_id(id) {
-            return Err("new spells need an id in the Operator Template Range".into());
+        if !is_operator_spell_id(id) {
+            return Err("new spells need an id in the Operator Spell Range".into());
         }
         if exists {
             return Err("the new spell id is already used; choose another id".into());

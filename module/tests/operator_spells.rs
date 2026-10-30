@@ -3,7 +3,7 @@ mod support;
 use serde_json::{json, Value};
 use support::Standalone;
 
-const NEW_SPELL: u32 = 5_200_500;
+const NEW_SPELL: u32 = 60_000;
 
 fn realm(name: &str) -> Standalone {
     let mut shard = Standalone::start(name);

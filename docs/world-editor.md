@@ -124,11 +124,7 @@ A derived trainer wrapper needs its taught rank in the same compile batch.
 
 SQL spell import and export are unavailable on a Realm. Creature spell lists still use
 `operator_apply_creature_edits`. The VMaNGOS spell path keeps its SQL save and reload behavior.
-Spell imports clear stored editor source rows for the spell ids they replace. New spells in the
-Operator Template Range remain outside the base spell import's range. Neither this change nor
-a save bumps `.lyracore-editor-rev` or changes `patch-3.MPQ`.
-
-New spell ids follow the Operator Template Range. The current initial spellbook packet casts
-ids to 16 bits in `crates/lyracore-protocol/src/codec/entity.rs`. This slice does not change that
-packet. Learning these high ids on a Character needs separate protocol work; editing existing
-low ids and using spells from creature lists do not rely on that spellbook packet.
+Spell imports clear stored editor source rows for the spell ids they replace. New spells get ids
+in the Operator Spell Range, 60,000 through 65,535, which a full spell import neither deletes nor
+accepts from a World Source. The range stays below 65,536 because the 1.12 initial spellbook
+packet carries 16-bit spell ids. A save does not change `patch-3.MPQ`.

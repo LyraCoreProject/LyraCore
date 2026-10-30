@@ -37,7 +37,7 @@ entry in both files.
 
 **N** [Native Host](CORE_TERMS.md#native-host) · [Navigation Inputs](#bots)
 
-**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](CORE_TERMS.md#operator) · [Operator Content API](#requests-and-delivery) · [Operator Spawn Range](#requests-and-delivery) · [Operator Template Range](#requests-and-delivery) · [Owner Token](#requests-and-delivery)
+**O** [Officer Note](#guilds) · [Official Package Collection](#packages) · [Official Package Source](#packages) · [Open Role](#meeting-stones) · [Operator](CORE_TERMS.md#operator) · [Operator Content API](#requests-and-delivery) · [Operator Spawn Range](#requests-and-delivery) · [Operator Spell Range](#requests-and-delivery) · [Operator Template Range](#requests-and-delivery) · [Owner Token](#requests-and-delivery)
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Public Note](#guilds)
 
@@ -184,6 +184,11 @@ pool owns. Spawn edits through the Operator Content API change only an Authored 
 **Operator Spawn Range**:
 The creature and gameobject spawn identifiers the Operator Content API allocates. No import and no
 Package spawn uses it. `docs/operator-content-api.md` gives the band.
+
+**Operator Spell Range**:
+Spell ids 60,000 through 65,535, reserved for spells the Operator Content API creates. The 1.12
+initial spellbook packet carries 16-bit spell ids, so a spell a Character learns must stay below
+65,536. World imports refuse source spells here.
 
 **Operator Template Range**:
 Template entries 5,200,500 through 5,999,999, reserved for allocation by the Operator Content API.

@@ -1519,6 +1519,15 @@ pub(crate) fn selected_world_plan(
         let (spells, manifest) = crate::vmangos_spell::read(source)?;
         (spells, Some(serde_json::to_string_pretty(&manifest)?))
     };
+    if let Some(spell) = spells
+        .iter()
+        .find(|s| lyracore_package_delta::ids::is_operator_spell_id(s.id))
+    {
+        anyhow::bail!(
+            "spell_template entry {} belongs to the Operator Spell Range",
+            spell.id
+        );
+    }
     let (mut rows, cov, _) = derive_spell_rows(
         &open_spell_tables(Path::new(data_dir), spells)?,
         only,

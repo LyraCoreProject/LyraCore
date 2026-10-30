@@ -894,7 +894,7 @@ casts, cooldowns and known spells stay in place, as they do for Package spell up
 auras retain their stored effect values; later casts use the new definition. No reload command
 or client packet accompanies a save. The client reads its changed Spell.dbc on its next start.
 
-New ids must be unused in the Operator Template Range. Meld selects an unused id from the Realm
+New ids must be unused in the Operator Spell Range, **60,000 to 65,535**. Meld selects an unused id from the Realm
 and client, and `create: true` makes the reducer refuse a concurrent allocation. An update needs
 an existing id. Zero, Package Spell Range and Fixture-Reserved spell ids refuse. Duplicate ids
 refuse the batch. Trainer offers retain existing spell and trainer keys; Package and
