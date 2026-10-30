@@ -261,9 +261,6 @@ pub(crate) fn run_proc_pass(
         target_survived,
         (dealer_bits, victim_bits),
     );
-    if target_survived {
-        super::chance_on_hit::roll_chance_on_hit(ctx, attacker_guid, target_guid, hit);
-    }
 }
 
 fn fire_aura_procs(

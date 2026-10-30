@@ -1,8 +1,7 @@
 use lyracore_shared::constants::starter_item::{CLASS_WEAPON, MAINHAND_SLOT};
-use lyracore_shared::spell::taxonomy::{SPELL_ATTR_WEAPON_PROCS, STANCE_BEAR, STANCE_DIRE_BEAR};
+use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_DIRE_BEAR};
 use spacetimedb::{log, ReducerContext};
 
-use crate::combat::{Hit, HitSource};
 use crate::game_world_entity;
 use crate::items::{game_item_template, ItemTemplate};
 
@@ -14,12 +13,13 @@ const SPELLTRIGGER_CHANCE_ON_HIT: u8 = 2;
 // vmangos rolls a spell whose procChance exceeds 100 at one proc per minute.
 const UNKNOWN_RATE_PPM: f32 = 1.0;
 
-// Follows vmangos Player::CastItemCombatSpell; the caller has seen the target survive the hit.
+// Follows vmangos Player::CastItemCombatSpell. The caller picks the slot: the hand that swung,
+// or the main hand for a spell that triggers weapon procs.
 pub(crate) fn roll_chance_on_hit(
     ctx: &ReducerContext,
     attacker_guid: u64,
     target_guid: u64,
-    hit: &Hit,
+    slot: u8,
 ) {
     if attacker_guid == target_guid {
         return;
@@ -31,18 +31,6 @@ pub(crate) fn roll_chance_on_hit(
     if !attacker.is_player() || entities.guid().find(target_guid).is_none_or(|t| t.dead) {
         return;
     }
-    let spell_cast_flags = if hit.spell_id == 0 {
-        0
-    } else {
-        ctx.db
-            .game_spell()
-            .spell_id()
-            .find(hit.spell_id)
-            .map_or(0, |s| s.cast_flags)
-    };
-    let Some(slot) = weapon_slot(hit, spell_cast_flags) else {
-        return;
-    };
     let Some(weapon) = weapon_in_slot(ctx, attacker_guid, slot) else {
         return;
     };
@@ -66,7 +54,7 @@ pub(crate) fn roll_chance_on_hit(
         if roll_bp >= chance_bp(spell.proc_chance, ppm, weapon.delay_ms) {
             continue;
         }
-        if let Err(err) = crate::spell::cast_triggered(
+        if let Err(err) = super::cast::resolve::cast_chance_on_hit(
             ctx,
             attacker_guid,
             spell_id,
@@ -77,17 +65,6 @@ pub(crate) fn roll_chance_on_hit(
                 "chance on hit: item {} could not cast {spell_id}: {err}",
                 weapon.entry
             );
-        }
-    }
-}
-
-fn weapon_slot(hit: &Hit, spell_cast_flags: u32) -> Option<u8> {
-    match hit.source {
-        HitSource::MainHand if hit.spell_id == 0 => Some(MAINHAND_SLOT),
-        HitSource::OffHand => Some(crate::items::equip_slot::OFFHAND),
-        HitSource::Ranged | HitSource::Triggered => None,
-        HitSource::MainHand | HitSource::MeleeSpell | HitSource::Spell => {
-            (spell_cast_flags & SPELL_ATTR_WEAPON_PROCS != 0).then_some(MAINHAND_SLOT)
         }
     }
 }
@@ -167,42 +144,6 @@ mod tests {
     use lyracore_shared::spell::taxonomy::{STANCE_BATTLE, STANCE_BERSERKER, STANCE_CAT};
 
     const OFFHAND: u8 = crate::items::equip_slot::OFFHAND;
-
-    #[test]
-    fn a_white_swing_rolls_the_weapon_that_swung() {
-        assert_eq!(
-            weapon_slot(&Hit::weapon(HitSource::MainHand, false), 0),
-            Some(MAINHAND_SLOT)
-        );
-        assert_eq!(
-            weapon_slot(&Hit::weapon(HitSource::OffHand, true), 0),
-            Some(OFFHAND)
-        );
-    }
-
-    #[test]
-    fn a_spell_hit_rolls_the_main_hand_only_when_it_triggers_weapon_procs() {
-        for source in [HitSource::MainHand, HitSource::MeleeSpell, HitSource::Spell] {
-            let hit = Hit::spell(source, 1715, false);
-            assert_eq!(
-                weapon_slot(&hit, SPELL_ATTR_WEAPON_PROCS),
-                Some(MAINHAND_SLOT)
-            );
-            assert_eq!(weapon_slot(&hit, 0), None);
-        }
-    }
-
-    #[test]
-    fn ranged_and_triggered_hits_roll_nothing() {
-        assert_eq!(weapon_slot(&Hit::weapon(HitSource::Ranged, false), 0), None);
-        assert_eq!(
-            weapon_slot(
-                &Hit::spell(HitSource::Triggered, 21992, false),
-                SPELL_ATTR_WEAPON_PROCS
-            ),
-            None
-        );
-    }
 
     #[test]
     fn a_feral_form_sets_both_weapons_aside() {

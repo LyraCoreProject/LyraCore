@@ -16,7 +16,7 @@ pub const SEND_CHANNEL_VISUAL: u32 = 0x0800;
 pub const SEPARATE_AURA_PER_CASTER: u32 = 0x1000;
 pub const TRIGGER_WEAPON_PROCS: u32 = 0x2000;
 pub const KNOWN: u32 = 0x3fff;
-pub const UNSUPPORTED: u32 = SEND_CHANNEL_VISUAL | TRIGGER_WEAPON_PROCS;
+pub const UNSUPPORTED: u32 = SEND_CHANNEL_VISUAL;
 
 #[must_use]
 pub fn is_negative(flags: u32, derived: bool) -> bool {
