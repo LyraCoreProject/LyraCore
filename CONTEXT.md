@@ -525,12 +525,14 @@ sight, power cost, cooldown or stealth-break checks. Its own hits fire no furthe
 _Avoid_: proc cast, internal cast, free cast
 
 **Chance on Hit**:
-A weapon spell slot that may cast when the weapon strikes a victim that is still alive. A white
-swing that lands and deals damage, or is blocked, rolls the weapon that swung. A spell that carries
-`SPELL_ATTR_WEAPON_PROCS` rolls the main hand once per target, even when avoided and even as a
-Triggered Cast. The roll uses the slot's procs-per-minute rate at the weapon's speed, else the
-spell's proc chance, and fires a Triggered Cast at the victim that rolls no further Chance on Hit.
-No aura carries it, so it is not a Proc.
+A weapon spell slot or a combat-spell enchantment that may cast when the weapon strikes a victim
+that is still alive. A white swing that lands and deals damage, or is blocked, rolls the weapon that
+swung. A spell that carries `SPELL_ATTR_WEAPON_PROCS` rolls the main hand once per target, even when
+avoided and even as a Triggered Cast. A spell slot rolls its procs-per-minute rate at the weapon's
+speed, else the spell's proc chance. An enchantment rolls its `game_enchant_proc_rate`, else its
+own percent, else one proc per minute. The roll fires a Triggered Cast that rolls no further Chance
+on Hit, at the victim, or at the wielder for a helpful enchantment spell. No aura carries it, so it
+is not a Proc.
 _Avoid_: item proc, on-hit spell
 
 **Spell Cast Event Kind**:

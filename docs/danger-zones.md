@@ -120,6 +120,10 @@ proc chance, which is one proc per minute for most weapons, and only white swing
 publish this schema to an existing Shard, reimport the `items` and `spell` families before play
 resumes.
 
+Enchantment Chance on Hit needs the combat-spell Stat Kind on `game_item_enchantment` rows and the
+`game_enchant_proc_rate` table. Until you reimport the `items` family with `--dbc` and the
+`spellmeta` family, Crusader, Fiery Weapon and the other combat-spell enchantments never roll.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

@@ -362,6 +362,10 @@ keyed by spell id, private, and absent for most spells; an absent row means "use
 values". The `spellmeta` dump family loads it, and its clear stops at the reserved synthetic id
 floor so the seeded Proc fixtures keep their overlay rows.
 
+`game_enchant_proc_rate` (`module/src/spell/chance_on_hit.rs`) carries the vmangos
+`spell_proc_item_enchant` rate: the procs-per-minute of an enchantment's Chance on Hit spell, keyed
+by that spell. It is private. The `spellmeta` dump family loads it, and packages cannot claim it.
+
 `game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
 `proc_ready_micros`. `spell::proc::freeze_profile` folds header and overlay together once, at
@@ -421,6 +425,7 @@ mask.
 | 23 | Dodge |
 | 24 | Parry |
 | 25 | Block |
+| 26 | Combat spell: a Chance on Hit, no stat. `amount` is its percent chance and `spell_id` the spell |
 
 Each enchantment effect has key `(u64(enchant_id) << 8) | effect_index`. Indices reserve 64
 positions per client enchantment slot, and a referenced spell's three subeffects each reserve eight

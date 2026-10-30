@@ -1,9 +1,13 @@
 use lyracore_shared::constants::starter_item::{CLASS_WEAPON, MAINHAND_SLOT};
+use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{STANCE_BEAR, STANCE_DIRE_BEAR};
-use spacetimedb::{log, ReducerContext};
+use spacetimedb::{log, table, ReducerContext};
 
 use crate::game_world_entity;
-use crate::items::{game_item_template, ItemTemplate};
+use crate::items::{
+    game_item_enchantment, game_item_random_property, game_item_template, ItemInstance,
+    ItemTemplate,
+};
 
 use super::game_spell;
 use super::proc::{proc_chance_bp, ProcProfile, ProcSide, BASIS_POINTS};
@@ -12,6 +16,14 @@ use super::proc::{proc_chance_bp, ProcProfile, ProcSide, BASIS_POINTS};
 const SPELLTRIGGER_CHANCE_ON_HIT: u8 = 2;
 // vmangos rolls a spell whose procChance exceeds 100 at one proc per minute.
 const UNKNOWN_RATE_PPM: f32 = 1.0;
+
+// vmangos spell_proc_item_enchant: the procs-per-minute rate of an enchantment's Chance on Hit spell.
+#[table(accessor = game_enchant_proc_rate)]
+pub struct EnchantProcRate {
+    #[primary_key]
+    pub spell_id: u32,
+    pub ppm_rate: f32,
+}
 
 // Follows vmangos Player::CastItemCombatSpell. The caller picks the slot: the hand that swung,
 // or the main hand for a spell that triggers weapon procs.
@@ -31,27 +43,48 @@ pub(crate) fn roll_chance_on_hit(
     if !attacker.is_player() || entities.guid().find(target_guid).is_none_or(|t| t.dead) {
         return;
     }
-    let Some(weapon) = weapon_in_slot(ctx, attacker_guid, slot) else {
+    let Some((item, weapon)) = weapon_in_slot(ctx, attacker_guid, slot) else {
         return;
     };
     let spells = chance_on_hit_spells(&weapon);
-    if spells.is_empty()
+    let enchants = combat_spell_enchants(ctx, &item);
+    if (spells.is_empty() && enchants.is_empty())
         || !holds_weapon(attacker.stance, slot, || {
             crate::spell::is_disarmed(ctx, attacker_guid)
         })
     {
         return;
     }
-    for (spell_id, ppm) in spells {
-        let Some(spell) = ctx.db.game_spell().spell_id().find(spell_id) else {
-            log::info!(
-                "chance on hit: item {} names unknown spell {spell_id}",
-                weapon.entry
-            );
-            continue;
-        };
-        let roll_bp = ctx.random::<u32>() % BASIS_POINTS;
-        if roll_bp >= chance_bp(spell.proc_chance, ppm, weapon.delay_ms) {
+    let item_rolls = spells.into_iter().filter_map(|(spell_id, ppm)| {
+        let spell = known_spell(ctx, &weapon, spell_id)?;
+        Some((
+            spell_id,
+            chance_bp(spell.proc_chance, ppm, weapon.delay_ms),
+            target_guid,
+        ))
+    });
+    // vmangos casts a helpful enchantment spell on the wielder.
+    let enchant_rolls = enchants.into_iter().filter_map(|(spell_id, amount)| {
+        let spell = known_spell(ctx, &weapon, spell_id)?;
+        let ppm = ctx
+            .db
+            .game_enchant_proc_rate()
+            .spell_id()
+            .find(spell_id)
+            .map_or(0.0, |rate| rate.ppm_rate);
+        Some((
+            spell_id,
+            enchant_chance_bp(ppm, amount, weapon.delay_ms),
+            if spell.is_negative {
+                target_guid
+            } else {
+                attacker_guid
+            },
+        ))
+    });
+    let rolls: Vec<_> = item_rolls.chain(enchant_rolls).collect();
+    for (spell_id, chance_bp, cast_target) in rolls {
+        if ctx.random::<u32>() % BASIS_POINTS >= chance_bp {
             continue;
         }
         if let Err(err) = super::cast::resolve::cast_chance_on_hit(
@@ -59,7 +92,7 @@ pub(crate) fn roll_chance_on_hit(
             attacker_guid,
             spell_id,
             attacker.level as u8,
-            target_guid,
+            cast_target,
         ) {
             log::info!(
                 "chance on hit: item {} could not cast {spell_id}: {err}",
@@ -67,6 +100,17 @@ pub(crate) fn roll_chance_on_hit(
             );
         }
     }
+}
+
+fn known_spell(ctx: &ReducerContext, weapon: &ItemTemplate, spell_id: u32) -> Option<super::Spell> {
+    let spell = ctx.db.game_spell().spell_id().find(spell_id);
+    if spell.is_none() {
+        log::info!(
+            "chance on hit: item {} names unknown spell {spell_id}",
+            weapon.entry
+        );
+    }
+    spell
 }
 
 // vmangos CanUseEquippedWeapon: a feral form sets weapons aside and Disarm takes the main hand.
@@ -77,11 +121,39 @@ fn holds_weapon(stance: u8, slot: u8, disarmed: impl FnOnce() -> bool) -> bool {
     slot != MAINHAND_SLOT || !disarmed()
 }
 
-fn weapon_in_slot(ctx: &ReducerContext, player_guid: u64, slot: u8) -> Option<ItemTemplate> {
+fn weapon_in_slot(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    slot: u8,
+) -> Option<(ItemInstance, ItemTemplate)> {
     let item = crate::items::item_in_slot(ctx, player_guid, slot)?;
     let weapon = ctx.db.game_item_template().entry().find(item.entry)?;
     (weapon.class == CLASS_WEAPON && !crate::items::item_is_broken(&weapon, &item))
-        .then_some(weapon)
+        .then_some((item, weapon))
+}
+
+// The permanent enchantment and the Random Property enchantments, as vmangos walks every slot.
+fn combat_spell_enchants(ctx: &ReducerContext, item: &ItemInstance) -> Vec<(u32, i32)> {
+    let property = ctx
+        .db
+        .game_item_random_property()
+        .property_id()
+        .find(item.random_property_id);
+    let enchant_ids = [item.enchant_id]
+        .into_iter()
+        .chain(property.into_iter().flat_map(|property| {
+            [
+                property.enchant_id_1,
+                property.enchant_id_2,
+                property.enchant_id_3,
+            ]
+        }))
+        .filter(|&id| id != 0);
+    enchant_ids
+        .flat_map(|id| ctx.db.game_item_enchantment().by_enchant().filter(id))
+        .filter(|effect| effect.kind == COMBAT_SPELL && effect.spell_id != 0)
+        .map(|effect| (effect.spell_id, effect.amount))
+        .collect()
 }
 
 fn chance_on_hit_spells(weapon: &ItemTemplate) -> Vec<(u32, f32)> {
@@ -138,6 +210,17 @@ fn chance_bp(proc_chance: u8, ppm: f32, weapon_delay_ms: u32) -> u32 {
     proc_chance_bp(&profile, ProcSide::Dealer, weapon_delay_ms)
 }
 
+// vmangos takes the rate table first, then the enchantment's own percent, then one proc per minute.
+fn enchant_chance_bp(ppm: f32, amount: i32, weapon_delay_ms: u32) -> u32 {
+    if ppm != 0.0 {
+        chance_bp(0, ppm, weapon_delay_ms)
+    } else if amount != 0 {
+        chance_bp(amount.clamp(0, 100) as u8, 0.0, weapon_delay_ms)
+    } else {
+        chance_bp(0, UNKNOWN_RATE_PPM, weapon_delay_ms)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -192,6 +275,16 @@ mod tests {
     fn a_spell_chance_above_certainty_rolls_one_proc_per_minute() {
         // One proc per minute on a 2.4 second weapon is 4 percent.
         assert_eq!(chance_bp(101, 0.0, 2400), 400);
+    }
+
+    #[test]
+    fn an_enchantment_takes_its_rate_then_its_percent_then_one_proc_per_minute() {
+        // Fiery Weapon: 6 procs per minute on a 2.4 second weapon is 24 percent.
+        assert_eq!(enchant_chance_bp(6.0, 15, 2400), 2400);
+        assert_eq!(enchant_chance_bp(0.0, 15, 2400), 1500);
+        assert_eq!(enchant_chance_bp(0.0, 0, 2400), 400);
+        assert_eq!(enchant_chance_bp(-1.0, 15, 2400), 0);
+        assert_eq!(enchant_chance_bp(0.0, -5, 2400), 0);
     }
 
     #[test]
