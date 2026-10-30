@@ -165,7 +165,7 @@ fn run_scenario(
     record_and_check(id, &path, &golden, recorded_at, &comparison, &violations)
 }
 
-fn probe_door(shard: &Standalone, transport: &mut OperatorTransport<'_>) -> Result<()> {
+fn probe_door(shard: &Standalone, transport: &mut OperatorTransport) -> Result<()> {
     let character = transport.character_guid();
     let position = shard
         .query_rows(&format!(

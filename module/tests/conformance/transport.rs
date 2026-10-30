@@ -10,8 +10,7 @@ use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
 use super::properties::{self, Batch, CreateContext, Packet, Projection};
 
-pub struct OperatorTransport<'a> {
-    shard: &'a Standalone,
+pub struct OperatorTransport {
     connection: ReducerConnection,
     guid: u64,
     fixtures: BTreeMap<String, u64>,
@@ -22,8 +21,8 @@ pub struct OperatorTransport<'a> {
     virtual_micros: u64,
 }
 
-impl<'a> OperatorTransport<'a> {
-    pub fn prepare(shard: &'a Standalone, scenario: &Scenario) -> Result<Self> {
+impl OperatorTransport {
+    pub fn prepare(shard: &Standalone, scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
         let FixtureVerb::Character {
             name,
@@ -63,7 +62,7 @@ impl<'a> OperatorTransport<'a> {
         Ok(transport)
     }
 
-    fn connect(shard: &'a Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
+    fn connect(shard: &Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
         let mut connection = shard.connect_reducers(&[
             "SELECT * FROM game_native_packet",
             "SELECT * FROM game_native_conformance_projection",
@@ -77,7 +76,6 @@ impl<'a> OperatorTransport<'a> {
             .call("debug_native_enter_world", json!([guid]))
             .map_err(|e| anyhow!(e))?;
         let mut transport = Self {
-            shard,
             delivery: Delivery::new(connection.connection_id()),
             connection,
             guid,
@@ -320,7 +318,7 @@ fn prepare_fixtures(
     Ok(fixtures)
 }
 
-impl Transport for OperatorTransport<'_> {
+impl Transport for OperatorTransport {
     fn now(&self) -> Duration {
         Duration::from_micros(self.virtual_micros)
     }
@@ -380,20 +378,20 @@ impl Transport for OperatorTransport<'_> {
     }
 }
 
-struct MultiCharacter<'a> {
+struct MultiCharacter {
     guid: u64,
     fixtures: BTreeMap<String, u64>,
-    transport: Option<OperatorTransport<'a>>,
+    transport: Option<OperatorTransport>,
     completed: Vec<Batch>,
 }
 
-pub struct MultiOperatorTransport<'a> {
+pub struct MultiOperatorTransport {
     shard: &'a Standalone,
-    characters: BTreeMap<String, MultiCharacter<'a>>,
+    characters: BTreeMap<String, MultiCharacter>,
     virtual_micros: u64,
 }
 
-impl<'a> MultiOperatorTransport<'a> {
+impl<'a> MultiOperatorTransport {
     pub fn prepare(shard: &'a Standalone, scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
         ensure!(
@@ -480,13 +478,13 @@ impl<'a> MultiOperatorTransport<'a> {
         Ok(())
     }
 
-    fn character(&self, id: &str) -> Result<&MultiCharacter<'a>> {
+    fn character(&self, id: &str) -> Result<&MultiCharacter> {
         self.characters
             .get(id)
             .context("unknown scenario Character")
     }
 
-    fn transport(&mut self, id: &str) -> Result<&mut OperatorTransport<'a>> {
+    fn transport(&mut self, id: &str) -> Result<&mut OperatorTransport> {
         self.characters
             .get_mut(id)
             .context("unknown scenario Character")?
@@ -496,7 +494,7 @@ impl<'a> MultiOperatorTransport<'a> {
     }
 }
 
-impl MultiTransport for MultiOperatorTransport<'_> {
+impl MultiTransport for MultiOperatorTransport {
     fn now(&self) -> Duration {
         Duration::from_micros(self.virtual_micros)
     }
