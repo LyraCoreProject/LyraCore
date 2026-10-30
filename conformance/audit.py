@@ -1,5 +1,6 @@
 import argparse
 from contextlib import contextmanager
+from concurrent.futures import ThreadPoolExecutor
 import datetime
 import fcntl
 import hashlib
@@ -19,7 +20,7 @@ import time
 import tomllib
 
 ROOT = Path(__file__).resolve().parent.parent
-SCRATCH = Path.home() / '.cache/lyracore-scratch/m5c'
+SCRATCH = Path(os.environ.get('LYRACORE_AUDIT_SCRATCH', Path.home() / '.cache/lyracore-scratch/m5c'))
 REFERENCE = Path.home() / '.cache/lyracore-scratch/reference-server'
 SCENARIO_CACHE = SCRATCH / 'scenario-audit'
 SNAPSHOT_STORE = Path.home() / '.cache/lyracore/conformance-worlds'
@@ -142,23 +143,52 @@ def module_schema_hash():
     with timed('Native Host build'):
         run([sys.executable, ROOT / 'native-host/prepare-host.py', '--checkout', host_checkout,
              '--build'], env=build_env, cwd=ROOT, stdout=subprocess.DEVNULL)
-    with tempfile.TemporaryDirectory(prefix='schema-', dir=SCENARIO_CACHE) as directory:
-        run(['spacetime', 'generate', '--lang', 'rust', '--module-path', ROOT / 'module',
-             '--out-dir', directory, '--build-options=--features=debug_reducers',
-             '--include-private', '--no-config', '-y'], cwd=ROOT, stdout=subprocess.DEVNULL)
-        module = Path(os.environ['CARGO_TARGET_DIR']) / 'wasm32-unknown-unknown/release/lyracore_module.wasm'
+    deployment_env = dict(os.environ)
+    for name in ['RUSTFLAGS', 'CARGO_ENCODED_RUSTFLAGS', 'CARGO_BUILD_RUSTFLAGS',
+                 'CARGO_TARGET_WASM32_UNKNOWN_UNKNOWN_RUSTFLAGS']:
+        deployment_env.pop(name, None)
+    with timed('deployment Module build'):
+        run(['cargo', 'build', '--locked', '--release', '--target', 'wasm32-unknown-unknown',
+             '-p', 'lyracore-module', '--features=debug_reducers'], cwd=ROOT, env=deployment_env,
+            stdout=subprocess.DEVNULL)
+    module = SCENARIO_CACHE / 'deployment.wasm'
+    shutil.copy2(Path(os.environ['CARGO_TARGET_DIR']) / 'wasm32-unknown-unknown/release/lyracore_module.wasm', module)
+    with timed('Module schema extraction'):
         extracted = run_with_diagnostic([host_checkout / 'target/release/spacetimedb-standalone',
                                          'extract-schema', module], timeout=120)
-        return schema_fingerprint(json.loads(extracted.stdout))
+    return schema_fingerprint(json.loads(extracted.stdout))
+
+
+# Read README.md's import contract before extending the import or initialization call paths.
+IMPORT_CONTRACT = (
+    'Cargo.toml', 'Cargo.lock', 'rust-toolchain.toml',
+    'importer/src', 'importer/scripts', 'importer/manifests', 'importer/Cargo.toml',
+    'crates/lyracore-shared', 'crates/lyracore-package-delta', 'crates/lyracore-protocol',
+    'module/Cargo.toml', 'module/build.rs', 'module/src/lib.rs', 'module/src/debug',
+    'module/src/seed.rs', 'module/src/config.rs',
+    'module/src/package_import.rs', 'module/src/package_import', 'module/src/import_meta.rs',
+    'module/src/terrain.rs', 'module/src/nav.rs', 'module/src/vmap.rs', 'module/src/go_model.rs',
+    'module/src/go_collider.rs', 'module/src/region.rs', 'module/src/creatures',
+    'module/src/gameobject.rs', 'module/src/items',
+    'module/src/spell', 'module/src/action_bar.rs', 'module/src/xp.rs',
+    'module/src/talent.rs', 'module/src/weather.rs', 'module/src/skill.rs',
+    'module/src/helpers.rs', 'module/src/time.rs', 'module/src/instance.rs',
+    'module/src/world.rs', 'module/src/duel.rs', 'module/src/motion.rs', 'module/src/gw.rs',
+    'module/src/meeting_stone', 'module/src/quest.rs', 'module/src/loot',
+    'module/src/trainer.rs', 'module/src/auth.rs',
+)
 
 
 def scenario_key(harness, client_data, schema_hash):
     pins = json.loads((harness / 'adapters/vmangos/pins.json').read_text())
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
-    importer = tree_hash([ROOT / 'importer/src', ROOT / 'importer/scripts',
-                          ROOT / 'importer/manifests', ROOT / 'importer/Cargo.toml'])
-    key = dict(importer_sha256=importer, module_schema_sha256=schema_hash,
+    paths = [ROOT / path for path in IMPORT_CONTRACT]
+    missing = [str(path) for path in paths if not path.exists()]
+    if missing:
+        raise RuntimeError('import contract paths are missing: ' + ', '.join(missing))
+    contract = tree_hash(paths)
+    key = dict(import_contract_sha256=contract, module_schema_sha256=schema_hash,
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
                client_sha256=client_hash)
@@ -264,6 +294,7 @@ def validate_snapshot(path, key):
 def copy_snapshot(path, realm_root):
     native = realm_root / '.lyracore'
     native.mkdir(exist_ok=True)
+    require_copy_space(path / 'native-data', realm_root)
     shutil.copytree(path / 'native-data', native / 'native-data')
     writable_tree(native / 'native-data')
     shutil.copytree(path / 'native-jwt', native / 'native-jwt')
@@ -276,13 +307,27 @@ def copy_snapshot(path, realm_root):
     shutil.copy2(path / 'current.json', current)
 
 
+def clean_pending_snapshots():
+    if SNAPSHOT_STORE.exists():
+        for pending in SNAPSHOT_STORE.glob('*.pending'):
+            if pending.is_dir():
+                writable_tree(pending)
+                shutil.rmtree(pending)
+
+
+def require_copy_space(source, destination):
+    needed = sum(path.stat().st_size for path in source.rglob('*') if path.is_file())
+    reserve = max(needed // 10, 256 * 1024 * 1024)
+    if shutil.disk_usage(destination).free < needed + reserve:
+        raise RuntimeError(f'insufficient free space to copy {source}: need {needed + reserve} bytes')
+
+
 def seal_snapshot(key, realm_root, password):
     SNAPSHOT_STORE.mkdir(parents=True, exist_ok=True, mode=0o700)
     SNAPSHOT_STORE.chmod(0o700)
+    clean_pending_snapshots()
+    require_copy_space(realm_root / '.lyracore/native-data', SNAPSHOT_STORE)
     pending = SNAPSHOT_STORE / (key + '.pending')
-    if pending.exists():
-        writable_tree(pending)
-        shutil.rmtree(pending)
     pending.mkdir(mode=0o700)
     native = realm_root / '.lyracore'
     shutil.copytree(native / 'native-data', pending / 'native-data')
@@ -299,7 +344,8 @@ def seal_snapshot(key, realm_root, password):
     (pending / 'state.json').chmod(0o400)
     pending.chmod(0o500)
     pending.rename(snapshot_path(key))
-    for old in sorted((p for p in SNAPSHOT_STORE.iterdir() if p.is_dir() and p.name != key),
+    for old in sorted((p for p in SNAPSHOT_STORE.iterdir()
+                       if p.is_dir() and p.name != key and (p / 'state.json').is_file()),
                       key=lambda p: p.stat().st_mtime, reverse=True)[1:]:
         writable_tree(old)
         shutil.rmtree(old)
@@ -308,6 +354,7 @@ def seal_snapshot(key, realm_root, password):
 def restore_imported_world(realm_root, seed, cli, env):
     stop_realm(realm_root, cli, env)
     native_data = realm_root / '.lyracore/native-data'
+    require_copy_space(seed, realm_root)
     shutil.rmtree(native_data)
     shutil.copytree(seed, native_data)
     writable_tree(native_data)
@@ -450,23 +497,31 @@ def reference_database_command(compose, env):
     return ['docker', 'compose', '-f', str(Path(compose[0]).with_name('compose.yml'))], configured
 
 
-def reference_dump(compose, env, path):
-    path.parent.mkdir(parents=True, exist_ok=True)
-    pending = path.with_suffix('.pending')
-    database, configured = reference_database_command(compose, env)
-    try:
-        with pending.open('wb') as output:
-            run([*database, 'exec', '-T', 'database', 'sh', '-c',
-                 'MYSQL_PWD="$MARIADB_ROOT_PASSWORD" mariadb-dump -uroot '
-                 '--single-transaction --add-drop-database '
-                 '--databases realmd mangos characters logs'],
-                env=configured, stdout=output)
-        if pending.stat().st_size == 0:
-            raise RuntimeError('Reference Server clean world dump is empty')
-        pending.chmod(0o400)
-        pending.replace(path)
-    finally:
-        pending.unlink(missing_ok=True)
+def reference_baseline(harness):
+    adapter = harness / 'adapters/vmangos'
+    checksum = hashlib.sha256()
+    for path in [adapter / 'pins.json', adapter / 'setup.py', adapter / 'compose.yml',
+                 ROOT / 'conformance/reference_baseline.py']:
+        checksum.update(bytes.fromhex(digest(path)))
+    return SNAPSHOT_STORE / ('reference-pristine-' + checksum.hexdigest() + '.sql')
+
+
+def prepare_reference_baseline(harness, path):
+    seal = path.with_suffix('.json')
+    credentials = ['player-password', 'gm-password']
+    if path.is_file() and seal.is_file():
+        saved = json.loads(seal.read_text())
+        if (saved['sha256'] == digest(path)
+                and saved['credentials'] == {name: digest(REFERENCE / 'credentials' / name)
+                                             for name in credentials}):
+            return
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with timed('pristine Reference Server preparation'):
+        run([sys.executable, ROOT / 'conformance/reference_baseline.py',
+             harness / 'adapters/vmangos', path, REFERENCE, SCENARIO_CACHE],
+            stdout=subprocess.DEVNULL)
+    write_state(seal, dict(sha256=digest(path), credentials={
+        name: digest(REFERENCE / 'credentials' / name) for name in credentials}))
 
 
 def validate_reference_ownership(owned, ids):
@@ -518,37 +573,41 @@ def restore_reference_world(marker, owned, compose, env):
 def scenario_reference_server(harness, key, peer_count=0, *, keep=True):
     adapter = harness / 'adapters/vmangos'
     pins = json.loads((adapter / 'pins.json').read_text())
-    runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
-    if pins != runtime or (REFERENCE / 'binaries/.verified').read_text() != pins['binary_sha256']:
-        raise RuntimeError('prepare the Reference Server with the pinned adapter first')
-    provenance = json.loads((REFERENCE / 'provenance.json').read_text())
-    expected = dict(server='vmangos', binary_release=pins['binary_tag'] + '/' + pins['binary_asset'],
-                    **{name: pins[name] for name in ['binary_sha256', 'source_commit', 'database_commit']})
-    if provenance != expected:
-        raise RuntimeError('Reference Server provenance does not match its runtime pins')
     marker = SCENARIO_CACHE / 'reference-state.json'
     compose = [adapter / 'reference.sh']
     with (REFERENCE / '.audit.lock').open('w') as lock:
         lock_owned_state(lock, 'Reference Server', wait=True)
         owned = json.loads(marker.read_text()) if marker.is_file() else None
+        env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project']) if owned else dict(os.environ)
         if owned:
-            env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
             owned_reference_ids(marker, owned, compose, env)
-            if owned['phase'] != 'ready' or owned['key'] != key:
-                if Path(owned['dump']).is_file():
-                    restore_reference_world(marker, owned, compose, env)
-                elif owned['phase'] != 'starting':
-                    raise RuntimeError('Reference Server has no clean database snapshot')
-        else:
-            if reference_running(compose, os.environ):
+        try:
+            runtime = json.loads((REFERENCE / 'runtime-pins.json').read_text())
+            if pins != runtime or (REFERENCE / 'binaries/.verified').read_text() != pins['binary_sha256']:
+                raise RuntimeError('prepare the Reference Server with the pinned adapter first')
+            provenance = json.loads((REFERENCE / 'provenance.json').read_text())
+            expected = dict(server='vmangos', binary_release=pins['binary_tag'] + '/' + pins['binary_asset'],
+                            **{name: pins[name] for name in ['binary_sha256', 'source_commit', 'database_commit']})
+            if provenance != expected:
+                raise RuntimeError('Reference Server provenance does not match its runtime pins')
+        except BaseException:
+            if owned:
+                owned['phase'] = 'invalid'
+                try:
+                    write_state(marker, owned)
+                finally:
+                    stop_reference(marker, owned, compose, env)
+            raise
+        if owned is None:
+            if reference_running(compose, env):
                 raise RuntimeError('Reference Server is already running outside this scenario cache')
             for port in [13724, 18085]:
                 free_port(port)
             owned = dict(phase='starting', key=key, project='lyracore-audit-' + secrets.token_hex(16),
-                         adapter=str(compose[0]), containers={},
-                         dump=str(SNAPSHOT_STORE / ('reference-' + pins['database_commit'] + '.sql')))
-            env = dict(os.environ, COMPOSE_PROJECT_NAME=owned['project'])
-            write_state(marker, owned)
+                         adapter=str(compose[0]), containers={})
+            env['COMPOSE_PROJECT_NAME'] = owned['project']
+        owned['dump'] = str(reference_baseline(harness))
+        write_state(marker, owned)
         try:
             with timed('Reference Server start'):
                 if not owned['containers']:
@@ -557,10 +616,9 @@ def scenario_reference_server(harness, key, peer_count=0, *, keep=True):
                 if set(owned['containers']) != {'auth', 'database', 'world'}:
                     raise RuntimeError('Reference Server startup did not create all containers')
                 database, configured = reference_database_command(compose, env)
-                if not Path(owned['dump']).is_file():
-                    run([*database, 'start', '--wait', '--wait-timeout', '180', 'database'],
-                        env=configured, capture_output=True)
-                    reference_dump(compose, env, Path(owned['dump']))
+                stop_reference(marker, owned, compose, env)
+                prepare_reference_baseline(harness, Path(owned['dump']))
+                restore_reference_world(marker, owned, compose, env)
                 # Persist dirtiness before starting world timers or allowing fixture writes.
                 owned.update(phase='invalid', key=key)
                 write_state(marker, owned)
@@ -703,8 +761,11 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
     if spacetime is None:
         raise RuntimeError('spacetime CLI is missing')
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
-    with (SCENARIO_CACHE / '.realm.lock').open('w') as lock:
+    SNAPSHOT_STORE.mkdir(parents=True, exist_ok=True, mode=0o700)
+    with (SCENARIO_CACHE / '.realm.lock').open('w') as lock, (SNAPSHOT_STORE / '.lock').open('w') as store_lock:
         lock_owned_state(lock, 'scenario Realm')
+        lock_owned_state(store_lock, 'imported-world snapshot store', wait=True)
+        clean_pending_snapshots()
         cache = SCENARIO_CACHE / 'realm'
         realm_root = cache / 'core'
         marker = cache / 'state.json'
@@ -721,6 +782,14 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
         state = json.loads(marker.read_text()) if marker.is_file() else None
         if cache.exists() and state is None:
             raise RuntimeError('scenario Realm has no ownership marker; inspect it before cleanup')
+        if state and state['phase'] == 'importing':
+            raise RuntimeError(f'interrupted import retained at {realm_root}; inspect it before cleanup')
+        if state and state['phase'] == 'imported':
+            if state['key'] != key:
+                raise RuntimeError(f'unsealed imported world retained at {realm_root}; seal it before changing inputs')
+            stop_realm(realm_root, cli, cli_env)
+            seal_snapshot(key, realm_root, (cache / 'password').read_text().strip())
+            saved = True
         if state and (not saved or state['key'] != key or state['core_commit'] != current
                       or state['phase'] != 'ready'):
             if (realm_root / '.lyracore').exists():
@@ -745,11 +814,13 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                 (realm_root / 'target').symlink_to(SCENARIO_CACHE / 'target', target_is_directory=True)
                 bin_dir.mkdir()
                 isolated = bin_dir / 'spacetime'
+                wrapper = [sys.executable, str(ROOT / 'conformance/audit_spacetime.py'),
+                           spacetime, str(SCENARIO_CACHE / 'deployment.wasm')]
                 isolated.write_text('#!/bin/sh\n'
                                     'if [ "$1" = login ] && [ "$2" = show ] && [ "$3" = --token ]; then\n'
                                     '    exit 1\n'
                                     'fi\n'
-                                    'exec ' + shlex.quote(spacetime) + ' "$@"\n')
+                                    'exec ' + shlex.join(wrapper) + ' "$@"\n')
                 isolated.chmod(0o700)
                 if saved:
                     copy_snapshot(snapshot, realm_root)
@@ -761,17 +832,19 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                     run([cli, 'dev', 'up', '--single'], env=cli_env, cwd=realm_root,
                         stdout=subprocess.DEVNULL)
                 if not saved:
+                    password = secrets.token_hex(8)
+                    (cache / 'password').write_text(password + '\n')
+                    (cache / 'password').chmod(0o600)
+                    state = dict(phase='importing', key=key, core_commit=current)
+                    write_state(marker, state)
                     with timed('import'):
                         run([cli, 'import', '--accept', '--client-data', client_data], env=cli_env,
                             cwd=realm_root, stdout=subprocess.DEVNULL)
                     imported = json.loads((realm_root / '.import/vmangos/current.json').read_text())
                     if imported['commit'] != pins['database_commit']:
                         raise RuntimeError('imported vmangos data differs from Reference Server pin')
-                    password = secrets.token_hex(8)
-                    for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
-                        run([cli, 'account', 'create', account, '--password-stdin'],
-                            input=(password + '\n').encode(), env=cli_env, cwd=realm_root,
-                            stdout=subprocess.DEVNULL)
+                    state = dict(phase='imported', key=key, core_commit=current)
+                    write_state(marker, state)
                     with timed('imported world snapshot'):
                         stop_realm(realm_root, cli, cli_env)
                         seal_snapshot(key, realm_root, password)
@@ -781,12 +854,15 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                     print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
                 state = dict(phase='ready', key=key, core_commit=current,
                              native_host_sha256=digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'),
-                             module_sha256=digest(realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'),
+                             module_sha256=digest(SCENARIO_CACHE / 'deployment.wasm'),
                              database_commit=pins['database_commit'])
                 write_state(marker, state)
             except BaseException:
                 if (realm_root / '.lyracore').exists():
                     stop_realm(realm_root, cli, cli_env)
+                if state and state['phase'] in ['importing', 'imported'] and not snapshot.exists():
+                    print(f'[audit] retaining stopped imported world at {realm_root}', file=sys.stderr)
+                    raise
                 if (realm_root / '.git').exists():
                     run(['git', 'worktree', 'remove', '--force', realm_root], cwd=ROOT,
                         stdout=subprocess.DEVNULL)
@@ -797,16 +873,20 @@ def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False
                 restore_imported_world(realm_root, snapshot / 'native-data', cli, cli_env)
             print('[audit] import: 0.00s (cached snapshot)', file=sys.stderr, flush=True)
             state['native_host_sha256'] = digest(realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone')
-            state['module_sha256'] = digest(realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm')
+            state['module_sha256'] = digest(SCENARIO_CACHE / 'deployment.wasm')
             write_state(marker, state)
         host = realm_root / '.lyracore/native-host/SpacetimeDB/target/release/spacetimedb-standalone'
-        module = realm_root / 'target/wasm32-unknown-unknown/release/lyracore_module.wasm'
+        module = SCENARIO_CACHE / 'deployment.wasm'
         if digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']:
             raise RuntimeError('cached Realm binaries changed')
         token = realm_root / '.lyracore/native-owner-token'
         if not token.is_file():
             raise RuntimeError('cached Realm has no Operator token')
         password = (snapshot / 'password').read_text().strip()
+        for account in ['CONFORMANCE', *(f'CONFORMANCE{peer}' for peer in range(2, peer_count + 2))]:
+            run([cli, 'account', 'create', account, '--password-stdin'],
+                input=(password + '\n').encode(), env=cli_env, cwd=realm_root,
+                stdout=subprocess.DEVNULL)
         yield password, token, host, module, realm_root
 
 
@@ -846,6 +926,7 @@ def capture_servers(harness, wire, work, client_data):
         return provenance, host_hash, module_hash, content
 
 
+@contextmanager
 def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, require_snapshot=False):
     env = dict(os.environ, WIRE_CRASH_DIR=str(work / 'diagnostics'))
     realm_env = dict(env)
@@ -864,29 +945,41 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
             (work / 'reference.json').write_text(json.dumps(provenance))
             reference_env = dict(env, COMPOSE_PROJECT_NAME=project,
                                  WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
-            with timed(f'{scenario} Reference Server run'):
-                accounts = ['CONFORMANCE', *peer_accounts(entry)]
-                passwords = []
-                for index, account in enumerate(accounts):
-                    name = 'player-password' if index == 0 else f'peer{index + 1}-password'
-                    secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
-                    passwords.append(secret)
-                    delete_reference_character(wire, characters[index], account, secret, env)
-                passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
-                capture(wire, work, entry, 'vmangos', [13724, 18085], b''.join(passwords),
-                        reference_env, progress=sys.stderr)
-        with timed(f'{scenario} Realm run'):
-            for index, character in enumerate(characters):
-                account = 'CONFORMANCE' if index == 0 else f'CONFORMANCE{index + 1}'
-                delete_reference_character(wire, character, account, (password + '\n').encode(),
-                                           realm_env, endpoints=(3724, 8085))
-            capture(wire, work, entry, 'lyracore', [3724, 8085],
-                    (password + '\n').encode() * len(characters), realm_env, progress=sys.stderr)
-        state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
-        snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
-        if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
-                or snapshot['commit'] != state['database_commit']):
-            raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
+            def capture_reference():
+                with timed(f'{scenario} Reference Server run'):
+                    accounts = ['CONFORMANCE', *peer_accounts(entry)]
+                    passwords = []
+                    for index, account in enumerate(accounts):
+                        name = 'player-password' if index == 0 else f'peer{index + 1}-password'
+                        secret = (REFERENCE / 'credentials' / name).read_bytes().rstrip(b'\n') + b'\n'
+                        passwords.append(secret)
+                        delete_reference_character(wire, characters[index], account, secret, env)
+                    passwords.append((REFERENCE / 'credentials/gm-password').read_bytes().rstrip(b'\n') + b'\n')
+                    capture(wire, work, entry, 'vmangos', [13724, 18085], b''.join(passwords),
+                            reference_env, progress=sys.stderr)
+            def capture_realm():
+                with timed(f'{scenario} Realm run'):
+                    for index, character in enumerate(characters):
+                        account = 'CONFORMANCE' if index == 0 else f'CONFORMANCE{index + 1}'
+                        delete_reference_character(wire, character, account, (password + '\n').encode(),
+                                                   realm_env, endpoints=(3724, 8085))
+                    capture(wire, work, entry, 'lyracore', [3724, 8085],
+                            (password + '\n').encode() * len(characters), realm_env, progress=sys.stderr)
+            cores = len(os.sched_getaffinity(0)) if hasattr(os, 'sched_getaffinity') else (os.cpu_count() or 1)
+            if cores >= 4:
+                with ThreadPoolExecutor(max_workers=2) as captures:
+                    futures = [captures.submit(capture_reference), captures.submit(capture_realm)]
+                    for future in futures:
+                        future.result()
+            else:
+                capture_reference()
+                capture_realm()
+            state = json.loads((SCENARIO_CACHE / 'realm/state.json').read_text())
+            snapshot = json.loads((realm_root / '.import/vmangos/current.json').read_text())
+            if (digest(host) != state['native_host_sha256'] or digest(module) != state['module_sha256']
+                    or snapshot['commit'] != state['database_commit']):
+                raise RuntimeError('cached Realm Module, Native Host or imported data changed during capture')
+            yield
 
 
 def setup_failure(scenario, json_mode, diagnostic):
@@ -930,14 +1023,34 @@ def agreement_result(tier1, audit, scenario):
                 audit_only=[json.loads(item) for item in sorted(second - first)])
 
 
+@contextmanager
+def scenario_work():
+    work = Path(tempfile.mkdtemp(prefix='scenario-', dir=SCENARIO_CACHE))
+    previous = os.environ.get('TMPDIR')
+    try:
+        yield work
+    finally:
+        if previous is None:
+            os.environ.pop('TMPDIR', None)
+        else:
+            os.environ['TMPDIR'] = previous
+        evidence = SNAPSHOT_STORE / 'diagnostics' / work.name
+        evidence.mkdir(parents=True, mode=0o700)
+        for path in work.glob('*.json'):
+            shutil.copy2(path, evidence / path.name)
+        if (work / 'diagnostics').exists():
+            shutil.copytree(work / 'diagnostics', evidence / 'wire')
+        print(f'[audit] diagnostics: {evidence}', file=sys.stderr, flush=True)
+        shutil.rmtree(work)
+
+
 def run_scenario(args, harness, target, core_commit):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
     with timed('Module schema fingerprint'):
         schema_hash = module_schema_hash()
     key, pins = scenario_key(harness, args.client_data, schema_hash)
-    with tempfile.TemporaryDirectory(prefix='scenario-', dir=SCENARIO_CACHE) as directory:
-        work = Path(directory)
+    with scenario_work() as work:
         os.environ['TMPDIR'] = str(work)
         audit = target / 'debug/examples/audit'
         wire = target / 'debug/vanilla-wire'
@@ -952,38 +1065,38 @@ def run_scenario(args, harness, target, core_commit):
                 raise RuntimeError('tier 1 did not produce a comparison: '
                                    + (tier1.stderr + tier1.stdout).strip())
         run_with_diagnostic([audit, 'export', work])
-        capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
-                         require_snapshot=args.require_snapshot)
-        if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
-            raise RuntimeError('core changed during scenario capture; commit and rerun')
-        with timed('comparison and output'):
-            run_with_diagnostic([audit, 'check', work, args.scenario])
-            environment = dict(os.environ, LYRACORE_CONFORMANCE_RESULT=str(work / 'result.json'),
-                               LYRACORE_CONFORMANCE_AUDIT_BASELINE=str(work / 'baseline.json'))
-            command = [target / 'debug/examples/run', args.scenario]
-            if args.json:
-                command.append('--json')
-            rendered = subprocess.run([str(arg) for arg in command], cwd=ROOT, env=environment,
-                                      capture_output=True, text=True)
-            if rendered.returncode not in [0, 1] or not rendered.stdout:
-                raise RuntimeError('could not render the completed scenario comparison: '
-                                   + rendered.stderr.strip())
-            if args.agreement:
-                agreement = agreement_result(work / 'tier1.json', work / 'result.json', args.scenario)
+        with capture_scenario(harness, wire, work, args.scenario, key, pins, str(args.client_data),
+                              require_snapshot=args.require_snapshot):
+            if core_commit != git('rev-parse', 'HEAD') or git('status', '--porcelain', '--untracked-files=normal'):
+                raise RuntimeError('core changed during scenario capture; commit and rerun')
+            with timed('comparison and output'):
+                run_with_diagnostic([audit, 'check', work, args.scenario])
+                environment = dict(os.environ, LYRACORE_CONFORMANCE_RESULT=str(work / 'result.json'),
+                                   LYRACORE_CONFORMANCE_AUDIT_BASELINE=str(work / 'baseline.json'))
+                command = [target / 'debug/examples/run', args.scenario]
                 if args.json:
-                    print(json.dumps(dict(audit=json.loads(rendered.stdout), agreement=agreement),
-                                     indent=2))
-                else:
-                    print(rendered.stdout, end='')
-                    for label, explanation in [('tier1_only', 'likely fixture artefact'),
-                                               ('audit_only', 'fixture blind spot')]:
-                        print(f"{label} ({explanation}): {len(agreement[label])}")
-                        for item in agreement[label]:
-                            print('  ' + json.dumps(item, sort_keys=True))
-                return int(bool(tier1.returncode or rendered.returncode
-                                or agreement['tier1_only'] or agreement['audit_only']))
-            print(rendered.stdout, end='')
-            return rendered.returncode
+                    command.append('--json')
+                rendered = subprocess.run([str(arg) for arg in command], cwd=ROOT, env=environment,
+                                          capture_output=True, text=True)
+                if rendered.returncode not in [0, 1] or not rendered.stdout:
+                    raise RuntimeError('could not render the completed scenario comparison: '
+                                       + rendered.stderr.strip())
+                if args.agreement:
+                    agreement = agreement_result(work / 'tier1.json', work / 'result.json', args.scenario)
+                    if args.json:
+                        print(json.dumps(dict(audit=json.loads(rendered.stdout), agreement=agreement),
+                                         indent=2))
+                    else:
+                        print(rendered.stdout, end='')
+                        for label, explanation in [('tier1_only', 'likely fixture artefact'),
+                                                   ('audit_only', 'fixture blind spot')]:
+                            print(f"{label} ({explanation}): {len(agreement[label])}")
+                            for item in agreement[label]:
+                                print('  ' + json.dumps(item, sort_keys=True))
+                    return int(bool(tier1.returncode or rendered.returncode
+                                    or agreement['tier1_only'] or agreement['audit_only']))
+                print(rendered.stdout, end='')
+                return rendered.returncode
 
 
 def scenario_main(args):

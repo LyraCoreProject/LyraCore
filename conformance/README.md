@@ -487,35 +487,67 @@ fixture blind spot. The command exits 1 when either array is nonempty or either 
 differs. A tier 1 setup failure exits 2 with its diagnostic.
 
 The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
-the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the
-importer crate source and scripts, the full Module schema extracted offline with the deploy feature
-set, the vmangos database pin, the client Data bytes, and the CLI pin. A gameplay commit does not
-change this key. Schema hashing includes table defaults, access and event flags. It normalizes
-type references and unordered definitions while preserving column and enum variant order.
-Later checks copy the snapshot into a new worktree at the current core commit;
-`dev up` publishes the current Module through SpacetimeDB's migration check. A schema change
-changes the key and requires a new import. The store retains the newest two snapshots and removes
-older ones after a successful import. Do not edit a sealed snapshot.
-Add `--require-snapshot` to forbid a cold import. A missing or changed import key then exits 2.
+the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the explicit
+import contract below, the full Module schema extracted from the deployment WASM, the vmangos
+database pin, the client Data bytes, and the CLI pin. Gameplay edits outside the import contract
+reuse the snapshot. Schema hashing includes table defaults, access and event flags. It normalizes
+type references and unordered definitions while preserving column and enum variant order. Later
+checks copy the snapshot into a new worktree at the current core commit; `dev up` publishes the
+current Module through SpacetimeDB's migration check. A schema change changes the key and requires a
+new import. The store retains the newest two snapshots and removes older ones after a successful
+seal. Abandoned `.pending` directories are removed under the shared snapshot-store lock. Copying
+requires the world size plus 10% or 256 MiB of free space, whichever reserve is larger. A failed
+seal retains the stopped imported world and its password. The next check retries sealing without
+importing again. An interrupted import requires inspection before cleanup. Do not edit a sealed
+snapshot. Add `--require-snapshot` to forbid a cold import. A missing or changed import key then
+exits 2.
 
 Each check restores the imported data before capture. The active Realm, target directory and
-temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`. The runner waits for its Native
-Host to exit before replacing or deleting data. It records process ownership before startup and
-checks the CLI's PID identities before stopping it. It retains those records across a shutdown
-timeout, even when the CLI clears its own records. Native Host build output survives gameplay
-checkout changes; `dev up` still checks the current Host source and patches.
+temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`, or `LYRACORE_AUDIT_SCRATCH` when
+set. The runner waits for its Native Host to exit before replacing or deleting data. It records
+process ownership before startup and checks the CLI's PID identities before stopping it. It retains
+those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
+output survives gameplay checkout changes; `dev up` still checks the current Host source and
+patches.
 
 The Reference Server marker records a unique Docker Compose project and container IDs before any
-service starts. A failed capture or readiness check makes that server unusable until its saved
-database dump has restored the clean world. Recovery keeps the same container IDs and can retry an
-interrupted restore. Changed IDs stop the command before it touches the containers.
-`./conformance/audit --stop` restores the Reference Server, stops owned services and removes the
-active worktree; it retains the sealed snapshots and build output. The full audit uses the same
-Reference Server recovery and stops it on exit.
+service starts. The clean baseline comes from the pinned, checksum-verified database archive in a
+new MariaDB volume. Preparation creates and verifies the two initial Accounts without starting world
+timers, then seals a dump with its checksum and password hashes. An existing prepared volume never
+supplies this baseline. Every owned check restores it before starting the world. Ownership lasts
+through reference comparison and provenance checks. Any failure leaves the marker invalid and stops
+the owned containers. Recovery keeps the same container IDs and can retry an interrupted restore.
+Changed IDs stop the command before it touches the containers. `./conformance/audit --stop` restores
+the Reference Server, stops owned services and removes the active worktree; it retains the sealed
+snapshots and build output. The full audit uses the same Reference Server recovery and stops it on
+exit. Required LyraCore Accounts are provisioned after every restore with the sealed password, so a
+larger scenario catalogue needs no new import.
 
-Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction,
-client hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement
-also reports its tier 1 time. A warm check prints `import: 0.00s (cached snapshot)`.
+Phase timings go to stderr, leaving JSON on stdout. They include builds, schema extraction, client
+hashing, Realm startup, import, snapshot sealing, both captures and comparison. Agreement also
+reports its tier 1 time. The runner builds one deployment WASM and uses that file for schema
+extraction, preflight bindings and publication. With at least four available CPUs, the two wire
+captures run concurrently. A warm check prints `import: 0.00s (cached snapshot)`.
+
+A failed reference comparison prints its scrubbed differences, including signatures and expected and
+actual values, before exit 2. Both comparisons and captures survive work-directory cleanup under
+`$HOME/.cache/lyracore/conformance-worlds/diagnostics/`; stderr prints the exact directory. These
+diagnostics do not count as a completed audit. Password and Operator token files stay private to the
+Realm and snapshot directories.
+
+### Import contract
+
+This is a base-world audit. It imports the vmangos world and client data; it applies no Package
+Deltas. `IMPORT_CONTRACT` in `audit.py` names the source paths that produce the stored rows. It
+includes the importer sources, scripts and manifests; shared, Package Delta and protocol crates; the
+workspace manifest, lockfile and toolchain; and Module initialization, import reducers and their
+row-building dependencies. Initialization data includes the `game_config` values in `seed.rs`.
+Publishing onto a restored snapshot does not rerun `init`.
+
+Files shared by import and gameplay are conservatively included in full. Taxi request handling and
+other gameplay outside these paths do not invalidate the snapshot. Extend the contract when an
+import or initialization call gains another dependency or data file. A schema change always
+invalidates it, even when the changed table is outside these paths.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
