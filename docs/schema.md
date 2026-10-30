@@ -62,6 +62,10 @@ for execution and failure rules.
    Module. Change both sides together and run the native protocol check. `./lyracore dev watch`
    refuses any change to reducer arguments or private tables.
 
+`game_operator_spell_source` is a new private table keyed by spell id. It retains the editable
+source fields committed with an Operator spell edit. See [spell edits](operator-content-api.md#spell-edits)
+for replacement and import rules. Existing spell table layouts stay unchanged.
+
 ## 2. Inventory
 
 Recount rather than trust a number here. The pattern matches both `#[table(...)]` and the fully

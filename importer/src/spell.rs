@@ -13,7 +13,10 @@ use wow_world_base::vanilla::AuraMod;
 
 use crate::dbc::{open_chain, read_table};
 use crate::dump::push_insert;
-use crate::spell_snapshot::{write_snapshot, SpellEffectRow, SpellHeaderRow, SpellRows};
+use crate::spell_snapshot::{
+    write_snapshot, AiMetadataRow, ReagentRow, SpellEffectRow, SpellHeaderRow, SpellRows,
+    TrainerRow,
+};
 use lyracore_importer::spell_kind::{
     aura_mod_to_kind, correct_script_effect_kind, dismount_effect_kind, instant_effect_to_kind,
 };
@@ -565,7 +568,7 @@ fn build_spell_rows(
     derive_spell_rows(&open_spell_tables(data_dir, spells)?, only, trainers)
 }
 
-fn derive_spell_rows(
+pub(crate) fn derive_spell_rows(
     dbc: &SpellTables,
     only: &[u32],
     trainers: &[(u32, Vec<u32>)],
@@ -588,8 +591,12 @@ fn derive_spell_rows(
                 continue;
             }
             let id = ((spell_id as u64) << 3) | slot as u64;
-            acc.reagent_rows
-                .push(format!("({id},{spell_id},{item},{count})"));
+            acc.reagent_rows.push(ReagentRow {
+                id,
+                spell_id,
+                item_entry: item as u32,
+                count,
+            });
         }
 
         let header = push_spell_header_row(s, dbc, &allow, &mut acc);
@@ -672,12 +679,12 @@ fn catalogue(spells: &[Spell]) -> SpellCatalogue {
     SpellCatalogue { ids, proc_effects }
 }
 
-struct SpellTables {
-    spells: Vec<Spell>,
-    cast_times: SpellCastTimes,
-    ranges: SpellRange,
-    durations: SpellDuration,
-    radii: SpellRadius,
+pub(crate) struct SpellTables {
+    pub(crate) spells: Vec<Spell>,
+    pub(crate) cast_times: SpellCastTimes,
+    pub(crate) ranges: SpellRange,
+    pub(crate) durations: SpellDuration,
+    pub(crate) radii: SpellRadius,
 }
 
 fn open_spell_tables(data_dir: &Path, spells: Vec<Spell>) -> Result<SpellTables> {
@@ -711,8 +718,8 @@ struct SpellAccumulator {
     cov: Coverage,
     spell_rows: Vec<SpellHeaderRow>,
     effect_rows: Vec<SpellEffectRow>,
-    reagent_rows: Vec<String>,
-    eventai_metadata_rows: Vec<String>,
+    reagent_rows: Vec<ReagentRow>,
+    eventai_metadata_rows: Vec<AiMetadataRow>,
     samples: Vec<String>,
     spell_levels: BTreeMap<u32, u8>,
     wrapper_to_rank: BTreeMap<u32, u32>,
@@ -794,7 +801,10 @@ fn push_spell_header_row(
     };
     let channeled = is_channeled(s.attributes_ex1, &name);
     if excludes_eventai_caster(s.attributes_ex1) {
-        eventai_metadata_rows.push(format!("({spell_id},true)"));
+        eventai_metadata_rows.push(AiMetadataRow {
+            spell_id,
+            exclude_caster: true,
+        });
     }
     let mut cast_flags = spell_flag_attributes(&name);
     if channeled {
@@ -1268,8 +1278,8 @@ fn trainer_offering_rows(
     trainers: &[(u32, Vec<u32>)],
     spell_levels: &BTreeMap<u32, u8>,
     wrapper_to_rank: &BTreeMap<u32, u32>,
-) -> Vec<String> {
-    let mut trainer_rows: Vec<String> = Vec::new();
+) -> Vec<TrainerRow> {
+    let mut trainer_rows: Vec<TrainerRow> = Vec::new();
     let mut trainer_missing: Vec<u32> = Vec::new();
     for (entry, ids) in trainers {
         let offered_triggers: std::collections::HashSet<u32> = ids
@@ -1286,7 +1296,15 @@ fn trainer_offering_rows(
                 Some(&lvl) => {
                     let cost = trainer_cost(lvl);
                     let id = CURATED_TRAINER_ID_BASE + trainer_rows.len() as u64;
-                    trainer_rows.push(format!("({id},{entry},{spell_id},{cost},{lvl},0,75)"));
+                    trainer_rows.push(TrainerRow {
+                        id,
+                        trainer_entry: *entry,
+                        spell_id,
+                        cost,
+                        required_level: lvl,
+                        learn_skill_line: 0,
+                        learn_skill_cap: 75,
+                    });
                 }
                 None => trainer_missing.push(spell_id),
             }
@@ -1338,13 +1356,21 @@ fn assemble_spell_sql(
         &mut stmts,
         "game_spell_reagent",
         "id,spell_id,item_entry,count",
-        &rows.reagents,
+        &rows
+            .reagents
+            .iter()
+            .map(ReagentRow::sql_values)
+            .collect::<Vec<_>>(),
     );
     push_insert(
         &mut stmts,
         "game_creature_ai_spell_metadata",
         "spell_id,exclude_caster",
-        &rows.eventai_metadata,
+        &rows
+            .eventai_metadata
+            .iter()
+            .map(AiMetadataRow::sql_values)
+            .collect::<Vec<_>>(),
     );
 
     for row in &rows.fishing {
@@ -1369,15 +1395,19 @@ fn assemble_spell_sql(
             &mut stmts,
             "game_trainer_spell",
             "id,trainer_entry,spell_id,cost,required_level,learn_skill_line,learn_skill_cap",
-            &rows.trainers,
+            &rows
+                .trainers
+                .iter()
+                .map(TrainerRow::sql_values)
+                .collect::<Vec<_>>(),
         );
     }
 
     stmts
 }
 
-const CURATED_TRAINER_ID_BASE: u64 = 5_200_000;
-const CURATED_TRAINER_ID_SPAN: u64 = 500;
+pub(crate) const CURATED_TRAINER_ID_BASE: u64 = 5_200_000;
+pub(crate) const CURATED_TRAINER_ID_SPAN: u64 = 500;
 
 const SYNTHETIC_SPELL_ID_FLOOR: u32 = 50_000;
 
@@ -1500,6 +1530,15 @@ pub(crate) fn selected_world_plan(
         let (spells, manifest) = crate::vmangos_spell::read(source)?;
         (spells, Some(serde_json::to_string_pretty(&manifest)?))
     };
+    if let Some(spell) = spells
+        .iter()
+        .find(|s| lyracore_package_delta::ids::is_operator_spell_id(s.id))
+    {
+        anyhow::bail!(
+            "spell_template entry {} belongs to the Operator Spell Range",
+            spell.id
+        );
+    }
     let (mut rows, cov, _) = derive_spell_rows(
         &open_spell_tables(Path::new(data_dir), spells)?,
         only,
@@ -1510,6 +1549,16 @@ pub(crate) fn selected_world_plan(
     rows.effects
         .retain(|effect| !replaced.contains(&effect.row_id()));
     let mut stmts = assemble_spell_sql(&rows, only, !trainers.is_empty());
+    if only.is_empty() {
+        stmts.push("DELETE FROM game_operator_spell_source WHERE spell_id < 50000".into());
+    } else {
+        for id in only {
+            stmts.push(format!(
+                "DELETE FROM game_operator_spell_source WHERE spell_id = {id}"
+            ));
+        }
+    }
+
     {
         stmts.retain(|s| {
             !s.starts_with("INSERT INTO game_spell (")
@@ -1910,8 +1959,18 @@ mod tests {
         let seal = effects(21082);
         assert_eq!(seal.len(), 4);
         assert_eq!((seal[3].kind, seal[3].base_points), (A_SEAL, 20));
-        assert!(rows.reagents.contains(&"(61984,7748,10940,2)".to_owned()));
-        assert!(rows.reagents.contains(&"(61985,7748,10938,2)".to_owned()));
+        assert!(rows
+            .reagents
+            .iter()
+            .map(ReagentRow::sql_values)
+            .collect::<Vec<_>>()
+            .contains(&"(61984,7748,10940,2)".to_owned()));
+        assert!(rows
+            .reagents
+            .iter()
+            .map(ReagentRow::sql_values)
+            .collect::<Vec<_>>()
+            .contains(&"(61985,7748,10938,2)".to_owned()));
     }
 
     #[test]
@@ -2161,7 +2220,13 @@ mod tests {
             (64, 0, 1)
         );
         assert_eq!(header.cast_flags, SPELL_ATTR_RANGED_AUTO_REPEAT);
-        assert_eq!(rows.eventai_metadata, ["(5090003,true)"]);
+        assert_eq!(
+            rows.eventai_metadata
+                .iter()
+                .map(AiMetadataRow::sql_values)
+                .collect::<Vec<_>>(),
+            ["(5090003,true)"]
+        );
         assert_eq!(
             (header.power_type, header.cost, header.cast_time_ms),
             (0, 33, 1500)
@@ -2184,7 +2249,10 @@ mod tests {
             (3, 0x1234_5678_8000_0001)
         );
         assert_eq!(
-            rows.reagents,
+            rows.reagents
+                .iter()
+                .map(ReagentRow::sql_values)
+                .collect::<Vec<_>>(),
             ["(40720024,5090003,111,2)", "(40720031,5090003,888,9)"]
         );
         assert_eq!(

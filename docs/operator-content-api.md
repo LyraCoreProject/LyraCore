@@ -864,3 +864,51 @@ The boundary test verifies that 2,001 live creatures refuse the whole batch with
 lives or templates, then removes one spawn and verifies that two updates to the same entry
 rebuild exactly 2,000 creatures once. Populated-world combat, many simultaneous observers,
 production hardware and real build 5875 presentation remain unmeasured.
+
+## Spell edits
+
+`operator_apply_spell_edits(edits: Vec<SpellEdit>) -> Result<(), String>` accepts up to 64
+compiled full spell rows in one transaction. Only the Operator may call it. Its HTTP body is
+`[[edit, ...]]`. A Refusal is HTTP 530 with the reason in the body.
+
+```text
+SpellEdit {
+    create: bool,
+    spell: Spell,
+    effects: Vec<SpellEffect>,
+    reagents: Vec<SpellReagent>,
+    trainers: Vec<TrainerSpell>,
+    metadata: Vec<CreatureAiSpellMetadata>,
+    source: Vec<SpellSourceField>,
+}
+SpellSourceField { name: String, value: String }
+```
+
+The compiled types are the complete table row types from `spell/tables.rs`, `trainer.rs` and
+`creatures/eventai/tables.rs`. Every field is required, including deterministic child keys,
+`max_duration_ms` and `points_per_combo`. The source fields retain the full editable
+`spell_template` row, including `entry` and `build`. The private `game_operator_spell_source`
+table stores them in the same transaction as the compiled rows.
+
+An edit replaces all rows for its spell id in `game_spell`, `game_spell_effect`,
+`game_spell_reagent`, `game_trainer_spell` and `game_creature_ai_spell_metadata`. Empty child
+lists remove old children. No spell header is deleted without a replacement. Auras, pending
+casts, cooldowns and known spells stay in place, as they do for Package spell updates. Existing
+auras retain their stored effect values; later casts use the new definition. No reload command
+or client packet accompanies a save. The client reads its changed Spell.dbc on its next start.
+
+New ids must be unused in the Operator Spell Range, **60,000 to 65,535**. Meld selects an unused id from the Realm
+and client, and `create: true` makes the reducer refuse a concurrent allocation. An update needs
+an existing id. Zero, Package Spell Range and Fixture-Reserved spell ids refuse. Duplicate ids
+refuse the batch. Trainer offers retain existing spell and trainer keys; Package and
+Fixture-Reserved offers cannot be replaced through this call.
+
+A spell has at most four compiled effects, including the importer's synthetic fourth effect,
+eight reagents, 256 trainer offers and one AI metadata row. The source has at most 256 fields
+and 64 KiB of names and values. Child keys must belong to their header and be unique. Names,
+school masks, power types, custom flags, effect kinds, targets and finite magnitudes pass Gates.
+Trigger spells must exist in the Realm or the same batch. A Refusal changes no rows. Success
+logs one line per spell through the Operator Content API logger.
+
+`module/tests/operator_spells.rs` covers authority, replacement and rollback.
+`native-host/operator_spells.py` checks a save with a connected Character.

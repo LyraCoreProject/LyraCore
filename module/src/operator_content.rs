@@ -2,6 +2,7 @@
 mod characters;
 mod creatures;
 mod items;
+mod spells;
 
 use lyracore_package_delta::{
     is_operator_spawn_id, is_package_creature_id, is_package_gameobject_id,

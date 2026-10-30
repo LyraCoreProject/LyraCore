@@ -47,4 +47,11 @@ if [ ! -x "$binary" ]; then
         || fail "could not install CLI revision $revision"
 fi
 
+case ${1-} in
+    editor)
+        MELD_LYRACORE_SPELL_COMPILER=${MELD_LYRACORE_SPELL_COMPILER:-$root/native-host/editor-spells.py}
+        export MELD_LYRACORE_SPELL_COMPILER
+        ;;
+esac
+
 exec "$binary" "$@"

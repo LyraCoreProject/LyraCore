@@ -61,6 +61,20 @@ pub const fn is_fixture_reserved_spell_id(spell_id: u32) -> bool {
         || (spell_id >= FIXTURE_RESERVED_ID_FLOOR && spell_id <= FIXTURE_RESERVED_ID_CEIL)
 }
 
+// The 1.12 initial spellbook packet carries 16-bit spell ids, so a spell a Character can learn
+// must stay below 65,536.
+pub const OPERATOR_SPELL_ID_FLOOR: u32 = 60_000;
+
+pub const OPERATOR_SPELL_ID_CEIL: u32 = 65_535;
+
+const _: () = assert!(FIXTURE_SPELL_ID_CEIL < OPERATOR_SPELL_ID_FLOOR);
+const _: () = assert!(OPERATOR_SPELL_ID_CEIL <= u16::MAX as u32);
+
+#[must_use]
+pub const fn is_operator_spell_id(spell_id: u32) -> bool {
+    spell_id >= OPERATOR_SPELL_ID_FLOOR && spell_id <= OPERATOR_SPELL_ID_CEIL
+}
+
 pub const PACKAGE_ITEM_ID_FLOOR: u32 = 7_000_000;
 
 pub const PACKAGE_ITEM_ID_CEIL: u32 = 7_999_999;

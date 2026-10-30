@@ -72,7 +72,7 @@ import, put it in a Package ([durability](./operator-content-api.md#durability))
 - On a Realm, Meld writes its terrain and client file edits to `patch-4.MPQ`, beside the
   `patch-3.MPQ` that `lyracore client sync` writes. The terrain import does not read patches above
   `patch-2.MPQ`, so terrain edits do not reach the Realm.
-- The gameobject, quest, gossip, loot and spell editors do not write a Realm yet. On a Realm they say
+- The gameobject, quest, gossip and loot editors do not write a Realm yet. On a Realm they say
   so and save nothing.
 
 ## Change the pinned build
@@ -81,3 +81,50 @@ Push the Meld commit to the `lyracore` branch of
 [LyraCoreProject/Meld](https://github.com/LyraCoreProject/Meld) and write its full SHA to
 `.lyracore-editor-rev`. The next `lyracore editor` builds it. Upstream's changes come in by merging
 `Coldensjo/Meld`'s `main` into `lyracore`.
+
+## Spell saves
+
+The Spell Editor compiles each save on the host with `lyracore-importer`, then calls
+`operator_apply_spell_edits`. It writes Spell.dbc and any new icon and visual rows into
+`patch-4.MPQ` after the Realm accepts the save. A client patch failure leaves the Realm save
+committed. Save again to retry the patch. If creating a spell reaches that failure, open the
+returned id and Save it instead of creating another copy.
+
+The `./lyracore` launcher supplies `MELD_LYRACORE_SPELL_COMPILER`, which names
+`native-host/editor-spells.py`. The script runs the importer from this checkout with Cargo.
+It builds on first use. This does not change the pinned `lyracore-cli`, whose
+`src/cmd/editor.rs` owns the editor command. A direct Meld launch must set this variable too.
+No token goes to the compiler. Meld continues to read the Owner Token from its token file and
+uses it only for Realm requests.
+
+The first read comes from the Operator's World Source, using the newest `spell_template`
+row through build 5875. The launcher reads its path from `.import/vmangos/current.json`.
+Set `MELD_LYRACORE_WORLD_SOURCE` to a SQLite path to select another local source. Use the source
+that was imported into this Realm. Later reads use `game_operator_spell_source` in the Realm,
+which commits with the compiled save. This retains server-only fields such as `customFlags`,
+bonus coefficients and script names. Spell.dbc lacks these fields, and the compiled tables
+cannot reconstruct the source row. Changes made outside this editor have no reconstructed source.
+
+Meld extracts range, duration, radius and cast-time DBCs from its current client chain, including
+pending files and `patch-4`, into a temporary directory in its user cache. The importer reads
+that directory and the edited source rows, reuses the world import compiler, and writes JSON
+on stdout. Diagnostics go to stderr. It touches no database. The standalone modes are:
+
+```bash
+native-host/editor-spells.py --read-spell-source 133
+native-host/editor-spells.py --compile-spell-edits edits.json --dbc /path/to/extracted-dbc
+```
+
+Use `-` instead of `edits.json` for stdin. Input is an array of
+`{ "create": false, "source": { "entry": "133", "build": "5875", ... }, "trainers": [...] }`.
+`source` must contain the full row with string values. `trainers` contains the existing full
+`game_trainer_spell` rows for that spell. The compiler recalculates offers in its curated trainer
+range and retains World Source trainer offers, which belong to a separate Import Family.
+A derived trainer wrapper needs its taught rank in the same compile batch.
+
+SQL spell import and export are unavailable on a Realm. Creature spell lists still use
+`operator_apply_creature_edits`. The VMaNGOS spell path keeps its SQL save and reload behavior.
+Spell imports clear stored editor source rows for the spell ids they replace. New spells get ids
+in the Operator Spell Range, 60,000 through 65,535, which a full spell import neither deletes nor
+accepts from a World Source. The range stays below 65,536 because the 1.12 initial spellbook
+packet carries 16-bit spell ids. A save does not change `patch-3.MPQ`.
