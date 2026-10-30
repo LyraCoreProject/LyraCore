@@ -16,7 +16,7 @@ pub struct NativeConformanceConnection {
     pub owner_identity: Identity,
 }
 
-#[table(accessor = game_native_conformance_projection)]
+#[table(accessor = game_native_conformance_projection, event)]
 pub struct NativeConformanceProjection {
     #[primary_key]
     pub guid: u64,
@@ -144,9 +144,6 @@ pub fn debug_native_project(ctx: &ReducerContext) -> Result<(), String> {
         )
         .collect::<std::collections::BTreeSet<_>>();
     let table = ctx.db.game_native_conformance_projection();
-    for old in table.iter().collect::<Vec<_>>() {
-        table.guid().delete(old.guid);
-    }
     for guid in guids {
         let grant = ctx
             .db

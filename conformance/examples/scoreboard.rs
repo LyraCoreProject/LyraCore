@@ -132,8 +132,10 @@ fn open_work(
             audit_state,
             State::NotRun | State::Stale | State::Unverified(_) | State::UnstableReference(_)
         ) && (tier1_state.is_match()
-            || (!matches!(tier1_state, State::Different(_))
-                && measured == Some(0)
+            || (!matches!(
+                tier1_state,
+                State::Different(_) | State::PropertyViolations(..)
+            ) && measured == Some(0)
                 && distinct_gaps == 0))
         {
             "evidence_refresh"
@@ -206,6 +208,7 @@ fn state_json(state: &State) -> Value {
         State::NoScenario => ("no_scenario", None),
         State::NotRun => ("not_run", None),
         State::Stale => ("stale", None),
+        State::PropertyViolations(_, summary) => ("property_violations", Some(summary)),
         State::Different(summary) => ("different", Some(summary)),
         State::Unverified(summary) => ("unverified", Some(summary)),
         State::UnstableReference(summary) => ("unstable_reference", Some(summary)),
@@ -769,6 +772,7 @@ fn clean_tier1_with_stale_audit_requests_evidence_refresh() -> Result<()> {
     tier1_value["audit"] = Value::Null;
     for scenario in tier1_value["scenarios"].as_array_mut().unwrap() {
         scenario["comparison"]["differences"] = json!([]);
+        scenario["properties"] = json!([]);
     }
     let tier1: Report = serde_json::from_value(tier1_value)?;
     let work = open_work(
@@ -855,6 +859,7 @@ fn clean_tier1_with_audit_difference_reproduces_with_audit() -> Result<()> {
     tier1_value["audit"] = Value::Null;
     for scenario in tier1_value["scenarios"].as_array_mut().unwrap() {
         scenario["comparison"]["differences"] = json!([]);
+        scenario["properties"] = json!([]);
     }
     let tier1: Report = serde_json::from_value(tier1_value)?;
     let work = open_work(

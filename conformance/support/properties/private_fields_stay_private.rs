@@ -10,6 +10,14 @@ fn permits(
     guid: u64,
     projection: &Projection,
 ) -> bool {
+    if field == 5
+        || matches!(
+            (object_type, field),
+            (2, 49) | (3 | 4, 187) | (5, 25) | (7, 37)
+        )
+    {
+        return false;
+    }
     if recipient == guid {
         return true;
     }
@@ -63,6 +71,44 @@ pub fn check(recipient: u64, update: &Update, projection: &Projection) -> Vec<Vi
 mod tests {
     use super::*;
     use std::collections::BTreeMap;
+
+    #[test]
+    fn padding_is_never_sent_even_to_self_owner_or_raid() {
+        for (object_type, field) in [
+            (0, 5),
+            (1, 5),
+            (2, 5),
+            (2, 49),
+            (3, 187),
+            (4, 187),
+            (5, 25),
+            (6, 5),
+            (7, 37),
+        ] {
+            for recipient in [7, 8, 9] {
+                for kind in [0, 2, 3] {
+                    let update = Update {
+                        kind,
+                        guid: 7,
+                        object_type: Some(object_type),
+                        fields: BTreeMap::from([(field, 0)]),
+                    };
+                    let projection = Projection {
+                        object_type,
+                        owner_guid: 8,
+                        same_raid: true,
+                        special_info: true,
+                        ..Default::default()
+                    };
+                    assert_eq!(
+                        check(recipient, &update, &projection).len(),
+                        1,
+                        "type {object_type}, field {field}, recipient {recipient}, kind {kind}"
+                    );
+                }
+            }
+        }
+    }
 
     #[test]
     fn peer_create_with_self_only_fields_fails() {

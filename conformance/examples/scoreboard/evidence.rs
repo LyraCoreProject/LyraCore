@@ -13,6 +13,10 @@ use wire_client::trace::{Origin, Provenance, Sha256Digest, Trace};
 mod rendering;
 pub use rendering::markdown;
 
+#[path = "../../support/property_violation.rs"]
+mod property_violation;
+use property_violation::Violation;
+
 pub fn harness_revision() -> &'static str {
     include_str!("../../../.wire-harness-rev")
         .split_whitespace()
@@ -41,6 +45,8 @@ pub struct ScenarioResult {
     pub behavior: String,
     pub scenario_sha256: Sha256Digest,
     pub comparison: Comparison,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub properties: Option<Vec<Violation>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub reference_comparison: Option<Comparison>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -231,6 +237,10 @@ impl Report {
         );
         let mut ids = BTreeSet::new();
         for scenario in &self.scenarios {
+            ensure!(
+                (tier == "tier1") == scenario.properties.is_some(),
+                "property results required only for tier 1"
+            );
             ensure!(
                 wire_client::scenario::identifier(&scenario.id) && ids.insert(&scenario.id),
                 "invalid or duplicate result scenario id"
@@ -505,6 +515,16 @@ impl Report {
             }
         }
         let summary = self.summary(&behavior.id, false);
+        let violations = self
+            .scenarios
+            .iter()
+            .filter(|scenario| scenario.behavior == behavior.id)
+            .filter_map(|scenario| scenario.properties.as_ref())
+            .map(Vec::len)
+            .sum();
+        if violations > 0 {
+            return Ok(State::PropertyViolations(violations, summary));
+        }
         if summary.rule.raw_records > 0 {
             return Ok(State::Different(summary));
         }
@@ -527,6 +547,7 @@ pub enum State {
     NotRun,
     Stale,
     Different(Summary),
+    PropertyViolations(usize, Summary),
     Unverified(Summary),
     UnstableReference(Summary),
     Match(Summary),
@@ -544,6 +565,9 @@ impl std::fmt::Display for State {
             Self::NoScenario => f.write_str("no scenario"),
             Self::NotRun => f.write_str("not run"),
             Self::Stale => f.write_str("stale"),
+            Self::PropertyViolations(count, summary) => {
+                write!(f, "{count} property violations; {summary}")
+            }
             Self::Different(summary) => write!(f, "{summary}"),
             Self::Match(summary) => write!(f, "pass; {summary}"),
             Self::Unverified(summary) => write!(f, "unverified (dirty tree); {summary}"),

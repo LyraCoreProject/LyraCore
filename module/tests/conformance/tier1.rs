@@ -18,6 +18,7 @@ use super::transport::{MultiOperatorTransport, OperatorTransport};
 mod ratchet;
 
 static REPORT: Mutex<()> = Mutex::new(());
+const VIRTUAL_START_MICROS: u64 = 1_800_000_000_000_000;
 
 fn harness_revision() -> Result<&'static str> {
     include_str!("../../../.wire-harness-rev")
@@ -104,20 +105,20 @@ fn run_scenario(
         .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
     std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
     let golden = catalogue::get(id)?;
-    let now = SystemTime::now()
+    let recorded_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?;
-    update_result(&path, &golden, None, &[], now)?;
+    update_result(&path, &golden, None, &[], recorded_at)?;
     let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     setup(&shard, golden.scenario())?;
-    let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    let virtual_start = VIRTUAL_START_MICROS;
     shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
     let mut transport = OperatorTransport::prepare(&shard, golden.scenario())?;
-    let now = (virtual_start / 1_000).try_into()?;
+    let now = virtual_start / 1_000;
     let observations = runner::run_on(golden.scenario(), &mut transport)?;
     ensure!(
         observations
@@ -158,9 +159,59 @@ fn run_scenario(
             delivered,
             "fresh creature was not delivered to the viewing Character"
         );
+        probe_door(&shard, &mut transport)?;
     }
     let violations = properties::run(transport.batches())?;
-    record_and_check(id, &path, &golden, now, &comparison, &violations)
+    record_and_check(id, &path, &golden, recorded_at, &comparison, &violations)
+}
+
+fn probe_door(shard: &Standalone, transport: &mut OperatorTransport<'_>) -> Result<()> {
+    let character = transport.character_guid();
+    let position = shard
+        .query_rows(&format!(
+            "SELECT map_id,x,y,z FROM game_world_entity WHERE guid = {character}"
+        ))
+        .into_iter()
+        .next()
+        .context("door probe Character")?;
+    shard.assert_call(
+        "debug_spawn_gameobject",
+        &[
+            "990001",
+            "0",
+            "1",
+            "0",
+            &position["map_id"],
+            &position["x"],
+            &position["y"],
+            &position["z"],
+            "0",
+            "0",
+            "0",
+            "0",
+        ],
+    );
+    let door: u64 = shard
+        .query_rows("SELECT guid FROM game_gameobject WHERE template_entry = 990001")[0]["guid"]
+        .parse()?;
+    transport.capture()?;
+    for state in [0, 1] {
+        shard.assert_call(
+            "debug_use_gameobject",
+            &[&character.to_string(), &door.to_string()],
+        );
+        transport.capture()?;
+        let projection = transport
+            .batches()
+            .last()
+            .and_then(|batch| batch.projections.get(&door))
+            .context("door probe projection")?;
+        ensure!(
+            projection.fields.get(&14).copied().unwrap_or(0) == state,
+            "door probe did not transition to client state {state}"
+        );
+    }
+    Ok(())
 }
 
 fn record_and_check(
@@ -198,20 +249,20 @@ fn run_multi_scenario(
         .unwrap_or_else(|| core_root().join(".lyracore/conformance/tier1.json"));
     std::fs::create_dir_all(path.parent().context("tier 1 result parent")?)?;
     let golden = catalogue::get(id)?;
-    let now = SystemTime::now()
+    let recorded_at = SystemTime::now()
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?;
-    update_result(&path, &golden, None, &[], now)?;
+    update_result(&path, &golden, None, &[], recorded_at)?;
     let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     setup(&shard, golden.scenario())?;
-    let virtual_start = SystemTime::now().duration_since(UNIX_EPOCH)?.as_micros();
+    let virtual_start = VIRTUAL_START_MICROS;
     shard.assert_call("debug_start_virtual_clock", &[&virtual_start.to_string()]);
     let mut transport = MultiOperatorTransport::prepare(&shard, golden.scenario())?;
-    let now = (virtual_start / 1_000).try_into()?;
+    let now = virtual_start / 1_000;
     let observations = runner::run_multi_on(golden.scenario(), &mut transport)?;
     let comparison = compare::compare_multi_observations(
         &golden,
@@ -221,7 +272,7 @@ fn run_multi_scenario(
         &[],
     )?;
     let violations = properties::run(&transport.batches())?;
-    record_and_check(id, &path, &golden, now, &comparison, &violations)
+    record_and_check(id, &path, &golden, recorded_at, &comparison, &violations)
 }
 
 fn seed_visibility_world(

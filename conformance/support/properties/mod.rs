@@ -5,19 +5,13 @@ mod private_fields_stay_private;
 use std::collections::BTreeMap;
 
 use anyhow::{bail, Context, Result};
-use serde::{Deserialize, Serialize};
 use wire_client::decode::{self, Field};
 
 use client_view_consistency::ClientViews;
 
-#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
-pub struct Violation {
-    pub property: String,
-    pub recipient: u64,
-    pub guid: u64,
-    pub field: Option<u16>,
-    pub detail: String,
-}
+#[path = "../property_violation.rs"]
+mod property_violation;
+pub use property_violation::Violation;
 
 #[derive(Clone, Debug, Default)]
 pub struct Projection {

@@ -135,7 +135,7 @@ values. Core needs no feature override.
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
 The tier 1 runner supports schema 3 single-Character scenarios and schema 4 named-Character
 scenarios. Schema 4 uses one fixture connection and Account per Character. All connections share
-the same virtual clock, and each receives only packets addressed to it. Reconnecting a Character
+the same virtual clock with a fixed starting timestamp, and each receives only packets addressed to it. Reconnecting a Character
 keeps its GUID. `bank_slot_purchase` uses a synthetic friendly banker template with NPC flag
 `0x100`; `two_character_visibility` checks each recipient's peer CREATE update.
 The pinned `run_on` builds step observations with `Observation::from_frame_with_rules`, so
@@ -167,7 +167,7 @@ The checks live in `conformance/support/properties/`, one module per stable prop
   A Character sees its private fields, an item's or pet's owner
   sees owner-only fields, and members of the same Party or Raid see group-only fields. The Module
   does not implement vmangos's Empathy aura or debug target-info cheat, so neither grants special-info
-  visibility in tier 1.
+  visibility in tier 1. Padding marked `UF_FLAG_NONE` is never sendable, including to self.
 - `client_view_consistency` applies each CREATE and partial VALUES update to the recipient's
   accumulated view. An omitted field keeps its previous value. After a reducer's delivery batch,
   the view must equal a fresh full projection at that moment for every visible object. The
@@ -179,6 +179,10 @@ The checks live in `conformance/support/properties/`, one module per stable prop
   The hook discovers visible objects from AOI Grants and owned items, so an omitted CREATE or
   entire VALUES packet cannot remove the object from the check. Packets from one reducer form
   one batch because a CREATE and its supplemental VALUES describe one committed state.
+  Projection rows are events returned by that reducer on the existing WebSocket. Capture uses
+  only that call's projection rows, while buffering CREATE context across earlier transactions.
+  This avoids SQL CLI processes at each virtual-clock step and still projects every visible
+  object, including unchanged objects and objects whose updates were entirely omitted.
 - `create_kind_matches_freshness` checks kind 3 only when the object was newly added to the world
   while the recipient was viewing it, as vmangos's
   [Map::Add](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Map.cpp)
@@ -189,6 +193,8 @@ The checks live in `conformance/support/properties/`, one module per stable prop
   to each recipient packet id in the same transaction. Later sightings use kind 2. The check
   does not take freshness from the CREATE encoder. The bank fixture also spawns a creature
   after the recorded steps to exercise kind 3 without changing Golden Trace observations.
+  It also spawns a door, opens it and closes it so consistency checks exercise an explicit
+  zero-valued `GAMEOBJECT_STATE` update.
 
 The projection reducer and its private tables exist only with `conformance_test_fixture`.
 `native_debug_gate` checks that a build with only `debug_reducers` exports none of them. To add a
@@ -406,8 +412,8 @@ Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`
 `scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
 `unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
 measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
-`unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
-record counts. Spell counts give build, source path or missing expected path, and per-class
+`unstable_reference`, `property_violations` and `match`. Summaries retain separate rule and data
+signatures and raw record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
 `scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
@@ -428,10 +434,10 @@ under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit
 Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
 explicit input or malformed report fails the command. A changed core, harness revision
 or scenario hash shows `stale`. A descendant core commit that changes only `conformance/reports/`
-remains current, so committing the report does not invalidate its measurement. A pass requires every scenario listed by the Behavior. Any rule
-difference, including a counted Deliberate Deviation, prevents a pass. Rule differences in the Reference Server
-comparison also prevent an audit pass. A matching run made with
-uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
+remains current, so committing the report does not invalidate its measurement. A pass requires
+every scenario listed by the Behavior. Any rule difference, including a counted Deliberate
+Deviation, or any tier 1 property violation prevents a pass. Rule differences in the Reference
+Server comparison also prevent an audit pass. A matching run made with uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
 Real-client cells come only from the ledger, never from a report.
 
 Counts use unique opcode values. The denominator is every row of `client-requests-5875.tsv`.
@@ -446,7 +452,9 @@ Neither opcode claims nor these source counts prove conformance.
 
 Both tiers retain the complete harness `Comparison`. Each record requires the comparator's
 `classification` tag, `rule` or `data`. There is no separate `data_differences` array. Version 1
-results lack tags and must be rerun. Summary counts never supply classification.
+results lack tags and must be rerun. Tier 1 results without `properties` must also be rerun.
+Summary counts never supply classification. Property violations have their own nonpassing state
+and do not enter comparator signature counts.
 
 A signature is `(rule, character, checkpoint, stream, opcode, field_path)`. `character` is absent
 for single-Character scenarios. Packet indices, reasons and values do not belong to it. The
@@ -467,6 +475,7 @@ duplicate results and malformed reports fail before freshness checks.
 | `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
 | `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
 | `scenarios[].comparison` | Complete tagged comparison of LyraCore with the Golden Trace |
+| `scenarios[].properties` | Required for tier 1, absent for audits; array of violations with `property`, `recipient`, `guid`, optional `field`, and `detail`; empty on success |
 | `scenarios[].reference_comparison` | Audit-only reference-stability comparison of vmangos with that same Golden Trace |
 | `scenarios[].reference_sha256` | SHA-256 of the Reference Server candidate, retained only in scratch |
 | `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |

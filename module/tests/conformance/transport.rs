@@ -64,7 +64,11 @@ impl<'a> OperatorTransport<'a> {
     }
 
     fn connect(shard: &'a Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
-        let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+        let mut connection = shard.connect_reducers(&[
+            "SELECT * FROM game_native_packet",
+            "SELECT * FROM game_native_conformance_projection",
+            "SELECT * FROM game_native_conformance_create",
+        ]);
         connection
             .call("native_world_open", json!([42]))
             .map_err(|e| anyhow!(e))?;
@@ -96,51 +100,58 @@ impl<'a> OperatorTransport<'a> {
         &self.batches
     }
 
-    fn capture(&mut self) -> Result<()> {
-        // The projection call also drains earlier transactions from this recipient's socket.
-        self.connection
+    pub(super) fn capture(&mut self) -> Result<()> {
+        // The call is a barrier for earlier packet transactions on this recipient's socket.
+        let projected = self
+            .connection
             .call("debug_native_project", json!([]))
             .map_err(|error| anyhow!(error))?;
+        self.connection
+            .drain_inserts("game_native_conformance_projection");
         let rows = self.connection.drain_packets();
         let packets = self.delivery.route_rows(rows)?;
         let mut projections = BTreeMap::new();
-        for row in self
-            .shard
-            .query_rows("SELECT * FROM game_native_conformance_projection")
-        {
-            let guid: u64 = row["guid"].parse()?;
+        for row in projected.inserts("game_native_conformance_projection") {
+            let (guid, object_type, owner_guid, same_raid, body, extra): (
+                u64,
+                u8,
+                u64,
+                bool,
+                String,
+                String,
+            ) = serde_json::from_str(row.get())?;
             let mut fields = BTreeMap::new();
-            for body in [&row["body_hex"], &row["extra_hex"]] {
-                if body.is_empty() {
-                    continue;
-                }
-                let bytes = decode_hex(body)?;
-                for update in properties::updates(0x00a9, &bytes)? {
-                    fields.extend(update.fields);
+            for body in [&body, &extra] {
+                if !body.is_empty() {
+                    for update in properties::updates(0x00a9, &decode_hex(body)?)? {
+                        fields.extend(update.fields);
+                    }
                 }
             }
             projections.insert(
                 guid,
                 Projection {
                     fields,
-                    object_type: row["object_type"].parse()?,
-                    owner_guid: row["owner_guid"].parse()?,
-                    same_raid: row["same_raid"].parse()?,
+                    object_type,
+                    owner_guid,
+                    same_raid,
                     special_info: false,
                 },
             );
         }
         let creates = self
-            .shard
-            .query_rows("SELECT * FROM game_native_conformance_create")
+            .connection
+            .drain_inserts("game_native_conformance_create")
             .into_iter()
             .map(|row| {
+                let (id, newly_added, layer, gameobject_type): (u64, bool, u8, u8) =
+                    serde_json::from_str(row.get())?;
                 Ok((
-                    row["packet_id"].parse()?,
+                    id,
                     CreateContext {
-                        newly_added: row["newly_added"].parse()?,
-                        layer: row["layer"].parse()?,
-                        gameobject_type: row["gameobject_type"].parse()?,
+                        newly_added,
+                        layer,
+                        gameobject_type,
                     },
                 ))
             })

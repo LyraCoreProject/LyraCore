@@ -31,14 +31,9 @@ struct ScenarioResult {
     properties: Vec<PropertyViolation>,
 }
 
-#[derive(Deserialize, Serialize)]
-struct PropertyViolation {
-    property: String,
-    recipient: u64,
-    guid: u64,
-    field: Option<u16>,
-    detail: String,
-}
+#[path = "../support/property_violation.rs"]
+mod property_violation;
+use property_violation::Violation as PropertyViolation;
 
 #[derive(Serialize)]
 struct RunOutput<'a> {
