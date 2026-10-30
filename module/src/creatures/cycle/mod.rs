@@ -1087,15 +1087,15 @@ fn angle_diff(from: f32, to: f32) -> f32 {
     d
 }
 
-fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
-    w: &mut W,
-    tick: &TickContext,
-) -> usize {
-    let mut pursuits = w.pursuits(&tick.scope);
+fn chase<W: CreatureWorld>(w: &mut W, tick: &TickContext) -> usize {
+    let mut pursuits = timed(w, "chase.pursuits", |w| w.pursuits(&tick.scope));
     pursuits.sort_unstable_by_key(|c| c.guid);
     let visited = pursuits.len();
     for c in pursuits {
-        if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
+        let gated = timed(w, "chase.gates", |w| {
+            c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid)
+        });
+        if gated {
             continue;
         }
         let back_off_from = c.leg.as_ref().map_or(0, |leg| leg.back_off_from);
@@ -1107,7 +1107,7 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         if gap_sq > CHASE_LEASH_SQ {
             continue;
         }
-        let posture = w.authored_ranged_posture(c.guid);
+        let posture = timed(w, "chase.posture", |w| w.authored_ranged_posture(c.guid));
         if let Some(aim) = posture.and_then(|(distance, angle)| {
             (distance > 0.0 && w.line_of_sight(c.guid, c.victim_at))
                 .then(|| ranged_hold_point(&c, distance, angle))
@@ -1122,23 +1122,30 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
         let victim_moving = crate::combat::is_translating(c.victim_movement_flags);
         let in_contact = gap_sq <= CHASE_CONTACT_YD * CHASE_CONTACT_YD;
         if in_contact || (gap_sq <= CHASE_MELEE_SQ && !victim_moving) {
-            if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
-                stand_and_face(w, tick, &c);
-            }
+            timed(w, "chase.contact", |w| {
+                if back_off_from == 0 && !back_off(w, tick, &c, gap_sq) {
+                    stand_and_face(w, tick, &c);
+                }
+            });
             continue;
         }
         if posture.is_none() {
-            let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
-            if hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at) {
+            let holding = timed(w, "chase.hold", |w| {
+                let hold = w.caster_hold_range(c.guid) * CASTER_HOLD_MARGIN;
+                hold > 0.0 && gap_sq <= hold * hold && w.line_of_sight(c.guid, c.victim_at)
+            });
+            if holding {
                 continue;
             }
         }
-        commit_chase_leg(w, &c, c.victim_at, CHASE_CONTACT_YD, tick.now_ms);
+        timed(w, "chase.leg", |w| {
+            commit_chase_leg(w, &c, c.victim_at, CHASE_CONTACT_YD, tick.now_ms)
+        });
     }
     visited
 }
 
-fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
+fn commit_chase_leg<W: CreatureWorld>(
     w: &mut W,
     c: &Pursuit,
     target: Point,
@@ -1155,7 +1162,9 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
     if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
         return;
     }
-    let step = w.navigate(c.guid, (target.x, target.y), gap, stop_dist);
+    let step = timed(w, "chase.navigate", |w| {
+        w.navigate(c.guid, (target.x, target.y), gap, stop_dist)
+    });
     if step == (c.at.x, c.at.y) {
         w.target_not_reachable(c.guid);
         return;
@@ -1165,17 +1174,19 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
     let Some((x, y, dur_ms)) = leg_toward((c.at.x, c.at.y), step, speed) else {
         return;
     };
-    w.commit_leg(
-        c.guid,
-        Leg {
-            to: (x, y),
-            z_fallback: target.z,
-            dur_ms,
-            gait,
-            hold_until_landed: false,
-        },
-        now_ms,
-    );
+    timed(w, "chase.commit", |w| {
+        w.commit_leg(
+            c.guid,
+            Leg {
+                to: (x, y),
+                z_fallback: target.z,
+                dur_ms,
+                gait,
+                hold_until_landed: false,
+            },
+            now_ms,
+        );
+    });
 }
 
 // cmangos ChaseMovementGenerator::Backpedal, measured with our contact and overlap distances.
