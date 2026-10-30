@@ -13,6 +13,26 @@ SPEC.loader.exec_module(audit)
 
 
 class WorldReadiness(unittest.TestCase):
+    def test_closed_listener_can_be_reused_with_connections_in_time_wait(self):
+        with audit.socket.socket() as listener:
+            listener.setsockopt(audit.socket.SOL_SOCKET, audit.socket.SO_REUSEADDR, 1)
+            listener.bind(('127.0.0.1', 0))
+            port = listener.getsockname()[1]
+            listener.listen(1)
+            with audit.socket.create_connection(('127.0.0.1', port)) as client:
+                connection, _ = listener.accept()
+                connection.close()
+                self.assertEqual(client.recv(1), b'')
+        audit.free_port(port)
+
+    def test_live_listener_is_never_considered_free(self):
+        with audit.socket.socket() as listener:
+            listener.setsockopt(audit.socket.SOL_SOCKET, audit.socket.SO_REUSEADDR, 1)
+            listener.bind(('127.0.0.1', 0))
+            listener.listen(1)
+            with self.assertRaisesRegex(RuntimeError, 'unavailable'):
+                audit.free_port(listener.getsockname()[1])
+
     def test_accept_without_an_auth_challenge_is_not_ready(self):
         early = MagicMock()
         early.__enter__.return_value.recv.return_value = b''

@@ -134,7 +134,9 @@ def scenario_key(harness, client_data, schema_hash):
 def free_port(port):
     try:
         with socket.socket() as listener:
+            listener.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
             listener.bind(('127.0.0.1', port))
+            listener.listen(1)
     except OSError as error:
         raise RuntimeError(f'loopback port {port} is unavailable: {error}') from error
 
