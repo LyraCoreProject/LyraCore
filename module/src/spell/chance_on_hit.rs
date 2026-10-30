@@ -24,6 +24,13 @@ pub(crate) fn roll_chance_on_hit(
     if attacker_guid == target_guid {
         return;
     }
+    let entities = ctx.db.game_world_entity();
+    let Some(attacker) = entities.guid().find(attacker_guid) else {
+        return;
+    };
+    if !attacker.is_player() || !entities.guid().find(target_guid).is_some_and(|t| !t.dead) {
+        return;
+    }
     let spell_cast_flags = if hit.spell_id == 0 {
         0
     } else {
@@ -36,13 +43,6 @@ pub(crate) fn roll_chance_on_hit(
     let Some(slot) = weapon_slot(hit, spell_cast_flags) else {
         return;
     };
-    let entities = ctx.db.game_world_entity();
-    let Some(attacker) = entities.guid().find(attacker_guid) else {
-        return;
-    };
-    if !attacker.is_player() || !entities.guid().find(target_guid).is_some_and(|t| !t.dead) {
-        return;
-    }
     let Some(weapon) = weapon_in_slot(ctx, attacker_guid, slot) else {
         return;
     };
@@ -139,6 +139,10 @@ fn chance_on_hit_spells(weapon: &ItemTemplate) -> Vec<(u32, f32)> {
 }
 
 fn chance_bp(proc_chance: u8, ppm: f32, weapon_delay_ms: u32) -> u32 {
+    // vmangos takes any nonzero item rate, and a negative rate never procs.
+    if ppm < 0.0 {
+        return 0;
+    }
     let ppm = if ppm > 0.0 {
         ppm
     } else if proc_chance > 100 {
@@ -217,7 +221,7 @@ mod tests {
         let weapon = ItemTemplate {
             spellid_1: 21992,
             spelltrigger_1: SPELLTRIGGER_CHANCE_ON_HIT,
-            spellppmrate_1: 9.5,
+            spellppmrate_1: 8.0,
             spellid_2: 7597,
             spelltrigger_2: 1,
             spellid_3: 0,
@@ -226,13 +230,18 @@ mod tests {
             spelltrigger_5: SPELLTRIGGER_CHANCE_ON_HIT,
             ..crate::seed::base_item(19019, "Thunderfury, Blessed Blade of the Windseeker")
         };
-        assert_eq!(chance_on_hit_spells(&weapon), [(21992, 9.5), (18104, 0.0)]);
+        assert_eq!(chance_on_hit_spells(&weapon), [(21992, 8.0), (18104, 0.0)]);
     }
 
     #[test]
     fn a_rate_scales_with_the_weapon_delay() {
-        // Thunderfury: 9.5 procs per minute on a 1.9 second blade is 30.08 percent.
-        assert_eq!(chance_bp(101, 9.5, 1900), 3008);
+        // Thunderfury at patch 10: 8 procs per minute on a 1.9 second blade is 25.33 percent.
+        assert_eq!(chance_bp(101, 8.0, 1900), 2533);
+    }
+
+    #[test]
+    fn a_negative_rate_never_procs() {
+        assert_eq!(chance_bp(101, -1.0, 2400), 0);
     }
 
     #[test]
