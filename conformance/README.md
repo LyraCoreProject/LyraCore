@@ -468,6 +468,7 @@ Run one scenario while climbing a Behavior:
 ```bash
 ./conformance/audit --scenario taxi_single_hop --check --client-data /path/to/client/Data
 ./conformance/audit --scenario taxi_single_hop --check --json --client-data /path/to/client/Data
+./conformance/audit --scenario taxi_single_hop --check --agreement --json --client-data /path/to/client/Data
 ```
 
 The local check captures the scenario on both servers and compares each candidate with its Golden
@@ -479,15 +480,28 @@ a dirty core tree. The scenario check writes no report or committed trace.
 If the latest full report has no entry for the scenario or has an older scenario revision, the
 check compares against an empty signature set and exits 1.
 
-The first check creates a disposable Realm worktree and imports the pinned vmangos world. It saves
-the imported Realm before any scenario runs. Later checks restore that data and restart the Realm,
-while the Reference Server stays running. The cache lives under
-`$HOME/.cache/lyracore-scratch/scenario-audit/`. Its key covers the core commit, harness and vmangos
-pins, CLI pin, client path and hashes of every client Data file. The runner checks file metadata on
-warm runs and hashes client files again when they change. It also verifies the cached Native Host,
-Module and imported snapshot before capture. A changed key removes the cached worktree and imports
-again. Use `./conformance/audit --stop` to stop both owned servers and remove the cached worktree
-when you need the loopback ports or want a full audit.
+`--agreement` also runs the scenario in tier 1. Its JSON output has `audit` with the normal
+scenario comparison and `agreement` with `tier1_only` and `audit_only` signature arrays. A
+`tier1_only` signature points to a likely fixture artefact. An `audit_only` signature points to a
+fixture blind spot. The command exits 1 when either array is nonempty or either tier's baseline
+differs. A tier 1 setup failure exits 2 with its diagnostic.
+
+The first check creates a disposable Realm worktree and imports the pinned vmangos world. It seals
+the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the
+importer crate source and scripts, the full Module schema extracted offline with the deploy feature
+set, the vmangos database pin, the client Data bytes, and the CLI pin. A gameplay commit does not
+change this key. Later checks copy the snapshot into a new worktree at the current core commit;
+`dev up` publishes the current Module through SpacetimeDB's migration check. A schema change
+changes the key and requires a new import. The store retains the newest two snapshots and removes
+older ones after a successful import. Do not edit a sealed snapshot.
+
+Each check restores the imported data before capture. The active Realm, target directory and
+temporary files live under `$HOME/.cache/lyracore-scratch/m5c/`. The runner waits for its Native
+Host to exit before replacing or deleting data. It records process ownership before startup and
+checks the CLI's PID identities before stopping it. The Reference Server marker records its Docker
+Compose project and container IDs. A failed capture makes that server unusable until its saved
+database dump has restored the clean world. `./conformance/audit --stop` stops owned servers and
+removes the active worktree; it retains the sealed snapshots.
 
 Prepare the pinned Reference Server once with the harness's
 [setup instructions](https://github.com/LyraCoreProject/wire-harness/blob/f58d550eb316557b64290f61da26339aa9e09ceb/adapters/vmangos/README.md).
@@ -502,7 +516,7 @@ The audit wrapper enters the Docker group through a `newgrp docker` heredoc:
 ```
 
 The Python command creates a disposable Git worktree under
-`$HOME/.cache/lyracore-scratch/conformance/` and manages its own Realm through `lyracore dev`.
+`$HOME/.cache/lyracore-scratch/m5c/` and manages its own Realm through `lyracore dev`.
 It refuses a changed CLI pin until the isolation contract has been reviewed. The worktree owns
 its `.lyracore/native-data`, JWT keys and Operator token; the audit stops its Native Host and
 deletes the worktree after capture. Its loopback ports 3000, 3724 and 8085 must be free.
