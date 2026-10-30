@@ -1163,7 +1163,6 @@ impl PetSink for CtxWorld<'_> {
                         leash_x: 0.0,
                         leash_y: 0.0,
                         swing_error: 0,
-                        extra_attacks: 0,
                     },
                 );
             }

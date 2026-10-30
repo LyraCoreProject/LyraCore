@@ -540,8 +540,9 @@ A main-hand swing granted by an extra-attack effect, such as the Hand of Justice
 Chance on Hit. The next melee tick that can swing spends every held Extra Attack at once and
 restarts the main-hand swing timer; a blocked swing keeps them held. An Extra Attack never fires
 the queued strike. A unit that still holds Extra Attacks, or is not auto-attacking in melee, gains
-none. While it holds them, a Proc that would grant more fails without its cooldown, and a Chance on
-Hit spell that grants them stops that weapon's roll. Reckoning stays unimplemented.
+none, and stopping the auto-attack drops them. While it holds them, a Proc that would grant more
+fails without its cooldown, and a Chance on Hit spell that grants them stops that weapon's roll.
+Reckoning stays unimplemented.
 _Avoid_: bonus swing, free swing
 
 **Spell Cast Event Kind**:

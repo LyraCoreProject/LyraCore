@@ -51,7 +51,6 @@ pub(crate) fn arm_creature_engagement(
             leash_x: 0.0,
             leash_y: 0.0,
             swing_error: 0,
-            extra_attacks: 0,
         },
     );
     let entities = ctx.db.game_world_entity();
@@ -260,9 +259,6 @@ pub struct MeleeAttack {
     /// `SWING_ERROR_*`; the Module sends each change only to the attacker.
     #[default(0u8)]
     pub swing_error: u8,
-    /// Main-hand swings granted by an extra-attack effect; the next melee tick spends them.
-    #[default(0u8)]
-    pub extra_attacks: u8,
 }
 
 impl MeleeAttack {
@@ -296,6 +292,7 @@ impl MeleeAttack {
             return false;
         };
         table.attacker_guid().delete(guid);
+        crate::combat::drop_extra_attacks(ctx, guid);
         crate::native::engagement_changed(ctx, Some(&old), None);
         true
     }
@@ -607,7 +604,6 @@ fn start_attack(
     }
 
     let melee = ctx.db.game_melee_attack();
-    let held = melee.attacker_guid().find(attacker.guid);
     let row = MeleeAttack {
         attacker_guid: attacker.guid,
         target_guid,
@@ -619,10 +615,8 @@ fn start_attack(
         leash_x: 0.0,
         leash_y: 0.0,
         swing_error: 0,
-        // vmangos keeps held Extra Attacks across a new target.
-        extra_attacks: held.as_ref().map_or(0, |held| held.extra_attacks),
     };
-    if held.is_some() {
+    if melee.attacker_guid().find(attacker.guid).is_some() {
         crate::combat::MeleeAttack::update(ctx, row);
     } else {
         crate::combat::MeleeAttack::insert(ctx, row);
@@ -728,7 +722,6 @@ pub(crate) fn apply_start_ranged_attack(
         .saturating_sub(ranged_delay.saturating_sub(RANGED_INITIAL_SHOT_MS))
         .max(1);
     let melee = ctx.db.game_melee_attack();
-    let held = melee.attacker_guid().find(attacker.guid);
     let row = MeleeAttack {
         attacker_guid: attacker.guid,
         target_guid,
@@ -740,9 +733,8 @@ pub(crate) fn apply_start_ranged_attack(
         leash_x: 0.0,
         leash_y: 0.0,
         swing_error: 0,
-        extra_attacks: held.as_ref().map_or(0, |held| held.extra_attacks),
     };
-    if held.is_some() {
+    if melee.attacker_guid().find(attacker.guid).is_some() {
         crate::combat::MeleeAttack::update(ctx, row);
     } else {
         crate::combat::MeleeAttack::insert(ctx, row);

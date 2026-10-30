@@ -127,7 +127,7 @@ Chill roll at the wrong rate until you also reimport the `spellmeta` family.
 
 Extra attacks need effect 19 imported as `E_ADD_EXTRA_ATTACKS`. Older spell rows keep it as
 `E_SCRIPTED`, so Hand of Justice, Ironfoe and Sword Specialization grant nothing until you reimport
-the `spell` family. `game_melee_attack.extra_attacks` defaults to zero and needs no repair.
+the `spell` family. The new `game_extra_attack` table starts empty and needs no repair.
 
 ### Native Relay events
 

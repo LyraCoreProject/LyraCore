@@ -99,6 +99,7 @@ pub(crate) mod character_owned_tripwire {
             &[
                 "game_combo_point",
                 "game_dr_state",
+                "game_extra_attack",
                 "game_melee_attack",
                 "game_taunt_lock",
                 "game_threat",

@@ -3160,7 +3160,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(113), E_RESURRECT);
         assert_eq!(instant_effect_to_kind(3), E_SCRIPTED);
         assert_eq!(instant_effect_to_kind(115), E_SCRIPTED);
-        assert_eq!(instant_effect_to_kind(19), E_SCRIPTED);
+        assert_eq!(instant_effect_to_kind(19), E_ADD_EXTRA_ATTACKS);
         assert_eq!(instant_effect_to_kind(112), E_SCRIPTED);
     }
 
