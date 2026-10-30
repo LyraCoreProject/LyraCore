@@ -490,7 +490,9 @@ The first check creates a disposable Realm worktree and imports the pinned vmang
 the imported Realm at `$HOME/.cache/lyracore/conformance-worlds/<key>/`. The key covers the
 importer crate source and scripts, the full Module schema extracted offline with the deploy feature
 set, the vmangos database pin, the client Data bytes, and the CLI pin. A gameplay commit does not
-change this key. Later checks copy the snapshot into a new worktree at the current core commit;
+change this key. Schema hashing includes table defaults, access and event flags. It normalizes
+type references and unordered definitions while preserving column and enum variant order.
+Later checks copy the snapshot into a new worktree at the current core commit;
 `dev up` publishes the current Module through SpacetimeDB's migration check. A schema change
 changes the key and requires a new import. The store retains the newest two snapshots and removes
 older ones after a successful import. Do not edit a sealed snapshot.

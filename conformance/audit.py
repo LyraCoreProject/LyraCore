@@ -99,23 +99,57 @@ def tree_hash(paths):
     return checksum.hexdigest()
 
 
+def schema_fingerprint(schema):
+    if set(schema) != {'V10'}:
+        raise RuntimeError('audit snapshot schema hashing requires a V10 Module definition')
+    sections = {name: value for section in schema['V10']['sections'] for name, value in section.items()}
+    types = sections.pop('Typespace')['types']
+    names = {item['ty']: item['source_name'] for item in sections['Types']}
+    if set(names) != set(range(len(types))):
+        raise RuntimeError('Module definition contains unnamed types; review snapshot schema hashing')
+
+    def normalize(value):
+        if isinstance(value, dict):
+            result = {}
+            for name, item in value.items():
+                if name in ['Ref', 'product_type_ref', 'ty']:
+                    result[name] = names[item]
+                else:
+                    normalized = normalize(item)
+                    # Collections are unordered; columns and enum variants keep their wire order.
+                    if name in ['indexes', 'constraints', 'sequences', 'default_values', 'entries']:
+                        normalized.sort(key=lambda entry: json.dumps(entry, sort_keys=True))
+                    result[name] = normalized
+            return result
+        if isinstance(value, list):
+            return [normalize(item) for item in value]
+        return value
+
+    canonical = {'Typespace': {json.dumps(names[index], sort_keys=True): normalize(value)
+                               for index, value in enumerate(types)}}
+    for name, value in sections.items():
+        canonical[name] = normalize(value)
+        if isinstance(value, list):
+            canonical[name].sort(key=lambda entry: json.dumps(entry, sort_keys=True))
+    return hashlib.sha256(json.dumps(canonical, sort_keys=True).encode()).hexdigest()
+
+
 def module_schema_hash():
     SCENARIO_CACHE.mkdir(parents=True, exist_ok=True)
+    host_checkout = SCENARIO_CACHE / 'native-host/SpacetimeDB'
+    build_env = dict(os.environ)
+    build_env.pop('CARGO_TARGET_DIR', None)
+    with timed('Native Host build'):
+        run([sys.executable, ROOT / 'native-host/prepare-host.py', '--checkout', host_checkout,
+             '--build'], env=build_env, cwd=ROOT, stdout=subprocess.DEVNULL)
     with tempfile.TemporaryDirectory(prefix='schema-', dir=SCENARIO_CACHE) as directory:
-        output = Path(directory)
         run(['spacetime', 'generate', '--lang', 'rust', '--module-path', ROOT / 'module',
-             '--out-dir', output, '--build-options=--features=debug_reducers',
+             '--out-dir', directory, '--build-options=--features=debug_reducers',
              '--include-private', '--no-config', '-y'], cwd=ROOT, stdout=subprocess.DEVNULL)
-        checksum = hashlib.sha256()
-        for path in sorted(output.rglob('*')):
-            if path.is_file():
-                source = path.read_text()
-                # SpacetimeDB 2.7.1 emits event lookup markers nondeterministically.
-                source = re.sub(r'^impl __sdk::__query_builder::CanBeLookupTable for \w+ \{\}\n?',
-                                '', source, flags=re.MULTILINE)
-                checksum.update(str(path.relative_to(output)).encode())
-                checksum.update(source.strip().encode())
-        return checksum.hexdigest()
+        module = Path(os.environ['CARGO_TARGET_DIR']) / 'wasm32-unknown-unknown/release/lyracore_module.wasm'
+        extracted = run_with_diagnostic([host_checkout / 'target/release/spacetimedb-standalone',
+                                         'extract-schema', module], timeout=120)
+        return schema_fingerprint(json.loads(extracted.stdout))
 
 
 def scenario_key(harness, client_data, schema_hash):
@@ -539,7 +573,7 @@ def scenario_reference_server(harness, key, peer_count=0, *, keep=True):
                 if peer_count:
                     run([sys.executable, adapter / 'setup.py', '--ensure-peers', str(peer_count)],
                         env=env, capture_output=True)
-            yield provenance
+            yield provenance, owned['project']
             owned['phase'] = 'ready'
             write_state(marker, owned)
         except BaseException:
@@ -564,11 +598,11 @@ def release_reference(marker, owned, compose, env):
 
 def capture(wire, work, scenario, adapter, endpoints, password, env, progress=sys.stdout):
     print(f"Capturing {scenario['id']} on {adapter}", file=progress, flush=True)
-    run([wire, 'candidate', work / f"{scenario['id']}.toml", work / f"{scenario['id']}-{adapter}.json",
+    run_with_diagnostic([wire, 'candidate', work / f"{scenario['id']}.toml", work / f"{scenario['id']}-{adapter}.json",
          '--host', '127.0.0.1', '--logon-port', endpoints[0], '--world-port', endpoints[1],
          '--account', 'CONFORMANCE', '--password-stdin'], input=password,
         env=dict(env, WIRE_ADAPTER=adapter, WIRE_PEER_ACCOUNTS=','.join(peer_accounts(scenario))),
-        stdout=subprocess.DEVNULL, timeout=240)
+        timeout=240)
 
 
 def delete_reference_character(wire, name, account, password, env, endpoints=(13724, 18085)):
@@ -783,8 +817,9 @@ def capture_servers(harness, wire, work, client_data):
     with local_realm(work, client_data, peer_count) as (password, token, host, module, realm_root):
         host_hash = digest(host)
         module_hash = digest(module)
-        with reference_server(harness, peer_count) as provenance:
-            reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
+        with reference_server(harness, peer_count) as (provenance, project):
+            reference_env = dict(env, COMPOSE_PROJECT_NAME=project,
+                                 WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             for scenario in scenarios:
                 with timed(f"{scenario['id']} Reference Server run"):
                     accounts = ['CONFORMANCE', *peer_accounts(scenario)]
@@ -825,9 +860,10 @@ def capture_scenario(harness, wire, work, scenario, key, pins, client_data, *, r
                         require_snapshot=require_snapshot) as (password, token, host, module, realm_root):
         realm_env.update(WIRE_REALM_URL='http://127.0.0.1:3000',
                          WIRE_OPERATOR_TOKEN_FILE=str(token), WIRE_SHARD='lyracore')
-        with scenario_reference_server(harness, key, peer_count) as provenance:
+        with scenario_reference_server(harness, key, peer_count) as (provenance, project):
             (work / 'reference.json').write_text(json.dumps(provenance))
-            reference_env = dict(env, WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
+            reference_env = dict(env, COMPOSE_PROJECT_NAME=project,
+                                 WIRE_GM_ACCOUNT='CONFORMANCEGM', WIRE_GM_CHARACTER='Conformsetup')
             with timed(f'{scenario} Reference Server run'):
                 accounts = ['CONFORMANCE', *peer_accounts(entry)]
                 passwords = []

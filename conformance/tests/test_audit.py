@@ -1,3 +1,4 @@
+import copy
 import importlib.util
 import json
 import os
@@ -103,6 +104,56 @@ class ClientDataPath(unittest.TestCase):
                     patch.object(audit, 'capture_servers', side_effect=capture_servers):
                 audit.main()
             self.assertEqual(captured, [str(client_data.resolve())])
+
+
+class ModuleSchema(unittest.TestCase):
+    def schema(self):
+        return {'V10': {'sections': [
+            {'Typespace': {'types': [
+                {'Product': {'elements': [{'name': {'some': 'id'}, 'algebraic_type': {'U64': []}},
+                                         {'name': {'some': 'value'}, 'algebraic_type': {'U32': []}}]}},
+                {'Sum': {'variants': [{'name': {'some': 'row'}, 'algebraic_type': {'Ref': 0}},
+                                     {'name': {'some': 'empty'}, 'algebraic_type': {'U8': []}}]}}]}},
+            {'Types': [{'source_name': {'scope': [], 'source_name': 'Row'}, 'ty': 0},
+                       {'source_name': {'scope': [], 'source_name': 'Choice'}, 'ty': 1}]},
+            {'Tables': [{'source_name': 'rows', 'product_type_ref': 0, 'primary_key': [0],
+                         'default_values': [{'col_id': 1, 'value': '00000000'}],
+                         'table_access': {'Private': []}, 'is_event': False}]},
+            {'Reducers': [{'source_name': 'put', 'params': {'elements': [
+                {'name': {'some': 'row'}, 'algebraic_type': {'Ref': 0}}]}}]},
+            {'Schedules': []}, {'LifeCycleReducers': []}, {'ExplicitNames': {'entries': []}}]}}
+
+    def test_default_access_and_event_changes_invalidate_snapshot(self):
+        original = self.schema()
+        before = audit.schema_fingerprint(original)
+        for field, value in [('default_values', [{'col_id': 1, 'value': '01000000'}]),
+                             ('table_access', {'Public': []}), ('is_event', True)]:
+            with self.subTest(field=field):
+                changed = copy.deepcopy(original)
+                changed['V10']['sections'][2]['Tables'][0][field] = value
+                self.assertNotEqual(before, audit.schema_fingerprint(changed))
+
+    def test_definition_order_and_type_numbers_do_not_change_schema(self):
+        original = self.schema()
+        changed = copy.deepcopy(original)
+        sections = changed['V10']['sections']
+        sections[0]['Typespace']['types'].reverse()
+        sections[0]['Typespace']['types'][0]['Sum']['variants'][0]['algebraic_type']['Ref'] = 1
+        for item in sections[1]['Types']:
+            item['ty'] = 1 - item['ty']
+        sections[1]['Types'].reverse()
+        sections[2]['Tables'][0]['product_type_ref'] = 1
+        sections[3]['Reducers'][0]['params']['elements'][0]['algebraic_type']['Ref'] = 1
+        sections.reverse()
+        self.assertEqual(audit.schema_fingerprint(original), audit.schema_fingerprint(changed))
+
+    def test_column_and_variant_order_remain_part_of_schema(self):
+        original = self.schema()
+        for index, kind, ordered in [(0, 'Product', 'elements'), (1, 'Sum', 'variants')]:
+            with self.subTest(kind=kind):
+                changed = copy.deepcopy(original)
+                changed['V10']['sections'][0]['Typespace']['types'][index][kind][ordered].reverse()
+                self.assertNotEqual(audit.schema_fingerprint(original), audit.schema_fingerprint(changed))
 
 
 class ScenarioKey(unittest.TestCase):
@@ -363,6 +414,7 @@ class ReferenceOwnership(unittest.TestCase):
         self.fail_restore = False
         self.fail_start = False
         self.project = None
+        self.captures = []
         self.marker = self.cache / 'reference-state.json'
         for name, value in [('REFERENCE', self.root), ('SCENARIO_CACHE', self.cache),
                             ('SNAPSHOT_STORE', self.store)]:
@@ -404,6 +456,11 @@ class ReferenceOwnership(unittest.TestCase):
         elif command[0] == 'down':
             self.running.clear()
             self.ids.clear()
+        elif command[0] == 'candidate':
+            env = options['env']
+            self.captures.append(env['WIRE_ADAPTER'])
+            if env['WIRE_ADAPTER'] == 'vmangos':
+                self.assertEqual(env.get('COMPOSE_PROJECT_NAME'), self.project)
         elif command[0] == 'exec':
             self.assertEqual(self.running, {'database'})
             if self.fail_restore:
@@ -531,6 +588,33 @@ class ReferenceOwnership(unittest.TestCase):
                 self.fail('unowned Reference Server')
         self.assertEqual(self.running, {'auth', 'database', 'world'})
         self.assertFalse(self.marker.exists())
+
+    def test_wire_adapter_receives_the_owned_project_in_scenario_and_full_audits(self):
+        realm = self.root / 'realm'
+        current = realm / '.import/vmangos/current.json'
+        current.parent.mkdir(parents=True)
+        current.write_text(json.dumps({'commit': 'pin'}))
+        host, module, token = [realm / name for name in ['host', 'module', 'token']]
+        for path in [host, module, token]:
+            path.write_text('fake')
+        state = self.cache / 'realm/state.json'
+        state.parent.mkdir()
+        state.write_text(json.dumps(dict(native_host_sha256=audit.digest(host),
+                                        module_sha256=audit.digest(module), database_commit='pin')))
+        scenario = {'id': 'taxi_single_hop', 'characters': ['Taxi']}
+        (self.root / 'catalogue.json').write_text(json.dumps([scenario]))
+        @audit.contextmanager
+        def local_realm(*_args, **_kwargs):
+            yield 'password', token, host, module, realm
+        with patch.object(audit, 'scenario_realm', local_realm), \
+                patch.object(audit, 'local_realm', local_realm):
+            credentials = self.root / 'credentials'
+            credentials.mkdir()
+            for name in ['player-password', 'gm-password']:
+                (credentials / name).write_text('fake')
+            audit.capture_scenario(self.root, 'wire', self.root, scenario['id'], 'key', {}, self.root)
+            audit.capture_servers(self.root, 'wire', self.root, self.root)
+        self.assertEqual(self.captures, ['vmangos', 'lyracore', 'vmangos', 'lyracore'])
 
     def test_stop_restores_clean_world_and_removes_owned_containers(self):
         with self.context():
