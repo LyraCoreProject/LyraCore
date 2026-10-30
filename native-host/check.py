@@ -3939,9 +3939,14 @@ def check_queries(host):
     client.send(0x26a, struct.pack('<Q', 0xffff_ffff))
     assert any(opcode == 0x96 for opcode, _ in client.collect())
     client.send(0xfe, struct.pack('<I', 15))
+    client.send(0xff)
+    assert client.collect() == []
+    client.send(0x100)
     assert sum(opcode == 0x96 for opcode, _ in client.collect()) == 1
-    client.send(0xfe, struct.pack('<I', 15))
+    client.send(0x100)
     assert not any(opcode == 0x96 for opcode, _ in client.collect())
+    client.send(0x2cd)
+    assert client.collect() == [(0x2cc, bytes(4))]
     client.send(0x21a)
     assert (0x21b, bytes(4)) in client.collect()
     client.send(0x60, struct.pack('<IQ', 51000, 0))

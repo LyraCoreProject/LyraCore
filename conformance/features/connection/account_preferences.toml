@@ -20,7 +20,7 @@ symbol = "WorldSession::HandleRequestAccountData"
 status = "unverified"
 
 [[known_gaps]]
-description = "The Module returns an unavailable response for CMSG_TUTORIAL_FLAG, CMSG_TUTORIAL_CLEAR, CMSG_TUTORIAL_RESET, CMSG_SET_ACTIONBAR_TOGGLES."
+description = "The Module stores no tutorial flags: it ignores CMSG_TUTORIAL_FLAG and CMSG_TUTORIAL_CLEAR, and returns an unavailable response for CMSG_TUTORIAL_RESET and CMSG_SET_ACTIONBAR_TOGGLES."
 path = "module/src/native/unavailable.rs"
 symbol = "responses"
 evidence = "module/src/native/unavailable.rs; docs/benilla-compatibility.md#missing-gameplay-and-deliberate-responses"

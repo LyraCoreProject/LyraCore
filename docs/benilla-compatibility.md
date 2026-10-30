@@ -166,10 +166,12 @@ A Refusal or an empty reply does not establish a working gameplay feature.
 | Pet bar editing, autocast and pet spell requests | Specific System Messages, with a cast-failed packet for a pet spell |
 | Item containers, wrapping and explicit vendor destinations | Inventory Refusal |
 | Readable pages | A terminal page naming the unavailable text service |
-| Tutorials and action-bar display preferences | One unavailable notice per feature per World Session |
+| Tutorial resets and action-bar display preferences | One unavailable notice per feature per World Session |
+| Tutorial mark-seen requests | No reply; login already reports every tutorial seen |
 | Ammunition, skill unlearning, equipment visibility, PvP flags and honor queries | Specific System Messages |
 | Summon acceptance, remote cameras, LFG preferences and quest-share confirmations | Specific System Messages |
-| Instance resets and raid lockout queries | Specific System Messages |
+| Instance resets | Specific System Message |
+| Raid lockout queries | An empty lockout list; instance bindings end with their Instance |
 | Taxi chains | Activation failure; single-hop taxis have their own implementation |
 
 The Module handles current presence, name lookup, party authority and recipient Gates in one

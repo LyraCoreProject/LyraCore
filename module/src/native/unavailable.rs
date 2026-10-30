@@ -22,9 +22,7 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
         ClientOpcodeMessage::CMSG_SET_ACTIONBAR_TOGGLES(_) => {
             Some((1, "Action bar visibility preferences"))
         }
-        ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(_)
-        | ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR
-        | ClientOpcodeMessage::CMSG_TUTORIAL_RESET => Some((2, "Tutorial preferences")),
+        ClientOpcodeMessage::CMSG_TUTORIAL_RESET => Some((2, "Tutorial resets")),
         _ => None,
     };
     if let Some((notice, service)) = notice {
@@ -36,6 +34,10 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
         });
     }
     let response = match msg {
+        // SMSG_TUTORIAL_FLAGS at login already marks every tutorial seen.
+        ClientOpcodeMessage::CMSG_TUTORIAL_FLAG(_) | ClientOpcodeMessage::CMSG_TUTORIAL_CLEAR => {
+            return Some(vec![])
+        }
         ClientOpcodeMessage::CMSG_GMTICKET_SYSTEMSTATUS => word(0x021b, 0),
         ClientOpcodeMessage::CMSG_GMTICKET_GETTICKET => word(0x0212, 10),
         ClientOpcodeMessage::CMSG_GMTICKET_DELETETICKET => word(0x0218, 9),
@@ -112,7 +114,10 @@ pub fn responses(msg: &ClientOpcodeMessage, notices: &mut u8) -> Option<Vec<Pack
         }
         ClientOpcodeMessage::MSG_QUEST_PUSH_RESULT(_) => unavailable("Quest sharing responses"),
         ClientOpcodeMessage::CMSG_RESET_INSTANCES => unavailable("Instance reset requests"),
-        ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => unavailable("Raid lockout queries"),
+        // Instance bindings end with their Instance, so no character holds a raid lockout.
+        ClientOpcodeMessage::CMSG_REQUEST_RAID_INFO => {
+            message(ServerOpcodeMessage::SMSG_RAID_INSTANCE_INFO(Box::default()))
+        }
         ClientOpcodeMessage::MSG_INSPECT_HONOR_STATS(_) => unavailable("Honor statistics"),
         ClientOpcodeMessage::CMSG_BUY_ITEM_IN_SLOT(_) => {
             message(ServerOpcodeMessage::SMSG_INVENTORY_CHANGE_FAILURE(
