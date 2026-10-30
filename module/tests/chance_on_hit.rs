@@ -1,7 +1,9 @@
 mod support;
 
+use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_DAMAGE, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS, T_TARGET_ENEMY,
+    E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS, T_SELF,
+    T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
@@ -17,6 +19,8 @@ const FIXTURE_BLADE: u32 = 5_090_050;
 const SINISTER_STRIKE: u32 = 1752;
 const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
+const HOLY_STRENGTH: u32 = 20007;
+const CRUSADER: u32 = 1900;
 // 30 procs per minute on a 2 second weapon is a certain proc.
 const CERTAIN_PPM: f32 = 30.0;
 const WEAPON_DELAY_MS: u32 = 2000;
@@ -36,7 +40,7 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
         SINISTER_STRIKE,
         "Sinister Strike",
         SPELL_ATTR_WEAPON_PROCS,
-        E_WEAPON_STRIKE,
+        (E_WEAPON_STRIKE, T_TARGET_ENEMY),
         (100, P_RAW),
     );
     set_level(&standalone, wolf, OUT_OF_REACH_LEVEL);
@@ -89,6 +93,53 @@ fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn a_helpful_enchantment_spell_casts_on_the_wielder() {
+    let mut standalone = Standalone::start("chance-on-hit-enchant");
+    let wolf = stage(&mut standalone);
+    stage_spell(
+        &standalone,
+        HOLY_STRENGTH,
+        "Holy Strength",
+        0,
+        (E_HEAL, T_SELF),
+        (0, P_NONE),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_template SET spelltrigger_1 = 0 WHERE entry = {FIXTURE_BLADE}"
+    ));
+    standalone.assert_sql(&format!(
+        "INSERT INTO game_item_enchantment (id, enchant_id, effect_index, kind, amount, spell_id, \
+         school_mask) VALUES ({CRUSADER}, {CRUSADER}, 0, {COMBAT_SPELL}, 0, {HOLY_STRENGTH}, 0)"
+    ));
+    standalone.assert_sql(&format!(
+        "INSERT INTO game_enchant_proc_rate (spell_id, ppm_rate) VALUES ({HOLY_STRENGTH}, {CERTAIN_PPM:.1})"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_instance SET enchant_id = {CRUSADER} \
+         WHERE owner_guid = {PLAYER} AND entry = {FIXTURE_BLADE}"
+    ));
+    let events = standalone.subscribe(&[CAST_EVENTS]);
+
+    standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
+
+    assert!(
+        poll_until(POLL_TIMEOUT, || go_of(&events, HOLY_STRENGTH).is_some()),
+        "a certain enchantment Chance on Hit must cast its spell when a white swing connects"
+    );
+    assert_eq!(
+        go_of(&events, HOLY_STRENGTH).unwrap()["target_guid"],
+        PLAYER.to_string(),
+        "a helpful enchantment spell lands on the wielder"
+    );
+    assert_eq!(
+        go_of(&events, THUNDERFURY_PROC),
+        None,
+        "the cleared item spell slot rolls nothing"
+    );
+}
+
 fn stage(standalone: &mut Standalone) -> u64 {
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
@@ -118,7 +169,7 @@ fn stage(standalone: &mut Standalone) -> u64 {
         THUNDERFURY_PROC,
         "Thunderfury",
         0,
-        E_DAMAGE,
+        (E_DAMAGE, T_TARGET_ENEMY),
         (0, P_NONE),
     );
     standalone.assert_sql(&format!(
@@ -141,22 +192,23 @@ fn stage_spell(
     spell_id: u32,
     name: &str,
     cast_flags: u32,
-    kind: u8,
+    (kind, target): (u8, u8),
     (p0, p0_kind): (i32, u8),
 ) {
+    let is_negative = target != T_SELF;
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell (spell_id, name, power_type, cost, cast_time_ms, gcd_ms, \
          cooldown_ms, range_yd, duration_ms, school_mask, dispel_type, mechanic, max_stacks, \
          aura_interrupt, attributes, spell_level, max_level, is_negative, cast_flags, stances, \
          family_name, family_flags, proc_flags, proc_chance, proc_charges, max_duration_ms) \
          VALUES ({spell_id}, '{name}', 0, 0, 0, 0, 0, 5, 0, 1, 0, 0, 0, 0, 0, \
-         0, 0, true, {cast_flags}, 0, 0, 0, 0, 0, 0, 0)"
+         0, 0, {is_negative}, {cast_flags}, 0, 0, 0, 0, 0, 0, 0)"
     ));
     standalone.assert_sql(&format!(
         "INSERT INTO game_spell_effect (id, spell_id, effect_index, kind, base_points, die_sides, \
          per_level, period_ms, target, radius_yd, chain_targets, trigger_spell, effect_mechanic, \
          p0, p0_kind, p1, script_id, enters_combat, points_per_combo) \
-         VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {T_TARGET_ENEMY}, \
+         VALUES ({}, {spell_id}, 0, {kind}, 5, 0, 0.0, 0, {target}, \
          0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
         (spell_id as u64) << 2
     ));

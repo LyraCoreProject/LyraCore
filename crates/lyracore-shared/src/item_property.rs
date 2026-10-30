@@ -24,6 +24,7 @@ pub const DEFENSE: u8 = 22;
 pub const DODGE: u8 = 23;
 pub const PARRY: u8 = 24;
 pub const BLOCK: u8 = 25;
+pub const COMBAT_SPELL: u8 = 26;
 
 pub fn enchant_stat(
     kind: u8,

@@ -191,6 +191,7 @@ fn catalogue_rows_sql(
                 }
             }
             let kind = match source_kind {
+                1 => kind::COMBAT_SPELL,
                 2 => kind::WEAPON_DAMAGE,
                 4 => resistance_kind(argument as u32).unwrap_or(kind::UNKNOWN),
                 5 => match argument {
@@ -561,13 +562,13 @@ mod tests {
     }
 
     #[test]
-    fn absent_linked_spells_retain_the_source_reference_as_unknown() {
+    fn a_combat_spell_keeps_its_kind_and_an_absent_equip_spell_stays_unknown() {
         let (properties, mut enchantments, spells) = catalogues();
         enchantments.rows[0].enchantment_type = [1, 3, 0];
         enchantments.rows[0].effect_arg = [509_0098, 509_0099, 0];
         let (sql, _, _) = catalogue_rows_sql(&properties, &enchantments, &spells).unwrap();
         let sql = sql.join("\n");
-        assert!(sql.contains("(1303040512,5090002,0,0,7,5090098,0)"));
+        assert!(sql.contains("(1303040512,5090002,0,26,7,5090098,0)"));
         assert!(sql.contains("(1303040576,5090002,64,0,9,5090099,0)"));
     }
 

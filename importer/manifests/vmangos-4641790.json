@@ -2720,6 +2720,17 @@
         "procFlags": 1046520
       }
     },
+    "spell_proc_item_enchant": {
+      "columns": {
+        "integer": [
+          "entry"
+        ],
+        "real": [
+          "ppmRate"
+        ]
+      },
+      "locked_rows": 4
+    },
     "spell_template": {
       "columns": {
         "integer": [
