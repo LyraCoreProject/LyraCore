@@ -3,6 +3,8 @@ use lyracore_shared::nav::OBS_DIM;
 use lyracore_shared::nav::{self, OBS_BYTES, WALK_BYTES, WALK_DIM};
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{reducer, table, ReducerContext, Table};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 #[table(accessor = game_nav_chunk, public)]
 pub struct NavChunk {
@@ -213,7 +215,51 @@ fn merged_cell(terrain: Option<NavCellData>, coverage: Option<NavCellData>) -> O
 
 fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<NavCellData> + '_ {
     let generation = coverage_generation(ctx, map_id);
-    move |cx, cy| fetch_cell(ctx, map_id, generation, cx, cy).0
+    move |cx, cy| cached_cell(ctx, map_id, generation, cx, cy)
+}
+
+type CellKey = (u32, Option<u64>, u16, u16);
+
+const CELL_CACHE_CELLS: usize = 4_096;
+
+thread_local! {
+    static CELL_CACHE: RefCell<Option<HashMap<CellKey, Option<NavCellData>>>> =
+        const { RefCell::new(None) };
+}
+
+// Only the importer writes nav chunks and coverage, so a cell read once stays valid for the scope.
+pub(crate) fn with_cell_cache<T>(query: impl FnOnce() -> T) -> T {
+    struct RestoreCache(Option<HashMap<CellKey, Option<NavCellData>>>);
+    impl Drop for RestoreCache {
+        fn drop(&mut self) {
+            CELL_CACHE.with(|cache| *cache.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = RestoreCache(CELL_CACHE.with(|cache| cache.replace(Some(HashMap::new()))));
+    query()
+}
+
+fn cached_cell(
+    ctx: &ReducerContext,
+    map_id: u32,
+    generation: Option<u64>,
+    cx: u16,
+    cy: u16,
+) -> Option<NavCellData> {
+    let key = (map_id, generation, cx, cy);
+    if let Some(hit) = CELL_CACHE.with(|cache| cache.borrow().as_ref()?.get(&key).cloned()) {
+        return hit;
+    }
+    let cell = fetch_cell(ctx, map_id, generation, cx, cy).0;
+    CELL_CACHE.with(|cache| {
+        if let Some(cells) = cache.borrow_mut().as_mut() {
+            if cells.len() == CELL_CACHE_CELLS {
+                cells.clear();
+            }
+            cells.insert(key, cell.clone());
+        }
+    });
+    cell
 }
 
 fn fetch_cell(

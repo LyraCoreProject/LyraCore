@@ -46,7 +46,9 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
         advances: Vec::new(),
         profile: tick.now_micros % PROFILE_PERIOD_MICROS < PROFILE_WINDOW_MICROS,
     };
-    let outcome = crate::vmap::with_query_cache(|| run_cycle(&mut world, tick));
+    let outcome = crate::vmap::with_query_cache(|| {
+        crate::nav::with_cell_cache(|| run_cycle(&mut world, tick))
+    });
     world.settle_advances();
     outcome
 }
