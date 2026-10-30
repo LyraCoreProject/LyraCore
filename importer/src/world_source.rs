@@ -158,6 +158,20 @@ impl Row {
         }
     }
 
+    pub(crate) fn named_values(&self) -> Result<BTreeMap<String, String>> {
+        self.columns
+            .indices
+            .keys()
+            .map(|name| {
+                let value = match self.cell(name)? {
+                    StoredCell::Text(range) => self.value(range),
+                    _ => self.raw(name)?,
+                };
+                Ok((name.clone(), value.to_owned()))
+            })
+            .collect()
+    }
+
     pub(crate) fn raw(&self, column: &str) -> Result<&str> {
         Ok(match self.cell(column)? {
             StoredCell::Null => "NULL",

@@ -18,6 +18,7 @@ mod shard;
 mod source_selection;
 mod spell;
 mod spell_dbc;
+mod spell_editor;
 mod spell_snapshot;
 mod talent;
 mod terrain;
@@ -39,6 +40,8 @@ use world_import::FAMILIES;
 use world_import_scope::{WorldImportProfile, WorldImportScope};
 
 struct Args {
+    compile_spell_edits: Option<String>,
+    read_spell_source: Option<u32>,
     dbc_diff: bool,
     taxi_mounts: Option<String>,
     dump: Option<String>,
@@ -86,6 +89,8 @@ where
     S: Into<String>,
 {
     let mut a = Args {
+        compile_spell_edits: None,
+        read_spell_source: None,
         dbc_diff: false,
         dump: None,
         taxi_mounts: None,
@@ -128,6 +133,19 @@ where
     let mut it = args.into_iter().map(Into::into);
     while let Some(arg) = it.next() {
         match arg.as_str() {
+            "--compile-spell-edits" => {
+                a.compile_spell_edits = Some(
+                    it.next()
+                        .context("--compile-spell-edits needs a JSON path or -")?,
+                )
+            }
+            "--read-spell-source" => {
+                a.read_spell_source = Some(
+                    it.next()
+                        .context("--read-spell-source needs an id")?
+                        .parse()?,
+                )
+            }
             "--dbc-diff" => a.dbc_diff = true,
             "--taxi-mounts" => {
                 a.taxi_mounts = Some(it.next().context("--taxi-mounts needs a dump path")?)
@@ -340,6 +358,40 @@ where
             other => bail!("unknown arg: {other}"),
         }
     }
+    if a.compile_spell_edits.is_some() || a.read_spell_source.is_some() {
+        if a.apply
+            || a.spells
+            || a.talents
+            || a.family.is_some()
+            || a.packages.is_some()
+            || a.dbc_diff
+            || a.spell_snapshot.is_some()
+            || a.pack_client.is_some()
+            || a.pack_out.is_some()
+            || a.terrain.is_some()
+            || a.nav.is_some()
+            || a.vmap.is_some()
+            || a.vmap_status
+            || a.vmap_prepare_coverage.is_some()
+            || a.go_models.is_some()
+            || a.dump_collision.is_some()
+            || a.taxi_mounts.is_some()
+            || a.print_extents
+            || a.print_scope_maps
+            || !a.only.is_empty()
+            || !a.trainers.is_empty()
+        {
+            bail!("spell editor modes cannot run imports or apply to a Realm");
+        }
+        if a.compile_spell_edits.is_some() {
+            if a.read_spell_source.is_some() || a.dbc.is_none() || a.dump.is_some() {
+                bail!("--compile-spell-edits needs only --dbc with an extracted DBC folder");
+            }
+        } else if a.dump.is_none() || a.dbc.is_some() {
+            bail!("--read-spell-source needs only --dump with the Operator's World Source");
+        }
+        return Ok(a);
+    }
     if let Some(profile) = a.world_profile {
         if !legacy_spatial_args.is_empty() {
             legacy_spatial_args.sort_unstable();
@@ -543,6 +595,15 @@ impl Args {
 
 fn main() -> Result<()> {
     let args = parse_args()?;
+    if let Some(input) = &args.compile_spell_edits {
+        return spell_editor::run(input, args.dbc.as_deref().context("missing DBC folder")?);
+    }
+    if let Some(id) = args.read_spell_source {
+        return spell_editor::read_source(
+            args.dump.as_deref().context("missing World Source")?,
+            id,
+        );
+    }
     if args.dbc_diff {
         print!(
             "{}",
@@ -1032,6 +1093,8 @@ mod tests {
 
     fn test_args() -> Args {
         Args {
+            compile_spell_edits: None,
+            read_spell_source: None,
             dbc_diff: false,
             dump: None,
             taxi_mounts: None,

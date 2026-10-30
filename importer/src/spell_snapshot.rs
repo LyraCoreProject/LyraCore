@@ -6,6 +6,7 @@ use crate::dump::sql_text;
 
 const SNAPSHOT_VERSION: u32 = 1;
 
+#[derive(serde::Serialize)]
 pub(crate) struct SpellHeaderRow {
     pub(crate) spell_id: u32,
     pub(crate) name: String,
@@ -87,6 +88,7 @@ impl SpellHeaderRow {
     }
 }
 
+#[derive(serde::Serialize)]
 pub(crate) struct SpellEffectRow {
     pub(crate) spell_id: u32,
     pub(crate) effect_index: u8,
@@ -168,15 +170,71 @@ fn sql_tuple(columns: &[(&'static str, FieldValue)]) -> String {
     out
 }
 
+#[derive(serde::Serialize)]
+pub(crate) struct ReagentRow {
+    pub id: u64,
+    pub spell_id: u32,
+    pub item_entry: u32,
+    pub count: u32,
+}
+
+impl ReagentRow {
+    pub fn sql_values(&self) -> String {
+        format!(
+            "({},{},{},{})",
+            self.id, self.spell_id, self.item_entry, self.count
+        )
+    }
+}
+
+#[derive(serde::Serialize)]
+pub(crate) struct AiMetadataRow {
+    pub spell_id: u32,
+    pub exclude_caster: bool,
+}
+
+impl AiMetadataRow {
+    pub fn sql_values(&self) -> String {
+        format!("({},{})", self.spell_id, self.exclude_caster)
+    }
+}
+
+#[derive(Clone, serde::Serialize, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct TrainerRow {
+    pub id: u64,
+    pub trainer_entry: u32,
+    pub spell_id: u32,
+    pub cost: u32,
+    pub required_level: u8,
+    pub learn_skill_line: u32,
+    pub learn_skill_cap: u32,
+}
+
+impl TrainerRow {
+    pub fn sql_values(&self) -> String {
+        format!(
+            "({},{},{},{},{},{},{})",
+            self.id,
+            self.trainer_entry,
+            self.spell_id,
+            self.cost,
+            self.required_level,
+            self.learn_skill_line,
+            self.learn_skill_cap
+        )
+    }
+}
+
 #[derive(Default)]
 pub(crate) struct SpellRows {
     pub(crate) headers: Vec<SpellHeaderRow>,
     pub(crate) effects: Vec<SpellEffectRow>,
     // Fishing markers replace source effects at the same key after the bulk insert.
     pub(crate) fishing: Vec<SpellEffectRow>,
-    pub(crate) reagents: Vec<String>,
-    pub(crate) eventai_metadata: Vec<String>,
-    pub(crate) trainers: Vec<String>,
+    pub(crate) reagents: Vec<ReagentRow>,
+    pub(crate) eventai_metadata: Vec<AiMetadataRow>,
+    pub(crate) trainers: Vec<TrainerRow>,
 }
 
 impl SpellRows {
