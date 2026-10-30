@@ -799,6 +799,7 @@ pub fn debug_engage(
         leash_x: 0.0,
         leash_y: 0.0,
         swing_error: 0,
+        extra_attacks: 0,
     };
     if melee.attacker_guid().find(attacker_guid).is_some() {
         crate::combat::MeleeAttack::update(ctx, row);

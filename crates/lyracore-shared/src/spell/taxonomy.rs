@@ -99,6 +99,7 @@ effect_kinds! {
     A_MOD_POWER_REGEN_PCT => AuraModPowerRegenPct = 0xB7,
     A_FLAG => AuraFlag = 0xBE,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
+    E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -210,6 +211,7 @@ mod tests {
         assert_eq!(E_HEAL, 0x02);
         assert_eq!(E_DISPEL, 0x04);
         assert_eq!(E_SUMMON_GUARDIANS, 0x27);
+        assert_eq!(E_ADD_EXTRA_ATTACKS, 0x28);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

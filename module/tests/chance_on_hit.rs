@@ -2,8 +2,8 @@ mod support;
 
 use lyracore_shared::item_property::COMBAT_SPELL;
 use lyracore_shared::spell::taxonomy::{
-    E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS, T_SELF,
-    T_TARGET_ENEMY,
+    E_ADD_EXTRA_ATTACKS, E_DAMAGE, E_HEAL, E_WEAPON_STRIKE, P_NONE, P_RAW, SPELL_ATTR_WEAPON_PROCS,
+    T_SELF, T_TARGET_ENEMY,
 };
 
 use std::collections::BTreeMap;
@@ -21,12 +21,17 @@ const THUNDERFURY_PROC: u32 = 21992;
 const CHANCE_ON_HIT: u8 = 2;
 const HOLY_STRENGTH: u32 = 20007;
 const CRUSADER: u32 = 1900;
+const FURY_OF_FORGEWRIGHT: u32 = 15494;
+const IRONFOE_EXTRA_ATTACKS: usize = 2;
+const SLOW_SWING_MS: u32 = 60_000;
 // 30 procs per minute on a 2 second weapon is a certain proc.
 const CERTAIN_PPM: f32 = 30.0;
 const WEAPON_DELAY_MS: u32 = 2000;
 // At this level the capped miss, dodge and parry chances sum past certainty for a level 1 player.
 const OUT_OF_REACH_LEVEL: u32 = 60;
 const AVOIDED_SWINGS: usize = 3;
+const ATTEMPTS: usize = 15;
+const SETTLE: std::time::Duration = std::time::Duration::from_secs(2);
 const CAST_EVENTS: &str = "SELECT * FROM game_spell_cast_event_live WHERE caster_guid = 1";
 const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live WHERE attacker_guid = 1";
 
@@ -140,6 +145,70 @@ fn a_helpful_enchantment_spell_casts_on_the_wielder() {
     );
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+fn an_extra_attack_chance_on_hit_swings_twice_and_grants_no_more() {
+    let mut standalone = Standalone::start("chance-on-hit-extra-attacks");
+    let wolf = stage(&mut standalone);
+    stage_spell(
+        &standalone,
+        FURY_OF_FORGEWRIGHT,
+        "Fury of Forgewright",
+        0,
+        (E_ADD_EXTRA_ATTACKS, T_SELF),
+        (0, P_NONE),
+    );
+    standalone.assert_sql(&format!(
+        "UPDATE game_spell_effect SET base_points = {IRONFOE_EXTRA_ATTACKS} \
+         WHERE spell_id = {FURY_OF_FORGEWRIGHT}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_item_template SET spellid_1 = {FURY_OF_FORGEWRIGHT} WHERE entry = {FIXTURE_BLADE}"
+    ));
+    standalone.assert_sql(&format!(
+        "UPDATE game_world_entity SET base_attack_time_ms = {SLOW_SWING_MS} WHERE guid = {PLAYER}"
+    ));
+    let events = standalone.subscribe(&[CAST_EVENTS, SWING_EVENTS]);
+    standalone.assert_call("debug_engage", &["1", &wolf.to_string()]);
+
+    // The 60-second swing timer swings once on engagement; every later normal swing is forced.
+    let mut normal_swings = 1;
+    assert!(
+        poll_until(POLL_TIMEOUT, || swings(&events) >= normal_swings),
+        "the engagement never swung"
+    );
+    while go_of(&events, FURY_OF_FORGEWRIGHT).is_none() {
+        assert!(
+            normal_swings < ATTEMPTS,
+            "no swing connected in {ATTEMPTS} attempts"
+        );
+        normal_swings += 1;
+        standalone
+            .assert_sql("UPDATE game_melee_attack SET last_swing_ms = 1 WHERE attacker_guid = 1");
+        assert!(
+            poll_until(POLL_TIMEOUT, || swings(&events) >= normal_swings),
+            "the forced swing never fired"
+        );
+    }
+
+    let after_extra = normal_swings + IRONFOE_EXTRA_ATTACKS;
+    assert!(
+        poll_until(POLL_TIMEOUT, || swings(&events) >= after_extra),
+        "the granted extra attacks never swung"
+    );
+    std::thread::sleep(SETTLE);
+    assert_eq!(
+        swings(&events),
+        after_extra,
+        "the two Extra Attacks swing once each and grant no more"
+    );
+    assert_eq!(
+        gos_of(&events, FURY_OF_FORGEWRIGHT),
+        1,
+        "an Extra Attack must not roll the extra-attack Chance on Hit again"
+    );
+}
+
 fn stage(standalone: &mut Standalone) -> u64 {
     standalone.publish_module();
     standalone.assert_call("claim_operator", &[]);
@@ -212,6 +281,13 @@ fn stage_spell(
          0.0, 0, 0, 0, {p0}, {p0_kind}, 0, 0, false, 0.0)",
         (spell_id as u64) << 2
     ));
+}
+
+fn gos_of(events: &TableSubscription, spell_id: u32) -> usize {
+    event_rows(events, "game_spell_cast_event_live")
+        .into_iter()
+        .filter(|row| row["spell_id"] == spell_id.to_string() && row["kind"] == "2")
+        .count()
 }
 
 fn go_of(events: &TableSubscription, spell_id: u32) -> Option<SqlRow> {

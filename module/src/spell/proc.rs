@@ -303,6 +303,9 @@ fn fire_aura_procs(
     };
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     for (row, side, counterparty_guid) in candidates {
+        if refuses_extra_attacks(ctx, &row) {
+            continue;
+        }
         let profile = ProcProfile::of(&row);
         let roll_bp = ctx.random::<u32>() % BASIS_POINTS;
         let Some(fire) = decide(&profile, side, &proc_hit, now_micros, roll_bp) else {
@@ -322,6 +325,14 @@ fn fire_aura_procs(
             fresh.update(ctx);
         }
     }
+}
+
+// vmangos fails a Proc that would grant Extra Attacks while the Carrier still holds some, so its
+// cooldown and charges stay untouched.
+fn refuses_extra_attacks(ctx: &ReducerContext, row: &Aura) -> bool {
+    row.eff_kind == A_PROC_TRIGGER
+        && super::chance_on_hit::grants_extra_attacks(ctx, row.eff_p1.max(0) as u32)
+        && crate::combat::has_extra_attacks(ctx, row.target_guid)
 }
 
 fn in_world(ctx: &ReducerContext, guid: u64) -> bool {

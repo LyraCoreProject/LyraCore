@@ -125,6 +125,10 @@ Enchantment Chance on Hit needs the combat-spell Stat Kind on `game_item_enchant
 never roll until you reimport the `items` family with `--dbc`. Fiery Weapon, Lifestealing and Icy
 Chill roll at the wrong rate until you also reimport the `spellmeta` family.
 
+Extra attacks need effect 19 imported as `E_ADD_EXTRA_ATTACKS`. Older spell rows keep it as
+`E_SCRIPTED`, so Hand of Justice, Ironfoe and Sword Specialization grant nothing until you reimport
+the `spell` family. `game_melee_attack.extra_attacks` defaults to zero and needs no repair.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

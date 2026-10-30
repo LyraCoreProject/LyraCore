@@ -21,7 +21,7 @@ entry in both files.
 
 **D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
-**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages)
+**E** [Effect Kind](#requests-and-delivery) · [Encounter Binding](#realm-topology) · [Encounter Signal](#realm-topology) · [Engagement](#creature-ai) · [Entity Handle](#runtime-scripts) · [Equivalence Rule](#conformance) · [Escrow](#retired-terms) · [Event Binding](#packages) · [Extra Attack](#procs)
 
 **F** [Fake](CORE_TERMS.md#fake) · [Feature Ledger](#conformance) · [Fee Hold](#retired-terms) · [Fixed Rout](#creature-ai) · [Fixture Verb](#conformance) · [Fixture-Reserved Identifier](#packages) · [Flat Cast](#creature-ai) · [Forced Death](#creature-ai) · [Fuel Budget](#runtime-scripts)
 
@@ -534,6 +534,15 @@ own percent, else one proc per minute. The roll fires a Triggered Cast that roll
 on Hit, at the victim, or at the wielder for a helpful enchantment spell. No aura carries it, so it
 is not a Proc.
 _Avoid_: item proc, on-hit spell
+
+**Extra Attack**:
+A main-hand swing granted by an extra-attack effect, such as the Hand of Justice Proc or Ironfoe's
+Chance on Hit. The next melee tick that can swing spends every held Extra Attack at once and
+restarts the main-hand swing timer; a blocked swing keeps them held. An Extra Attack never fires
+the queued strike. A unit that still holds Extra Attacks, or is not auto-attacking in melee, gains
+none. While it holds them, a Proc that would grant more fails without its cooldown, and a Chance on
+Hit spell that grants them stops that weapon's roll. Reckoning stays unimplemented.
+_Avoid_: bonus swing, free swing
 
 **Spell Cast Event Kind**:
 The append-only code naming the wire signal in one `game_spell_cast_event` row, such as START, GO

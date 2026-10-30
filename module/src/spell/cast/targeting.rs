@@ -644,6 +644,10 @@ pub(crate) fn apply_effect(
             }
             EffectHit::none()
         }
+        EffectKind::AddExtraAttacks => {
+            crate::combat::grant_extra_attacks(ctx, target_guid, points);
+            EffectHit::none()
+        }
         EffectKind::Duel => {
             if e.p0_kind == P_GAMEOBJECT_ENTRY {
                 crate::duel::request_duel(ctx, caster_guid, target_guid, e.p0.max(0) as u32);
