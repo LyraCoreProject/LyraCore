@@ -42,3 +42,7 @@ opt-level = 0
 
 [profile.dev-reload.build-override]
 opt-level = 3
+
+# The fork builds flate2 without C zlib, which macOS cannot archive for wasm32.
+[patch.crates-io]
+wow_world_messages = { git = "https://github.com/LyraCoreProject/wow_world_messages", rev = "486d31cb0552c52904dcb6dda561b416f1dbc0ab" }
