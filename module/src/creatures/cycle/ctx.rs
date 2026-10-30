@@ -25,6 +25,10 @@ use crate::{
 };
 use lyracore_shared::movement_flags::FORWARD;
 
+// Pass timings are logged for the first five seconds of each minute.
+const PROFILE_PERIOD_MICROS: u64 = 60_000_000;
+const PROFILE_WINDOW_MICROS: u64 = 5_000_000;
+
 pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
     if !crate::world::backfill_simulation(ctx) {
         return CycleOutcome {
@@ -40,6 +44,7 @@ pub(crate) fn run(ctx: &ReducerContext, tick: TickContext) -> CycleOutcome {
         ctx,
         regen_window,
         advances: Vec::new(),
+        profile: tick.now_micros % PROFILE_PERIOD_MICROS < PROFILE_WINDOW_MICROS,
     };
     let outcome = crate::vmap::with_query_cache(|| run_cycle(&mut world, tick));
     world.settle_advances();
@@ -50,6 +55,7 @@ struct CtxWorld<'a> {
     ctx: &'a ReducerContext,
     regen_window: crate::combat::RegenWindow,
     advances: Vec<(WorldEntity, WorldEntity)>,
+    profile: bool,
 }
 
 impl CtxWorld<'_> {
@@ -97,6 +103,7 @@ pub(crate) fn stop_on_stored_leg(ctx: &ReducerContext, leg: CreatureSpline) -> O
         ctx,
         regen_window: crate::combat::RegenWindow::new(now_micros / 1_000, 0),
         advances: Vec::new(),
+        profile: false,
     };
     super::stop_on_leg(&world, &as_leg(leg, false), now_micros)
 }
@@ -1214,5 +1221,9 @@ impl CreatureWorld for CtxWorld<'_> {
     }
     fn run_package_passes(&mut self) {
         crate::hooks::run_package_tick_passes(self.ctx);
+    }
+    fn pass_timer(&self, pass: &'static str) -> Option<spacetimedb::log_stopwatch::LogStopwatch> {
+        self.profile
+            .then(|| spacetimedb::log_stopwatch::LogStopwatch::new(pass))
     }
 }
