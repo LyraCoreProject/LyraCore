@@ -236,9 +236,12 @@ ItemFields {
 }
 ```
 
-Every `ItemFields` member is required. An update replaces every column except `entry`; it is not a
-partial update. Start with the current `game_item_template` row, remove `entry`, and change the
-fields you want. The exhaustive constructor in the Module keeps this type in step with the table.
+Every `ItemFields` member is required. An update replaces every column except `entry` and the
+Chance on Hit rates `spellppmrate_1` through `spellppmrate_5`; it is not a partial update. Start
+with the current `game_item_template` row, remove `entry` and those rates, and change the fields
+you want. An update keeps the rates and a create sets them to zero, so a created item's Chance on
+Hit rolls the spell's proc chance. The exhaustive constructor in the Module keeps this type in step
+with the table.
 There is no item delete. Instances, loot, quests and vendors can refer to an item.
 
 This is a complete create edit. Pass an array of edits as the reducer's sole argument. The HTTP

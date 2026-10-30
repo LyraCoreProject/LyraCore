@@ -1867,7 +1867,12 @@
         ],
         "real": [
           "dmg_max1",
-          "dmg_min1"
+          "dmg_min1",
+          "spellppmrate_1",
+          "spellppmrate_2",
+          "spellppmrate_3",
+          "spellppmrate_4",
+          "spellppmrate_5"
         ],
         "text": [
           "name"

@@ -187,6 +187,8 @@ pub const STAT_ALL: u8 = 0xFF;
 pub const RESIST_ARMOR: u8 = 0x01;
 pub const SPELL_ATTR_CHANNELED: u32 = 0x0080;
 pub const SPELL_ATTR_RANGED_AUTO_REPEAT: u32 = 0x0200;
+// vmangos SpellEntry::CanTriggerWeaponProcs: the hit rolls the main-hand weapon's Chance on Hit.
+pub const SPELL_ATTR_WEAPON_PROCS: u32 = 0x0400;
 
 #[cfg(test)]
 mod tests {

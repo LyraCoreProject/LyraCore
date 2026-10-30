@@ -116,6 +116,17 @@ pub struct ItemTemplate {
     pub allowed_race: u32,
     #[default(0)]
     pub random_property: u32,
+    // Chance on Hit procs per minute for each spell slot; zero rolls the spell's proc chance.
+    #[default(0.0f32)]
+    pub spellppmrate_1: f32,
+    #[default(0.0f32)]
+    pub spellppmrate_2: f32,
+    #[default(0.0f32)]
+    pub spellppmrate_3: f32,
+    #[default(0.0f32)]
+    pub spellppmrate_4: f32,
+    #[default(0.0f32)]
+    pub spellppmrate_5: f32,
 }
 
 #[table(accessor = game_item_instance, public, index(accessor = by_owner_guid, btree(columns = [owner_guid])))]

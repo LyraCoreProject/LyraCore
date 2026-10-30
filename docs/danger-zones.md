@@ -109,6 +109,14 @@ the other finishers skip the combo-point Gate and keep their points, no finisher
 points, and Slice and Dice lasts its 6-second base. After you publish this schema to an existing
 Shard, reimport spells with `--dbc` before play resumes.
 
+### Chance on Hit migration
+
+`game_item_template.spellppmrate_1` through `spellppmrate_5` default to zero, and older spell rows
+lack `SPELL_ATTR_WEAPON_PROCS`. Until both are reimported, every Chance on Hit rolls its spell's
+proc chance, which is one proc per minute for most weapons, and only white swings roll it. After you
+publish this schema to an existing Shard, reimport the `items` and `spell` families before play
+resumes.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

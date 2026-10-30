@@ -124,6 +124,11 @@ pub(crate) mod it {
     pub const SPELLTRIGGER_4: &str = "spelltrigger_4";
     pub const SPELLID_5: &str = "spellid_5";
     pub const SPELLTRIGGER_5: &str = "spelltrigger_5";
+    pub const SPELLPPMRATE_1: &str = "spellppmrate_1";
+    pub const SPELLPPMRATE_2: &str = "spellppmrate_2";
+    pub const SPELLPPMRATE_3: &str = "spellppmrate_3";
+    pub const SPELLPPMRATE_4: &str = "spellppmrate_4";
+    pub const SPELLPPMRATE_5: &str = "spellppmrate_5";
     pub const BONDING: &str = "bonding";
     pub const PAGE_TEXT: &str = "page_text";
     pub const START_QUEST: &str = "start_quest";

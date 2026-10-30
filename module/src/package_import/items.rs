@@ -131,6 +131,11 @@ fn blank_item(entry: u32) -> ItemTemplate {
         allowed_class: 0,
         allowed_race: 0,
         random_property: 0,
+        spellppmrate_1: 0.0,
+        spellppmrate_2: 0.0,
+        spellppmrate_3: 0.0,
+        spellppmrate_4: 0.0,
+        spellppmrate_5: 0.0,
     }
 }
 

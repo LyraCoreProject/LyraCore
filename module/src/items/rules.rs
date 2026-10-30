@@ -497,6 +497,11 @@ pub(crate) mod tests {
             allowed_class: crate::items::tables::ALL_PLAYABLE_CLASS_MASK,
             allowed_race: crate::items::tables::ALL_PLAYABLE_RACE_MASK,
             random_property: 0,
+            spellppmrate_1: 0.0,
+            spellppmrate_2: 0.0,
+            spellppmrate_3: 0.0,
+            spellppmrate_4: 0.0,
+            spellppmrate_5: 0.0,
         }
     }
 

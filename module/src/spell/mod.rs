@@ -1,4 +1,5 @@
 pub(crate) mod cast;
+mod chance_on_hit;
 mod outcome;
 mod presentation;
 pub(crate) use outcome::{

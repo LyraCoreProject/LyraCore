@@ -38,10 +38,10 @@ use lyracore_shared::spell::taxonomy::{
     SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
     SPELL_ATTR_REQ_OVERPOWER, SPELL_ATTR_REQ_REVENGE, SPELL_ATTR_REQ_STEALTH,
-    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE,
-    STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER, STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR,
-    STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY, T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY,
-    T_TARGET_ENEMY,
+    SPELL_ATTR_STEALTH_SAFE, SPELL_ATTR_USES_RANGED_SLOT, SPELL_ATTR_WEAPON_PROCS,
+    SPELL_FAMILY_DRUID, SPELL_FAMILY_ROGUE, STANCE_BATTLE, STANCE_BEAR, STANCE_BERSERKER,
+    STANCE_CAT, STANCE_DEFENSIVE, STANCE_DIRE_BEAR, STAT_ALL, T_AREA_ALLY, T_AREA_ENEMY,
+    T_SCRIPTED, T_SELF, T_TARGET_ALLY, T_TARGET_ANY, T_TARGET_ENEMY,
 };
 
 fn binding_summon_entry(spell_id: u32, effect: i32, event: u32, focus: u32) -> Option<i32> {
@@ -90,6 +90,14 @@ const EFFECT_WEAPON_PERCENT_DAMAGE: i32 = 31;
 const WEAPON_DAMAGE_FULL_PCT: i32 = 100;
 // vmangos adds this to the cast time of every ranged-slot spell that does not auto-repeat.
 const RANGED_SLOT_CAST_MS: u32 = 500;
+
+const ITEM_CLASS_WEAPON: u32 = 2;
+const SPELL_RANGE_IDX_COMBAT: u32 = 2;
+
+fn triggers_weapon_procs(s: &Spell) -> bool {
+    (s.equipment[0] == ITEM_CLASS_WEAPON && s.range == SPELL_RANGE_IDX_COMBAT)
+        || s.custom_flags & lyracore_shared::spell_custom::TRIGGER_WEAPON_PROCS != 0
+}
 
 // Overpower carries the finisher bit for its dodge window; passive talents are never cast.
 fn is_combo_finisher(s: &Spell) -> bool {
@@ -797,6 +805,9 @@ fn push_spell_header_row(
     }
     if is_combo_finisher(s) {
         cast_flags |= SPELL_ATTR_COMBO_FINISHER;
+    }
+    if triggers_weapon_procs(s) {
+        cast_flags |= SPELL_ATTR_WEAPON_PROCS;
     }
     let stances = translate_stance_mask(s.shapeshift_mask);
     let spell_level = s.spell_level.min(255) as u8;
@@ -2354,6 +2365,44 @@ mod tests {
             correct_script_effect_kind("Create Healthstone (Major)", E_SCRIPTED),
             E_CREATE_ITEM
         );
+    }
+
+    #[test]
+    fn weapon_procs_follow_a_melee_weapon_requirement_or_the_source_flag() {
+        let spell = |id, name: &str, item_class, range, custom_flags| Spell {
+            id,
+            name: name.into(),
+            equipment: [item_class, 0, 0],
+            range,
+            custom_flags,
+            effect: [2, 0, 0],
+            implicit_target_a: [6, 0, 0],
+            duration: 1,
+            ..Default::default()
+        };
+        let mut dbc = fixture_tables();
+        // Values from vmangos 4641790 spell_template; u32::MAX is equippedItemClass -1.
+        dbc.spells = vec![
+            spell(1715, "Hamstring", 2, 2, 0),
+            spell(75, "Auto Shot", 2, 114, 0),
+            spell(23881, "Bloodthirst", u32::MAX, 2, 0x2080),
+            spell(133, "Fireball", u32::MAX, 4, 0),
+        ];
+
+        let (rows, _, _) = derive_spell_rows(&dbc, &[], &[]).unwrap();
+        let procs = |id| {
+            rows.headers
+                .iter()
+                .find(|h| h.spell_id == id)
+                .unwrap()
+                .cast_flags
+                & SPELL_ATTR_WEAPON_PROCS
+                != 0
+        };
+        assert!(procs(1715), "a melee weapon ability rolls weapon procs");
+        assert!(!procs(75), "a ranged weapon spell does not");
+        assert!(procs(23881), "the source flag grants weapon procs");
+        assert!(!procs(133));
     }
 
     #[test]
