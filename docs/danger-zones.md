@@ -18,6 +18,9 @@ Shard. An existing multi-Shard Realm needs a reviewed data migration first; see
 2. **Migrations:**
    - A new column goes at the END of the struct with a `#[default(...)]`. That is an additive
      auto-migrate. A column anywhere else makes the publish abort.
+   - SpacetimeDB SQL INSERT needs every column. When an existing INSERT can omit the new column,
+     add its default to `crates/lyracore-shared/src/import_sql_defaults.txt`; the importer, the
+     durable tests and the native check fill it from there.
    - Change native reducer arguments and their Host calls together. The Host and Module also share
      the BSATN layouts of `game_native_cipher` and `game_native_packet`. Update
      `native-host/src/feed.rs` with `module/src/native/mod.rs`, then run the native protocol check.

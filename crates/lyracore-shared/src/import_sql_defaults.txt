@@ -5,3 +5,8 @@ game_spell_effect bonus_coefficient -1.0
 game_creature_ai_broadcast_text sound_id 0
 game_creature_display gender 0
 game_creature_display bounding_radius 0.389
+game_item_template spellppmrate_1 0.0
+game_item_template spellppmrate_2 0.0
+game_item_template spellppmrate_3 0.0
+game_item_template spellppmrate_4 0.0
+game_item_template spellppmrate_5 0.0
