@@ -149,12 +149,28 @@ pub struct GameObject {
 impl GameObject {
     pub(crate) fn try_insert(self, ctx: &ReducerContext) -> Result<Self, String> {
         let object = ctx.db.game_gameobject().try_insert(self)?;
+        #[cfg(feature = "conformance_test_fixture")]
+        crate::native::record_conformance_birth(
+            ctx,
+            object.guid,
+            object.map_id,
+            object.instance_id,
+            object.cell,
+        );
         crate::aoi::gameobject_changed(ctx, &object, true);
         Ok(object)
     }
 
     pub(crate) fn insert(self, ctx: &ReducerContext) -> Self {
         let object = ctx.db.game_gameobject().insert(self);
+        #[cfg(feature = "conformance_test_fixture")]
+        crate::native::record_conformance_birth(
+            ctx,
+            object.guid,
+            object.map_id,
+            object.instance_id,
+            object.cell,
+        );
         crate::aoi::gameobject_changed(ctx, &object, true);
         object
     }

@@ -26,6 +26,7 @@ starting points for scenario authors.
 If you change a table schema, read [migration trap §1.2](../../../docs/danger-zones.md#1-do-not-touch-traps) and update every test that inserts into that table. When CI fails, reproduce only the failing test with the command in [testing](../../../docs/testing.md).
 
 When setup cannot be repaired or no fix matches the Reference Server, stop and hand the item to a maintainer with the commands you ran and their output. Keep scenario defects with the scenario author. Every review finding must become an automated check that fails on the old code before its fix merges: a scenario variant (for example a second Character or a reconnect), a property check, a strictness mutation or a fixture check. List review findings that CI missed in the PR, each tagged as uncovered situation, loose rule, fixture artefact, broken invariant or client rejection. Keep scenarios, Golden Traces, Equivalence Rules and the harness pin out of an implementation PR. Preserve the tests and required rungs; add no skips or weaker rules. Generate baselines only with `./conformance/baseline`.
+For a broken invariant, add a named property under `conformance/support/properties/` with a violating-stream test and prove it fails on the old code in scratch.
 
 ## Scenario author
 

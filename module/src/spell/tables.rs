@@ -516,6 +516,14 @@ impl DynamicObject {
     pub(crate) fn insert(mut self, ctx: &ReducerContext) {
         self.cell = self.position_cell();
         let object = ctx.db.game_dynamic_object().insert(self);
+        #[cfg(feature = "conformance_test_fixture")]
+        crate::native::record_conformance_birth(
+            ctx,
+            object.guid,
+            object.map_id,
+            object.instance_id,
+            object.cell,
+        );
         crate::aoi::dynamic_object_changed(ctx, &object, true);
     }
 

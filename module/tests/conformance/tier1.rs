@@ -1,6 +1,7 @@
 use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
+use std::time::Duration;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use anyhow::{ensure, Context, Result};
@@ -10,6 +11,7 @@ use wire_client::runner::Transport;
 use wire_client::scenario::FixtureVerb;
 use wire_client::{catalogue, compare, runner};
 
+use super::properties::{self, Violation};
 use super::transport::{MultiOperatorTransport, OperatorTransport};
 
 #[path = "../../../conformance/support/ratchet.rs"]
@@ -39,6 +41,7 @@ fn update_result(
     path: &Path,
     golden: &wire_client::trace::GoldenTrace,
     comparison: Option<&compare::Comparison>,
+    violations: &[Violation],
     now: u64,
 ) -> Result<()> {
     let _lock = REPORT.lock().unwrap();
@@ -81,6 +84,7 @@ fn update_result(
             "behavior": golden.scenario().behavior,
             "scenario_sha256": golden.trace().header.scenario_sha256,
             "comparison": comparison,
+            "properties": violations,
         }));
     }
     scenarios.sort_by(|a, b| a["id"].as_str().cmp(&b["id"].as_str()));
@@ -93,6 +97,7 @@ fn update_result(
 fn run_scenario(
     id: &str,
     setup: impl FnOnce(&Standalone, &wire_client::scenario::Scenario) -> Result<()>,
+    fresh_creature_probe: Option<u32>,
 ) -> Result<()> {
     let path = std::env::var_os("LYRACORE_CONFORMANCE_RESULT")
         .map(PathBuf::from)
@@ -103,7 +108,7 @@ fn run_scenario(
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?;
-    update_result(&path, &golden, None, now)?;
+    update_result(&path, &golden, None, &[], now)?;
     let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -127,7 +132,35 @@ fn run_scenario(
         now,
         &[],
     )?;
-    record_and_check(id, &path, &golden, now, &comparison)
+    if let Some(entry) = fresh_creature_probe {
+        shard.assert_call(
+            "debug_spawn_at_feet",
+            &[
+                &transport.character_guid().to_string(),
+                &entry.to_string(),
+                "3.0",
+            ],
+        );
+        let mut delivered = false;
+        for _ in 0..16 {
+            transport.receive(Duration::from_millis(50))?;
+            delivered = transport.batches().iter().any(|batch| {
+                batch
+                    .creates
+                    .values()
+                    .any(|context| context.newly_added && context.layer == 0)
+            });
+            if delivered {
+                break;
+            }
+        }
+        ensure!(
+            delivered,
+            "fresh creature was not delivered to the viewing Character"
+        );
+    }
+    let violations = properties::run(transport.batches())?;
+    record_and_check(id, &path, &golden, now, &comparison, &violations)
 }
 
 fn record_and_check(
@@ -136,8 +169,9 @@ fn record_and_check(
     golden: &wire_client::trace::GoldenTrace,
     now: u64,
     comparison: &compare::Comparison,
+    violations: &[Violation],
 ) -> Result<()> {
-    update_result(path, golden, Some(comparison), now)?;
+    update_result(path, golden, Some(comparison), violations, now)?;
     let report = serde_json::to_string_pretty(comparison)?;
     println!("{id}: {report}");
     let baseline = ratchet::Baseline::read(&core_root().join("conformance/tier1-baseline.json"))?;
@@ -148,6 +182,10 @@ fn record_and_check(
         &golden.trace().header.scenario_sha256,
         comparison,
     ))?;
+    ensure!(
+        violations.is_empty(),
+        "tier 1 property violations: {violations:#?}"
+    );
     Ok(())
 }
 
@@ -164,7 +202,7 @@ fn run_multi_scenario(
         .duration_since(UNIX_EPOCH)?
         .as_millis()
         .try_into()?;
-    update_result(&path, &golden, None, now)?;
+    update_result(&path, &golden, None, &[], now)?;
     let mut shard = Standalone::start(&format!("tier1-{}", id.replace('_', "-")));
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
@@ -182,7 +220,8 @@ fn run_multi_scenario(
         now,
         &[],
     )?;
-    record_and_check(id, &path, &golden, now, &comparison)
+    let violations = properties::run(&transport.batches())?;
+    record_and_check(id, &path, &golden, now, &comparison, &violations)
 }
 
 fn seed_visibility_world(
@@ -277,29 +316,35 @@ fn seed_visibility_world(
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn connection_identity_matches_its_golden_trace() -> Result<()> {
-    run_scenario("connection_identity", |_, _| Ok(()))
+    run_scenario("connection_identity", |_, _| Ok(()), None)
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
-    run_scenario("taxi_single_hop", |shard, scenario| {
-        for statement in super::taxi_route::statements(scenario)? {
-            shard.assert_sql(&statement);
-        }
-        shard.assert_call(
-            "import_terrain_chunks",
-            &[&super::taxi_route::terrain_chunks()],
-        );
-        Ok(())
-    })
+    run_scenario(
+        "taxi_single_hop",
+        |shard, scenario| {
+            for statement in super::taxi_route::statements(scenario)? {
+                shard.assert_sql(&statement);
+            }
+            shard.assert_call(
+                "import_terrain_chunks",
+                &[&super::taxi_route::terrain_chunks()],
+            );
+            Ok(())
+        },
+        None,
+    )
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
 fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
-    run_scenario("bank_slot_purchase", |shard, _| {
-        shard.assert_sql(
+    run_scenario(
+        "bank_slot_purchase",
+        |shard, _| {
+            shard.assert_sql(
             "INSERT INTO game_creature_template \
              (entry,name,subname,display_id,level,health,faction_template,npc_flags,unit_flags,\
               creature_type,creature_family,type_flags,rank,scale,base_attack_time_ms,money_min,\
@@ -307,8 +352,10 @@ fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
               pickpocket_loot_id,skin_loot_id,trainer_type,trainer_class) \
              VALUES (5099,'Bank fixture','',1,1,100,35,256,0,7,0,0,0,1,2000,0,0,1,100,0,0,0,0,0,0,0,0)",
         );
-        Ok(())
-    })
+            Ok(())
+        },
+        Some(5099),
+    )
 }
 
 #[test]
@@ -329,9 +376,9 @@ fn result_updates_preserve_other_scenarios_and_clear_failed_setup() -> Result<()
     let identity = catalogue::get("connection_identity")?;
     let taxi = catalogue::get("taxi_single_hop")?;
     let comparison = compare::compare(&identity, identity.trace(), &[])?;
-    update_result(&path, &identity, Some(&comparison), 1)?;
-    update_result(&path, &taxi, Some(&comparison), 2)?;
-    update_result(&path, &taxi, None, 3)?;
+    update_result(&path, &identity, Some(&comparison), &[], 1)?;
+    update_result(&path, &taxi, Some(&comparison), &[], 2)?;
+    update_result(&path, &taxi, None, &[], 3)?;
     let result: serde_json::Value = serde_json::from_slice(&std::fs::read(&path)?)?;
     assert_eq!(result["scenarios"].as_array().unwrap().len(), 1);
     assert_eq!(result["scenarios"][0]["id"], "connection_identity");

@@ -1,0 +1,184 @@
+mod client_view_consistency;
+mod create_kind_matches_freshness;
+mod private_fields_stay_private;
+
+use std::collections::BTreeMap;
+
+use anyhow::{bail, Context, Result};
+use serde::{Deserialize, Serialize};
+use wire_client::decode::{self, Field};
+
+pub use client_view_consistency::ClientViews;
+
+#[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
+pub struct Violation {
+    pub property: String,
+    pub recipient: u64,
+    pub guid: u64,
+    pub field: Option<u16>,
+    pub detail: String,
+}
+
+#[derive(Clone, Debug, Default)]
+pub struct Projection {
+    pub fields: BTreeMap<u16, u32>,
+    pub object_type: u8,
+    pub owner_guid: u64,
+    pub same_raid: bool,
+    pub special_info: bool,
+}
+
+#[derive(Clone, Copy, Debug)]
+pub struct CreateContext {
+    pub newly_added: bool,
+    pub layer: u8,
+    pub gameobject_type: u8,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Packet {
+    pub id: u64,
+    pub opcode: u16,
+    pub body: Vec<u8>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Batch {
+    pub recipient: u64,
+    pub reset: bool,
+    pub packets: Vec<Packet>,
+    pub projections: BTreeMap<u64, Projection>,
+    pub creates: BTreeMap<u64, CreateContext>,
+}
+
+#[derive(Clone, Debug)]
+pub struct Update {
+    pub kind: u8,
+    pub guid: u64,
+    pub object_type: Option<u8>,
+    pub fields: BTreeMap<u16, u32>,
+}
+
+fn unsigned(field: &Field) -> Result<u64> {
+    match field {
+        Field::Unsigned(value) | Field::Guid(value) => Ok(*value),
+        _ => bail!("expected unsigned update field"),
+    }
+}
+
+pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<Update>> {
+    if !matches!(opcode, 0x00a9 | 0x01f6) {
+        return Ok(Vec::new());
+    }
+    let decoded = decode::decode(opcode, body)?;
+    let Field::List(objects) = decoded.fields.get("objects").context("update objects")? else {
+        bail!("update objects are not a list");
+    };
+    let mut updates = Vec::new();
+    for object in objects {
+        let Field::Object(object) = object else {
+            bail!("update object is malformed");
+        };
+        let kind: u8 = unsigned(object.get("kind").context("update kind")?)?.try_into()?;
+        if matches!(kind, 4 | 5) {
+            let Field::List(guids) = object.get("guids").context("out of range GUIDs")? else {
+                bail!("out of range GUIDs are malformed");
+            };
+            for guid in guids {
+                updates.push(Update {
+                    kind,
+                    guid: unsigned(guid)?,
+                    object_type: None,
+                    fields: BTreeMap::new(),
+                });
+            }
+            continue;
+        }
+        let fields = match object.get("values") {
+            Some(Field::Object(values)) => values
+                .iter()
+                .map(|(name, value)| {
+                    Ok((
+                        name.strip_prefix("field_")
+                            .context("update field name")?
+                            .parse()?,
+                        unsigned(value)?.try_into()?,
+                    ))
+                })
+                .collect::<Result<BTreeMap<_, _>>>()?,
+            None => BTreeMap::new(),
+            _ => bail!("update values are malformed"),
+        };
+        updates.push(Update {
+            kind,
+            guid: unsigned(object.get("guid").context("update GUID")?)?,
+            object_type: object
+                .get("object_type")
+                .map(|value| Ok::<u8, anyhow::Error>(u8::try_from(unsigned(value)?)?))
+                .transpose()?,
+            fields,
+        });
+    }
+    Ok(updates)
+}
+
+pub fn check_private(recipient: u64, update: &Update, projection: &Projection) -> Vec<Violation> {
+    private_fields_stay_private::check(recipient, update, projection)
+}
+
+pub fn check_create_kind(
+    recipient: u64,
+    update: &Update,
+    context: Option<CreateContext>,
+) -> Vec<Violation> {
+    create_kind_matches_freshness::check(recipient, update, context)
+}
+
+pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
+    let mut views = BTreeMap::<u64, ClientViews>::new();
+    let mut known = BTreeMap::<(u64, u64), Projection>::new();
+    let mut violations = Vec::new();
+    for batch in batches {
+        if batch.reset {
+            views.remove(&batch.recipient);
+            known.retain(|(recipient, _), _| *recipient != batch.recipient);
+        }
+        for (&guid, projection) in &batch.projections {
+            known.insert((batch.recipient, guid), projection.clone());
+        }
+        let view = views.entry(batch.recipient).or_default();
+        for packet in &batch.packets {
+            for update in updates(packet.opcode, &packet.body)? {
+                if matches!(update.kind, 0 | 2 | 3) {
+                    if let Some(projection) = known.get(&(batch.recipient, update.guid)) {
+                        violations.extend(check_private(batch.recipient, &update, projection));
+                    } else {
+                        violations.push(Violation {
+                            property: private_fields_stay_private::NAME.into(),
+                            recipient: batch.recipient,
+                            guid: update.guid,
+                            field: None,
+                            detail: "update has no visibility context".into(),
+                        });
+                    }
+                }
+                violations.extend(check_create_kind(
+                    batch.recipient,
+                    &update,
+                    batch.creates.get(&packet.id).copied(),
+                ));
+                view.apply(&update);
+            }
+            if matches!(packet.opcode, 0x00aa | 0x0215) {
+                let decoded = decode::decode(packet.opcode, &packet.body)?;
+                if let Some(guid) = decoded.fields.get("guid") {
+                    view.remove(unsigned(guid)?);
+                }
+            }
+        }
+        violations.extend(view.check(batch.recipient, &batch.projections));
+    }
+    violations.sort();
+    violations.dedup();
+    Ok(violations)
+}

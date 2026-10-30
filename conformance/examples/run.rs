@@ -28,6 +28,16 @@ struct ScenarioResult {
     behavior: String,
     scenario_sha256: Sha256Digest,
     comparison: Comparison,
+    properties: Vec<PropertyViolation>,
+}
+
+#[derive(Deserialize, Serialize)]
+struct PropertyViolation {
+    property: String,
+    recipient: u64,
+    guid: u64,
+    field: Option<u16>,
+    detail: String,
 }
 
 #[derive(Serialize)]
@@ -39,6 +49,7 @@ struct RunOutput<'a> {
     conforms: bool,
     baseline: BaselineOutput,
     groups: Vec<Group>,
+    properties: &'a [PropertyViolation],
 }
 
 #[derive(Serialize)]
@@ -85,6 +96,7 @@ fn assemble<'a>(
     scenario_sha256: &Sha256Digest,
     comparison: &Comparison,
     baseline: &ratchet::Baseline,
+    properties: &'a [PropertyViolation],
 ) -> Result<RunOutput<'a>> {
     let current = ratchet::ScenarioBaseline::from_comparison(
         scenario,
@@ -130,6 +142,7 @@ fn assemble<'a>(
             regeneration,
         },
         groups,
+        properties,
     })
 }
 
@@ -231,6 +244,26 @@ fn text_output(output: &RunOutput<'_>) -> Result<String> {
             writeln!(text, "  actual: {}", serde_json::to_string(&record.actual)?)?;
         }
     }
+    writeln!(
+        text,
+        "\nProperties: {}",
+        if output.properties.is_empty() {
+            "pass"
+        } else {
+            "fail"
+        }
+    )?;
+    for violation in output.properties {
+        writeln!(
+            text,
+            "  {}: recipient {} object {} field {:?}: {}",
+            violation.property,
+            violation.recipient,
+            violation.guid,
+            violation.field,
+            violation.detail
+        )?;
+    }
     Ok(text)
 }
 
@@ -301,13 +334,14 @@ fn main() -> Result<()> {
         &entry.scenario_sha256,
         &entry.comparison,
         &baseline,
+        &entry.properties,
     )?;
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         print!("{}", text_output(&output)?);
     }
-    if !output.baseline.matches {
+    if !output.baseline.matches || !output.properties.is_empty() {
         std::process::exit(1);
     }
     Ok(())
@@ -367,6 +401,7 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            &[],
         )?;
         let text = text_output(&output)?;
         assert!(text.contains("vmangos: abcdef:src/game/Handlers/TaxiHandler.cpp :: WorldSession::HandleActivateTaxiOpcode"));
@@ -392,6 +427,7 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            &[],
         )?;
         let value: serde_json::Value =
             serde_json::from_str(&serde_json::to_string_pretty(&output)?)?;
@@ -442,6 +478,7 @@ mod tests {
             &Sha256Digest::of(b"scenario"),
             &comparison,
             &baseline,
+            &[],
         )?;
         let text = text_output(&output)?;
         assert!(text.contains("Tier 1 baseline: differs"));

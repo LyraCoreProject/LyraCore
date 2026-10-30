@@ -31,6 +31,14 @@ impl WorldEntity {
     pub(crate) fn insert(mut self, ctx: &ReducerContext) -> Self {
         self.stamp_simulation();
         let entity = ctx.db.game_world_entity().insert(self);
+        #[cfg(feature = "conformance_test_fixture")]
+        crate::native::record_conformance_birth(
+            ctx,
+            entity.guid,
+            entity.map_id,
+            entity.instance_id,
+            entity.cell,
+        );
         crate::aoi::entity_changed(ctx, None, &entity);
         entity
     }

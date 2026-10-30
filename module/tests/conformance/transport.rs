@@ -8,18 +8,23 @@ use serde_json::{json, value::RawValue};
 use wire_client::runner::{MultiTransport, Transport};
 use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
-pub struct OperatorTransport {
+use super::properties::{self, Batch, CreateContext, Packet, Projection};
+
+pub struct OperatorTransport<'a> {
+    shard: &'a Standalone,
     connection: ReducerConnection,
     guid: u64,
     fixtures: BTreeMap<String, u64>,
     opening: Vec<Observation>,
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
+    visible: BTreeSet<u64>,
+    batches: Vec<Batch>,
     virtual_micros: u64,
 }
 
-impl OperatorTransport {
-    pub fn prepare(shard: &Standalone, scenario: &Scenario) -> Result<Self> {
+impl<'a> OperatorTransport<'a> {
+    pub fn prepare(shard: &'a Standalone, scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
         let FixtureVerb::Character {
             name,
@@ -59,7 +64,7 @@ impl OperatorTransport {
         Ok(transport)
     }
 
-    fn connect(shard: &Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
+    fn connect(shard: &'a Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
         let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
         connection
             .call("native_world_open", json!([42]))
@@ -69,23 +74,129 @@ impl OperatorTransport {
             .call("debug_native_enter_world", json!([guid]))
             .map_err(|e| anyhow!(e))?;
         let mut transport = Self {
+            shard,
             delivery: Delivery::new(connection.connection_id()),
             connection,
             guid,
             fixtures,
             opening: Vec::new(),
             pending: VecDeque::new(),
+            visible: BTreeSet::new(),
+            batches: Vec::new(),
             virtual_micros: 0,
         };
         let setup = transport.connection.drain_packets();
-        transport.opening = transport
-            .delivery
-            .route_rows(setup)?
+        let opening = transport.delivery.route_rows(setup)?;
+        transport.capture(&opening)?;
+        transport.opening = opening
             .into_iter()
-            .map(|(opcode, body)| Observation::opening(opcode, &body))
+            .map(|packet| Observation::opening(packet.opcode, &packet.body))
             .collect();
         Ok(transport)
     }
+
+    pub fn batches(&self) -> &[Batch] {
+        &self.batches
+    }
+
+    fn capture(&mut self, packets: &[Packet]) -> Result<()> {
+        if packets.is_empty() {
+            return Ok(());
+        }
+        for packet in packets {
+            for update in properties::updates(packet.opcode, &packet.body)? {
+                match update.kind {
+                    2 | 3 => {
+                        self.visible.insert(update.guid);
+                    }
+                    4 => {
+                        self.visible.remove(&update.guid);
+                    }
+                    _ => (),
+                }
+            }
+            if matches!(packet.opcode, 0x00aa | 0x0215) {
+                let decoded = wire_client::decode::decode(packet.opcode, &packet.body)?;
+                if let Some(wire_client::decode::Field::Guid(guid)) = decoded.fields.get("guid") {
+                    self.visible.remove(guid);
+                }
+            }
+        }
+        let mut project_guids = self.visible.clone();
+        for row in self.shard.query_rows(&format!(
+            "SELECT entity_guid FROM game_aoi_grant WHERE viewer_guid = {}",
+            self.guid
+        )) {
+            project_guids.insert(row["entity_guid"].parse()?);
+        }
+        self.connection
+            .call(
+                "debug_native_project",
+                json!([project_guids.into_iter().collect::<Vec<_>>()]),
+            )
+            .map_err(|error| anyhow!(error))?;
+        let mut projections = BTreeMap::new();
+        for row in self
+            .shard
+            .query_rows("SELECT * FROM game_native_conformance_projection")
+        {
+            let guid: u64 = row["guid"].parse()?;
+            let mut fields = BTreeMap::new();
+            for body in [&row["body_hex"], &row["extra_hex"]] {
+                if body.is_empty() {
+                    continue;
+                }
+                let bytes = decode_hex(body)?;
+                for update in properties::updates(0x00a9, &bytes)? {
+                    fields.extend(update.fields);
+                }
+            }
+            projections.insert(
+                guid,
+                Projection {
+                    fields,
+                    object_type: row["object_type"].parse()?,
+                    owner_guid: row["owner_guid"].parse()?,
+                    same_raid: row["same_raid"].parse()?,
+                    special_info: false,
+                },
+            );
+        }
+        let creates = self
+            .shard
+            .query_rows("SELECT * FROM game_native_conformance_create")
+            .into_iter()
+            .map(|row| {
+                Ok((
+                    row["packet_id"].parse()?,
+                    CreateContext {
+                        newly_added: row["newly_added"].parse()?,
+                        layer: row["layer"].parse()?,
+                        gameobject_type: row["gameobject_type"].parse()?,
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        self.batches.push(Batch {
+            recipient: self.guid,
+            reset: self.batches.is_empty(),
+            packets: packets.to_vec(),
+            projections,
+            creates,
+        });
+        Ok(())
+    }
+}
+
+fn decode_hex(encoded: &str) -> Result<Vec<u8>> {
+    ensure!(
+        encoded.is_ascii() && encoded.len() % 2 == 0,
+        "invalid packet hex"
+    );
+    (0..encoded.len())
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&encoded[offset..offset + 2], 16).map_err(Into::into))
+        .collect()
 }
 
 fn prepare_character(
@@ -225,7 +336,7 @@ fn prepare_fixtures(
     Ok(fixtures)
 }
 
-impl Transport for OperatorTransport {
+impl Transport for OperatorTransport<'_> {
     fn now(&self) -> Duration {
         Duration::from_micros(self.virtual_micros)
     }
@@ -268,7 +379,13 @@ impl Transport for OperatorTransport {
                 return Ok(Some(packet));
             }
             let rows = self.connection.drain_packets();
-            self.pending.extend(self.delivery.route_rows(rows)?);
+            let packets = self.delivery.route_rows(rows)?;
+            self.capture(&packets)?;
+            self.pending.extend(
+                packets
+                    .into_iter()
+                    .map(|packet| (packet.opcode, packet.body)),
+            );
             if let Some(packet) = self.pending.pop_front() {
                 return Ok(Some(packet));
             }
@@ -289,15 +406,16 @@ impl Transport for OperatorTransport {
     }
 }
 
-struct MultiCharacter {
+struct MultiCharacter<'a> {
     guid: u64,
     fixtures: BTreeMap<String, u64>,
-    transport: Option<OperatorTransport>,
+    transport: Option<OperatorTransport<'a>>,
+    completed: Vec<Batch>,
 }
 
 pub struct MultiOperatorTransport<'a> {
     shard: &'a Standalone,
-    characters: BTreeMap<String, MultiCharacter>,
+    characters: BTreeMap<String, MultiCharacter<'a>>,
     virtual_micros: u64,
 }
 
@@ -340,6 +458,7 @@ impl<'a> MultiOperatorTransport<'a> {
                     guid,
                     fixtures,
                     transport: None,
+                    completed: Vec::new(),
                 },
             );
         }
@@ -363,13 +482,28 @@ impl<'a> MultiOperatorTransport<'a> {
             .collect()
     }
 
-    fn character(&self, id: &str) -> Result<&MultiCharacter> {
+    pub fn batches(&self) -> Vec<Batch> {
+        self.characters
+            .values()
+            .flat_map(|character| {
+                character.completed.iter().cloned().chain(
+                    character
+                        .transport
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|transport| transport.batches().iter().cloned()),
+                )
+            })
+            .collect()
+    }
+
+    fn character(&self, id: &str) -> Result<&MultiCharacter<'a>> {
         self.characters
             .get(id)
             .context("unknown scenario Character")
     }
 
-    fn transport(&mut self, id: &str) -> Result<&mut OperatorTransport> {
+    fn transport(&mut self, id: &str) -> Result<&mut OperatorTransport<'a>> {
         self.characters
             .get_mut(id)
             .context("unknown scenario Character")?
@@ -426,10 +560,11 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             .characters
             .get_mut(character)
             .context("unknown scenario Character")?;
-        ensure!(
-            entry.transport.take().is_some(),
-            "scenario Character is disconnected"
-        );
+        let transport = entry
+            .transport
+            .take()
+            .context("scenario Character is disconnected")?;
+        entry.completed.extend_from_slice(transport.batches());
         Ok(())
     }
 
@@ -471,7 +606,7 @@ impl Delivery {
         }
     }
 
-    fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<(u16, Vec<u8>)>> {
+    fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<Packet>> {
         let mut rows = rows
             .iter()
             .map(|row| serde_json::from_str::<Row>(row.get()))
@@ -486,9 +621,16 @@ impl Delivery {
         Ok(packets)
     }
 
-    fn route(&mut self, row: Row) -> Result<Option<(u16, Vec<u8>)>> {
-        let Row(_, (audience, recipient), (option, opcode), body, close, not_before, authenticated) =
-            row;
+    fn route(&mut self, row: Row) -> Result<Option<Packet>> {
+        let Row(
+            id,
+            (audience, recipient),
+            (option, opcode),
+            body,
+            close,
+            not_before,
+            authenticated,
+        ) = row;
         let addressed = match audience {
             0 => serde_json::from_str::<(u128,)>(recipient.get())?.0 == self.connection,
             1 => {
@@ -541,7 +683,11 @@ impl Delivery {
                     .step_by(2)
                     .map(|offset| u8::from_str_radix(&body[offset..offset + 2], 16))
                     .collect::<std::result::Result<Vec<_>, _>>()?;
-                Ok(Some((serde_json::from_str(opcode.get())?, bytes)))
+                Ok(Some(Packet {
+                    id,
+                    opcode: serde_json::from_str(opcode.get())?,
+                    body: bytes,
+                }))
             }
             1 => Ok(None),
             _ => bail!("invalid opcode option {option}"),
@@ -563,7 +709,11 @@ fn delivery_follows_grants_revoke_clear_and_excluded_connections() {
         delivery
             .route(serde_json::from_str(&grant).unwrap())
             .unwrap(),
-        Some((477, vec![7, 0, 0, 0]))
+        Some(Packet {
+            id: 1,
+            opcode: 477,
+            body: vec![7, 0, 0, 0]
+        })
     );
     assert!(delivery
         .route(serde_json::from_str(&broadcast).unwrap())
@@ -628,6 +778,17 @@ fn delivery_uses_packet_ids_before_applying_grants() {
     .collect();
     assert_eq!(
         delivery.route_rows(rows).unwrap(),
-        [(169, vec![2]), (477, vec![3])]
+        [
+            Packet {
+                id: 2,
+                opcode: 169,
+                body: vec![2]
+            },
+            Packet {
+                id: 3,
+                opcode: 477,
+                body: vec![3]
+            }
+        ]
     );
 }
