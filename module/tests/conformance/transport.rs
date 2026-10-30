@@ -385,13 +385,13 @@ struct MultiCharacter {
     completed: Vec<Batch>,
 }
 
-pub struct MultiOperatorTransport {
+pub struct MultiOperatorTransport<'a> {
     shard: &'a Standalone,
     characters: BTreeMap<String, MultiCharacter>,
     virtual_micros: u64,
 }
 
-impl<'a> MultiOperatorTransport {
+impl<'a> MultiOperatorTransport<'a> {
     pub fn prepare(shard: &'a Standalone, scenario: &Scenario) -> Result<Self> {
         scenario.validate()?;
         ensure!(
@@ -494,7 +494,7 @@ impl<'a> MultiOperatorTransport {
     }
 }
 
-impl MultiTransport for MultiOperatorTransport {
+impl MultiTransport for MultiOperatorTransport<'_> {
     fn now(&self) -> Duration {
         Duration::from_micros(self.virtual_micros)
     }
