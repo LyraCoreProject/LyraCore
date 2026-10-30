@@ -2,10 +2,12 @@ import copy
 import importlib.util
 import json
 import os
+import re
 from pathlib import Path
 import shutil
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 SPEC = importlib.util.spec_from_file_location('audit', os.environ.get(
@@ -158,6 +160,68 @@ class ModuleSchema(unittest.TestCase):
                 self.assertNotEqual(audit.schema_fingerprint(original), audit.schema_fingerprint(changed))
 
 
+class ImportModuleCoverage(unittest.TestCase):
+    def test_reachable_modules_are_hashed(self):
+        hashed = set()
+        for path in audit.import_contract_paths():
+            hashed.update(path.rglob('*') if path.is_dir() else [path])
+        pending = [audit.ROOT / name for name in audit.IMPORT_CONTRACT
+                   if name.startswith('module/src/') and name.endswith('.rs')
+                   and name != 'module/src/lib.rs']
+        pending.extend(path for path in hashed if path.suffix == '.rs'
+                       and path.is_relative_to(audit.ROOT / 'module/src')
+                       and path.name != 'lib.rs')
+        visited = set()
+        while pending:
+            path = pending.pop()
+            if path in visited:
+                continue
+            visited.add(path)
+            source = re.sub(r'/\*.*?\*/|//[^\n]*', '', path.read_text(), flags=re.DOTALL)
+            for declaration in re.finditer(
+                    r'((?:#\[[^\n]+\]\s*)*)(?:pub(?:\([^)]*\))?\s+)?mod\s+(\w+)\s*;',
+                    source):
+                attributes, name = declaration.groups()
+                explicit = re.search(r'path\s*=\s*"([^"]+)"', attributes)
+                directory = path.parent if path.name == 'mod.rs' else path.with_suffix('')
+                candidates = ([path.parent / explicit[1]] if explicit else
+                              [directory / f'{name}.rs', directory / name / 'mod.rs'])
+                children = [child for child in candidates if child.is_file()]
+                self.assertEqual(len(children), 1, f'{path}: module {name}')
+                child = children[0].resolve()
+                self.assertIn(child, hashed, f'unhashed child module of {path}')
+                pending.append(child)
+
+    def test_coverage_check_detects_an_unhashed_seed_child(self):
+        paths = [path for path in audit.import_contract_paths()
+                 if path != audit.ROOT / 'module/src/seed']
+        with patch.object(audit, 'import_contract_paths', return_value=paths):
+            with self.assertRaisesRegex(AssertionError, 'unhashed child module'):
+                self.test_reachable_modules_are_hashed()
+
+    def test_child_directories_and_external_module_paths_are_hashed_recursively(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            root = Path(directory)
+            (root / 'seed.rs').write_text('mod fixtures;')
+            (root / 'seed').mkdir()
+            (root / 'seed/fixtures.rs').write_text('#[path = "../shared.rs"]\nmod shared;')
+            (root / 'shared.rs').write_text('#[path = "external/mod.rs"]\nmod external;')
+            (root / 'external').mkdir()
+            (root / 'external/mod.rs').write_text('mod leaf;')
+            (root / 'external/leaf.rs').write_text('original')
+            (root / 'shared').mkdir()
+            nested = root / 'shared/nested.rs'
+            nested.write_text('original')
+            with patch.object(audit, 'ROOT', root), \
+                    patch.object(audit, 'IMPORT_CONTRACT', ('seed.rs',)):
+                before = audit.tree_hash(audit.import_contract_paths())
+                for path in [nested, root / 'external/leaf.rs']:
+                    path.write_text('changed')
+                    self.assertNotEqual(before, audit.tree_hash(audit.import_contract_paths()))
+                    path.write_text('original')
+
+
 class ScenarioKey(unittest.TestCase):
     def test_only_import_inputs_invalidate_snapshot(self):
         audit.SCRATCH.mkdir(parents=True, exist_ok=True)
@@ -179,7 +243,8 @@ class ScenarioKey(unittest.TestCase):
             gameplay.parent.mkdir(parents=True)
             gameplay.write_text('first gameplay commit')
             for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
-                         'module/src/seed.rs', 'module/src/package_import/creatures.rs']:
+                         'module/src/seed.rs', 'module/src/seed/fixtures.rs',
+                         'module/src/operations.rs', 'module/src/package_import/creatures.rs']:
                 path = root / name
                 path.parent.mkdir(parents=True, exist_ok=True)
                 path.write_text('original')
@@ -197,7 +262,8 @@ class ScenarioKey(unittest.TestCase):
                 gameplay.write_text('second gameplay commit')
                 self.assertEqual(first, audit.scenario_key(harness, client, 'schema')[0])
                 for name in ['Cargo.lock', 'crates/lyracore-shared/src/nav.rs',
-                             'module/src/seed.rs', 'module/src/package_import/creatures.rs']:
+                             'module/src/seed.rs', 'module/src/seed/fixtures.rs',
+                             'module/src/operations.rs', 'module/src/package_import/creatures.rs']:
                     with self.subTest(import_input=name):
                         path = root / name
                         path.write_text('changed')
@@ -699,6 +765,27 @@ class ReferenceOwnership(unittest.TestCase):
         self.assertEqual(self.world, 'clean world')
         self.assertFalse(self.ids)
         self.assertFalse(self.marker.exists())
+
+
+class Tier1BuildDirectory(unittest.TestCase):
+    def test_agreement_overrides_the_deployment_target_directory(self):
+        audit.SCRATCH.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(dir=audit.SCRATCH) as directory:
+            cache = Path(directory)
+            work = MagicMock()
+            work.__enter__.return_value = cache
+            with patch.object(audit, 'SCENARIO_CACHE', cache), \
+                    patch.object(audit, 'git', return_value=''), \
+                    patch.object(audit, 'module_schema_hash', return_value='schema'), \
+                    patch.object(audit, 'scenario_key', return_value=('key', {})), \
+                    patch.object(audit, 'scenario_work', return_value=work), \
+                    patch.dict(os.environ, CARGO_TARGET_DIR=str(cache / 'deployment')), \
+                    patch.object(audit.subprocess, 'run', side_effect=RuntimeError('child boundary')) as run:
+                args = SimpleNamespace(client_data=cache, agreement=True, scenario='taxi_single_hop')
+                with self.assertRaisesRegex(RuntimeError, 'child boundary'):
+                    audit.run_scenario(args, cache, cache, 'core')
+            self.assertEqual(run.call_args.kwargs['env']['CARGO_TARGET_DIR'],
+                             str(cache / 'tier1-target'))
 
 
 class ComparisonOutput(unittest.TestCase):

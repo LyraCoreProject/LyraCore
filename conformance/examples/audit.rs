@@ -122,6 +122,7 @@ fn check(directory: &Path, scenario: &str) -> Result<()> {
             "behavior": golden.scenario().behavior.clone(),
             "scenario_sha256": golden.trace().header.scenario_sha256.clone(),
             "comparison": comparison,
+            "properties": [],
         }],
     });
     std::fs::write(directory.join("result.json"), serde_json::to_vec(&result)?)?;
@@ -376,6 +377,7 @@ mod tests {
         let baseline: serde_json::Value =
             serde_json::from_slice(&std::fs::read(directory.join("baseline.json"))?)?;
         assert_eq!(result["scenarios"][0]["id"], scenario);
+        assert_eq!(result["scenarios"][0]["properties"], serde_json::json!([]));
         assert_eq!(
             baseline["scenarios"][0]["harness_revision"],
             report.harness_revision

@@ -575,7 +575,9 @@ set. The runner waits for its Native Host to exit before replacing or deleting d
 process ownership before startup and checks the CLI's PID identities before stopping it. It retains
 those records across a shutdown timeout, even when the CLI clears its own records. Native Host build
 output survives gameplay checkout changes; `dev up` still checks the current Host source and
-patches.
+patches. Tier 1 agreement builds use a separate persistent Cargo target directory at
+`scenario-audit/tier1-target/` under the audit scratch directory. This keeps their WASM feature set
+from replacing deployment build output between checks.
 
 The Reference Server marker records a unique Docker Compose project and container IDs before any
 service starts. The clean baseline comes from the pinned, checksum-verified database archive in a
@@ -609,7 +611,12 @@ Deltas. `IMPORT_CONTRACT` in `audit.py` names the source paths that produce the 
 includes the importer sources, scripts and manifests; shared, Package Delta and protocol crates; the
 workspace manifest, lockfile and toolchain; and Module initialization, import reducers and their
 row-building dependencies. Initialization data includes the `game_config` values in `seed.rs`.
-Publishing onto a restored snapshot does not rerun `init`.
+Publishing onto a restored snapshot does not rerun `init`. The contract includes `operations.rs`
+and automatically includes each listed Rust file's child-module directory, including
+`seed/fixtures.rs`. It follows external `#[path]` module declarations recursively. Crate roots
+such as `module/src/lib.rs` are hashed as files; their ordinary declarations do not pull unrelated
+gameplay modules into the contract. The module-coverage test walks the import entry modules and
+checks that every reachable child module is hashed.
 
 Files shared by import and gameplay are conservatively included in full. Taxi request handling and
 other gameplay outside these paths do not invalidate the snapshot. Extend the contract when an

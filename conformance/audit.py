@@ -165,8 +165,8 @@ IMPORT_CONTRACT = (
     'importer/src', 'importer/scripts', 'importer/manifests', 'importer/Cargo.toml',
     'crates/lyracore-shared', 'crates/lyracore-package-delta', 'crates/lyracore-protocol',
     'module/Cargo.toml', 'module/build.rs', 'module/src/lib.rs', 'module/src/debug',
-    'module/src/seed.rs', 'module/src/config.rs',
-    'module/src/package_import.rs', 'module/src/package_import', 'module/src/import_meta.rs',
+    'module/src/seed.rs', 'module/src/config.rs', 'module/src/operations.rs',
+    'module/src/package_import.rs', 'module/src/import_meta.rs',
     'module/src/terrain.rs', 'module/src/nav.rs', 'module/src/vmap.rs', 'module/src/go_model.rs',
     'module/src/go_collider.rs', 'module/src/region.rs', 'module/src/creatures',
     'module/src/gameobject.rs', 'module/src/items',
@@ -179,15 +179,43 @@ IMPORT_CONTRACT = (
 )
 
 
+def import_contract_paths():
+    paths = {ROOT / path for path in IMPORT_CONTRACT}
+    missing = [str(path) for path in sorted(paths) if not path.exists()]
+    if missing:
+        raise RuntimeError('import contract paths are missing: ' + ', '.join(missing))
+    pending = list(paths)
+    scanned = set()
+    while pending:
+        path = pending.pop()
+        if path in scanned:
+            continue
+        scanned.add(path)
+        if path.is_dir():
+            pending.extend(path.rglob('*.rs'))
+        elif path.suffix == '.rs':
+            children = path.parent if path.name == 'mod.rs' else path.with_suffix('')
+            if children.is_dir():
+                paths.add(children)
+                pending.append(children)
+            # #[path] is relative to the source file for external module declarations.
+            for relative in re.findall(
+                    r'^\s*#\[path\s*=\s*"([^"\n]+)"\]\s*'
+                    r'(?:#\[[^\n]+\]\s*)*(?:pub(?:\([^)]*\))?\s+)?mod\s+\w+\s*;',
+                    path.read_text(), re.MULTILINE):
+                child = (path.parent / relative).resolve()
+                if not child.is_relative_to(ROOT) or not child.is_file():
+                    raise RuntimeError(f'import module path is missing or outside the checkout: {child}')
+                paths.add(child)
+                pending.append(child)
+    return sorted(paths)
+
+
 def scenario_key(harness, client_data, schema_hash):
     pins = json.loads((harness / 'adapters/vmangos/pins.json').read_text())
     with timed('client data fingerprint'):
         client_hash = client_fingerprint(client_data)
-    paths = [ROOT / path for path in IMPORT_CONTRACT]
-    missing = [str(path) for path in paths if not path.exists()]
-    if missing:
-        raise RuntimeError('import contract paths are missing: ' + ', '.join(missing))
-    contract = tree_hash(paths)
+    contract = tree_hash(import_contract_paths())
     key = dict(import_contract_sha256=contract, module_schema_sha256=schema_hash,
                vmangos_database_commit=pins['database_commit'],
                cli_revision=(ROOT / '.lyracore-cli-rev').read_text().strip(),
@@ -1059,6 +1087,7 @@ def run_scenario(args, harness, target, core_commit):
                 tier1 = subprocess.run([str(ROOT / 'conformance/run'), args.scenario, '--json',
                                         '--result', str(work / 'tier1.json')],
                                        cwd=ROOT, env=dict(os.environ,
+                                                          CARGO_TARGET_DIR=str(SCENARIO_CACHE / 'tier1-target'),
                                                           LYRACORE_CONFORMANCE_SCRATCH=str(SCRATCH / 'tier1')),
                                        capture_output=True, text=True)
             if tier1.returncode not in [0, 1] or not (work / 'tier1.json').is_file():

@@ -354,14 +354,14 @@ fn main() -> Result<()> {
     let output = RunOutput {
         properties: &entry.properties,
         ..assemble(
-        &scenario,
-        &behavior.id,
-        &behavior.vmangos,
-        &result.harness_revision,
-        &entry.scenario_sha256,
-        &entry.comparison,
-        source,
-    )?
+            &scenario,
+            &behavior.id,
+            &behavior.vmangos,
+            &result.harness_revision,
+            &entry.scenario_sha256,
+            &entry.comparison,
+            source,
+        )?
     };
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
