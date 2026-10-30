@@ -9,7 +9,8 @@ def check_operator_items(host):
     assert selection.read()[0] == 0x1ee
     template = host.sql('SELECT * FROM game_item_template WHERE entry = 25')[0]
     fields = dict(zip([column['name']['some'] for column in template['schema']['elements']], template['rows'][0]))
-    del fields['entry']
+    for column in ['entry'] + [f'spellppmrate_{slot}' for slot in range(1, 6)]:
+        del fields[column]
     fields.update(name='Operator tunic', **{'class': 4, 'subclass': 1, 'inventory_type': 5})
     host.restore('game_item_template', 'entry >= 5200500 AND entry <= 5999999')
     wearer.collect()
