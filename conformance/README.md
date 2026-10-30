@@ -135,7 +135,7 @@ values. Core needs no feature override.
 Run tier 1 with the disposable Shard commands in [testing](../docs/testing.md#conformance).
 The tier 1 runner supports schema 3 single-Character scenarios and schema 4 named-Character
 scenarios. Schema 4 uses one fixture connection and Account per Character. All connections share
-the same virtual clock, and each receives only packets addressed to it. Reconnecting a Character
+the same virtual clock with a fixed starting timestamp, and each receives only packets addressed to it. Reconnecting a Character
 keeps its GUID. `bank_slot_purchase` uses a synthetic friendly banker template with NPC flag
 `0x100`; `two_character_visibility` checks each recipient's peer CREATE update.
 The pinned `run_on` builds step observations with `Observation::from_frame_with_rules`, so
@@ -151,6 +151,67 @@ every entry, run all tier 1 scenarios, then `./conformance/baseline`. Both forms
 harness revision and scenario hashes before writing the canonical file.
 Review the changed signatures with the behavior change. This baseline does not change comparator
 tags, scoreboard pass/fail or the Conformance Audit.
+
+### Global tier 1 properties
+
+Every tier 1 run checks each recipient's candidate update stream, including opening packets and
+updates outside recorded checkpoints. `./conformance/run` prints property violations and includes
+them in `properties` in its JSON result. A violation fails the tier 1 test and the command even
+when the Golden Trace signatures still match the baseline.
+
+The checks live in `conformance/support/properties/`, one module per stable property name:
+
+- `private_fields_stay_private` checks CREATE and VALUES masks against vmangos's 1.12.1
+  [update-field flags](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/UpdateFields_1_12_1.h)
+  and [recipient rules](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp).
+  A Character sees its private fields, an item's or pet's owner
+  sees owner-only fields, and members of the same Party or Raid see group-only fields. The Module
+  does not implement vmangos's Empathy aura or debug target-info cheat, so neither grants special-info
+  visibility in tier 1. Padding marked `UF_FLAG_NONE` is never sendable, including to self.
+- `client_view_consistency` applies each CREATE and partial VALUES update to the recipient's
+  accumulated view. An omitted field keeps its previous value. After a reducer's delivery batch,
+  the view must equal a fresh full projection at that moment for every visible object. The
+  `conformance_test_fixture` reducer builds that projection with the recipient's CREATE
+  visibility rules. This checks incremental updates against the full projection; it does not
+  establish that the projection matches 1.12.1. The Golden Trace comparison checks recorded
+  moments against the Reference Server. The runner captures every connected recipient after
+  each request, connection change and virtual-clock step, including recipients with no packets.
+  The hook discovers visible objects from AOI Grants and owned items, so an omitted CREATE or
+  entire VALUES packet cannot remove the object from the check. Packets from one reducer form
+  one batch because a CREATE and its supplemental VALUES describe one committed state.
+  Projection rows are events returned by that reducer on the existing WebSocket. Capture uses
+  only that call's rows, while buffering CREATE context across earlier transactions. Each call
+  still enumerates AOI Grants and owned items. The fixture compares all codec inputs with the
+  previous inputs for that connection and object before rebuilding an encoding. These disposable
+  cache keys use derived Debug text plus float bits where update fields carry floats. They are
+  equality keys, not hashes or persisted evidence. Entity movement-block inputs are neutralized
+  because this property compares update fields. Transport projections remain time-dependent.
+  Unchanged rows carry an empty body to reuse the previous decoded fields. Source changes therefore
+  trigger a fresh projection even when no packet was delivered. Every delivered update is checked
+  against the current projection; objects with neither changed fields nor an update reuse their
+  previous comparison. Visibility membership is checked on every batch.
+  Clock advancement and the receiving Character's projection share one reducer call. Other connected
+  recipients are captured once after that tick. Set `LYRACORE_CONFORMANCE_FULL_PROJECTION=1` on
+  `./conformance/run <scenario>` to rebuild, decode and compare every projection for an equivalence
+  check. This mode uses the same visibility discovery and batch boundaries.
+- `create_kind_matches_freshness` checks kind 3 only when the object was newly added to the world
+  while the recipient was viewing it, as vmangos's
+  [Map::Add](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Maps/Map.cpp)
+  and [Object.cpp](https://raw.githubusercontent.com/vmangos/core/d9173eca3ea08dd985c52dabbcc826898d1d0b77/src/game/Objects/Object.cpp)
+  do. A known object entering view uses kind 2. Characters,
+  Transports, elevators and moving Transports use kind 2 as vmangos does. The fixture records
+  which connected AOI viewers existed when each object entered the world, then joins that fact
+  to each recipient packet id in the same transaction. Later sightings use kind 2. The check
+  does not take freshness from the CREATE encoder. The bank fixture also spawns a creature
+  after the recorded steps to exercise kind 3 without changing Golden Trace observations.
+  It also spawns a door, opens it and closes it so consistency checks exercise an explicit
+  zero-valued `GAMEOBJECT_STATE` update.
+
+The projection reducer and its private tables exist only with `conformance_test_fixture`.
+`native_debug_gate` checks that a build with only `debug_reducers` exports none of them. To add a
+property after a review finds a broken invariant, add one named module, a hand-built violating
+stream test, and a scratch reversal of the historical fix that makes a tier 1 run fail. Keep
+property failures separate from Golden Trace differences and the Tier 1 baseline.
 
 ### Automated harness pin proposals
 
@@ -202,8 +263,9 @@ then prints differences grouped by signature. Each record shows the expected and
 values and the comparator rule's reason. The Behavior's vmangos commit, path and symbol come from
 the Feature Ledger. `Golden Trace` reports the comparator's rule result; `Tier 1 baseline` reports
 exact signature and provenance equality. The command exits with code 1 when the baseline differs
-and code 2 when `cargo` cannot start or the test produces no completed comparison. In the latter
-case it prints the test diagnostic. Code 0 means the run completed and the Tier 1 baseline matches.
+or a property fails, and code 2 when `cargo` cannot start or the test produces no completed
+comparison. In the latter case it prints the test diagnostic. Code 0 means the run completed,
+all properties passed, and the Tier 1 baseline matches.
 Taxi can exit successfully while its known rule differences remain visible.
 
 `--json` writes one schema version 1 object to stdout. On setup failure it writes an error object
@@ -215,6 +277,7 @@ Groups sort rule before data, then by signature. Records retain comparator order
 | `schema_version` | `1` |
 | `scenario`, `behavior` | Catalogue scenario and Feature Ledger Behavior ids |
 | `vmangos` | Ledger source object with `commit`, `path` and `symbol` |
+| `properties` | Property violations with stable name, recipient, object GUID, field and detail; empty on success |
 | `conforms` | True when the comparator reports no rule differences |
 | `baseline.matches` | True when the current provenance and rule and data signature sets equal the Tier 1 baseline |
 | `baseline.regeneration.rule`, `.data` | Sorted `added` and `removed` signature arrays that regeneration would write |
@@ -335,7 +398,8 @@ when no scenario exists. An implementer whose tier 1 result passes but whose aud
 differences reproduces them with `./conformance/audit --scenario <id> --check`. An audit-only difference usually also means
 the tier 1 fixture misses something; a scenario author can fix that fixture.
 Run a tier 1 item's `next_command` from the repo root. Exit code 0 means its signature set still
-matches the Tier 1 baseline, 1 means it changed, and 2 means setup failed before comparison.
+matches the Tier 1 baseline and all properties passed. Code 1 means a baseline change or property
+failure, and 2 means setup failed before comparison.
 After an improvement, run `./conformance/baseline <scenario>`, then review the changed
 signatures. For an audit item, replace `/path/to/client/Data` in `next_command` and check its
 `prerequisites`. Implementer items run one scenario without a report. Evidence refresh items use
@@ -360,8 +424,8 @@ Each system gives `behaviors`, `with_scenario`, `without_scenario`, `tier1_pass`
 `scenarios`, `dependencies`, `required_rungs`, `scope_verification`, `tier1`, `audit`, `real_client`, `claimed_opcodes`,
 `unavailable` and `known_gaps`. Tier cells have `state`, the text `display`, and a summary when
 measured. State values are `no_scenario`, `not_run`, `stale`, `different`, `unverified`,
-`unstable_reference` and `match`. Summaries retain separate rule and data signatures and raw
-record counts. Spell counts give build, source path or missing expected path, and per-class
+`unstable_reference`, `property_violations` and `match`. Summaries retain separate rule and data
+signatures and raw record counts. Spell counts give build, source path or missing expected path, and per-class
 trainable, supported-kind and unsupported-kind counts. Open-work items give `behavior`, `system`,
 `kind`, `reproduce_with`, `next_command`, `prerequisites` and the three numeric ranking inputs. `kind` is
 `scenario_author`, `implementer`, `scope_verification` or `evidence_refresh`. The `open_signatures_or_gaps` ranking input
@@ -382,10 +446,10 @@ under `conformance/reports/` with the greatest `recorded_at_unix_ms`. Each audit
 Missing default inputs show `not run`; Behaviors with no scenario show `no scenario`. A missing
 explicit input or malformed report fails the command. A changed core, harness revision
 or scenario hash shows `stale`. A descendant core commit that changes only `conformance/reports/`
-remains current, so committing the report does not invalidate its measurement. A pass requires every scenario listed by the Behavior. Any rule
-difference, including a counted Deliberate Deviation, prevents a pass. Rule differences in the Reference Server
-comparison also prevent an audit pass. A matching run made with
-uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
+remains current, so committing the report does not invalidate its measurement. A pass requires
+every scenario listed by the Behavior. Any rule difference, including a counted Deliberate
+Deviation, or any tier 1 property violation prevents a pass. Rule differences in the Reference
+Server comparison also prevent an audit pass. A matching run made with uncommitted changes shows `unverified (dirty tree)` and contributes no pass to system totals.
 Real-client cells come only from the ledger, never from a report.
 
 Counts use unique opcode values. The denominator is every row of `client-requests-5875.tsv`.
@@ -400,7 +464,9 @@ Neither opcode claims nor these source counts prove conformance.
 
 Both tiers retain the complete harness `Comparison`. Each record requires the comparator's
 `classification` tag, `rule` or `data`. There is no separate `data_differences` array. Version 1
-results lack tags and must be rerun. Summary counts never supply classification.
+results lack tags and must be rerun. Tier 1 results without `properties` must also be rerun.
+Summary counts never supply classification. Property violations have their own nonpassing state
+and do not enter comparator signature counts.
 
 A signature is `(rule, character, checkpoint, stream, opcode, field_path)`. `character` is absent
 for single-Character scenarios. Packet indices, reasons and values do not belong to it. The
@@ -421,6 +487,7 @@ duplicate results and malformed reports fail before freshness checks.
 | `scenarios[].id`, `scenarios[].behavior` | Scenario and Behavior ids |
 | `scenarios[].scenario_sha256` | Hash from the Golden Trace header |
 | `scenarios[].comparison` | Complete tagged comparison of LyraCore with the Golden Trace |
+| `scenarios[].properties` | Required for tier 1, absent for audits; array of violations with `property`, `recipient`, `guid`, optional `field`, and `detail`; empty on success |
 | `scenarios[].reference_comparison` | Audit-only reference-stability comparison of vmangos with that same Golden Trace |
 | `scenarios[].reference_sha256` | SHA-256 of the Reference Server candidate, retained only in scratch |
 | `scenarios[].capture` | Audit-only LyraCore candidate SHA-256, core commit, Native Host SHA-256 and Module SHA-256 |

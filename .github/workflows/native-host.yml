@@ -85,6 +85,8 @@ jobs:
       - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
       - name: Build the Module
         run: cargo build --locked --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers
+      - name: Check the Module links no native code
+        run: python3 scripts/module-env-imports.py target/wasm32-unknown-unknown/release/lyracore_module.wasm
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: native-module

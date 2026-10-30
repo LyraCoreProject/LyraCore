@@ -99,6 +99,14 @@ impl Corpse {
     pub(crate) fn insert(mut self, ctx: &ReducerContext) -> Self {
         self.cell = self.position_cell();
         let row = ctx.db.game_corpse().insert(self);
+        #[cfg(feature = "conformance_test_fixture")]
+        crate::native::record_conformance_birth(
+            ctx,
+            row.guid,
+            row.map_id,
+            row.instance_id,
+            row.cell,
+        );
         crate::aoi::corpse_changed(ctx, &row, true);
         crate::native::corpse_created(ctx, &row);
         row

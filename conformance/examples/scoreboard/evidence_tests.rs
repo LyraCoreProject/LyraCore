@@ -14,7 +14,7 @@ fn example() -> (FeatureLedger, Value) {
             "schema_version": 2, "tier": "tier1", "core_commit": "1".repeat(40),
             "harness_revision": harness_revision().to_string(), "working_tree_dirty": false, "recorded_at_unix_ms": 1,
             "scenarios": [{"id": "taxi_single_hop", "behavior": "taxi_single_hop",
-                "scenario_sha256": golden.trace().header.scenario_sha256, "comparison": {"differences": []}}],
+                "scenario_sha256": golden.trace().header.scenario_sha256, "comparison": {"differences": []}, "properties": []}],
         }),
     )
 }
@@ -52,6 +52,10 @@ fn state(value: &Value, ledger: &FeatureLedger) -> State {
 fn audit_example() -> (FeatureLedger, Value) {
     let (ledger, mut value) = example();
     value["tier"] = json!("conformance_audit");
+    value["scenarios"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("properties");
     value["scenarios"][0]["reference_comparison"] = json!({"differences": []});
     value["scenarios"][0]["reference_sha256"] = json!("c".repeat(64));
     value["scenarios"][0]["capture"] = json!({"sha256": "d".repeat(64), "core_commit": value["core_commit"],
@@ -673,4 +677,34 @@ fn fixed_and_regressed_cannot_trust_an_edited_previous_comparison() -> Result<()
         .to_string()
         .contains("candidate replay"));
     Ok(())
+}
+
+#[test]
+fn property_violations_never_count_as_passing_evidence() {
+    let (ledger, mut value) = example();
+    value["scenarios"][0]["properties"] = json!([{
+        "property": "client_view_consistency", "recipient": 7, "guid": 9,
+        "field": 14, "detail": "client has 1, fresh projection has 0"
+    }]);
+    let result = state(&value, &ledger);
+    assert!(!result.is_match());
+    assert!(result.to_string().contains("1 property violation"));
+    value["scenarios"][0]["properties"] = json!([]);
+    assert!(state(&value, &ledger).is_match());
+}
+
+#[test]
+fn missing_or_malformed_properties_cannot_be_passing_evidence() {
+    let (ledger, value) = example();
+    for properties in [Value::Null, json!([{}]), json!([{"property": "unknown"}])] {
+        let mut invalid = value.clone();
+        invalid["scenarios"][0]["properties"] = properties;
+        assert!(parse(&invalid, &ledger).is_err());
+    }
+    let mut missing = value;
+    missing["scenarios"][0]
+        .as_object_mut()
+        .unwrap()
+        .remove("properties");
+    assert!(parse(&missing, &ledger).is_err());
 }

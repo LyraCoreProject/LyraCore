@@ -14,7 +14,7 @@ use crate::POLL_TIMEOUT;
 pub struct ReducerConnection {
     socket: WebSocket<TcpStream>,
     connection_id: ConnectionId,
-    packets: Vec<Box<RawValue>>,
+    inserts: BTreeMap<String, Vec<Box<RawValue>>>,
     next_request: u32,
 }
 
@@ -121,7 +121,7 @@ impl ReducerConnection {
             connection_id: ConnectionId {
                 __connection_id__: 0,
             },
-            packets: Vec::new(),
+            inserts: BTreeMap::new(),
             next_request: 1,
         };
         let Some(ServerMessage::IdentityToken { connection_id }) =
@@ -149,7 +149,12 @@ impl ReducerConnection {
 
     // Drains received inserts; wait_for_packets reads transactions still pending on the socket.
     pub fn drain_packets(&mut self) -> Vec<Box<RawValue>> {
-        std::mem::take(&mut self.packets)
+        self.drain_inserts("game_native_packet")
+    }
+
+    // Drains subscribed inserts through the last received transaction, including earlier calls.
+    pub fn drain_inserts(&mut self, table: &str) -> Vec<Box<RawValue>> {
+        self.inserts.remove(table).unwrap_or_default()
     }
 
     // Returns buffered packet rows or waits for the first batch; an empty result means timeout.
@@ -157,7 +162,11 @@ impl ReducerConnection {
         let deadline = Instant::now()
             .checked_add(timeout)
             .ok_or("invalid packet timeout")?;
-        while self.packets.is_empty() {
+        while self
+            .inserts
+            .get("game_native_packet")
+            .is_none_or(Vec::is_empty)
+        {
             if self.receive(deadline)?.is_none() {
                 break;
             }
@@ -247,12 +256,9 @@ impl ReducerConnection {
                         _ => None,
                     };
                     if let Some(update) = update {
-                        let mut rows = ReducerRows::decode(update)?;
-                        self.packets.extend(
-                            rows.inserts
-                                .remove("game_native_packet")
-                                .unwrap_or_default(),
-                        );
+                        for (table, inserts) in ReducerRows::decode(update)?.inserts {
+                            self.inserts.entry(table).or_default().extend(inserts);
+                        }
                     }
                     return Ok(Some(message));
                 }
@@ -366,6 +372,28 @@ mod tests {
             packets.iter().map(|row| row.get()).collect::<Vec<_>>(),
             ["[1]", "[2]"]
         );
+        assert!(client.drain_packets().is_empty());
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn calls_buffer_subscribed_context_from_earlier_transactions() {
+        let (mut client, handle) = peer(|mut socket| {
+            socket.read().unwrap();
+            let context = json!({"tables": [{"table_name": "create_context", "updates": [{"inserts": ["[7,true]"]}]}]});
+            socket
+                .send(Message::text(format!(
+                    r#"{{"TransactionUpdateLight":{{"request_id":0,"update":{context}}}}}"#
+                )))
+                .unwrap();
+            socket.send(Message::text(
+                r#"{"TransactionUpdate":{"caller_connection_id":{"__connection_id__":340282366920938463463374607431768211454},"reducer_call":{"request_id":1},"status":{"Committed":{"tables":[]}}}}"#
+            )).unwrap();
+        });
+        let rows = client.call("barrier", json!([])).unwrap();
+        assert!(rows.inserts("create_context").is_empty());
+        assert_eq!(client.drain_inserts("create_context")[0].get(), "[7,true]");
+        assert!(client.drain_inserts("create_context").is_empty());
         assert!(client.drain_packets().is_empty());
         handle.join().unwrap();
     }

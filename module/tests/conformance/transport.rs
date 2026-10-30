@@ -8,6 +8,8 @@ use serde_json::{json, value::RawValue};
 use wire_client::runner::{MultiTransport, Transport};
 use wire_client::scenario::{FixtureVerb, Observation, Scenario};
 
+use super::properties::{self, Batch, CreateContext, Packet, Projection};
+
 pub struct OperatorTransport {
     connection: ReducerConnection,
     guid: u64,
@@ -15,6 +17,8 @@ pub struct OperatorTransport {
     opening: Vec<Observation>,
     delivery: Delivery,
     pending: VecDeque<(u16, Vec<u8>)>,
+    batches: Vec<Batch>,
+    projections: BTreeMap<u64, Projection>,
     virtual_micros: u64,
 }
 
@@ -60,7 +64,11 @@ impl OperatorTransport {
     }
 
     fn connect(shard: &Standalone, guid: u64, fixtures: BTreeMap<String, u64>) -> Result<Self> {
-        let mut connection = shard.connect_reducers(&["SELECT * FROM game_native_packet"]);
+        let mut connection = shard.connect_reducers(&[
+            "SELECT * FROM game_native_packet",
+            "SELECT * FROM game_native_conformance_projection",
+            "SELECT * FROM game_native_conformance_create",
+        ]);
         connection
             .call("native_world_open", json!([42]))
             .map_err(|e| anyhow!(e))?;
@@ -75,17 +83,124 @@ impl OperatorTransport {
             fixtures,
             opening: Vec::new(),
             pending: VecDeque::new(),
+            batches: Vec::new(),
+            projections: BTreeMap::new(),
             virtual_micros: 0,
         };
-        let setup = transport.connection.drain_packets();
+        transport.capture()?;
         transport.opening = transport
-            .delivery
-            .route_rows(setup)?
-            .into_iter()
+            .pending
+            .drain(..)
             .map(|(opcode, body)| Observation::opening(opcode, &body))
             .collect();
         Ok(transport)
     }
+
+    pub fn batches(&self) -> &[Batch] {
+        &self.batches
+    }
+
+    pub(super) fn capture(&mut self) -> Result<()> {
+        self.capture_after(0)
+    }
+
+    fn capture_after(&mut self, advance_micros: u64) -> Result<()> {
+        // The call is a barrier for earlier packet transactions on this recipient's socket.
+        let projected = self
+            .connection
+            .call(
+                "debug_native_project",
+                json!([
+                    std::env::var_os("LYRACORE_CONFORMANCE_FULL_PROJECTION").is_some(),
+                    advance_micros
+                ]),
+            )
+            .map_err(|error| anyhow!(error))?;
+        self.connection
+            .drain_inserts("game_native_conformance_projection");
+        let rows = self.connection.drain_packets();
+        let packets = self.delivery.route_rows(rows)?;
+        let mut projections = BTreeMap::new();
+        for row in projected.inserts("game_native_conformance_projection") {
+            let (guid, object_type, owner_guid, same_raid, body, extra): (
+                u64,
+                u8,
+                u64,
+                bool,
+                String,
+                String,
+            ) = serde_json::from_str(row.get())?;
+            let fields = if body.is_empty() {
+                self.projections
+                    .get(&guid)
+                    .context("projection reused before its first encoding")?
+                    .fields
+                    .clone()
+            } else {
+                let mut fields = BTreeMap::new();
+                for body in [&body, &extra] {
+                    if !body.is_empty() {
+                        for update in properties::updates(0x00a9, &decode_hex(body)?)? {
+                            fields.extend(update.fields);
+                        }
+                    }
+                }
+                fields.into()
+            };
+            projections.insert(
+                guid,
+                Projection {
+                    fields,
+                    object_type,
+                    owner_guid,
+                    same_raid,
+                    special_info: false,
+                },
+            );
+        }
+        let creates = self
+            .connection
+            .drain_inserts("game_native_conformance_create")
+            .into_iter()
+            .map(|row| {
+                let (id, newly_added, layer, gameobject_type): (u64, bool, u8, u8) =
+                    serde_json::from_str(row.get())?;
+                Ok((
+                    id,
+                    CreateContext {
+                        newly_added,
+                        layer,
+                        gameobject_type,
+                    },
+                ))
+            })
+            .collect::<Result<BTreeMap<_, _>>>()?;
+        self.projections = projections.clone();
+        self.batches.push(Batch {
+            recipient: self.guid,
+            reset: self.batches.is_empty(),
+            packets: packets.clone(),
+            projections,
+            creates,
+        });
+        self.pending.extend(
+            packets
+                .into_iter()
+                .map(|packet| (packet.opcode, packet.body)),
+        );
+        Ok(())
+    }
+}
+
+fn decode_hex(encoded: &str) -> Result<Vec<u8>> {
+    ensure!(
+        encoded.is_ascii() && encoded.len().is_multiple_of(2),
+        "invalid packet hex"
+    );
+    (0..encoded.len())
+        .step_by(2)
+        .map(|offset| u8::from_str_radix(&encoded[offset..offset + 2], 16).map_err(Into::into))
+        .collect()
 }
 
 fn prepare_character(
@@ -247,7 +362,7 @@ impl Transport for OperatorTransport {
             .connection
             .call("native_world_receive", json!([opcode, body]))
         {
-            Ok(_) => Ok(()),
+            Ok(_) => (),
             Err(reason) => {
                 let Some(reply) = reason.strip_prefix("native_reply:") else {
                     bail!(reason)
@@ -256,19 +371,14 @@ impl Transport for OperatorTransport {
                 self.connection
                     .call("native_world_reply", json!([packets]))
                     .map_err(|e| anyhow!(e))?;
-                Ok(())
             }
         }
+        self.capture()
     }
 
     fn receive(&mut self, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
         let deadline = self.now() + timeout;
         loop {
-            if let Some(packet) = self.pending.pop_front() {
-                return Ok(Some(packet));
-            }
-            let rows = self.connection.drain_packets();
-            self.pending.extend(self.delivery.route_rows(rows)?);
             if let Some(packet) = self.pending.pop_front() {
                 return Ok(Some(packet));
             }
@@ -281,9 +391,7 @@ impl Transport for OperatorTransport {
             let to_boundary = 50_000 - self.virtual_micros % 50_000;
             let delta = remaining.as_micros().min(u128::from(to_boundary));
             let delta: u64 = delta.try_into()?;
-            self.connection
-                .call("debug_advance_virtual_clock", json!([delta]))
-                .map_err(|e| anyhow!(e))?;
+            self.capture_after(delta)?;
             self.virtual_micros += delta;
         }
     }
@@ -293,6 +401,7 @@ struct MultiCharacter {
     guid: u64,
     fixtures: BTreeMap<String, u64>,
     transport: Option<OperatorTransport>,
+    completed: Vec<Batch>,
 }
 
 pub struct MultiOperatorTransport<'a> {
@@ -340,6 +449,7 @@ impl<'a> MultiOperatorTransport<'a> {
                     guid,
                     fixtures,
                     transport: None,
+                    completed: Vec::new(),
                 },
             );
         }
@@ -361,6 +471,33 @@ impl<'a> MultiOperatorTransport<'a> {
             .iter()
             .map(|(id, character)| (id.clone(), character.guid))
             .collect()
+    }
+
+    pub fn batches(&self) -> Vec<Batch> {
+        self.characters
+            .values()
+            .flat_map(|character| {
+                character.completed.iter().cloned().chain(
+                    character
+                        .transport
+                        .as_ref()
+                        .into_iter()
+                        .flat_map(|transport| transport.batches().iter().cloned()),
+                )
+            })
+            .collect()
+    }
+
+    fn capture_except(&mut self, captured: Option<&str>) -> Result<()> {
+        for (id, character) in &mut self.characters {
+            if captured == Some(id.as_str()) {
+                continue;
+            }
+            if let Some(transport) = &mut character.transport {
+                transport.capture()?;
+            }
+        }
+        Ok(())
     }
 
     fn character(&self, id: &str) -> Result<&MultiCharacter> {
@@ -418,7 +555,7 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             OperatorTransport::connect(self.shard, entry.guid, entry.fixtures.clone())?;
         transport.virtual_micros = self.virtual_micros;
         entry.transport = Some(transport);
-        Ok(())
+        self.capture_except(Some(character))
     }
 
     fn disconnect(&mut self, character: &str) -> Result<()> {
@@ -426,24 +563,44 @@ impl MultiTransport for MultiOperatorTransport<'_> {
             .characters
             .get_mut(character)
             .context("unknown scenario Character")?;
-        ensure!(
-            entry.transport.take().is_some(),
-            "scenario Character is disconnected"
-        );
-        Ok(())
+        let mut transport = entry
+            .transport
+            .take()
+            .context("scenario Character is disconnected")?;
+        transport.capture()?;
+        entry.completed.extend_from_slice(transport.batches());
+        self.shard
+            .assert_call("debug_logout_character", &[&entry.guid.to_string()]);
+        drop(transport);
+        self.capture_except(None)
     }
 
     fn send(&mut self, character: &str, opcode: u32, body: &[u8]) -> Result<()> {
-        self.transport(character)?.send(opcode, body)
+        self.transport(character)?.send(opcode, body)?;
+        self.capture_except(Some(character))
     }
 
     fn receive(&mut self, character: &str, timeout: Duration) -> Result<Option<(u16, Vec<u8>)>> {
-        let now = self.virtual_micros;
-        let transport = self.transport(character)?;
-        transport.virtual_micros = now;
-        let packet = transport.receive(timeout)?;
-        self.virtual_micros = transport.virtual_micros;
-        Ok(packet)
+        let deadline = self.now() + timeout;
+        loop {
+            if let Some(packet) = self.transport(character)?.pending.pop_front() {
+                return Ok(Some(packet));
+            }
+            let Some(remaining) = deadline.checked_sub(self.now()) else {
+                return Ok(None);
+            };
+            if remaining.is_zero() {
+                return Ok(None);
+            }
+            let to_boundary = 50_000 - self.virtual_micros % 50_000;
+            let delta: u64 = remaining
+                .as_micros()
+                .min(u128::from(to_boundary))
+                .try_into()?;
+            self.transport(character)?.capture_after(delta)?;
+            self.virtual_micros += delta;
+            self.capture_except(Some(character))?;
+        }
     }
 }
 
@@ -471,7 +628,7 @@ impl Delivery {
         }
     }
 
-    fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<(u16, Vec<u8>)>> {
+    fn route_rows(&mut self, rows: Vec<Box<RawValue>>) -> Result<Vec<Packet>> {
         let mut rows = rows
             .iter()
             .map(|row| serde_json::from_str::<Row>(row.get()))
@@ -486,9 +643,16 @@ impl Delivery {
         Ok(packets)
     }
 
-    fn route(&mut self, row: Row) -> Result<Option<(u16, Vec<u8>)>> {
-        let Row(_, (audience, recipient), (option, opcode), body, close, not_before, authenticated) =
-            row;
+    fn route(&mut self, row: Row) -> Result<Option<Packet>> {
+        let Row(
+            id,
+            (audience, recipient),
+            (option, opcode),
+            body,
+            close,
+            not_before,
+            authenticated,
+        ) = row;
         let addressed = match audience {
             0 => serde_json::from_str::<(u128,)>(recipient.get())?.0 == self.connection,
             1 => {
@@ -536,12 +700,12 @@ impl Delivery {
         );
         match option {
             0 => {
-                ensure!(body.is_ascii() && body.len() % 2 == 0, "invalid packet hex");
-                let bytes = (0..body.len())
-                    .step_by(2)
-                    .map(|offset| u8::from_str_radix(&body[offset..offset + 2], 16))
-                    .collect::<std::result::Result<Vec<_>, _>>()?;
-                Ok(Some((serde_json::from_str(opcode.get())?, bytes)))
+                let bytes = decode_hex(&body)?;
+                Ok(Some(Packet {
+                    id,
+                    opcode: serde_json::from_str(opcode.get())?,
+                    body: bytes,
+                }))
             }
             1 => Ok(None),
             _ => bail!("invalid opcode option {option}"),
@@ -563,7 +727,11 @@ fn delivery_follows_grants_revoke_clear_and_excluded_connections() {
         delivery
             .route(serde_json::from_str(&grant).unwrap())
             .unwrap(),
-        Some((477, vec![7, 0, 0, 0]))
+        Some(Packet {
+            id: 1,
+            opcode: 477,
+            body: vec![7, 0, 0, 0]
+        })
     );
     assert!(delivery
         .route(serde_json::from_str(&broadcast).unwrap())
@@ -628,6 +796,17 @@ fn delivery_uses_packet_ids_before_applying_grants() {
     .collect();
     assert_eq!(
         delivery.route_rows(rows).unwrap(),
-        [(169, vec![2]), (477, vec![3])]
+        [
+            Packet {
+                id: 2,
+                opcode: 169,
+                body: vec![2]
+            },
+            Packet {
+                id: 3,
+                opcode: 477,
+                body: vec![3]
+            }
+        ]
     );
 }

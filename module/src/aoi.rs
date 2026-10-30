@@ -67,7 +67,7 @@ impl AoiViewer {
         }
     }
 
-    fn sees_entity(&self, entity: &WorldEntity, stealthed: bool) -> bool {
+    pub(crate) fn sees_entity(&self, entity: &WorldEntity, stealthed: bool) -> bool {
         self.contains(entity.map_id, entity.instance_id, entity.cell)
             && (self.guid == entity.guid
                 || (!stealthed && (self.is_ghost || entity.npc_flags & SPIRITHEALER == 0)))

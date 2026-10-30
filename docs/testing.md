@@ -71,25 +71,29 @@ cargo build --release --target wasm32-unknown-unknown -p lyracore-module --featu
 cargo test -p lyracore-module --test weather -- --ignored
 ```
 
-CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`.
+CI runs every target in three parallel jobs with `--test-threads=4 --skip deadmines`. It skips the
+workflow when a change touches only Markdown, `docs/` or `.claude/`.
 The Deadmines targets need the separately installed dungeons Package. CI runs the
 [taxi Behavior](../conformance/features/taxi/taxi_single_hop.toml) against its committed tier 1
 signature baseline. The bundled route fixture removes its imported-data requirement.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
-`859c7257c74d2c371dea8ed743cfbccd596cac11`, sets `LYRACORE_TEST_BASELINE_WASM` to that Wasm,
-and publishes the current Module over the populated fixture without clearing it. Character, entity,
-spell and effect rows must survive; new spell fields must receive their migration defaults. The
-fixture includes nonzero combo scaling and checks live emote delivery. Other durable runs must skip
-that test unless the baseline Wasm is available.
+`859c7257c74d2c371dea8ed743cfbccd596cac11` once and caches that Wasm under the commit. It sets
+`LYRACORE_TEST_BASELINE_WASM` to the Wasm and publishes the current Module over the populated
+fixture without clearing it. Character, entity, spell and effect rows must survive; new spell fields
+must receive their migration defaults. The fixture includes nonzero combo scaling and checks live
+emote delivery. Other durable runs must skip that test unless the baseline Wasm is available.
 
 `scripts/durable-test-targets.py` assigns targets by the durations in
 `.github/durable-test-seconds.json`. It includes every current target once and estimates 20 seconds
-for a new target. `JOB_SECONDS` reserves extra time for the populated-upgrade baseline.
-To refresh the estimates, use a successful main run: record each Module target's reported test
-duration, rounded up to whole seconds, in the JSON file. Set each job's `JOB_SECONDS` entry to its
-total duration minus those target durations. Keep the run reference in the script current.
-Run `python3 -m unittest discover -s scripts/tests` to check the assignment.
+for a new target. `JOB_SECONDS` reserves extra time for the populated-upgrade check. To refresh the
+estimates, use a successful main run: record each Module target's duration, rounded up to whole
+seconds, in the JSON file. Measure a target from its `Running tests/…` line to the next one, because
+the log interleaves stdout and stderr and a `test result` line can land after the next target
+starts. Set each job's `JOB_SECONDS` entry to its total duration minus its target durations, less
+the smallest such value among the jobs. Leave out a baseline compile after a cache miss. Keep the
+run reference in the script current. Run `python3 -m unittest discover -s scripts/tests` to check
+the assignment.
 
 The Session expiry test checks the five-minute production interval before it shortens the schedule
 on its private fixture. It then checks two real scheduled cleanups without a five-minute wait.

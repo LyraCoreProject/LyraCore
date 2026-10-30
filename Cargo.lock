@@ -731,7 +731,6 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "843fba2746e448b37e26a819579957415c8cef339bf08564fe8b7ddbd959573c"
 dependencies = [
  "crc32fast",
- "libz-sys",
  "miniz_oxide",
 ]
 
@@ -1138,17 +1137,6 @@ name = "libsqlite3-sys"
 version = "0.39.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "14a5f01b87b92705d07b433c06f96cbc764637d81a0bffb5734ce17cf0f9a2b3"
-dependencies = [
- "cc",
- "pkg-config",
- "vcpkg",
-]
-
-[[package]]
-name = "libz-sys"
-version = "1.1.29"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "85bc9657773828b90eeb625adff10eeac83cc21bbfd8e23a03eaa8a33c9e28d9"
 dependencies = [
  "cc",
  "pkg-config",
@@ -2969,8 +2957,7 @@ checksum = "d3e7f722a488637c33c707dc29de57a12908eba56b3f07db69ee476d1f7f3f8f"
 [[package]]
 name = "wow_world_messages"
 version = "0.3.0"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "7df703a8a402cd5fe84c8d560f2d6eefbaaaac66f6e3c49d9c93829e00964209"
+source = "git+https://github.com/LyraCoreProject/wow_world_messages?rev=486d31cb0552c52904dcb6dda561b416f1dbc0ab#486d31cb0552c52904dcb6dda561b416f1dbc0ab"
 dependencies = [
  "flate2",
  "wow_srp",

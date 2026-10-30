@@ -320,12 +320,16 @@ pub fn skill_slot_layout(class_b: u8, learned: &[(u32, u16, u16)]) -> Vec<(Skill
     lines
 }
 
-fn create_packed_bytes(entity: &EntityView, power: u8) -> (u32, u32, u32) {
-    let player_bytes_2 = if entity.player_bytes_2 & 0x0000_ff00 == 0 {
-        entity.player_bytes_2 | 0x0000_ee00
+pub(crate) fn client_player_bytes_2(bytes: u32) -> u32 {
+    if bytes & 0x0000_ff00 == 0 {
+        bytes | 0x0000_ee00
     } else {
-        entity.player_bytes_2
-    };
+        bytes
+    }
+}
+
+fn create_packed_bytes(entity: &EntityView, power: u8) -> (u32, u32, u32) {
+    let player_bytes_2 = client_player_bytes_2(entity.player_bytes_2);
     let unit_bytes_1 = if matches!(power, 0 | 1) && entity.unit_bytes_1 & 0x0000_ff00 == 0 {
         entity.unit_bytes_1 | 0x0000_ee00
     } else {

@@ -69,25 +69,28 @@ fn recipient_packet(
     grant: &AoiGrant,
     packet: Option<lyracore_protocol::world::Packet>,
     create: bool,
-) {
+) -> u64 {
     let recipient = super::NativeRecipient {
         connection_id: connection,
         layer: grant.layer,
         entity_guid: grant.entity_guid,
     };
-    ctx.db.game_native_packet().insert(NativePacket {
-        id: 0,
-        audience: if create {
-            NativeAudience::Grant(recipient)
-        } else {
-            NativeAudience::Revoke(recipient)
-        },
-        opcode: packet.as_ref().map(|packet| packet.opcode),
-        body: packet.map_or_else(Vec::new, |packet| packet.body),
-        close_after: false,
-        not_before_micros: 0,
-        authentication_complete: false,
-    });
+    ctx.db
+        .game_native_packet()
+        .insert(NativePacket {
+            id: 0,
+            audience: if create {
+                NativeAudience::Grant(recipient)
+            } else {
+                NativeAudience::Revoke(recipient)
+            },
+            opcode: packet.as_ref().map(|packet| packet.opcode),
+            body: packet.map_or_else(Vec::new, |packet| packet.body),
+            close_after: false,
+            not_before_micros: 0,
+            authentication_complete: false,
+        })
+        .id
 }
 
 pub(super) fn create(
@@ -197,7 +200,30 @@ pub(super) fn create(
         ))
         .map_err(|error| error.to_string())?,
     };
-    recipient_packet(ctx, connection, grant, Some(packet), true);
+    let packet_id = recipient_packet(ctx, connection, grant, Some(packet), true);
+    #[cfg(feature = "conformance_test_fixture")]
+    {
+        let gameobject_type = if grant.layer == GAME_OBJECT {
+            ctx.db
+                .game_gameobject()
+                .guid()
+                .find(grant.entity_guid)
+                .and_then(|object| super::object::view(ctx, &object).ok())
+                .map_or(0, |view| view.type_id)
+        } else {
+            0
+        };
+        super::debug::note_create(
+            ctx,
+            packet_id,
+            grant.entity_guid,
+            grant.viewer_guid,
+            grant.layer,
+            gameobject_type,
+        );
+    }
+    #[cfg(not(feature = "conformance_test_fixture"))]
+    let _ = packet_id;
     if let Some((opcode, body)) = rotation {
         super::send_raw(ctx, connection, opcode, body, false);
     }

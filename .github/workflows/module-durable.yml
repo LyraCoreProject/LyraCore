@@ -2,8 +2,16 @@ name: Module durable tests
 
 on:
   pull_request:
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
   push:
     branches: [main]
+    paths-ignore:
+      - "**/*.md"
+      - "docs/**"
+      - ".claude/**"
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.run_id }}
@@ -11,6 +19,10 @@ concurrency:
 
 permissions:
   contents: read
+
+env:
+  UPGRADE_BASELINE: 859c7257c74d2c371dea8ed743cfbccd596cac11
+  UPGRADE_BASELINE_WASM: ${{ github.workspace }}/.lyracore-upgrade-baseline.wasm
 
 jobs:
   durable:
@@ -45,21 +57,33 @@ jobs:
           echo "targets: ${targets[*]}"
           cargo test -p lyracore-module "${args[@]}" -- --ignored --test-threads=4 --skip deadmines --skip populated_old_module_upgrades_without_clearing
 
-      - name: Check out the populated-upgrade baseline
+      - id: baseline-cache
         if: matrix.shard == 2
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ env.UPGRADE_BASELINE_WASM }}
+          key: durable-upgrade-baseline-${{ env.UPGRADE_BASELINE }}
+
+      - name: Check out the populated-upgrade baseline
+        if: matrix.shard == 2 && steps.baseline-cache.outputs.cache-hit != 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          ref: 859c7257c74d2c371dea8ed743cfbccd596cac11
+          ref: ${{ env.UPGRADE_BASELINE }}
           path: .lyracore-upgrade-baseline
           persist-credentials: false
 
-      - name: Verify the populated Module upgrade
-        if: matrix.shard == 2
+      - name: Build the populated-upgrade baseline
+        if: matrix.shard == 2 && steps.baseline-cache.outputs.cache-hit != 'true'
         run: |
           baseline_target="$RUNNER_TEMP/lyracore-upgrade-baseline-target"
           cargo build --manifest-path .lyracore-upgrade-baseline/Cargo.toml --target-dir "$baseline_target" --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
-          export LYRACORE_TEST_BASELINE_WASM="$baseline_target/wasm32-unknown-unknown/release/lyracore_module.wasm"
-          cargo test -p lyracore-module --test additive_upgrade populated_old_module_upgrades_without_clearing -- --ignored --exact --test-threads=1
+          cp "$baseline_target/wasm32-unknown-unknown/release/lyracore_module.wasm" "$UPGRADE_BASELINE_WASM"
+
+      - name: Verify the populated Module upgrade
+        if: matrix.shard == 2
+        env:
+          LYRACORE_TEST_BASELINE_WASM: ${{ env.UPGRADE_BASELINE_WASM }}
+        run: cargo test -p lyracore-module --test additive_upgrade populated_old_module_upgrades_without_clearing -- --ignored --exact --test-threads=1
 
       - name: Upload the standalone logs
         if: failure()
