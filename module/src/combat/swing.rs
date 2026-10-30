@@ -168,6 +168,14 @@ fn resolve_offhand_swing(
     {
         return;
     }
+    if !is_avoided(hit_info) {
+        crate::spell::chance_on_hit::roll_chance_on_hit(
+            ctx,
+            attacker_guid,
+            target_guid,
+            crate::items::equip_slot::OFFHAND,
+        );
+    }
 
     if let Some(mut fresh) = melee.attacker_guid().find(attacker_guid) {
         fresh.last_offhand_swing_ms = now_ms;
@@ -570,6 +578,22 @@ fn fire_melee_swing(
     }
     if combat_ended {
         return;
+    }
+    // vmangos rolls a white swing that connected, and a weapon-proc strike even when avoided.
+    let rolls_weapon = if swing_is_spell {
+        queued_header
+            .as_ref()
+            .is_some_and(|strike| strike.cast_flags & crate::spell::SPELL_ATTR_WEAPON_PROCS != 0)
+    } else {
+        !is_avoided(hit_info)
+    };
+    if rolls_weapon {
+        crate::spell::chance_on_hit::roll_chance_on_hit(
+            ctx,
+            attacker_guid,
+            target_guid,
+            crate::items::equip_slot::MAINHAND,
+        );
     }
 
     // Arm Revenge after damage so a stale defender snapshot cannot erase its deadline.

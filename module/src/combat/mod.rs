@@ -52,15 +52,15 @@ pub use swing::{ranged_impact, tick_melee};
 pub(crate) use tables::{
     agility_crit_bp, apply_offhand_penalty, armor_mitigated, armor_mitigation_pct, attack_outcome,
     block_chance_bp, crit_bp_with_bonus, crushing_chance_bp, dodge_chance_bp, effective_stat,
-    glancing_chance_bp, is_rage_user, is_translating, melee_attack_power_for, miss_bp_with_bonus,
-    miss_chance_bp, parry_chance_bp, player_swing_range_ap, rage_from_damage, ranged_sheet_values,
-    regen_entity_health, regen_entity_health_in_combat, regen_entity_power, resist_mitigation_pct,
-    scale_swing_for_rank, swing_time_with_haste, weapon_swing_range_ap, AttackTable, RegenWindow,
-    AUTO_SHOT_PROJECTILE_SPEED, COMBAT_BACKSTOP_SQ, CREATURE_MELEE_MAX, CREATURE_MELEE_MIN,
-    CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT, HIT_CRUSHING, HIT_DODGE,
-    HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, LEASH_RADIUS_SQ, MELEE_LEEWAY_WINDOW_MS,
-    MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ, PURSUIT_WINDOW_MS,
-    RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
+    glancing_chance_bp, is_avoided, is_rage_user, is_translating, melee_attack_power_for,
+    miss_bp_with_bonus, miss_chance_bp, parry_chance_bp, player_swing_range_ap, rage_from_damage,
+    ranged_sheet_values, regen_entity_health, regen_entity_health_in_combat, regen_entity_power,
+    resist_mitigation_pct, scale_swing_for_rank, swing_time_with_haste, weapon_swing_range_ap,
+    AttackTable, RegenWindow, AUTO_SHOT_PROJECTILE_SPEED, COMBAT_BACKSTOP_SQ, CREATURE_MELEE_MAX,
+    CREATURE_MELEE_MIN, CRIT_MULT, CRUSH_DAMAGE_PCT, GLANCING_DAMAGE_PCT, HIT_BLOCK, HIT_CRIT,
+    HIT_CRUSHING, HIT_DODGE, HIT_GLANCING, HIT_MISS, HIT_NORMAL, HIT_PARRY, LEASH_RADIUS_SQ,
+    MELEE_LEEWAY_WINDOW_MS, MELEE_RANGE_LEEWAY_CREATURE_SQ, MELEE_RANGE_LEEWAY_SQ, MELEE_RANGE_SQ,
+    PURSUIT_WINDOW_MS, RANGED_INITIAL_SHOT_MS, RANGED_RANGE_SQ, WAND_PROJECTILE_SPEED,
 };
 #[cfg(feature = "debug_reducers")]
 pub(crate) use tables::{regen_health_in_combat, swing_profile};

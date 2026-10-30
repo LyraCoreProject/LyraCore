@@ -1,6 +1,7 @@
 use lyracore_shared::spell_custom as custom;
 use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 
+use crate::combat::is_avoided;
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
 use crate::items::game_item_template;
@@ -161,11 +162,15 @@ pub(crate) enum CastOrigin {
     },
     Triggered,
     DeadCreatureCallbackTriggered,
+    ChanceOnHit,
 }
 
 impl CastOrigin {
     fn is_triggered(self) -> bool {
-        matches!(self, Self::Triggered | Self::DeadCreatureCallbackTriggered)
+        matches!(
+            self,
+            Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit
+        )
     }
 
     fn allows_dead_self(self) -> bool {
@@ -178,7 +183,9 @@ impl CastOrigin {
                 is_completion,
                 client_initiated,
             } => (is_completion, client_initiated),
-            Self::Triggered | Self::DeadCreatureCallbackTriggered => (false, false),
+            Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit => {
+                (false, false)
+            }
         }
     }
 }
@@ -275,6 +282,11 @@ fn run_spell_effects(
     let weapon_strike = matches!(table, HitTable::Weapon { .. });
     let rolls_hit = weapon_strike || effects.iter().any(|e| e.kind == E_DAMAGE);
     let mut target_rolls: std::collections::HashMap<u64, u8> = std::collections::HashMap::new();
+    // vmangos rolls the main hand per target, landed or avoided; a Chance on Hit cast rolls none.
+    let rolls_weapon =
+        hdr.cast_flags & SPELL_ATTR_WEAPON_PROCS != 0 && !matches!(origin, CastOrigin::ChanceOnHit);
+    let mut weapon_targets = Vec::new();
+    let mut seen_weapon_targets = std::collections::HashSet::new();
     for e in effects {
         let points = effect_amount(
             e.base_points,
@@ -296,6 +308,9 @@ fn run_spell_effects(
             } else {
                 crate::combat::HIT_NORMAL
             };
+            if rolls_weapon && t != caster_guid {
+                remember_hit_target(&mut weapon_targets, &mut seen_weapon_targets, t);
+            }
             if is_avoided(roll) {
                 if t == target_guid {
                     primary_avoided = roll;
@@ -418,6 +433,14 @@ fn run_spell_effects(
             ..SpellCastEvent::signal(ctx, caster_guid, hdr.spell_id, SpellCastEventKind::Go)
         },
     );
+    for target in weapon_targets {
+        crate::spell::chance_on_hit::roll_chance_on_hit(
+            ctx,
+            caster_guid,
+            target,
+            crate::items::equip_slot::MAINHAND,
+        );
+    }
 }
 
 #[derive(Clone, Copy)]
@@ -462,11 +485,6 @@ fn arm_avoidance_reacts(ctx: &ReducerContext, caster_guid: u64, target_guid: u64
     if matches!(roll, HIT_DODGE | HIT_PARRY) {
         arm_react(ctx, target_guid, ReactKind::Revenge);
     }
-}
-
-fn is_avoided(roll: u8) -> bool {
-    use crate::combat::{HIT_DODGE, HIT_MISS, HIT_PARRY};
-    matches!(roll, HIT_MISS | HIT_DODGE | HIT_PARRY)
 }
 
 fn cast_miss(roll: u8, weapon_strike: bool, school_mask: u8) -> u8 {
@@ -514,6 +532,23 @@ pub(crate) fn cast_triggered(
         level,
         target_guid,
         CastOrigin::Triggered,
+    )
+}
+
+pub(crate) fn cast_chance_on_hit(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    target_guid: u64,
+) -> Result<(), String> {
+    cast_triggered_with_origin(
+        ctx,
+        caster_guid,
+        spell_id,
+        level,
+        target_guid,
+        CastOrigin::ChanceOnHit,
     )
 }
 

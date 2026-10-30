@@ -8,7 +8,7 @@
   "binding_quests": 21,
   "build_script": 1,
   "cast_global_cooldown": 7,
-  "chance_on_hit": 3,
+  "chance_on_hit": 12,
   "chat_channel_moderation": 21,
   "chat_channels": 17,
   "combat_log": 3,

@@ -58,6 +58,10 @@ pub(crate) const HIT_GLANCING: u8 = 5;
 pub(crate) const HIT_CRUSHING: u8 = 6;
 pub(crate) const HIT_BLOCK: u8 = 7;
 
+pub(crate) fn is_avoided(hit_info: u8) -> bool {
+    matches!(hit_info, HIT_MISS | HIT_DODGE | HIT_PARRY)
+}
+
 pub(crate) fn miss_chance_bp(skill_diff: u32) -> u32 {
     let raw = if skill_diff > 10 {
         700 + (skill_diff - 10) * 40

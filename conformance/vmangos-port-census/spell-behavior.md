@@ -27,9 +27,9 @@ No existing field moves.
 | 0x0400 | NOT_REMOVED_ON_EVADE | 95 | Evade preserves this aura and finite positive auras cast by players. The native check compares player buffs, permanent buffs, debuffs and creature buffs. |
 | 0x0800 | SEND_CHANNEL_VISUAL | 17 | Held under decision 11. The Module has no SpellVisual channel-kit catalogue or repeating visual-kit delivery. |
 | 0x1000 | SEPARATE_AURA_PER_CASTER | 3 | Different casters get separate aura rows and slots. The native check verifies both. |
-| 0x2000 | TRIGGER_WEAPON_PROCS | 30 | Held under decision 11. Chance on Hit honors it for spell hits that are not Triggered Casts. The Module has no weapon-enchant dispatcher. |
+| 0x2000 | TRIGGER_WEAPON_PROCS | 30 | Each target, landed or avoided, rolls the caster's main-hand Chance on Hit, Triggered Casts included. Durable `chance_on_hit` covers an avoided strike. |
 
-The held bits remain in the catalogue and the manifest reports 47 affected entries. Their
+The held bit remains in the catalogue and the manifest reports 17 affected entries. Its
 behavior stays unsupported. Unknown bits fail the source reader.
 
 The source has 24,689 nonnegative effect coefficients, including unused effect slots.
