@@ -8,7 +8,7 @@ use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use wire_client::decode::{self, Field};
 
-pub use client_view_consistency::ClientViews;
+use client_view_consistency::ClientViews;
 
 #[derive(Clone, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 pub struct Violation {
@@ -122,18 +122,6 @@ pub fn updates(opcode: u16, body: &[u8]) -> Result<Vec<Update>> {
     Ok(updates)
 }
 
-pub fn check_private(recipient: u64, update: &Update, projection: &Projection) -> Vec<Violation> {
-    private_fields_stay_private::check(recipient, update, projection)
-}
-
-pub fn check_create_kind(
-    recipient: u64,
-    update: &Update,
-    context: Option<CreateContext>,
-) -> Vec<Violation> {
-    create_kind_matches_freshness::check(recipient, update, context)
-}
-
 pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
     let mut views = BTreeMap::<u64, ClientViews>::new();
     let mut known = BTreeMap::<(u64, u64), Projection>::new();
@@ -151,7 +139,11 @@ pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
             for update in updates(packet.opcode, &packet.body)? {
                 if matches!(update.kind, 0 | 2 | 3) {
                     if let Some(projection) = known.get(&(batch.recipient, update.guid)) {
-                        violations.extend(check_private(batch.recipient, &update, projection));
+                        violations.extend(private_fields_stay_private::check(
+                            batch.recipient,
+                            &update,
+                            projection,
+                        ));
                     } else {
                         violations.push(Violation {
                             property: private_fields_stay_private::NAME.into(),
@@ -162,14 +154,14 @@ pub fn run(batches: &[Batch]) -> Result<Vec<Violation>> {
                         });
                     }
                 }
-                violations.extend(check_create_kind(
+                violations.extend(create_kind_matches_freshness::check(
                     batch.recipient,
                     &update,
                     batch.creates.get(&packet.id).copied(),
                 ));
                 view.apply(&update);
             }
-            if matches!(packet.opcode, 0x00aa | 0x0215) {
+            if packet.opcode == 0x00aa {
                 let decoded = decode::decode(packet.opcode, &packet.body)?;
                 if let Some(guid) = decoded.fields.get("guid") {
                     view.remove(unsigned(guid)?);
@@ -279,6 +271,22 @@ mod tests {
         let violations = run(&[spawn])?;
         assert_eq!(violations.len(), 1);
         assert_eq!(violations[0].property, "create_kind_matches_freshness");
+        Ok(())
+    }
+
+    #[test]
+    fn a_despawn_animation_does_not_remove_the_object_view() -> Result<()> {
+        let opening = batch(vec![packet(1, 2, 9, 5, &[(14, 1)])], 5, &[(14, 1)]);
+        let animation = batch(
+            vec![Packet {
+                id: 2,
+                opcode: 0x0215,
+                body: 9u64.to_le_bytes().to_vec(),
+            }],
+            5,
+            &[(14, 1)],
+        );
+        assert!(run(&[opening, animation])?.is_empty());
         Ok(())
     }
 }
