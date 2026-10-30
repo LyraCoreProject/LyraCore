@@ -57,7 +57,7 @@ pub fn build_player_flags_values(
 }
 
 pub fn build_bank_bag_slots_values(guid: u64, player_bytes_2: u32) -> SMSG_UPDATE_OBJECT {
-    let (a, b, c, d) = unpack4(player_bytes_2);
+    let (a, b, c, d) = unpack4(super::entity::client_player_bytes_2(player_bytes_2));
     player_values(guid, |player| {
         player.set_player_bytes_2(a, b, c, d);
     })
@@ -96,10 +96,13 @@ pub fn build_explored_zones_values(guid: u64, word_idx: u16, word_value: u32) ->
     build_values_update_raw(guid, &mask)
 }
 
-/// VALUES replaces the whole u32; preserve facial hair and the nonzero rest-state byte.
+/// VALUES replaces the whole u32; preserve the CREATE byte while changing rest state.
 pub fn build_rest_state_values(guid: u64, player_bytes_2: u32) -> (u16, Vec<u8>) {
     let mut mask = update_mask::UpdateMaskValues::new();
-    mask.set_u32(update_mask::idx::PLAYER_BYTES_2, player_bytes_2);
+    mask.set_u32(
+        update_mask::idx::PLAYER_BYTES_2,
+        super::entity::client_player_bytes_2(player_bytes_2),
+    );
     build_values_update_raw(guid, &mask)
 }
 
@@ -250,7 +253,7 @@ pub fn build_armor_values(guid: u64, total: [u32; 7], pos_buff: u32) -> SMSG_UPD
     })
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub struct SheetStatsValues {
     pub strength: u32,
     pub agility: u32,

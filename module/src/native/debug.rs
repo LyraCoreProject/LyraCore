@@ -1,7 +1,8 @@
 use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, Table};
 
-use super::{game_native_world_connection, NativeWorldState};
-use crate::game_account;
+use super::{game_native_player, game_native_world_connection, NativeWorldState};
+use crate::{game_account, game_world_entity};
+mod projection;
 
 #[table(accessor = game_native_conformance_connection)]
 pub struct NativeConformanceConnection {
@@ -9,6 +10,94 @@ pub struct NativeConformanceConnection {
     pub connection_id: ConnectionId,
     pub account_id: u64,
     pub owner_identity: Identity,
+}
+
+#[table(accessor = game_native_conformance_create)]
+pub struct NativeConformanceCreate {
+    #[primary_key]
+    pub packet_id: u64,
+    pub newly_added: bool,
+    pub layer: u8,
+    pub gameobject_type: u8,
+}
+
+#[table(accessor = game_native_conformance_birth)]
+pub struct NativeConformanceBirth {
+    #[primary_key]
+    pub guid: u64,
+    pub viewers: Vec<u64>,
+    pub added_at: spacetimedb::Timestamp,
+}
+
+pub(crate) fn record_birth(
+    ctx: &ReducerContext,
+    guid: u64,
+    map_id: u32,
+    instance_id: u64,
+    cell: i64,
+) {
+    let entity = ctx.db.game_world_entity().guid().find(guid);
+    let stealthed = entity
+        .as_ref()
+        .is_some_and(|_| crate::spell::is_stealthed(ctx, guid));
+    let viewers = crate::aoi::nearby_viewers(ctx, map_id, instance_id, cell)
+        .filter(|viewer| {
+            ctx.db
+                .game_native_player()
+                .character_guid()
+                .find(viewer.guid)
+                .is_some()
+                && entity
+                    .as_ref()
+                    .is_none_or(|entity| viewer.sees_entity(entity, stealthed))
+        })
+        .map(|viewer| viewer.guid)
+        .collect();
+    let births = ctx.db.game_native_conformance_birth();
+    births.guid().delete(guid);
+    births.insert(NativeConformanceBirth {
+        guid,
+        viewers,
+        added_at: ctx.timestamp,
+    });
+}
+
+pub(super) fn note_create(
+    ctx: &ReducerContext,
+    packet_id: u64,
+    object_guid: u64,
+    viewer_guid: u64,
+    layer: u8,
+    gameobject_type: u8,
+) {
+    let births = ctx.db.game_native_conformance_birth();
+    let mut birth = births.guid().find(object_guid);
+    let newly_added = birth.as_mut().is_some_and(|birth| {
+        if birth.added_at != ctx.timestamp {
+            return false;
+        }
+        if let Some(index) = birth
+            .viewers
+            .iter()
+            .position(|viewer| *viewer == viewer_guid)
+        {
+            birth.viewers.remove(index);
+            true
+        } else {
+            false
+        }
+    });
+    if let Some(birth) = birth {
+        births.guid().update(birth);
+    }
+    ctx.db
+        .game_native_conformance_create()
+        .insert(NativeConformanceCreate {
+            packet_id,
+            newly_added,
+            layer,
+            gameobject_type,
+        });
 }
 
 pub(super) fn account(
@@ -33,6 +122,7 @@ pub(super) fn account(
 }
 
 pub(super) fn close(ctx: &ReducerContext, connection_id: ConnectionId) {
+    projection::close(ctx, connection_id);
     ctx.db
         .game_native_conformance_connection()
         .connection_id()

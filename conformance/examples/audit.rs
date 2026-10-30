@@ -118,6 +118,7 @@ fn compare_run(
             behavior: golden.scenario().behavior.clone(),
             scenario_sha256: golden.trace().header.scenario_sha256.clone(),
             comparison,
+            properties: None,
             reference_comparison: Some(reference_comparison),
             capture: Some(CandidateCapture {
                 sha256: candidate_sha256,

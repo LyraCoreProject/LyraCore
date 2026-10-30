@@ -28,7 +28,12 @@ struct ScenarioResult {
     behavior: String,
     scenario_sha256: Sha256Digest,
     comparison: Comparison,
+    properties: Vec<PropertyViolation>,
 }
+
+#[path = "../support/property_violation.rs"]
+mod property_violation;
+use property_violation::Violation as PropertyViolation;
 
 #[derive(Serialize)]
 struct RunOutput<'a> {
@@ -39,6 +44,7 @@ struct RunOutput<'a> {
     conforms: bool,
     baseline: BaselineOutput,
     groups: Vec<Group>,
+    properties: &'a [PropertyViolation],
 }
 
 #[derive(Serialize)]
@@ -130,6 +136,7 @@ fn assemble<'a>(
             regeneration,
         },
         groups,
+        properties: &[],
     })
 }
 
@@ -231,6 +238,26 @@ fn text_output(output: &RunOutput<'_>) -> Result<String> {
             writeln!(text, "  actual: {}", serde_json::to_string(&record.actual)?)?;
         }
     }
+    writeln!(
+        text,
+        "\nProperties: {}",
+        if output.properties.is_empty() {
+            "pass"
+        } else {
+            "fail"
+        }
+    )?;
+    for violation in output.properties {
+        writeln!(
+            text,
+            "  {}: recipient {} object {} field {:?}: {}",
+            violation.property,
+            violation.recipient,
+            violation.guid,
+            violation.field,
+            violation.detail
+        )?;
+    }
     Ok(text)
 }
 
@@ -293,21 +320,24 @@ fn main() -> Result<()> {
         "tier 1 result uses another scenario revision"
     );
     let baseline = ratchet::Baseline::read(&root.join("conformance/tier1-baseline.json"))?;
-    let output = assemble(
-        &scenario,
-        &behavior.id,
-        &behavior.vmangos,
-        &result.harness_revision,
-        &entry.scenario_sha256,
-        &entry.comparison,
-        &baseline,
-    )?;
+    let output = RunOutput {
+        properties: &entry.properties,
+        ..assemble(
+            &scenario,
+            &behavior.id,
+            &behavior.vmangos,
+            &result.harness_revision,
+            &entry.scenario_sha256,
+            &entry.comparison,
+            &baseline,
+        )?
+    };
     if json {
         println!("{}", serde_json::to_string_pretty(&output)?);
     } else {
         print!("{}", text_output(&output)?);
     }
-    if !output.baseline.matches {
+    if !output.baseline.matches || !output.properties.is_empty() {
         std::process::exit(1);
     }
     Ok(())
@@ -447,6 +477,37 @@ mod tests {
         assert!(text.contains("Tier 1 baseline: differs"));
         assert!(text.contains("Regeneration would change:"));
         assert!(text.contains("+ rule: exact_field / flight / reply/flight / 0x00DD / duration"));
+        Ok(())
+    }
+
+    #[test]
+    fn a_property_failure_is_reported_even_when_the_baseline_matches() -> Result<()> {
+        let (source, comparison, baseline) = fixture();
+        let violations = [PropertyViolation {
+            property: "client_view_consistency".into(),
+            recipient: 7,
+            guid: 9,
+            field: Some(14),
+            detail: "client has 1, fresh projection has 0".into(),
+        }];
+        let output = RunOutput {
+            properties: &violations,
+            ..assemble(
+                "taxi_single_hop",
+                "taxi_single_hop",
+                &source,
+                "revision",
+                &Sha256Digest::of(b"scenario"),
+                &comparison,
+                &baseline,
+            )?
+        };
+        assert!(output.baseline.matches);
+        let json = serde_json::to_value(&output)?;
+        assert_eq!(json["properties"][0]["field"], 14);
+        let text = text_output(&output)?;
+        assert!(text.contains("Properties: fail"));
+        assert!(text.contains("client_view_consistency: recipient 7 object 9"));
         Ok(())
     }
 }
