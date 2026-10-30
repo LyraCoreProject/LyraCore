@@ -488,6 +488,15 @@ pub(crate) trait CreatureWorld:
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)>;
     fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64;
     fn run_package_passes(&mut self);
+    /// Times one pass when this tick is sampled for profiling.
+    fn pass_timer(&self, _pass: &'static str) -> Option<spacetimedb::log_stopwatch::LogStopwatch> {
+        None
+    }
+}
+
+fn timed<W: CreatureWorld, T>(w: &mut W, pass: &'static str, f: impl FnOnce(&mut W) -> T) -> T {
+    let _timer = w.pass_timer(pass);
+    f(w)
 }
 
 pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> CycleOutcome {
@@ -495,50 +504,82 @@ pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> Cycle
         active,
         pets,
         in_combat,
-    } = w.awake_creatures(&tick.scope, tick.sense);
+    } = timed(w, "sweep", |w| w.awake_creatures(&tick.scope, tick.sense));
     let global = tick.scope.runs_global_passes();
     let mut rows: Vec<(&'static str, u64)> = Vec::new();
 
-    rows.push(("advance", advance_legs(w, &tick) as u64));
-    rows.push(("patrol", patrol(w, &tick, &active) as u64));
+    rows.push((
+        "advance",
+        timed(w, "advance", |w| advance_legs(w, &tick)) as u64,
+    ));
+    rows.push((
+        "patrol",
+        timed(w, "patrol", |w| patrol(w, &tick, &active)) as u64,
+    ));
     if global {
-        rows.extend(w.run_due_world_maintenance());
+        let maintenance = timed(w, "maintenance", |w| w.run_due_world_maintenance());
+        rows.extend(maintenance);
     }
     if tick.sense {
-        let (pulls, seen) = aggro(w, &active);
+        let (pulls, seen) = timed(w, "aggro", |w| aggro(w, &active));
         rows.push(("aggro", seen as u64));
-        rows.push(("assist", assist(w, &active, pulls) as u64));
-        rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
+        rows.push((
+            "assist",
+            timed(w, "assist", |w| assist(w, &active, pulls)) as u64,
+        ));
+        rows.push((
+            "pet",
+            timed(w, "pet", |w| pet_behavior(w, &tick, &pets)) as u64,
+        ));
         rows.push((
             "eventai",
-            w.evaluate_eventai(EventAiRequest::Cycle {
-                scope: &tick.scope,
-                active: &active,
+            timed(w, "eventai", |w| {
+                w.evaluate_eventai(EventAiRequest::Cycle {
+                    scope: &tick.scope,
+                    active: &active,
+                })
             }),
         ));
-        rows.push(("cast", cast(w, &tick.scope) as u64));
-        rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
+        rows.push(("cast", timed(w, "cast", |w| cast(w, &tick.scope)) as u64));
+        rows.push((
+            "threat_retarget",
+            timed(w, "threat_retarget", |w| threat_retarget(w, &tick.scope)) as u64,
+        ));
     }
-    rows.push(("chase", chase(w, &tick) as u64));
-    rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
-    rows.push(("idle", idle_movement(w, &tick, &active) as u64));
+    rows.push(("chase", timed(w, "chase", |w| chase(w, &tick)) as u64));
+    rows.push((
+        "combat_enter",
+        timed(w, "combat_enter", |w| combat_entry(w, &tick.scope)) as u64,
+    ));
+    rows.push((
+        "idle",
+        timed(w, "idle", |w| idle_movement(w, &tick, &active)) as u64,
+    ));
     if tick.sense && global {
-        rows.push(("regen*", regenerate(w, &in_combat) as u64));
-        rows.push(("combat_drop*", combat_exit(w, &tick, &in_combat) as u64));
+        rows.push((
+            "regen*",
+            timed(w, "regen", |w| regenerate(w, &in_combat)) as u64,
+        ));
+        rows.push((
+            "combat_drop*",
+            timed(w, "combat_drop", |w| combat_exit(w, &tick, &in_combat)) as u64,
+        ));
     }
-    rows.push(("rout", rout(w, &tick) as u64));
-    rows.push(("fear", fear(w, &tick) as u64));
+    rows.push(("rout", timed(w, "rout", |w| rout(w, &tick)) as u64));
+    rows.push(("fear", timed(w, "fear", |w| fear(w, &tick)) as u64));
     if !tick.sense {
         rows.push((
             "eventai",
-            w.evaluate_eventai(EventAiRequest::Cycle {
-                scope: &tick.scope,
-                active: &active,
+            timed(w, "eventai", |w| {
+                w.evaluate_eventai(EventAiRequest::Cycle {
+                    scope: &tick.scope,
+                    active: &active,
+                })
             }),
         ));
     }
     if global {
-        w.run_package_passes();
+        timed(w, "packages", |w| w.run_package_passes());
     }
 
     CycleOutcome {
