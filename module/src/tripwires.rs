@@ -20,8 +20,8 @@ pub(crate) mod character_owned_tripwire {
             "Realm Shard routing and delete revisions, updated by World Shards over IDC",
         ),
         (
-            &["game_native_handoff", "game_world_entry"],
-            "a World Session's pending Handoff to another Shard, gone once the Shard adopts it",
+            &["game_native_handoff", "game_world_entry", "game_native_transfer", "game_native_transfer_moved", "game_native_transfer_release"],
+            "pending World Session routing, settled by Handoff adoption or IDC results",
         ),
         (
             &[

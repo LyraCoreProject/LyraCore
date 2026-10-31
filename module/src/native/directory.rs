@@ -44,7 +44,8 @@ pub fn operator_set_map_owner(
     crate::helpers::require_operator(ctx)?;
     match role(ctx) {
         Some(ShardRole::Realm { .. }) if is_peer(ctx, world) => {}
-        Some(ShardRole::World { .. }) if world == ctx.database_identity() => {}
+        Some(ShardRole::World { .. })
+            if world == ctx.database_identity() || is_peer(ctx, world) => {}
         _ => return Err("map owner must be a World Shard of this Realm".into()),
     }
     let owners = ctx.db.game_map_owner();
@@ -109,6 +110,18 @@ pub(crate) fn owns_map(ctx: &ReducerContext, map_id: u32) -> bool {
             .is_some_and(|owner| owner.world == ctx.database_identity())
 }
 
+pub(crate) fn transfer_target(ctx: &ReducerContext, map_id: u32) -> Option<Identity> {
+    let realm = realm_shard(ctx)?;
+    ctx.db
+        .game_map_owner()
+        .map_id()
+        .find(map_id)
+        .map(|owner| owner.world)
+        .filter(|world| {
+            *world != ctx.database_identity() && *world != realm && is_peer(ctx, *world)
+        })
+}
+
 pub(super) fn character_world(
     ctx: &ReducerContext,
     account_id: u64,
@@ -164,8 +177,30 @@ pub struct CharacterDirectoryUpdate {
     pub revision: u64,
 }
 
+#[table(accessor = game_directory_clock)]
+pub struct DirectoryClock {
+    #[primary_key]
+    pub id: u8,
+    pub revision: u64,
+}
+
+pub(super) fn observe_revision(ctx: &ReducerContext, revision: u64) {
+    let clock = ctx.db.game_directory_clock();
+    let revision = revision.max(clock.id().find(0).map_or(0, |row| row.revision));
+    clock.id().delete(0);
+    clock.insert(DirectoryClock { id: 0, revision });
+}
+
 pub(super) fn revision(ctx: &ReducerContext) -> u64 {
-    ctx.timestamp.to_micros_since_unix_epoch() as u64
+    let revision = (ctx.timestamp.to_micros_since_unix_epoch() as u64).max(
+        ctx.db
+            .game_directory_clock()
+            .id()
+            .find(0)
+            .map_or(0, |row| row.revision + 1),
+    );
+    observe_revision(ctx, revision);
+    revision
 }
 
 pub(crate) fn changed(ctx: &ReducerContext, account_id: u64, guid: u64, present: bool) {
@@ -214,11 +249,11 @@ pub(super) fn apply(
     for (guid, present) in changes {
         let versions = ctx.db.game_character_directory_version();
         if let Some(version) = versions.guid().find(guid) {
-            if version.world != ctx.sender() {
-                return Err("Character directory owner cannot change without a Transfer".into());
-            }
             if version.revision >= revision {
                 continue;
+            }
+            if version.world != ctx.sender() {
+                return Err("Character directory owner cannot change without a Transfer".into());
             }
         }
         let directory = ctx.db.game_character_directory();

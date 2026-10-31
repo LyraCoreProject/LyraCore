@@ -229,6 +229,7 @@ pub(super) fn enter_character(
         teleport_counter,
         zone_id: entity.zone_id,
         teleport_started_micros: 0,
+        teleport_origin: None,
     });
     for grant in grants {
         super::visibility::create(ctx, connection.connection_id, &grant, false)?;
@@ -260,6 +261,7 @@ pub(super) fn leave(ctx: &ReducerContext, connection_id: ConnectionId) {
     if let Some(player) = players.connection_id().find(connection_id) {
         super::clear_audience(ctx, connection_id);
         super::member_stats::stop(ctx, connection_id);
+        super::teleport::restore_origin(ctx, player.character_guid, player.teleport_origin);
         players.connection_id().delete(connection_id);
         crate::meeting_stone::remove_solo_seeker(ctx, player.character_guid);
         crate::channel::leave_all(ctx, player.character_guid);
@@ -290,6 +292,9 @@ pub(super) fn receive(
     opcode: u32,
     body: &[u8],
 ) -> Result<(), Rollback> {
+    if super::transfer::pending(ctx, connection.connection_id) {
+        return Ok(());
+    }
     let player = ctx
         .db
         .game_native_player()

@@ -5,7 +5,7 @@ use lyracore_protocol::{
 use spacetimedb::{ReducerContext, SpacetimeType, Table};
 
 use super::{game_native_player, NativePlayer, NativeWorldConnection};
-use crate::{game_world_entity, world::TeleportEvent};
+use crate::{game_character, game_world_entity, world::TeleportEvent};
 
 const NEAR_ACK_TIMEOUT_MICROS: i64 = 20_000_000;
 
@@ -15,8 +15,54 @@ pub enum NativeTeleport {
     WorldPort,
 }
 
+#[derive(SpacetimeType, Clone, Copy)]
+pub struct NativeTeleportOrigin {
+    pub map_id: u32,
+    pub instance_id: u64,
+    pub zone_id: u32,
+    pub x: f32,
+    pub y: f32,
+    pub z: f32,
+    pub orientation: f32,
+}
+
+pub(super) fn restore_origin(
+    ctx: &ReducerContext,
+    guid: u64,
+    origin: Option<NativeTeleportOrigin>,
+) {
+    let (Some(origin), Some(mut character)) =
+        (origin, crate::helpers::character_by_guid(ctx, guid))
+    else {
+        return;
+    };
+    if super::directory::owns_map(ctx, character.map_id) {
+        return;
+    }
+    character.map_id = origin.map_id;
+    character.pending_instance_id = origin.instance_id;
+    character.zone_id = origin.zone_id;
+    character.x = origin.x;
+    character.y = origin.y;
+    character.z = origin.z;
+    character.orientation = origin.orientation;
+    ctx.db.game_character().guid().update(character);
+}
+
 pub(crate) fn begin(ctx: &ReducerContext, guid: u64, cross_map: bool) -> Option<u32> {
     let mut player = ctx.db.game_native_player().character_guid().find(guid)?;
+    player.teleport_origin = cross_map
+        .then(|| ctx.db.game_world_entity().guid().find(guid))
+        .flatten()
+        .map(|entity| NativeTeleportOrigin {
+            map_id: entity.map_id,
+            instance_id: entity.instance_id,
+            zone_id: entity.zone_id,
+            x: entity.x,
+            y: entity.y,
+            z: entity.z,
+            orientation: entity.orientation,
+        });
     player.teleport_counter = player.teleport_counter.wrapping_add(1);
     player.teleport_started_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
     player.teleport = Some(if cross_map {
@@ -118,6 +164,9 @@ pub(super) fn acknowledge(
             finish_near(ctx, player, counter, false).map(|_| ())
         }
         (ClientOpcodeMessage::MSG_MOVE_WORLDPORT_ACK, Some(NativeTeleport::WorldPort)) => {
+            if super::transfer::begin(ctx, &connection, &player)? {
+                return Ok(());
+            }
             // Rebuild without a recipient; a Passenger's Transport, then self CREATE, precede AOI.
             ctx.db
                 .game_native_player()

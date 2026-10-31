@@ -57,7 +57,7 @@ fn blob<T: spacetimedb::Serialize>(row: &T) -> Vec<u8> {
     bsatn::to_vec(row).expect("a table row encodes")
 }
 
-fn store_account(ctx: &ReducerContext, account: &[u8]) -> Result<Account, String> {
+pub(super) fn store_account(ctx: &ReducerContext, account: &[u8]) -> Result<Account, String> {
     let account: Account = bsatn::from_slice(account).map_err(|error| error.to_string())?;
     let accounts = ctx.db.game_account();
     accounts.id().delete(account.id);
@@ -65,7 +65,7 @@ fn store_account(ctx: &ReducerContext, account: &[u8]) -> Result<Account, String
     Ok(accounts.insert(account))
 }
 
-fn store_session(ctx: &ReducerContext, session: &[u8]) -> Result<(), String> {
+pub(super) fn store_session(ctx: &ReducerContext, session: &[u8]) -> Result<(), String> {
     let session: Session = bsatn::from_slice(session).map_err(|error| error.to_string())?;
     let sessions = ctx.db.game_session();
     sessions.account_id().delete(session.account_id);
@@ -373,6 +373,10 @@ pub fn idc_world_entry(
         client_seed,
         client_proof,
         character_guid: Some(character_guid),
+        world_port: false,
+        teleport_counter: 0,
+        transfer_id: 0,
+        transfer_source: None,
     });
     Ok(())
 }
@@ -552,6 +556,10 @@ pub fn idc_return_to_selection(
         client_seed,
         client_proof,
         character_guid: None,
+        world_port: false,
+        teleport_counter: 0,
+        transfer_id: 0,
+        transfer_source: None,
     });
     Ok(())
 }

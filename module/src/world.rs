@@ -457,7 +457,9 @@ fn teleport(
     [x, y, z, o]: [f32; 4],
     aboard: Option<crate::transport::Aboard>,
 ) {
-    if !crate::native::directory::owns_map(ctx, map_id)
+    if (!crate::native::directory::owns_map(ctx, map_id)
+        && !(crate::native::directory::transfer_target(ctx, map_id).is_some()
+            && crate::native::has_world_session(ctx, player_guid)))
         || crate::taxi::movement_is_suppressed(ctx, player_guid)
     {
         return;

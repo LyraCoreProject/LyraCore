@@ -24,6 +24,14 @@ pub struct NativeHandoff {
     /// The Character the World Session enters on arrival; without one it arrives at selection.
     #[default(None::<u64>)]
     pub character_guid: Option<u64>,
+    #[default(false)]
+    pub world_port: bool,
+    #[default(0u32)]
+    pub teleport_counter: u32,
+    #[default(0u64)]
+    pub transfer_id: u64,
+    #[default(None::<Identity>)]
+    pub transfer_source: Option<Identity>,
 }
 
 pub(super) fn write_marker(ctx: &ReducerContext, connection_id: ConnectionId, database: Identity) {
@@ -90,15 +98,18 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
             connection,
             account.id,
             guid,
-            crate::world::WorldEntry::Login,
-            0,
+            if handoff.world_port {
+                crate::world::WorldEntry::WorldPort
+            } else {
+                crate::world::WorldEntry::Login
+            },
+            handoff.teleport_counter,
         ),
         None => super::current_account(ctx, &connection, account.id).map(drop),
     }
 }
 
-/// Moves the World Session of `account_id` to `database`. The PONG before the marker reaches the
-/// client; the PONG after it must not.
+/// Sends PONGs around a Handoff marker; only the first reaches the client.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_native_handoff(
@@ -131,7 +142,7 @@ pub fn debug_native_handoff(
     pong(0xaf7e)
 }
 
-/// Records the World Session that another Shard hands to this one, for the Account named `username`.
+/// Prepares a selection Handoff for the named Account.
 #[cfg(feature = "debug_reducers")]
 #[reducer]
 pub fn debug_native_expect_handoff(
@@ -156,6 +167,10 @@ pub fn debug_native_expect_handoff(
         client_seed,
         client_proof,
         character_guid: None,
+        world_port: false,
+        teleport_counter: 0,
+        transfer_id: 0,
+        transfer_source: None,
     });
     Ok(())
 }

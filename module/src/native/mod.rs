@@ -48,6 +48,7 @@ mod taxi;
 mod teleport;
 mod trade;
 mod trainer;
+mod transfer;
 mod transport;
 mod unavailable;
 mod view;
@@ -204,6 +205,8 @@ pub struct NativePlayer {
     pub gossip_root_menu_id: u32,
     #[default(0i64)]
     pub teleport_started_micros: i64,
+    #[default(None::<teleport::NativeTeleportOrigin>)]
+    pub teleport_origin: Option<teleport::NativeTeleportOrigin>,
 }
 
 pub(crate) fn group_event(
@@ -767,6 +770,14 @@ fn available_entity(ctx: &ReducerContext, guid: u64) -> Result<crate::WorldEntit
 
 fn available_character(ctx: &ReducerContext, guid: u64) -> Result<crate::Character, Refusal> {
     crate::helpers::character_by_guid(ctx, guid).ok_or_else(|| "Character is not available".into())
+}
+
+pub(crate) fn has_world_session(ctx: &ReducerContext, guid: u64) -> bool {
+    ctx.db
+        .game_native_player()
+        .character_guid()
+        .find(guid)
+        .is_some()
 }
 
 #[cfg(test)]

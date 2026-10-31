@@ -32,6 +32,14 @@ entry menu. The Host does not decode this table, and its delivery layouts do not
 default expires a near teleport already pending at migration on the next tick. World ports do not
 use this timeout.
 
+Native world-port Transfer adds private IDC outboxes and a pending connection table. The
+`game_directory_clock` row carries the greatest observed directory revision across World Shards.
+`game_native_player.teleport_origin` is an end-appended optional position with default `None`.
+`game_native_handoff` appends `world_port` (false), `teleport_counter` (0), `transfer_id` (0) and
+`transfer_source` (`None`). Old Handoffs remain ordinary login or selection arrivals. The Native
+Host's cipher and packet layouts do not change. See [Character Transfer](character-transfer.md)
+for the ledger and Handoff ordering.
+
 `game_creature_level_stats` holds final health, damage and armor by template and level.
 `game_creature_display` holds weighted display choices by template. Both are new tables, so an
 existing Realm migrates without changing stored template rows. A template stat change takes

@@ -1724,3 +1724,19 @@ fn finish_before_the_attestation_refuses_and_leaves_the_source_copy_alone() {
     let mut elsewhere = FakeDb::new();
     apply_finish_step(&mut elsewhere, XFER).expect("no escrow here — nothing to finish");
 }
+
+#[test]
+fn refused_idc_import_releases_only_an_unconfirmed_source() {
+    let mut source = FakeDb::populated(GUID);
+    apply_begin(&mut source, 9901, GUID, DEST, true).unwrap();
+    apply_abort(&mut source, 9901).unwrap();
+    apply_abort(&mut source, 9901).unwrap();
+    assert!(source.has_character(GUID));
+    assert!(!source.is_in_transit(GUID));
+    assert_eq!(source.gear_of(GUID).len(), 2);
+    apply_begin(&mut source, 9902, GUID, DEST, true).unwrap();
+    apply_confirm(&mut source, 9902).unwrap();
+    assert!(apply_abort(&mut source, 9902).is_err());
+    assert!(source.has_character(GUID));
+    assert!(source.is_in_transit(GUID));
+}
