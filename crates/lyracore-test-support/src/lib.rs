@@ -699,6 +699,16 @@ pub fn actor(guid: &str) -> String {
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
+// `describe` returns a V10 module definition: a list of sections keyed by kind, such as "Reducers".
+pub fn schema_section<'a>(schema: &'a serde_json::Value, kind: &str) -> &'a serde_json::Value {
+    schema["sections"]
+        .as_array()
+        .expect("Module definition sections")
+        .iter()
+        .find_map(|section| section.get(kind))
+        .unwrap_or_else(|| panic!("the Module definition has no {kind} section"))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

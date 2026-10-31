@@ -50,55 +50,61 @@ fn the_architecture_check_detects_a_missing_or_ineffective_feature_gate() {
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn debug_reducers_build_does_not_export_conformance_entry() {
-    use lyracore_test_support::{module_bytes_with_features, Standalone};
+    use lyracore_test_support::{module_bytes_with_features, schema_section, Standalone};
 
     let wasm = module_bytes_with_features("debug_reducers");
     let mut shard = Standalone::start("native-debug-gate");
     shard.publish_module_bytes(&wasm);
     let schema = shard.describe();
-    let reducers = schema["reducers"].as_array().expect("Module reducers");
+    let reducers = schema_section(&schema, "Reducers")
+        .as_array()
+        .expect("Module reducers");
     assert!(reducers
         .iter()
-        .any(|reducer| reducer["name"] == "debug_learn_taxi_node"));
+        .any(|reducer| reducer["source_name"] == "debug_learn_taxi_node"));
     assert!(!reducers
         .iter()
-        .any(|reducer| reducer["name"] == "debug_native_enter_world"));
+        .any(|reducer| reducer["source_name"] == "debug_native_enter_world"));
     assert!(!reducers
         .iter()
-        .any(|reducer| reducer["name"] == "debug_native_project"));
+        .any(|reducer| reducer["source_name"] == "debug_native_project"));
     for name in ["debug_start_virtual_clock", "debug_advance_virtual_clock"] {
-        assert!(!reducers.iter().any(|reducer| reducer["name"] == name));
+        assert!(!reducers
+            .iter()
+            .any(|reducer| reducer["source_name"] == name));
     }
-    assert!(!schema["tables"]
+    assert!(!schema_section(&schema, "Tables")
         .as_array()
         .expect("Module tables")
         .iter()
-        .any(|table| table["name"] == "game_conformance_clock"));
+        .any(|table| table["source_name"] == "game_conformance_clock"));
     for name in [
         "game_native_conformance_projection",
         "game_native_conformance_cache",
         "game_native_conformance_create",
         "game_native_conformance_birth",
     ] {
-        assert!(!schema["tables"]
+        assert!(!schema_section(&schema, "Tables")
             .as_array()
             .expect("Module tables")
             .iter()
-            .any(|table| table["name"] == name));
+            .any(|table| table["source_name"] == name));
     }
 }
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn default_build_does_not_export_taxi_discovery() {
-    use lyracore_test_support::{module_bytes_with_features, Standalone};
+    use lyracore_test_support::{module_bytes_with_features, schema_section, Standalone};
 
     let wasm = module_bytes_with_features("");
     let mut shard = Standalone::start("taxi-debug-gate");
     shard.publish_module_bytes(&wasm);
     let schema = shard.describe();
-    let reducers = schema["reducers"].as_array().expect("Module reducers");
+    let reducers = schema_section(&schema, "Reducers")
+        .as_array()
+        .expect("Module reducers");
     assert!(!reducers
         .iter()
-        .any(|reducer| reducer["name"] == "debug_learn_taxi_node"));
+        .any(|reducer| reducer["source_name"] == "debug_learn_taxi_node"));
 }

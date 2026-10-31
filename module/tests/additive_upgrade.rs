@@ -4,8 +4,8 @@ use std::fs;
 
 use serde_json::Value;
 use support::{
-    actor, event_rows, fence_subscription, module_bytes, poll_until, subscribe_with_fence, Row,
-    Standalone, POLL_TIMEOUT,
+    actor, event_rows, fence_subscription, module_bytes, poll_until, schema_section,
+    subscribe_with_fence, Row, Standalone, POLL_TIMEOUT,
 };
 
 const LEGACY_NOTIFICATIONS: &[&str] = &[
@@ -175,11 +175,11 @@ fn entity(shard: &Standalone) -> Row {
 }
 
 fn table<'a>(schema: &'a Value, name: &str) -> &'a Value {
-    schema["tables"]
+    schema_section(schema, "Tables")
         .as_array()
         .expect("Module tables")
         .iter()
-        .find(|table| table["name"] == name)
+        .find(|table| table["source_name"] == name)
         .unwrap_or_else(|| panic!("missing table {name}"))
 }
 
@@ -192,7 +192,9 @@ fn table_schema(schema: &Value, name: &str) -> Value {
         .expect("table row type")
         .as_u64()
         .expect("table row type reference") as usize;
-    let types = schema["typespace"]["types"].as_array().expect("typespace");
+    let types = schema_section(schema, "Typespace")["types"]
+        .as_array()
+        .expect("typespace");
     definition["row_type"] = resolve_type(&types[type_ref], types);
     definition
 }

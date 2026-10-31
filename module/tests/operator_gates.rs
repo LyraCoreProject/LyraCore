@@ -1,7 +1,7 @@
 mod support;
 
 use serde_json::{json, Map, Value};
-use support::Standalone;
+use support::{schema_section, Standalone};
 
 const OPEN: &[&str] = &["claim_operator"];
 
@@ -59,22 +59,29 @@ fn every_operator_reducer_refuses_an_anonymous_caller() {
 }
 
 fn operator_reducers(schema: &Value) -> Vec<(String, Vec<String>)> {
-    let typespace = schema["typespace"]["types"].as_array().expect("typespace");
-    let scheduled: Vec<&str> = schema["tables"]
+    let typespace = schema_section(schema, "Typespace")["types"]
         .as_array()
-        .expect("tables")
-        .iter()
-        .filter_map(|table| table["schedule"]["some"]["reducer_name"].as_str())
-        .collect();
-    schema["reducers"]
+        .expect("typespace");
+    let function_names = |kind| -> Vec<&str> {
+        schema_section(schema, kind)
+            .as_array()
+            .expect(kind)
+            .iter()
+            .map(|entry| entry["function_name"].as_str().expect("function name"))
+            .collect()
+    };
+    let scheduled = function_names("Schedules");
+    let lifecycle = function_names("LifeCycleReducers");
+    schema_section(schema, "Reducers")
         .as_array()
         .expect("reducers")
         .iter()
-        .filter(|reducer| reducer["lifecycle"].get("none").is_some())
         .filter_map(|reducer| {
-            let name = reducer["name"].as_str().expect("reducer name");
-            let open =
-                OPEN.contains(&name) || name.starts_with(OPEN_PREFIX) || scheduled.contains(&name);
+            let name = reducer["source_name"].as_str().expect("reducer name");
+            let open = OPEN.contains(&name)
+                || name.starts_with(OPEN_PREFIX)
+                || scheduled.contains(&name)
+                || lifecycle.contains(&name);
             let args = reducer["params"]["elements"]
                 .as_array()
                 .expect("reducer params")
