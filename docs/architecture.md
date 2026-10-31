@@ -351,6 +351,14 @@ Native connection, cipher and delivery tables are private. The Host connects in 
 Shard publisher, and WoW clients receive only the packets the Module selects. HTTP access still
 requires the Operator Gates; public tables are not a substitute for them.
 
+Shards of one Realm call each other through SpacetimeDB outbox tables, as calls between databases.
+Every Shard runs the same Module, so the outbox bindings in `module/src/remote_bindings/peer` come
+from the Module's own `idc_` reducers; `scripts/idc-bindings.py` regenerates them, and CI checks
+that they are current. An `idc_` reducer takes plain arguments and refuses a caller that is not a
+Peer Shard. A call arrives as a short connection from the calling Shard, so `client_disconnected`
+skips Peer Shards. Delivery is exactly once, and each call waits for disk writes on both sides, so
+calls carry rare events and batches, never per-packet traffic.
+
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in
 [the Package API](./package-api.md).

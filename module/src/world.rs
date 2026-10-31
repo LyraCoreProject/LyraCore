@@ -1463,6 +1463,10 @@ pub(crate) fn apply_gossip_select(
 
 #[reducer(client_disconnected)]
 pub fn on_disconnect(ctx: &ReducerContext) {
+    // Every call from a Peer Shard connects and disconnects as that Shard; it holds no World Session.
+    if crate::peer::is_peer(ctx, ctx.sender()) {
+        return;
+    }
     crate::native::close(ctx);
     if let Some(entity) = entity_by_owner(ctx, ctx.sender()) {
         if !crate::native::is_player(ctx, entity.guid) {
