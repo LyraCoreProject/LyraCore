@@ -212,6 +212,7 @@ pub(crate) mod package_fixture;
 mod package_import;
 
 mod package_teardown;
+mod peer;
 
 #[cfg(test)]
 pub(crate) mod package_test;
@@ -224,6 +225,7 @@ mod quest;
 mod realm_chat;
 mod realm_core;
 mod refusal;
+mod remote_bindings;
 pub(crate) use refusal::Refusal;
 mod region;
 mod reputation;
