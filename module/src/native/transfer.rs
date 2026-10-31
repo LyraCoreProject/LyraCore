@@ -144,7 +144,7 @@ fn require_world_peer(ctx: &ReducerContext, realm: Identity) -> Result<(), Strin
     if realm_shard(ctx) == Some(realm) && ctx.sender() != realm && is_peer(ctx, ctx.sender()) {
         Ok(())
     } else {
-        Err("Transfer caller must be a Peer World Shard of the same Realm Shard".into())
+        Err("caller is not a Peer Shard".into())
     }
 }
 
