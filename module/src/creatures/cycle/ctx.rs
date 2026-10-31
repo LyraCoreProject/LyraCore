@@ -25,8 +25,7 @@ use crate::{
 };
 use lyracore_shared::movement_flags::FORWARD;
 
-// Path search dominates a crowded tick. One chase search and one tick's chase searches are bounded
-// so the tick's cost stays flat as players and pursuing creatures grow.
+// Path-search nodes for one chase search and for all of one tick's chase searches.
 const CHASE_SEARCH_EXPANSIONS: u32 = 4_096;
 const CHASE_TICK_EXPANSIONS: u32 = 32_768;
 

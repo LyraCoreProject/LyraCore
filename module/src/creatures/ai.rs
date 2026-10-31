@@ -241,8 +241,7 @@ pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
 
 pub(crate) const TICK_SLICES: u32 = 4;
 
-/// The open-world tick fires this often and runs one slice of the creatures each time, so each
-/// creature still runs every `MOVE_TICK_MICROS` while no single transaction holds the writer long.
+/// Each firing runs one slice, so every creature still runs once per `MOVE_TICK_MICROS`.
 pub(crate) const SLICED_TICK_MICROS: i64 = MOVE_TICK_MICROS / TICK_SLICES as i64;
 
 #[derive(Clone, Copy, Debug, PartialEq)]
