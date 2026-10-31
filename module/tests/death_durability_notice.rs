@@ -14,7 +14,7 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("debug_spawn_player_entity", &["1"]);
     shard.assert_sql("DELETE FROM game_item_instance");
     // The reaper would delete the events under test.
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard
 }
 
@@ -29,7 +29,7 @@ fn notices(shard: &Standalone) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_death_that_damages_worn_gear_tells_the_victim_once() {
     let shard = fixture("death-durability-notice");
     shard.assert_call("debug_grant_item", &["1", BLADE, "1"]);
@@ -48,7 +48,7 @@ fn a_death_that_damages_worn_gear_tells_the_victim_once() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_death_with_nothing_to_damage_sends_no_notice() {
     let shard = fixture("death-durability-bare");
 

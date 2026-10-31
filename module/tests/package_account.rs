@@ -45,7 +45,7 @@ fn package_accounts(shard: &Standalone) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_character_lands_on_an_account_that_records_its_package() {
     let shard = stage("package-account-owner");
     for index in 0..11 {
@@ -93,7 +93,7 @@ fn a_package_character_lands_on_an_account_that_records_its_package() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_character_meets_the_client_name_race_and_class_refusals() {
     let shard = stage("package-account-refusals");
     shard.assert_call(
@@ -118,7 +118,7 @@ fn a_package_character_meets_the_client_name_race_and_class_refusals() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_new_package_account_skips_a_name_an_unowned_account_holds() {
     let shard = stage("package-account-taken-name");
     let first = create(&shard, "Bota", "1", "1");

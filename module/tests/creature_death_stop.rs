@@ -25,7 +25,7 @@ fn assert_stored_at(row: &Row, at: (f32, f32, f32), when: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_creature_killed_mid_leg_stops_where_the_client_renders_it() {
     let mut shard = Standalone::start("creature-death-stop");
     let wolf = lone_wolf(&mut shard);

@@ -51,7 +51,7 @@ fn destination(shard: &Standalone, table: &str, map: u32) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn offline_teleport_saves_the_destination_for_the_next_login() {
     let shard = realm("operator-character-offline");
     shard.assert_sql("UPDATE game_character SET pending_instance_id = 42 WHERE guid = 1");
@@ -100,7 +100,7 @@ fn refused(shard: &Standalone, args: &[&str], message: &str) {
 const ARGS: &[&str] = &["\"Tester\"", "0", "100", "100", "10.5", "1.25"];
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn online_same_map_and_far_teleports_use_the_world_path() {
     let shard = realm("operator-character-online");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -120,7 +120,7 @@ fn online_same_map_and_far_teleports_use_the_world_path() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn non_operator_and_unclaimed_operator_cannot_teleport() {
     let shard = realm("operator-character-authority");
     let before = snapshot(&shard);
@@ -133,7 +133,7 @@ fn non_operator_and_unclaimed_operator_cannot_teleport() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn unknown_names_instance_maps_unloaded_maps_and_outside_coordinates_refuse() {
     let shard = realm("operator-character-destination-refusal");
     for (index, value, message) in [
@@ -161,7 +161,7 @@ fn unknown_names_instance_maps_unloaded_maps_and_outside_coordinates_refuse() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn ambiguous_case_insensitive_names_refuse_even_an_exact_spelling() {
     let shard = realm("operator-character-ambiguous");
     let account = shard.query_rows("SELECT account_id FROM game_character WHERE guid = 1")[0]
@@ -186,7 +186,7 @@ fn ambiguous_case_insensitive_names_refuse_even_an_exact_spelling() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn dead_ghost_combat_taxi_and_transport_states_refuse_without_changes() {
     let shard = realm("operator-character-state-refusal");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -224,7 +224,7 @@ fn dead_ghost_combat_taxi_and_transport_states_refuse_without_changes() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn offline_ghost_and_online_character_without_entity_refuse() {
     let shard = realm("operator-character-offline-refusal");
     shard.assert_sql("UPDATE game_character SET pending_ghost = true WHERE guid = 1");
@@ -240,7 +240,7 @@ fn offline_ghost_and_online_character_without_entity_refuse() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn offline_destination_without_area_data_clears_the_old_zone() {
     let shard = realm("operator-character-no-area");
     shard.assert_sql("DELETE FROM game_area");
@@ -252,7 +252,7 @@ fn offline_destination_without_area_data_clears_the_old_zone() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transfer_fenced_character_cannot_be_relocated() {
     let shard = realm("operator-character-transfer");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -274,7 +274,7 @@ fn transfer_fenced_character_cannot_be_relocated() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_live_sessionless_character_uses_the_world_path() {
     let shard = realm("operator-character-sessionless");
     shard.assert_call("debug_spawn_player_entity", &["1"]);

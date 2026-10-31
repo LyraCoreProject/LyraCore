@@ -63,7 +63,7 @@ fn make_tabard_designer(shard: &Standalone, vendor: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_guild_leader_pays_ten_gold_and_every_refusal_keeps_the_copper() {
     let (shard, vendor) = fixture("guild-fee");
     let payer = actor(PAYER);

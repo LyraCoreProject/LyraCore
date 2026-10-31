@@ -118,7 +118,7 @@ fn mirror_group(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_group_mirror_arms_and_cancels_the_countdown_in_roster_revision_order() {
     let node = start("instance-removal-mirror");
     node.assert_call("debug_stage_instance_removal_fixture", &["900"]);
@@ -222,7 +222,7 @@ fn join(node: &Standalone, inviter: u64, guid: u64) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_membership_cores_arm_and_cancel_the_countdown_on_one_database() {
     let node = start("instance-removal-cores");
     for guid in [BRAVO, CHARLIE, DELTA, ECHO] {
@@ -307,7 +307,7 @@ fn assert_in_instance(node: &Standalone, guid: u64) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_of_two_that_forms_again_inside_the_instance_cancels_both_countdowns() {
     let node = start("instance-removal-regroup-cores");
     join(&node, ALPHA, CHARLIE);
@@ -332,7 +332,7 @@ fn a_party_of_two_that_forms_again_inside_the_instance_cancels_both_countdowns()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_of_two_that_forms_again_reaches_the_instance_pool_mirror_and_cancels() {
     let node = start("instance-removal-regroup-mirror");
     node.assert_call("debug_stage_instance_removal_fixture", &["900"]);
@@ -349,7 +349,7 @@ fn a_party_of_two_that_forms_again_reaches_the_instance_pool_mirror_and_cancels(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_assistants_kick_arms_the_countdown_and_the_assistants_invite_cancels_it() {
     let node = start("instance-removal-assistant-rights");
     for guid in [BRAVO, CHARLIE] {

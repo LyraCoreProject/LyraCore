@@ -176,7 +176,7 @@ fn vmangos_gameobjects_select_versions_and_ranges_skip_disabled_and_translate_st
 }
 
 #[test]
-#[ignore = "requires the local SpacetimeDB 2.7.1 CLI and debug Module"]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
 fn imported_open_chest_can_be_looted() {
     let plan = gameobject_plan(&gameobject_source());
     let mut shard = standalone_support::Standalone::start("vmangos-open-chest");

@@ -144,7 +144,7 @@ fn fixture(name: &str, copper: u32) -> (Standalone, String) {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     stage_charter_template(&shard);
     shard.assert_call("debug_spawn_player_entity", &[&OWNER.to_string()]);
@@ -167,7 +167,7 @@ fn fixture(name: &str, copper: u32) -> (Standalone, String) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_charter_with_nine_signatures_founds_the_guild() {
     let (shard, npc) = fixture("guild-petition", 1_500);
     let owner = actor(OWNER);
@@ -296,7 +296,7 @@ fn a_charter_with_nine_signatures_founds_the_guild() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_refused_charter_costs_nothing_and_a_joining_signer_loses_its_signature() {
     let (shard, npc) = fixture("guild-petition-refusals", 999);
     let owner = actor(OWNER);

@@ -99,7 +99,7 @@ fn refusal(shard: &Standalone, reducer: &str, args: &[&str]) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_updated_creature_spawn_respawns_at_its_new_place_in_a_new_life() {
     let shard = realm("operator-content-update");
     let (map_id, x, y, z) = chicken_home(&shard);
@@ -125,7 +125,7 @@ fn an_updated_creature_spawn_respawns_at_its_new_place_in_a_new_life() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_created_creature_spawn_takes_the_operator_range_and_appears() {
     let shard = realm("operator-content-create");
     let (map_id, x, y, z) = chicken_home(&shard);
@@ -184,7 +184,7 @@ fn a_created_creature_spawn_takes_the_operator_range_and_appears() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_deleted_creature_spawn_leaves_no_entity_route_or_row() {
     let shard = realm("operator-content-delete");
     assert!(entity_row(&shard, CHICKEN).is_some());
@@ -204,7 +204,7 @@ fn a_deleted_creature_spawn_leaves_no_entity_route_or_row() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spawn_edits_refuse_bad_targets_and_bad_input() {
     let shard = realm("operator-content-refusals");
     shard.assert_call("install_guid_range", &["0"]);
@@ -294,7 +294,7 @@ fn spawn_edits_refuse_bad_targets_and_bad_input() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_population_copy_is_not_an_authored_spawn() {
     let shard = realm("operator-content-population-copy");
     shard.assert_sql(&format!(
@@ -310,7 +310,7 @@ fn a_population_copy_is_not_an_authored_spawn() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn gameobject_spawn_edits_move_create_and_remove_the_object() {
     let shard = realm("operator-content-gameobject");
     let chest = gameobject_row(&shard, CHEST).expect("the seeded chest");
@@ -347,7 +347,7 @@ fn gameobject_spawn_edits_move_create_and_remove_the_object() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_spawn_edit_batch_applies_whole_or_not_at_all() {
     let shard = realm("operator-content-batch");
     let (map_id, x, y, z) = chicken_home(&shard);
@@ -394,7 +394,7 @@ fn a_spawn_edit_batch_applies_whole_or_not_at_all() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
     let shard = realm("operator-content-instance-copy");
     shard.assert_call("install_guid_range", &["0"]);
@@ -438,7 +438,7 @@ fn an_instance_copy_skips_the_guid_of_a_dormant_operator_spawn() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_population_member_can_move_but_not_be_deleted() {
     let shard = realm("operator-content-population-member");
     shard.assert_sql(&format!(

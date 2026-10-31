@@ -45,7 +45,7 @@ fn arrival_pending(shard: &Standalone, guid: &str) -> bool {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_scripted_move_leaves_the_stored_row_on_the_leg() {
     let mut shard = Standalone::start("encounter-move-stored-row");
     let wolf = lone_wolf(&mut shard);
@@ -76,7 +76,7 @@ fn a_scripted_move_leaves_the_stored_row_on_the_leg() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_move_dynamic_arrival_fires_when_the_leg_lands() {
     let mut shard = Standalone::start("encounter-move-arrival");
     let pair = wolves(&mut shard, &[5.0, 30.0]);
@@ -104,7 +104,7 @@ fn a_move_dynamic_arrival_fires_when_the_leg_lands() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_move_dynamic_arrival_is_dropped_when_a_newer_leg_replaced_the_leg() {
     let mut shard = Standalone::start("encounter-move-arrival-superseded");
     let pair = wolves(&mut shard, &[5.0, 30.0]);
@@ -138,7 +138,7 @@ fn a_move_dynamic_arrival_is_dropped_when_a_newer_leg_replaced_the_leg() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_move_dynamic_arrival_puts_the_mover_on_the_destination_and_reaps_the_leg() {
     let mut shard = Standalone::start("encounter-move-arrival-placement");
     let pair = wolves(&mut shard, &[5.0, 30.0]);

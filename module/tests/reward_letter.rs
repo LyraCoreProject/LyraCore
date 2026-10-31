@@ -43,7 +43,7 @@ fn turn_in(standalone: &Standalone, quest: &str) -> std::process::Output {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_turn_in_files_one_reward_letter_that_arrives_from_its_quest_giver() {
     let mut standalone = Standalone::start("reward-letter");
     standalone.publish_module();

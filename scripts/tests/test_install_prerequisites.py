@@ -60,9 +60,9 @@ class InstallerPrerequisiteTests(unittest.TestCase):
                 **({"python3": "exit 0"} if python else {}),
                 "pkg-config": "exit 0",
                 "apt-get": "exit 99",
-                "cargo": "echo 'cargo 1.93.0'",
+                "cargo": "echo 'cargo 1.97.1'",
                 "spacetime": (
-                    'case "$1" in --version) echo "spacetimedb tool version 2.7.1";; '
+                    'case "$1" in --version) echo "spacetimedb tool version 2.14.0";; '
                     f'*) echo "$*" >> {shlex.quote(str(spacetime_calls))}; exit 98;; esac'
                 ),
                 "wasm-opt": "echo 'wasm-opt version 131'",

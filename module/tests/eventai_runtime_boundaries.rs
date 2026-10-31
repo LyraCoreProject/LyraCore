@@ -3,7 +3,7 @@ mod support;
 use support::{poll_until, Standalone, POLL_TIMEOUT};
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn empty_relay_catalogue_and_spell_guardian_cleanup_apply_through_real_reducers() {
     let mut standalone = Standalone::start("eventai-runtime-boundaries");
     standalone.publish_module_anonymous();
@@ -11,7 +11,7 @@ fn empty_relay_catalogue_and_spell_guardian_cleanup_apply_through_real_reducers(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn obsolete_callbacks_leave_replacement_summons_and_living_summons_expire_naturally() {
     let mut standalone = Standalone::start("eventai-summon-expiry-boundaries");
     standalone.publish_module();
@@ -53,7 +53,7 @@ fn obsolete_callbacks_leave_replacement_summons_and_living_summons_expire_natura
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scripts() {
     let mut standalone = Standalone::start("eventai-script-failure");
     standalone.publish_module();
@@ -102,7 +102,7 @@ fn delayed_scripts_continue_after_failure_and_abort_without_canceling_child_scri
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn delayed_speech_uses_the_authored_chat_override() {
     let mut shard = Standalone::start("script-speech-override");
     shard.publish_module();

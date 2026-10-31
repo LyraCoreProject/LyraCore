@@ -24,7 +24,7 @@ fn packed_definition(rules: &str) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn zone_speech_resolves_terrain_imported_after_the_creature_spawn() {
     let mut shard = Standalone::start("full-world-zone-speech");
     shard.publish_module();
@@ -81,7 +81,7 @@ fn zone_speech_resolves_terrain_imported_after_the_creature_spawn() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn authored_auto_attack_switch_controls_real_scheduled_swings() {
     let mut shard = Standalone::start("full-world-eventai");
     shard.publish_module();
@@ -140,7 +140,7 @@ fn authored_auto_attack_switch_controls_real_scheduled_swings() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn instance_copies_inherit_the_source_guid_spawn_rule() {
     let mut shard = Standalone::start("full-world-guid-ai");
     shard.publish_module();

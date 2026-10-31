@@ -6,7 +6,7 @@ use support::{wolves_beside, Standalone};
 const TEST_POLY: &str = "50023";
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_control_aura_without_a_free_slot_leaves_diminishing_returns_unchanged() {
     let mut shard = Standalone::start("diminishing-returns-refusal");
     shard.publish_module();

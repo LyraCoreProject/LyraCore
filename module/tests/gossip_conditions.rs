@@ -96,7 +96,7 @@ fn fixture(name: &str) -> (Standalone, String) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction() {
     let rewarded = ConditionKind::QuestRewarded.code();
     let not = ConditionKind::Not.code();
@@ -154,7 +154,7 @@ fn imported_conditions_gate_current_quest_state_and_the_hook_in_one_transaction(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook() {
     let always = ConditionKind::Always.code();
     const FIRST_MENU: u32 = 509_9001;
@@ -229,7 +229,7 @@ fn a_menu_switch_refuses_colliding_rows_and_synthesized_options_before_the_hook(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
     let (shard, npc) = fixture("gossip-repeatable-quest");
     shard.assert_sql(&format!(
@@ -271,7 +271,7 @@ fn a_rewarded_repeatable_quest_is_neither_current_nor_rewarded_for_gossip() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
     let always = ConditionKind::Always.code();
     const MENU: u32 = 509_9001;
@@ -336,7 +336,7 @@ fn changed_service_actions_and_new_authored_services_refuse_stale_clicks() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn synthesized_services_require_current_capability_and_resolvable_stock() {
     let (shard, npc) = fixture("gossip-service-capability");
     shard.assert_sql(&format!(
@@ -390,7 +390,7 @@ fn synthesized_services_require_current_capability_and_resolvable_stock() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn authored_services_require_current_capability_before_the_hook() {
     const MENU: u32 = 509_9001;
     let (shard, npc) = fixture("gossip-authored-capability");
@@ -463,7 +463,7 @@ fn authored_services_require_current_capability_before_the_hook() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook() {
     let (shard, npc) = fixture("gossip-trainer-eligibility");
     shard.assert_sql(&format!(
@@ -539,7 +539,7 @@ fn trainer_options_repeat_current_class_and_talent_level_gates_before_the_hook()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_quest_subject_refuses_selection_even_with_retained_progress() {
     let (shard, npc) = fixture("gossip-missing-quest");
     shard.assert_call("debug_grant_quest", &["1", &QUEST.to_string()]);

@@ -59,7 +59,7 @@ fn refused(shard: &Standalone, reducer: &str, args: &[&str], tag: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn login_refuses_a_character_in_escrow() {
     let shard = start("transfer-fence-login", false);
     let key = serde_json::to_string(&vec![7u8; 40]).unwrap();
@@ -82,7 +82,7 @@ fn login_refuses_a_character_in_escrow() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn background_passes_leave_a_character_in_escrow_unchanged() {
     let shard = start("transfer-fence-background", true);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -111,7 +111,7 @@ fn background_passes_leave_a_character_in_escrow_unchanged() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn resting_accrual_uses_the_live_level_when_the_character_row_lags() {
     let shard = start("rest-live-level", true);
     shard.assert_sql("UPDATE game_world_entity SET level = 60 WHERE guid = 1");
@@ -148,7 +148,7 @@ fn rest(shard: &Standalone, guid: &str) -> Row {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_instance_reaper_holds_an_instance_claimed_by_escrow() {
     let shard = start("transfer-fence-reaper", true);
     for guid in [ESCROWED, BYSTANDER] {

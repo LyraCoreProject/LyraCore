@@ -253,10 +253,10 @@ fn assert_faces(shard: &Standalone, guid: u64, angle: f32, when: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hidden() {
     let (shard, line) = shard("distract-cast");
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     shard.assert_call(
         "debug_set_power",
         &[&PLAYER.to_string(), &ENERGY.to_string()],
@@ -394,10 +394,10 @@ fn distract_turns_only_the_idle_creatures_near_the_point_and_keeps_the_rogue_hid
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_distraction_holds_idle_movement_until_its_expiry_and_ends_on_an_engagement() {
     let (shard, line) = shard("distract-cycle");
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     shard.assert_call("claim_operator", &[]);
     let point = line.at(20.0, 3.0);
 

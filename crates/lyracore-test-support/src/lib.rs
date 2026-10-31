@@ -49,6 +49,58 @@ pub fn log_dir() -> PathBuf {
 }
 
 // Wasmtime keys entries by Module and compiler, and its cache tolerates concurrent processes.
+// SpacetimeDB 2.14 publish compiles the whole Module locally to read its schema; cache that by content.
+fn schema_extractor(spacetime: &OsString) -> Option<&'static Path> {
+    use std::hash::{Hash, Hasher};
+
+    static EXTRACTOR: std::sync::OnceLock<Option<PathBuf>> = std::sync::OnceLock::new();
+    EXTRACTOR
+        .get_or_init(|| {
+            let cli = Path::new(spacetime);
+            let cli = if cli.components().count() > 1 {
+                cli.to_path_buf()
+            } else {
+                std::env::split_paths(&std::env::var_os("PATH")?)
+                    .map(|dir| dir.join(cli))
+                    .find(|path| path.is_file())?
+            };
+            // The CLI's own default is the standalone beside it; a version-manager shim has none.
+            let real = fs::canonicalize(cli)
+                .ok()?
+                .with_file_name("spacetimedb-standalone");
+            if !real.is_file() {
+                return None;
+            }
+            let mut hasher = std::collections::hash_map::DefaultHasher::new();
+            real.hash(&mut hasher);
+            let cache = std::env::temp_dir()
+                .join(format!("lyracore-schema-cache-{:016x}", hasher.finish()));
+            caching_extractor(&real, &cache)
+        })
+        .as_deref()
+}
+
+fn caching_extractor(real: &Path, cache: &Path) -> Option<PathBuf> {
+    use std::os::unix::fs::PermissionsExt;
+
+    fs::create_dir_all(cache).ok()?;
+    // The CLI clears the environment, so the script names every binary by absolute path.
+    let body = format!(
+        "#!/bin/sh\nset -eu\nsum=$(/usr/bin/cksum < \"$2\")\n\
+                 cache=\"{cache}/${{sum% *}}-${{sum#* }}.json\"\n\
+                 if [ ! -s \"$cache\" ]; then\n  \"{real}\" \"$@\" > \"$cache.$$\"\n  \
+                 /bin/mv \"$cache.$$\" \"$cache\"\nfi\nexec /bin/cat \"$cache\"\n",
+        cache = cache.display(),
+        real = real.display()
+    );
+    let staged = cache.join(format!("extract-schema.{}", std::process::id()));
+    fs::write(&staged, body).ok()?;
+    fs::set_permissions(&staged, fs::Permissions::from_mode(0o755)).ok()?;
+    let script = cache.join("extract-schema.sh");
+    fs::rename(&staged, &script).ok()?;
+    Some(script)
+}
+
 fn share_compile_cache(data_dir: &Path) {
     let shared = std::env::temp_dir().join("lyracore-wasmtime-cache");
     fs::create_dir_all(&shared).expect("failed to create the shared Wasm compile cache");
@@ -375,6 +427,10 @@ impl Standalone {
         self.assert_ok(&self.call_anonymous(reducer, args));
     }
 
+    pub fn clear_schedule(&self, table: &str) {
+        self.assert_call("debug_clear_schedule", &[&format!("\"{table}\"")]);
+    }
+
     pub fn assert_sql(&self, query: &str) {
         self.assert_sql_database(&self.database, query);
     }
@@ -429,6 +485,9 @@ impl Standalone {
         };
         for attempt in 0..allowed_attempts {
             let mut command = self.command();
+            if let Some(extractor) = schema_extractor(&self.spacetime) {
+                command.env("SPACETIMEDB_SCHEMA_EXTRACTOR", extractor);
+            }
             command
                 .current_dir(workspace)
                 .args(["publish", "-s", &self.server]);
@@ -695,8 +754,58 @@ pub fn actor(guid: &str) -> String {
     format!(r#"{{"guid":{guid},"ownership":null}}"#)
 }
 
+// `describe` returns a V10 module definition: a list of sections keyed by kind, such as "Reducers".
+pub fn schema_section<'a>(schema: &'a serde_json::Value, kind: &str) -> &'a serde_json::Value {
+    schema["sections"]
+        .as_array()
+        .expect("Module definition sections")
+        .iter()
+        .find_map(|section| section.get(kind))
+        .unwrap_or_else(|| panic!("the Module definition has no {kind} section"))
+}
+
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn the_schema_extractor_runs_once_per_module_content() {
+        let root =
+            std::env::temp_dir().join(format!("lyracore-extractor-test-{}", std::process::id()));
+        fs::create_dir_all(&root).unwrap();
+        let real = root.join("spacetimedb-standalone");
+        let calls = root.join("calls");
+        fs::write(
+            &real,
+            format!(
+                "#!/bin/sh\necho x >> {}\necho \"{{\\\"module\\\":\\\"$2\\\"}}\"\n",
+                calls.display()
+            ),
+        )
+        .unwrap();
+        fs::set_permissions(&real, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
+        let script = caching_extractor(&real, &root.join("cache")).unwrap();
+        let module = root.join("module");
+        let extract = |bytes: &[u8]| {
+            fs::write(&module, bytes).unwrap();
+            let output = Command::new(&script)
+                .env_clear()
+                .args([
+                    "extract-schema",
+                    module.to_str().unwrap(),
+                    "--host-type",
+                    "wasm",
+                ])
+                .output()
+                .unwrap();
+            assert!(output.status.success(), "{}", describe(&output));
+            output.stdout
+        };
+        let first = extract(b"one");
+        assert_eq!(extract(b"one"), first);
+        extract(b"two");
+        assert_eq!(fs::read_to_string(&calls).unwrap().lines().count(), 2);
+        fs::remove_dir_all(&root).unwrap();
+    }
+
     use super::*;
     use std::cell::Cell;
 

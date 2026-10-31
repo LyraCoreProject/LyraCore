@@ -146,7 +146,7 @@ fn member_channel_names(realm: &Standalone, guid: u64) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn each_team_has_its_own_trade_channel_and_a_line_reaches_every_member() {
     let realm = start("chat-channels-teams");
 
@@ -235,7 +235,7 @@ fn each_team_has_its_own_trade_channel_and_a_line_reaches_every_member() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_custom_channel_announces_names_an_owner_and_hands_ownership_on() {
     let realm = start("chat-channels-custom");
 
@@ -321,7 +321,7 @@ fn a_custom_channel_announces_names_an_owner_and_hands_ownership_on() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_last_member_leaving_deletes_the_channel_its_password_and_its_bans() {
     let realm = start("chat-channels-delete");
     refused(
@@ -387,7 +387,7 @@ fn claim(realm: &Standalone, nonce: &str) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
     let realm = start("chat-channels-claims");
     op(&realm, &actor("2"), JOIN, "Raiders", "", HUMAN);
@@ -450,7 +450,7 @@ fn channel_membership_ends_with_the_account_claim_that_admitted_it() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn channel_speech_follows_the_members_flags_not_the_speakers_health() {
     let realm = start("chat-channels-speech");
     op(&realm, &actor("1"), JOIN, "Raiders", "", HUMAN);
@@ -503,7 +503,7 @@ fn channel_speech_follows_the_members_flags_not_the_speakers_health() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_zone_border_crossing_keeps_every_new_zone_channel_membership() {
     let realm = start("chat-channels-zone-walk");
 

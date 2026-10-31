@@ -4,8 +4,8 @@ use std::fs;
 
 use serde_json::Value;
 use support::{
-    actor, event_rows, fence_subscription, module_bytes, poll_until, subscribe_with_fence, Row,
-    Standalone, POLL_TIMEOUT,
+    actor, event_rows, fence_subscription, module_bytes, poll_until, schema_section,
+    subscribe_with_fence, Row, Standalone, POLL_TIMEOUT,
 };
 
 const LEGACY_NOTIFICATIONS: &[&str] = &[
@@ -17,10 +17,10 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.7.1 CLI"]
+#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.14.0 CLI"]
 fn populated_old_module_upgrades_without_clearing() {
     let baseline_path = std::env::var_os("LYRACORE_TEST_BASELINE_WASM")
-        .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 859c7257c74d2c371dea8ed743cfbccd596cac11 with debug_reducers,package_test_fixture");
+        .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 859c7257c74d2c371dea8ed743cfbccd596cac11 plus module/tests/fixtures/upgrade-baseline.patch, with debug_reducers,package_test_fixture");
     let baseline = fs::read(baseline_path).expect("read the baseline Module Wasm");
     assert!(baseline.starts_with(b"\0asm"), "baseline is not Wasm");
     let current = module_bytes();
@@ -119,9 +119,9 @@ fn populated_old_module(baseline: &[u8]) -> Standalone {
     shard.publish_module_bytes(baseline);
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
-    shard.assert_sql("DELETE FROM game_melee_schedule");
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
+    shard.clear_schedule("game_melee_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard.assert_sql("UPDATE game_character SET money = 123456, xp = 37 WHERE guid = 1");
     let in_combat = lyracore_shared::constants::unit_flags::IN_COMBAT;
     shard.assert_sql(&format!(
@@ -175,11 +175,11 @@ fn entity(shard: &Standalone) -> Row {
 }
 
 fn table<'a>(schema: &'a Value, name: &str) -> &'a Value {
-    schema["tables"]
+    schema_section(schema, "Tables")
         .as_array()
         .expect("Module tables")
         .iter()
-        .find(|table| table["name"] == name)
+        .find(|table| table["source_name"] == name)
         .unwrap_or_else(|| panic!("missing table {name}"))
 }
 
@@ -192,7 +192,9 @@ fn table_schema(schema: &Value, name: &str) -> Value {
         .expect("table row type")
         .as_u64()
         .expect("table row type reference") as usize;
-    let types = schema["typespace"]["types"].as_array().expect("typespace");
+    let types = schema_section(schema, "Typespace")["types"]
+        .as_array()
+        .expect("typespace");
     definition["row_type"] = resolve_type(&types[type_ref], types);
     definition
 }

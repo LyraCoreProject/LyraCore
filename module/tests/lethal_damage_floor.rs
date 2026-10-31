@@ -10,11 +10,11 @@ const THIRD_WOLF_GUID: u64 = (0xF130_u64 << 48) | ((WOLF_ENTRY as u64) << 24) | 
 const SOURCE_RULE_ID: u64 = 900_001;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
     let mut standalone = Standalone::start("lethal-damage-floor");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER_GUID.to_string()]);
     let first_definition = definition("phase:1");
     install_definition(&standalone, WOLF_GUID, &first_definition);

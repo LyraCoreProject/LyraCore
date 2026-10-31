@@ -10,7 +10,7 @@ const SESSION_ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
 const SESSION_MISSING_ACTOR: &str = r#"{"guid":999999,"ownership":null}"#;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn gateway_taxi_gates_keep_refusals_typed_and_invariants_fatal() {
     let wasm = support::module_bytes();
     let mut standalone = Standalone::start("typed-taxi-contracts");

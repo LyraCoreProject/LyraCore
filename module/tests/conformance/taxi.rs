@@ -12,7 +12,7 @@ fn fixture(name: &str) -> (Standalone, u64) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn learning_a_taxi_node_requires_the_operator() {
     let (shard, guid) = fixture("taxi-learn-operator");
     let mut anonymous = shard.connect_reducers_anonymous(&[]);
@@ -26,7 +26,7 @@ fn learning_a_taxi_node_requires_the_operator() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn learning_a_taxi_node_requires_a_character_and_an_existing_node() {
     let (shard, guid) = fixture("taxi-learn-input");
     let mut connection = shard.connect_reducers(&[]);
@@ -44,7 +44,7 @@ fn learning_a_taxi_node_requires_a_character_and_an_existing_node() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn learning_a_taxi_node_is_idempotent_without_flight_or_packets() {
     let (shard, guid) = fixture("taxi-learn-state");
     let mut connection = super::enter(&shard, guid);

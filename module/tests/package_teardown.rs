@@ -21,7 +21,7 @@ fn count(shard: &Standalone, query: &str) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn teardown_leaves_a_package_character_dormant_and_forgets_the_package_config() {
     let shard = stage("package-teardown-dormant");
     shard.assert_call(
@@ -95,7 +95,7 @@ fn teardown_leaves_a_package_character_dormant_and_forgets_the_package_config() 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn teardown_refuses_a_package_this_build_does_not_compile() {
     let shard = stage("package-teardown-unknown");
     let output = shard.call("teardown_package", &[&arg("not-installed")]);

@@ -2081,8 +2081,8 @@ mod tests {
         for sql in assemble_spell_sql(&rows, ids, false) {
             shard.assert_sql(&sql);
         }
-        shard.assert_sql("DELETE FROM game_creature_move_schedule");
-        shard.assert_sql("DELETE FROM game_melee_schedule");
+        shard.clear_schedule("game_creature_move_schedule");
+        shard.clear_schedule("game_melee_schedule");
         shard.assert_call("debug_spawn_player_entity", &["1"]);
         shard.assert_call("debug_set_level", &["1", "10"]);
         let ally = ((0xf130u64 << 48) | (51001u64 << 24) | 1).to_string();
@@ -2126,7 +2126,7 @@ mod tests {
     #[ignore = "requires LYRACORE_VMANGOS_SQLITE, LYRACORE_TEST_DBC, SpacetimeDB and Wasm"]
     fn actual_imported_gouge_control_ends_on_damage() {
         let (shard, _, wolf) = imported_spell_fixture(&[1776]);
-        shard.assert_sql("DELETE FROM game_aura_schedule");
+        shard.clear_schedule("game_aura_schedule");
         shard.assert_call("debug_cast_at", &["1", "1776", &wolf]);
         let control =
             shard.query_rows("SELECT effect_id, eff_p0 FROM game_aura WHERE spell_id = 1776");

@@ -35,10 +35,14 @@ pub(crate) fn characters_by_name<'a>(
     ctx: &'a ReducerContext,
     name: &'a str,
 ) -> impl Iterator<Item = Character> + 'a {
-    ctx.db
+    let characters: Vec<_> = ctx
+        .db
         .game_character()
         .iter()
-        .filter(move |character| character.name.eq_ignore_ascii_case(name))
+        .filter(|character| character.name.eq_ignore_ascii_case(name))
+        .collect();
+    characters
+        .into_iter()
         .filter_map(move |character| gate_by_guid(ctx, Some(character), |character| character.guid))
 }
 

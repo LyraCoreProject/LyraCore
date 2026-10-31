@@ -6,8 +6,8 @@ use lyracore_module::{
 use spacetimedb::{Local, Table};
 
 fn additive_event<Legacy: Table, Live: Table<Row = Legacy::Row>>(
-    _legacy: fn(&Local) -> &Legacy,
-    _live: fn(&Local) -> &Live,
+    _legacy: fn(&Local) -> Legacy,
+    _live: fn(&Local) -> Live,
 ) {
     assert!(
         !Legacy::IS_EVENT,

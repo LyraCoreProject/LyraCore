@@ -151,7 +151,7 @@ fn start(name: &str) -> Standalone {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
     let realm = start("raid-leadership-set-leader");
     join(&realm, 1, 2);
@@ -201,7 +201,7 @@ fn the_leader_passes_the_lead_and_every_member_hears_it_before_the_list() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_leaving_raid_leader_passes_the_lead_to_the_first_assistant_in_join_order() {
     let realm = start("raid-leadership-succession");
     for guid in 2..=4 {
@@ -237,7 +237,7 @@ fn a_leaving_raid_leader_passes_the_lead_to_the_first_assistant_in_join_order() 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_raid_leader_promotes_and_demotes_an_assistant() {
     let realm = start("raid-leadership-assistant");
     join(&realm, 1, 2);
@@ -282,7 +282,7 @@ fn the_raid_leader_promotes_and_demotes_an_assistant() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_assistant_invites_and_removes_members_but_never_the_leader() {
     let realm = start("raid-leadership-rights");
     for guid in 2..=4 {
@@ -355,7 +355,7 @@ fn an_assistant_invites_and_removes_members_but_never_the_leader() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_solo_inviters_pending_invites_follow_the_group_its_first_accept_forms() {
     let realm = start("raid-leadership-solo-inviter");
     group_op(&realm, INVITE, 1, 2, 0);
@@ -380,7 +380,7 @@ fn a_solo_inviters_pending_invites_follow_the_group_its_first_accept_forms() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_assistant_who_inherits_the_lead_can_start_a_ready_check() {
     let realm = start("raid-leadership-succession-ready-check");
     for guid in 2..=4 {
@@ -408,7 +408,7 @@ fn the_assistant_who_inherits_the_lead_can_start_a_ready_check() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_demoted_assistant_can_no_longer_move_a_member_or_mark_a_target_icon() {
     let realm = start("raid-leadership-demoted-assistant-rights");
     for guid in 2..=3 {

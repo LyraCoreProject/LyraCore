@@ -13,8 +13,8 @@ files, and players connect with an unmodified client.
 
 ### Requirements
 - A World of Warcraft 1.12.1 client, build 5875. None is distributed here.
-- [Rust](https://rust-lang.org/tools/install/) through rustup. `rust-toolchain.toml` pins 1.93.0, and rustup installs it on the first `cargo` call.
-- The SpacetimeDB CLI, exactly version 2.7.1. `module/Cargo.toml` pins it, and `lyracore preflight` refuses any other version. `install.sh` offers to install it.
+- [Rust](https://rust-lang.org/tools/install/) through rustup. `rust-toolchain.toml` pins 1.97.1, and rustup installs it on the first `cargo` call.
+- The SpacetimeDB CLI, exactly version 2.14.0. `module/Cargo.toml` pins it, and `lyracore preflight` refuses any other version. `install.sh` offers to install it.
 - A Linux or macOS machine or container. On Windows, use WSL2 with Ubuntu; see [`docs/windows.md`](docs/windows.md).
 
 ### Installing
@@ -24,7 +24,7 @@ cd LyraCore
 ```
 The script puts the LyraCore folder in your current directory and a launcher for the
 [lyracore CLI](https://github.com/LyraCoreProject/lyracore-cli) in `~/.local/bin`. It offers to
-install Rust, SpacetimeDB 2.7.1 and `wasm-opt` if they are missing. Nothing needs root.
+install Rust, SpacetimeDB 2.14.0 and `wasm-opt` if they are missing. Nothing needs root.
 
 ```bash
 lyracore doctor                  # is this machine ready?

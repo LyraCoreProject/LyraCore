@@ -91,7 +91,7 @@ fn roster_revision(node: &Standalone) -> u64 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_converted_raid_takes_members_past_five_into_the_next_subgroup() {
     let mut realm = Standalone::start("raid-convert");
     realm.publish_module();
@@ -183,7 +183,7 @@ fn a_converted_raid_takes_members_past_five_into_the_next_subgroup() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_still_caps_at_five() {
     let mut realm = Standalone::start("raid-convert-party-cap");
     realm.publish_module();
@@ -257,7 +257,7 @@ fn mirror_group(node: &Standalone, group_id: u64, guids: &[u64], kind: GroupKind
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_world_shard_mirror_takes_the_kind_and_every_raid_slot_or_refuses_the_push() {
     let mut shard = Standalone::start("raid-convert-mirror");
     shard.publish_module();
@@ -295,7 +295,7 @@ fn a_world_shard_mirror_takes_the_kind_and_every_raid_slot_or_refuses_the_push()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
     let mut realm = Standalone::start("raid-convert-companion-order");
     realm.publish_module();
@@ -343,7 +343,7 @@ fn a_raid_past_five_certifies_a_companion_order_for_any_member() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_world_shard_mirror_refuses_a_party_past_five() {
     let mut shard = Standalone::start("raid-convert-party-cap");
     shard.publish_module();
@@ -365,7 +365,7 @@ fn a_world_shard_mirror_refuses_a_party_past_five() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_mirror_past_five_is_stale_at_both_companion_order_readers() {
     let mut realm = Standalone::start("raid-convert-damaged-party");
     realm.publish_module();

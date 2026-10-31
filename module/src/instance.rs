@@ -604,7 +604,7 @@ pub(crate) fn create_instance_with_id(
     }
 
     let gos = ctx.db.game_gameobject();
-    let mut next_go_seq = gos
+    let first_go_seq = gos
         .iter()
         .filter(|g| {
             g.guid >> 48 == 0xF110
@@ -632,7 +632,7 @@ pub(crate) fn create_instance_with_id(
         })
         .collect();
     let mut copied = 0u32;
-    for src in &sources {
+    for (next_go_seq, src) in (first_go_seq..).zip(&sources) {
         let copy = crate::gameobject::GameObject {
             guid: (0xF110u64 << 48) | GO_COPY_BAND | next_go_seq,
             template_entry: src.template_entry,
@@ -655,7 +655,6 @@ pub(crate) fn create_instance_with_id(
         }
         .insert(ctx);
         crate::go_collider::register(ctx, &copy);
-        next_go_seq += 1;
         copied += 1;
     }
 

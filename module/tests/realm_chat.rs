@@ -38,7 +38,7 @@ fn inserted_lines(update: &Value) -> Vec<Value> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_line_is_one_row_naming_every_member_of_the_realm_core_party() {
     let mut realm = Standalone::start("realm-chat-party");
     realm.publish_module();

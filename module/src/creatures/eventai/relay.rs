@@ -1296,9 +1296,8 @@ pub(crate) fn start_imported_relay(
 }
 
 pub(crate) fn current_catalogue_version(ctx: &ReducerContext) -> Option<u64> {
-    let mut versions = ctx
-        .db
-        .game_creature_ai_relay_definition()
+    let definitions = ctx.db.game_creature_ai_relay_definition();
+    let mut versions = definitions
         .iter()
         .filter(|definition| definition.current)
         .map(|definition| definition.catalogue_version);

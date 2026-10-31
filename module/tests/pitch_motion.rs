@@ -9,7 +9,7 @@ const START_FORWARD: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_START_FO
 const SET_PITCH: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_SET_PITCH;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_pitch_change_coalesces_behind_a_staged_transition() {
     let mut standalone = Standalone::start("pitch-motion");
     standalone.publish_module();
@@ -23,7 +23,7 @@ fn a_pitch_change_coalesces_behind_a_staged_transition() {
             .is_some()),
         "scheduled publisher did not create the public motion row"
     );
-    standalone.assert_sql("DELETE FROM game_motion_publish_schedule");
+    standalone.clear_schedule("game_motion_publish_schedule");
     let published = published_seq(&standalone);
 
     move_with(&standalone, START_FORWARD, 2);

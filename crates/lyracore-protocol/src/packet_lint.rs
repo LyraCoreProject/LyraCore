@@ -17,21 +17,19 @@ pub fn lint_raw(opcode: u16, body: &[u8]) -> Vec<&'static str> {
                 }
             }
         }
-        SET_FACTION_STANDING => {
-            // Faction-standing slots are u32 indices into a fixed 64-entry client array.
-            if body.len() >= 4 {
-                let count = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
-                for i in 0..count {
-                    let off = 4 + i * 8;
-                    let Some(idx_bytes) = body.get(off..off + 4) else {
-                        break;
-                    };
-                    let idx = u32::from_le_bytes(idx_bytes.try_into().unwrap());
-                    if idx >= 64 {
-                        hits.push(
-                            "SET_FACTION_STANDING reputation index >= 64 (past the client's rep array — ERROR #132 crash class)",
-                        );
-                    }
+        // Faction-standing slots are u32 indices into a fixed 64-entry client array.
+        SET_FACTION_STANDING if body.len() >= 4 => {
+            let count = u32::from_le_bytes(body[0..4].try_into().unwrap()) as usize;
+            for i in 0..count {
+                let off = 4 + i * 8;
+                let Some(idx_bytes) = body.get(off..off + 4) else {
+                    break;
+                };
+                let idx = u32::from_le_bytes(idx_bytes.try_into().unwrap());
+                if idx >= 64 {
+                    hits.push(
+                        "SET_FACTION_STANDING reputation index >= 64 (past the client's rep array — ERROR #132 crash class)",
+                    );
                 }
             }
         }

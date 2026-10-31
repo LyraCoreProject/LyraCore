@@ -27,7 +27,7 @@ const RAGE: u32 = 1;
 const ENERGY: u32 = 3;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_soulstone_death_holds_the_option_and_using_it_revives_in_place() {
     let standalone = start("self-res-soulstone");
     set_class(&standalone, WARLOCK, MANA, 2000);
@@ -60,7 +60,7 @@ fn a_soulstone_death_holds_the_option_and_using_it_revives_in_place() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn without_an_option_self_resurrection_is_refused_and_changes_nothing() {
     let standalone = start("self-res-refused");
     soulstone(&standalone);
@@ -87,7 +87,7 @@ fn without_an_option_self_resurrection_is_refused_and_changes_nothing() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_option_survives_release_spirit_and_revives_the_ghost() {
     let standalone = start("self-res-ghost");
     set_class(&standalone, WARLOCK, MANA, 2000);
@@ -111,7 +111,7 @@ fn the_option_survives_release_spirit_and_revives_the_ghost() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_spirit_healer_resurrection_or_a_logout_spends_the_option() {
     let standalone = start("self-res-other-paths");
     soulstone(&standalone);
@@ -133,7 +133,7 @@ fn a_spirit_healer_resurrection_or_a_logout_spends_the_option() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn rage_comes_back_empty_and_energy_comes_back_full() {
     let standalone = start("self-res-power-types");
     set_class(&standalone, WARRIOR, RAGE, 1000);

@@ -12,7 +12,7 @@ const TRAINER_GUID: u64 = (0xF130_u64 << 48) | (51001_u64 << 24) | 1;
 type SqlRow = BTreeMap<String, String>;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_new_timed_cast_replaces_only_the_casters_pending_rows() {
     let mut standalone = Standalone::start("pending-cast-replacement");
     standalone.publish_module();
@@ -40,9 +40,10 @@ fn a_new_timed_cast_replaces_only_the_casters_pending_rows() {
     let wolf_before = only_cast_for(&two_casters, TEST_WOLF_GUID).clone();
 
     cast_at(&standalone, TRAINER_GUID, PLAYER_GUID, [30.0, 31.0, 32.0]);
-    standalone.assert_sql(&format!(
-        "UPDATE game_pending_cast SET caster_guid = {PLAYER_GUID} WHERE caster_guid = {TRAINER_GUID}"
-    ));
+    standalone.assert_call(
+        "debug_reassign_pending_casts",
+        &[&TRAINER_GUID.to_string(), &PLAYER_GUID.to_string()],
+    );
     let staged = pending_casts(&standalone);
     assert_eq!(casts_for(&staged, PLAYER_GUID).len(), 2);
     assert_eq!(only_cast_for(&staged, TEST_WOLF_GUID), &wolf_before);

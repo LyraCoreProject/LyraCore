@@ -11,12 +11,12 @@ const DUEL: u64 = 509_0001;
 const ACTIVE: u8 = 2;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_duel_ending_swing_is_no_killing_blow() {
     let mut standalone = Standalone::start("duel-killing-blow");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
-    standalone.assert_sql("DELETE FROM game_event_reaper_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
+    standalone.clear_schedule("game_event_reaper_schedule");
     standalone.assert_call("claim_operator", &[]);
     standalone.assert_call("install_guid_range", &["0"]);
     standalone.assert_call("debug_seed_scenario_fixtures", &[]);

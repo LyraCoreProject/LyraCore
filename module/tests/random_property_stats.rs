@@ -78,7 +78,7 @@ fn create_damage_spell(shard: &Standalone, spell_id: u32, school_mask: u8) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn direct_pools_and_regeneration_follow_working_equipment() {
     let shard = fixture("property-stat-vitals", 8);
     enchantments(&shard, &[(6, 25, 0), (7, 40, 0), (18, 10, 0), (19, 15, 0)]);
@@ -151,7 +151,7 @@ fn direct_pools_and_regeneration_follow_working_equipment() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn defenses_and_each_magic_resistance_reach_combat_callers() {
     let shard = fixture("property-stat-defense", 1);
     enchantments(
@@ -243,10 +243,10 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spell_power_selects_school_and_healing_power_only_affects_heals() {
     let shard = fixture("property-stat-spells", 8);
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     enchantments(
         &shard,
         &[(16, 20, 4), (16, 30, 16), (17, 40, 2), (17, 60, 4)],
@@ -306,7 +306,7 @@ fn spell_power_selects_school_and_healing_power_only_affects_heals() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn weapon_damage_uses_the_selected_main_off_and_ranged_item() {
     let shard = fixture("property-stat-weapons", 8);
     enchantments(&shard, &[(15, 20, 0)]);

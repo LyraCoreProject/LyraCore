@@ -5,7 +5,7 @@ set -eu
 REPO_URL=https://github.com/LyraCoreProject/LyraCore.git
 REPO_URL_RAW=https://raw.githubusercontent.com/LyraCoreProject/LyraCore/main/install.sh
 TARGET_DIR=LyraCore
-SPACETIME_VERSION=2.7.1
+SPACETIME_VERSION=2.14.0
 BINARYEN_VERSION=131
 BIN_DIR=$HOME/.local/bin
 LAUNCHER=$BIN_DIR/lyracore

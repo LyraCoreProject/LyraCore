@@ -94,7 +94,7 @@ fn member_rank(realm: &Standalone, guid: u64) -> Option<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_deleted_leaders_guild_passes_on_then_disbands_with_its_last_member() {
     let mut realm = Standalone::start("guild-cleanup-succession");
     realm.publish_module();
@@ -164,7 +164,7 @@ fn a_deleted_leaders_guild_passes_on_then_disbands_with_its_last_member() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_deleted_signer_and_owner_leave_no_petition_behind() {
     let mut realm = Standalone::start("guild-cleanup-petition");
     realm.publish_module();

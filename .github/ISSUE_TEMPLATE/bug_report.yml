@@ -45,7 +45,7 @@ body:
       placeholder: |
         $ ./lyracore doctor
           ✓ project layout   /home/you/lyracore
-          ✓ Rust             1.93.0 (requires 1.93.0)
+          ✓ Rust             1.97.1 (requires 1.97.1)
           ...
     validations:
       required: true

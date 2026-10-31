@@ -25,7 +25,7 @@ const THROWN_STACK: u32 = 20;
 const ATTEMPTS: u32 = 15;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_throw_strikes_with_the_thrown_weapon_and_spends_one_from_its_stack() {
     let mut standalone = Standalone::start("weapon-strike-throw");
     let wolf = stage(&mut standalone);
@@ -62,7 +62,7 @@ fn a_throw_strikes_with_the_thrown_weapon_and_spends_one_from_its_stack() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_melee_weapon_spell_adds_its_bonus_to_the_weapon_roll() {
     const BONUS: i32 = 3;
     let mut standalone = Standalone::start("weapon-strike-melee");

@@ -303,7 +303,7 @@ fn disband_phase(realm: &Standalone, guild_id: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn membership_moves_through_every_op_as_tokenless_actors() {
     let mut realm = Standalone::start("guild-membership");
     realm.publish_module();
@@ -323,7 +323,7 @@ fn membership_moves_through_every_op_as_tokenless_actors() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn leave_disbands_a_lone_leader_and_refuses_a_leader_with_company() {
     let mut realm = Standalone::start("guild-membership-leave");
     realm.publish_module();

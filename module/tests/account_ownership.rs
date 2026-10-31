@@ -28,7 +28,7 @@ fn refused(shard: &Standalone, reducer: &str, args: &[&str], reason: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
     let mut shard = Standalone::start("account-claim-replay");
     shard.publish_module();
@@ -80,7 +80,7 @@ fn claim_replay_recovers_a_lost_reply_without_reopening_closed_ownership() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn party_requests_answer_only_to_the_current_account_claim() {
     let mut realm = Standalone::start("account-realm-party");
     realm.publish_module();

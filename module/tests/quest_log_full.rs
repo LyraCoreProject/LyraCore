@@ -74,7 +74,7 @@ fn assert_full_log_refusal(output: &std::process::Output) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_full_quest_log_refuses_a_new_accept_and_adds_no_row() {
     let (shard, giver) = setup("quest-log-full");
     for offset in 0..LOG_SIZE {
@@ -99,7 +99,7 @@ fn a_full_quest_log_refuses_a_new_accept_and_adds_no_row() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rewarded_repeatable_quest_needs_a_free_slot_to_return() {
     let (shard, giver) = setup("quest-log-repeatable");
     grant(&shard, REPEATABLE);
@@ -119,7 +119,7 @@ fn a_rewarded_repeatable_quest_needs_a_free_slot_to_return() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_failed_quest_keeps_its_slot_until_it_is_taken_again() {
     let (shard, giver) = setup("quest-log-failed");
     for offset in 0..LOG_SIZE {

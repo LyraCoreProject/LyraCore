@@ -10,12 +10,12 @@ const CHARACTER: u64 = 1;
 const FINISHER: u32 = 509_0110;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_finisher_adds_its_per_point_damage_and_spends_the_points() {
     let mut standalone = Standalone::start("combo-finisher");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
-    standalone.assert_sql("DELETE FROM game_melee_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
+    standalone.clear_schedule("game_melee_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     standalone.assert_call(
         "debug_spawn_at_feet",

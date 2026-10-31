@@ -7,7 +7,7 @@ import re
 import shutil
 import subprocess
 
-REVISION = '08e1aba133671f9c631c6e70133a82faa0e7b283'
+REVISION = '7c3ee551755dc0152d9e0b0d5241fff939d3eda0'
 ROOT = Path(__file__).resolve().parent
 
 
@@ -40,7 +40,7 @@ def main():
     args = parser.parse_args()
     checkout = args.checkout.resolve()
     if not checkout.exists():
-        subprocess.run(['git', 'clone', '--depth', '1', '--branch', 'v2.13.0',
+        subprocess.run(['git', 'clone', '--depth', '1', '--branch', 'v2.14.0',
             'https://github.com/clockworklabs/SpacetimeDB.git', str(checkout)], check=True)
     revision = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=checkout, text=True).strip()
     if revision != REVISION:

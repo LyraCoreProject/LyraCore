@@ -37,8 +37,8 @@ without it: [§2](#2-clone-and-check) has the plain `git clone` form.
 
 | Thing | Version | Why that version |
 | --- | --- | --- |
-| **Rust** | **1.93.0** | The workspace declares `rust-version = "1.93.0"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb`/`spacetimedb-sdk` 2.7.1 declare `rust-version = "1.93.0"` themselves, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.93.0 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
-| **SpacetimeDB CLI** | **exactly 2.7.1** | `module/Cargo.toml` pins `spacetimedb = "=2.7.1"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so a newer CLI passes `doctor` and then fails `preflight`. Install 2.7.1. |
+| **Rust** | **1.97.1** | The workspace declares `rust-version = "1.97.1"` and `rust-toolchain.toml` pins the same. **Nothing lower builds** — `spacetimedb` 2.14.0 declares `rust-version = "1.97"` itself, so there is no lower MSRV to fall back to. You do **not** install it by hand: rustup reads `rust-toolchain.toml` and fetches/switches to 1.97.1 (plus the `wasm32-unknown-unknown` target) for any `cargo` command run inside the checkout. |
+| **SpacetimeDB CLI** | **exactly 2.14.0** | `module/Cargo.toml` pins `spacetimedb = "=2.14.0"`. `./lyracore preflight` and CI require an exact match. `./lyracore doctor` only checks for 2.7.1 or newer, so another CLI can pass `doctor` and then fail `preflight`. Install 2.14.0. |
 | **git**, **curl**, a C toolchain | any current | Cloning, the SpacetimeDB installer, and linking the Native Host. |
 | **Native Host Rust toolchain** | **1.97.1** | `native-host/rust-toolchain.toml` pins it. Native startup builds the Host with `cargo +1.97.1`, which needs rustup. If the toolchain is missing, `dev up` installs it through rustup. |
 | **python3** | any current | Native startup runs `native-host/prepare-host.py` to prepare and build the Host. |
@@ -55,7 +55,7 @@ sudo apt-get install -y build-essential pkg-config libssl-dev openssl python3 gi
 Install `libssl-dev` and `pkg-config` for the native Rust dependencies that link against OpenSSL.
 
 ```bash
-# Rust (rustup — it will pick up the pinned 1.93.0 toolchain from the checkout automatically)
+# Rust (rustup — it will pick up the pinned 1.97.1 toolchain from the checkout automatically)
 curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
 . "$HOME/.cargo/env"
 ```
@@ -82,7 +82,7 @@ Keep that PATH entry in your shell configuration. `openssl version` must report 
 The CLI refuses LibreSSL before writing key files.
 The installer and `./lyracore doctor` also check this requirement before Native Host startup.
 
-### SpacetimeDB 2.7.1 (both platforms)
+### SpacetimeDB 2.14.0 (both platforms)
 
 The installer is a **version manager**: it always installs the latest `spacetime` shim, and you then
 pin the version side by side. (An older `--version <x.y.z>` installer flag exists in some docs — it was
@@ -91,13 +91,13 @@ removed upstream and now errors with "unexpected argument".)
 ```bash
 curl -sSf https://install.spacetimedb.com | sh -s -- -y
 export PATH="$HOME/.local/bin:$PATH"        # add this to your shell profile too
-spacetime version install 2.7.1
-spacetime version use 2.7.1
-spacetime --version                          # expect: spacetimedb tool version 2.7.1
+spacetime version install 2.14.0
+spacetime version use 2.14.0
+spacetime --version                          # expect: spacetimedb tool version 2.14.0
 ```
 
 This is the same sequence the maintainers' build pipeline runs on current Ubuntu and macOS, and the
-same one `install.sh` runs (after asking) when it does not find 2.7.1. That `$HOME/.local/bin` on
+same one `install.sh` runs (after asking) when it does not find 2.14.0. That `$HOME/.local/bin` on
 `PATH` is a prerequisite of the documented install either way — the installer offers to append it
 for you, once, as a single marked line.
 
@@ -131,7 +131,7 @@ less install.sh && sh install.sh          # --yes answers every prompt with "yes
 
 It does §1 and this section in one pass: checks the prerequisites (**never** running `sudo` — a
 missing system package prints the exact `apt-get` line for *you* to run), offers to install rustup
-and SpacetimeDB 2.7.1 if they are absent, clones into `./LyraCore`, and installs the `lyracore`
+and SpacetimeDB 2.14.0 if they are absent, clones into `./LyraCore`, and installs the `lyracore`
 launcher into `$HOME/.local/bin`. It refuses a directory that already exists rather than merging into
 it, and everything it writes is: `./LyraCore`, `$HOME/.local/bin/lyracore`, the two upstream
 installers' own roots, and — only if you say yes — **one** marked line in **one** shell profile.
@@ -180,9 +180,9 @@ A healthy `doctor` looks like this:
 
 ```text
   ✓ project layout   /home/you/lyracore
-  ✓ Rust             1.93.0 (requires 1.93.0)
-  ✓ Cargo            cargo 1.93.0 (083ac5135 2025-12-15)
-  ✓ SpacetimeDB      2.7.1 (requires 2.7.1)
+  ✓ Rust             1.97.1 (requires 1.97.1)
+  ✓ Cargo            cargo 1.97.1 (8bab26f4f 2026-07-14)
+  ✓ SpacetimeDB      2.14.0 (requires 2.14.0)
   ✓ WASM target      wasm32-unknown-unknown installed
   ✓ ports            3000, 3724, 8085 free
 
@@ -212,8 +212,8 @@ gameplay and AOI. Moving between them no longer requires cross-Shard coordinatio
 remains accepted and has no effect on native startup.
 
 The first build uses the Host's pinned Rust 1.97.1 toolchain from `native-host/rust-toolchain.toml`,
-in addition to Rust 1.93.0 for the Module. If rustup does not have it yet, `dev up` installs it
-before the build, and `./lyracore doctor` warns about it in advance.
+the same version the Module uses. If rustup does not have it yet, `dev up` installs it before the
+build, and `./lyracore doctor` warns about it in advance.
 
 The CLI stores the new local Realm in `.lyracore/native-data`. It does not merge data from a legacy
 multi-Shard Realm. Stop a recorded legacy runtime with `./lyracore dev down` before starting the
@@ -584,21 +584,21 @@ from the checkout root, which needs nothing on `PATH`.
 ### `doctor` says a version is wrong
 
 ```text
-  ✗ Rust             found 1.90.0, but this checkout needs 1.93.0 — `rustup update` ...
-  ✗ SpacetimeDB      found 2.5.0, but 2.7.1 is required — upgrade with `spacetime version upgrade` ...
+  ✗ Rust             found 1.90.0, but this checkout needs 1.97.1 — `rustup update` ...
+  ✗ SpacetimeDB      found 2.5.0, but 2.14.0 is required — upgrade with `spacetime version upgrade` ...
 ```
 
 - **Rust:** the pinned toolchain in `rust-toolchain.toml` is installed automatically by any cargo
   command run inside the checkout — so this usually means your `rustc` is **not managed by rustup**
   (a distro package, or a Homebrew `rust`). Install rustup and make sure its shims come first on
   `PATH`.
-- **SpacetimeDB:** `doctor` accepts 2.7.1 *or newer*, but the repo is pinned to **exactly 2.7.1** and
+- **SpacetimeDB:** `doctor` accepts 2.7.1 *or newer*, but the repo is pinned to **exactly 2.14.0** and
   `./lyracore preflight` fails on anything else (`spacetime CLI reports 2.5.0, this repo is pinned to
-  2.7.1`). Versions install side by side, so this is not destructive:
+  2.14.0`). Versions install side by side, so this is not destructive:
 
   ```bash
-  spacetime version install 2.7.1
-  spacetime version use 2.7.1
+  spacetime version install 2.14.0
+  spacetime version use 2.14.0
   ```
 
 - **WASM target** (a warning): `rustup target add wasm32-unknown-unknown`.

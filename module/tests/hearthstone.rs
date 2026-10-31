@@ -39,7 +39,7 @@ fn timestamp(row: &Row) -> i64 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn hearthstone_recalls_to_the_bound_home_only_after_ten_seconds() {
     let shard = fixture("hearthstone-completion");
     let casts = subscribe_with_fence(
@@ -87,7 +87,7 @@ fn hearthstone_recalls_to_the_bound_home_only_after_ten_seconds() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn cancelling_hearthstone_prevents_recall_and_keeps_it_usable() {
     let shard = fixture("hearthstone-cancel");
     let before = position(&shard);
@@ -105,7 +105,7 @@ fn cancelling_hearthstone_prevents_recall_and_keeps_it_usable() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn movement_cancels_hearthstone_before_recall() {
     let shard = fixture("hearthstone-movement");
     let inventory = items(&shard);

@@ -17,7 +17,7 @@ fn changed_columns(from: &Row, to: &Row) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_walking_creature_stores_its_position_past_four_yards_and_on_arrival() {
     let mut shard = Standalone::start("creature-advance-persist");
     let wolf = lone_wolf(&mut shard);

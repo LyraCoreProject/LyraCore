@@ -92,7 +92,7 @@ case "${1:-}" in
         exit 0
         ;;
     --version)
-        echo "spacetimedb tool version 2.7.1"
+        echo "spacetimedb tool version 2.14.0"
         ;;
 esac
 exit 0

@@ -34,7 +34,7 @@ fn rows(shard: &Standalone, query: &str) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_five_second_aura_expires_at_the_same_virtual_time_on_repeated_casts() {
     let shard = fixture("virtual-aura-expiry");
     shard.assert_sql("UPDATE game_spell SET duration_ms = 5000 WHERE spell_id = 168");
@@ -52,7 +52,7 @@ fn a_five_second_aura_expires_at_the_same_virtual_time_on_repeated_casts() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_pending_cast_resolves_at_its_virtual_due_time() {
     let shard = fixture("virtual-pending-cast");
     shard.assert_sql("UPDATE game_spell SET cast_time_ms = 1000 WHERE spell_id = 168");
@@ -71,7 +71,7 @@ fn a_pending_cast_resolves_at_its_virtual_due_time() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_spell_projectile_impacts_at_its_virtual_due_time() {
     let shard = fixture("virtual-spell-impact");
     shard.assert_call("debug_spawn_at_feet", &["1", "51000", "2"]);
@@ -108,7 +108,7 @@ fn a_spell_projectile_impacts_at_its_virtual_due_time() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_completed_spell_impact_releases_its_arming_row() {
     let shard = fixture("virtual-spell-impact-arming");
     start_clock(&shard);
@@ -144,7 +144,7 @@ fn a_completed_spell_impact_releases_its_arming_row() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_taxi_started_off_phase_waits_for_its_own_first_tick() {
     let shard = fixture("virtual-taxi-phase");
     start_clock(&shard);
@@ -168,7 +168,7 @@ fn a_taxi_started_off_phase_waits_for_its_own_first_tick() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_near_teleport_ack_expires_after_twenty_virtual_seconds() {
     let shard = fixture("virtual-near-teleport-expiry");
     let mut connection = shard.connect_reducers(&[]);

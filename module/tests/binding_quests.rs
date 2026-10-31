@@ -190,7 +190,7 @@ fn assert_lifetime_checks_continue(node: &Standalone, summon: &BTreeMap<String, 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn binding_items_require_the_circle_and_complete_both_quest_variants_without_replacing_a_pet() {
     let mut node = Standalone::start("binding-quests");
     node.publish_module();

@@ -305,6 +305,10 @@ mod tests {
         .is_err());
     }
 
+    #[allow(
+        clippy::result_large_err,
+        reason = "tungstenite's handshake callback fixes its error type"
+    )]
     fn peer(
         run: impl FnOnce(WebSocket<TcpStream>) + Send + 'static,
     ) -> (ReducerConnection, std::thread::JoinHandle<()>) {

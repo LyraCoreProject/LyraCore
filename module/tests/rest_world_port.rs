@@ -3,7 +3,7 @@ mod support;
 use support::{actor, Standalone};
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn world_port_keeps_rested_state_below_the_login_threshold() {
     let mut shard = Standalone::start("rest-world-port");
     shard.publish_module();

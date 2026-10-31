@@ -1,7 +1,7 @@
 mod support;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn closed_doors_block_only_their_own_instance() {
     let mut fixture = support::Standalone::start("go-collision");
     fixture.publish_module();

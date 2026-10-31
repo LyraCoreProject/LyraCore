@@ -8,7 +8,7 @@ const CHARACTER_GUID: u64 = 1;
 const HEARTBEAT: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn connected_character_motion_is_removed_until_world_port_acknowledgement() {
     let mut standalone = Standalone::start("teleport-motion");
     standalone.publish_module();
@@ -40,7 +40,7 @@ fn connected_character_motion_is_removed_until_world_port_acknowledgement() {
         "a same-map teleport keeps the live entity's public motion row"
     );
 
-    standalone.assert_sql("DELETE FROM game_motion_publish_schedule");
+    standalone.clear_schedule("game_motion_publish_schedule");
     move_to(&standalone, 201.0, 200.0, 2);
     assert_eq!(row_count(&standalone, "game_entity_motion_pending"), 1);
 
@@ -69,7 +69,7 @@ fn connected_character_motion_is_removed_until_world_port_acknowledgement() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn sessionless_map_change_keeps_the_character_live_and_discards_previous_motion() {
     let mut standalone = Standalone::start("sessionless-teleport-motion");
     standalone.publish_module();
@@ -79,7 +79,7 @@ fn sessionless_map_change_keeps_the_character_live_and_discards_previous_motion(
 
     move_to(&standalone, 100.0, 100.0, 1);
     wait_for_public_motion(&standalone);
-    standalone.assert_sql("DELETE FROM game_motion_publish_schedule");
+    standalone.clear_schedule("game_motion_publish_schedule");
     move_to(&standalone, 101.0, 100.0, 2);
     assert_eq!(row_count(&standalone, "game_entity_motion_pending"), 1);
 

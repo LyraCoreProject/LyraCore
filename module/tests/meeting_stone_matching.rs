@@ -45,7 +45,7 @@ fn start(name: &str) -> Standalone {
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
-    realm.assert_sql("DELETE FROM game_event_reaper_schedule");
+    realm.clear_schedule("game_event_reaper_schedule");
     realm
 }
 
@@ -327,7 +327,7 @@ fn alone(area: u32, team: u32, class: u8) -> SeekerRow {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn five_seekers_with_every_role_complete_a_party_at_once() {
     let realm = start("stone-match-complete");
     const TANK: u64 = 509_6000;
@@ -392,7 +392,7 @@ fn five_seekers_with_every_role_complete_a_party_at_once() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn five_mages_form_a_party_that_waits_for_a_tank_and_a_healer() {
     let realm = start("stone-match-mages");
     let mages: Vec<u64> = (509_6010..509_6015).collect();
@@ -417,7 +417,7 @@ fn five_mages_form_a_party_that_waits_for_a_tank_and_a_healer() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_party_takes_the_longest_waiting_healer() {
     let realm = start("stone-match-healer");
     const LEADER: u64 = 509_6020;
@@ -473,7 +473,7 @@ fn a_queued_party_takes_the_longest_waiting_healer() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn seekers_of_another_team_or_area_never_meet() {
     let realm = start("stone-match-buckets");
     let mages: Vec<u64> = (509_6030..509_6034).collect();
@@ -529,10 +529,10 @@ fn seekers_of_another_team_or_area_never_meet() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_seeker_without_a_live_claim_is_dropped_by_the_pass() {
     let realm = start("stone-match-claims");
-    realm.assert_sql("DELETE FROM game_gateway_lease_reaper_schedule");
+    realm.clear_schedule("game_gateway_lease_reaper_schedule");
     let mages: Vec<u64> = (509_6040..509_6046).collect();
     let expired = mages[1];
     for &guid in &mages {
@@ -560,7 +560,7 @@ fn a_seeker_without_a_live_claim_is_dropped_by_the_pass() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_member_who_leaves_keeps_the_party_queued_and_frees_a_role() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-leave");
@@ -626,7 +626,7 @@ fn a_member_who_leaves_keeps_the_party_queued_and_frees_a_role() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_leader_who_leaves_takes_the_party_out_of_the_queue() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-leader-leaves");
@@ -658,7 +658,7 @@ fn a_leader_who_leaves_takes_the_party_out_of_the_queue() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_kicked_member_waits_alone_and_the_party_leaves_the_queue() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-kick");
@@ -705,7 +705,7 @@ fn a_kicked_member_waits_alone_and_the_party_leaves_the_queue() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_kicked_member_without_a_claim_does_not_wait_alone() {
     let realm = start("stone-hook-kick-unclaimed");
     const LEADER: u64 = 509_6065;
@@ -742,7 +742,7 @@ fn a_kicked_member_without_a_claim_does_not_wait_alone() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stale_party_row_leaves_the_queue_without_blocking_a_join() {
     let realm = start("stone-match-stale-party");
     const LEADER: u64 = 509_6090;
@@ -782,7 +782,7 @@ fn a_stale_party_row_leaves_the_queue_without_blocking_a_join() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_disband_answers_every_former_member_with_none() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-disband");
@@ -815,7 +815,7 @@ fn a_disband_answers_every_former_member_with_none() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn accepting_an_invite_moves_a_solo_seeker_into_the_party() {
     for plane in PLANES {
         let realm = plane.start("stone-hook-accept");
@@ -880,7 +880,7 @@ fn accepting_an_invite_moves_a_solo_seeker_into_the_party() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_party_that_converts_to_a_raid_leaves_the_queue() {
     let realm = start("stone-hook-raid-convert");
     const LEADER: u64 = 509_6085;
@@ -907,7 +907,7 @@ fn a_queued_party_that_converts_to_a_raid_leaves_the_queue() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_kicked_member_joins_a_second_queued_party_at_once() {
     let realm = start("stone-match-kick-requeue");
     const FIRST_LEADER: u64 = 509_6090;
@@ -961,7 +961,7 @@ fn a_kicked_member_joins_a_second_queued_party_at_once() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn every_party_the_pass_forms_or_fills_has_a_higher_roster_revision() {
     let realm = start("stone-match-revisions");
     let mages: Vec<u64> = (509_6000..509_6005).collect();
@@ -981,7 +981,7 @@ fn every_party_the_pass_forms_or_fills_has_a_higher_roster_revision() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_due_reminder_tells_every_member_once() {
     let realm = start("stone-match-reminder");
     const LEADER: u64 = 509_6000;
@@ -1036,7 +1036,7 @@ fn a_due_reminder_tells_every_member_once() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stone_formed_party_has_the_defaults_of_an_invited_one() {
     let realm = start("stone-match-defaults");
     let mages: Vec<u64> = (509_6000..509_6005).collect();
@@ -1077,7 +1077,7 @@ fn a_stone_formed_party_has_the_defaults_of_an_invited_one() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_stone_add_into_the_party_that_owns_the_instance_cancels_the_countdown() {
     let realm = start("stone-match-instance");
     const ALPHA: u64 = 509_295_001;

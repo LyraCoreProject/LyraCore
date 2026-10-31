@@ -15,7 +15,7 @@ fn start(name: &str) -> Standalone {
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
-    realm.assert_sql("DELETE FROM game_event_reaper_schedule");
+    realm.clear_schedule("game_event_reaper_schedule");
     realm
 }
 
@@ -66,7 +66,7 @@ fn heard(realm: &Standalone, guid: u64) -> Vec<u8> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_member_kicked_from_a_surviving_group_hears_uninvite_before_destroyed() {
     let realm = start("group-uninvite-survives");
     const LEADER: u64 = 509_6100;
@@ -87,7 +87,7 @@ fn a_member_kicked_from_a_surviving_group_hears_uninvite_before_destroyed() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_kick_that_disbands_the_group_sends_only_destroyed() {
     let realm = start("group-uninvite-disbands");
     const LEADER: u64 = 509_6110;
@@ -107,7 +107,7 @@ fn a_kick_that_disbands_the_group_sends_only_destroyed() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_member_who_leaves_hears_no_uninvite() {
     let realm = start("group-uninvite-leave");
     const LEADER: u64 = 509_6120;

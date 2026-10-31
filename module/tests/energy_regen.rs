@@ -93,14 +93,14 @@ fn assert_ticks_of(readings: &[Reading], per_tick: u32) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rogue_regains_twenty_energy_every_two_seconds() {
     let shard = rogue_at_zero_energy("energy-regen-ticks");
     assert_ticks_of(&watch_energy(&shard, 80), 20);
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn adrenaline_rush_doubles_each_energy_tick() {
     let shard = rogue_at_zero_energy("energy-regen-adrenaline-rush");
     shard.assert_sql(&format!(

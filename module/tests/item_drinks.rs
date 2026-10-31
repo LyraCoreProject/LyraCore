@@ -3,7 +3,7 @@ mod support;
 use support::{actor, Standalone};
 
 #[test]
-#[ignore = "requires the local SpacetimeDB 2.7.1 CLI and debug Module"]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
 fn drink_spells_restore_mana_and_refuse_rage_even_without_the_item_flag() {
     let mut shard = Standalone::start("drink-spell-effects");
     shard.publish_module();

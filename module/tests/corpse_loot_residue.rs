@@ -3,7 +3,7 @@ mod support;
 use support::{wolves_beside, Standalone};
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_kill_purges_loot_and_eligibility_left_on_the_living_creature() {
     let mut shard = Standalone::start("corpse-loot-residue");
     shard.publish_module();

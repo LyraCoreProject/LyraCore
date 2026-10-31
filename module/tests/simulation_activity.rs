@@ -6,7 +6,7 @@ use support::{
 };
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn migration_defaults_are_repaired_before_recovery_outside_active_cells() {
     let mut shard = Standalone::start("simulation-backfill");
     let wolf = lone_wolf(&mut shard);
@@ -41,7 +41,7 @@ fn migration_defaults_are_repaired_before_recovery_outside_active_cells() {
 }
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
     let mut shard = Standalone::start("simulation-combat-backfill");
     let wolf = lone_wolf(&mut shard);
@@ -80,7 +80,7 @@ fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
 }
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
     let mut shard = Standalone::start("simulation-batched-backfill");
     let wolf = lone_wolf(&mut shard);
@@ -104,7 +104,7 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
             .len()
             == 513
     }));
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql("DELETE FROM game_creature_spawn");
     shard.assert_sql("DELETE FROM game_world_entity WHERE entry != 51000");
     assert_eq!(
@@ -112,11 +112,7 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
         513
     );
 
-    shard.assert_call("debug_arm_instance_tick", &["0", "4000"]);
-    shard.assert_sql(&format!(
-        "UPDATE game_creature_move_schedule SET instance_id = {}",
-        u64::MAX
-    ));
+    shard.assert_call("debug_rearm_creature_tick", &["4000"]);
     let updates = shard.subscribe(&["SELECT * FROM game_world_entity"]);
     shard.assert_sql(
         "UPDATE game_world_entity SET health = 1, max_health = 100, power = 0, max_power = 0, \

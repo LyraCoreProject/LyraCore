@@ -217,7 +217,7 @@ fn owner_guid(realm: &Standalone, name: &str) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn moderator_rights_gate_ownership_and_moderator_changes() {
     let realm = start("chat-channel-moderation-rights");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -351,7 +351,7 @@ fn moderator_rights_gate_ownership_and_moderator_changes() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn mute_kick_and_ban_remove_or_silence_members() {
     let realm = start("chat-channel-moderation-removal");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -503,7 +503,7 @@ fn mute_kick_and_ban_remove_or_silence_members() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn kick_or_ban_of_the_owner_sends_owner_changed_only_past_one_remaining_member() {
     let realm = start("chat-channel-moderation-owner-changed");
     join(&realm, &actor("1"), "Pair", HUMAN);
@@ -548,7 +548,7 @@ fn kick_or_ban_of_the_owner_sends_owner_changed_only_past_one_remaining_member()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn invite_notifies_the_target_and_follows_faction_and_ban_rules() {
     let realm = start("chat-channel-moderation-invite");
     join(&realm, &actor("1"), "Raiders", HUMAN);
@@ -630,7 +630,7 @@ fn invite_notifies_the_target_and_follows_faction_and_ban_rules() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn moderation_and_announcements_toggle_for_moderators_only() {
     let realm = start("chat-channel-moderation-toggles");
     join(&realm, &actor("1"), "Officers", HUMAN);
@@ -709,7 +709,7 @@ fn moderation_and_announcements_toggle_for_moderators_only() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_unresolved_target_refuses_after_membership_and_rights_checks() {
     let realm = start("chat-channel-moderation-order");
     join(&realm, &actor("1"), "Raiders", HUMAN);

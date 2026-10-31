@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_unassigned_region_retains_its_epoch_and_refuses_stale_retries() {
     let mut shard = Standalone::start("region-assignment-tombstone");
     shard.publish_module();

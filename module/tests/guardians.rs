@@ -62,7 +62,7 @@ fn stage(duration_ms: u32) -> (Standalone, String) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn guardians_attack_players_survive_owner_death_and_expire_in_combat() {
     let (shard, owner) = stage(12_000);
     let rows = shard.query_rows(&format!(
@@ -107,7 +107,7 @@ fn guardians_attack_players_survive_owner_death_and_expire_in_combat() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn fifteen_guardians_allow_a_full_cast_and_more_than_fifteen_prevent_another() {
     for (amount, total) in [(1, 16), (2, 17)] {
         let (shard, owner) = stage(0);
@@ -135,7 +135,7 @@ fn fifteen_guardians_allow_a_full_cast_and_more_than_fifteen_prevent_another() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_guardian_leaves_a_non_lootable_corpse_for_fifteen_seconds() {
     let (shard, owner) = stage(0);
     let guardian = shard

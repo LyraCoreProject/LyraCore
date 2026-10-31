@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn raid_quest_credit_keeps_the_raid_gate_and_party_parity() {
     let mut standalone = Standalone::start("raid-quest-credit");
     standalone.publish_module();

@@ -58,7 +58,7 @@ fn reply(kind: u64, message: &str) -> Option<(String, String)> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn away_status_lives_on_the_entity_and_ends_at_login() {
     let shard = start("away-status");
     shard.assert_call("debug_spawn_player_entity", &["1"]);
@@ -158,7 +158,7 @@ fn plan(rows: &[Value]) -> Vec<(u64, u64, u64, String, Vec<u64>)> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn realm_whisper_writes_the_vanilla_lines() {
     let realm = start("away-whisper");
     let text = "meet me at the gate".to_string();
@@ -207,7 +207,7 @@ fn realm_whisper_writes_the_vanilla_lines() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_ignored_notice_reaches_the_dropped_speaker() {
     let realm = start("away-ignored");
     let request = json!({

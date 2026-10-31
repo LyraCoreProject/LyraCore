@@ -5,7 +5,7 @@ use std::sync::Barrier;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn concurrent_fixtures_publish_complete_modules() {
     let fixtures: Vec<_> = (0..4)
         .map(|index| Standalone::start(&format!("concurrent-publish-{index}")))

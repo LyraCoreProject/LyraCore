@@ -14,7 +14,7 @@ fn start(name: &str) -> Standalone {
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
-    realm.assert_sql("DELETE FROM game_event_reaper_schedule");
+    realm.clear_schedule("game_event_reaper_schedule");
     realm
 }
 
@@ -90,7 +90,7 @@ fn rosters_heard(realm: &Standalone, guid: u64) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_acceptance_forms_a_party_at_the_first_roster_revision_like_a_realm_acceptance() {
     let realm = start("group-roster-package-accept");
     const REALM_LEADER: u64 = 509_7100;
@@ -128,7 +128,7 @@ fn party_of_three(realm: &Standalone, leader: u64, joiners: [u64; 2]) -> u64 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_departure_advances_the_roster_revision_of_the_surviving_party() {
     let realm = start("group-roster-package-leave");
     const LEADER: u64 = 509_7110;
@@ -141,7 +141,7 @@ fn a_package_departure_advances_the_roster_revision_of_the_surviving_party() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn deleting_a_member_advances_the_roster_revision_of_the_surviving_party() {
     let realm = start("group-roster-character-deleted");
     const LEADER: u64 = 509_7130;
@@ -154,7 +154,7 @@ fn deleting_a_member_advances_the_roster_revision_of_the_surviving_party() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_cross_faction_acceptance_through_the_package_path_is_refused() {
     let realm = start("group-roster-package-faction");
     const ALLIANCE_LEADER: u64 = 509_7120;

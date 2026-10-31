@@ -4,7 +4,7 @@ use lyracore_shared::terrain::cell_index;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn area_graveyards_take_priority_and_unusable_links_fall_back_to_the_zone() {
     let mut shard = Standalone::start("area-graveyards");
     shard.publish_module();

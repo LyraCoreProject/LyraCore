@@ -40,7 +40,7 @@ fn assert_equip_lacks_proficiency(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_warrior_equips_a_two_handed_sword_only_after_learning_the_proficiency() {
     let shard = fixture("weapon-proficiency-equip");
     assert!(!spellbook(&shard, "1").contains(&TWO_HANDED_SWORDS.to_string()));
@@ -60,7 +60,7 @@ fn a_warrior_equips_a_two_handed_sword_only_after_learning_the_proficiency() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_new_character_learns_the_weapon_proficiencies_of_its_race_and_class() {
     let shard = fixture("weapon-proficiency-kit");
     shard.assert_call(
@@ -80,7 +80,7 @@ fn a_new_character_learns_the_weapon_proficiencies_of_its_race_and_class() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn login_restores_a_missing_kit_weapon_proficiency() {
     let shard = fixture("weapon-proficiency-login");
     shard.assert_sql("DELETE FROM game_player_spell WHERE character_guid = 1 AND spell_id = 201");
@@ -101,7 +101,7 @@ fn login_restores_a_missing_kit_weapon_proficiency() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn repair_after_publish_adds_missing_weapon_kit_rows_once() {
     let shard = fixture("weapon-proficiency-repair");
     let kit = "SELECT * FROM game_createinfo_spell";
