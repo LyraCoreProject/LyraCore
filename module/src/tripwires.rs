@@ -16,6 +16,10 @@ pub(crate) mod character_owned_tripwire {
 
     const NOT_CHARACTER_OWNED: &[(&[&str], &str)] = &[
         (
+            &["game_native_handoff", "game_world_entry"],
+            "a World Session's pending Handoff to another Shard, gone once the Shard adopts it",
+        ),
+        (
             &[
                 "game_native_conformance_projection",
                 "game_native_conformance_cache",
@@ -1292,7 +1296,8 @@ mod partition_discipline_tripwire {
             violations.is_empty(),
             "Invariant: no Module game logic reads a shard id.\n\
              module code outside {SHARD_ID_OWNERS:?} reads a SHARD ID:\n  {}\n\n\
-             Native Realms use one Shard. Partition gameplay by map and Instance through \
+             A Realm Shard and a World Shard split a Realm by role, never by region. Partition gameplay \
+             by map and Instance through \
              `crate::helpers`, and use indexed cells for nearby reads.",
             violations.join("\n  ")
         );

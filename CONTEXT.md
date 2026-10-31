@@ -41,7 +41,7 @@ entry in both files.
 
 **P** [Package](CORE_TERMS.md#package) · [Package API](CORE_TERMS.md#package-api) · [Package Cast Range](#packages) · [Package Config](#packages) · [Package Creature Range](#packages) · [Package Delta](#packages) · [Package Event](#runtime-scripts) · [Package EventAI Range](#packages) · [Package Fixture](#packages) · [Package Gameobject Range](#packages) · [Package Globals Range](#packages) · [Package Gossip Range](#packages) · [Package Identifier Range](#packages) · [Package Import](#packages) · [Package Inventory](#packages) · [Package Item Range](#packages) · [Package Loot Range](#packages) · [Package Quest Range](#packages) · [Package Script Range](#packages) · [Package Source](#packages) · [Package Spell](#packages) · [Package Spell Metadata Range](#packages) · [Package Spell Range](#packages) · [Package Teardown](#packages) · [Package Trainer Range](#packages) · [Package-owned Account](#accounts-characters-and-sessions) · [Party](#groups) · [Party Partition](#groups) · [Passenger](#transports) · [Path Progress](#transports) · [Patrol Pause](#creature-ai) · [Peer Shard](#realm-topology) · [Petition](#guilds) · [Petitioner](#guilds) · [Pre-auth I/O Deadline](#accounts-characters-and-sessions) · [Proc](#procs) · [Proficiency](#requests-and-delivery) · [Property Pool](#random-properties) · [Protocol Family](CORE_TERMS.md#protocol-family) · [Prototype](#working-method) · [Provenance Stamp](#packages) · [Public Note](#guilds)
 
-**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
+**R** [Raid](#groups) · [Raid Quest](#groups) · [Raid Slot](#groups) · [Random Property](#random-properties) · [Ranged Posture](#creature-ai) · [Rank Rights](#guilds) · [Ready Check](#groups) · [Realm](CORE_TERMS.md#realm) · [Realm Chat Line](#chat) · [Realm Clock](#world-clock-and-weather) · [Realm Shard](#realm-topology) · [Realm-core](#retired-terms) · [Recorded Revision](#packages) · [Reference Datascript](#packages) · [Reference Package](#packages) · [Reference Server](#conformance) · [Refusal](CORE_TERMS.md#refusal) · [Relay](CORE_TERMS.md#relay) · [Relay Arrival](#realm-topology) · [Relay Definition](#realm-topology) · [Relay Run](#realm-topology) · [Returned Mail](#mail) · [Reward Letter](#mail) · [Rollback](#requests-and-delivery) · [Roster Revision](#groups) · [Roster Revision Relay](#retired-terms) · [Route Path](#procs) · [Route Step](#procs) · [Rule State](#creature-ai) · [Runtime Script](CORE_TERMS.md#runtime-script) · [Runtime Script Host](#runtime-scripts) · [Runtime Script Toolchain](#packages)
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
@@ -51,7 +51,7 @@ entry in both files.
 
 **V** [Verification](CORE_TERMS.md#verification)
 
-**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Editor](#requests-and-delivery) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#retired-terms) · [World Source](#realm-topology)
+**W** [Weapon Strike](#procs) · [Will-Not-Be-Traded Slot](#trading) · [World Editor](#requests-and-delivery) · [World Import Completion](#realm-topology) · [World Import Profile](#realm-topology) · [World Import Scope](#realm-topology) · [World Session](CORE_TERMS.md#world-session) · [World Session Token](#retired-terms) · [World Shard](#realm-topology) · [World Source](#realm-topology)
 
 **Z** [Zone Weather](#world-clock-and-weather)
 
@@ -62,6 +62,18 @@ entry in both files.
 Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 [Development reload](CORE_TERMS.md#development-reload), [Realm](CORE_TERMS.md#realm),
 [Shard](CORE_TERMS.md#shard), [Module](CORE_TERMS.md#module), [Operator](CORE_TERMS.md#operator).
+
+**Realm Shard**:
+A Shard that holds logon, Accounts, Sessions and the Login Queue of its Realm, but no Characters.
+It relays Character selection to its World Shard and hands each World Session to it by Handoff to
+enter the world. It keeps the Session of an Account it handed away, so the Session reaper spares it.
+_Avoid_: login server, auth database
+
+**World Shard**:
+A Shard that holds the Characters and the world of a Realm with a Realm Shard. It answers the Realm
+Shard's Character selection requests and keeps copies of the Accounts and Sessions of the World
+Sessions it holds. Logout hands the World Session back to the Realm Shard.
+_Avoid_: game server, map server
 
 **Peer Shard**:
 Another Shard of the same Realm, listed in `game_peer_shard`. Only a Peer Shard may call this
@@ -1283,4 +1295,3 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 
 **World Session Token**: retired. The Realm-core ownership token a request carried across Shards. _Avoid_ in new text.
 
-**World Shard**: retired. A Shard that owned a set of maps. _Avoid_ in new text.

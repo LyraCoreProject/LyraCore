@@ -1,8 +1,8 @@
 use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, SpacetimeType, Table};
 
 use super::{
-    game_native_cipher, game_native_world_connection, NativeCipher, NativeWorldConnection,
-    NativeWorldState,
+    game_native_cipher, game_native_packet, game_native_world_connection, NativeCipher,
+    NativeWorldConnection, NativeWorldState,
 };
 use crate::{game_account, game_session};
 
@@ -21,9 +21,26 @@ pub struct NativeHandoff {
     pub account_id: u64,
     pub client_seed: u32,
     pub client_proof: Vec<u8>,
+    /// The Character the World Session enters on arrival; without one it arrives at selection.
+    #[default(None::<u64>)]
+    pub character_guid: Option<u64>,
 }
 
-// ponytail: only Character selection moves; entering the world on arrival needs the Character's Transfer.
+pub(super) fn write_marker(ctx: &ReducerContext, connection_id: ConnectionId, database: Identity) {
+    ctx.db.game_native_packet().insert(super::NativePacket {
+        id: 0,
+        audience: super::NativeAudience::Handoff(NativeHandoffTarget {
+            connection_id,
+            database,
+        }),
+        opcode: None,
+        body: Vec::new(),
+        close_after: false,
+        not_before_micros: 0,
+        authentication_complete: false,
+    });
+}
+
 #[reducer]
 pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
     let connection_id = super::connection_id(ctx)?;
@@ -67,8 +84,17 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
             group_broadcasts: None,
             addon_limit: None,
         });
-    super::current_account(ctx, &connection, account.id)?;
-    Ok(())
+    match handoff.character_guid {
+        Some(guid) => super::world::enter_character(
+            ctx,
+            connection,
+            account.id,
+            guid,
+            crate::world::WorldEntry::Login,
+            0,
+        ),
+        None => super::current_account(ctx, &connection, account.id).map(drop),
+    }
 }
 
 /// Moves the World Session of `account_id` to `database`. The PONG before the marker reaches the
@@ -80,7 +106,6 @@ pub fn debug_native_handoff(
     account_id: u64,
     database: Identity,
 ) -> Result<(), String> {
-    use super::game_native_packet;
     use lyracore_protocol::messages::vanilla::{opcodes::ServerOpcodeMessage, SMSG_PONG};
 
     crate::helpers::require_operator(ctx)?;
@@ -102,18 +127,7 @@ pub fn debug_native_handoff(
         )
     };
     pong(0xbef0)?;
-    ctx.db.game_native_packet().insert(super::NativePacket {
-        id: 0,
-        audience: super::NativeAudience::Handoff(NativeHandoffTarget {
-            connection_id,
-            database,
-        }),
-        opcode: None,
-        body: Vec::new(),
-        close_after: false,
-        not_before_micros: 0,
-        authentication_complete: false,
-    });
+    write_marker(ctx, connection_id, database);
     pong(0xaf7e)
 }
 
@@ -141,6 +155,7 @@ pub fn debug_native_expect_handoff(
         account_id: account.id,
         client_seed,
         client_proof,
+        character_guid: None,
     });
     Ok(())
 }

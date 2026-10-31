@@ -20,11 +20,13 @@ The local `dev watch` workflow that rebuilds Module code and publishes it while 
 Host and World Sessions running. The Module definition must stay unchanged.
 
 <a id="realm"></a>**Realm**:
-The game world and Accounts that clients see as one server. One Shard holds it.
+The game world and Accounts that clients see as one server. One Shard holds it, or a Realm Shard
+and a World Shard share it.
 _Avoid_: server, cluster
 
 <a id="shard"></a>**Shard**:
-The SpacetimeDB database that holds one Realm. Maps and Instances partition gameplay within it.
+A SpacetimeDB database of a Realm. One Shard can hold the whole Realm, or a Realm Shard and a World
+Shard can share it. Maps and Instances partition gameplay within a Shard.
 _Avoid_: database (when meaning a shard), db, cross-database
 
 <a id="module"></a>**Module**:
