@@ -88,7 +88,7 @@ fn inventory_changes_preserve_accepted_trade_items() {
     shard.assert_sql("UPDATE game_spell SET cast_time_ms = 1000, cost = 10, power_type = 1 WHERE spell_id = 5090171");
     shard.assert_sql("UPDATE game_spell_reagent SET item_entry = 5090054 WHERE id = 40721368");
     shard.assert_sql("INSERT INTO game_spell_reagent (id,spell_id,item_entry,count) VALUES (40721369,5090171,5090052,1)");
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql(
         "UPDATE game_world_entity SET simulation_indexed = false, power = 100 WHERE guid = 1",
     );
@@ -162,7 +162,7 @@ fn inventory_changes_preserve_accepted_trade_items() {
     shard.assert_sql("INSERT INTO game_spell_effect (id,spell_id,effect_index,kind,base_points,die_sides,per_level,period_ms,target,radius_yd,chain_targets,trigger_spell,effect_mechanic,p0,p0_kind,p1,script_id,enters_combat,points_per_combo) VALUES (20360685,5090171,1,7,1,0,0.0,0,0,0.0,0,0,0,5090999,8,0,0,false,0.0)");
     let before_failed_product = shard.query_rows("SELECT * FROM game_item_instance");
     let accepted = shard.query_rows("SELECT * FROM game_trade_session");
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard.assert_sql("DELETE FROM game_trade_event");
     shard.assert_call("debug_begin_cast", &["1", "5090171", "1"]);
     assert!(poll_until(std::time::Duration::from_secs(5), || shard

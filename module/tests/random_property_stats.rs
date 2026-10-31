@@ -246,7 +246,7 @@ fn defenses_and_each_magic_resistance_reach_combat_callers() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spell_power_selects_school_and_healing_power_only_affects_heals() {
     let shard = fixture("property-stat-spells", 8);
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     enchantments(
         &shard,
         &[(16, 20, 4), (16, 30, 16), (17, 40, 2), (17, 60, 4)],

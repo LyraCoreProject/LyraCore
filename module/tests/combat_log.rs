@@ -25,8 +25,8 @@ const DOT: u32 = 9_000_032;
 fn damage_heal_and_energize_ticks_each_log_their_outcome() {
     let mut standalone = Standalone::start("periodic-aura-log");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
-    standalone.assert_sql("DELETE FROM game_melee_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
+    standalone.clear_schedule("game_melee_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     standalone.assert_sql(&format!(
         "UPDATE game_world_entity SET simulation_indexed = false, health = 100, max_health = 100 WHERE guid = {WOLF}"
@@ -124,8 +124,8 @@ const SELF_ENERGIZE: u32 = 509_0101;
 fn a_direct_energize_records_the_power_given_on_the_go() {
     let mut standalone = Standalone::start("energize-log");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
-    standalone.assert_sql("DELETE FROM game_event_reaper_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
+    standalone.clear_schedule("game_event_reaper_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     standalone.assert_sql(&format!(
         "DELETE FROM game_spell WHERE spell_id = {SELF_ENERGIZE}"
@@ -202,8 +202,8 @@ const CAST_MISS_RESIST: u32 = 2;
 fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
     let mut standalone = Standalone::start("cast-miss");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
-    standalone.assert_sql("DELETE FROM game_melee_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
+    standalone.clear_schedule("game_melee_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&CHARACTER.to_string()]);
     standalone.assert_call(
         "debug_spawn_at_feet",

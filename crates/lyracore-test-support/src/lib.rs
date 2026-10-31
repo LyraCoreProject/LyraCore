@@ -375,6 +375,10 @@ impl Standalone {
         self.assert_ok(&self.call_anonymous(reducer, args));
     }
 
+    pub fn clear_schedule(&self, table: &str) {
+        self.assert_call("debug_clear_schedule", &[&format!("\"{table}\"")]);
+    }
+
     pub fn assert_sql(&self, query: &str) {
         self.assert_sql_database(&self.database, query);
     }

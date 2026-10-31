@@ -1557,6 +1557,74 @@ pub fn debug_disarm_instance_tick(ctx: &ReducerContext, instance_id: u64) -> Res
     Ok(())
 }
 
+// SpacetimeDB 2.14 refuses SQL writes to scheduled tables, so durable tests stop schedules here.
+#[reducer]
+pub fn debug_clear_schedule(ctx: &ReducerContext, table: String) -> Result<(), String> {
+    use crate::{
+        game_aura_schedule, game_event_reaper_schedule, game_gateway_lease_reaper_schedule,
+        game_melee_schedule, game_motion_publish_schedule,
+    };
+    fn clear<T: Table>(table: T) {
+        let rows: Vec<_> = table.iter().collect();
+        for row in rows {
+            table.delete(row);
+        }
+    }
+    match table.as_str() {
+        "game_aura_schedule" => clear(ctx.db.game_aura_schedule()),
+        "game_creature_move_schedule" => clear(ctx.db.game_creature_move_schedule()),
+        "game_event_reaper_schedule" => clear(ctx.db.game_event_reaper_schedule()),
+        "game_gateway_lease_reaper_schedule" => clear(ctx.db.game_gateway_lease_reaper_schedule()),
+        "game_melee_schedule" => clear(ctx.db.game_melee_schedule()),
+        "game_motion_publish_schedule" => clear(ctx.db.game_motion_publish_schedule()),
+        _ => return Err(format!("{table} is not a clearable schedule")),
+    }
+    Ok(())
+}
+
+#[reducer]
+pub fn debug_rearm_creature_tick(ctx: &ReducerContext, tick_ms: u64) -> Result<(), String> {
+    if !(INSTANCE_TICK_MS_FLOOR..=INSTANCE_TICK_MS_CEIL).contains(&tick_ms) {
+        return Err(format!(
+            "tick_ms {tick_ms} outside {INSTANCE_TICK_MS_FLOOR}..={INSTANCE_TICK_MS_CEIL}"
+        ));
+    }
+    let sched = ctx.db.game_creature_move_schedule();
+    let stale: Vec<u64> = sched
+        .iter()
+        .filter(|r| r.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE)
+        .map(|r| r.scheduled_id)
+        .collect();
+    for id in stale {
+        sched.scheduled_id().delete(id);
+    }
+    sched.insert(CreatureMoveSchedule {
+        scheduled_id: 0,
+        scheduled_at: crate::time::schedule_interval(
+            ctx,
+            TimeDuration::from_micros(tick_ms as i64 * 1000),
+        ),
+        instance_id: crate::creatures::GLOBAL_TICK_INSTANCE,
+    });
+    Ok(())
+}
+
+#[reducer]
+pub fn debug_reassign_pending_casts(
+    ctx: &ReducerContext,
+    from_guid: u64,
+    to_guid: u64,
+) -> Result<(), String> {
+    use crate::game_pending_cast;
+    let casts = ctx.db.game_pending_cast();
+    let rows: Vec<_> = casts.by_caster().filter(from_guid).collect();
+    for mut row in rows {
+        row.caster_guid = to_guid;
+        casts.scheduled_id().update(row);
+    }
+    Ok(())
+}
+
 #[reducer]
 pub fn debug_verify_combat_regen(ctx: &ReducerContext, character_guid: u64) -> Result<(), String> {
     let e = crate::helpers::live_entity(ctx, character_guid)?;

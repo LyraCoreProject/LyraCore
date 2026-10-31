@@ -119,9 +119,9 @@ fn populated_old_module(baseline: &[u8]) -> Standalone {
     shard.publish_module_bytes(baseline);
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("debug_spawn_player_entity", &["1"]);
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
-    shard.assert_sql("DELETE FROM game_melee_schedule");
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
+    shard.clear_schedule("game_melee_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard.assert_sql("UPDATE game_character SET money = 123456, xp = 37 WHERE guid = 1");
     let in_combat = lyracore_shared::constants::unit_flags::IN_COMBAT;
     shard.assert_sql(&format!(

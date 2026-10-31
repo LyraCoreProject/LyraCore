@@ -144,7 +144,7 @@ fn fixture(name: &str, copper: u32) -> (Standalone, String) {
     shard.publish_module();
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     stage_charter_template(&shard);
     shard.assert_call("debug_spawn_player_entity", &[&OWNER.to_string()]);

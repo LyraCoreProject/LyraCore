@@ -22,7 +22,7 @@ fn fixture(name: &str) -> Standalone {
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
     // The reaper would delete the relay events under test.
-    shard.assert_sql("DELETE FROM game_event_reaper_schedule");
+    shard.clear_schedule("game_event_reaper_schedule");
     let heights = vec!["-50"; 145].join(":");
     let packed = [(DEEP_WATER, u64::MAX), (SAFE_WATER, 0)]
         .iter()

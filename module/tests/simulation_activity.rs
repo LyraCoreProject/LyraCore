@@ -104,7 +104,7 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
             .len()
             == 513
     }));
-    shard.assert_sql("DELETE FROM game_creature_move_schedule");
+    shard.clear_schedule("game_creature_move_schedule");
     shard.assert_sql("DELETE FROM game_creature_spawn");
     shard.assert_sql("DELETE FROM game_world_entity WHERE entry != 51000");
     assert_eq!(
@@ -112,11 +112,7 @@ fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
         513
     );
 
-    shard.assert_call("debug_arm_instance_tick", &["0", "4000"]);
-    shard.assert_sql(&format!(
-        "UPDATE game_creature_move_schedule SET instance_id = {}",
-        u64::MAX
-    ));
+    shard.assert_call("debug_rearm_creature_tick", &["4000"]);
     let updates = shard.subscribe(&["SELECT * FROM game_world_entity"]);
     shard.assert_sql(
         "UPDATE game_world_entity SET health = 1, max_health = 100, power = 0, max_power = 0, \

@@ -14,7 +14,7 @@ fn start(name: &str) -> Standalone {
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
-    realm.assert_sql("DELETE FROM game_event_reaper_schedule");
+    realm.clear_schedule("game_event_reaper_schedule");
     realm
 }
 

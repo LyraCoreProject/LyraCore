@@ -14,7 +14,7 @@ const SOURCE_RULE_ID: u64 = 900_001;
 fn authoritative_damage_honors_the_lethal_floor_and_its_lifetime() {
     let mut standalone = Standalone::start("lethal-damage-floor");
     standalone.publish_module();
-    standalone.assert_sql("DELETE FROM game_creature_move_schedule");
+    standalone.clear_schedule("game_creature_move_schedule");
     standalone.assert_call("debug_spawn_player_entity", &[&PLAYER_GUID.to_string()]);
     let first_definition = definition("phase:1");
     install_definition(&standalone, WOLF_GUID, &first_definition);

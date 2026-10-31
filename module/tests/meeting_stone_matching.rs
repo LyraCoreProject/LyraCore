@@ -45,7 +45,7 @@ fn start(name: &str) -> Standalone {
     realm.publish_module();
     realm.assert_call("claim_operator", &[]);
     realm.assert_call("install_guid_range", &["0"]);
-    realm.assert_sql("DELETE FROM game_event_reaper_schedule");
+    realm.clear_schedule("game_event_reaper_schedule");
     realm
 }
 
@@ -532,7 +532,7 @@ fn seekers_of_another_team_or_area_never_meet() {
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_seeker_without_a_live_claim_is_dropped_by_the_pass() {
     let realm = start("stone-match-claims");
-    realm.assert_sql("DELETE FROM game_gateway_lease_reaper_schedule");
+    realm.clear_schedule("game_gateway_lease_reaper_schedule");
     let mages: Vec<u64> = (509_6040..509_6046).collect();
     let expired = mages[1];
     for &guid in &mages {
