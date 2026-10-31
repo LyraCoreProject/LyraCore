@@ -192,6 +192,16 @@ pub(crate) trait IdleSink {
     fn engaged(&self, guid: u64) -> bool;
     fn speed_of(&self, guid: u64, gait: Gait) -> f32;
     fn navigate(&self, guid: u64, to: (f32, f32), max_step: f32, stop_dist: f32) -> (f32, f32);
+    /// A chase step, or None when this tick's path-search budget is spent.
+    fn chase_navigate(
+        &self,
+        guid: u64,
+        to: (f32, f32),
+        max_step: f32,
+        stop_dist: f32,
+    ) -> Option<(f32, f32)> {
+        Some(self.navigate(guid, to, max_step, stop_dist))
+    }
     fn roll(&self) -> u32;
     fn aim_at_waypoint(&mut self, guid: u64, waypoint_id: u64);
     fn reached_home(&mut self, guid: u64);
@@ -488,57 +498,114 @@ pub(crate) trait CreatureWorld:
     fn run_due_world_maintenance(&mut self) -> Vec<(&'static str, u64)>;
     fn evaluate_eventai(&mut self, request: EventAiRequest<'_>) -> u64;
     fn run_package_passes(&mut self);
+    /// Times one pass when this tick is sampled for profiling.
+    fn pass_timer(&self, _pass: &'static str) -> Option<PassTimer> {
+        None
+    }
+}
+
+/// Logs a pass's elapsed time when dropped. Native test builds have no Host timer to call.
+pub(crate) struct PassTimer {
+    #[cfg(target_arch = "wasm32")]
+    _stopwatch: spacetimedb::log_stopwatch::LogStopwatch,
+}
+
+impl PassTimer {
+    pub(crate) fn start(_pass: &'static str) -> Self {
+        Self {
+            #[cfg(target_arch = "wasm32")]
+            _stopwatch: spacetimedb::log_stopwatch::LogStopwatch::new(_pass),
+        }
+    }
+}
+
+fn timed<W: CreatureWorld, T>(w: &mut W, pass: &'static str, f: impl FnOnce(&mut W) -> T) -> T {
+    let _timer = w.pass_timer(pass);
+    f(w)
 }
 
 pub(crate) fn run_cycle<W: CreatureWorld>(w: &mut W, tick: TickContext) -> CycleOutcome {
     let TickSweep {
         active,
+        awake,
         pets,
         in_combat,
-    } = w.awake_creatures(&tick.scope, tick.sense);
+    } = timed(w, "sweep", |w| w.awake_creatures(&tick.scope, tick.sense));
     let global = tick.scope.runs_global_passes();
     let mut rows: Vec<(&'static str, u64)> = Vec::new();
 
-    rows.push(("advance", advance_legs(w, &tick) as u64));
-    rows.push(("patrol", patrol(w, &tick, &active) as u64));
+    rows.push((
+        "advance",
+        timed(w, "advance", |w| advance_legs(w, &tick)) as u64,
+    ));
+    rows.push((
+        "patrol",
+        timed(w, "patrol", |w| patrol(w, &tick, &active)) as u64,
+    ));
     if global {
-        rows.extend(w.run_due_world_maintenance());
+        let maintenance = timed(w, "maintenance", |w| w.run_due_world_maintenance());
+        rows.extend(maintenance);
     }
     if tick.sense {
-        let (pulls, seen) = aggro(w, &active);
+        let (pulls, seen) = timed(w, "aggro", |w| aggro(w, &active));
         rows.push(("aggro", seen as u64));
-        rows.push(("assist", assist(w, &active, pulls) as u64));
-        rows.push(("pet", pet_behavior(w, &tick, &pets) as u64));
+        rows.push((
+            "assist",
+            timed(w, "assist", |w| assist(w, &awake, pulls)) as u64,
+        ));
+        rows.push((
+            "pet",
+            timed(w, "pet", |w| pet_behavior(w, &tick, &pets)) as u64,
+        ));
         rows.push((
             "eventai",
-            w.evaluate_eventai(EventAiRequest::Cycle {
-                scope: &tick.scope,
-                active: &active,
+            timed(w, "eventai", |w| {
+                w.evaluate_eventai(EventAiRequest::Cycle {
+                    scope: &tick.scope,
+                    active: &active,
+                })
             }),
         ));
-        rows.push(("cast", cast(w, &tick.scope) as u64));
-        rows.push(("threat_retarget", threat_retarget(w, &tick.scope) as u64));
+        rows.push(("cast", timed(w, "cast", |w| cast(w, &tick.scope)) as u64));
+        rows.push((
+            "threat_retarget",
+            timed(w, "threat_retarget", |w| threat_retarget(w, &tick.scope)) as u64,
+        ));
     }
-    rows.push(("chase", chase(w, &tick) as u64));
-    rows.push(("combat_enter", combat_entry(w, &tick.scope) as u64));
-    rows.push(("idle", idle_movement(w, &tick, &active) as u64));
+    rows.push(("chase", timed(w, "chase", |w| chase(w, &tick)) as u64));
+    rows.push((
+        "combat_enter",
+        timed(w, "combat_enter", |w| combat_entry(w, &tick.scope)) as u64,
+    ));
+    rows.push((
+        "idle",
+        timed(w, "idle", |w| idle_movement(w, &tick, &active)) as u64,
+    ));
     if tick.sense && global {
-        rows.push(("regen*", regenerate(w, &in_combat) as u64));
-        rows.push(("combat_drop*", combat_exit(w, &tick, &in_combat) as u64));
+        rows.push((
+            "regen*",
+            timed(w, "regen", |w| regenerate(w, &in_combat)) as u64,
+        ));
+        rows.push((
+            "combat_drop*",
+            timed(w, "combat_drop", |w| combat_exit(w, &tick, &in_combat)) as u64,
+        ));
     }
-    rows.push(("rout", rout(w, &tick) as u64));
-    rows.push(("fear", fear(w, &tick) as u64));
+    rows.push(("rout", timed(w, "rout", |w| rout(w, &tick)) as u64));
+    rows.push(("fear", timed(w, "fear", |w| fear(w, &tick)) as u64));
     if !tick.sense {
         rows.push((
             "eventai",
-            w.evaluate_eventai(EventAiRequest::Cycle {
-                scope: &tick.scope,
-                active: &active,
+            timed(w, "eventai", |w| {
+                w.evaluate_eventai(EventAiRequest::Cycle {
+                    scope: &tick.scope,
+                    active: &active,
+                })
             }),
         ));
     }
     if global {
-        w.run_package_passes();
+        timed(w, "packages", |w| w.run_package_passes());
     }
 
     CycleOutcome {
@@ -1036,7 +1103,8 @@ fn chase<W: PursuitSink + MotionSink + IdleSink + EngageSink>(
     tick: &TickContext,
 ) -> usize {
     let mut pursuits = w.pursuits(&tick.scope);
-    pursuits.sort_unstable_by_key(|c| c.guid);
+    // A creature without a leg stands still, so it searches before one that is still moving.
+    pursuits.sort_unstable_by_key(|c| (c.leg.is_some(), c.guid));
     let visited = pursuits.len();
     for c in pursuits {
         if c.routing || w.movement_suppressed(c.guid) || !w.combat_movement_enabled(c.guid) {
@@ -1094,13 +1162,17 @@ fn commit_chase_leg<W: MotionSink + IdleSink + PursuitSink>(
         return;
     }
     let dir = ((target.x - c.at.x) / gap, (target.y - c.at.y) / gap);
-    let step = w.navigate(c.guid, (target.x, target.y), gap, stop_dist);
-    if step == (c.at.x, c.at.y) {
-        w.target_not_reachable(c.guid);
+    let stop_at = (target.x - dir.0 * stop_dist, target.y - dir.1 * stop_dist);
+    // Path search dominates the tick, so a leg that still leads to the victim is kept unsearched.
+    if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
         return;
     }
-    let stop_at = (target.x - dir.0 * stop_dist, target.y - dir.1 * stop_dist);
-    if !needs_new_leg(c.leg.as_ref(), dir, stop_at) {
+    // Out of budget, the creature keeps its current leg until a later tick.
+    let Some(step) = w.chase_navigate(c.guid, (target.x, target.y), gap, stop_dist) else {
+        return;
+    };
+    if step == (c.at.x, c.at.y) {
+        w.target_not_reachable(c.guid);
         return;
     }
     let gait = w.chase_gait(c.guid);
@@ -1199,7 +1271,7 @@ fn combat_entry<W: EngageSink>(w: &mut W, scope: &TickScope) -> usize {
     let mut visited = 0usize;
     let mut units: Vec<u64> = Vec::new();
     for e in w.engagements() {
-        if !scope.covers(e.instance_id) || e.player_never_swung {
+        if !scope.owns(e.attacker, e.instance_id) || e.player_never_swung {
             continue;
         }
         visited += 1;

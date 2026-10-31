@@ -3,6 +3,8 @@ use lyracore_shared::nav::OBS_DIM;
 use lyracore_shared::nav::{self, OBS_BYTES, WALK_BYTES, WALK_DIM};
 use lyracore_shared::terrain::{cell_index, cell_key};
 use spacetimedb::{reducer, table, ReducerContext, Table};
+use std::cell::RefCell;
+use std::collections::HashMap;
 
 #[table(accessor = game_nav_chunk, public)]
 pub struct NavChunk {
@@ -213,7 +215,51 @@ fn merged_cell(terrain: Option<NavCellData>, coverage: Option<NavCellData>) -> O
 
 fn fetcher(ctx: &ReducerContext, map_id: u32) -> impl FnMut(u16, u16) -> Option<NavCellData> + '_ {
     let generation = coverage_generation(ctx, map_id);
-    move |cx, cy| fetch_cell(ctx, map_id, generation, cx, cy).0
+    move |cx, cy| cached_cell(ctx, map_id, generation, cx, cy)
+}
+
+type CellKey = (u32, Option<u64>, u16, u16);
+
+const CELL_CACHE_CELLS: usize = 4_096;
+
+thread_local! {
+    static CELL_CACHE: RefCell<Option<HashMap<CellKey, Option<NavCellData>>>> =
+        const { RefCell::new(None) };
+}
+
+// Only the importer writes nav chunks and coverage, so a cell read once stays valid for the scope.
+pub(crate) fn with_cell_cache<T>(query: impl FnOnce() -> T) -> T {
+    struct RestoreCache(Option<HashMap<CellKey, Option<NavCellData>>>);
+    impl Drop for RestoreCache {
+        fn drop(&mut self) {
+            CELL_CACHE.with(|cache| *cache.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = RestoreCache(CELL_CACHE.with(|cache| cache.replace(Some(HashMap::new()))));
+    query()
+}
+
+fn cached_cell(
+    ctx: &ReducerContext,
+    map_id: u32,
+    generation: Option<u64>,
+    cx: u16,
+    cy: u16,
+) -> Option<NavCellData> {
+    let key = (map_id, generation, cx, cy);
+    if let Some(hit) = CELL_CACHE.with(|cache| cache.borrow().as_ref()?.get(&key).cloned()) {
+        return hit;
+    }
+    let cell = fetch_cell(ctx, map_id, generation, cx, cy).0;
+    CELL_CACHE.with(|cache| {
+        if let Some(cells) = cache.borrow_mut().as_mut() {
+            if cells.len() == CELL_CACHE_CELLS {
+                cells.clear();
+            }
+            cells.insert(key, cell.clone());
+        }
+    });
+    cell
 }
 
 fn fetch_cell(
@@ -805,24 +851,59 @@ pub(crate) fn nav_step(
     stop_dist: f32,
     z: f32,
 ) -> (f32, f32) {
-    let stepped = if !nav_enabled(ctx) {
-        crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+    nav_step_within(
+        ctx,
+        map_id,
+        instance_id,
+        cur,
+        dest,
+        (max_step, stop_dist),
+        z,
+        LEG_MAX_EXPANSIONS,
+    )
+    .0
+}
+
+/// Steps toward `dest` with at most `max_expansions` path-search nodes; returns the nodes spent.
+#[allow(clippy::too_many_arguments)]
+pub(crate) fn nav_step_within(
+    ctx: &ReducerContext,
+    map_id: u32,
+    instance_id: u64,
+    cur: (f32, f32),
+    dest: (f32, f32),
+    (max_step, stop_dist): (f32, f32),
+    z: f32,
+    max_expansions: u32,
+) -> ((f32, f32), u32) {
+    let (stepped, expansions) = if !nav_enabled(ctx) {
+        (
+            crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
+            0,
+        )
     } else {
-        match lyracore_shared::nav::find_leg_in_range(
+        let search = lyracore_shared::nav::find_leg_in_range_ex(
             &mut fetcher(ctx, map_id),
             cur,
             dest,
             stop_dist,
-            LEG_MAX_EXPANSIONS,
-        ) {
-            Some(path) => {
+            max_expansions,
+        );
+        let stepped = match search.outcome {
+            nav::LegOutcome::Complete(path) | nav::LegOutcome::Partial(path) => {
                 let wp = path[0];
                 crate::creatures::chase_step(cur.0, cur.1, wp.0, wp.1, max_step, 0.0)
             }
-            None => crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist),
-        }
+            nav::LegOutcome::Blocked => {
+                crate::creatures::chase_step(cur.0, cur.1, dest.0, dest.1, max_step, stop_dist)
+            }
+        };
+        (stepped, search.expansions)
     };
-    step_gate(ctx, map_id, instance_id, cur, stepped, z)
+    (
+        step_gate(ctx, map_id, instance_id, cur, stepped, z),
+        expansions,
+    )
 }
 
 const GATE_CLEARANCE_YD: f32 = 1.0;

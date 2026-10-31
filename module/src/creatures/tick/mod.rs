@@ -116,25 +116,62 @@ pub fn tick_creatures(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
     creature_pass(ctx, schedule);
 }
 
+#[table(accessor = game_creature_tick_cursor)]
+pub struct CreatureTickCursor {
+    #[primary_key]
+    pub id: u8,
+    pub tick: u64,
+}
+
+fn next_tick(ctx: &ReducerContext) -> u64 {
+    let cursors = ctx.db.game_creature_tick_cursor();
+    match cursors.id().find(0) {
+        Some(mut cursor) => {
+            let tick = cursor.tick;
+            cursor.tick = tick.wrapping_add(1);
+            cursors.id().update(cursor);
+            tick
+        }
+        None => {
+            cursors.insert(CreatureTickCursor { id: 0, tick: 1 });
+            0
+        }
+    }
+}
+
 fn creature_pass(ctx: &ReducerContext, schedule: CreatureMoveSchedule) {
-    let scope = TickScope::from_rows(
+    let interval_micros = match &schedule.scheduled_at {
+        ScheduleAt::Interval(d) => d.to_micros(),
+        ScheduleAt::Time(_) => MOVE_TICK_MICROS,
+    };
+    // A row still on the unsliced interval keeps the whole-world tick until repair re-arms it.
+    let sliced = schedule.instance_id == crate::creatures::GLOBAL_TICK_INSTANCE
+        && interval_micros == crate::creatures::SLICED_TICK_MICROS;
+    let tick_number = sliced.then(|| next_tick(ctx));
+    let slice = tick_number.map_or(TickSlice::WHOLE, TickSlice::of_tick);
+    let scope = TickScope::sliced(
         schedule.instance_id,
         ctx.db
             .game_creature_move_schedule()
             .iter()
             .map(|r| r.instance_id),
+        slice,
     );
-    let interval_micros = match &schedule.scheduled_at {
-        ScheduleAt::Interval(d) => d.to_micros(),
-        ScheduleAt::Time(_) => MOVE_TICK_MICROS,
-    };
+    let period_micros = interval_micros * i64::from(slice.count);
     let now_micros = crate::time::now(ctx).to_micros_since_unix_epoch();
+    let sense = match tick_number {
+        Some(tick) => {
+            let every_n = (super::ai::SENSE_PERIOD_MICROS / period_micros).max(1) as u64;
+            (tick / u64::from(slice.count)) % every_n == 0
+        }
+        None => is_sense_tick_for_interval(now_micros, interval_micros),
+    };
     let tick = crate::creatures::cycle::TickContext {
         now_micros: now_micros as u64,
         now_ms: (now_micros / 1000) as u32,
-        tick_secs: tick_secs_for_interval(interval_micros),
-        sense: is_sense_tick_for_interval(now_micros, interval_micros),
-        sense_secs: sense_period_secs_for_interval(interval_micros),
+        tick_secs: tick_secs_for_interval(period_micros),
+        sense,
+        sense_secs: sense_period_secs_for_interval(period_micros),
         scope,
     };
     let (sense, scope_label) = (tick.sense, scope_label(&tick.scope));
@@ -176,7 +213,7 @@ pub(crate) fn active_cell_creatures(
     let package_controlled = |guid: u64| consents.character_guid().find(guid).is_some();
     let now_ms = (crate::time::now(ctx).to_micros_since_unix_epoch() / 1000) as u32;
     let radius = active_cell_radius(ctx);
-    let mut out = std::collections::HashSet::new();
+    let mut awake = std::collections::HashSet::new();
     let mut pets: Vec<u64> = Vec::new();
     let mut in_combat: Vec<u64> = Vec::new();
 
@@ -185,7 +222,7 @@ pub(crate) fn active_cell_creatures(
             entities
                 .by_owner_guid()
                 .filter(1u64..)
-                .filter(|entity| scope.covers(entity.instance_id))
+                .filter(|entity| scope.owns(entity.guid, entity.instance_id))
                 .map(|entity| entity.guid),
         );
         if scope.runs_global_passes() {
@@ -214,7 +251,7 @@ pub(crate) fn active_cell_creatures(
             continue;
         };
         if active_object_enters_scope(e.is_player(), scope.covers(e.instance_id), true) {
-            out.insert(e.guid);
+            awake.insert(e.guid);
         }
     }
     let cells = active_cells(
@@ -226,12 +263,14 @@ pub(crate) fn active_cell_creatures(
     for cell in cells {
         for creature in entities.by_grid().filter(cell) {
             if !creature.is_player() {
-                out.insert(creature.guid);
+                awake.insert(creature.guid);
             }
         }
     }
+    let slice = scope.slice();
     TickSweep {
-        active: out,
+        active: awake.iter().copied().filter(|&g| slice.owns(g)).collect(),
+        awake,
         pets,
         in_combat,
     }
@@ -255,14 +294,25 @@ fn is_idle_bot(
 
 #[derive(Default)]
 pub(crate) struct TickSweep {
+    /// The awake creatures this tick's slice runs.
     pub(crate) active: std::collections::HashSet<u64>,
+    /// Every awake creature in scope, whichever slice runs it; a neighbour can answer any call.
+    pub(crate) awake: std::collections::HashSet<u64>,
     pub(crate) pets: Vec<u64>,
     pub(crate) in_combat: Vec<u64>,
 }
 
 fn scope_label(scope: &TickScope) -> String {
     match scope {
-        TickScope::CatchAll { dedicated } => {
+        TickScope::CatchAll { dedicated, slice } if slice.count > 1 => {
+            format!(
+                "global(slice {}/{}, skipping {} dedicated)",
+                slice.index,
+                slice.count,
+                dedicated.len()
+            )
+        }
+        TickScope::CatchAll { dedicated, .. } => {
             format!("global(skipping {} dedicated)", dedicated.len())
         }
         TickScope::Only(n) => format!("instance {n}"),
@@ -644,7 +694,7 @@ pub(crate) fn movable_creature(
     scope: &TickScope,
 ) -> Option<WorldEntity> {
     let c = ctx.db.game_world_entity().guid().find(guid)?;
-    if c.is_player() || c.dead || !scope.covers(c.instance_id) {
+    if c.is_player() || c.dead || !scope.owns(c.guid, c.instance_id) {
         return None;
     }
     Some(c)

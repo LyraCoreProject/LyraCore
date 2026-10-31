@@ -1,3 +1,6 @@
+use std::cell::RefCell;
+use std::collections::HashMap;
+
 use lyracore_protocol::codec;
 use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
@@ -6,6 +9,53 @@ use super::game_native_player;
 use super::{game_native_packet, NativeAudience, NativePacket};
 use crate::aoi::{AoiGrant, CORPSE, DYNAMIC_OBJECT, GAME_OBJECT, TRANSPORT, WORLD_ENTITY};
 use crate::{game_corpse, game_dynamic_object, game_gameobject, game_world_entity, WorldEntity};
+
+type PeerParts = (
+    codec::EntityView,
+    Vec<codec::ItemInstanceView>,
+    Option<Vec<u8>>,
+);
+
+thread_local! {
+    static PEER_PARTS: RefCell<Option<HashMap<u64, PeerParts>>> = const { RefCell::new(None) };
+}
+
+/// One subject's Grants fan out inside `fan_out`, so its CREATE parts are read once.
+pub(crate) fn with_shared_creates<T>(fan_out: impl FnOnce() -> T) -> T {
+    struct Restore(Option<HashMap<u64, PeerParts>>);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            PEER_PARTS.with(|parts| *parts.borrow_mut() = self.0.take());
+        }
+    }
+    let _restore = Restore(PEER_PARTS.with(|parts| parts.replace(Some(HashMap::new()))));
+    fan_out()
+}
+
+fn peer_parts(ctx: &ReducerContext, entity: &WorldEntity) -> PeerParts {
+    if let Some(hit) = PEER_PARTS.with(|parts| parts.borrow().as_ref()?.get(&entity.guid).cloned())
+    {
+        return hit;
+    }
+    let mut view = super::view::entity(ctx, entity);
+    super::taxi::create_spline(ctx, entity.guid, &mut view);
+    let items = if entity.is_player() {
+        super::view::equipment(ctx, entity.guid)
+    } else {
+        Vec::new()
+    };
+    let parts = (
+        view,
+        items,
+        super::transport::passenger_movement(ctx, entity),
+    );
+    PEER_PARTS.with(|cache| {
+        if let Some(cache) = cache.borrow_mut().as_mut() {
+            cache.insert(entity.guid, parts.clone());
+        }
+    });
+    parts
+}
 
 pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant, newly_added: bool) {
     if let Some(player) = ctx
@@ -126,15 +176,9 @@ pub(super) fn create(
             if entity.is_player() {
                 freshness = codec::CreateFreshness::Known;
             }
-            let mut view = super::view::entity(ctx, &entity);
-            super::taxi::create_spline(ctx, entity.guid, &mut view);
+            let (mut view, items, movement) = peer_parts(ctx, &entity);
             view.dynamic_flags = super::loot::dynamic_flags(ctx, &entity, grant.viewer_guid);
-            let items = if entity.is_player() {
-                super::view::items(ctx, entity.guid)
-            } else {
-                Vec::new()
-            };
-            passenger_movement = super::transport::passenger_movement(ctx, &entity);
+            passenger_movement = movement;
             codec::build_create_object(&view, codec::CreateKind::Peer, &items, &[])
                 .map_err(|error| error.to_string())?
         }

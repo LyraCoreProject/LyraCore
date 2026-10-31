@@ -942,6 +942,7 @@ fn a_pending_evade_return_fires_reached_home_once() {
         true,
         TickScope::CatchAll {
             dedicated: HashSet::new(),
+            slice: crate::creatures::TickSlice::WHOLE,
         },
     );
     run_cycle(&mut scenario, tick);
@@ -949,6 +950,7 @@ fn a_pending_evade_return_fires_reached_home_once() {
         true,
         TickScope::CatchAll {
             dedicated: HashSet::new(),
+            slice: crate::creatures::TickSlice::WHOLE,
         },
     );
     run_cycle(&mut scenario, tick);

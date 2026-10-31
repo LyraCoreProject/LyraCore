@@ -239,17 +239,53 @@ pub(crate) fn sense_period_secs_for_interval(interval_micros: i64) -> f32 {
 
 pub(crate) const GLOBAL_TICK_INSTANCE: u64 = u64::MAX;
 
+pub(crate) const TICK_SLICES: u32 = 4;
+
+/// Each firing runs one slice, so every creature still runs once per `MOVE_TICK_MICROS`.
+pub(crate) const SLICED_TICK_MICROS: i64 = MOVE_TICK_MICROS / TICK_SLICES as i64;
+
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub(crate) struct TickSlice {
+    pub index: u32,
+    pub count: u32,
+}
+
+impl TickSlice {
+    pub(crate) const WHOLE: TickSlice = TickSlice { index: 0, count: 1 };
+
+    pub(crate) fn of_tick(tick: u64) -> Self {
+        TickSlice {
+            index: (tick % u64::from(TICK_SLICES)) as u32,
+            count: TICK_SLICES,
+        }
+    }
+
+    pub(crate) fn owns(self, guid: u64) -> bool {
+        self.count <= 1 || guid % u64::from(self.count) == u64::from(self.index)
+    }
+}
+
 pub(crate) enum TickScope {
     CatchAll {
         dedicated: std::collections::HashSet<u64>,
+        slice: TickSlice,
     },
     Only(u64),
 }
 
 impl TickScope {
+    #[cfg(test)]
     pub(crate) fn from_rows(
         row_instance_id: u64,
         all_row_instance_ids: impl IntoIterator<Item = u64>,
+    ) -> Self {
+        Self::sliced(row_instance_id, all_row_instance_ids, TickSlice::WHOLE)
+    }
+
+    pub(crate) fn sliced(
+        row_instance_id: u64,
+        all_row_instance_ids: impl IntoIterator<Item = u64>,
+        slice: TickSlice,
     ) -> Self {
         if row_instance_id == GLOBAL_TICK_INSTANCE {
             TickScope::CatchAll {
@@ -257,6 +293,7 @@ impl TickScope {
                     .into_iter()
                     .filter(|&i| i != GLOBAL_TICK_INSTANCE)
                     .collect(),
+                slice,
             }
         } else {
             TickScope::Only(row_instance_id)
@@ -265,13 +302,25 @@ impl TickScope {
 
     pub(crate) fn covers(&self, instance_id: u64) -> bool {
         match self {
-            TickScope::CatchAll { dedicated } => !dedicated.contains(&instance_id),
+            TickScope::CatchAll { dedicated, .. } => !dedicated.contains(&instance_id),
             TickScope::Only(n) => instance_id == *n,
         }
     }
 
+    /// Whether this tick runs the creature: its instance is covered and its guid is in the slice.
+    pub(crate) fn owns(&self, guid: u64, instance_id: u64) -> bool {
+        self.covers(instance_id) && self.slice().owns(guid)
+    }
+
+    pub(crate) fn slice(&self) -> TickSlice {
+        match self {
+            TickScope::CatchAll { slice, .. } => *slice,
+            TickScope::Only(_) => TickSlice::WHOLE,
+        }
+    }
+
     pub(crate) fn runs_global_passes(&self) -> bool {
-        matches!(self, TickScope::CatchAll { .. })
+        matches!(self, TickScope::CatchAll { slice, .. } if slice.index == 0)
     }
 }
 
@@ -766,6 +815,24 @@ mod tests {
         );
         assert!(!scope.covers(9));
         assert!(scope.runs_global_passes());
+    }
+
+    #[test]
+    fn tick_slices_run_every_creature_once_per_cycle_and_global_passes_once() {
+        let rows = [GLOBAL_TICK_INSTANCE];
+        let scopes: Vec<TickScope> = (0..u64::from(TICK_SLICES))
+            .map(|tick| TickScope::sliced(GLOBAL_TICK_INSTANCE, rows, TickSlice::of_tick(tick)))
+            .collect();
+        for guid in [0u64, 1, 2, 3, 0xF130_0003_3601_3B72, u64::MAX] {
+            let owners = scopes.iter().filter(|s| s.owns(guid, 0)).count();
+            assert_eq!(owners, 1, "guid {guid:#x} must run in exactly one slice");
+        }
+        let global = scopes.iter().filter(|s| s.runs_global_passes()).count();
+        assert_eq!(global, 1, "world-wide passes run once per cycle");
+        assert_eq!(
+            SLICED_TICK_MICROS * i64::from(TICK_SLICES),
+            MOVE_TICK_MICROS
+        );
     }
 
     #[test]

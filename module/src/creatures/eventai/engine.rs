@@ -1004,7 +1004,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 let creature = entities.guid().find(fight.attacker_guid)?;
                 (super::runs_eventai(self.ctx, &creature)
                     && !creature.dead
-                    && scope.covers(creature.instance_id))
+                    && scope.owns(creature.guid, creature.instance_id))
                 .then_some(EngagedFight {
                     creature_guid: creature.guid,
                     victim_guid: fight.target_guid,
@@ -1022,7 +1022,7 @@ impl EventAiWorld for DatabaseWorld<'_> {
                 continue;
             };
             if creature.dead
-                || !scope.covers(creature.instance_id)
+                || !scope.owns(creature.guid, creature.instance_id)
                 || !super::runs_eventai(self.ctx, &creature)
             {
                 continue;
