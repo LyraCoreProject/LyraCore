@@ -17,6 +17,7 @@ mod death;
 mod debug;
 #[cfg(feature = "conformance_test_fixture")]
 pub(crate) use debug::record_birth as record_conformance_birth;
+pub(crate) mod directory;
 mod duel;
 mod economy;
 mod environment;
@@ -287,6 +288,7 @@ fn send_raw(
 
 fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
     realm_shard::closing(ctx, connection_id);
+    realm_shard::cancel_selection(ctx, connection_id);
     #[cfg(feature = "conformance_test_fixture")]
     debug::close(ctx, connection_id);
     ctx.db.game_native_packet().insert(NativePacket {
@@ -466,24 +468,22 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
             }
         }
         NativeWorldState::CharacterSelection { account_id } => {
-            let world = crate::peer::world_shard(ctx);
-            match (opcode, world) {
-                (0x003d, Some(world)) => {
-                    return realm_shard::enter_world(ctx, connection, world, &body)
+            if crate::peer::world_shard(ctx).is_some() {
+                match opcode {
+                    0x003d => return realm_shard::enter_world(ctx, connection, &body),
+                    0x0036..=0x0038 => {
+                        return realm_shard::route_selection(
+                            ctx,
+                            connection_id,
+                            account_id,
+                            opcode,
+                            body,
+                        )
+                    }
+                    _ => {}
                 }
-                (0x003d, None) => return world::login(ctx, connection, &body),
-                // A Realm Shard's World Shard holds the Characters, so it answers these.
-                (0x0036..=0x0038, Some(world)) => {
-                    return Ok(realm_shard::relay_selection(
-                        ctx,
-                        connection_id,
-                        world,
-                        account_id,
-                        opcode,
-                        body,
-                    )?);
-                }
-                _ => {}
+            } else if opcode == 0x003d {
+                return world::login(ctx, connection, &body);
             }
             let Some(reply) = selection_reply(ctx, account_id, opcode, &body)? else {
                 return Ok(());
@@ -728,6 +728,7 @@ fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64
 pub(crate) fn close(ctx: &ReducerContext) {
     if let Some(connection_id) = ctx.connection_id() {
         realm_shard::closing(ctx, connection_id);
+        realm_shard::cancel_selection(ctx, connection_id);
         #[cfg(feature = "conformance_test_fixture")]
         debug::close(ctx, connection_id);
         logon::close(ctx, connection_id);

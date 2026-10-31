@@ -17,7 +17,7 @@ entry in both files.
 
 **B** [Base Snapshot](#packages) · [Baseline](#client-content) · [Behavior](#conformance) · [Bot Capacity Lease](#bots) · [Bot Controller](#bots) · [Bounded Map Slice](#realm-topology) · [Build Identity](#packages)
 
-**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
+**C** [Cancellation](#auctions) · [Carrier](#procs) · [Cast Handle](#procs) · [Cast Miss](#procs) · [Chance on Hit](#procs) · [Channel Membership](#chat) · [Channel Notice](#chat) · [Character](CORE_TERMS.md#character) · [Character directory](#realm-topology) · [Character Relocation](#bots) · [Chat Channel](#chat) · [Chat Flood Limiter](#chat) · [Chat Kind](#chat) · [Claim](#packages) · [Claim Conflict](#packages) · [Client Artifact](#client-content) · [Command Receipt](#retired-terms) · [Compatibility Manifest](#realm-topology) · [Conformance Audit](#conformance) · [Content Identity](#packages) · [Counterparty](#procs) · [Creature-AI Family](#creature-ai)
 
 **D** [Data-dependent field](#conformance) · [Datascript](#packages) · [Deliberate Deviation](#conformance) · [Delivery Delay](#mail) · [Development reload](CORE_TERMS.md#development-reload) · [Dismount](#mounts) · [Disposable Host](#working-method) · [Distraction](#creature-ai) · [Dormant Character](#accounts-characters-and-sessions) · [Durable Read](CORE_TERMS.md#durable-read) · [Durable Request](CORE_TERMS.md#durable-request) · [DynamicObject](#requests-and-delivery)
 
@@ -65,8 +65,9 @@ Core terms used here: [Native Host](CORE_TERMS.md#native-host),
 
 **Realm Shard**:
 A Shard that holds logon, Accounts, Sessions and the Login Queue of its Realm, but no Characters.
-It relays Character selection to its World Shard and hands each World Session to it by Handoff to
-enter the world. It keeps the Session of an Account it handed away, so the Session reaper spares it.
+It uses its Character directory to route Character selection to World Shards and hands each
+World Session to its owning World Shard by Handoff to enter the world. It keeps the Session of an
+Account it handed away, so the Session reaper spares it.
 _Avoid_: login server, auth database
 
 **World Shard**:
@@ -75,9 +76,14 @@ Shard's Character selection requests and keeps copies of the Accounts and Sessio
 Sessions it holds. Logout hands the World Session back to the Realm Shard.
 _Avoid_: game server, map server
 
+**Character directory**:
+The Realm Shard's record of each Character guid, Account id and owning World Shard. World Shards
+send changes over IDC on creation and deletion. Login and deletion use this record; Character
+lists ask each World Shard that holds Characters of the Account.
+
 **Peer Shard**:
 Another Shard of the same Realm, listed in `game_peer_shard`. Only a Peer Shard may call this
-Shard's `idc_` reducers. The Operator lists each of the two Shards on the other; a hello between
+Shard's `idc_` reducers. The Operator lists each pair of Shards on each other; a hello between
 them confirms the pair.
 _Avoid_: remote database, sibling Shard
 

@@ -359,15 +359,54 @@ Peer Shard. A call arrives as a short connection from the calling Shard, so `cli
 skips Peer Shards. Delivery is exactly once, and each call waits for disk writes on both sides, so
 calls carry rare events and batches, never per-packet traffic.
 
-A Realm can split into a Realm Shard and one World Shard on the same Native Host. The Native Host's
+A Realm can split into a Realm Shard and World Shards on the same Native Host. The Native Host's
 logon and world listeners point at the Realm Shard, which keeps logon, Accounts, Sessions and the
-Login Queue. It relays the Character list, create and delete requests to the World Shard, which
-answers with the packet; a refusal comes back in the World Shard's error and the Realm Shard sends
-it. Character login sends the World Shard a copy of the Account and Session, then hands the World
-Session over by Handoff, and logout hands it back. A changed Session goes to the World Shard, so its
-next request checks the current one. To split a Realm, list each Shard as a Peer Shard of the other
-with `operator_add_peer_shard`, then name the roles with `operator_set_shard_role`. Without a role,
-a Shard holds the whole Realm. The Login Queue counts only World Sessions on the Realm Shard.
+Login Queue. `ShardRole::Realm { world }` names its default World Shard. Without explicit map
+assignments, the existing one-World setup keeps routing creation, login and deletion to it.
+Without any role, a Shard still holds the whole Realm, including Argus.
+
+For two continents, the Operator lists each World Shard and the Realm Shard as Peer Shards of each
+other with `operator_add_peer_shard`, then sets their roles with `operator_set_shard_role`.
+`operator_set_map_owner(map_id, world)` assigns map 0 to the Eastern Kingdoms World Shard and map 1
+to the Kalimdor World Shard on the Realm Shard. The Operator repeats each assignment on its owning
+World Shard, using that World Shard's own identity. A map has one owner, and reassignment is refused.
+Once a World Shard has explicit assignments, creation and world entry refuse maps it does not own.
+Existing Characters must already be on their owning World Shard before enabling assignments.
+
+The Realm Shard has no world import. The Operator calls
+`operator_set_character_start_map(race, class, map_id)` there for each supported race/class pair,
+using the World Shards' imported `game_start_position` rows. This small table contains only routing
+facts and supports class-specific starts. Missing routes return a Character-create Refusal. The
+World Shard still applies the gameplay rules and checks its actual start map before creation.
+
+The Character directory (`game_character_directory`) maps a Character guid to its Account and World
+Shard. Creation and deletion send IDC changes. Setting a World Shard role reports existing Characters
+and can be repeated to refresh the directory. Assigning a map on a World Shard also reports its
+Characters after the Realm Shard has its map assignments. Directory versions retain delete tombstones
+so late answers cannot restore deleted entries. Successful selection replies also apply their directory
+changes before the client receives the packet. The version and owner live apart from Character-owned
+state, so a future Transfer arrival can update routing without importing gameplay state into the
+Realm Shard. Changing a directory owner requires that future Transfer protocol.
+
+A Character-list request asks each World Shard named by the Account's directory entries. With
+explicit map assignments and no Characters, it sends an empty list directly. An existing one-World
+setup asks its default World Shard even before its directory has been filled. Replies carry a request
+id; the Realm Shard sums their count bytes and appends their entries into one `SMSG_CHAR_ENUM`. Selection requests are serialized
+per connection. A refused or failed enumeration closes the World Session, and a ten-second deadline
+also closes it if an answer never arrives. Closing a connection removes its pending selection.
+Late replies can update the directory but cannot send a packet to the departed connection.
+Creation and deletion Refusal packets return through the World Shard's error envelope.
+
+Login and deletion route by Character guid and Account. Login sends the owning World Shard Account
+and Session copies, then hands the World Session over by Handoff. Logout hands it back. The Realm
+Shard records which World Shard holds the away World Session, so changed Accounts and Sessions go
+to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts only
+World Sessions on the Realm Shard.
+
+Groups, guilds, whispers, who, friends, mail and auctions stay per World Shard. Cross-map Character
+Transfer between continents is not implemented here. Teleports and home recall do not move a
+Character to an unowned map. A cross-map teleport does not select another World Shard. That requires
+a separate change to movement, Transfer arrival and the Character directory.
 
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in

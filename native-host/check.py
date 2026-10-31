@@ -5167,6 +5167,101 @@ def check_realm_shard(host):
     enter()
 
 
+def check_continent_shards(host):
+    """One Realm Shard routes Character selection and Handoff to two World Shards."""
+    eastern = host.add_database(guid_base=1_000_000_000)
+    kalimdor = host.add_database(guid_base=2_000_000_000)
+    for shard in (eastern, kalimdor):
+        host.call('debug_seed_scenario_fixtures', database=shard)
+        host.call('operator_add_peer_shard', [host.identity(shard), shard])
+        host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=shard)
+        host.sql('DELETE FROM game_character WHERE guid = 1', shard)
+    # The seeded start position is Human Warrior only; add the Orc Warrior start fixture.
+    host.sql('INSERT INTO game_start_position (race_class, race, class, map_id, zone_id, x, y, z, orientation, display_id) '
+        'VALUES (513, 2, 1, 1, 14, 0, 0, 0, 0, 51)', kalimdor)
+    host.call('operator_set_shard_role', [{'some': {'realm': host.identity(eastern)}}])
+    for shard in (eastern, kalimdor):
+        host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=shard)
+    for map_id, shard in ((0, eastern), (1, kalimdor)):
+        host.call('operator_set_map_owner', [map_id, host.identity(shard)])
+        host.call('operator_set_map_owner', [map_id, host.identity(shard)], database=shard)
+    for race, map_id in ((1, 0), (2, 1)):
+        host.call('operator_set_character_start_map', [race, 1, map_id])
+    account = host.account('CONTINENTS')
+    client = host.connect('CONTINENTS')
+    assert client.read()[0] == 0x1ee
+    client.send(0x37)
+    assert client.read() == (0x3b, b'\x00')
+    characters = []
+
+    owners = dict(host.rows('SELECT map_id, world FROM game_map_owner'))
+
+    def directory_is_current():
+        rows = host.rows(f'SELECT guid, account_id, world FROM game_character_directory WHERE account_id = {account.id}')
+        expected = [[guid, account.id, owners[0 if shard == eastern else 1]] for guid, shard in characters]
+        assert sorted(rows) == sorted(expected), (rows, expected)
+
+    for name, race, shard in (('Eastern', 1, eastern), ('Western', 2, kalimdor)):
+        client.send(0x36, name.encode() + b'\0' + bytes([race, 1, 0, 0, 0, 0, 0, 0, 0]))
+        assert client.read() == (0x3a, bytes([0x2e]))
+        guid = host.rows(f"SELECT guid FROM game_character WHERE name = '{name}'", shard)[0][0]
+        characters.append((guid, shard))
+        directory_is_current()
+        host.sql(f'UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {guid}', shard)
+    client.send(0x37)
+    opcode, body = client.read()
+    assert opcode == 0x3b and body[0] == 2, (hex(opcode), body.hex())
+    assert all(struct.pack('<Q', guid) in body for guid, _ in characters)
+    assert not host.rows(f'SELECT guid FROM game_character WHERE account_id = {account.id}')
+    host.sql('UPDATE game_start_position SET map_id = 1 WHERE race_class = 257', eastern)
+    client.send(0x36, b'Misplaced\0' + bytes([1, 1, 0, 0, 0, 0, 0, 0, 0]))
+    assert client.read() == (0x3a, bytes([0x2f]))
+    assert not host.rows("SELECT guid FROM game_character WHERE name = 'Misplaced'", eastern)
+    directory_is_current()
+    host.sql('UPDATE game_start_position SET map_id = 0 WHERE race_class = 257', eastern)
+    for guid, shard in characters:
+        client.send(0x3d, struct.pack('<Q', guid))
+        entered = []
+        while guid not in creates(entered):
+            entered.append(client.read())
+        host.wait_until(lambda: host.rows('SELECT character_guid FROM game_native_player', shard) == [[guid]],
+            'the owning World Shard did not adopt the Character')
+        other = kalimdor if shard == eastern else eastern
+        assert not host.rows('SELECT character_guid FROM game_native_player', other)
+        directory_is_current()
+        destination = 1 if shard == eastern else 0
+        host.call('debug_teleport', [guid, destination, 0, 0, 0, 0], database=shard)
+        assert host.rows(f'SELECT map_id FROM game_character WHERE guid = {guid}', shard) == [[1 - destination]]
+        client.collect()
+        client.send(0x4b)
+        while client.read()[0] != 0x4d:
+            pass
+        host.wait_until(lambda: host.rows('SELECT connection_id FROM game_native_world_connection')
+            and not host.rows('SELECT connection_id FROM game_native_world_connection', shard),
+            'logout did not hand the World Session back to the Realm Shard')
+        assert not host.rows('SELECT account_id FROM game_native_away')
+        directory_is_current()
+    deleted, shard = characters.pop()
+    client.send(0x38, struct.pack('<Q', deleted))
+    assert client.read() == (0x3c, bytes([0x39]))
+    assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {deleted}', shard)
+    directory_is_current()
+    client.send(0x37)
+    opcode, body = client.read()
+    assert opcode == 0x3b and body[0] == 1 and struct.pack('<Q', characters[0][0]) in body
+    assert struct.pack('<Q', deleted) not in body
+    client.send(0x37)
+    client.close()
+    host.wait_until(lambda: not host.rows('SELECT id FROM game_pending_selection'),
+        'a closed connection retained a pending Character list')
+    client = host.connect('CONTINENTS')
+    assert client.read()[0] == 0x1ee
+    host.call('operator_remove_peer_shard', [host.identity()], database=eastern)
+    client.send(0x37)
+    client.read_until_closed(timeout=15)
+    assert not host.rows('SELECT id FROM game_pending_selection')
+
+
 def named(*checks):
     return {check.__name__.removeprefix('check_').replace('_', '-'): check for check in checks}
 
@@ -5193,6 +5288,7 @@ ALONE = {
     'accept-recovery': (check_accept_recovery, {}),
     'handoff': (check_handoff, {}),
     'realm-shard': (check_realm_shard, {'seeded': True}),
+    'continent-shards': (check_continent_shards, {'seeded': True}),
 }
 
 

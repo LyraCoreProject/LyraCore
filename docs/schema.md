@@ -117,6 +117,23 @@ Two shapes recur:
 
 ## 3. Tables with rules the struct cannot show
 
+### Character selection routing (`module/src/native/directory.rs`)
+
+`game_map_owner` has one World Shard per map. On the Realm Shard it routes creation; on each World
+Shard it bounds creation and world entry. `game_character_start_map` holds only the Realm Shard's
+race/class start-map routing facts.
+
+`game_character_directory` contains live guid, Account and World Shard entries.
+`game_character_directory_version` retains each guid's latest source revision after deletion.
+Both belong to the Realm Shard and do not follow a Character-owned delete sweep. Revisions come
+from the source World Shard's reducer timestamp; a source cannot replace a different owner.
+
+`game_pending_selection` holds one request per connection with its deadline and expected World
+Shards. It is removed on completion, failure or connection close. `game_selection_result` carries
+correlated replies and directory changes. The previous `game_selection_reply` layout remains for
+additive migration. `game_selection_request.selection_id` and `game_native_away.world` are typed,
+END-appended defaults; a legacy away row uses the default World Shard.
+
 ### Map catalogue (`module/src/config.rs`)
 
 `game_map` stores selected vmangos `map_template` rows. `internal_name` alone comes from the

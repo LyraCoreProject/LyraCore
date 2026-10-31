@@ -109,6 +109,8 @@ jobs:
             checks: retention recovery slow-readers accept-recovery
           - group: Handoff
             checks: handoff realm-shard
+          - group: continent Shards
+            checks: continent-shards
     name: checks (${{ matrix.group }})
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
