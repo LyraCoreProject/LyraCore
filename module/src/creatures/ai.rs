@@ -275,6 +275,7 @@ pub(crate) enum TickScope {
 }
 
 impl TickScope {
+    #[cfg(test)]
     pub(crate) fn from_rows(
         row_instance_id: u64,
         all_row_instance_ids: impl IntoIterator<Item = u64>,
