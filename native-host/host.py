@@ -40,6 +40,7 @@ class Host:
         self.clients = []
         self.restorations = []
         self.identities = 0
+        self.additional_databases = 0
         self.process = None
         self.token = None
 
@@ -146,12 +147,13 @@ class Host:
     def publish(self, wasm, database=None):
         return self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm')
 
-    def add_database(self):
-        """Publishes the Module to a second database on this Host and claims it. Returns its name."""
-        database = f'{self.database}-second'
+    def add_database(self, guid_base=1):
+        """Publishes and claims another database on this Host. Returns its name."""
+        self.additional_databases += 1
+        database = f'{self.database}-extra-{self.additional_databases}'
         self.publish(self.module.read_bytes(), database)
         self.call('claim_operator', database=database)
-        self.call('install_guid_range', [1], database=database)
+        self.call('install_guid_range', [guid_base], database=database)
         return database
 
     def identity(self, database=None):

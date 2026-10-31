@@ -869,6 +869,9 @@ pub(crate) fn insert_new_character(
         .or_else(|| positions.race_class().find(human_warrior))
         .ok_or_else(|| "no start position seeded".to_string())?;
 
+    if !crate::native::directory::owns_map(ctx, sp.map_id) {
+        return Err("World Shard does not own the start map".to_string().into());
+    }
     let next_guid = next_character_guid(ctx);
 
     let row = Character {
@@ -933,6 +936,7 @@ pub(crate) fn insert_new_character(
     crate::action_bar::grant_createinfo_actions(ctx, next_guid, owner, race, class);
 
     crate::items::grant_starter_item(ctx, next_guid, owner)?;
+    crate::native::directory::changed(ctx, account_id, next_guid, true);
     Ok(next_guid)
 }
 
@@ -978,5 +982,6 @@ pub(crate) fn apply_delete_character(
     }
     crate::mail_text::drop_character_letters(ctx, character_guid);
     crate::world::cascade_delete_character(ctx, character_guid);
+    crate::native::directory::changed(ctx, account_id, character_guid, false);
     Ok(())
 }

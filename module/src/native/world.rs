@@ -66,6 +66,9 @@ pub(super) fn enter_character(
     if character.account_id != account_id || account.banned {
         return Err("Account cannot log in this Character".into());
     }
+    if !super::directory::owns_map(ctx, character.map_id) {
+        return Err("World Shard does not own the Character map".into());
+    }
     let cinematic = character
         .first_login
         .then(|| codec::opening_cinematic(character.race))

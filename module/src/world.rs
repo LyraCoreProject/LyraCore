@@ -457,7 +457,9 @@ fn teleport(
     [x, y, z, o]: [f32; 4],
     aboard: Option<crate::transport::Aboard>,
 ) {
-    if crate::taxi::movement_is_suppressed(ctx, player_guid) {
+    if !crate::native::directory::owns_map(ctx, map_id)
+        || crate::taxi::movement_is_suppressed(ctx, player_guid)
+    {
         return;
     }
     let entities = ctx.db.game_world_entity();
@@ -606,7 +608,9 @@ pub(crate) fn recall_to_home(ctx: &ReducerContext, guid: u64) {
         );
         return;
     }
-    if crate::taxi::movement_is_suppressed(ctx, guid) {
+    if !crate::native::directory::owns_map(ctx, c.home_map)
+        || crate::taxi::movement_is_suppressed(ctx, guid)
+    {
         return;
     }
     c.map_id = c.home_map;
@@ -695,6 +699,9 @@ pub(crate) fn apply_player_login(
             character.guid,
             character.map_id
         );
+    }
+    if !crate::native::directory::owns_map(ctx, character.map_id) {
+        return Err("World Shard does not own the Character map".into());
     }
     if !character.pending_ghost {
         crate::Corpse::delete(ctx, crate::corpse::corpse_guid_for(character_guid));

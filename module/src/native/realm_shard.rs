@@ -1,26 +1,32 @@
-//! A Realm split into a Realm Shard and a World Shard. The Realm Shard keeps logon, Accounts,
-//! Sessions and the Login Queue. Character selection and the world run on the World Shard; the
-//! Realm Shard relays selection requests to it and hands World Sessions to it to enter the world.
+//! A Realm split into a Realm Shard and World Shards. The Realm Shard keeps logon, Accounts,
+//! Sessions, the Login Queue and the Character directory. It routes Character selection to the
+//! World Shards and hands World Sessions to them to enter the world.
 
 use spacetimedb::sats::bsatn;
-use spacetimedb::{reducer, table, ConnectionId, ReducerContext, Table};
+use spacetimedb::{
+    reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
+};
 
+use super::directory::{self, game_character_directory, game_map_owner};
 use super::handoff::{game_native_handoff, NativeHandoff};
 use super::{
     game_native_cipher, game_native_world_connection, NativeActive, NativeWorldConnection,
     NativeWorldState, Rollback,
 };
 use crate::auth::{Account, Session};
+use crate::game_character;
 use crate::peer::{realm_shard, require_sender, world_shard};
 use crate::remote_bindings::peer as remote;
 use crate::{game_account, game_session};
 
-/// An Account whose World Session this Realm Shard handed to its World Shard.
+/// An Account whose World Session this Realm Shard handed to a World Shard.
 #[table(accessor = game_native_away)]
 pub struct NativeAway {
     #[primary_key]
     pub account_id: u64,
     pub connection_id: ConnectionId,
+    #[default(None::<Identity>)]
+    pub world: Option<Identity>,
 }
 
 pub(crate) fn away_accounts(ctx: &ReducerContext) -> Vec<u64> {
@@ -51,7 +57,6 @@ fn blob<T: spacetimedb::Serialize>(row: &T) -> Vec<u8> {
     bsatn::to_vec(row).expect("a table row encodes")
 }
 
-// The World Shard keeps copies of the Accounts and Sessions of the World Sessions it holds.
 fn store_account(ctx: &ReducerContext, account: &[u8]) -> Result<Account, String> {
     let account: Account = bsatn::from_slice(account).map_err(|error| error.to_string())?;
     let accounts = ctx.db.game_account();
@@ -68,8 +73,6 @@ fn store_session(ctx: &ReducerContext, session: &[u8]) -> Result<(), String> {
     Ok(())
 }
 
-// Realm Shard → World Shard.
-
 #[table(accessor = game_selection_request, outbox(remote::idc_selection_request))]
 pub struct SelectionRequest {
     #[primary_key]
@@ -81,15 +84,18 @@ pub struct SelectionRequest {
     pub account: Vec<u8>,
     pub opcode: u32,
     pub body: Vec<u8>,
+    #[default(0u64)]
+    pub selection_id: u64,
 }
 
-pub(super) fn relay_selection(
+fn relay_selection(
     ctx: &ReducerContext,
     connection_id: ConnectionId,
     world: spacetimedb::Identity,
     account_id: u64,
     opcode: u32,
     body: Vec<u8>,
+    selection_id: u64,
 ) -> Result<(), String> {
     let account = ctx
         .db
@@ -104,6 +110,7 @@ pub(super) fn relay_selection(
         account: blob(&account),
         opcode,
         body,
+        selection_id,
     });
     Ok(())
 }
@@ -119,8 +126,18 @@ pub fn selection_answered(
     let Err(error) = result else {
         return;
     };
+    if request.selection_id != 0 {
+        if request.opcode == 0x37 || super::rollback::replies_in(&error).is_none() {
+            fail_selection(ctx, request.selection_id);
+            return;
+        }
+        cancel_selection(ctx, connection_id);
+    }
     let Some(packets) = super::rollback::replies_in(&error) else {
         spacetimedb::log::warn!("World Shard refused a selection request: {error}");
+        if at_selection(ctx, connection_id).is_some() {
+            super::disconnect(ctx, connection_id);
+        }
         return;
     };
     if at_selection(ctx, connection_id).is_none() {
@@ -150,16 +167,30 @@ pub struct WorldEntry {
 pub(super) fn enter_world(
     ctx: &ReducerContext,
     connection: NativeWorldConnection,
-    world: spacetimedb::Identity,
     body: &[u8],
 ) -> Result<(), Rollback> {
     let NativeWorldState::CharacterSelection { account_id } = connection.state else {
         return Err("character login requires character selection".into());
     };
+    if ctx
+        .db
+        .game_pending_selection()
+        .connection_id()
+        .find(connection.connection_id)
+        .is_some()
+    {
+        return Err(Rollback::silent("Character selection request is pending"));
+    }
     let character_guid = u64::from_le_bytes(
         body.try_into()
             .map_err(|_| "invalid character login packet")?,
     );
+    let Some(world) = directory::character_world(ctx, account_id, character_guid) else {
+        return Err(Rollback::reply(
+            lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage::SMSG_CHARACTER_LOGIN_FAILED(
+                lyracore_protocol::codec::build_character_login_failed()),
+            "Character directory has no Character for this Account"));
+    };
     let account = ctx
         .db
         .game_account()
@@ -218,6 +249,7 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
     aways.insert(NativeAway {
         account_id,
         connection_id,
+        world: Some(entry.database.0),
     });
     super::handoff::write_marker(ctx, connection_id, entry.database.0);
 }
@@ -233,21 +265,14 @@ pub struct AccountUpdate {
     pub session: Vec<u8>,
 }
 
-/// Sends the World Shard a changed Account or Session of a World Session it holds, so its next
-/// request checks the current one.
+/// Sends Account and Session changes to the World Shard that holds the World Session.
 pub(crate) fn account_changed(ctx: &ReducerContext, account_id: u64) {
-    let Some(world) = world_shard(ctx) else {
+    let Some(away) = ctx.db.game_native_away().account_id().find(account_id) else {
         return;
     };
-    if ctx
-        .db
-        .game_native_away()
-        .account_id()
-        .find(account_id)
-        .is_none()
-    {
+    let Some(world) = away.world.or_else(|| world_shard(ctx)) else {
         return;
-    }
+    };
     let (Some(account), Some(session)) = (
         ctx.db.game_account().id().find(account_id),
         ctx.db.game_session().account_id().find(account_id),
@@ -269,20 +294,47 @@ pub fn idc_selection_request(
     account: Vec<u8>,
     opcode: u32,
     body: Vec<u8>,
+    selection_id: u64,
 ) -> Result<(), String> {
     require_sender(ctx, realm_shard(ctx))?;
     let account = store_account(ctx, &account)?;
+    let before: Vec<u64> = ctx
+        .db
+        .game_character()
+        .by_account()
+        .filter(account.id)
+        .map(|character| character.guid)
+        .collect();
     let reply = super::selection_reply(ctx, account.id, opcode, &body)
         .map_err(Rollback::into_reducer_error)?;
     if let Some(message) = reply {
         let packet =
             lyracore_protocol::world::encode(message).map_err(|error| error.to_string())?;
-        ctx.db.game_selection_reply().insert(SelectionReply {
+        ctx.db.game_selection_result().insert(SelectionResult {
             id: 0,
             database: remote::Identity(ctx.sender()),
             connection,
             opcode: packet.opcode,
             body: packet.body,
+            selection_id,
+            account_id: account.id,
+            directory_changes: {
+                let after: Vec<u64> = ctx
+                    .db
+                    .game_character()
+                    .by_account()
+                    .filter(account.id)
+                    .map(|character| character.guid)
+                    .collect();
+                let mut changes: Vec<(u64, bool)> = before
+                    .into_iter()
+                    .filter(|guid| !after.contains(guid))
+                    .map(|guid| (guid, false))
+                    .collect();
+                changes.extend(after.into_iter().map(|guid| (guid, true)));
+                blob(&changes)
+            },
+            revision: directory::revision(ctx),
         });
     }
     Ok(())
@@ -307,6 +359,9 @@ pub fn idc_world_entry(
         .ok_or("Character no longer exists")?;
     if character.account_id != account.id || account.banned {
         return Err("Account cannot log in this Character".into());
+    }
+    if !directory::owns_map(ctx, character.map_id) {
+        return Err("World Shard does not own the Character map".into());
     }
     let connection_id = ConnectionId::from_u128(connection);
     let handoffs = ctx.db.game_native_handoff();
@@ -333,10 +388,8 @@ pub fn idc_account_update(
     store_session(ctx, &session)
 }
 
-// World Shard → Realm Shard.
-
-#[table(accessor = game_selection_reply, outbox(remote::idc_selection_reply))]
-pub struct SelectionReply {
+#[table(accessor = game_selection_result, outbox(remote::idc_selection_result))]
+pub struct SelectionResult {
     #[primary_key]
     #[auto_inc]
     pub id: u64,
@@ -345,6 +398,10 @@ pub struct SelectionReply {
     pub connection: u128,
     pub opcode: u16,
     pub body: Vec<u8>,
+    pub selection_id: u64,
+    pub account_id: u64,
+    pub directory_changes: Vec<u8>,
+    pub revision: u64,
 }
 
 #[table(accessor = game_return_to_selection, outbox(remote::idc_return_to_selection))]
@@ -361,8 +418,7 @@ pub struct ReturnToSelection {
     pub client_proof: Vec<u8>,
 }
 
-/// After logout on a World Shard, hands the World Session back to the Realm Shard's Character
-/// selection.
+/// Hands a logged-out World Session back to the Realm Shard.
 pub(super) fn return_to_selection(
     ctx: &ReducerContext,
     connection_id: ConnectionId,
@@ -442,15 +498,23 @@ pub(super) fn closing(ctx: &ReducerContext, connection_id: ConnectionId) {
 }
 
 #[reducer]
-pub fn idc_selection_reply(
+#[allow(clippy::too_many_arguments)]
+pub fn idc_selection_result(
     ctx: &ReducerContext,
     connection: u128,
     opcode: u16,
     body: Vec<u8>,
+    selection_id: u64,
+    account_id: u64,
+    directory_changes: Vec<u8>,
+    revision: u64,
 ) -> Result<(), String> {
-    require_sender(ctx, world_shard(ctx))?;
+    directory::require_world(ctx)?;
+    directory::apply(ctx, account_id, &directory_changes, revision)?;
     let connection_id = ConnectionId::from_u128(connection);
-    if at_selection(ctx, connection_id).is_some() {
+    if selection_id != 0 {
+        selection_answer(ctx, selection_id, connection_id, opcode, body)?;
+    } else if at_selection(ctx, connection_id).is_some() {
         super::send_raw(ctx, connection_id, opcode, body, false);
     }
     Ok(())
@@ -465,8 +529,19 @@ pub fn idc_return_to_selection(
     client_seed: u32,
     client_proof: Vec<u8>,
 ) -> Result<(), String> {
-    require_sender(ctx, world_shard(ctx))?;
+    directory::require_world(ctx)?;
     let connection_id = ConnectionId::from_u128(connection);
+    let away = ctx
+        .db
+        .game_native_away()
+        .account_id()
+        .find(account_id)
+        .ok_or("Account has no away World Session")?;
+    if away.connection_id != connection_id
+        || away.world.or_else(|| world_shard(ctx)) != Some(ctx.sender())
+    {
+        return Err("World Session belongs to another World Shard".into());
+    }
     ctx.db.game_native_away().account_id().delete(account_id);
     let handoffs = ctx.db.game_native_handoff();
     handoffs.connection_id().delete(connection_id);
@@ -487,14 +562,310 @@ pub fn idc_world_session_closed(
     connection: u128,
     account_id: u64,
 ) -> Result<(), String> {
-    require_sender(ctx, world_shard(ctx))?;
+    directory::require_world(ctx)?;
     let aways = ctx.db.game_native_away();
-    if aways
-        .account_id()
-        .find(account_id)
-        .is_some_and(|away| away.connection_id == ConnectionId::from_u128(connection))
-    {
+    if aways.account_id().find(account_id).is_some_and(|away| {
+        away.connection_id == ConnectionId::from_u128(connection)
+            && away.world.or_else(|| world_shard(ctx)) == Some(ctx.sender())
+    }) {
         aways.account_id().delete(account_id);
+    }
+    Ok(())
+}
+
+#[table(accessor = game_pending_selection, scheduled(expire_pending_selection))]
+pub struct PendingSelection {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[unique]
+    pub connection_id: ConnectionId,
+    pub scheduled_at: ScheduleAt,
+    pub request_opcode: u32,
+    pub remaining: Vec<Identity>,
+    pub bodies: Vec<Vec<u8>>,
+    /// The World Shard of each entry in `bodies`.
+    pub answered: Vec<Identity>,
+}
+
+pub(super) fn cancel_selection(ctx: &ReducerContext, connection_id: ConnectionId) {
+    ctx.db
+        .game_pending_selection()
+        .connection_id()
+        .delete(connection_id);
+}
+
+fn fail_selection(ctx: &ReducerContext, id: u64) {
+    if let Some(pending) = ctx.db.game_pending_selection().id().find(id) {
+        cancel_selection(ctx, pending.connection_id);
+        if at_selection(ctx, pending.connection_id).is_some() {
+            super::disconnect(ctx, pending.connection_id);
+        }
+    }
+}
+
+#[reducer]
+pub fn expire_pending_selection(
+    ctx: &ReducerContext,
+    pending: PendingSelection,
+) -> Result<(), String> {
+    if ctx.sender() != ctx.database_identity() {
+        return Err("scheduler only".into());
+    }
+    fail_selection(ctx, pending.id);
+    Ok(())
+}
+
+pub(super) fn route_selection(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    account_id: u64,
+    opcode: u32,
+    body: Vec<u8>,
+) -> Result<(), Rollback> {
+    use lyracore_protocol::codec;
+    use lyracore_protocol::messages::vanilla::opcodes::ClientOpcodeMessage;
+    use lyracore_protocol::messages::vanilla::opcodes::ServerOpcodeMessage;
+
+    if ctx
+        .db
+        .game_pending_selection()
+        .connection_id()
+        .find(connection_id)
+        .is_some()
+    {
+        return Err(Rollback::silent("Character selection request is pending"));
+    }
+    let message =
+        lyracore_protocol::world::decode(opcode, &body).map_err(|error| error.to_string())?;
+    let world = match message {
+        ClientOpcodeMessage::CMSG_CHAR_ENUM => {
+            let mut worlds: Vec<Identity> = ctx
+                .db
+                .game_character_directory()
+                .by_account()
+                .filter(account_id)
+                .map(|entry| entry.world)
+                .collect();
+            if worlds.is_empty() && ctx.db.game_map_owner().iter().next().is_none() {
+                worlds.extend(world_shard(ctx));
+            }
+            worlds.sort();
+            worlds.dedup();
+            if worlds.is_empty() {
+                super::send_raw(ctx, connection_id, 0x3b, vec![0], false);
+                return Ok(());
+            }
+            let pending = ctx.db.game_pending_selection().insert(PendingSelection {
+                id: 0,
+                connection_id,
+                scheduled_at: (ctx.timestamp + TimeDuration::from_micros(10_000_000)).into(),
+                request_opcode: opcode,
+                remaining: worlds.clone(),
+                bodies: Vec::new(),
+                answered: Vec::new(),
+            });
+            for world in worlds {
+                relay_selection(
+                    ctx,
+                    connection_id,
+                    world,
+                    account_id,
+                    opcode,
+                    body.clone(),
+                    pending.id,
+                )?;
+            }
+            return Ok(());
+        }
+        ClientOpcodeMessage::CMSG_CHAR_CREATE(request) => {
+            let count = ctx
+                .db
+                .game_character_directory()
+                .by_account()
+                .filter(account_id)
+                .count();
+            if count >= crate::auth::CHARACTERS_PER_ACCOUNT {
+                return Err(Rollback::reply(
+                    ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(
+                        codec::CharCreateOutcome::ServerLimit,
+                    )),
+                    "Account is full",
+                ));
+            }
+            directory::create_world(ctx, request.race.as_int(), request.class.as_int()).ok_or_else(
+                || {
+                    Rollback::reply(
+                        ServerOpcodeMessage::SMSG_CHAR_CREATE(codec::build_char_create_response(
+                            codec::CharCreateOutcome::Failed,
+                        )),
+                        "start map has no World Shard",
+                    )
+                },
+            )?
+        }
+        ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => {
+            directory::character_world(ctx, account_id, request.guid.guid()).ok_or_else(|| {
+                Rollback::reply(
+                    ServerOpcodeMessage::SMSG_CHAR_DELETE(codec::build_char_delete_response(
+                        codec::CharDeleteOutcome::Failed,
+                    )),
+                    "Character directory has no Character for this Account",
+                )
+            })?
+        }
+        _ => return Ok(()),
+    };
+    let pending = ctx.db.game_pending_selection().insert(PendingSelection {
+        id: 0,
+        connection_id,
+        scheduled_at: (ctx.timestamp + TimeDuration::from_micros(10_000_000)).into(),
+        request_opcode: opcode,
+        remaining: vec![world],
+        bodies: Vec::new(),
+        answered: Vec::new(),
+    });
+    Ok(relay_selection(
+        ctx,
+        connection_id,
+        world,
+        account_id,
+        opcode,
+        body,
+        pending.id,
+    )?)
+}
+
+fn selection_answer(
+    ctx: &ReducerContext,
+    id: u64,
+    connection_id: ConnectionId,
+    opcode: u16,
+    body: Vec<u8>,
+) -> Result<(), String> {
+    let Some(mut pending) = ctx.db.game_pending_selection().id().find(id) else {
+        return Ok(());
+    };
+    if pending.connection_id != connection_id {
+        return Err("Character selection connection does not match".into());
+    }
+    let Some(index) = pending
+        .remaining
+        .iter()
+        .position(|world| *world == ctx.sender())
+    else {
+        return Err("unexpected World Shard selection reply".into());
+    };
+    if pending.request_opcode != 0x37 {
+        let expected = match pending.request_opcode {
+            0x36 => 0x3a,
+            0x38 => 0x3c,
+            _ => 0,
+        };
+        if opcode != expected {
+            fail_selection(ctx, id);
+            return Ok(());
+        }
+        cancel_selection(ctx, connection_id);
+        if at_selection(ctx, connection_id).is_some() {
+            super::send_raw(ctx, connection_id, opcode, body, false);
+        }
+        return Ok(());
+    }
+    if opcode != 0x3b || body.is_empty() {
+        fail_selection(ctx, id);
+        return Ok(());
+    }
+    pending.remaining.remove(index);
+    pending.bodies.push(body);
+    pending.answered.push(ctx.sender());
+    if pending.remaining.is_empty() {
+        // Merge in World Shard order, so the client lists the Characters in the same order each time.
+        let mut answers: Vec<_> = pending.answered.iter().zip(&pending.bodies).collect();
+        answers.sort_by_key(|(world, _)| **world);
+        let bodies: Vec<Vec<u8>> = answers.into_iter().map(|(_, body)| body.clone()).collect();
+        match merge_enumerations(&bodies) {
+            Ok(body) => {
+                cancel_selection(ctx, connection_id);
+                if at_selection(ctx, connection_id).is_some() {
+                    super::send_raw(ctx, connection_id, 0x3b, body, false);
+                }
+            }
+            Err(_) => fail_selection(ctx, id),
+        }
+    } else {
+        ctx.db.game_pending_selection().id().update(pending);
+    }
+    Ok(())
+}
+
+fn merge_enumerations(bodies: &[Vec<u8>]) -> Result<Vec<u8>, &'static str> {
+    let mut merged = vec![0u8];
+    for body in bodies {
+        let (&count, entries) = body.split_first().ok_or("missing Character count")?;
+        merged[0] = merged[0]
+            .checked_add(count)
+            .ok_or("Character count overflow")?;
+        if usize::from(merged[0]) > crate::auth::CHARACTERS_PER_ACCOUNT
+            || (count == 0) != entries.is_empty()
+        {
+            return Err("invalid Character list");
+        }
+        merged.extend_from_slice(entries);
+    }
+    Ok(merged)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn merged_character_list_has_one_count_and_preserves_entries() {
+        assert_eq!(
+            merge_enumerations(&[vec![1, 11, 12], vec![0], vec![2, 21, 22, 23]]),
+            Ok(vec![3, 11, 12, 21, 22, 23])
+        );
+        assert_eq!(merge_enumerations(&[]), Ok(vec![0]));
+    }
+
+    #[test]
+    fn malformed_or_oversized_lists_fail_instead_of_wrapping_the_count() {
+        for bodies in [
+            vec![vec![]],
+            vec![vec![0, 1]],
+            vec![vec![1]],
+            vec![vec![10, 1], vec![1, 2]],
+            vec![vec![255, 1], vec![1, 2]],
+        ] {
+            assert!(merge_enumerations(&bodies).is_err());
+        }
+    }
+}
+
+#[table(accessor = game_selection_reply, outbox(remote::idc_selection_reply))]
+pub struct SelectionReply {
+    #[primary_key]
+    #[auto_inc]
+    pub id: u64,
+    #[target]
+    pub database: remote::Identity,
+    pub connection: u128,
+    pub opcode: u16,
+    pub body: Vec<u8>,
+}
+
+#[reducer]
+pub fn idc_selection_reply(
+    ctx: &ReducerContext,
+    connection: u128,
+    opcode: u16,
+    body: Vec<u8>,
+) -> Result<(), String> {
+    directory::require_world(ctx)?;
+    let connection_id = ConnectionId::from_u128(connection);
+    if at_selection(ctx, connection_id).is_some() {
+        super::send_raw(ctx, connection_id, opcode, body, false);
     }
     Ok(())
 }

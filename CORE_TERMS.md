@@ -21,12 +21,12 @@ Host and World Sessions running. The Module definition must stay unchanged.
 
 <a id="realm"></a>**Realm**:
 The game world and Accounts that clients see as one server. One Shard holds it, or a Realm Shard
-and a World Shard share it.
+and World Shards share it.
 _Avoid_: server, cluster
 
 <a id="shard"></a>**Shard**:
-A SpacetimeDB database of a Realm. One Shard can hold the whole Realm, or a Realm Shard and a World
-Shard can share it. Maps and Instances partition gameplay within a Shard.
+A SpacetimeDB database of a Realm. One Shard can hold the whole Realm, or a Realm Shard and World
+Shards can share it. Maps and Instances partition gameplay within a Shard.
 _Avoid_: database (when meaning a shard), db, cross-database
 
 <a id="module"></a>**Module**:

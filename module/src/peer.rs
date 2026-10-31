@@ -83,7 +83,7 @@ pub fn operator_remove_peer_shard(ctx: &ReducerContext, database: Identity) -> R
 /// What this Shard holds of its Realm. Without a row the Shard holds the whole Realm.
 #[derive(SpacetimeType, Clone, Copy, PartialEq)]
 pub enum ShardRole {
-    /// Logon, Accounts, Sessions and the Login Queue. Character selection goes to `world`.
+    /// Logon, Accounts, Sessions and the Login Queue; `world` is the default World Shard.
     Realm { world: Identity },
     /// Characters and the world. World Sessions arrive from `realm` by Handoff.
     World { realm: Identity },
@@ -100,7 +100,7 @@ pub(crate) fn role(ctx: &ReducerContext) -> Option<ShardRole> {
     ctx.db.game_shard_role().id().find(0).map(|row| row.role)
 }
 
-/// The World Shard of this Realm Shard.
+/// The default World Shard of this Realm Shard.
 pub(crate) fn world_shard(ctx: &ReducerContext) -> Option<Identity> {
     match role(ctx) {
         Some(ShardRole::Realm { world }) => Some(world),
@@ -144,5 +144,8 @@ pub fn operator_set_shard_role(
         return Err("the Shard a role names must be a Peer Shard".into());
     }
     roles.insert(ShardRoleRow { id: 0, role });
+    if matches!(role, ShardRole::World { .. }) {
+        crate::native::directory::report_characters(ctx);
+    }
     Ok(())
 }
