@@ -5110,6 +5110,62 @@ def check_handoff(host):
     hand_off(second, None)
 
 
+def check_realm_shard(host):
+    """Logon and Sessions stay on the Realm Shard; Character selection and the world run on its World
+    Shard, and a World Session moves between them by Handoff."""
+    world = host.add_database()
+    host.call('debug_seed_scenario_fixtures', database=world)
+    host.call('operator_add_peer_shard', [host.identity(world), 'world'])
+    host.call('operator_add_peer_shard', [host.identity(), 'realm'], database=world)
+    host.wait_until(lambda: host.rows('SELECT confirmed FROM game_peer_shard') == [[True]]
+        and host.rows('SELECT confirmed FROM game_peer_shard', world) == [[True]], 'the Shards did not confirm each other',
+        timeout=20)
+    host.call('operator_set_shard_role', [{'some': {'Realm': {'world': host.identity(world)}}}])
+    host.call('operator_set_shard_role', [{'some': {'World': {'realm': host.identity()}}}], database=world)
+    host.account('SPLIT')
+    client = host.connect('SPLIT')
+    opcode, body = client.read()
+    assert (opcode, body[:1]) == (0x1ee, b'\x0c'), (hex(opcode), body.hex())
+
+    client.send(0x37)
+    assert client.read() == (0x3b, b'\x00'), 'the World Shard should list no Characters yet'
+    character = b'Splitter\0' + bytes([1, 1, 0, 0, 0, 0, 0, 0, 0])
+    client.send(0x36, character)
+    assert client.read() == (0x3a, bytes([0x2e])), 'the World Shard should create the Character'
+    client.send(0x36, character)
+    assert client.read() == (0x3a, bytes([0x31])), "the World Shard's refusal should reach the client"
+    assert not host.rows("SELECT guid FROM game_character WHERE name = 'Splitter'"), 'the Realm Shard holds no Characters'
+    guid = host.rows("SELECT guid FROM game_character WHERE name = 'Splitter'", world)[0][0]
+    host.sql(f'UPDATE game_character SET x = 0, y = 0, z = 0 WHERE guid = {guid}', world)
+    client.send(0x37)
+    opcode, body = client.read()
+    assert opcode == 0x3b and body[0] == 1 and struct.pack('<Q', guid) in body, (hex(opcode), body.hex())
+
+    def enter():
+        client.send(0x3d, struct.pack('<Q', guid))
+        entered = []
+        while guid not in creates(entered):
+            entered.append(client.read())
+        host.wait_until(lambda: host.rows('SELECT character_guid FROM game_native_player', world) == [[guid]],
+            'the World Shard did not take the World Session')
+        assert host.rows('SELECT account_id FROM game_native_away'), 'the Realm Shard should keep the Session'
+        assert not host.rows('SELECT connection_id FROM game_native_world_connection')
+
+    enter()
+    client.collect()
+    client.send(0x4b)
+    while client.read()[0] != 0x4d:
+        pass
+    host.wait_until(lambda: host.rows('SELECT connection_id FROM game_native_world_connection')
+        and not host.rows('SELECT connection_id FROM game_native_world_connection', world),
+        'the World Session did not return to the Realm Shard')
+    assert not host.rows('SELECT account_id FROM game_native_away')
+    client.send(0x37)
+    opcode, body = client.read()
+    assert opcode == 0x3b and body[0] == 1, (hex(opcode), body.hex())
+    enter()
+
+
 def named(*checks):
     return {check.__name__.removeprefix('check_').replace('_', '-'): check for check in checks}
 
@@ -5135,6 +5191,7 @@ ALONE = {
     'slow-readers': (check_slow_readers, {'seeded': True}),
     'accept-recovery': (check_accept_recovery, {}),
     'handoff': (check_handoff, {}),
+    'realm-shard': (check_realm_shard, {'seeded': True}),
 }
 
 

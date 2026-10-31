@@ -393,6 +393,7 @@ pub fn establish_session(
     } else {
         sessions.insert(row);
     }
+    crate::native::account_changed(ctx, account_id);
     ensure_session_reaper_armed(ctx);
     Ok(())
 }

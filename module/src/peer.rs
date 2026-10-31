@@ -1,4 +1,4 @@
-use spacetimedb::{reducer, table, Identity, ReducerContext, Table};
+use spacetimedb::{reducer, table, Identity, ReducerContext, SpacetimeType, Table};
 
 /// Another Shard of this Realm that may call this Shard's `idc_` reducers.
 #[table(accessor = game_peer_shard)]
@@ -77,5 +77,72 @@ pub fn operator_remove_peer_shard(ctx: &ReducerContext, database: Identity) -> R
     if !ctx.db.game_peer_shard().database().delete(database) {
         return Err("not a Peer Shard".into());
     }
+    Ok(())
+}
+
+/// What this Shard holds of its Realm. Without a row the Shard holds the whole Realm.
+#[derive(SpacetimeType, Clone, Copy, PartialEq)]
+pub enum ShardRole {
+    /// Logon, Accounts, Sessions and the Login Queue. Character selection goes to `world`.
+    Realm { world: Identity },
+    /// Characters and the world. World Sessions arrive from `realm` by Handoff.
+    World { realm: Identity },
+}
+
+#[table(accessor = game_shard_role)]
+pub struct ShardRoleRow {
+    #[primary_key]
+    pub id: u8,
+    pub role: ShardRole,
+}
+
+pub(crate) fn role(ctx: &ReducerContext) -> Option<ShardRole> {
+    ctx.db.game_shard_role().id().find(0).map(|row| row.role)
+}
+
+/// The World Shard of this Realm Shard.
+pub(crate) fn world_shard(ctx: &ReducerContext) -> Option<Identity> {
+    match role(ctx) {
+        Some(ShardRole::Realm { world }) => Some(world),
+        _ => None,
+    }
+}
+
+/// The Realm Shard of this World Shard.
+pub(crate) fn realm_shard(ctx: &ReducerContext) -> Option<Identity> {
+    match role(ctx) {
+        Some(ShardRole::World { realm }) => Some(realm),
+        _ => None,
+    }
+}
+
+/// Refuses a caller other than `expected`, the Shard this role names.
+pub(crate) fn require_sender(
+    ctx: &ReducerContext,
+    expected: Option<Identity>,
+) -> Result<(), String> {
+    if expected.is_some_and(|expected| expected == ctx.sender() && is_peer(ctx, expected)) {
+        Ok(())
+    } else {
+        Err("caller is not a Peer Shard".into())
+    }
+}
+
+#[reducer]
+pub fn operator_set_shard_role(
+    ctx: &ReducerContext,
+    role: Option<ShardRole>,
+) -> Result<(), String> {
+    crate::helpers::require_operator(ctx)?;
+    let roles = ctx.db.game_shard_role();
+    roles.id().delete(0);
+    let Some(role) = role else {
+        return Ok(());
+    };
+    let (ShardRole::Realm { world: peer } | ShardRole::World { realm: peer }) = role;
+    if !is_peer(ctx, peer) {
+        return Err("the Shard a role names must be a Peer Shard".into());
+    }
+    roles.insert(ShardRoleRow { id: 0, role });
     Ok(())
 }

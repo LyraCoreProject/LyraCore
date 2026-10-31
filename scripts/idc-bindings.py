@@ -5,6 +5,10 @@ Every Shard runs the same Module, so a Shard calls a Peer Shard through bindings
 own Wasm. Only the `idc_` reducers go in, and they take plain arguments, so no generated types can
 collide with the Module's own.
 
+A new `idc_` reducer is not in the bindings yet, so an outbox that calls it cannot compile. Build the
+Module once with that outbox's `outbox(...)`, `#[target]` and `on_result` attributes removed, run
+this script on that Wasm, then put the attributes back.
+
 Usage: scripts/idc-bindings.py <lyracore_module.wasm> [--check]
 Runs `spacetime` from PATH (or $SPACETIME) and the spacetimedb-standalone installed beside it.
 """

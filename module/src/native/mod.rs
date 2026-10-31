@@ -23,6 +23,8 @@ mod environment;
 mod gossip;
 mod guild;
 mod handoff;
+mod realm_shard;
+pub(crate) use realm_shard::account_changed;
 mod instance;
 mod inventory;
 mod logon;
@@ -284,6 +286,7 @@ fn send_raw(
 }
 
 fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
+    realm_shard::closing(ctx, connection_id);
     #[cfg(feature = "conformance_test_fixture")]
     debug::close(ctx, connection_id);
     ctx.db.game_native_packet().insert(NativePacket {
@@ -463,43 +466,27 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
             }
         }
         NativeWorldState::CharacterSelection { account_id } => {
-            if opcode == 0x003d {
-                return world::login(ctx, connection, &body);
+            let world = crate::peer::world_shard(ctx);
+            match (opcode, world) {
+                (0x003d, Some(world)) => {
+                    return realm_shard::enter_world(ctx, connection, world, &body)
+                }
+                (0x003d, None) => return world::login(ctx, connection, &body),
+                // A Realm Shard's World Shard holds the Characters, so it answers these.
+                (0x0036..=0x0038, Some(world)) => {
+                    return Ok(realm_shard::relay_selection(
+                        ctx,
+                        connection_id,
+                        world,
+                        account_id,
+                        opcode,
+                        body,
+                    )?);
+                }
+                _ => {}
             }
-            let message = lyracore_protocol::world::decode(opcode, &body)
-                .map_err(|error| error.to_string())?;
-            let reply = match message {
-                ClientOpcodeMessage::CMSG_PING(ping) => ServerOpcodeMessage::SMSG_PONG(SMSG_PONG {
-                    sequence_id: ping.sequence_id,
-                }),
-                ClientOpcodeMessage::CMSG_QUERY_TIME => {
-                    ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(SMSG_QUERY_TIME_RESPONSE {
-                        time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000)
-                            as u32,
-                    })
-                }
-                ClientOpcodeMessage::CMSG_CHAR_ENUM => {
-                    let characters = ctx
-                        .db
-                        .game_character()
-                        .by_account()
-                        .filter(account_id)
-                        .map(|character| view::character(ctx, character))
-                        .collect::<Vec<_>>();
-                    ServerOpcodeMessage::SMSG_CHAR_ENUM(Box::new(
-                        codec::build_char_enum(&characters).map_err(|error| error.to_string())?,
-                    ))
-                }
-                ClientOpcodeMessage::CMSG_CHAR_CREATE(request) => {
-                    character::create(ctx, account_id, *request)?
-                }
-                ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => {
-                    character::delete(ctx, account_id, request.guid.guid())?
-                }
-                ClientOpcodeMessage::CMSG_CHAR_RENAME(_) => ServerOpcodeMessage::SMSG_CHAR_RENAME(
-                    Box::new(codec::build_char_rename_refusal()),
-                ),
-                _ => return Ok(()),
+            let Some(reply) = selection_reply(ctx, account_id, opcode, &body)? else {
+                return Ok(());
             };
             Ok(send(ctx, connection_id, reply, false)?)
         }
@@ -507,6 +494,49 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
             world::receive(ctx, connection, character_guid, opcode, &body)
         }
     }
+}
+
+/// The reply to a Character selection request, or None for a request selection ignores.
+fn selection_reply(
+    ctx: &ReducerContext,
+    account_id: u64,
+    opcode: u32,
+    body: &[u8],
+) -> Result<Option<ServerOpcodeMessage>, Rollback> {
+    let message =
+        lyracore_protocol::world::decode(opcode, body).map_err(|error| error.to_string())?;
+    Ok(Some(match message {
+        ClientOpcodeMessage::CMSG_PING(ping) => ServerOpcodeMessage::SMSG_PONG(SMSG_PONG {
+            sequence_id: ping.sequence_id,
+        }),
+        ClientOpcodeMessage::CMSG_QUERY_TIME => {
+            ServerOpcodeMessage::SMSG_QUERY_TIME_RESPONSE(SMSG_QUERY_TIME_RESPONSE {
+                time: (crate::time::now(ctx).to_micros_since_unix_epoch() / 1_000_000) as u32,
+            })
+        }
+        ClientOpcodeMessage::CMSG_CHAR_ENUM => {
+            let characters = ctx
+                .db
+                .game_character()
+                .by_account()
+                .filter(account_id)
+                .map(|character| view::character(ctx, character))
+                .collect::<Vec<_>>();
+            ServerOpcodeMessage::SMSG_CHAR_ENUM(Box::new(
+                codec::build_char_enum(&characters).map_err(|error| error.to_string())?,
+            ))
+        }
+        ClientOpcodeMessage::CMSG_CHAR_CREATE(request) => {
+            character::create(ctx, account_id, *request)?
+        }
+        ClientOpcodeMessage::CMSG_CHAR_DELETE(request) => {
+            character::delete(ctx, account_id, request.guid.guid())?
+        }
+        ClientOpcodeMessage::CMSG_CHAR_RENAME(_) => {
+            ServerOpcodeMessage::SMSG_CHAR_RENAME(Box::new(codec::build_char_rename_refusal()))
+        }
+        _ => return Ok(None),
+    }))
 }
 
 fn authenticate(
@@ -672,6 +702,12 @@ fn current_account(
 
 // Login-proof expiry does not revoke an established World Session; see docs/architecture.md.
 pub(crate) fn active_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64> {
+    let mut active = local_session_accounts(ctx);
+    active.extend(realm_shard::away_accounts(ctx));
+    active
+}
+
+fn local_session_accounts(ctx: &ReducerContext) -> std::collections::HashSet<u64> {
     ctx.db
         .game_native_world_connection()
         .iter()
@@ -691,6 +727,7 @@ pub(crate) fn active_session_accounts(ctx: &ReducerContext) -> std::collections:
 
 pub(crate) fn close(ctx: &ReducerContext) {
     if let Some(connection_id) = ctx.connection_id() {
+        realm_shard::closing(ctx, connection_id);
         #[cfg(feature = "conformance_test_fixture")]
         debug::close(ctx, connection_id);
         logon::close(ctx, connection_id);

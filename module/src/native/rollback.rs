@@ -93,9 +93,56 @@ fn envelope(replies: &[Packet]) -> String {
     format!("native_reply:[{packets}]")
 }
 
+/// The refusal packets in a reducer error that `envelope` wrote.
+pub(super) fn replies_in(error: &str) -> Option<Vec<(u16, Vec<u8>)>> {
+    let list = error.strip_prefix("native_reply:")?;
+    let mut packets: Vec<(u16, Vec<u8>)> = Vec::new();
+    let (mut depth, mut number) = (0, None::<u32>);
+    for character in list.chars() {
+        if let Some(digit) = character.to_digit(10) {
+            number = Some(number.unwrap_or(0).checked_mul(10)?.checked_add(digit)?);
+            continue;
+        }
+        if let Some(value) = number.take() {
+            match depth {
+                2 => packets.push((u16::try_from(value).ok()?, Vec::new())),
+                3 => packets.last_mut()?.1.push(u8::try_from(value).ok()?),
+                _ => return None,
+            }
+        }
+        match character {
+            '[' => depth += 1,
+            ']' => depth -= 1,
+            ',' | ' ' => {}
+            _ => return None,
+        }
+    }
+    (depth == 0).then_some(packets)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn replies_round_trip_through_the_envelope() {
+        let replies = vec![
+            Packet {
+                opcode: 0x3a,
+                body: vec![0, 255, 7],
+            },
+            Packet {
+                opcode: 0x1dd,
+                body: Vec::new(),
+            },
+        ];
+        assert_eq!(
+            replies_in(&envelope(&replies)),
+            Some(vec![(0x3a, vec![0, 255, 7]), (0x1dd, Vec::new())])
+        );
+        assert_eq!(replies_in("native_reply:[]"), Some(Vec::new()));
+        assert_eq!(replies_in("plain failure"), None);
+    }
 
     #[test]
     fn a_silent_refusal_is_an_empty_reply_list() {

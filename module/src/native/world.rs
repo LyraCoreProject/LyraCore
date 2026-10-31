@@ -675,6 +675,8 @@ pub(super) fn receive(
                 ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(codec::logout_denied_in_combat())
             } else {
                 leave(ctx, connection.connection_id);
+                let (connection_id, server_seed) =
+                    (connection.connection_id, connection.server_seed);
                 let NativeWorldState::InWorld(NativeActive { account_id, .. }) = connection.state
                 else {
                     return Err("invalid world state".into());
@@ -689,6 +691,12 @@ pub(super) fn receive(
                 for message in codec::logout_sequence() {
                     super::send(ctx, connection.connection_id, message, false)?;
                 }
+                super::realm_shard::return_to_selection(
+                    ctx,
+                    connection_id,
+                    server_seed,
+                    account_id,
+                )?;
                 return Ok(());
             }
         }

@@ -343,7 +343,7 @@ selection clears it.
 ## Durable state and extension points
 
 The Module owns Characters, Accounts, inventory, groups, guilds, Mail and auction state in one
-Shard. Spatial reads use the indexed partition helpers, and AOI uses map, Instance and cell indexes.
+Shard, or in the World Shard of a Realm that has a Realm Shard. Spatial reads use the indexed partition helpers, and AOI uses map, Instance and cell indexes.
 Whole-world scans are limited by the Architecture Tests in `module/src/tripwires.rs`.
 [`schema.md`](./schema.md) maps the tables.
 
@@ -358,6 +358,16 @@ that they are current. An `idc_` reducer takes plain arguments and refuses a cal
 Peer Shard. A call arrives as a short connection from the calling Shard, so `client_disconnected`
 skips Peer Shards. Delivery is exactly once, and each call waits for disk writes on both sides, so
 calls carry rare events and batches, never per-packet traffic.
+
+A Realm can split into a Realm Shard and one World Shard on the same Native Host. The Native Host's
+logon and world listeners point at the Realm Shard, which keeps logon, Accounts, Sessions and the
+Login Queue. It relays the Character list, create and delete requests to the World Shard, which
+answers with the packet; a refusal comes back in the World Shard's error and the Realm Shard sends
+it. Character login sends the World Shard a copy of the Account and Session, then hands the World
+Session over by Handoff, and logout hands it back. A changed Session goes to the World Shard, so its
+next request checks the current one. To split a Realm, list each Shard as a Peer Shard of the other
+with `operator_add_peer_shard`, then name the roles with `operator_set_shard_role`. Without a role,
+a Shard holds the whole Realm. The Login Queue counts only World Sessions on the Realm Shard.
 
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in
