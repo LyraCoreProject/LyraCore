@@ -169,6 +169,10 @@ pub(super) fn revision(ctx: &ReducerContext) -> u64 {
 }
 
 pub(crate) fn changed(ctx: &ReducerContext, account_id: u64, guid: u64, present: bool) {
+    send_changes(ctx, account_id, vec![(guid, present)]);
+}
+
+fn send_changes(ctx: &ReducerContext, account_id: u64, changes: Vec<(u64, bool)>) {
     let Some(realm) = realm_shard(ctx) else {
         return;
     };
@@ -178,17 +182,24 @@ pub(crate) fn changed(ctx: &ReducerContext, account_id: u64, guid: u64, present:
             id: 0,
             database: remote::Identity(realm),
             account_id,
-            changes: bsatn::to_vec(&vec![(guid, present)]).expect("directory changes encode"),
+            changes: bsatn::to_vec(&changes).expect("directory changes encode"),
             revision: revision(ctx),
         });
 }
 
+// One message per Account: each call between databases costs a round trip and disk writes.
 pub(crate) fn report_characters(ctx: &ReducerContext) {
+    let mut by_account = std::collections::BTreeMap::<u64, Vec<(u64, bool)>>::new();
     for character in ctx.db.game_character().iter() {
-        if crate::transfer::is_in_transit(ctx, character.guid) {
-            continue;
+        if !crate::transfer::is_in_transit(ctx, character.guid) {
+            by_account
+                .entry(character.account_id)
+                .or_default()
+                .push((character.guid, true));
         }
-        changed(ctx, character.account_id, character.guid, true);
+    }
+    for (account_id, changes) in by_account {
+        send_changes(ctx, account_id, changes);
     }
 }
 

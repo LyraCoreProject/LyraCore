@@ -1,3 +1,7 @@
+//! A Realm split into a Realm Shard and World Shards. The Realm Shard keeps logon, Accounts,
+//! Sessions, the Login Queue and the Character directory. It routes Character selection to the
+//! World Shards and hands World Sessions to them to enter the world.
+
 use spacetimedb::sats::bsatn;
 use spacetimedb::{
     reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
@@ -580,6 +584,8 @@ pub struct PendingSelection {
     pub request_opcode: u32,
     pub remaining: Vec<Identity>,
     pub bodies: Vec<Vec<u8>>,
+    /// The World Shard of each entry in `bodies`.
+    pub answered: Vec<Identity>,
 }
 
 pub(super) fn cancel_selection(ctx: &ReducerContext, connection_id: ConnectionId) {
@@ -657,6 +663,7 @@ pub(super) fn route_selection(
                 request_opcode: opcode,
                 remaining: worlds.clone(),
                 bodies: Vec::new(),
+                answered: Vec::new(),
             });
             for world in worlds {
                 relay_selection(
@@ -716,6 +723,7 @@ pub(super) fn route_selection(
         request_opcode: opcode,
         remaining: vec![world],
         bodies: Vec::new(),
+        answered: Vec::new(),
     });
     Ok(relay_selection(
         ctx,
@@ -770,8 +778,13 @@ fn selection_answer(
     }
     pending.remaining.remove(index);
     pending.bodies.push(body);
+    pending.answered.push(ctx.sender());
     if pending.remaining.is_empty() {
-        match merge_enumerations(&pending.bodies) {
+        // Merge in World Shard order, so the client lists the Characters in the same order each time.
+        let mut answers: Vec<_> = pending.answered.iter().zip(&pending.bodies).collect();
+        answers.sort_by_key(|(world, _)| **world);
+        let bodies: Vec<Vec<u8>> = answers.into_iter().map(|(_, body)| body.clone()).collect();
+        match merge_enumerations(&bodies) {
             Ok(body) => {
                 cancel_selection(ctx, connection_id);
                 if at_selection(ctx, connection_id).is_some() {
