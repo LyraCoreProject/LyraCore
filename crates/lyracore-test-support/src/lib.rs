@@ -13,7 +13,7 @@ pub use subscription::TableSubscription;
 use std::collections::{BTreeMap, BTreeSet};
 use std::ffi::OsString;
 use std::fs::{self, OpenOptions};
-use std::io::{BufRead, BufReader};
+use std::io::{self, BufRead, BufReader, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Output, Stdio};
@@ -474,7 +474,8 @@ impl Standalone {
         );
     }
 
-    // SpacetimeDB 2.7.1 can segfault at launch; retry only for a new database.
+    // SpacetimeDB 2.7.1 segfaulted in about one launch in twelve. Retry only for a new database, and
+    // log each retry so CI shows whether 2.14.0 still does.
     fn publish(&mut self, database: &str, source: &[&str], extra: &[&str]) {
         let workspace = core_root();
         let mut attempts = Vec::new();
@@ -509,6 +510,12 @@ impl Standalone {
             if node_is_running || attempt + 1 == allowed_attempts {
                 break;
             }
+            // libtest captures `eprintln!` from passing tests; the raw handle reaches the CI log.
+            let _ = writeln!(
+                io::stderr(),
+                "standalone exited during publish of {database}; retrying\n{}",
+                self.log_tail()
+            );
             self.restart();
         }
         panic!(

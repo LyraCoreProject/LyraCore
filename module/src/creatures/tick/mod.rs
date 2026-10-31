@@ -39,7 +39,7 @@ pub struct CreatureMoveEvent {
     public,
     index(accessor = by_instance, btree(columns = [instance_id])),
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    // AOI subscriptions require three equality columns in SpacetimeDB 2.7.1.
+    // AOI subscriptions require three equality columns in SpacetimeDB 2.14.0.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct CreatureSpline {

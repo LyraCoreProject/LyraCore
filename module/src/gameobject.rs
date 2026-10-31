@@ -111,7 +111,7 @@ pub struct GameObjectUnlocked {
         accessor = by_template_scope,
         btree(columns = [template_entry, map_id, instance_id])
     ),
-    // SpacetimeDB 2.7.1 serves AOI subscriptions with three equality-indexed columns.
+    // SpacetimeDB 2.14.0 serves AOI subscriptions with three equality-indexed columns.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell]))
 )]
 pub struct GameObject {

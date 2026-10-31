@@ -95,7 +95,7 @@ pub(crate) fn clear_relay_world_states_for_instance(ctx: &ReducerContext, instan
     public,
     index(accessor = by_map, btree(columns = [map_id])),
     index(accessor = by_grid, btree(columns = [map_id, instance_id, grid_x, grid_y])),
-    // SpacetimeDB 2.7.1 serves this subscription only with three equality-indexed columns.
+    // SpacetimeDB 2.14.0 serves this subscription only with three equality-indexed columns.
     index(accessor = by_cell, btree(columns = [map_id, instance_id, cell])),
     index(accessor = by_cell_entry, btree(columns = [map_id, instance_id, cell, entry])),
     index(accessor = by_owner, btree(columns = [owner_identity])),
