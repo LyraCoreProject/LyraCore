@@ -1,5 +1,7 @@
 use spacetimedb::sats::bsatn;
-use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, Table};
+use spacetimedb::{
+    reducer, table, ConnectionId, Identity, ReducerContext, ScheduleAt, Table, TimeDuration,
+};
 
 use super::directory::{
     self, game_character_directory, game_character_directory_version, game_map_owner,
@@ -338,6 +340,66 @@ pub fn idc_native_transfer_moved(
     Ok(())
 }
 
+/// A refused Realm update or release waits before it is sent again: an IDC error is final, so an
+/// immediate resend would loop until the refusal clears.
+const RETRY_MICROS: i64 = 30_000_000;
+
+fn retry_at(ctx: &ReducerContext) -> ScheduleAt {
+    (ctx.timestamp + TimeDuration::from_micros(RETRY_MICROS)).into()
+}
+
+#[table(accessor = game_native_transfer_moved_retry, scheduled(retry_native_transfer_moved))]
+pub struct NativeTransferMovedRetry {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub call: NativeTransferMoved,
+}
+
+#[reducer]
+pub fn retry_native_transfer_moved(
+    ctx: &ReducerContext,
+    retry: NativeTransferMovedRetry,
+) -> Result<(), String> {
+    if !crate::time::scheduler_authorized(ctx) {
+        return Err("scheduler only".into());
+    }
+    ctx.db
+        .game_native_transfer_moved()
+        .insert(NativeTransferMoved {
+            id: 0,
+            ..retry.call
+        });
+    Ok(())
+}
+
+#[table(accessor = game_native_transfer_release_retry, scheduled(retry_native_transfer_release))]
+pub struct NativeTransferReleaseRetry {
+    #[primary_key]
+    #[auto_inc]
+    pub scheduled_id: u64,
+    pub scheduled_at: ScheduleAt,
+    pub call: NativeTransferRelease,
+}
+
+#[reducer]
+pub fn retry_native_transfer_release(
+    ctx: &ReducerContext,
+    retry: NativeTransferReleaseRetry,
+) -> Result<(), String> {
+    if !crate::time::scheduler_authorized(ctx) {
+        return Err("scheduler only".into());
+    }
+    ctx.db
+        .game_native_transfer_release()
+        .insert(NativeTransferRelease {
+            id: 0,
+            ..retry.call
+        });
+    Ok(())
+}
+
 #[table(accessor = game_native_transfer_release, outbox(remote::idc_native_transfer_release))]
 pub struct NativeTransferRelease {
     #[primary_key]
@@ -355,7 +417,7 @@ pub struct NativeTransferRelease {
 #[reducer(on_result(game_native_transfer_moved))]
 pub fn native_transfer_moved_answered(
     ctx: &ReducerContext,
-    mut call: NativeTransferMoved,
+    call: NativeTransferMoved,
     result: Result<(), String>,
 ) {
     if let Err(error) = result {
@@ -363,8 +425,13 @@ pub fn native_transfer_moved_answered(
             "Transfer {} directory update waits: {error}",
             call.transfer_id
         );
-        call.id = 0;
-        ctx.db.game_native_transfer_moved().insert(call);
+        ctx.db
+            .game_native_transfer_moved_retry()
+            .insert(NativeTransferMovedRetry {
+                scheduled_id: 0,
+                scheduled_at: retry_at(ctx),
+                call,
+            });
         return;
     }
     ctx.db
@@ -433,8 +500,13 @@ pub fn native_transfer_release_answered(
 ) {
     if let Err(error) = result {
         spacetimedb::log::error!("Transfer {} release waits: {error}", call.transfer_id);
-        call.id = 0;
-        ctx.db.game_native_transfer_release().insert(call);
+        ctx.db
+            .game_native_transfer_release_retry()
+            .insert(NativeTransferReleaseRetry {
+                scheduled_id: 0,
+                scheduled_at: retry_at(ctx),
+                call,
+            });
         return;
     }
     let connection_id = ConnectionId::from_u128(call.connection);
