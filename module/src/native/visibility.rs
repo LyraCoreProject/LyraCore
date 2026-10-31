@@ -67,6 +67,7 @@ pub(crate) fn grant_added(ctx: &ReducerContext, grant: &AoiGrant, newly_added: b
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
+        let _create = crate::world::span("vis.create");
         if let Err(error) = create(ctx, player.connection_id, grant, newly_added) {
             spacetimedb::log::error!(
                 "native CREATE failed for entity {}: {error}",
@@ -87,6 +88,7 @@ pub(crate) fn grant_removed(ctx: &ReducerContext, grant: &AoiGrant) {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
             return;
         }
+        let _destroy = crate::world::span("vis.destroy");
         let result = lyracore_protocol::world::encode(ServerOpcodeMessage::SMSG_DESTROY_OBJECT(
             codec::build_destroy_object(grant.entity_guid),
         ));
@@ -176,7 +178,9 @@ pub(super) fn create(
             if entity.is_player() {
                 freshness = codec::CreateFreshness::Known;
             }
+            let parts = crate::world::span("vis.parts");
             let (mut view, items, movement) = peer_parts(ctx, &entity);
+            drop(parts);
             view.dynamic_flags = super::loot::dynamic_flags(ctx, &entity, grant.viewer_guid);
             passenger_movement = movement;
             codec::build_create_object(&view, codec::CreateKind::Peer, &items, &[])
@@ -232,6 +236,7 @@ pub(super) fn create(
         }
         _ => return Err("unknown AOI layer".into()),
     };
+    let build = crate::world::span("vis.build");
     codec::set_create_freshness(&mut message, freshness);
     let packet = match passenger_movement {
         Some(movement) => lyracore_protocol::world::Packet {
@@ -245,6 +250,7 @@ pub(super) fn create(
         .map_err(|error| error.to_string())?,
     };
     let packet_id = recipient_packet(ctx, connection, grant, Some(packet), true);
+    drop(build);
     #[cfg(feature = "conformance_test_fixture")]
     {
         let gameobject_type = if grant.layer == GAME_OBJECT {
@@ -271,6 +277,7 @@ pub(super) fn create(
     if let Some((opcode, body)) = rotation {
         super::send_raw(ctx, connection, opcode, body, false);
     }
+    let _replay = crate::world::span("vis.replay");
     if grant.layer == WORLD_ENTITY {
         super::pet::replay(ctx, connection, grant.viewer_guid, grant.entity_guid)?;
         super::combat::replay(ctx, connection, grant.entity_guid)?;
