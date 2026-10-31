@@ -62,7 +62,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ env.UPGRADE_BASELINE_WASM }}
-          key: durable-upgrade-baseline-${{ env.UPGRADE_BASELINE }}
+          key: durable-upgrade-baseline-${{ env.UPGRADE_BASELINE }}-${{ hashFiles('module/tests/fixtures/upgrade-baseline.patch') }}
 
       - name: Check out the populated-upgrade baseline
         if: matrix.shard == 2 && steps.baseline-cache.outputs.cache-hit != 'true'
@@ -75,6 +75,7 @@ jobs:
       - name: Build the populated-upgrade baseline
         if: matrix.shard == 2 && steps.baseline-cache.outputs.cache-hit != 'true'
         run: |
+          git -C .lyracore-upgrade-baseline apply "$PWD/module/tests/fixtures/upgrade-baseline.patch"
           baseline_target="$RUNNER_TEMP/lyracore-upgrade-baseline-target"
           cargo build --manifest-path .lyracore-upgrade-baseline/Cargo.toml --target-dir "$baseline_target" --release --target wasm32-unknown-unknown -p lyracore-module --features=debug_reducers,package_test_fixture
           cp "$baseline_target/wasm32-unknown-unknown/release/lyracore_module.wasm" "$UPGRADE_BASELINE_WASM"

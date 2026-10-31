@@ -78,7 +78,10 @@ The Deadmines targets need the separately installed dungeons Package. CI runs th
 signature baseline. The bundled route fixture removes its imported-data requirement.
 
 CI runs `populated_old_module_upgrades_without_clearing` separately. It builds the Module at
-`859c7257c74d2c371dea8ed743cfbccd596cac11` once and caches that Wasm under the commit. It sets
+`859c7257c74d2c371dea8ed743cfbccd596cac11` once and caches that Wasm under the commit and patch. Before the
+build it applies [`upgrade-baseline.patch`](../module/tests/fixtures/upgrade-baseline.patch), which
+adds `debug_clear_schedule`: SpacetimeDB 2.14 refuses SQL writes to scheduled tables, so the test
+stops the baseline's schedules through that reducer. It sets
 `LYRACORE_TEST_BASELINE_WASM` to the Wasm and publishes the current Module over the populated
 fixture without clearing it. Character, entity, spell and effect rows must survive; new spell fields
 must receive their migration defaults. The fixture includes nonzero combo scaling and checks live
