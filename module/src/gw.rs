@@ -354,7 +354,7 @@ pub fn gw_use_item(
     require_operator(ctx)?;
     let actor_guid = crate::account_ownership::require_actor(ctx, request_actor)?;
     item_actor(ctx, actor_guid)?;
-    crate::actor::use_item(ctx, actor_guid, slot, None).map_err(crate::items::refused)
+    crate::actor::use_item(ctx, actor_guid, slot).map_err(crate::items::refused)
 }
 
 #[reducer]

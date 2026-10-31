@@ -361,7 +361,7 @@ pub(super) fn receive(
                     Some(ItemTarget::Item { item }) => Some(item.guid()),
                     _ => None,
                 };
-                crate::items::apply_item_use(ctx, guid, source, item_target)
+                crate::items::apply_item_use_on(ctx, guid, source, item_target)
             }
             ClientOpcodeMessage::CMSG_READ_ITEM(_) => {
                 let item = item_in_slot(ctx, guid, source).ok_or(ItemRefusal::ItemNotFound)?;

@@ -421,7 +421,7 @@ pub fn debug_spawn_ground_area(
 
 #[reducer]
 pub fn debug_use_item(ctx: &ReducerContext, character_guid: u64, slot: u8) -> Result<(), String> {
-    crate::actor::use_item(ctx, character_guid, slot, None).map_err(crate::items::refused)
+    crate::actor::use_item(ctx, character_guid, slot).map_err(crate::items::refused)
 }
 
 #[reducer]
@@ -433,7 +433,7 @@ pub fn debug_use_item_on_item(
 ) -> Result<(), String> {
     let target = crate::items::item_in_slot(ctx, character_guid, target_slot)
         .ok_or_else(|| format!("no item in slot {target_slot}"))?;
-    crate::actor::use_item(ctx, character_guid, slot, Some(target.guid))
+    crate::items::apply_item_use_on(ctx, character_guid, slot, Some(target.guid))
         .map_err(crate::items::refused)
 }
 

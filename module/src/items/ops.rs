@@ -495,6 +495,15 @@ pub(crate) fn apply_item_use(
     ctx: &ReducerContext,
     player_guid: u64,
     slot: u8,
+) -> Result<(), ItemRefusal> {
+    apply_item_use_on(ctx, player_guid, slot, None)
+}
+
+/// Uses an item at another of the user's items, such as a poison at a weapon.
+pub(crate) fn apply_item_use_on(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    slot: u8,
     item_target: Option<u64>,
 ) -> Result<(), ItemRefusal> {
     let entities = ctx.db.game_world_entity();
