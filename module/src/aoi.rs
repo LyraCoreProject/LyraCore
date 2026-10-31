@@ -17,7 +17,7 @@ pub(crate) const TRANSPORT: u8 = 4;
 
 #[table(
     accessor = game_aoi_grant,
-    index(accessor = by_viewer, btree(columns = [viewer_guid])),
+    index(accessor = by_viewer, btree(columns = [viewer_guid, layer, entity_guid])),
     index(accessor = by_subject, btree(columns = [layer, entity_guid]))
 )]
 pub struct AoiGrant {
@@ -102,7 +102,15 @@ pub(crate) fn entity_changed(
             let viewer = AoiViewer::of(entity);
             if previous != viewer {
                 viewers.guid().update(viewer.clone());
-                refresh_viewer(ctx, &viewer);
+                let moved = AoiViewer {
+                    cell: viewer.cell,
+                    ..previous.clone()
+                };
+                if moved == viewer {
+                    shift_viewer(ctx, &previous, &viewer);
+                } else {
+                    refresh_viewer(ctx, &viewer);
+                }
             }
         } else {
             viewers.guid().delete(entity.guid);
@@ -201,44 +209,56 @@ pub(crate) fn nearby_viewers(
     })
 }
 
-fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
-    let mut wanted = BTreeSet::new();
-    for cell in cells(viewer.cell) {
-        for entity in
-            ctx.db
-                .game_world_entity()
-                .by_cell()
-                .filter((viewer.map_id, viewer.instance_id, cell))
-        {
-            if viewer.sees_entity(&entity, crate::spell::is_stealthed(ctx, entity.guid)) {
-                wanted.insert((WORLD_ENTITY, entity.guid));
+/// The Grant subjects in one cell of `viewer`'s map; `all` skips the visibility test.
+fn subjects_in(ctx: &ReducerContext, viewer: &AoiViewer, cell: i64, all: bool) -> Vec<(u8, u64)> {
+    let key = (viewer.map_id, viewer.instance_id, cell);
+    let entities = ctx.db.game_world_entity().by_cell().filter(key);
+    let entities = entities
+        .filter(|entity| {
+            all || viewer.sees_entity(entity, crate::spell::is_stealthed(ctx, entity.guid))
+        })
+        .map(|entity| (WORLD_ENTITY, entity.guid));
+    let objects = ctx.db.game_gameobject().by_cell().filter(key);
+    let corpses = ctx.db.game_corpse().by_cell().filter(key);
+    let dynamic = ctx.db.game_dynamic_object().by_cell().filter(key);
+    entities
+        .chain(objects.map(|object| (GAME_OBJECT, object.guid)))
+        .chain(corpses.map(|corpse| (CORPSE, corpse.guid)))
+        .chain(dynamic.map(|object| (DYNAMIC_OBJECT, object.guid)))
+        .collect()
+}
+
+/// A cell move changes only the subjects in cells that enter or leave the AOI.
+fn shift_viewer(ctx: &ReducerContext, from: &AoiViewer, to: &AoiViewer) {
+    let grants = ctx.db.game_aoi_grant();
+    let find = |layer: u8, guid: u64| grants.by_viewer().filter((to.guid, layer, guid)).next();
+    for cell in cells(from.cell).filter(|&cell| !to.contains(to.map_id, to.instance_id, cell)) {
+        for (layer, guid) in subjects_in(ctx, from, cell, true) {
+            if let Some(grant) = find(layer, guid) {
+                grants.id().delete(grant.id);
+                crate::native::grant_removed(ctx, &grant);
             }
         }
-        for object in
-            ctx.db
-                .game_gameobject()
-                .by_cell()
-                .filter((viewer.map_id, viewer.instance_id, cell))
-        {
-            wanted.insert((GAME_OBJECT, object.guid));
-        }
-        for corpse in
-            ctx.db
-                .game_corpse()
-                .by_cell()
-                .filter((viewer.map_id, viewer.instance_id, cell))
-        {
-            wanted.insert((CORPSE, corpse.guid));
-        }
-        for object in
-            ctx.db
-                .game_dynamic_object()
-                .by_cell()
-                .filter((viewer.map_id, viewer.instance_id, cell))
-        {
-            wanted.insert((DYNAMIC_OBJECT, object.guid));
+    }
+    for cell in cells(to.cell).filter(|&cell| !from.contains(from.map_id, from.instance_id, cell)) {
+        for (layer, entity_guid) in subjects_in(ctx, to, cell, false) {
+            if find(layer, entity_guid).is_none() {
+                let grant = grants.insert(AoiGrant {
+                    id: 0,
+                    viewer_guid: to.guid,
+                    layer,
+                    entity_guid,
+                });
+                crate::native::grant_added(ctx, &grant, false);
+            }
         }
     }
+}
+
+fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
+    let mut wanted: BTreeSet<_> = cells(viewer.cell)
+        .flat_map(|cell| subjects_in(ctx, viewer, cell, false))
+        .collect();
     for transport in crate::transport::visible_on(ctx, viewer.map_id, viewer.instance_id) {
         wanted.insert((TRANSPORT, transport));
     }
@@ -284,15 +304,17 @@ fn replace_subject(
             crate::native::grant_removed(ctx, &grant);
         }
     }
-    for viewer_guid in wanted {
-        let grant = grants.insert(AoiGrant {
-            id: 0,
-            viewer_guid,
-            layer,
-            entity_guid,
-        });
-        crate::native::grant_added(ctx, &grant, newly_added);
-    }
+    crate::native::with_shared_creates(|| {
+        for viewer_guid in wanted {
+            let grant = grants.insert(AoiGrant {
+                id: 0,
+                viewer_guid,
+                layer,
+                entity_guid,
+            });
+            crate::native::grant_added(ctx, &grant, newly_added);
+        }
+    });
 }
 
 /// Every viewer in the open world of `map_id`, and each of `aboard`, holds the Transport's Grant.
