@@ -4,11 +4,19 @@ use std::time::Duration;
 
 use support::{module_bytes, poll_until, Standalone};
 
+// `st_module` stores the database identity as a u256, which SQL prints in decimal.
 fn identity(shard: &Standalone, database: &str) -> String {
     let rows = shard.query_database_rows(database, "SELECT database_identity FROM st_module");
-    let hex = rows[0]["database_identity"]
-        .trim_start_matches("0x")
-        .to_owned();
+    let mut limbs = [0u64; 4];
+    for digit in rows[0]["database_identity"].bytes() {
+        let mut carry = u128::from(digit - b'0');
+        for limb in limbs.iter_mut().rev() {
+            let wide = u128::from(*limb) * 10 + carry;
+            *limb = wide as u64;
+            carry = wide >> 64;
+        }
+    }
+    let hex: String = limbs.iter().map(|limb| format!("{limb:016x}")).collect();
     format!(r#"{{"__identity__":"0x{hex}"}}"#)
 }
 
