@@ -380,6 +380,9 @@ pub fn native_world_receive(
 }
 
 fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollback> {
+    crate::world::sample_packet();
+    let _total = crate::world::span("rx.total");
+    let prelude = crate::world::span("rx.prelude");
     let connection_id = connection_id(ctx)?;
     let connection = ctx
         .db
@@ -429,7 +432,9 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
     {
         return Ok(());
     }
+    drop(prelude);
     if !matches!(connection.state, NativeWorldState::AwaitingProof) {
+        let _unavailable = crate::world::span("rx.unavailable");
         if let Some(packets) =
             unavailable::raw_responses(opcode, &body).map_err(|error| error.to_string())?
         {
@@ -459,6 +464,7 @@ fn receive(ctx: &ReducerContext, opcode: u32, body: Vec<u8>) -> Result<(), Rollb
         }
         NativeWorldState::CharacterSelection { account_id } => {
             if opcode == 0x003d {
+                let _login = crate::creatures::PassTimer::start("rx.login");
                 return world::login(ctx, connection, &body);
             }
             let message = lyracore_protocol::world::decode(opcode, &body)

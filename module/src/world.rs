@@ -841,6 +841,21 @@ pub fn debug_delete_character(ctx: &ReducerContext, character_guid: u64) -> Resu
 
 static MOVEMENT_ENTRIES: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
 
+// Temporary profiling: time the steps of one received packet in 64.
+static RX_PACKETS: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+static RX_SAMPLED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
+
+pub(crate) fn sample_packet() {
+    let n = RX_PACKETS.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    RX_SAMPLED.store(n % 64 == 0, std::sync::atomic::Ordering::Relaxed);
+}
+
+pub(crate) fn span(name: &'static str) -> Option<crate::creatures::PassTimer> {
+    RX_SAMPLED
+        .load(std::sync::atomic::Ordering::Relaxed)
+        .then(|| crate::creatures::PassTimer::start(name))
+}
+
 pub(crate) const PERSIST_MAX_DRIFT_YD: f32 = 4.0;
 
 pub(crate) fn snapshot_needs_persist(
@@ -923,6 +938,8 @@ pub(crate) fn apply_movement_update(
     movement: &ClientMovement,
     relay_body: Vec<u8>,
 ) -> Result<(), String> {
+    let _total = span("mv.total");
+    let gates = span("mv.gates");
     let info = movement.info();
     let (x, y, z) = (info.position.x, info.position.y, info.position.z);
     let (o, move_time_ms) = (info.orientation, info.timestamp);
@@ -953,6 +970,8 @@ pub(crate) fn apply_movement_update(
         return Ok(());
     }
 
+    drop(gates);
+    let place = span("mv.place");
     let (old_x, old_y, old_z) = (mover.x, mover.y, mover.z);
     let (old_gx, old_gy) = (mover.grid_x, mover.grid_y);
     let old_move_ms = mover.last_move_ms;
@@ -982,7 +1001,11 @@ pub(crate) fn apply_movement_update(
         fall_lethal = lethal;
         crate::native::fall_damage(ctx, mover.guid, dmg);
     }
+    drop(place);
+    let explore = span("mv.explore");
     crossing.explore(ctx, &mut mover);
+    drop(explore);
+    let env = span("mv.env");
     if mover.is_player() && !mover.dead && (move_time_ms / 1000 != old_move_ms / 1000) {
         let area = crate::terrain::area_at(ctx, mover.map_id, mover.x, mover.y);
         crate::rest::check_rest_state(ctx, &mut mover, area.as_ref());
@@ -1009,6 +1032,7 @@ pub(crate) fn apply_movement_update(
             lyracore_shared::env::is_in_deep_water(mover.z, deep_water_level, mover.movement_flags);
         crate::fatigue::update_fatigue_edge(ctx, &mover, in_deep_water);
     }
+    drop(env);
     let mount_indoor_due = mover.is_player()
         && mover.mount_display_id != 0
         && crate::mount::indoor_check_is_due(old_move_ms, move_time_ms);
@@ -1033,9 +1057,11 @@ pub(crate) fn apply_movement_update(
         &delta,
     );
 
+    let persist = span("mv.persist");
     if plan.persist_entity {
         mover.update(ctx);
     }
+    drop(persist);
     if plan.fall_lethal {
         crate::combat::kill_player(ctx, mover_guid, mover_guid);
     }
@@ -1045,6 +1071,7 @@ pub(crate) fn apply_movement_update(
         crate::mount::dismount(ctx, mover_guid);
     }
 
+    let breaks = span("mv.breaks");
     if plan.moved {
         crate::spell::break_channel(ctx, mover_guid);
     }
@@ -1053,9 +1080,13 @@ pub(crate) fn apply_movement_update(
         crate::spell::break_auras_on_move(ctx, mover_guid);
     }
 
+    drop(breaks);
+    let score = span("mv.score");
     if plan.moved && boarding == crate::transport::Boarding::Ashore {
         score_and_log_movement(ctx, mover_guid, &delta);
     }
+    drop(score);
+    let _relay = span("mv.relay");
 
     if plan.relay_motion {
         crate::motion::queue_motion(

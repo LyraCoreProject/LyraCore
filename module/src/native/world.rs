@@ -267,6 +267,7 @@ pub(super) fn receive(
     opcode: u32,
     body: &[u8],
 ) -> Result<(), Rollback> {
+    let session = crate::world::span("rx.session");
     let player = ctx
         .db
         .game_native_player()
@@ -275,6 +276,7 @@ pub(super) fn receive(
         .filter(|player| player.character_guid == guid)
         .ok_or("native World Session is no longer current")?;
     let player = super::teleport::expire(ctx, player)?;
+    drop(session);
     if matches!(opcode, 0x00c7 | 0x00dc) {
         return Ok(super::teleport::acknowledge(
             ctx, connection, player, opcode, body,
@@ -294,6 +296,7 @@ pub(super) fn receive(
         }
     }
     if lyracore_shared::opcodes::movement::is_slice_move(opcode) {
+        let decode = crate::world::span("rx.move_decode");
         let movement = codec::ClientMovement::decode(body).map_err(|error| error.to_string())?;
         let entity = ctx
             .db
@@ -301,6 +304,7 @@ pub(super) fn receive(
             .guid()
             .find(guid)
             .ok_or("Character is not in the world")?;
+        drop(decode);
         return Ok(crate::world::apply_movement_update(
             ctx,
             entity,

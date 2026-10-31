@@ -29,6 +29,7 @@ pub(crate) use ai::{
 };
 #[cfg(test)]
 pub(crate) use ai::{MOVE_TICK_SECS, SENSE_EVERY_N_TICKS};
+pub(crate) use cycle::PassTimer;
 pub(crate) use eventai::{
     begin_death_dispatch, cancel_relay_runs_for_instance, cancel_relay_runs_for_new_life,
     cancel_relay_runs_for_source, creature_ai_on_aggro, creature_ai_on_creature_death,
