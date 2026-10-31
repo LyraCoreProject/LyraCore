@@ -45,7 +45,7 @@ entry in both files.
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#retired-terms) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#realm-topology) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -78,14 +78,20 @@ _Avoid_: game server, map server
 
 **Character directory**:
 The Realm Shard's record of each Character guid, Account id and owning World Shard. World Shards
-send changes over IDC on creation and deletion. Login and deletion use this record; Character
-lists ask each World Shard that holds Characters of the Account.
+send changes over IDC on creation, deletion and Transfer. Login and deletion use this record;
+Character lists ask each World Shard that holds Characters of the Account.
 
 **Peer Shard**:
 Another Shard of the same Realm, listed in `game_peer_shard`. Only a Peer Shard may call this
 Shard's `idc_` reducers. The Operator lists each pair of Shards on each other; a hello between
 them confirms the pair.
 _Avoid_: remote database, sibling Shard
+
+**Transfer**:
+Moving a Character's durable state between World Shards of one Realm. Escrow fences the source
+until the target import commits, then the source copy is deleted. The Character directory moves
+before the target is released. A native teleport hands the World Session over by Handoff behind
+the loading screen. See [Character Transfer](docs/character-transfer.md).
 
 **World Source**:
 The external world database an Operator supplies to an import. vmangos owns the source identifiers,
@@ -1294,8 +1300,6 @@ the names. [Migrating to the Native Host](docs/migrating-to-native-host.md) cove
 **Realm-core**: retired. The Shard for Realm-wide state. A native Realm keeps that state in its one Shard. `module/src/realm_core.rs` keeps its tables and reducers. _Avoid_ in new text.
 
 **Roster Revision Relay**: retired. The Gateway's push of a Realm-core roster to World Shard mirrors. `sync_group_mirror` remains. _Avoid_ in new text.
-
-**Transfer**: retired. Moving a Character's state from one Shard to another. `module/src/transfer/` remains, and gameplay still asks `transfer::is_in_transit` before it acts on a Character. _Avoid_ outside that module and `docs/character-transfer.md`.
 
 **Transfer Intent**: retired. A row a Package wrote to ask the Gateway to Transfer a sessionless Character. Character Relocation replaced it. _Avoid_ in new text.
 

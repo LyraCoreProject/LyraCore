@@ -643,8 +643,8 @@ pub(crate) trait ReapSink: FinishSink {
     fn escrows(&self) -> Vec<(u64, u64, i64, bool)>;
 }
 
-struct CtxShard<'a> {
-    ctx: &'a ReducerContext,
+pub(crate) struct CtxShard<'a> {
+    pub(crate) ctx: &'a ReducerContext,
 }
 
 impl ShardLedger for CtxShard<'_> {
@@ -1375,6 +1375,15 @@ pub fn release_bot_transfer_arrival(
         return Ok(());
     }
     apply_release(&mut CtxShard { ctx }, transfer_id)
+}
+
+/// Call only after IDC reports that the destination transaction rolled back.
+pub(crate) fn apply_abort<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> Result<(), String> {
+    if sink.in_row(transfer_id).is_some() {
+        return Err("an imported Transfer can only finish".into());
+    }
+    sink.delete_out_row(transfer_id);
+    Ok(())
 }
 
 pub(crate) fn apply_release<S: ShardLedger>(sink: &mut S, transfer_id: u64) -> Result<(), String> {

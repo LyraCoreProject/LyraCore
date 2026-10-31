@@ -201,11 +201,14 @@ impl Standalone {
         let port = listener.local_addr().unwrap().port();
         drop(listener);
 
+        // Tests of one file share a name and a process, and two can start in the same nanosecond.
+        static STARTED: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
         let nonce = SystemTime::now()
             .duration_since(UNIX_EPOCH)
             .unwrap()
             .as_nanos();
-        let name = format!("{test_name}-{}-{nonce}", std::process::id());
+        let sequence = STARTED.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let name = format!("{test_name}-{}-{nonce}-{sequence}", std::process::id());
         let data_dir = std::env::temp_dir().join(format!("lyracore-{name}"));
         fs::create_dir(&data_dir).expect("failed to create standalone data directory");
         share_compile_cache(&data_dir);

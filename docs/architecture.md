@@ -368,8 +368,8 @@ Without any role, a Shard still holds the whole Realm, including Argus.
 For two continents, the Operator lists each World Shard and the Realm Shard as Peer Shards of each
 other with `operator_add_peer_shard`, then sets their roles with `operator_set_shard_role`.
 `operator_set_map_owner(map_id, world)` assigns map 0 to the Eastern Kingdoms World Shard and map 1
-to the Kalimdor World Shard on the Realm Shard. The Operator repeats each assignment on its owning
-World Shard, using that World Shard's own identity. A map has one owner, and reassignment is refused.
+to the Kalimdor World Shard on the Realm Shard. The Operator repeats both assignments on each
+World Shard and lists the World Shards as Peer Shards of each other. A map has one owner, and reassignment is refused.
 Once a World Shard has explicit assignments, creation and world entry refuse maps it does not own.
 Existing Characters must already be on their owning World Shard before enabling assignments.
 
@@ -385,8 +385,9 @@ and can be repeated to refresh the directory. Assigning a map on a World Shard a
 Characters after the Realm Shard has its map assignments. Directory versions retain delete tombstones
 so late answers cannot restore deleted entries. Successful selection replies also apply their directory
 changes before the client receives the packet. The version and owner live apart from Character-owned
-state, so a future Transfer arrival can update routing without importing gameplay state into the
-Realm Shard. Changing a directory owner requires that future Transfer protocol.
+state. A Transfer changes the owner only through an update from the current World Shard with a
+newer revision. World Shards carry a directory clock across each Transfer, so late updates cannot
+undo a round trip.
 
 A Character-list request asks each World Shard named by the Account's directory entries. With
 explicit map assignments and no Characters, it sends an empty list directly. An existing one-World
@@ -403,10 +404,21 @@ Shard records which World Shard holds the away World Session, so changed Account
 to that Shard. The Handoff row retains the Character guid for arrival. The Login Queue counts only
 World Sessions on the Realm Shard.
 
-Groups, guilds, whispers, who, friends, mail and auctions stay per World Shard. Cross-map Character
-Transfer between continents is not implemented here. Teleports and home recall do not move a
-Character to an unowned map. A cross-map teleport does not select another World Shard. That requires
-a separate change to movement, Transfer arrival and the Character directory.
+A cross-map teleport to a Peer World Shard starts a Character Transfer when the client acknowledges
+its world port. The source leaves the world and sends one manifest batch over IDC while both copies
+stay fenced by Escrow. A successful import permits the source finish cascade. The Realm Shard then
+moves the Character directory entry and the away World Session together. The target releases its
+arrival fence before the source writes the Handoff marker. Adoption enters with WorldPort and the
+saved teleport counter, on the same connection. A refused import restores the source position and
+closes the World Session. See [Character Transfer](character-transfer.md) for crash recovery.
+
+Groups, guilds, whispers, who, friends, mail and auctions stay per World Shard; interactions across
+World Shards remain unsupported. A Transfer carries the existing Character-owned manifest, not
+Shard-owned social or economic state. Casts in progress are cancelled; melee, threat, AOI Grants,
+Transport attachment and other omitted transient state do not survive. World departure also applies
+the existing logout cleanup, including buyback cleanup and pet despawn. A Shard without a role or
+map assignments retains its local teleport behavior. Sessionless relocation to an unowned map is
+still refused.
 
 Packages compile into the same Module and have its privileges. `module/build.rs` discovers their
 source and registry markers. The supported operations and compatibility rules are in

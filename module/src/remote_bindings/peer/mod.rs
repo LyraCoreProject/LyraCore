@@ -303,6 +303,1116 @@ impl spacetimedb::rt::RemoteReducer for idc_character_directory {
 
 #[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
 #[sats(crate = __lib)]
+pub struct IdcNativeTransferArgs {
+    pub realm: Identity,
+    pub transfer_id: ::core::primitive::u64,
+    pub connection: ::core::primitive::u128,
+    pub server_seed: ::core::primitive::u32,
+    pub account: ::std::vec::Vec<::core::primitive::u8>,
+    pub session: ::std::vec::Vec<::core::primitive::u8>,
+    pub client_seed: ::core::primitive::u32,
+    pub client_proof: ::std::vec::Vec<::core::primitive::u8>,
+    pub character_guid: ::core::primitive::u64,
+    pub teleport_counter: ::core::primitive::u32,
+    pub blob: ::std::vec::Vec<::core::primitive::u8>,
+    pub revision: ::core::primitive::u64,
+    pub origin: ::std::vec::Vec<::core::primitive::u8>,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_realm_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as realm), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(realm),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_realm_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_realm_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_realm {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(realm),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as realm), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: $module::Identity = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_realm_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_realm!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_realm;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_connection_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_connection_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_connection_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_connection {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u128 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_connection_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_connection!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_connection;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_server_seed_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as server_seed), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(server_seed),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_server_seed_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_server_seed_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_server_seed {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(server_seed),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as server_seed), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u32 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_server_seed_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_server_seed!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_server_seed;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_account_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as account), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(account),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_account_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_account_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_account {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(account),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as account), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_account_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_account!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_account;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_session_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as session), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(session),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_session_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_session_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_session {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(session),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as session), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_session_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_session!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_session;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_client_seed_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as client_seed), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(client_seed),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_seed_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_client_seed_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_client_seed {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(client_seed),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as client_seed), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u32 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_seed_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_seed!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_client_seed;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_client_proof_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as client_proof), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(client_proof),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_proof_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_client_proof_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_client_proof {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(client_proof),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as client_proof), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_proof_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_client_proof!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_client_proof;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_character_guid_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_character_guid_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_character_guid_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_character_guid {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_character_guid_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_character_guid!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_character_guid;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as teleport_counter), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(teleport_counter),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(teleport_counter),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as teleport_counter), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u32 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_blob_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as blob), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(blob),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_blob_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_blob_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_blob {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(blob),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as blob), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_blob_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_blob!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_blob;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_revision_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as revision), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(revision),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_revision_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_revision_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_revision {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(revision),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as revision), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_revision_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_revision!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_revision;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_origin_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as origin), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(origin),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_origin_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_origin_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_origin {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(origin),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as origin), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::std::vec::Vec::<::core::primitive::u8> = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_origin_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_origin!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_origin;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_realm!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_transfer_id!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_connection!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_server_seed!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_account!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_session!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_client_seed!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_client_proof!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_character_guid!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_teleport_counter!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_blob!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_revision!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_origin!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer;
+
+#[allow(non_camel_case_types)]
+pub struct idc_native_transfer;
+
+impl spacetimedb::rt::RemoteReducer for idc_native_transfer {
+    const NAME: &'static str = "idc_native_transfer";
+    const SIGNATURE_HASH: &'static str =
+        "aefd2e18589d8f66b2211683730cfdb97a8993948d8dcf6bda06fcb9c81b8cae";
+    type Args = IdcNativeTransferArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub struct IdcNativeTransferMovedArgs {
+    pub world: Identity,
+    pub transfer_id: ::core::primitive::u64,
+    pub character_guid: ::core::primitive::u64,
+    pub account_id: ::core::primitive::u64,
+    pub connection: ::core::primitive::u128,
+    pub revision: ::core::primitive::u64,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_world_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as world), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(world),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_world_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_world_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_world {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(world),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as world), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: $module::Identity = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_world_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_world!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_world;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as account_id), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(account_id),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(account_id),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as account_id), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u128 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as revision), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(revision),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(revision),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as revision), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_moved {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_world!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_transfer_id!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_character_guid!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_account_id!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_connection!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_moved_revision!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_moved;
+
+#[allow(non_camel_case_types)]
+pub struct idc_native_transfer_moved;
+
+impl spacetimedb::rt::RemoteReducer for idc_native_transfer_moved {
+    const NAME: &'static str = "idc_native_transfer_moved";
+    const SIGNATURE_HASH: &'static str =
+        "54b231aa948d81cdaa59603c648b700d4f1d4e0c59c2038151f80dcead6c1ced";
+    type Args = IdcNativeTransferMovedArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
+pub struct IdcNativeTransferReleaseArgs {
+    pub realm: Identity,
+    pub transfer_id: ::core::primitive::u64,
+    pub character_guid: ::core::primitive::u64,
+    pub connection: ::core::primitive::u128,
+    pub connected: ::core::primitive::bool,
+}
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_realm_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as realm), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(realm),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_realm_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_realm_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_realm {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(realm),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as realm), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: $module::Identity = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_realm_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_realm!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_realm;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(transfer_id),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as transfer_id), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(character_guid),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as character_guid), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u64 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_connection_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connection_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_connection_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_connection {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connection),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connection), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::u128 = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connection_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connection!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_connection;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_connected_reject_duplicate {
+    ($module:ident;) => {};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connected), $($rest:tt)*) => {
+        compile_error!(concat!(
+            "outbox has multiple columns matching remote reducer parameter `",
+            stringify!(connected),
+            "`"
+        ));
+    };
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connected_reject_duplicate!($module; $($rest)*);
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_connected_reject_duplicate;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release_connected {
+    ($module:ident;) => {{
+        compile_error!(concat!(
+            "outbox has no column matching remote reducer parameter `",
+            stringify!(connected),
+            "`"
+        ));
+        0u16
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as connected), $($rest:tt)*) => {{
+        let _ = |x: $ty| { let _: ::core::primitive::bool = x; };
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connected_reject_duplicate!($module; $($rest)*);
+        $index
+    }};
+    ($module:ident; ($index:literal, $field:ident : $ty:ty as $other:ident), $($rest:tt)*) => {
+        $module::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connected!($module; $($rest)*)
+    };
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release_connected;
+
+#[doc(hidden)]
+macro_rules! __spacetimedb_typecheck_outbox_idc_native_transfer_release {
+    ($module:path, { $($columns:tt)* }) => {{
+        #[allow(unused_imports)]
+        use $module as __outbox_receiver;
+        &[__outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_release_realm!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_release_transfer_id!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_release_character_guid!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connection!(__outbox_receiver; $($columns)*),
+            __outbox_receiver::__spacetimedb_typecheck_outbox_idc_native_transfer_release_connected!(__outbox_receiver; $($columns)*)]
+    }};
+}
+
+#[doc(hidden)]
+pub(crate) use __spacetimedb_typecheck_outbox_idc_native_transfer_release;
+
+#[allow(non_camel_case_types)]
+pub struct idc_native_transfer_release;
+
+impl spacetimedb::rt::RemoteReducer for idc_native_transfer_release {
+    const NAME: &'static str = "idc_native_transfer_release";
+    const SIGNATURE_HASH: &'static str =
+        "8eae8c1ccd524432a2a7664d608f7b1a425ff3b34f7e4249c75f9b329885078b";
+    type Args = IdcNativeTransferReleaseArgs;
+}
+
+#[derive(__lib::ser::Serialize, __lib::de::Deserialize, Clone, PartialEq, Debug)]
+#[sats(crate = __lib)]
 pub struct IdcPeerHelloArgs {}
 
 #[doc(hidden)]
