@@ -7,7 +7,11 @@ const OPEN: &[&str] = &["claim_operator"];
 
 const OPEN_PREFIX: &str = "debug_";
 
-const GATE_REFUSALS: &[&str] = &["operator only", "loot:boundary_operator_rejected"];
+const GATE_REFUSALS: &[&str] = &[
+    "operator only",
+    "loot:boundary_operator_rejected",
+    "caller is not a Peer Shard",
+];
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
@@ -78,7 +82,10 @@ fn operator_reducers(schema: &Value) -> Vec<(String, Vec<String>)> {
         .iter()
         .filter_map(|reducer| {
             let name = reducer["source_name"].as_str().expect("reducer name");
-            let open = OPEN.contains(&name)
+            // Outbox result callbacks are private; no client can call them.
+            let callable = reducer["visibility"].get("ClientCallable").is_some();
+            let open = !callable
+                || OPEN.contains(&name)
                 || name.starts_with(OPEN_PREFIX)
                 || scheduled.contains(&name)
                 || lifecycle.contains(&name);
