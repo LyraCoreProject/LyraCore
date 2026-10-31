@@ -165,6 +165,22 @@ pub(super) fn item(ctx: &ReducerContext, item: &crate::ItemInstance) -> codec::I
             .map_or(item.durability, |t| t.max_durability),
         container_slots: template.map_or(0, |t| t.container_slots),
         random_property_enchant_ids: enchantments,
+        temporary_enchantment: temporary_enchantment(ctx, item.guid),
+    }
+}
+
+fn temporary_enchantment(ctx: &ReducerContext, item_guid: u64) -> codec::TemporaryEnchantmentView {
+    let Some(row) = crate::items::temporary_enchantment(ctx, item_guid) else {
+        return codec::TemporaryEnchantmentView::default();
+    };
+    let left_micros = row
+        .expires_at
+        .to_micros_since_unix_epoch()
+        .saturating_sub(crate::time::now(ctx).to_micros_since_unix_epoch());
+    codec::TemporaryEnchantmentView {
+        enchantment: row.enchant_id,
+        duration_ms: (left_micros / 1000).clamp(0, i64::from(u32::MAX)) as u32,
+        charges: row.charges,
     }
 }
 

@@ -26,6 +26,7 @@ pub fn instant_effect_to_kind(effect_id: i32) -> u8 {
         94 => E_SELF_RESURRECT,
         18 | 113 => E_RESURRECT,
         19 => E_ADD_EXTRA_ATTACKS,
+        54 => E_ENCHANT_ITEM_TEMPORARY,
         _ => E_SCRIPTED,
     }
 }

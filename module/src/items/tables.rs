@@ -188,6 +188,7 @@ impl ItemInstance {
         let items = ctx.db.game_item_instance();
         let previous = items.guid().find(guid);
         let removed = items.guid().delete(guid);
+        super::forget_temporary_enchantment(ctx, guid);
         if let Some(row) = previous {
             crate::native::item_changed(ctx, Some(&row), None, false);
         }

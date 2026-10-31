@@ -129,6 +129,15 @@ Extra attacks need effect 19 imported as `E_ADD_EXTRA_ATTACKS`. Older spell rows
 `E_SCRIPTED`, so Hand of Justice, Ironfoe and Sword Specialization grant nothing until you reimport
 the `spell` family. The new `game_extra_attack` table starts empty and needs no repair.
 
+### Temporary enchantment migration
+
+Poisons, sharpening stones, weapon oils and shaman weapon spells need effect 54 imported as
+`E_ENCHANT_ITEM_TEMPORARY`. Older spell rows keep it as `E_SCRIPTED`, so these items and spells
+put nothing on the weapon until you reimport the `spell` family. Poisons have no charges until you
+also reimport the `spellmeta` family, and a poison proc needs the combat-spell enchantment rows from
+an `items` reimport with `--dbc`. The new `game_temporary_enchantment` table starts empty and needs
+no repair.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

@@ -172,8 +172,28 @@ pub(super) fn enter_character(
         )?,
     }
     super::environment::enter_zone(ctx, connection.connection_id, entity.map_id, entity.zone_id);
-    for (opcode, body) in items.iter().filter_map(codec::build_random_property_values) {
+    for (opcode, body) in items
+        .iter()
+        .filter_map(codec::build_enchantment_slot_values)
+    {
         super::send_raw(ctx, connection.connection_id, opcode, body, false);
+    }
+    for item in items
+        .iter()
+        .filter(|item| item.temporary_enchantment.enchantment != 0)
+    {
+        super::send(
+            ctx,
+            connection.connection_id,
+            ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(Box::new(
+                codec::build_item_enchant_time_update(
+                    item.guid,
+                    item.owner_guid,
+                    item.temporary_enchantment.duration_ms / 1000,
+                ),
+            )),
+            false,
+        )?;
     }
     for item in &items {
         if let Some((bag_slot, position)) = codec::bag_content_parts(item.slot) {

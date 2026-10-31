@@ -496,6 +496,16 @@ pub(crate) fn apply_item_use(
     player_guid: u64,
     slot: u8,
 ) -> Result<(), ItemRefusal> {
+    apply_item_use_on(ctx, player_guid, slot, None)
+}
+
+/// Uses an item at another of the user's items, such as a poison at a weapon.
+pub(crate) fn apply_item_use_on(
+    ctx: &ReducerContext,
+    player_guid: u64,
+    slot: u8,
+    item_target: Option<u64>,
+) -> Result<(), ItemRefusal> {
     let entities = ctx.db.game_world_entity();
     let player = entities
         .guid()
@@ -564,15 +574,25 @@ pub(crate) fn apply_item_use(
             crate::ItemInstance::delete(ctx, inst.guid);
         }
     }
-    crate::spell::begin_cast(
-        ctx,
-        player_guid,
-        spell_id,
-        player.level as u8,
-        player_guid,
-        false,
-        None,
-    )
+    match item_target {
+        Some(item_guid) => crate::spell::begin_item_cast(
+            ctx,
+            player_guid,
+            spell_id,
+            player.level as u8,
+            item_guid,
+            false,
+        ),
+        None => crate::spell::begin_cast(
+            ctx,
+            player_guid,
+            spell_id,
+            player.level as u8,
+            player_guid,
+            false,
+            None,
+        ),
+    }
     .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 
@@ -624,14 +644,22 @@ fn item_stat_bonus_for_school(
     which: EquipStat,
     school_mask: u32,
 ) -> i32 {
+    let temporary = super::temporary_enchant_id(ctx, item.guid);
     let (enchant, property) = if school_mask == u32::MAX {
         (
-            super::enchant_stat(ctx, item.enchant_id, which.kind()),
+            super::enchant_stat(ctx, item.enchant_id, which.kind())
+                .saturating_add(super::enchant_stat(ctx, temporary, which.kind())),
             super::property_stat(ctx, item.random_property_id, which.kind()),
         )
     } else {
         (
-            super::enchant_stat_for_school(ctx, item.enchant_id, which.kind(), school_mask),
+            super::enchant_stat_for_school(ctx, item.enchant_id, which.kind(), school_mask)
+                .saturating_add(super::enchant_stat_for_school(
+                    ctx,
+                    temporary,
+                    which.kind(),
+                    school_mask,
+                )),
             super::property_stat_for_school(
                 ctx,
                 item.random_property_id,

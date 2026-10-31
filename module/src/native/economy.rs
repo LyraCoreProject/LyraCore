@@ -153,7 +153,7 @@ fn send_buyback(
                 ))),
                 false,
             )?;
-            if let Some((opcode, body)) = codec::build_random_property_values(&view) {
+            if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
                 super::send_raw(ctx, connection, opcode, body, false);
             }
             (item_guid, row.price)

@@ -27,6 +27,7 @@ pub(crate) fn fire_pending_cast(ctx: &ReducerContext, sched: PendingCast) {
                 sched
                     .has_dest
                     .then_some((sched.dest_x, sched.dest_y, sched.dest_z)),
+                (sched.item_target_guid != 0).then_some(sched.item_target_guid),
             )
         });
     clear_dead_callback_cast_admission(ctx, sched.caster_guid, sched.spell_id);

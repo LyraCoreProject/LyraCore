@@ -4,6 +4,7 @@ use lyracore_shared::spell_custom as custom;
 
 use spacetimedb::{log, ReducerContext, Table, TimeDuration, Timestamp};
 
+use crate::items::game_item_instance;
 use crate::{game_character, game_creature_template, game_world_entity};
 
 use crate::spell::*;
@@ -202,6 +203,35 @@ pub(crate) fn select_targets(
             vec![one]
         }
     }
+}
+
+fn enchant_item_temporarily(
+    ctx: &ReducerContext,
+    e: &SpellEffect,
+    caster_guid: u64,
+    item_target: Option<u64>,
+    seconds: i32,
+) {
+    let Some(item) = item_target
+        .and_then(|guid| ctx.db.game_item_instance().guid().find(guid))
+        .filter(|item| item.owner_guid == caster_guid)
+    else {
+        log::info!(
+            "spell {} temporary enchantment has no item target",
+            e.spell_id
+        );
+        return;
+    };
+    let enchant_id = e.p0.max(0) as u32;
+    if !crate::items::is_known_enchant(ctx, enchant_id) {
+        log::info!(
+            "spell {} names unknown temporary enchantment {enchant_id}",
+            e.spell_id
+        );
+        return;
+    }
+    let duration_ms = u32::try_from(seconds).unwrap_or(0).saturating_mul(1000);
+    crate::items::enchant_item_temporarily(ctx, &item, e.spell_id, enchant_id, duration_ms);
 }
 
 fn next_stacks(current: u8, max_stacks: u8) -> u8 {
@@ -598,6 +628,7 @@ pub(crate) fn apply_effect(
     dest: Option<(f32, f32, f32)>,
     triggered: bool,
     strike_crit: bool,
+    item_target: Option<u64>,
 ) -> EffectHit {
     use lyracore_shared::spell::taxonomy::EffectKind;
 
@@ -713,6 +744,10 @@ pub(crate) fn apply_effect(
             };
             let removed = dispel_target(ctx, target_guid, category);
             log::info!("dispel (cat {category}) on {target_guid} removed {removed} debuff(s)");
+            EffectHit::none()
+        }
+        EffectKind::EnchantItemTemporary => {
+            enchant_item_temporarily(ctx, e, caster_guid, item_target, points);
             EffectHit::none()
         }
         EffectKind::EnchantItem

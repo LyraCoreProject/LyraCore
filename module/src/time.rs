@@ -56,6 +56,8 @@ pub(crate) fn scheduler_authorized(ctx: &ReducerContext) -> bool {
 }
 
 #[cfg(feature = "conformance_test_fixture")]
+use crate::items::game_temporary_enchantment;
+#[cfg(feature = "conformance_test_fixture")]
 use crate::native::{
     game_native_admission_tick, game_native_logon_reaper, game_native_member_stats,
 };
@@ -161,6 +163,7 @@ macro_rules! schedule_tables {
         $macro!($ctx, 29, game_creature_ai_relay_arrival, scheduled_id, crate::creatures::resume_relay_arrival $(, $extra)*);
         $macro!($ctx, 30, game_creature_ai_summon_expiry, scheduled_id, crate::creatures::expire_eventai_summon $(, $extra)*);
         $macro!($ctx, 31, game_creature_ai_forced_despawn, scheduled_id, crate::creatures::fire_eventai_forced_despawn $(, $extra)*);
+        $macro!($ctx, 32, game_temporary_enchantment, scheduled_id, crate::items::expire_temporary_enchantment $(, $extra)*);
     };
 }
 

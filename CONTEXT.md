@@ -45,7 +45,7 @@ entry in both files.
 
 **S** [Script Answer](#runtime-scripts) · [Script Artifact](#packages) · [Script Diagnostic](#runtime-scripts) · [Script Directive](#packages) · [Script Identity](#packages) · [Seam](CORE_TERMS.md#seam) · [Seeker](#meeting-stones) · [Self-Resurrection Option](#death-and-resurrection) · [Service Reconciliation](#realm-topology) · [Session](CORE_TERMS.md#session) · [Session Expiry](#accounts-characters-and-sessions) · [SessionActor](#accounts-characters-and-sessions) · [Sessionless Action Consent](#bots) · [Settlement](#auctions) · [Shard](CORE_TERMS.md#shard) · [Signature](#guilds) · [Source Profile](#realm-topology) · [Soulstone](#death-and-resurrection) · [Spatial Claim](#packages) · [Speaker Facts](#chat) · [Spec](#working-method) · [Speech](#chat) · [Spell Cast Event Kind](#procs) · [Staged Effect](#runtime-scripts) · [Standalone Supervisor](#realm-topology) · [Stat Kind](#random-properties) · [Stone Add](#meeting-stones) · [Store](CORE_TERMS.md#store) · [Subgroup](#groups) · [Suffix](#random-properties) · [Swing Error](#procs)
 
-**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#retired-terms) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
+**T** [Tabard Designer](#guilds) · [Target Icon](#groups) · [Temporary Enchantment](#random-properties) · [Tier 1 baseline](#conformance) · [Trade Commit](#trading) · [Trade Session](#trading) · [Transfer](#retired-terms) · [Transfer Intent](#retired-terms) · [Transport](#transports) · [Transport Loss](CORE_TERMS.md#transport-loss) · [Triggered Cast](#procs) · [Trust Review](#packages)
 
 **U** [UI Transform](#client-content)
 
@@ -531,8 +531,8 @@ swung. A spell that carries `SPELL_ATTR_WEAPON_PROCS` rolls the main hand once p
 avoided and even as a Triggered Cast. A spell slot rolls its procs-per-minute rate at the weapon's
 speed, else the spell's proc chance. An enchantment rolls its `game_enchant_proc_rate`, else its
 own percent, else one proc per minute. The roll fires a Triggered Cast that rolls no further Chance
-on Hit, at the victim, or at the wielder for a helpful enchantment spell. No aura carries it, so it
-is not a Proc.
+on Hit, at the victim, or at the wielder for a helpful enchantment spell. A Temporary Enchantment
+with charges spends one per roll that fires. No aura carries it, so it is not a Proc.
 _Avoid_: item proc, on-hit spell
 
 **Extra Attack**:
@@ -1207,6 +1207,14 @@ _Avoid_: random property group, suffix group
 The name a Random Property adds to an item, such as "of the Bear". The Module keeps a copy for
 diagnosis. The client renders its own.
 _Avoid_: affix, postfix
+
+**Temporary Enchantment**:
+An enchantment that a poison, a sharpening stone, a weapon oil or a shaman weapon spell puts on one
+item for a set time, in the client's second enchantment slot. A new one replaces the old. Its stats
+and Chance on Hit count beside the permanent enchantment. Poisons carry charges, and the last one
+spent removes it early. `game_temporary_enchantment` holds it, keyed by item, and its schedule
+removes it at expiry. The time runs while the item is unequipped or its owner is offline.
+_Avoid_: temp enchant, coating, imbue
 
 **Stat Kind**:
 An append-only code for an enchantment effect's contribution, independent of the client encoding.

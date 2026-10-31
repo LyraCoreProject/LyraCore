@@ -6,6 +6,7 @@ mod ops;
 mod properties;
 mod rules;
 mod tables;
+mod temporary_enchantment;
 
 use lyracore_shared::item::ItemRefusal;
 
@@ -35,12 +36,12 @@ pub(crate) use inventory::{
     is_carried_slot, validate_bag_dest_slot,
 };
 pub(crate) use ops::{
-    apply_death_durability_loss, apply_item_use, apply_spirit_healer_durability_loss,
-    apply_take_loot, equipped_school_stat_bonus, equipped_stat_bonus, grant_item,
-    grant_item_property, grant_letter_item, grant_starter_item, has_free_slot, item_count,
-    item_stat_bonus, remove_items, request_grant_item, request_profile_item, request_take_loot,
-    resistance_items, store_instance_state, take_loot_item, ItemSnapshot, StoreRefusal,
-    TakeLootRefusal,
+    apply_death_durability_loss, apply_item_use, apply_item_use_on,
+    apply_spirit_healer_durability_loss, apply_take_loot, equipped_school_stat_bonus,
+    equipped_stat_bonus, grant_item, grant_item_property, grant_letter_item, grant_starter_item,
+    has_free_slot, item_count, item_stat_bonus, remove_items, request_grant_item,
+    request_profile_item, request_take_loot, resistance_items, store_instance_state,
+    take_loot_item, ItemSnapshot, StoreRefusal, TakeLootRefusal,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,
@@ -62,6 +63,13 @@ pub use tables::{
     ItemInstance, ItemTemplate, NpcVendor, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
 };
 pub(crate) use tables::{item_in_slot, item_is_broken};
+pub(crate) use temporary_enchantment::{
+    enchant_item_temporarily, forget_item as forget_temporary_enchantment,
+    spend_charge as spend_temporary_enchantment_charge, temporary_enchant_id,
+    temporary_enchantment,
+};
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use temporary_enchantment::{expire_temporary_enchantment, game_temporary_enchantment};
 
 pub(crate) use tables::{
     sweep_delete_game_character_buyback, sweep_delete_game_item_instance,

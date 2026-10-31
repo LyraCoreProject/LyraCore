@@ -29,14 +29,15 @@ use lyracore_shared::spell::taxonomy::{
     A_PROC_TRIGGER, A_SEAL, A_SELF_RESURRECT, A_SPELLMOD_FLAT, A_SPELLMOD_PCT, A_TRANSFORM,
     COMBAT_ATTACK_POWER, COMBAT_CRIT, COMBAT_DMG_DONE, COMBAT_DODGE, COMBAT_HIT,
     COMBAT_SPELL_POWER, COMBAT_THREAT, E_ADD_COMBO, E_ADD_EXTRA_ATTACKS, E_BLINK, E_CHARGE,
-    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL, E_ENERGIZE,
-    E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL, E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT,
-    E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA, E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME,
-    E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED, E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS,
-    E_SUMMON_HOSTILE, E_SUMMON_PET, E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR,
-    M_POLY, M_ROOT, M_STUN, P_COMBAT_FIELD, P_DISPLAY_ID, P_ENTRY, P_FLAG, P_FLAT_MANA,
-    P_GAMEOBJECT_ENTRY, P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW,
-    P_SCHOOL_MASK, P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
+    E_CONVERT_RESOURCE, E_CREATE_ITEM, E_DAMAGE, E_DISPEL, E_DISTRACT, E_DUEL,
+    E_ENCHANT_ITEM_TEMPORARY, E_ENERGIZE, E_FEED_PET, E_FINISHER_DAMAGE, E_FISH, E_HEAL,
+    E_HEAL_MAX_HEALTH, E_INTERRUPT, E_JUDGEMENT, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
+    E_PICKPOCKET, E_POWER_BURN, E_RECALL_HOME, E_REDUCE_THREAT, E_RESURRECT, E_SCRIPTED,
+    E_SELF_RESURRECT, E_SET_STANCE, E_SUMMON_GUARDIANS, E_SUMMON_HOSTILE, E_SUMMON_PET,
+    E_TAME_CREATURE, E_TAUNT, E_TRIGGER, E_WEAPON_STRIKE, M_FEAR, M_POLY, M_ROOT, M_STUN,
+    P_COMBAT_FIELD, P_DISPLAY_ID, P_ENCHANT_ID, P_ENTRY, P_FLAG, P_FLAT_MANA, P_GAMEOBJECT_ENTRY,
+    P_ITEM_ENTRY, P_MECHANIC, P_NONE, P_PCT_MAX_POWER, P_POWER_TYPE, P_RAW, P_SCHOOL_MASK,
+    P_SPEED_KIND, P_SPELLMOD_OP, P_SPELL_ID, P_STAT_ID, SPEED_MOUNTED, SPEED_MOVE,
     SPEED_MOVE_ALWAYS, SPEED_MOVE_NOT_STACK, SPEED_SWIM, SPELL_ATTR_CHANNELED,
     SPELL_ATTR_COMBO_FINISHER, SPELL_ATTR_INCAP_OPENER, SPELL_ATTR_PASSIVE,
     SPELL_ATTR_RANGED_AUTO_REPEAT, SPELL_ATTR_REQ_BEHIND, SPELL_ATTR_REQ_DAGGER,
@@ -190,6 +191,16 @@ const RECENTLY_BANDAGED: u32 = 11196;
 // EffectBasePoints stores the nominal integer amount minus one.
 fn dbc_flat_amount(raw: i32) -> i32 {
     raw + 1
+}
+
+// Poisons, lures and imbues leave the duration at zero, which vmangos would apply as one second.
+// Older mangos gives a rogue poison its 1.12 tooltip's 30 minutes and anything else an hour.
+fn unset_temporary_enchantment_seconds(family_name: u8) -> i32 {
+    if family_name == SPELL_FAMILY_ROGUE {
+        1800
+    } else {
+        3600
+    }
 }
 
 fn proc_header_fields(flags: u32, chance: u32, charges: u32) -> (u32, u8, u8) {
@@ -443,6 +454,7 @@ fn resolve_instant_params(kind: u8, misc: u32, item_type: i32) -> (i32, u8) {
         E_SUMMON_PET | E_SUMMON_GUARDIANS => (misc as i32, P_ENTRY),
         E_DUEL => (misc as i32, P_GAMEOBJECT_ENTRY),
         E_SELF_RESURRECT => (misc as i32, P_FLAT_MANA),
+        E_ENCHANT_ITEM_TEMPORARY => (misc as i32, P_ENCHANT_ID),
         _ => (0, P_NONE),
     }
 }
@@ -1195,7 +1207,11 @@ fn resolve_effect_kind(
         (p0, p0_kind)
     };
 
-    let base_points = dbc_flat_amount(s.effect_base_points[i]);
+    let base_points = if kind == E_ENCHANT_ITEM_TEMPORARY && s.effect_base_points[i] == 0 {
+        unset_temporary_enchantment_seconds(s.family_name as u8)
+    } else {
+        dbc_flat_amount(s.effect_base_points[i])
+    };
     // DBC dodge modifiers use percent; durable combat values use basis points.
     let base_points = if kind == A_MOD_COMBAT && p0 == i32::from(COMBAT_DODGE) {
         base_points * 100
@@ -1252,8 +1268,15 @@ fn resolve_effect_target(s: &Spell, i: usize, kind: u8, header: &SpellHeader) ->
         E_CHARGE | E_JUDGEMENT | E_PICKPOCKET | E_INTERRUPT | E_NEXT_SWING | E_TAUNT
         | E_TAME_CREATURE => T_TARGET_ENEMY,
         E_RESURRECT => T_TARGET_ALLY,
-        E_REDUCE_THREAT | E_BLINK | E_PERSISTENT_AREA | E_SUMMON_PET | E_SUMMON_HOSTILE
-        | E_SUMMON_GUARDIANS | E_SELF_RESURRECT | E_RECALL_HOME => T_SELF,
+        E_REDUCE_THREAT
+        | E_BLINK
+        | E_PERSISTENT_AREA
+        | E_SUMMON_PET
+        | E_SUMMON_HOSTILE
+        | E_SUMMON_GUARDIANS
+        | E_SELF_RESURRECT
+        | E_RECALL_HOME
+        | E_ENCHANT_ITEM_TEMPORARY => T_SELF,
         E_DUEL => T_TARGET_ANY,
         _ => target,
     };
@@ -1471,6 +1494,7 @@ fn kind_name(kind: u8) -> &'static str {
         E_SUMMON_PET => "E_SUMMON_PET",
         E_SUMMON_GUARDIANS => "E_SUMMON_GUARDIANS",
         E_ADD_EXTRA_ATTACKS => "E_ADD_EXTRA_ATTACKS",
+        E_ENCHANT_ITEM_TEMPORARY => "E_ENCHANT_ITEM_TEMPORARY",
         E_SUMMON_HOSTILE => "E_SUMMON_HOSTILE",
         E_DISTRACT => "E_DISTRACT",
         E_HEAL_MAX_HEALTH => "E_HEAL_MAX_HEALTH",
@@ -1780,6 +1804,44 @@ mod tests {
             ),
             (E_ADD_EXTRA_ATTACKS, 1, 1, T_SELF)
         );
+    }
+
+    fn temporary_enchantment_effect(update: &str) -> SpellEffectRow {
+        let source = crate::vmangos_spell::fixture();
+        let crate::world_source::WorldSource::Vmangos(connection) = &source else {
+            unreachable!()
+        };
+        connection.execute_batch(update).unwrap();
+        let mut tables = fixture_tables();
+        tables.spells = crate::vmangos_spell::read(&source).unwrap().0;
+        let (rows, _, _) = derive_spell_rows(&tables, &[], &[]).unwrap();
+        rows.effects.into_iter().next().unwrap()
+    }
+
+    #[test]
+    fn a_temporary_enchantment_carries_its_enchantment_and_duration_in_seconds() {
+        // Rockbiter Weapon 8017: enchantment 29 for 1799 + 1 seconds.
+        let effect = temporary_enchantment_effect("UPDATE spell_template SET effect1=54, effectApplyAuraName1=0, effectBasePoints1=1799, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=29, effectImplicitTargetA1=0, effectImplicitTargetB1=0, spellFamilyName=11, effect2=0 WHERE build=5875");
+        assert_eq!(
+            (
+                effect.kind,
+                effect.base_points,
+                effect.die_sides,
+                effect.p0,
+                effect.p0_kind,
+                effect.target
+            ),
+            (E_ENCHANT_ITEM_TEMPORARY, 1800, 1, 29, P_ENCHANT_ID, T_SELF)
+        );
+    }
+
+    #[test]
+    fn a_rogue_poison_without_a_duration_lasts_thirty_minutes_and_other_items_an_hour() {
+        // Instant Poison 8679 and Shiny Bauble 8087 leave effectBasePoints1 at zero.
+        let poison = temporary_enchantment_effect("UPDATE spell_template SET effect1=54, effectApplyAuraName1=0, effectBasePoints1=0, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=323, spellFamilyName=8, effect2=0 WHERE build=5875");
+        let lure = temporary_enchantment_effect("UPDATE spell_template SET effect1=54, effectApplyAuraName1=0, effectBasePoints1=0, effectBaseDice1=1, effectDieSides1=1, effectMiscValue1=263, spellFamilyName=0, effect2=0 WHERE build=5875");
+        assert_eq!((poison.base_points, poison.p0), (1800, 323));
+        assert_eq!((lure.base_points, lure.p0), (3600, 263));
     }
 
     #[test]
@@ -3161,6 +3223,7 @@ mod tests {
         assert_eq!(instant_effect_to_kind(3), E_SCRIPTED);
         assert_eq!(instant_effect_to_kind(115), E_SCRIPTED);
         assert_eq!(instant_effect_to_kind(19), E_ADD_EXTRA_ATTACKS);
+        assert_eq!(instant_effect_to_kind(54), E_ENCHANT_ITEM_TEMPORARY);
         assert_eq!(instant_effect_to_kind(112), E_SCRIPTED);
     }
 

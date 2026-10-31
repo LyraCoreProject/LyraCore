@@ -49,7 +49,11 @@ pub(crate) fn roll_chance_on_hit(
         return;
     };
     let spells = chance_on_hit_spells(&weapon);
-    let enchants = combat_spell_enchants(ctx, &item);
+    let enchants = combat_spell_enchants(
+        ctx,
+        &item,
+        crate::items::temporary_enchant_id(ctx, item.guid),
+    );
     if (spells.is_empty() && enchants.is_empty())
         || !holds_weapon(attacker.stance, slot, || {
             crate::spell::is_disarmed(ctx, attacker_guid)
@@ -71,11 +75,15 @@ pub(crate) fn roll_chance_on_hit(
         let chance_bp = chance_bp(spell.proc_chance, ppm, weapon.delay_ms);
         cast_on_roll(ctx, &attacker, spell_id, chance_bp, target_guid);
     }
-    for (enchant_id, spell_id, amount) in enchants {
-        let Some(spell) = known_spell(ctx, spell_id, || format!("enchantment {enchant_id}")) else {
+    for enchant in enchants {
+        let spell_id = enchant.spell_id;
+        let Some(spell) = known_spell(ctx, spell_id, || {
+            format!("enchantment {}", enchant.enchant_id)
+        }) else {
             continue;
         };
-        let chance_bp = enchant_chance_bp(enchant_rate(ctx, spell_id), amount, weapon.delay_ms);
+        let chance_bp =
+            enchant_chance_bp(enchant_rate(ctx, spell_id), enchant.amount, weapon.delay_ms);
         let effect_targets = ctx
             .db
             .game_spell_effect()
@@ -87,19 +95,23 @@ pub(crate) fn roll_chance_on_hit(
         } else {
             target_guid
         };
-        cast_on_roll(ctx, &attacker, spell_id, chance_bp, cast_target);
+        let fired = cast_on_roll(ctx, &attacker, spell_id, chance_bp, cast_target);
+        if fired && enchant.temporary {
+            crate::items::spend_temporary_enchantment_charge(ctx, item.guid);
+        }
     }
 }
 
+// Returns whether the roll fired, even when the cast itself fails.
 fn cast_on_roll(
     ctx: &ReducerContext,
     attacker: &crate::WorldEntity,
     spell_id: u32,
     chance_bp: u32,
     cast_target: u64,
-) {
+) -> bool {
     if ctx.random::<u32>() % BASIS_POINTS >= chance_bp {
-        return;
+        return false;
     }
     if let Err(err) = super::cast::resolve::cast_chance_on_hit(
         ctx,
@@ -110,6 +122,7 @@ fn cast_on_roll(
     ) {
         log::info!("chance on hit: could not cast {spell_id}: {err}");
     }
+    true
 }
 
 pub(crate) fn grants_extra_attacks(ctx: &ReducerContext, spell_id: u32) -> bool {
@@ -175,27 +188,49 @@ fn weapon_in_slot(
         .then_some((item, weapon))
 }
 
-// The permanent enchantment and the Random Property enchantments, as vmangos walks every slot.
-fn combat_spell_enchants(ctx: &ReducerContext, item: &ItemInstance) -> Vec<(u32, u32, i32)> {
+struct CombatSpellEnchant {
+    enchant_id: u32,
+    spell_id: u32,
+    amount: i32,
+    temporary: bool,
+}
+
+// The permanent, temporary and Random Property enchantments, as vmangos walks every slot.
+fn combat_spell_enchants(
+    ctx: &ReducerContext,
+    item: &ItemInstance,
+    temporary: u32,
+) -> Vec<CombatSpellEnchant> {
     let property = ctx
         .db
         .game_item_random_property()
         .property_id()
         .find(item.random_property_id);
-    let enchant_ids = [item.enchant_id]
+    let enchant_ids = [(item.enchant_id, false), (temporary, true)]
         .into_iter()
         .chain(property.into_iter().flat_map(|property| {
             [
-                property.enchant_id_1,
-                property.enchant_id_2,
-                property.enchant_id_3,
+                (property.enchant_id_1, false),
+                (property.enchant_id_2, false),
+                (property.enchant_id_3, false),
             ]
         }))
-        .filter(|&id| id != 0);
+        .filter(|&(id, _)| id != 0);
     enchant_ids
-        .flat_map(|id| ctx.db.game_item_enchantment().by_enchant().filter(id))
-        .filter(|effect| effect.kind == COMBAT_SPELL && effect.spell_id != 0)
-        .map(|effect| (effect.enchant_id, effect.spell_id, effect.amount))
+        .flat_map(|(id, temporary)| {
+            ctx.db
+                .game_item_enchantment()
+                .by_enchant()
+                .filter(id)
+                .map(move |effect| (effect, temporary))
+        })
+        .filter(|(effect, _)| effect.kind == COMBAT_SPELL && effect.spell_id != 0)
+        .map(|(effect, temporary)| CombatSpellEnchant {
+            enchant_id: effect.enchant_id,
+            spell_id: effect.spell_id,
+            amount: effect.amount,
+            temporary,
+        })
         .collect()
 }
 

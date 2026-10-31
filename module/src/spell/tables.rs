@@ -573,6 +573,9 @@ pub struct PendingCast {
     pub dest_y: f32,
     #[default(0.0)]
     pub dest_z: f32,
+    // Zero is no item target; item guids start above zero.
+    #[default(0u64)]
+    pub item_target_guid: u64,
 }
 
 #[table(accessor = game_pending_spell_impact, scheduled(fire_spell_impact))]

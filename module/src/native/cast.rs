@@ -7,8 +7,8 @@ use lyracore_protocol::{
     world::Packet,
 };
 use lyracore_shared::spell::taxonomy::{
-    E_DISENCHANT, E_ENCHANT_ITEM, E_FISH, E_NEXT_SWING, E_OPEN_LOCK, E_PERSISTENT_AREA,
-    SPELL_ATTR_RANGED_AUTO_REPEAT,
+    E_DISENCHANT, E_ENCHANT_ITEM, E_ENCHANT_ITEM_TEMPORARY, E_FISH, E_NEXT_SWING, E_OPEN_LOCK,
+    E_PERSISTENT_AREA, SPELL_ATTR_RANGED_AUTO_REPEAT,
 };
 use spacetimedb::{ConnectionId, ReducerContext};
 
@@ -67,6 +67,7 @@ fn cast_result(reason: CastRefusalReason) -> u8 {
         R::MountInCombat => code::AFFECTING_COMBAT,
         R::MountIndoors => code::ONLY_OUTDOORS,
         R::MountInDeepWater => code::ONLY_ABOVEWATER,
+        R::ItemGone => code::ITEM_GONE,
     }
 }
 
@@ -78,7 +79,11 @@ fn known(ctx: &ReducerContext, guid: u64, spell: u32) -> Result<(), Refusal> {
     }
 }
 
-fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Result<u8, Refusal> {
+fn item_target(
+    ctx: &ReducerContext,
+    guid: u64,
+    request: &CMSG_CAST_SPELL,
+) -> Result<crate::ItemInstance, Refusal> {
     let Some(ItemTarget::Item { item }) = request.targets.target_flags.get_item() else {
         return Err("cast requires an owned item target".into());
     };
@@ -87,8 +92,11 @@ fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Resu
         .guid()
         .find(item.guid())
         .filter(|item| item.owner_guid == guid)
-        .map(|item| item.slot)
         .ok_or_else(|| "item target is not in the Character's bag".into())
+}
+
+fn item_slot(ctx: &ReducerContext, guid: u64, request: &CMSG_CAST_SPELL) -> Result<u8, Refusal> {
+    item_target(ctx, guid, request).map(|item| item.slot)
 }
 
 pub(super) fn receive(
@@ -198,7 +206,22 @@ pub(super) fn receive(
                 crate::gameobject::apply_pick_lock(ctx, guid, object)
             }
             Route::Ordinary => {
-                if matches!(
+                if effects
+                    .iter()
+                    .any(|row| row.kind == E_ENCHANT_ITEM_TEMPORARY)
+                {
+                    let item = item_target(ctx, guid, request).map_err(|refusal| {
+                        CastGateRefusal::other(CastRefusalReason::ItemGone, String::from(refusal))
+                    })?;
+                    crate::spell::begin_item_cast(
+                        ctx,
+                        guid,
+                        spell,
+                        caster.level as u8,
+                        item.guid,
+                        true,
+                    )
+                } else if matches!(
                     request.targets.target_flags.get_item(),
                     Some(ItemTarget::Item { .. })
                 ) {
@@ -317,6 +340,7 @@ mod tests {
             (R::MountInCombat, 0x00),
             (R::MountIndoors, 0x55),
             (R::MountInDeepWater, 0x50),
+            (R::ItemGone, 0x26),
         ] {
             assert_eq!(cast_result(reason), code, "{reason:?}");
         }
