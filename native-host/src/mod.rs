@@ -1,18 +1,16 @@
 use crate::StandaloneEnv;
 use anyhow::{ensure, Context, Result};
-use spacetimedb::client::{
-    ClientActorId, ClientConfig, ClientConnection, ClientConnectionReceiver, Protocol, WsVersion,
-};
+use spacetimedb::client::{ClientActorId, ClientConfig, ClientConnection, Protocol, WsVersion};
 use spacetimedb::host::{FunctionArgs, ReducerCallError, ReducerOutcome};
 use spacetimedb_auth::identity::ConnectionAuthCtx;
 use spacetimedb_client_api::{ControlStateReadAccess, NodeDelegate};
 use spacetimedb_client_api_messages::websocket::v1;
-use spacetimedb_lib::{bsatn, identity::AuthCtx, ser::Serialize, ConnectionId};
+use spacetimedb_lib::{bsatn, identity::AuthCtx, ser::Serialize, ConnectionId, Identity};
 use std::net::SocketAddr;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
 use tokio::net::{TcpListener, TcpStream};
-use tokio::sync::{mpsc, watch};
+use tokio::sync::{mpsc, oneshot, watch};
 use wow_srp::vanilla_header::ProofSeed;
 
 #[path = "native_feed.rs"]
@@ -106,18 +104,20 @@ impl Drop for ClientLifetime {
     }
 }
 
-async fn connect(
-    ctx: Arc<StandaloneEnv>,
-    socket: TcpStream,
-    database: &str,
-    kind: Listener,
-    slot: tokio::sync::OwnedSemaphorePermit,
-) -> Result<()> {
-    socket.set_nodelay(true)?;
-    let database = ctx
-        .lookup_database_identity(database)
-        .await?
-        .context("native database missing")?;
+/// A native connection's attachment to one Shard. Dropping it disconnects the client from that Shard.
+struct Shard {
+    client: ClientConnection,
+    deliveries: mpsc::Receiver<feed::Delivery>,
+    closed: oneshot::Receiver<()>,
+    _stop: oneshot::Sender<()>,
+    _registration: feed::Registration,
+}
+
+async fn attach(
+    ctx: &Arc<StandaloneEnv>,
+    database: Identity,
+    connection_id: ConnectionId,
+) -> Result<Shard> {
     let db = ctx
         .get_database_by_identity(&database)
         .await?
@@ -127,10 +127,10 @@ async fn connect(
     let mut module_rx = leader.module_watcher().await?;
     let id = ClientActorId {
         identity: db.owner_identity,
-        connection_id: new_connection_id(),
+        connection_id,
         name: ctx.client_actor_index().next_client_name(),
     };
-    let (registration, deliveries) = feed.register(id.connection_id)?;
+    let (registration, deliveries) = feed.register(connection_id)?;
     let auth = ConnectionAuthCtx {
         identity: id.identity,
         jwt_payload: None,
@@ -138,36 +138,65 @@ async fn connect(
     let connected =
         ClientConnection::call_client_connected_maybe_reject(&mut module_rx, id, auth.clone())
             .await?;
-    ClientConnection::spawn(
+    let (stop, stopped) = oneshot::channel::<()>();
+    let (closing, closed) = oneshot::channel::<()>();
+    let client = ClientConnection::spawn(
         id,
         auth,
         AuthCtx::new(db.owner_identity, db.owner_identity),
         config(),
         leader.replica_id,
         module_rx,
-        move |mut client, receiver| async move {
-            let _slot = slot;
+        move |mut client, mut receiver| async move {
+            let _closing = closing;
             let _lifetime = ClientLifetime(client.clone());
-            let _registration = registration;
-            let transport_client = client.clone();
-            let serving = async move {
-                match kind {
-                    Listener::World => serve(transport_client, receiver, deliveries, socket).await,
-                    Listener::Logon => {
-                        serve_logon(transport_client, receiver, deliveries, socket).await
-                    }
+            let drain = async move {
+                let mut messages = Vec::with_capacity(32);
+                while receiver.recv_many(&mut messages, 32).await != 0 {
+                    messages.clear();
+                    tokio::task::yield_now().await;
                 }
             };
             tokio::select! {
-                result = serving => if let Err(error) = result {
-                    log::debug!("native {kind:?} transport: {error:#}");
-                },
-                _ = client.watch_module_host() => {}
+                _ = drain => {},
+                _ = stopped => {},
+                _ = client.watch_module_host() => {},
             }
         },
         connected,
     )
     .await;
+    Ok(Shard {
+        client,
+        deliveries,
+        closed,
+        _stop: stop,
+        _registration: registration,
+    })
+}
+
+async fn connect(
+    ctx: Arc<StandaloneEnv>,
+    socket: TcpStream,
+    database: &str,
+    kind: Listener,
+    slot: tokio::sync::OwnedSemaphorePermit,
+) -> Result<()> {
+    let _slot = slot;
+    socket.set_nodelay(true)?;
+    let database = ctx
+        .lookup_database_identity(database)
+        .await?
+        .context("native database missing")?;
+    let connection_id = new_connection_id();
+    let shard = attach(&ctx, database, connection_id).await?;
+    let served = match kind {
+        Listener::World => serve(&ctx, shard, connection_id, socket).await,
+        Listener::Logon => serve_logon(shard, socket).await,
+    };
+    if let Err(error) = served {
+        log::debug!("native {kind:?} transport: {error:#}");
+    }
     Ok(())
 }
 
@@ -219,125 +248,139 @@ async fn call(
 }
 
 async fn serve(
-    client: ClientConnection,
-    mut receiver: ClientConnectionReceiver,
-    mut deliveries: mpsc::Receiver<feed::Delivery>,
+    ctx: &Arc<StandaloneEnv>,
+    mut shard: Shard,
+    connection_id: ConnectionId,
     mut socket: TcpStream,
 ) -> Result<()> {
-    let drain = async move {
-        let mut messages = Vec::with_capacity(32);
-        while receiver.recv_many(&mut messages, 32).await != 0 {
-            messages.clear();
-            tokio::task::yield_now().await;
-        }
+    let seed = ProofSeed::new();
+    let (client, deliveries, closed) = (&shard.client, &mut shard.deliveries, &mut shard.closed);
+    let handshake = async {
+        request(client, "native_world_open", &(seed.seed(),)).await?;
+        let challenge = deliveries.recv().await.context("native feed closed")?;
+        wire::write_plain(&mut socket, challenge).await?;
+        let (opcode, body) = wire::read_client(&mut socket, None).await?;
+        request(client, "native_world_receive", &(opcode, body)).await?;
+        let reply = deliveries.recv().await.context("native feed closed")?;
+        let Some(cipher) = reply.cipher else {
+            wire::write_plain(&mut socket, reply).await?;
+            anyhow::bail!("Module did not authorize world encryption");
+        };
+        let username = wow_srp::normalized_string::NormalizedString::new(&cipher.username)?;
+        let key = cipher
+            .session_key
+            .as_slice()
+            .try_into()
+            .context("invalid native cipher key")?;
+        let proof = cipher
+            .client_proof
+            .as_slice()
+            .try_into()
+            .context("invalid native cipher proof")?;
+        let crypto = seed
+            .into_server_header_crypto(&username, key, proof, cipher.client_seed)
+            .map_err(|_| anyhow::anyhow!("Module cipher does not match the connection proof"))?;
+        let (mut encrypt, decrypt) = crypto.split();
+        wire::write_encrypted(&mut socket, &mut encrypt, reply.packets).await?;
+        Ok::<_, anyhow::Error>((encrypt, decrypt, cipher))
     };
-    let transport = async move {
-        let seed = ProofSeed::new();
-        let handshake = async {
-            request(&client, "native_world_open", &(seed.seed(),)).await?;
-            let challenge = deliveries.recv().await.context("native feed closed")?;
-            wire::write_plain(&mut socket, challenge).await?;
-            let (opcode, body) = wire::read_client(&mut socket, None).await?;
-            request(&client, "native_world_receive", &(opcode, body)).await?;
-            let reply = deliveries.recv().await.context("native feed closed")?;
-            let Some(cipher) = reply.cipher else {
-                wire::write_plain(&mut socket, reply).await?;
-                anyhow::bail!("Module did not authorize world encryption");
-            };
-            let username = wow_srp::normalized_string::NormalizedString::new(&cipher.username)?;
-            let key = cipher
-                .session_key
-                .as_slice()
-                .try_into()
-                .context("invalid native cipher key")?;
-            let proof = cipher
-                .client_proof
-                .as_slice()
-                .try_into()
-                .context("invalid native cipher proof")?;
-            let crypto = seed
-                .into_server_header_crypto(&username, key, proof, cipher.client_seed)
-                .map_err(|_| {
-                    anyhow::anyhow!("Module cipher does not match the connection proof")
-                })?;
-            let (mut encrypt, decrypt) = crypto.split();
-            wire::write_encrypted(&mut socket, &mut encrypt, reply.packets).await?;
-            Ok::<_, anyhow::Error>((encrypt, decrypt))
-        };
-        let (mut encrypt, mut decrypt) =
-            tokio::time::timeout(Duration::from_secs(10), handshake).await??;
-        let (mut reader, mut writer) = socket.into_split();
-        let (activity, mut activity_rx) = watch::channel(tokio::time::Instant::now());
-        let input_activity = activity.clone();
-        let input = async move {
-            loop {
-                let (opcode, body) = wire::read_client(&mut reader, Some(&mut decrypt)).await?;
-                input_activity.send_replace(tokio::time::Instant::now());
-                request(&client, "native_world_receive", &(opcode, body)).await?;
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        };
-        let output = async move {
-            while let Some(delivery) = deliveries.recv().await {
-                ensure!(
-                    delivery.cipher.is_none(),
-                    "native cipher changed after authentication"
-                );
-                wire::write_encrypted(&mut writer, &mut encrypt, delivery.packets).await?;
-                activity.send_replace(tokio::time::Instant::now());
-            }
-            Ok::<(), anyhow::Error>(())
-        };
-        let idle = async move {
-            loop {
-                let deadline = *activity_rx.borrow_and_update() + Duration::from_secs(90);
-                tokio::time::timeout_at(deadline, activity_rx.changed()).await??;
-            }
-            #[allow(unreachable_code)]
-            Ok::<(), anyhow::Error>(())
-        };
-        tokio::select! { result = input => result, result = output => result, result = idle => result }
+    let (mut encrypt, mut decrypt, established) = tokio::select! {
+        result = tokio::time::timeout(Duration::from_secs(10), handshake) => result??,
+        _ = closed => return Ok(()),
     };
-    tokio::select! { result = transport => result, _ = drain => Ok(()) }
-}
-
-async fn serve_logon(
-    client: ClientConnection,
-    mut receiver: ClientConnectionReceiver,
-    mut deliveries: mpsc::Receiver<feed::Delivery>,
-    mut socket: TcpStream,
-) -> Result<()> {
-    let drain = async move {
-        let mut messages = Vec::with_capacity(32);
-        while receiver.recv_many(&mut messages, 32).await != 0 {
-            messages.clear();
-            tokio::task::yield_now().await;
-        }
-    };
-    let transport = async move {
-        request(
-            &client,
-            "native_logon_open",
-            &(socket.peer_addr()?.ip().to_string(),),
-        )
-        .await?;
-        let mut deadline = tokio::time::Instant::now() + Duration::from_secs(10);
-        let mut authenticated = false;
+    let (mut reader, mut writer) = socket.into_split();
+    let (activity, mut activity_rx) = watch::channel(tokio::time::Instant::now());
+    // A request that was in flight to the Shard before a Handoff may fail once that Shard lets go.
+    let (current, current_rx) = watch::channel((0u64, shard.client.clone()));
+    let input_activity = activity.clone();
+    let input = async move {
         loop {
-            if authenticated {
-                deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+            let (opcode, body) = wire::read_client(&mut reader, Some(&mut decrypt)).await?;
+            input_activity.send_replace(tokio::time::Instant::now());
+            let (generation, client) = current_rx.borrow().clone();
+            let result = request(&client, "native_world_receive", &(opcode, body)).await;
+            if result.is_err() && current_rx.borrow().0 == generation {
+                return result;
             }
-            let exchange = async {
-                let frame = wire::read_logon(&mut socket).await?;
-                request(&client, "native_logon_receive", &(frame, entropy::<32>())).await?;
-                let delivery = deliveries.recv().await.context("native feed closed")?;
-                wire::write_logon(&mut socket, delivery).await
-            };
-            authenticated |= tokio::time::timeout_at(deadline, exchange).await??;
         }
         #[allow(unreachable_code)]
         Ok::<(), anyhow::Error>(())
     };
-    tokio::select! { result = transport => result, _ = drain => Ok(()) }
+    let output = async move {
+        let mut generation = 0;
+        let mut adopting = false;
+        loop {
+            let delivery = tokio::select! {
+                delivery = shard.deliveries.recv() => delivery,
+                _ = &mut shard.closed => None,
+            };
+            let Some(delivery) = delivery else {
+                return Ok(());
+            };
+            // The target of a Handoff records the cipher it adopts; it must be the one in use.
+            if let Some(cipher) = delivery.cipher {
+                ensure!(
+                    std::mem::take(&mut adopting) && cipher == established,
+                    "native cipher changed after authentication"
+                );
+            }
+            let mut packets = delivery.packets;
+            let handoff = packets.iter().position(|packet| packet.handoff().is_some());
+            let target = handoff.and_then(|at| packets[at].handoff());
+            // Packets after the marker belong to the World Session this Shard no longer holds.
+            packets.truncate(handoff.unwrap_or(packets.len()));
+            wire::write_encrypted(&mut writer, &mut encrypt, packets).await?;
+            activity.send_replace(tokio::time::Instant::now());
+            if let Some(database) = target {
+                let next = attach(ctx, database, connection_id).await?;
+                request(&next.client, "native_world_adopt", &()).await?;
+                generation += 1;
+                current.send_replace((generation, next.client.clone()));
+                shard = next;
+                adopting = true;
+            }
+        }
+    };
+    let idle = async move {
+        loop {
+            let deadline = *activity_rx.borrow_and_update() + Duration::from_secs(90);
+            tokio::time::timeout_at(deadline, activity_rx.changed()).await??;
+        }
+        #[allow(unreachable_code)]
+        Ok::<(), anyhow::Error>(())
+    };
+    tokio::select! { result = input => result, result = output => result, result = idle => result }
+}
+
+async fn serve_logon(shard: Shard, mut socket: TcpStream) -> Result<()> {
+    let Shard {
+        client,
+        mut deliveries,
+        mut closed,
+        _stop: _attached,
+        _registration: _registered,
+    } = shard;
+    request(
+        &client,
+        "native_logon_open",
+        &(socket.peer_addr()?.ip().to_string(),),
+    )
+    .await?;
+    let mut deadline = tokio::time::Instant::now() + Duration::from_secs(10);
+    let mut authenticated = false;
+    loop {
+        if authenticated {
+            deadline = tokio::time::Instant::now() + Duration::from_secs(90);
+        }
+        let exchange = async {
+            let frame = wire::read_logon(&mut socket).await?;
+            request(&client, "native_logon_receive", &(frame, entropy::<32>())).await?;
+            let delivery = deliveries.recv().await.context("native feed closed")?;
+            wire::write_logon(&mut socket, delivery).await
+        };
+        authenticated |= tokio::select! {
+            result = tokio::time::timeout_at(deadline, exchange) => result??,
+            _ = &mut closed => return Ok(()),
+        };
+    }
 }
