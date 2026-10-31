@@ -496,15 +496,22 @@ pub(crate) fn apply_item_use(
     player_guid: u64,
     slot: u8,
 ) -> Result<(), ItemRefusal> {
-    apply_item_use_on(ctx, player_guid, slot, None)
+    apply_item_use_on(ctx, player_guid, slot, ItemUseTarget::User)
 }
 
-/// Uses an item at another of the user's items, such as a poison at a weapon.
+#[derive(Clone, Copy)]
+pub(crate) enum ItemUseTarget {
+    User,
+    Unit(u64),
+    /// Another of the user's items, such as a weapon for a poison.
+    Item(u64),
+}
+
 pub(crate) fn apply_item_use_on(
     ctx: &ReducerContext,
     player_guid: u64,
     slot: u8,
-    item_target: Option<u64>,
+    target: ItemUseTarget,
 ) -> Result<(), ItemRefusal> {
     let entities = ctx.db.game_world_entity();
     let player = entities
@@ -574,25 +581,30 @@ pub(crate) fn apply_item_use_on(
             crate::ItemInstance::delete(ctx, inst.guid);
         }
     }
-    match item_target {
-        Some(item_guid) => crate::spell::begin_item_cast(
-            ctx,
-            player_guid,
-            spell_id,
-            player.level as u8,
-            item_guid,
-            false,
-        ),
-        None => crate::spell::begin_cast(
-            ctx,
-            player_guid,
-            spell_id,
-            player.level as u8,
-            player_guid,
-            false,
-            None,
-        ),
-    }
+    let unit_guid = match target {
+        ItemUseTarget::Item(item_guid) => {
+            return crate::spell::begin_item_cast(
+                ctx,
+                player_guid,
+                spell_id,
+                player.level as u8,
+                item_guid,
+                false,
+            )
+            .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail));
+        }
+        ItemUseTarget::User => player_guid,
+        ItemUseTarget::Unit(unit_guid) => unit_guid,
+    };
+    crate::spell::begin_cast(
+        ctx,
+        player_guid,
+        spell_id,
+        player.level as u8,
+        unit_guid,
+        false,
+        None,
+    )
     .map_err(|detail| refuse(ItemRefusal::NotRightNow, detail))
 }
 
