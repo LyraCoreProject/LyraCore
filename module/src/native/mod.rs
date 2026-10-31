@@ -95,7 +95,9 @@ pub(crate) use teleport::{
     begin as begin_teleport, changed as teleport_changed, expire_near_teleports_pass,
 };
 pub(crate) use trade::event as trade_event;
-pub(crate) use visibility::{entity_changed, grant_added, grant_removed, loot_flags, motion};
+pub(crate) use visibility::{
+    entity_changed, grant_added, grant_removed, loot_flags, motion, with_shared_creates,
+};
 
 pub(crate) fn is_world_porting(ctx: &ReducerContext, guid: u64) -> bool {
     ctx.db

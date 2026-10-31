@@ -177,6 +177,17 @@ pub(super) fn items(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInstanceV
         .collect()
 }
 
+/// A peer CREATE shows only equipment, so bags and bank skip their template lookups.
+pub(super) fn equipment(ctx: &ReducerContext, guid: u64) -> Vec<codec::ItemInstanceView> {
+    ctx.db
+        .game_item_instance()
+        .by_owner_guid()
+        .filter(guid)
+        .filter(|row| codec::visible_item_index(row.slot).is_some())
+        .map(|row| item(ctx, &row))
+        .collect()
+}
+
 pub(super) fn quests(ctx: &ReducerContext, guid: u64) -> Vec<codec::update_mask::QuestLogSlot> {
     use crate::quest::{game_character_quest, game_quest_objective, objective_kind};
     let mut quests: Vec<_> = ctx
