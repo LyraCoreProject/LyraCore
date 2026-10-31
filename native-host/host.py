@@ -143,20 +143,33 @@ class Host:
             return False
         return True
 
-    def publish(self, wasm):
-        return self.request(f'/v1/database/{self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm')
+    def publish(self, wasm, database=None):
+        return self.request(f'/v1/database/{database or self.database}?host_type=Wasm', wasm, 'PUT', 'application/wasm')
 
-    def call(self, reducer, args=(), operator=True):
+    def add_database(self):
+        """Publishes the Module to a second database on this Host and claims it. Returns its name."""
+        database = f'{self.database}-second'
+        self.publish(self.module.read_bytes(), database)
+        self.call('claim_operator', database=database)
+        self.call('install_guid_range', [1], database=database)
+        return database
+
+    def identity(self, database=None):
+        identity = self.request(f'/v1/database/{database or self.database}/identity').decode().strip('"')
+        return {'__identity__': '0x' + identity.removeprefix('0x')}
+
+    def call(self, reducer, args=(), operator=True, database=None):
         """Calls a reducer as the Operator, or anonymously. Raises RuntimeError when the call fails."""
-        return self.request(f'/v1/database/{self.database}/call/{reducer}', json.dumps(list(args)).encode(),
-            'POST', authenticated=operator)
+        return self.request(f'/v1/database/{database or self.database}/call/{reducer}',
+            json.dumps(list(args)).encode(), 'POST', authenticated=operator)
 
-    def sql(self, query):
+    def sql(self, query, database=None):
         query = insert_defaults(query)
-        return json.loads(self.request(f'/v1/database/{self.database}/sql', query.encode(), 'POST', 'text/plain'))
+        return json.loads(self.request(f'/v1/database/{database or self.database}/sql', query.encode(), 'POST',
+            'text/plain'))
 
-    def rows(self, query):
-        return self.sql(query)[0]['rows']
+    def rows(self, query, database=None):
+        return self.sql(query, database)[0]['rows']
 
     def wait_until(self, condition, message, timeout=5, interval=0.05):
         """Returns the first truthy result of `condition()`, or raises AssertionError(message)."""
@@ -172,18 +185,18 @@ class Host:
     def await_empty(self, table):
         self.wait_until(lambda: not self.rows(f'SELECT * FROM {table}'), f'{table} retained disconnected clients')
 
-    def account(self, username, password=None, key=KEY):
+    def account(self, username, password=None, key=KEY, database=None):
         """Provisions an Account. Without a password it also establishes a Session for `key`, so a
         World Session can authenticate without the logon port."""
         if password is not None:
             salt = secrets.token_bytes(32)
             self.call('provision_account', [username, list(salt), list(verifier(username, password, salt))])
             return Account(self.rows(f"SELECT id FROM game_account WHERE username = '{username}'")[0][0], username, None)
-        self.call('provision_account', [username, [0] * 32, [1] * 32])
-        account = self.rows(f"SELECT id FROM game_account WHERE username = '{username}'")[0][0]
+        self.call('provision_account', [username, [0] * 32, [1] * 32], database=database)
+        account = self.rows(f"SELECT id FROM game_account WHERE username = '{username}'", database)[0][0]
         self.identities += 1
         identity = f'0x{self.identities:064x}'
-        self.call('establish_session', [account, list(key), [identity]])
+        self.call('establish_session', [account, list(key), [identity]], database=database)
         return Account(account, username, identity)
 
     def character(self, name, race=1, cls=1, account=None, at=None):

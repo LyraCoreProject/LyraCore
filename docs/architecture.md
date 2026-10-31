@@ -17,8 +17,8 @@ keep AOI Grants stable through entity, GameObject, Corpse, DynamicObject and ste
 Packet codecs live in the WASM-compatible [protocol crate](../crates/lyracore-protocol/src/lib.rs).
 
 The [host extension](../native-host/src/mod.rs) adds logon and world TCP listeners to SpacetimeDB
-standalone. It uses in-process Core connections and one private output subscription for all native
-clients, with no SDK or WebSocket connection to the Module. It passes native reducer arguments as
+standalone. It uses in-process Core connections and one private output subscription per Shard, shared by
+that Shard's native clients, with no SDK or WebSocket connection to the Module. It passes native reducer arguments as
 BSATN. BSATN has no field names and the reducer call does not check for trailing bytes, so the
 Host's arguments must match the reducer parameters' order and layout. The Host owns secure random
 seeds, header ciphers, framing, socket deadlines and bounded output queues. It applies the grant and
@@ -33,6 +33,13 @@ before the packets delivered through that grant. A revoke removes its recipient 
 packets can use it. Logout clears every delivery permission of the connection before it returns to
 Character selection. The Host applies these instructions in order. A failed output subscription
 closes its native clients, because the Host cannot continue from a missed instruction.
+
+A Handoff marker moves a World Session to another Shard on the same Host. The Host writes the
+connection's packets before the marker and drops the rest of the source Shard's output for it. It
+attaches the connection to the target Shard under the same connection id and calls
+`native_world_adopt`, which builds the World Session from the target's `game_native_handoff` row.
+The source Shard sees an ordinary disconnect. A request still in flight to the source Shard may
+fail without ending the World Session. Only a World Session at Character selection can move yet.
 
 World entry registers the Character as an AOI viewer before self CREATE and replays its grants
 after it. A Passenger's Transport is the one grant replayed before self CREATE.

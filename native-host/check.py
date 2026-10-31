@@ -3,6 +3,7 @@ import argparse
 import json
 from pathlib import Path
 import resource
+import secrets
 import socket
 import struct
 import sys
@@ -5072,6 +5073,42 @@ def check_logon_limits(host):
     assert all(row[0] == 0 for row in host.rows('SELECT active FROM game_native_logon_address'))
 
 
+def check_handoff(host):
+    """A World Session moves to a second Shard on the same Native Host and back, keeping its cipher."""
+    second = host.add_database()
+    host.account('HANDOFF')
+    host.account('HANDOFF', database=second)
+    world = host.connect('HANDOFF')
+    assert world.read() == (0x1ee, b'\x0c')
+
+    def hand_off(source, target):
+        connection_id, server_seed = host.rows('SELECT connection_id, server_seed FROM game_native_world_connection', source)[0]
+        client_seed, proof = host.rows('SELECT client_seed, client_proof FROM game_native_cipher', source)[0]
+        proof = list(bytes.fromhex(proof.removeprefix('0x'))) if isinstance(proof, str) else proof
+        host.call('debug_native_expect_handoff', [connection_id, server_seed, 'HANDOFF', client_seed, proof], database=target)
+        account = host.rows("SELECT id FROM game_account WHERE username = 'HANDOFF'", source)[0][0]
+
+        def moved():
+            try:
+                host.call('debug_native_handoff', [account, host.identity(target)], database=source)
+            except RuntimeError:
+                return False
+            return True
+
+        host.wait_until(moved, 'the World Session did not reach Character selection')
+        assert world.read() == (0x1dd, struct.pack('<I', 0xbef0)), 'the packet before the Handoff marker did not arrive'
+        host.wait_until(lambda: host.rows('SELECT connection_id FROM game_native_world_connection', target) == [[connection_id]],
+            'the target Shard did not adopt the World Session')
+        host.wait_until(lambda: not host.rows('SELECT connection_id FROM game_native_world_connection', source),
+            'the source Shard kept the World Session')
+        sequence = secrets.randbits(32)
+        world.send(0x1dc, struct.pack('<II', sequence, 0))
+        assert world.read() == (0x1dd, struct.pack('<I', sequence)), 'the target Shard did not answer through the same cipher'
+
+    hand_off(None, second)
+    hand_off(second, None)
+
+
 def named(*checks):
     return {check.__name__.removeprefix('check_').replace('_', '-'): check for check in checks}
 
@@ -5096,6 +5133,7 @@ ALONE = {
     'recovery': (check_recovery, {'seeded': True}),
     'slow-readers': (check_slow_readers, {'seeded': True}),
     'accept-recovery': (check_accept_recovery, {}),
+    'handoff': (check_handoff, {}),
 }
 
 

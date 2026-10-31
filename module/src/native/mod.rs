@@ -22,6 +22,7 @@ mod economy;
 mod environment;
 mod gossip;
 mod guild;
+mod handoff;
 mod instance;
 mod inventory;
 mod logon;
@@ -123,6 +124,7 @@ pub enum NativeAudience {
     Grant(NativeRecipient),
     Revoke(NativeRecipient),
     Clear(ConnectionId),
+    Handoff(handoff::NativeHandoffTarget),
 }
 #[derive(SpacetimeType)]
 pub struct NativeAoi {
@@ -734,7 +736,10 @@ mod tests {
     use spacetimedb::sats::bsatn;
     use spacetimedb::ConnectionId;
 
-    use super::{NativeAoi, NativeAudience, NativeCipher, NativePacket, NativeRecipient};
+    use super::{
+        handoff::NativeHandoffTarget, NativeAoi, NativeAudience, NativeCipher, NativePacket,
+        NativeRecipient,
+    };
 
     include!(concat!(
         env!("CARGO_MANIFEST_DIR"),
@@ -820,6 +825,18 @@ mod tests {
             (
                 packet(5, NativeAudience::Clear(CONNECTION), None, Vec::new()),
                 CLEAR_PACKET,
+            ),
+            (
+                packet(
+                    6,
+                    NativeAudience::Handoff(NativeHandoffTarget {
+                        connection_id: CONNECTION,
+                        database: spacetimedb::Identity::from_byte_array([9; 32]),
+                    }),
+                    None,
+                    Vec::new(),
+                ),
+                HANDOFF_PACKET,
             ),
         ];
         for (row, fixture) in rows {

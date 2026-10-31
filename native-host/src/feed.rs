@@ -1,4 +1,4 @@
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
@@ -12,9 +12,9 @@ use tokio::sync::mpsc;
 
 use crate::StandaloneEnv;
 
-#[derive(SpacetimeType)]
+#[derive(SpacetimeType, PartialEq)]
 #[sats(crate = spacetimedb_lib)]
-#[cfg_attr(test, derive(Debug, PartialEq))]
+#[cfg_attr(test, derive(Debug))]
 pub(super) struct Cipher {
     connection_id: ConnectionId,
     pub username: String,
@@ -32,6 +32,15 @@ enum Audience {
     Grant(Recipient),
     Revoke(Recipient),
     Clear(ConnectionId),
+    Handoff(Handoff),
+}
+
+#[derive(SpacetimeType, Clone, Copy)]
+#[sats(crate = spacetimedb_lib)]
+#[cfg_attr(test, derive(Debug, PartialEq))]
+struct Handoff {
+    connection_id: ConnectionId,
+    database: Identity,
 }
 
 #[derive(SpacetimeType, Clone, Copy)]
@@ -63,6 +72,16 @@ pub(super) struct Packet {
     pub close_after: bool,
     pub not_before_micros: i64,
     pub authentication_complete: bool,
+}
+
+impl Packet {
+    /// The Shard that this connection moves to, when this packet is a Handoff marker.
+    pub(super) fn handoff(&self) -> Option<Identity> {
+        match self.audience {
+            Audience::Handoff(handoff) => Some(handoff.database),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Default)]
@@ -109,7 +128,11 @@ impl Router {
         for packet in packets {
             match packet.audience {
                 Audience::Clear(connection) => self.clear(connection),
-                Audience::Connection(connection) => {
+                Audience::Connection(connection)
+                | Audience::Handoff(Handoff {
+                    connection_id: connection,
+                    ..
+                }) => {
                     deliveries.entry(connection).or_default().push(packet);
                 }
                 Audience::Aoi(Aoi {
@@ -340,9 +363,10 @@ pub(super) async fn shared(
     database: Identity,
     owner: Identity,
 ) -> Result<Arc<Feed>> {
-    static FEED: tokio::sync::Mutex<Option<Arc<Feed>>> = tokio::sync::Mutex::const_new(None);
-    let mut current = FEED.lock().await;
-    if let Some(feed) = current.as_ref() {
+    static FEEDS: tokio::sync::Mutex<BTreeMap<Identity, Arc<Feed>>> =
+        tokio::sync::Mutex::const_new(BTreeMap::new());
+    let mut feeds = FEEDS.lock().await;
+    if let Some(feed) = feeds.get(&database) {
         if !feed
             .0
             .lock()
@@ -354,7 +378,7 @@ pub(super) async fn shared(
     }
     let feed =
         tokio::time::timeout(Duration::from_secs(10), create(ctx, database, owner)).await??;
-    *current = Some(feed.clone());
+    feeds.insert(database, feed.clone());
     Ok(feed)
 }
 
@@ -642,6 +666,27 @@ mod tests {
     }
 
     #[test]
+    fn handoff_reaches_its_connection_in_id_order() {
+        let mut router = Router::default();
+        let handoff = packet(
+            6,
+            Audience::Handoff(Handoff {
+                connection_id: VIEWER,
+                database: Identity::from_byte_array([9; 32]),
+            }),
+        );
+        let routed = route(
+            &mut router,
+            vec![
+                packet(7, Audience::Connection(VIEWER)),
+                handoff,
+                packet(5, Audience::Connection(VIEWER)),
+            ],
+        );
+        assert_eq!(routed, HashMap::from([(VIEWER, vec![5, 6, 7])]));
+    }
+
+    #[test]
     fn aoi_packet_without_recipients_reaches_nobody() {
         let mut router = granted(&[VIEWER], SUBJECT);
         assert!(route(&mut router, vec![aoi(10, OTHER_SUBJECT)]).is_empty());
@@ -703,6 +748,18 @@ mod tests {
             (
                 row(5, Audience::Clear(CONNECTION), None, Vec::new()),
                 CLEAR_PACKET,
+            ),
+            (
+                row(
+                    6,
+                    Audience::Handoff(Handoff {
+                        connection_id: CONNECTION,
+                        database: Identity::from_byte_array([9; 32]),
+                    }),
+                    None,
+                    Vec::new(),
+                ),
+                HANDOFF_PACKET,
             ),
         ];
         for (expected, fixture) in rows {

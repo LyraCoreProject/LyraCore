@@ -27,7 +27,7 @@ entry in both files.
 
 **G** [GameObject Collider](#gameobject-collision) · [Gate](CORE_TERMS.md#gate) · [Gateway](#retired-terms) · [Gateway Verb](#retired-terms) · [Git Package Source](#packages) · [GM level](#accounts-characters-and-sessions) · [Golden Trace](#conformance) · [Group](#groups) · [Group Audience](#groups) · [Group Broadcast](#groups) · [Group Intent](#retired-terms) · [Guardian](#creature-ai) · [GUID Range](#accounts-characters-and-sessions) · [Guild](#guilds) · [Guild Charter](#guilds) · [Guild Emblem](#guilds) · [Guild Event](#guilds) · [Guild Invite](#guilds) · [Guild Leader](#guilds) · [Guild Projection](#guilds) · [Guild Rank](#guilds)
 
-**H** [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
+**H** [Handoff](#requests-and-delivery) · [Headless Client](CORE_TERMS.md#headless-client) · [Hold](#retired-terms) · [Host Operation](#runtime-scripts)
 
 **I** [Idle Bot](#bots) · [Import Family](#packages) · [Instance Lease](#groups) · [Instance Pool](#retired-terms) · [Instance Removal](#groups) · [Instance Vmap Slice](#realm-topology) · [Invocation](#runtime-scripts) · [Item Exchange](#procs) · [Item Text](#mail)
 
@@ -151,6 +151,14 @@ How a native request ends without committing. A Refusal rollback carries the pac
 Native Host sends after the transaction rolls back; the list can be empty. A failure rollback ends
 the World Session. Only `native_world_receive` writes a Refusal as the `native_reply:` envelope.
 _Avoid_: native error, reply string
+
+**Handoff**:
+The move of a World Session's native connection from one Shard to another on the same Native Host.
+The source Shard writes a Handoff marker for the connection. The Native Host sends the packets
+before the marker and drops those after it. It then attaches the connection to the target Shard,
+which adopts the World Session from the record it holds for that connection. The client keeps its
+cipher.
+_Avoid_: migration, reconnect
 
 **Proficiency**:
 What a Character may wield and wear. A weapon type needs its weapon proficiency spell, and misc
