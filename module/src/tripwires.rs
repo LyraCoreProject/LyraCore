@@ -339,14 +339,11 @@ pub(crate) mod character_owned_tripwire {
         {
             let test_start = search_from + offset;
             let mut item_start = test_start;
-            loop {
-                let Some(end) = code[..item_start]
-                    .iter()
-                    .rposition(|byte| !byte.is_ascii_whitespace())
-                    .map(|position| position + 1)
-                else {
-                    break;
-                };
+            while let Some(end) = code[..item_start]
+                .iter()
+                .rposition(|byte| !byte.is_ascii_whitespace())
+                .map(|position| position + 1)
+            {
                 if code.get(end - 1) != Some(&b']') {
                     break;
                 }
