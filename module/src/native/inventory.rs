@@ -10,7 +10,7 @@ use lyracore_shared::item::ItemRefusal;
 use spacetimedb::{ConnectionId, ReducerContext, Table};
 
 use super::{game_native_player, Rollback};
-use crate::items::item_in_slot;
+use crate::items::{item_in_slot, ItemUseTarget};
 use crate::{game_item_template, ItemInstance};
 
 fn packet(message: ServerOpcodeMessage) -> Packet {
@@ -357,11 +357,17 @@ pub(super) fn receive(
                         return Ok(());
                     }
                 }
-                let item_target = match c.targets.target_flags.get_item() {
-                    Some(ItemTarget::Item { item }) => Some(item.guid()),
-                    _ => None,
+                let target = match (
+                    c.targets.target_flags.get_item(),
+                    c.targets.target_flags.get_unit(),
+                ) {
+                    (Some(ItemTarget::Item { item }), _) => ItemUseTarget::Item(item.guid()),
+                    (_, Some(unit)) if unit.unit_target.guid() != 0 => {
+                        ItemUseTarget::Unit(unit.unit_target.guid())
+                    }
+                    _ => ItemUseTarget::User,
                 };
-                crate::items::apply_item_use_on(ctx, guid, source, item_target)
+                crate::items::apply_item_use_on(ctx, guid, source, target)
             }
             ClientOpcodeMessage::CMSG_READ_ITEM(_) => {
                 let item = item_in_slot(ctx, guid, source).ok_or(ItemRefusal::ItemNotFound)?;

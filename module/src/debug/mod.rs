@@ -433,8 +433,13 @@ pub fn debug_use_item_on_item(
 ) -> Result<(), String> {
     let target = crate::items::item_in_slot(ctx, character_guid, target_slot)
         .ok_or_else(|| format!("no item in slot {target_slot}"))?;
-    crate::items::apply_item_use_on(ctx, character_guid, slot, Some(target.guid))
-        .map_err(crate::items::refused)
+    crate::items::apply_item_use_on(
+        ctx,
+        character_guid,
+        slot,
+        crate::items::ItemUseTarget::Item(target.guid),
+    )
+    .map_err(crate::items::refused)
 }
 
 #[reducer]

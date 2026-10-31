@@ -41,7 +41,7 @@ pub(crate) use ops::{
     equipped_stat_bonus, grant_item, grant_item_property, grant_letter_item, grant_starter_item,
     has_free_slot, item_count, item_stat_bonus, remove_items, request_grant_item,
     request_profile_item, request_take_loot, resistance_items, store_instance_state,
-    take_loot_item, ItemSnapshot, StoreRefusal, TakeLootRefusal,
+    take_loot_item, ItemSnapshot, ItemUseTarget, StoreRefusal, TakeLootRefusal,
 };
 pub(crate) use properties::{
     enchant_stat, enchant_stat_for_school, is_known_enchant, property_stat,
