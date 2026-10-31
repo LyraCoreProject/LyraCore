@@ -17,7 +17,7 @@ pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
     (gx, gy)
 }
 
-// SpacetimeDB 2.7.1 needs one equality query per packed cell for indexed AOI reads.
+// SpacetimeDB 2.14.0 needs one equality query per packed cell for indexed AOI reads.
 pub fn grid_cell_id(gx: i32, gy: i32) -> i64 {
     ((gx as i64) << 32) | (gy as u32 as i64)
 }

@@ -68,7 +68,7 @@ class LocalRealmLifetime(unittest.TestCase):
                 patch.object(audit, 'run', run), patch.object(audit.shutil, 'which', return_value='/usr/bin/spacetime'), \
                 patch.object(audit.socket, 'socket'):
             work = Path(directory)
-            (work / '.lyracore-cli-rev').write_text('a016c82c6848a098ecbbb07ed53704c2b7dfdff1')
+            (work / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
             with self.assertRaisesRegex(RuntimeError, 'import failed'):
                 with audit.local_realm(work, work / 'client/Data', 0):
                     self.fail('capture must not start')
@@ -912,7 +912,7 @@ class ScenarioRealmReuse(unittest.TestCase):
         self.running = False
         self.imports = 0
         self.pins = {'database_commit': 'pin'}
-        (self.root / '.lyracore-cli-rev').write_text('a016c82c6848a098ecbbb07ed53704c2b7dfdff1')
+        (self.root / '.lyracore-cli-rev').write_text('30814fe814edbfa3a143102f93008080482df6a6')
         for name, value in [('ROOT', self.root), ('SCENARIO_CACHE', self.cache),
                             ('SNAPSHOT_STORE', self.store)]:
             patched = patch.object(audit, name, value)

@@ -713,7 +713,7 @@ def local_realm(work, client_data, peer_count):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('commit core changes before starting an isolated audit Realm')
     revision = (ROOT / '.lyracore-cli-rev').read_text().strip()
-    if revision != 'a016c82c6848a098ecbbb07ed53704c2b7dfdff1':
+    if revision != '30814fe814edbfa3a143102f93008080482df6a6':
         raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
     for port in [3000, 3724, 8085]:
         with socket.socket() as listener:
@@ -783,7 +783,7 @@ def local_realm(work, client_data, peer_count):
 def scenario_realm(key, pins, client_data, peer_count, *, require_snapshot=False):
     if git('status', '--porcelain', '--untracked-files=normal'):
         raise RuntimeError('clean core working tree required; commit changes before scenario capture')
-    if (ROOT / '.lyracore-cli-rev').read_text().strip() != 'a016c82c6848a098ecbbb07ed53704c2b7dfdff1':
+    if (ROOT / '.lyracore-cli-rev').read_text().strip() != '30814fe814edbfa3a143102f93008080482df6a6':
         raise RuntimeError('audit Realm isolation needs review for this lyracore CLI revision')
     spacetime = shutil.which('spacetime')
     if spacetime is None:
