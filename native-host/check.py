@@ -5120,8 +5120,9 @@ def check_realm_shard(host):
     host.wait_until(lambda: host.rows('SELECT confirmed FROM game_peer_shard') == [[True]]
         and host.rows('SELECT confirmed FROM game_peer_shard', world) == [[True]], 'the Shards did not confirm each other',
         timeout=20)
-    host.call('operator_set_shard_role', [{'some': {'Realm': {'world': host.identity(world)}}}])
-    host.call('operator_set_shard_role', [{'some': {'World': {'realm': host.identity()}}}], database=world)
+    # A one-field variant carries its field directly, under its camelCase name.
+    host.call('operator_set_shard_role', [{'some': {'realm': host.identity(world)}}])
+    host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=world)
     host.account('SPLIT')
     client = host.connect('SPLIT')
     opcode, body = client.read()
