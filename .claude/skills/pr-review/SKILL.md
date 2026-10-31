@@ -116,7 +116,7 @@ describing it as merged or closed.
 
 ## Reply to the contributor
 
-Apply `unslop`. Use the tone of
+Use the tone of
 [samwhosung's reply on benilla #803](https://github.com/samwhosung/benilla/pull/803#issuecomment-6049493781):
 specific credit, a short account of the additions, and the observable result. Read that example
 when calibrating the voice; its technical details and merged status belong to that PR alone.

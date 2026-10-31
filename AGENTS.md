@@ -24,8 +24,6 @@ We build complex things as simply as possible, and we look for ways to remove co
 
 ## Words
 
-- Apply the `unslop` skill (`.claude/skills/unslop/SKILL.md`) to all prose: docs, PR text, comments,
-  reports.
 - Use the glossary terms in identifiers, comments, commits, docs and PR text. Each term is defined
   in one file: `CORE_TERMS.md` holds the terms a new contributor meets first, `CONTEXT.md` every
   other term, and the index in `CONTEXT.md` lists both. Keep the `_Avoid_` words out of new names
