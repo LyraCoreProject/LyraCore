@@ -102,6 +102,7 @@ pub(crate) fn entity_changed(
             let viewer = AoiViewer::of(entity);
             if previous != viewer {
                 viewers.guid().update(viewer.clone());
+                let _viewer = crate::world::span("aoi.viewer");
                 refresh_viewer(ctx, &viewer);
             }
         } else {
@@ -117,6 +118,7 @@ pub(crate) fn entity_changed(
     }) {
         return;
     }
+    let _subject = crate::world::span("aoi.subject");
     refresh_entity_with_freshness(ctx, entity.guid, old.is_none() && !entity.is_player());
 }
 
@@ -202,6 +204,7 @@ pub(crate) fn nearby_viewers(
 }
 
 fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
+    let scan = crate::world::span("aoi.viewer_scan");
     let mut wanted = BTreeSet::new();
     for cell in cells(viewer.cell) {
         for entity in
@@ -242,6 +245,8 @@ fn refresh_viewer(ctx: &ReducerContext, viewer: &AoiViewer) {
     for transport in crate::transport::visible_on(ctx, viewer.map_id, viewer.instance_id) {
         wanted.insert((TRANSPORT, transport));
     }
+    drop(scan);
+    let _diff = crate::world::span("aoi.viewer_grants");
     let grants = ctx.db.game_aoi_grant();
     let existing: BTreeMap<_, _> = grants
         .by_viewer()

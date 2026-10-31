@@ -45,9 +45,16 @@ impl WorldEntity {
 
     pub(crate) fn update(mut self, ctx: &ReducerContext) -> Self {
         self.stamp_simulation();
+        let find = crate::world::span("up.find");
         let old = ctx.db.game_world_entity().guid().find(self.guid);
+        drop(find);
+        let write = crate::world::span("up.write");
         let entity = ctx.db.game_world_entity().guid().update(self);
+        drop(write);
+        let aoi = crate::world::span("up.aoi");
         crate::aoi::entity_changed(ctx, old.as_ref(), &entity);
+        drop(aoi);
+        let _native = crate::world::span("up.native");
         if let Some(old) = old {
             if crate::breath::eligible(&old) && !crate::breath::eligible(&entity) {
                 crate::breath::clear(ctx, entity.guid);
