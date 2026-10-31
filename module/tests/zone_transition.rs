@@ -23,7 +23,7 @@ const IN_WESTFALL: (f32, f32, f32) = (-9100.0, -132.0, 60.0);
 type SqlRow = BTreeMap<String, String>;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn accepted_movement_across_a_zone_boundary_updates_the_live_and_durable_zone_once() {
     assert_distinct_cells();
 

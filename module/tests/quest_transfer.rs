@@ -76,7 +76,7 @@ fn seed_quests(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn quest_progress_survives_cross_shard_transfer_and_world_port() {
     let source = shard("quest-transfer-source", "0");
     let destination = shard("quest-transfer-destination", "1000000000");

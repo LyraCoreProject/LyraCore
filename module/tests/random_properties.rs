@@ -28,7 +28,7 @@ fn max_health(shard: &Standalone) -> u32 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn loot_keeps_its_property_after_the_pool_changes_and_equipped_stats_follow_it() {
     let shard = fixture("property-loot");
     shard.assert_sql(&format!("INSERT INTO game_creature_loot (id,creature_entry,item_entry,chance_bp,count,group_id,quest_only) VALUES (5090100,51000,{ITEM},10000,1,0,false)"));
@@ -112,7 +112,7 @@ fn create_spell(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
     let shard = fixture("property-missing-loot-pool");
     shard.assert_sql(
@@ -137,7 +137,7 @@ fn a_missing_property_pool_does_not_leave_an_empty_loot_cursor() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
     let shard = fixture("property-mixed-creature");
     shard.assert_sql("DELETE FROM game_item_property_weight WHERE id = 5090100");
@@ -160,7 +160,7 @@ fn invalid_creature_drops_leave_valid_loot_at_slot_zero() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
     let shard = fixture("property-mixed-chest");
     shard.assert_sql("UPDATE game_world_entity SET x = 100, y = 100, z = 100 WHERE guid = 1");
@@ -192,7 +192,7 @@ fn invalid_chest_properties_preserve_valid_drops_and_finish_empty_fallbacks() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn large_imported_spirit_contributions_do_not_overflow_equipping() {
     let shard = fixture("property-spirit-bound");
     let base: u32 = shard.query_rows("SELECT spirit FROM game_world_entity WHERE guid = 1")[0]
@@ -216,7 +216,7 @@ fn large_imported_spirit_contributions_do_not_overflow_equipping() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn creation_is_atomic_even_when_the_spell_handles_a_full_inventory() {
     let shard = fixture("property-create");
     create_spell(&shard);
@@ -254,7 +254,7 @@ fn creation_is_atomic_even_when_the_spell_handles_a_full_inventory() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn splitting_and_moving_stacks_never_mix_properties() {
     let shard = fixture("property-stacks");
     shard.assert_sql(&format!(
@@ -294,7 +294,7 @@ fn splitting_and_moving_stacks_never_mix_properties() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
     let shard = fixture("property-buyback");
     shard.assert_call("debug_spawn_at_feet", &["1", "51004", "1"]);
@@ -332,7 +332,7 @@ fn buyback_restores_the_saved_property_without_reading_the_current_pool() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn cross_shard_transfer_imports_the_saved_item_property() {
     let source = fixture("property-transfer-source");
     source.assert_call("debug_grant_item", &["1", ITEM, "1"]);

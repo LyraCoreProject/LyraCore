@@ -9,7 +9,7 @@ const START_FORWARD: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_START_FO
 const SET_PITCH: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_SET_PITCH;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_pitch_change_coalesces_behind_a_staged_transition() {
     let mut standalone = Standalone::start("pitch-motion");
     standalone.publish_module();

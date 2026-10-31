@@ -6,12 +6,12 @@ what a real client shows.
 
 ## Prerequisites
 
-- Rust through rustup. `rust-toolchain.toml` pins 1.93.0 with rustfmt, clippy and the
+- Rust through rustup. `rust-toolchain.toml` pins 1.97.1 with rustfmt, clippy and the
   `wasm32-unknown-unknown` target, and rustup installs them on the first `cargo` call in the
   checkout.
 - On Linux, a C toolchain, `pkg-config` and the OpenSSL headers (`build-essential pkg-config
   libssl-dev` on Ubuntu). macOS needs only the Xcode Command Line Tools.
-- For the durable tier and schema checks: the SpacetimeDB CLI 2.7.1 on `PATH`
+- For the durable tier and schema checks: the SpacetimeDB CLI 2.14.0 on `PATH`
   as `spacetime`, with the matching standalone. [`quickstart.md`](./quickstart.md) gives the
   install. Durable test fixtures also accept `SPACETIME_BIN` to locate the CLI.
 - For the Runtime Script check: Bun 1.4.3.

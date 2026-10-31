@@ -48,9 +48,8 @@ plain text, and the Host closes the connection.
 
 ### Host, listeners and admission
 
-The host extension pins SpacetimeDB 2.13.0 at `08e1aba133671f9c631c6e70133a82faa0e7b283`
-([`prepare-host.py`](../native-host/prepare-host.py)). The Module targets 2.7.1 and passes the
-native compatibility check. The listeners read `LYRACORE_NATIVE_LOGON_ADDR`,
+The host extension pins SpacetimeDB 2.14.0 at `7c3ee551755dc0152d9e0b0d5241fff939d3eda0`
+([`prepare-host.py`](../native-host/prepare-host.py)). The Module uses the same version. The listeners read `LYRACORE_NATIVE_LOGON_ADDR`,
 `LYRACORE_NATIVE_WORLD_ADDR` and `LYRACORE_NATIVE_DATABASE`; a listener whose address is absent is
 off.
 

@@ -57,7 +57,7 @@ fn assert_projection(shard: &Standalone, display: u32, speed_bp: u32) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_untrained_mount_refusal_keeps_the_item_vitals_and_auras_unchanged() {
     let shard = fixture("mount-untrained");
     shard.assert_sql("DELETE FROM game_creature_move_schedule");
@@ -95,7 +95,7 @@ fn an_untrained_mount_refusal_keeps_the_item_vitals_and_auras_unchanged() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
     let shard = fixture("mount-lifetime");
     shard.assert_call("debug_spawn_at_feet", &[RIDER, "51007", "5"]);
@@ -158,7 +158,7 @@ fn reusable_reins_restore_the_mount_on_rebuild_and_clear_it_on_dismount() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn world_entry_preserves_godmode_and_the_unmounted_speed_multiplier() {
     let shard = fixture("gm-world-entry");
     bind_session(&shard);

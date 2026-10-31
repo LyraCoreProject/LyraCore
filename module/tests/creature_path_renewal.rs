@@ -10,7 +10,7 @@ const RENEW_AFTER: Duration = Duration::from_millis(900);
 const MIN_LAG_YD: f32 = 0.1;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_path_renewed_mid_leg_starts_where_the_client_renders_the_mover() {
     let mut shard = Standalone::start("creature-path-renewal");
     let wolf = lone_wolf(&mut shard);

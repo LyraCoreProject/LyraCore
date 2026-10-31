@@ -41,7 +41,7 @@ fn assert_refusal(output: Output, reason: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn seeded_and_created_characters_start_without_a_watched_faction() {
     let shard = start("watched-faction-fresh");
     assert_eq!(watched(&shard, CHARACTER), -1);
@@ -66,7 +66,7 @@ fn seeded_and_created_characters_start_without_a_watched_faction() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn selecting_and_clearing_preserve_standing_and_at_war_state() {
     let shard = start("watched-faction-select");
     shard.assert_call("debug_seed_scenario_fixtures", &[]);
@@ -98,7 +98,7 @@ fn selecting_and_clearing_preserve_standing_and_at_war_state() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn watched_selection_requires_operator_current_actor_and_live_character() {
     let shard = start("watched-faction-gates");
     select(&shard, 19);
@@ -142,7 +142,7 @@ fn enter_world(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn selection_and_clear_survive_logout_and_login() {
     let shard = start("watched-faction-relog");
     enter_world(&shard);
@@ -156,7 +156,7 @@ fn selection_and_clear_survive_logout_and_login() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn selection_and_clear_survive_a_map_change_and_world_port() {
     let shard = start("watched-faction-map-change");
     enter_world(&shard);
@@ -189,7 +189,7 @@ fn selection_and_clear_survive_a_map_change_and_world_port() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_character_can_choose_the_watched_faction_during_a_taxi_flight() {
     let shard = start("watched-faction-taxi");
     shard.assert_sql(

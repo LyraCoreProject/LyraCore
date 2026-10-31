@@ -5,8 +5,8 @@ runs:
   steps:
     - shell: bash
       env:
-        SPACETIME_VERSION: 2.7.1
-        SPACETIME_ARCHIVE_SHA256: 9b58192135733083479f30aba47dbbbc79b51db368c46cc221baa663e9c3a2c1
+        SPACETIME_VERSION: 2.14.0
+        SPACETIME_ARCHIVE_SHA256: 2d8950dc3c67910aa80aa7612efddb5ee6ed53c443573f617b3ad65fef2aa084
       run: |
         archive_path="$RUNNER_TEMP/spacetime.tar.gz"
         cli_dir="$RUNNER_TEMP/spacetime-$SPACETIME_VERSION"

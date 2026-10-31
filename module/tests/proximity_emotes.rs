@@ -27,7 +27,7 @@ fn inserted_rows(update: &Value) -> Vec<Value> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() {
     let mut standalone = Standalone::start("proximity-emotes");
     standalone.publish_module();
@@ -73,7 +73,7 @@ fn an_e_line_is_one_universal_row_and_a_dead_or_creature_only_type_is_refused() 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_say_or_yell_line_needs_a_language_the_speakers_race_knows() {
     let mut standalone = Standalone::start("say-language");
     standalone.publish_module();

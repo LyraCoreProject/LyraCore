@@ -22,8 +22,8 @@ Characters again.
 1. Pull `main`. `./lyracore` installs the pinned CLI on its next run.
 2. Stop the old runtime with `./lyracore dev down`. Native startup refuses while a recorded legacy
    runtime is live, and it refuses an unrelated process on port 3000, 3724 or 8085.
-3. Install the Native Host toolchain with `rustup toolchain install 1.97.1`. The Module still builds
-   with 1.93.0. Native startup also needs OpenSSL 3 or newer.
+3. Install the toolchain with `rustup toolchain install 1.97.1`. The Module and the Native Host both
+   build with it. Native startup also needs OpenSSL 3 or newer.
 4. Run `./lyracore dev up`. The first run also builds the Native Host.
 5. Run `./lyracore import`, then `./lyracore account create TEST`.
 

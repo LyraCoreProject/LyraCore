@@ -101,7 +101,7 @@ fn event_count(realm: &Standalone, guild_id: &str) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn motd_and_info_text_gate_on_rank_rights_and_length_caps() {
     let mut realm = Standalone::start("guild-settings-motd-info");
     realm.publish_module();
@@ -160,7 +160,7 @@ fn motd_and_info_text_gate_on_rank_rights_and_length_caps() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn notes_gate_on_rank_rights_and_target_membership_and_answer_the_editor_with_a_roster_event() {
     let mut realm = Standalone::start("guild-settings-notes");
     realm.publish_module();
@@ -219,7 +219,7 @@ fn notes_gate_on_rank_rights_and_target_membership_and_answer_the_editor_with_a_
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn rank_edit_add_and_delete_respect_leadership_five_to_ten_bounds_and_move_members() {
     let mut realm = Standalone::start("guild-settings-ranks");
     realm.publish_module();

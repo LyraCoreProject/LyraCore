@@ -79,7 +79,7 @@ fn assert_take_refused(standalone: &Standalone, recipient: &str, mail_id: &str) 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn only_an_item_sent_or_returned_to_another_account_waits_an_hour() {
     let standalone = tester_with_purse("mail-delivery-send");
     let tester = actor(TESTER);

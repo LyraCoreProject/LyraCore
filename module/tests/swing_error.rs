@@ -9,7 +9,7 @@ const NOT_IN_RANGE: u8 = 1;
 const BAD_FACING: u8 = 2;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_due_swing_records_out_of_range_and_bad_facing_and_a_landed_swing_clears_it() {
     let mut standalone = Standalone::start("swing-error");
     standalone.publish_module();

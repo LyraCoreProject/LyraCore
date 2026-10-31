@@ -107,7 +107,7 @@ fn packet(row: &RawValue, connection_id: u128, opcode: u16) -> wire_client::deco
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn operator_connection_enters_world_and_receives_pong() {
     let (shard, guid, _) = fixture("native-conformance");
     let accounts = shard.query_rows("SELECT * FROM game_account");
@@ -156,7 +156,7 @@ fn operator_connection_enters_world_and_receives_pong() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_near_teleport_ack_expires_and_world_requests_resume() {
     let (shard, guid, _) = fixture("native-teleport-expiry");
     let mut connection = enter(&shard, guid);
@@ -200,7 +200,7 @@ fn a_missing_near_teleport_ack_expires_and_world_requests_resume() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
     let (shard, guid, account) = fixture("native-conformance-session");
     let key = serde_json::to_string(&vec![0x37u8; 40]).unwrap();
@@ -260,7 +260,7 @@ fn fixture_entry_preserves_login_credentials_and_refuses_the_old_fixture_key() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_later_transaction_delivers_packets_without_another_client_request() {
     let (shard, guid, _) = fixture("native-conformance-later");
     let mut connection = enter(&shard, guid);
@@ -471,7 +471,7 @@ fn taxi_x(shard: &Standalone, guid: u64) -> f32 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_new_viewer_receives_the_current_taxi_spline() {
     let (shard, passenger, observer) = taxi_flight("taxi-new-viewer", 200);
     let mut viewer = enter(&shard, observer);
@@ -509,7 +509,7 @@ fn a_new_viewer_receives_the_current_taxi_spline() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_late_viewers_create_follows_the_authoritative_curved_flight() {
     let route = [
         (0.0, 0.0, 0.0),
@@ -599,7 +599,7 @@ fn a_late_viewers_create_follows_the_authoritative_curved_flight() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn login_near_a_flyer_replays_its_current_spline() {
     let (shard, passenger, observer) = taxi_flight("taxi-login-near-flyer", 40);
     assert!(lyracore_test_support::poll_until(
@@ -621,7 +621,7 @@ fn login_near_a_flyer_replays_its_current_spline() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn flyer_reconnect_restores_position_and_replays_current_spline() {
     let (shard, passenger, _) = taxi_flight("taxi-flyer-reconnect", 40);
     let mut first = enter(&shard, passenger);
@@ -662,7 +662,7 @@ fn flyer_reconnect_restores_position_and_replays_current_spline() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn permanent_taxi_abort_sends_dismount_result() {
     let (shard, passenger, _) = taxi_flight("taxi-abort-dismount", 40);
     let mut connection = enter(&shard, passenger);
@@ -688,7 +688,7 @@ fn permanent_taxi_abort_sends_dismount_result() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn taxi_landing_sends_a_position_correction_after_dismount() {
     use wire_client::decode::Field;
 
@@ -737,7 +737,7 @@ fn taxi_landing_sends_a_position_correction_after_dismount() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
     use std::collections::BTreeMap;
     use wire_client::decode::Field;
@@ -833,7 +833,7 @@ fn taxi_crosses_capital_and_zone_boundaries_with_area_data() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn rest_area_rejects_hostile_characters_in_an_enemy_capital() {
     let (shard, alliance, account) = fixture("capital-rest-teams");
     shard.assert_call(
@@ -880,7 +880,7 @@ fn rest_area_rejects_hostile_characters_in_an_enemy_capital() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
     use std::collections::BTreeSet;
 
@@ -931,7 +931,7 @@ fn rest_area_rejects_a_flyer_above_the_goldshire_inn() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn tavern_rest_uses_imported_trigger_geometry() {
     let (shard, character, _) = fixture("tavern-rest");
     shard.assert_sql("INSERT INTO game_area_trigger (id,map_id,x,y,z,radius,box_length,box_width,box_height,box_yaw) VALUES (5090902,0,-9464,42,56,0,8,6,4,0)");
@@ -963,7 +963,7 @@ fn tavern_rest_uses_imported_trigger_geometry() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn world_entry_resets_rest_state_before_bonus_threshold() {
     let (shard, character, _) = fixture("rest-state-login");
     shard.assert_sql(&format!(
@@ -981,7 +981,7 @@ fn world_entry_resets_rest_state_before_bonus_threshold() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn neutral_capital_does_not_rest_on_ffa_pvp_realm() {
     let (shard, character, _) = fixture("ffa-capital-rest");
     shard.assert_sql("UPDATE game_realm SET realm_type = 16 WHERE id = 1");
@@ -1036,7 +1036,7 @@ fn start_taxi_flight_on_route(shard: &Standalone, passenger: u64, route: &[(f32,
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_reconnecting_passenger_keeps_both_taxi_flags() {
     use lyracore_shared::constants::unit_flags;
 

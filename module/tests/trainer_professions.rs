@@ -36,7 +36,7 @@ fn assert_learned(shard: &Standalone, spell: u32, line: u32, cap: u32) {
 }
 
 #[test]
-#[ignore = "requires the local SpacetimeDB 2.7.1 CLI and debug Module"]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
 fn profession_wrappers_teach_the_spell_at_every_skill_tier() {
     let (shard, npc) = fixture("trainer-profession-wrappers");
     for (profession, (line, spells)) in [
@@ -61,7 +61,7 @@ fn profession_wrappers_teach_the_spell_at_every_skill_tier() {
 }
 
 #[test]
-#[ignore = "requires the local SpacetimeDB 2.7.1 CLI and debug Module"]
+#[ignore = "requires the local SpacetimeDB 2.14.0 CLI and debug Module"]
 fn classic_wrapper_and_synthesized_profession_offers_keep_working_in_either_order() {
     let (shard, npc) = fixture("trainer-classic-professions");
     for (tier, spell) in [2259, 3101, 3464, 11611].into_iter().enumerate() {

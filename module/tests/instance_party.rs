@@ -9,7 +9,7 @@ const INVITE: &str = "0";
 const ACCEPT: &str = "1";
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_solo_instance_becomes_the_instance_of_the_party_its_owner_forms() {
     let mut shard = Standalone::start("instance-party-adoption");
     shard.publish_module();

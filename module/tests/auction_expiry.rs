@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn scheduled_bid_expiry_settles_once_and_a_callback_replay_is_a_no_op() {
     let mut standalone = Standalone::start("auction-expiry");
     standalone.publish_module();

@@ -34,7 +34,7 @@ fn memberships(realm: &Standalone, guid: u64) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_guild_member_never_joins_guild_recruitment() {
     let mut realm = Standalone::start("guild-recruitment");
     realm.publish_module();

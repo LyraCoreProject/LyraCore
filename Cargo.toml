@@ -14,8 +14,8 @@ members = [
 [workspace.package]
 edition = "2021"
 license = "MIT OR Apache-2.0"
-# Keep this floor equal to rust-toolchain.toml; SpacetimeDB 2.7.1 requires Rust 1.93.0.
-rust-version = "1.93.0"
+# Keep this floor equal to rust-toolchain.toml; SpacetimeDB 2.14.0 requires Rust 1.97.
+rust-version = "1.97.1"
 repository = "https://github.com/LyraCoreProject/LyraCore"
 homepage = "https://github.com/LyraCoreProject/LyraCore"
 publish = false

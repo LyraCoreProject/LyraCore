@@ -8,7 +8,7 @@ const CHARACTER_GUID: u64 = 1;
 const HEARTBEAT: u32 = lyracore_shared::opcodes::movement::MSG_MOVE_HEARTBEAT;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn connected_character_motion_is_removed_until_world_port_acknowledgement() {
     let mut standalone = Standalone::start("teleport-motion");
     standalone.publish_module();
@@ -69,7 +69,7 @@ fn connected_character_motion_is_removed_until_world_port_acknowledgement() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn sessionless_map_change_keeps_the_character_live_and_discards_previous_motion() {
     let mut standalone = Standalone::start("sessionless-teleport-motion");
     standalone.publish_module();

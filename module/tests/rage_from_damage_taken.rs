@@ -17,7 +17,7 @@ const HEALTH: u32 = 10_000;
 const PERIODIC_LOG: u8 = 6;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_warrior_gains_rage_from_spell_and_periodic_damage_taken() {
     let mut standalone = Standalone::start("rage-from-damage-taken");
     standalone.publish_module();

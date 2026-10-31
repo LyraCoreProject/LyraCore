@@ -82,7 +82,7 @@ fn entity(shard: &Standalone) -> support::Row {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn deep_water_exhausts_a_motionless_character_and_safe_water_recovers_it() {
     let shard = fixture("fatigue-exhaustion");
     move_to(&shard, SAFE_WATER, 1000);
@@ -114,7 +114,7 @@ fn deep_water_exhausts_a_motionless_character_and_safe_water_recovers_it() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_exhausted_ghost_returns_to_a_graveyard() {
     let shard = fixture("fatigue-ghost");
     shard.assert_call("debug_set_health", &[PLAYER, "0"]);

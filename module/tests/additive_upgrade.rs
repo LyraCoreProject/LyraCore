@@ -17,7 +17,7 @@ const LEGACY_NOTIFICATIONS: &[&str] = &[
 ];
 
 #[test]
-#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.7.1 CLI"]
+#[ignore = "requires LYRACORE_TEST_BASELINE_WASM from 859c7257 and the SpacetimeDB 2.14.0 CLI"]
 fn populated_old_module_upgrades_without_clearing() {
     let baseline_path = std::env::var_os("LYRACORE_TEST_BASELINE_WASM")
         .expect("set LYRACORE_TEST_BASELINE_WASM to the Module Wasm built at 859c7257c74d2c371dea8ed743cfbccd596cac11 with debug_reducers,package_test_fixture");

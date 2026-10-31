@@ -33,7 +33,7 @@ const RAGE: u32 = 1;
 const MANA: u32 = 0;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_strike_fizzles_into_a_white_swing_when_the_rage_is_gone() {
     let mut standalone = Standalone::start("queued-strike-fizzle");
     standalone.publish_module();
@@ -165,7 +165,7 @@ fn a_queued_strike_fizzles_into_a_white_swing_when_the_rage_is_gone() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fires() {
     let mut standalone = Standalone::start("queued-raptor-strike");
     standalone.publish_module();
@@ -228,7 +228,7 @@ fn a_queued_raptor_strike_spends_mana_and_starts_its_cooldown_when_the_swing_fir
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn leaving_bear_form_interrupts_a_queued_maul() {
     let mut standalone = Standalone::start("queued-maul-stance");
     standalone.publish_module();
@@ -297,7 +297,7 @@ fn assert_form_change_interrupts_maul(standalone: &Standalone, form: u32) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn death_drops_a_queued_raptor_strike() {
     let mut standalone = Standalone::start("queued-strike-death");
     standalone.publish_module();
@@ -339,7 +339,7 @@ fn death_drops_a_queued_raptor_strike() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_queued_raptor_strike_ends_with_its_attack() {
     let mut standalone = Standalone::start("queued-strike-attack-end");
     standalone.publish_module();
@@ -386,7 +386,7 @@ fn a_queued_raptor_strike_ends_with_its_attack() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn ending_auto_shot_keeps_a_queued_raptor_strike() {
     const AUTO_SHOT: u32 = 75;
     let mut standalone = Standalone::start("queued-strike-auto-shot");
@@ -427,7 +427,7 @@ fn ending_auto_shot_keeps_a_queued_raptor_strike() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_auto_shot_target_dying_interrupts_a_queued_raptor_strike() {
     const AUTO_SHOT: u32 = 75;
     const FIXTURE_BLADE: u32 = 5_090_050;
@@ -493,7 +493,7 @@ fn an_auto_shot_target_dying_interrupts_a_queued_raptor_strike() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn running_out_of_ammo_keeps_a_queued_raptor_strike() {
     const AUTO_SHOT: u32 = 75;
     const FIXTURE_BLADE: u32 = 5_090_050;
@@ -586,7 +586,7 @@ fn stage_form(standalone: &Standalone, spell_id: u32, name: &str, stance: u8) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_evading_creature_drops_its_queued_strike() {
     const STRIKE: u32 = 11976;
     let mut standalone = Standalone::start("queued-strike-evade");

@@ -24,7 +24,7 @@ fn fixture_in_range(name: &str, base: &str) -> Standalone {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn characters_above_bit_24_can_receive_items_together() {
     let shard = fixture("item-guid-owners");
     shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
@@ -35,7 +35,7 @@ fn characters_above_bit_24_can_receive_items_together() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn legacy_items_keep_their_identity_and_no_longer_control_new_grants() {
     let shard = fixture("item-guid-legacy");
     shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
@@ -62,7 +62,7 @@ fn legacy_items_keep_their_identity_and_no_longer_control_new_grants() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn split_and_debug_equipment_allocate_distinct_items_after_slot_moves() {
     let shard = fixture("item-guid-split");
     shard.assert_call("debug_grant_item", &["1", "5090052", "5"]);
@@ -91,7 +91,7 @@ fn split_and_debug_equipment_allocate_distinct_items_after_slot_moves() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn trade_remints_for_each_recipient_before_deleting_outgoing_items() {
     let shard = fixture("item-guid-trade");
     shard.assert_call("debug_grant_item", &["1", "5090050", "1"]);
@@ -167,7 +167,7 @@ fn finish(source: &Standalone, destination: &Standalone, id: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip() {
     let source = fixture("item-guid-transfer-source");
     source.assert_call("debug_grant_item", &["1", "5090050", "1"]);
@@ -244,7 +244,7 @@ fn transfer_refuses_legacy_collision_then_preserves_both_formats_on_round_trip()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
     const TRANSFER: &str = "5090173";
     const FOREIGN: &str = "16777217";
@@ -302,7 +302,7 @@ fn transfer_remints_an_aura_id_without_changing_a_foreign_aura() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks() {
     let shard = fixture("item-guid-exhaustion");
     shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);
@@ -347,7 +347,7 @@ fn item_and_character_creation_share_exhaustion_without_changing_partial_stacks(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn crafting_does_not_reuse_the_consumed_reagents_identity() {
     let shard = fixture("item-guid-craft");
     shard.assert_call("debug_grant_item", &["1", "5090052", "1"]);
@@ -370,7 +370,7 @@ fn seed_craft(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_failed_craft_keeps_reagents_without_skill_or_partial_products() {
     let shard = fixture("item-guid-craft-refund");
     seed_craft(&shard);
@@ -402,7 +402,7 @@ fn a_failed_craft_keeps_reagents_without_skill_or_partial_products() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_high_range_character_arrives_and_receives_items_from_the_destinations_own_range() {
     let source = fixture_in_range("item-guid-high-source", "1000000000");
     source.assert_call(
@@ -462,7 +462,7 @@ fn a_high_range_character_arrives_and_receives_items_from_the_destinations_own_r
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_format_exhaustion_does_not_advance_the_range() {
     let shard = fixture_in_range("item-guid-format-limit", "140737000000000");
     shard.assert_sql("UPDATE game_guid_allocator SET high_water = 140737488355327 WHERE id = 0");
@@ -479,7 +479,7 @@ fn item_format_exhaustion_does_not_advance_the_range() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_local_legacy_collision_refuses_without_replacing_either_owners_items() {
     let shard = fixture("item-guid-local-conflict");
     shard.assert_call("debug_grant_item", &["16777217", "5090050", "1"]);
@@ -507,7 +507,7 @@ fn a_local_legacy_collision_refuses_without_replacing_either_owners_items() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn legacy_deletion_preserves_its_floor_before_range_installation() {
     let mut shard = Standalone::start("item-guid-legacy-floor");
     shard.publish_module();

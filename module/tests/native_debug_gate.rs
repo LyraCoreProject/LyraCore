@@ -48,7 +48,7 @@ fn the_architecture_check_detects_a_missing_or_ineffective_feature_gate() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn debug_reducers_build_does_not_export_conformance_entry() {
     use lyracore_test_support::{module_bytes_with_features, Standalone};
 
@@ -89,7 +89,7 @@ fn debug_reducers_build_does_not_export_conformance_entry() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn default_build_does_not_export_taxi_discovery() {
     use lyracore_test_support::{module_bytes_with_features, Standalone};
 

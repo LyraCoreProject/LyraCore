@@ -92,7 +92,7 @@ fn auras(shard: &Standalone, spell_id: u32) -> usize {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rooted_character_turns_but_moves_only_after_the_last_root_ends() {
     let (shard, [x, y, z]) = fixture("movement-root");
     cast(&shard, ROOT_A);
@@ -128,7 +128,7 @@ fn a_rooted_character_turns_but_moves_only_after_the_last_root_ends() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn moving_ends_shadowmeld_but_keeps_stealth() {
     let (shard, [x, y, z]) = fixture("movement-shadowmeld");
     cast(&shard, SHADOWMELD);

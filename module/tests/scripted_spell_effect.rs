@@ -25,7 +25,7 @@ const HEAL_SCRIPT_COST: u32 = 30;
 const GATE_SPELL_COST: u32 = 40;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_caster() {
     let mut standalone = Standalone::start("scripted-effect-heal");
     standalone.publish_module();
@@ -90,7 +90,7 @@ fn an_enabled_scripted_effect_heals_the_resolved_target_and_credits_xp_to_the_ca
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op() {
     let mut standalone = Standalone::start("scripted-effect-noop");
     standalone.publish_module();
@@ -137,7 +137,7 @@ fn a_scripted_effect_with_script_id_zero_stays_the_vanilla_no_op() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
     let mut standalone = Standalone::start("scripted-effect-gate");
     standalone.publish_module();
@@ -229,7 +229,7 @@ fn a_missing_or_disabled_script_refuses_the_cast_before_any_cost_is_spent() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_failing_scripted_effect_discards_only_its_own_staged_effects() {
     let mut standalone = Standalone::start("scripted-effect-partial-failure");
     standalone.publish_module();

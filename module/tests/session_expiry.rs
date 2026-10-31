@@ -7,7 +7,7 @@ use spacetimedb::Timestamp;
 use support::{poll_until, Standalone};
 
 #[test]
-#[ignore = "requires SpacetimeDB 2.7.1 and the Wasm toolchain"]
+#[ignore = "requires SpacetimeDB 2.14.0 and the Wasm toolchain"]
 fn logon_renews_expired_sessions_and_the_scheduler_reaps_only_expired_rows() {
     let mut standalone = Standalone::start("session-expiry");
     standalone.publish_module();

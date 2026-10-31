@@ -10,7 +10,7 @@ fn source_guid(map_id: u32) -> u64 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
     let mut shard = Standalone::start("legacy-creature-pools");
     shard.publish_module();
@@ -82,7 +82,7 @@ fn legacy_pools_choose_one_position_and_keep_instance_lives_independent() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
     let mut shard = Standalone::start("full-world-population");
     shard.publish_module();
@@ -220,7 +220,7 @@ fn all_dungeon_populations_have_independent_spawn_and_patrol_lifecycles() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_selected_world_entry_keeps_its_source_and_uses_its_own_guid_and_patrol() {
     let mut shard = Standalone::start("world-source-choice");
     shard.publish_module();

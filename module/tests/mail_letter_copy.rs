@@ -68,7 +68,7 @@ fn seed_letter_item_template(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn copying_a_letter_sets_copied_and_files_its_body_as_item_text() {
     let shard = fixture("mail-letter-copy-basic");
     let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
@@ -86,7 +86,7 @@ fn copying_a_letter_sets_copied_and_files_its_body_as_item_text() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn copying_the_same_letter_twice_replays_without_a_second_text_row() {
     let shard = fixture("mail-letter-copy-twice");
     let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
@@ -101,7 +101,7 @@ fn copying_the_same_letter_twice_replays_without_a_second_text_row() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_returned_letters_reused_id_copies_again_without_panicking() {
     let shard = fixture("mail-letter-copy-returned");
     let alice = 1u64;
@@ -139,7 +139,7 @@ fn a_returned_letters_reused_id_copies_again_without_panicking() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn granting_a_letter_a_second_time_does_not_duplicate_the_item() {
     let shard = fixture("mail-letter-grant-twice");
     seed_letter_item_template(&shard);
@@ -157,7 +157,7 @@ fn granting_a_letter_a_second_time_does_not_duplicate_the_item() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn copying_grant_and_destroying_the_letter_refuses_a_second_grant() {
     let shard = fixture("mail-letter-copy-grant-destroy");
     seed_letter_item_template(&shard);
@@ -242,7 +242,7 @@ fn mail_letter(shard: &Standalone, sender: u64, recipient: u64, letter_guid: &st
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_traded_plain_letter_keeps_its_text() {
     let shard = fixture("trade-letter-copy");
     seed_letter_item_template(&shard);
@@ -272,7 +272,7 @@ fn a_traded_plain_letter_keeps_its_text() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_mailed_plain_letter_keeps_its_text_until_it_is_destroyed() {
     let shard = fixture("mail-letter-copy-mailed");
     seed_letter_item_template(&shard);
@@ -322,7 +322,7 @@ fn a_mailed_plain_letter_keeps_its_text_until_it_is_destroyed() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_letter_not_yet_delivered_cannot_be_copied() {
     let shard = fixture("mail-letter-copy-not-delivered");
     let mail_id = seed_mail(&shard, 1, 2, "left it at the inn");
@@ -350,7 +350,7 @@ fn a_letter_not_yet_delivered_cannot_be_copied() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
     let source = fixture("mail-letter-copy-transfer-source");
     seed_letter_item_template(&source);
@@ -408,7 +408,7 @@ fn a_transfer_keeps_the_text_of_the_letters_it_carries() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn deleting_a_character_destroys_its_letters_text() {
     let shard = fixture("mail-letter-copy-character-deleted");
     seed_letter_item_template(&shard);
@@ -431,7 +431,7 @@ fn deleting_a_character_destroys_its_letters_text() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn deleting_a_character_drops_the_text_of_the_letter_in_its_mail_once() {
     let shard = fixture("mail-letter-copy-mail-owner-deleted");
     seed_letter_item_template(&shard);

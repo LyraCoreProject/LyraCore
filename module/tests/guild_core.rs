@@ -38,7 +38,7 @@ fn guild_rows(realm: &Standalone) -> (usize, usize, usize) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_gm_founds_a_guild_on_realm_core_and_refusals_change_nothing() {
     let mut realm = Standalone::start("guild-core");
     realm.publish_module();

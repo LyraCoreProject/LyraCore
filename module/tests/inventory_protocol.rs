@@ -17,7 +17,7 @@ fn fixture(name: &str) -> Standalone {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn inventory_changes_preserve_accepted_trade_items() {
     let shard = fixture("inventory-trade-offer");
     shard.assert_call(
@@ -226,7 +226,7 @@ fn slot_of(shard: &Standalone, entry: u32) -> Vec<String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_two_handed_weapon_moves_the_off_hand_item_to_a_free_slot() {
     const TWO_HANDER: u32 = 5090050;
     const ONE_HANDER: u32 = 5090052;

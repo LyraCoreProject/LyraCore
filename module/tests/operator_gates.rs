@@ -10,7 +10,7 @@ const OPEN_PREFIX: &str = "debug_";
 const GATE_REFUSALS: &[&str] = &["operator only", "loot:boundary_operator_rejected"];
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn every_operator_reducer_refuses_an_anonymous_caller() {
     let mut shard = Standalone::start("operator-gates");
     shard.publish_module();

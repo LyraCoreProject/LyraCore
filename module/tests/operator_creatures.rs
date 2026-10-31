@@ -70,7 +70,7 @@ fn loot() -> Value {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn only_the_operator_can_edit_creatures_even_in_an_empty_batch() {
     let shard = realm("operator-creatures-authority");
     assert!(!shard
@@ -81,7 +81,7 @@ fn only_the_operator_can_edit_creatures_even_in_an_empty_batch() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn create_uses_the_operator_range_and_edits_survive_plain_publish() {
     let mut shard = realm("operator-creatures-publish");
     apply(
@@ -111,7 +111,7 @@ fn create_uses_the_operator_range_and_edits_survive_plain_publish() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn template_and_display_edits_respawn_world_creatures_but_leave_instance_copies() {
     let shard = realm("operator-creatures-respawn");
     shard.assert_call("install_guid_range", &["0"]);
@@ -216,7 +216,7 @@ fn template_and_display_edits_respawn_world_creatures_but_leave_instance_copies(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
     let shard = realm("operator-creatures-loot");
     for (table, key, variant, extra) in [
@@ -267,7 +267,7 @@ fn loot_lists_replace_imported_ids_skip_bands_and_preserve_owned_rows() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spell_lists_and_fallback_cast_replace_and_remove() {
     let shard = realm("operator-creatures-spells");
     shard.assert_sql("INSERT INTO game_creature_spell (id,creature_entry,spell_id,priority,condition,condition_value) VALUES (9999999,620,133,0,0,0),(10999999,621,133,0,0,0)");
@@ -323,7 +323,7 @@ fn spell_lists_and_fallback_cast_replace_and_remove() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn refused_batches_keep_rows_lives_and_logs_and_unchanged_imported_values_pass() {
     let shard = realm("operator-creatures-rollback");
     let fields = fields(&shard);
@@ -389,7 +389,7 @@ fn refused_batches_keep_rows_lives_and_logs_and_unchanged_imported_values_pass()
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn respawn_cap_refuses_the_whole_batch() {
     let shard = realm("operator-creatures-cap");
     const CAP: usize = 2_000;

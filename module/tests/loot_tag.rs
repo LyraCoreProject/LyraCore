@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn loot_tag_owns_threat_lifetime_rewards_and_corpse_eligibility() {
     let mut standalone = Standalone::start("loot-tag");
     standalone.publish_module_anonymous();

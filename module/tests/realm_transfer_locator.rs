@@ -54,7 +54,7 @@ fn assert_begin_refused(realm: &Standalone, args: &[&str], reason: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_first_human_transfer_creates_only_a_pending_locator_and_replays_exactly() {
     let realm = realm("first-human-transfer-locator");
     realm.assert_call("begin_character_shard_transfer", &begin("0"));
@@ -79,7 +79,7 @@ fn a_first_human_transfer_creates_only_a_pending_locator_and_replays_exactly() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn first_transfer_initialization_cannot_replace_a_competing_pending_locator() {
     let realm = realm("competing-first-transfer-locator");
     realm.assert_call("begin_character_shard_transfer", &begin("0"));
@@ -91,7 +91,7 @@ fn first_transfer_initialization_cannot_replace_a_competing_pending_locator() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn first_transfer_initialization_cannot_replace_a_settled_locator() {
     let realm = realm("settled-first-transfer-locator");
     realm.assert_call("set_character_shard", &["1", "1", "0", ACTOR]);
@@ -100,7 +100,7 @@ fn first_transfer_initialization_cannot_replace_a_settled_locator() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_bot_cannot_create_a_missing_transfer_locator() {
     let realm = realm("bot-missing-transfer-locator");
     for (revision, reason) in [

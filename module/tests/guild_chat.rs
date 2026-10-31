@@ -115,7 +115,7 @@ fn refused(realm: &Standalone, actor_guid: u64, kind: u8, tag: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn guild_chat_reaches_every_member_with_gchatlisten() {
     let mut realm = Standalone::start("guild-chat-guild-audience");
     realm.publish_module();
@@ -128,7 +128,7 @@ fn guild_chat_reaches_every_member_with_gchatlisten() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn officer_chat_reaches_only_officer_ranked_members() {
     let mut realm = Standalone::start("guild-chat-officer-audience");
     realm.publish_module();
@@ -141,7 +141,7 @@ fn officer_chat_reaches_only_officer_ranked_members() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rank_without_the_speak_right_and_a_non_member_are_refused() {
     let mut realm = Standalone::start("guild-chat-refusals");
     realm.publish_module();
@@ -155,7 +155,7 @@ fn a_rank_without_the_speak_right_and_a_non_member_are_refused() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_rank_edit_changes_the_very_next_line() {
     let mut realm = Standalone::start("guild-chat-rank-edit-takes-effect");
     realm.publish_module();

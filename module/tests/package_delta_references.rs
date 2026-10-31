@@ -164,7 +164,7 @@ fn refusal_text(output: &std::process::Output) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn quest_and_loot_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-references");
     standalone.publish_module();
@@ -206,7 +206,7 @@ fn quest_and_loot_claims_refuse_missing_cross_table_references() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn tuning_a_package_quest_no_enabled_package_inserts_is_refused() {
     let mut standalone = Standalone::start("package-delta-uninvented-quest");
     standalone.publish_module();
@@ -234,7 +234,7 @@ fn tuning_a_package_quest_no_enabled_package_inserts_is_refused() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn cast_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-cast-references");
     standalone.publish_module();
@@ -279,7 +279,7 @@ fn cast_claims_refuse_missing_cross_table_references() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
     let mut standalone = Standalone::start("cast-fixture-target");
     standalone.publish_module();
@@ -336,7 +336,7 @@ fn creature_spell_updates_cannot_hide_their_fixture_creature_target() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() {
     let mut standalone = Standalone::start("package-delta-trainer-references");
     standalone.publish_module();
@@ -387,7 +387,7 @@ fn a_profession_offerings_marker_spell_is_exempt_but_a_class_offerings_is_not() 
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn gossip_claims_refuse_missing_cross_table_references() {
     let mut standalone = Standalone::start("package-delta-gossip-references");
     standalone.publish_module();
@@ -438,7 +438,7 @@ fn gossip_claims_refuse_missing_cross_table_references() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_table() {
     let mut standalone = Standalone::start("package-delta-globals-references");
     standalone.publish_module();
@@ -496,7 +496,7 @@ fn globals_claims_refuse_missing_references_and_every_insert_on_a_fixed_key_tabl
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spell_metadata_claims_refuse_a_missing_spell_in_the_key_and_in_a_column() {
     let mut standalone = Standalone::start("package-delta-spellmeta-references");
     standalone.publish_module();
@@ -585,7 +585,7 @@ fn gameobject_template_insert() -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_maps() {
     let mut standalone = Standalone::start("package-delta-creature-references");
     standalone.publish_module();
@@ -655,7 +655,7 @@ fn creature_spawn_claims_refuse_a_missing_template_and_one_row_claimed_on_two_ma
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn gameobject_claims_refuse_a_missing_template_and_place_an_invented_one() {
     let mut standalone = Standalone::start("package-delta-gameobject-references");
     standalone.publish_module();
@@ -771,7 +771,7 @@ fn broadcast_text_update(id: u32) -> String {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn creature_ai_claims_are_checked_against_quests_and_encounter_ownership() {
     let mut standalone = Standalone::start("package-delta-creature-ai-references");
     standalone.publish_module();

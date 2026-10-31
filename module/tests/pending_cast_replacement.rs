@@ -12,7 +12,7 @@ const TRAINER_GUID: u64 = (0xF130_u64 << 48) | (51001_u64 << 24) | 1;
 type SqlRow = BTreeMap<String, String>;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_new_timed_cast_replaces_only_the_casters_pending_rows() {
     let mut standalone = Standalone::start("pending-cast-replacement");
     standalone.publish_module();

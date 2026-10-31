@@ -55,7 +55,7 @@ fn refusal(shard: &Standalone, edits: Value, expected: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn only_the_operator_can_edit_items_even_in_an_empty_batch() {
     let shard = realm("operator-items-authority");
     let output = shard.call_anonymous("operator_apply_item_edits", &["[]"]);
@@ -64,7 +64,7 @@ fn only_the_operator_can_edit_items_even_in_an_empty_batch() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_create_and_full_update_use_the_operator_template_range() {
     let shard = realm("operator-items-create");
     let mut fields = fields(&shard);
@@ -94,7 +94,7 @@ fn item_create_and_full_update_use_the_operator_template_range() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn protected_items_missing_spells_and_invalid_fields_refuse() {
     let shard = realm("operator-items-refusals");
     let fields = fields(&shard);
@@ -133,7 +133,7 @@ fn protected_items_missing_spells_and_invalid_fields_refuse() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_refused_item_batch_rolls_back_templates_vendors_and_success_logs() {
     let shard = realm("operator-items-rollback");
     let before = item(&shard, 25).unwrap();
@@ -163,7 +163,7 @@ fn a_refused_item_batch_rolls_back_templates_vendors_and_success_logs() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn vendor_replacement_allocates_above_imported_ids_and_preserves_list_order() {
     let shard = realm("operator-items-vendor");
     shard.assert_sql(&format!("INSERT INTO game_npc_vendor (id, creature_entry, item_entry, slot, max_count) VALUES (90000000, {VENDOR}, 25, 1, 0)"));
@@ -197,7 +197,7 @@ fn vendor_replacement_allocates_above_imported_ids_and_preserves_list_order() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn vendor_refusals_preserve_the_old_offer_list() {
     let shard = realm("operator-items-vendor-refusal");
     let offer = json!({"item_entry": 25, "max_count": 0});
@@ -240,7 +240,7 @@ fn vendor_refusals_preserve_the_old_offer_list() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn item_edits_survive_plain_publish() {
     let mut shard = realm("operator-items-publish");
     apply(
@@ -265,7 +265,7 @@ fn item_edits_survive_plain_publish() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_update_keeps_an_imported_spell_reference_the_realm_lacks() {
     let shard = realm("operator-items-held-spell");
     let mut fields = fields(&shard);

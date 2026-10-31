@@ -24,7 +24,7 @@ fn one_row(standalone: &Standalone, zone_id: &str) -> BTreeMap<String, String> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn forced_weather_is_per_zone_and_a_refusal_leaves_every_row_unchanged() {
     let mut standalone = Standalone::start("weather-forced");
     standalone.publish_module();
@@ -105,7 +105,7 @@ fn forced_weather_is_per_zone_and_a_refusal_leaves_every_row_unchanged() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_weather_roll_and_its_climate_survive_a_republish() {
     let mut standalone = Standalone::start("weather-republish");
     standalone.publish_module();

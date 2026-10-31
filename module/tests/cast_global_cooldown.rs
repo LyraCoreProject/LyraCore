@@ -10,7 +10,7 @@ const WOLF: u64 = (0xF130_u64 << 48) | (51000_u64 << 24) | 1;
 const ACTOR: &str = r#"{"guid":1,"ownership":null}"#;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn fireball_can_be_cast_again_when_its_cast_bar_finishes() {
     let shard = fixture("fireball-global-cooldown", 2000, 1500, 0);
     let casts = subscribe_with_fence(
@@ -34,7 +34,7 @@ fn fireball_can_be_cast_again_when_its_cast_bar_finishes() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_short_cast_finishes_during_its_original_global_cooldown() {
     let shard = fixture("short-cast-global-cooldown", 500, 5000, 7000);
     let casts = subscribe_with_fence(
@@ -66,7 +66,7 @@ fn a_short_cast_finishes_during_its_original_global_cooldown() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_instant_cast_still_starts_a_global_cooldown() {
     let shard = fixture("instant-cast-global-cooldown", 0, 5000, 0);
     let casts = subscribe_with_fence(
@@ -88,7 +88,7 @@ fn an_instant_cast_still_starts_a_global_cooldown() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn cancelling_a_timed_cast_releases_its_global_cooldown() {
     let shard = fixture("cancelled-cast-global-cooldown", 60000, 60000, 0);
     cast_fireball(&shard);
@@ -104,7 +104,7 @@ fn cancelling_a_timed_cast_releases_its_global_cooldown() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_refused_cast_does_not_start_a_global_cooldown() {
     let shard = fixture("refused-cast-global-cooldown", 2000, 1500, 0);
     shard.assert_sql("UPDATE game_spell SET cost = 1000 WHERE spell_id = 133");

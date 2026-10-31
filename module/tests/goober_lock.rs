@@ -115,7 +115,7 @@ fn key_count(standalone: &Standalone) -> u32 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn locked_goober_use_is_atomic_until_an_opener_unlocks_it() {
     let mut standalone = Standalone::start("goober-lock");
     standalone.publish_module();

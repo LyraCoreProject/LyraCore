@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_level_cap_discards_excess_xp_and_preserves_rested_xp_on_later_kills() {
     let mut standalone = Standalone::start("xp-cap");
     standalone.publish_module();

@@ -119,7 +119,7 @@ fn assert_alive(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn night_elf_release_applies_wisp_and_spirit_healer_restores_native_form() {
     let shard = fixture("ghost-wisp", 4);
     release(&shard);
@@ -131,7 +131,7 @@ fn night_elf_release_applies_wisp_and_spirit_healer_restores_native_form() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn human_release_keeps_native_form() {
     let shard = fixture("ghost-human", 1);
     release(&shard);
@@ -149,7 +149,7 @@ fn bind_session(shard: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn wisp_and_corpse_survive_logout_and_world_entry() {
     let shard = fixture("ghost-relog", 4);
     bind_session(&shard);
@@ -169,7 +169,7 @@ fn wisp_and_corpse_survive_logout_and_world_entry() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn corpse_reclaim_restores_native_form() {
     let shard = fixture("ghost-reclaim", 4);
     release(&shard);
@@ -180,7 +180,7 @@ fn corpse_reclaim_restores_native_form() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn self_resurrection_restores_native_form() {
     let shard = fixture("ghost-self-res", 4);
     release(&shard);
@@ -198,7 +198,7 @@ fn self_resurrection_restores_native_form() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn ghost_effects_cannot_be_cancelled() {
     let shard = fixture("ghost-cancel", 4);
     release(&shard);
@@ -212,7 +212,7 @@ fn ghost_effects_cannot_be_cancelled() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn wisp_survives_cross_shard_transfer() {
     let source = fixture("ghost-transfer-source", 4);
     let destination = fixture("ghost-transfer-destination", 4);
@@ -247,7 +247,7 @@ fn wisp_survives_cross_shard_transfer() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn damage_breaks_a_transform_and_restores_the_native_body() {
     let shard = fixture("transform-damage", 1);
     insert_spell(
@@ -268,7 +268,7 @@ fn damage_breaks_a_transform_and_restores_the_native_body() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_living_transform_survives_logout_and_world_entry() {
     let shard = fixture("transform-relog", 1);
     insert_spell(
@@ -289,7 +289,7 @@ fn a_living_transform_survives_logout_and_world_entry() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn accepting_resurrection_restores_native_form() {
     let shard = fixture("ghost-accept-res", 4);
     release(&shard);
@@ -379,7 +379,7 @@ fn timestamp(value: &str) -> i64 {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ghost_chooses_a_spirit_healer_in_reach_and_pays_its_penalties() {
     let shard = fixture("ghost-spirit-healer", 1);
     shard.assert_sql(&format!("INSERT INTO game_gossip_option (row_id,entry,option_index,icon,text,action,action_menu_id,cond_type,cond_value1,cond_value2) VALUES ({SPIRIT_HEALER_OPTION},{SPIRIT_HEALER_ENTRY},0,0,'Return me to life.',{},0,0,0,0)", lyracore_shared::constants::gossip_option::SPIRITHEALER));

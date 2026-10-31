@@ -156,7 +156,7 @@ fn raid(name: &str) -> Standalone {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ready_check_asks_every_member_and_the_answers_reach_the_leader_alone() {
     let realm = raid("raid-broadcasts-ready-check");
     let revision = roster_revision(&realm);
@@ -191,7 +191,7 @@ fn a_ready_check_asks_every_member_and_the_answers_reach_the_leader_alone() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn target_icons_follow_the_vanilla_placement_and_go_when_the_raid_disbands() {
     let realm = raid("raid-broadcasts-target-icons");
     let revision = roster_revision(&realm);
@@ -280,7 +280,7 @@ fn target_icons_follow_the_vanilla_placement_and_go_when_the_raid_disbands() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_party_list_carries_its_target_icons_and_a_raid_list_carries_none() {
     let realm = party("raid-broadcasts-party-icons", &[2]);
     group_op(&realm, TARGET_ICON, 1, DEFIAS, 7, 0);
@@ -306,7 +306,7 @@ fn a_party_list_carries_its_target_icons_and_a_raid_list_carries_none() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_leader_change_list_still_carries_the_partys_target_icons() {
     let realm = party("raid-broadcasts-leader-change-icons", &[2]);
     group_op(&realm, TARGET_ICON, 1, DEFIAS, 7, 0);
@@ -330,7 +330,7 @@ fn a_leader_change_list_still_carries_the_partys_target_icons() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_ping_skips_the_sender_and_a_roll_reaches_the_whole_group() {
     let realm = raid("raid-broadcasts-ping-roll");
     let revision = roster_revision(&realm);
@@ -395,7 +395,7 @@ fn a_ping_skips_the_sender_and_a_roll_reaches_the_whole_group() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_deleted_characters_leave_drops_the_target_icons_on_it() {
     let realm = party("raid-broadcasts-deleted-icons", &[2, 3, 4]);
     group_op(&realm, TARGET_ICON, 1, 2, 7, 0);

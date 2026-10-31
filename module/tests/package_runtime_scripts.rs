@@ -79,7 +79,7 @@ fn provenance(standalone: &Standalone) -> Vec<(String, u64)> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
     let mut standalone = Standalone::start("package-runtime-scripts");
     standalone.publish_module();
@@ -219,7 +219,7 @@ fn a_packages_runtime_scripts_reconcile_onto_a_shard() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
     let mut standalone = Standalone::start("package-runtime-scripts-conflict");
     standalone.publish_module();
@@ -293,7 +293,7 @@ fn a_conflicting_plan_leaves_the_shard_exactly_as_it_was() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_binds_its_own_event_and_never_another_packages() {
     let mut standalone = Standalone::start("package-runtime-scripts-package-event");
     standalone.publish_module();
@@ -356,7 +356,7 @@ fn a_package_binds_its_own_event_and_never_another_packages() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_next() {
     let mut standalone = Standalone::start("package-runtime-scripts-fire");
     standalone.publish_module();
@@ -433,7 +433,7 @@ fn a_package_script_fires_on_a_real_event_and_a_failing_one_does_not_block_the_n
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_typed_levelup_binding_receives_each_attained_level_from_the_core_hook() {
     let mut standalone = Standalone::start("package-runtime-scripts-typed-levelup");
     standalone.publish_module();

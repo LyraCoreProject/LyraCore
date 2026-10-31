@@ -11,7 +11,7 @@ const SOURCE_RULE_ID: u64 = 900_001;
 const WORLD_TICK: Duration = Duration::from_millis(500);
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn scheduled_visits_preserve_state_then_clean_a_reloaded_definition() {
     let mut standalone = Standalone::start("eventai-revision");
     standalone.publish_module();

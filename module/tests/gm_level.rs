@@ -16,7 +16,7 @@ fn levels(account: &str, character: &str) -> (String, String) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn the_repair_moves_a_character_gm_level_onto_its_account_once() {
     let mut shard = Standalone::start("gm-level");
     shard.publish_module();

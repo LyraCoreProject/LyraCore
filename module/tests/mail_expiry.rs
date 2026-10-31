@@ -27,7 +27,7 @@ fn timers(standalone: &Standalone) -> Vec<BTreeMap<String, String>> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn expired_mail_returns_or_is_deleted_once_and_each_arrival_fires_once() {
     let mut standalone = Standalone::start("mail-expiry");
     standalone.publish_module();

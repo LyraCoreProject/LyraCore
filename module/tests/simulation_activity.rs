@@ -6,7 +6,7 @@ use support::{
 };
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn migration_defaults_are_repaired_before_recovery_outside_active_cells() {
     let mut shard = Standalone::start("simulation-backfill");
     let wolf = lone_wolf(&mut shard);
@@ -41,7 +41,7 @@ fn migration_defaults_are_repaired_before_recovery_outside_active_cells() {
 }
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
     let mut shard = Standalone::start("simulation-combat-backfill");
     let wolf = lone_wolf(&mut shard);
@@ -80,7 +80,7 @@ fn backfill_recovers_combat_flags_without_restarting_the_combat_deadline() {
 }
 
 #[test]
-#[ignore = "requires a healthy machine with the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires a healthy machine with the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn backfill_batches_pause_regeneration_until_every_entity_is_indexed() {
     let mut shard = Standalone::start("simulation-batched-backfill");
     let wolf = lone_wolf(&mut shard);

@@ -3,7 +3,7 @@ mod support;
 use support::{fence_subscription, subscribe_with_fence, Standalone};
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn spawn_commands_keep_quest_flags_when_clearing_immunity() {
     let mut shard = Standalone::start("scripted-immunity");
     shard.publish_module();

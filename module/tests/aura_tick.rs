@@ -9,7 +9,7 @@ const CHARACTER: u64 = 1;
 const WOLF: u64 = (0xF130_u64 << 48) | (51_000_u64 << 24) | 1;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_periodic_kill_commits_the_death_and_an_unrelated_heal() {
     let mut standalone = Standalone::start("aura-tick-death");
     standalone.publish_module();

@@ -44,7 +44,7 @@ fn refused(standalone: &Standalone, state: &str, tag: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_player_sits_and_stands_but_cannot_pick_a_server_state() {
     let standalone = spawned("stand-state");
     let upper_bytes = unit_bytes_1(&standalone) & !0xFF;
@@ -69,7 +69,7 @@ fn a_player_sits_and_stands_but_cannot_pick_a_server_state() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn damage_stands_a_seated_player() {
     let standalone = spawned("stand-on-damage");
     let upper_bytes = unit_bytes_1(&standalone) & !0xFF;

@@ -21,7 +21,7 @@ const ENERGIZE: u32 = 9_000_001;
 const DOT: u32 = 9_000_032;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn damage_heal_and_energize_ticks_each_log_their_outcome() {
     let mut standalone = Standalone::start("periodic-aura-log");
     standalone.publish_module();
@@ -120,7 +120,7 @@ fn logs(events: &TableSubscription) -> Vec<Row> {
 const SELF_ENERGIZE: u32 = 509_0101;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_direct_energize_records_the_power_given_on_the_go() {
     let mut standalone = Standalone::start("energize-log");
     standalone.publish_module();
@@ -198,7 +198,7 @@ const FIRE_WITH_DOT: u32 = 509_0102;
 const CAST_MISS_RESIST: u32 = 2;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_resisted_spell_lands_none_of_its_effects_and_reports_the_resist() {
     let mut standalone = Standalone::start("cast-miss");
     standalone.publish_module();

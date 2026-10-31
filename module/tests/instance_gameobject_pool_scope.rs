@@ -3,7 +3,7 @@ mod support;
 use support::Standalone;
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn imported_instance_maps_exclude_world_gameobject_pools_without_terrain() {
     let mut standalone = Standalone::start("instance-gameobject-pool-scope");
     standalone.publish_module();

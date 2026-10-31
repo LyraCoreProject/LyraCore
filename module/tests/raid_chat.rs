@@ -109,7 +109,7 @@ fn seven_member_raid(node: &Standalone) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn party_chat_in_a_raid_reaches_only_the_speakers_subgroup() {
     let mut realm = Standalone::start("raid-chat-party-subgroup");
     realm.publish_module();
@@ -129,7 +129,7 @@ fn party_chat_in_a_raid_reaches_only_the_speakers_subgroup() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn party_chat_outside_a_raid_still_reaches_everyone() {
     let mut realm = Standalone::start("raid-chat-party-unaffected");
     realm.publish_module();
@@ -141,7 +141,7 @@ fn party_chat_outside_a_raid_still_reaches_everyone() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn raid_chat_reaches_the_whole_raid_and_is_refused_in_a_party() {
     let mut realm = Standalone::start("raid-chat-raid-wide");
     realm.publish_module();
@@ -162,7 +162,7 @@ fn raid_chat_reaches_the_whole_raid_and_is_refused_in_a_party() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn raid_leader_chat_is_leader_only() {
     let mut realm = Standalone::start("raid-chat-raid-leader");
     realm.publish_module();
@@ -177,7 +177,7 @@ fn raid_leader_chat_is_leader_only() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn raid_warning_needs_the_leader_or_an_assistant() {
     let mut realm = Standalone::start("raid-chat-raid-warning");
     realm.publish_module();

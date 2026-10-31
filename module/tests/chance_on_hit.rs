@@ -36,7 +36,7 @@ const CAST_EVENTS: &str = "SELECT * FROM game_spell_cast_event_live WHERE caster
 const SWING_EVENTS: &str = "SELECT * FROM game_combat_event_live WHERE attacker_guid = 1";
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
     let mut standalone = Standalone::start("chance-on-hit-strike");
     let wolf = stage(&mut standalone);
@@ -73,7 +73,7 @@ fn an_avoided_weapon_ability_still_casts_the_main_hand_chance_on_hit_spell() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
     let mut standalone = Standalone::start("chance-on-hit-swing");
     let wolf = stage(&mut standalone);
@@ -99,7 +99,7 @@ fn only_a_white_swing_that_connects_casts_the_chance_on_hit_spell() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_helpful_enchantment_spell_casts_on_the_wielder() {
     let mut standalone = Standalone::start("chance-on-hit-enchant");
     let wolf = stage(&mut standalone);
@@ -146,7 +146,7 @@ fn a_helpful_enchantment_spell_casts_on_the_wielder() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn an_extra_attack_chance_on_hit_swings_twice_and_grants_no_more() {
     let mut standalone = Standalone::start("chance-on-hit-extra-attacks");
     let wolf = stage(&mut standalone);

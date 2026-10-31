@@ -3,7 +3,7 @@ mod support;
 use support::{event_rows, fence_subscription, subscribe_with_fence, Standalone};
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI, the Wasm toolchain, and the dungeons Package installed (lyracore packages add dungeons)"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI, the Wasm toolchain, and the dungeons Package installed (lyracore packages add dungeons)"]
 fn deadmines_choreography_reaches_package_owned_outcomes() {
     let mut standalone = Standalone::start("deadmines-package");
     standalone.publish_module();

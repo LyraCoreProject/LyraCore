@@ -365,13 +365,13 @@ fn seed_visibility_world(
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn connection_identity_matches_its_golden_trace() -> Result<()> {
     run_scenario("connection_identity", |_, _| Ok(()), None)
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
     run_scenario(
         "taxi_single_hop",
@@ -390,7 +390,7 @@ fn taxi_single_hop_matches_its_golden_trace() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
     run_scenario(
         "bank_slot_purchase",
@@ -410,7 +410,7 @@ fn bank_slot_purchase_matches_its_golden_trace() -> Result<()> {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn two_character_visibility_matches_its_golden_trace() -> Result<()> {
     run_multi_scenario("two_character_visibility", seed_visibility_world)
 }

@@ -37,7 +37,7 @@ fn hunter(name: &str) -> Standalone {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn tame_dismiss_and_retame_preserve_one_durable_identity_and_clean_live_state() {
     let shard = hunter("hunter-pet-lifetime");
     let wild = wild_boar(&shard);
@@ -182,7 +182,7 @@ fn assert_refused(output: std::process::Output, reason: &str) {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout() {
     let shard = hunter("hunter-pet-rename");
     let wild = wild_boar(&shard);
@@ -240,7 +240,7 @@ fn a_hunter_renames_its_own_pet_once_and_the_name_outlives_logout() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn a_summoned_pet_cannot_be_renamed_as_a_hunter_pet() {
     use lyracore_shared::spell::taxonomy::{E_SUMMON_PET, T_SELF};
 
@@ -275,7 +275,7 @@ fn a_summoned_pet_cannot_be_renamed_as_a_hunter_pet() {
 }
 
 #[test]
-#[ignore = "requires the SpacetimeDB 2.7.1 CLI and Wasm toolchain"]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
 fn existing_live_pet_recovers_rename_eligibility_without_losing_other_flags() {
     let shard = hunter("hunter-pet-name-upgrade");
     let wild = wild_boar(&shard);
