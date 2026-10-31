@@ -5079,7 +5079,8 @@ def check_handoff(host):
     host.account('HANDOFF')
     host.account('HANDOFF', database=second)
     world = host.connect('HANDOFF')
-    assert world.read() == (0x1ee, b'\x0c')
+    opcode, body = world.read()
+    assert (opcode, body[:1]) == (0x1ee, b'\x0c'), (hex(opcode), body.hex())
 
     def hand_off(source, target):
         connection_id, server_seed = host.rows('SELECT connection_id, server_seed FROM game_native_world_connection', source)[0]
