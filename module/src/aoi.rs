@@ -1,7 +1,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use lyracore_shared::constants::{npc_flags::SPIRITHEALER, player_flags::GHOST};
-use lyracore_shared::spatial::{grid_cell_id, grid_cell_of_id, BOX_HALF_SPAN};
+use lyracore_shared::spatial::{
+    grid_cell_id, grid_cell_of_id, near_cell, AOI_HYSTERESIS_YD, BOX_HALF_SPAN,
+};
 use spacetimedb::{table, ReducerContext, Table};
 
 use crate::corpse::{game_corpse, Corpse};
@@ -99,7 +101,15 @@ pub(crate) fn entity_changed(
     let viewers = ctx.db.game_aoi_viewer();
     if let Some(previous) = viewers.guid().find(entity.guid) {
         if entity.is_player() {
-            let viewer = AoiViewer::of(entity);
+            let mut viewer = AoiViewer::of(entity);
+            let jitter = AoiViewer {
+                cell: previous.cell,
+                ..viewer.clone()
+            };
+            if jitter == previous && near_cell(previous.cell, entity.x, entity.y, AOI_HYSTERESIS_YD)
+            {
+                viewer.cell = previous.cell;
+            }
             if previous != viewer {
                 viewers.guid().update(viewer.clone());
                 let _viewer = crate::world::span("aoi.viewer");

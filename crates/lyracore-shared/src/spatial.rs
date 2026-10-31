@@ -6,6 +6,9 @@ pub const GRID_CELL_SIZE: f32 = 50.0;
 
 pub const BOX_HALF_SPAN: i32 = 2;
 
+// An AOI viewer keeps its cell until it is this far past the edge, so border jitter keeps Grants.
+pub const AOI_HYSTERESIS_YD: f32 = 10.0;
+
 pub const DEFAULT_VISIBILITY_RADIUS: f32 = 100.0;
 
 pub fn grid_cell(x: f32, y: f32) -> (i32, i32) {
@@ -21,6 +24,17 @@ pub fn grid_cell_id(gx: i32, gy: i32) -> i64 {
 
 pub fn grid_cell_of_id(id: i64) -> (i32, i32) {
     ((id >> 32) as i32, (id as u32) as i32)
+}
+
+/// Whether (x, y) lies inside `cell` widened by `margin` yards on every side.
+pub fn near_cell(cell: i64, x: f32, y: f32, margin: f32) -> bool {
+    let (gx, gy) = grid_cell_of_id(cell);
+    let m = margin / GRID_CELL_SIZE;
+    let inside = |coord: f32, g: i32| {
+        let f = (MAP_COORD_MAX - coord) / GRID_CELL_SIZE;
+        f >= g as f32 - m && f < (g + 1) as f32 + m
+    };
+    inside(x, gx) && inside(y, gy)
 }
 
 pub fn cell_id_at(x: f32, y: f32) -> i64 {
@@ -134,6 +148,17 @@ impl GridRect {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn near_cell_widens_the_cell_by_the_margin() {
+        let cell = cell_id_at(-8920.0, -180.0);
+        let (gx, _) = grid_cell_of_id(cell);
+        let edge = MAP_COORD_MAX - (gx + 1) as f32 * GRID_CELL_SIZE;
+        assert!(near_cell(cell, -8920.0, -180.0, 0.0));
+        assert!(!near_cell(cell, edge - 1.0, -180.0, 0.0));
+        assert!(near_cell(cell, edge - 9.0, -180.0, AOI_HYSTERESIS_YD));
+        assert!(!near_cell(cell, edge - 11.0, -180.0, AOI_HYSTERESIS_YD));
+    }
 
     #[test]
     fn grid_box_bounds_and_recenter() {

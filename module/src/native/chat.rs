@@ -347,8 +347,12 @@ pub(crate) fn system_message(ctx: &ReducerContext, event: &SystemMessageEvent) {
 }
 
 fn nearby(ctx: &ReducerContext, speaker: &WorldEntity, radius: f32) -> Vec<WorldEntity> {
-    let (gx0, gx1, gy0, gy1) =
-        lyracore_shared::spatial::covering_cell_box(speaker.x, speaker.y, radius);
+    // A viewer's cell can lag its position by the AOI hysteresis margin.
+    let (gx0, gx1, gy0, gy1) = lyracore_shared::spatial::covering_cell_box(
+        speaker.x,
+        speaker.y,
+        radius + lyracore_shared::spatial::AOI_HYSTERESIS_YD,
+    );
     let mut listeners = Vec::new();
     for gx in gx0..=gx1 {
         for gy in gy0..=gy1 {
