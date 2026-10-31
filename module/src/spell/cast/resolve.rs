@@ -4,7 +4,7 @@ use spacetimedb::{log, ReducerContext, Table, TimeDuration};
 use crate::combat::is_avoided;
 use crate::{game_creature_template, game_world_entity, WorldEntity};
 
-use crate::items::game_item_template;
+use crate::items::{game_item_instance, game_item_template};
 
 use crate::spell::*;
 
@@ -30,6 +30,7 @@ pub(crate) fn resolve_cast_at(
         is_completion,
         client_initiated,
         dest,
+        None,
     )
     .map_err(Into::into)
 }
@@ -44,6 +45,7 @@ pub(crate) fn resolve_cast_at_typed(
     is_completion: bool,
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
+    item_target: Option<u64>,
 ) -> Result<(), CastGateRefusal> {
     let hdr = ctx
         .db
@@ -65,6 +67,7 @@ pub(crate) fn resolve_cast_at_typed(
     effects.sort_by_key(|e| (e.kind != E_INTERRUPT, e.effect_index));
 
     check_cast_gates(ctx, &caster, &hdr, &effects, target_guid, spell_id, level)?;
+    check_item_target(ctx, caster_guid, &effects, item_target)?;
     check_source_cast_position(ctx, &caster, &hdr, target_guid)?;
     if !is_completion {
         check_global_cooldown(ctx, caster_guid)?;
@@ -111,6 +114,7 @@ pub(crate) fn resolve_cast_at_typed(
         CastOrigin::Direct {
             is_completion,
             client_initiated,
+            item_target,
         },
         dest,
         craft,
@@ -159,6 +163,7 @@ pub(crate) enum CastOrigin {
     Direct {
         is_completion: bool,
         client_initiated: bool,
+        item_target: Option<u64>,
     },
     Triggered,
     DeadCreatureCallbackTriggered,
@@ -173,6 +178,13 @@ impl CastOrigin {
         )
     }
 
+    fn item_target(self) -> Option<u64> {
+        match self {
+            Self::Direct { item_target, .. } => item_target,
+            Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit => None,
+        }
+    }
+
     fn allows_dead_self(self) -> bool {
         matches!(self, Self::DeadCreatureCallbackTriggered)
     }
@@ -182,6 +194,7 @@ impl CastOrigin {
             Self::Direct {
                 is_completion,
                 client_initiated,
+                ..
             } => (is_completion, client_initiated),
             Self::Triggered | Self::DeadCreatureCallbackTriggered | Self::ChanceOnHit => {
                 (false, false)
@@ -362,6 +375,7 @@ fn run_spell_effects(
                     dest,
                     triggered,
                     roll == crate::combat::HIT_CRIT,
+                    origin.item_target(),
                 )
             };
             match hit.item {
@@ -748,6 +762,7 @@ pub(crate) fn start_creature_spell(
             request.caster_level,
             route.target_guid,
             false,
+            None,
             None,
             route.admission,
         )
@@ -1452,9 +1467,58 @@ pub(crate) fn begin_cast(
         target_guid,
         client_initiated,
         dest,
+        None,
         CreatureSpellCasterAdmission::Living,
     )
     .map(|_| ())
+}
+
+/// Begins a cast at one of the caster's own items, such as a poison or a weapon spell.
+pub(crate) fn begin_item_cast(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    level: u8,
+    item_guid: u64,
+    client_initiated: bool,
+) -> Result<(), CastGateRefusal> {
+    begin_cast_with_admission(
+        ctx,
+        caster_guid,
+        spell_id,
+        level,
+        caster_guid,
+        client_initiated,
+        None,
+        Some(item_guid),
+        CreatureSpellCasterAdmission::Living,
+    )
+    .map(|_| ())
+}
+
+// vmangos Spell::CheckCast refuses a temporary enchantment without an item it may enchant.
+fn check_item_target(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    effects: &[SpellEffect],
+    item_target: Option<u64>,
+) -> Result<(), CastGateRefusal> {
+    if !effects.iter().any(|e| e.kind == E_ENCHANT_ITEM_TEMPORARY) {
+        return Ok(());
+    }
+    let owned = item_target
+        .and_then(|guid| ctx.db.game_item_instance().guid().find(guid))
+        .is_some_and(|item| {
+            item.owner_guid == caster_guid && crate::items::is_carried_slot(item.slot)
+        });
+    if owned {
+        Ok(())
+    } else {
+        Err(CastGateRefusal::other(
+            CastRefusalReason::ItemGone,
+            "temporary enchantment needs a carried item target",
+        ))
+    }
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1466,6 +1530,7 @@ pub(crate) fn begin_cast_with_admission(
     target_guid: u64,
     client_initiated: bool,
     dest: Option<(f32, f32, f32)>,
+    item_target: Option<u64>,
     admission: CreatureSpellCasterAdmission,
 ) -> Result<CastStart, CastGateRefusal> {
     let hdr = ctx
@@ -1494,6 +1559,7 @@ pub(crate) fn begin_cast_with_admission(
         admission == CreatureSpellCasterAdmission::DeadCreatureCallback,
     )?;
     check_targeted_los(ctx, &caster, &effects, target_guid)?;
+    check_item_target(ctx, caster_guid, &effects, item_target)?;
 
     // Break the previous channel before a new channel can place its aura.
     break_channel(ctx, caster_guid);
@@ -1523,6 +1589,7 @@ pub(crate) fn begin_cast_with_admission(
             false,
             client_initiated,
             dest,
+            item_target,
         );
         clear_dead_callback_cast_admission(ctx, caster_guid, spell_id);
         return result.map(|_| CastStart::Resolved);
@@ -1561,6 +1628,7 @@ pub(crate) fn begin_cast_with_admission(
         dest_x: dx,
         dest_y: dy,
         dest_z: dz,
+        item_target_guid: item_target.unwrap_or(0),
     });
     start_global_cooldown(ctx, caster_guid, hdr.gcd_ms);
     crate::spell::SpellCastEvent::insert(

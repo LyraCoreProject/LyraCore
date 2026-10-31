@@ -366,6 +366,16 @@ floor so the seeded Proc fixtures keep their overlay rows.
 `spell_proc_item_enchant` rate: the procs-per-minute of an enchantment's Chance on Hit spell, keyed
 by its first rank. Higher ranks take the first rank's rate through `game_spell_chain`. It is private. The `spellmeta` dump family loads it, and packages cannot claim it.
 
+`game_spell_enchant_charges` (`module/src/items/temporary_enchantment.rs`) carries the vmangos
+`spell_enchant_charges` count: the charges a temporary enchantment spell puts on its item. An absent
+row means no charge limit. It is private. The `spellmeta` dump family loads it, and packages cannot
+claim it.
+
+`game_temporary_enchantment` (`module/src/items/temporary_enchantment.rs`) holds one Temporary
+Enchantment per item: `item_guid`, `enchant_id`, `expires_at` and `charges` (0 means no limit). It is
+a private scheduled table. Its schedule fires at `expires_at` and deletes the row; replacing,
+spending the last charge or deleting the item deletes it earlier.
+
 `game_aura` carries the frozen profile: `proc_flags`, `proc_chance`, `proc_ppm`, `proc_ex`,
 `proc_school_mask`, `proc_family_name`, `proc_family_flags`, `proc_charges`, `proc_icd_ms`,
 `proc_ready_micros`. `spell::proc::freeze_profile` folds header and overlay together once, at

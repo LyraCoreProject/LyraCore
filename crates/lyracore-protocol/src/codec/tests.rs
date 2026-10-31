@@ -1914,6 +1914,7 @@ fn item_create_object_is_item_typed_and_serializes() {
         random_property_enchant_ids: [0; 3],
         item_text_id: 0,
         enchantment: 0,
+        temporary_enchantment: TemporaryEnchantmentView::default(),
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();
@@ -1951,6 +1952,7 @@ fn a_copied_letters_create_block_carries_its_item_text_id() {
         random_property_enchant_ids: [0; 3],
         item_text_id: 7,
         enchantment: 0,
+        temporary_enchantment: TemporaryEnchantmentView::default(),
     };
     match &build_item_create_object(&inst).objects[0] {
         Object::CreateObject {
@@ -3559,6 +3561,7 @@ fn item_create_object_bag_slots_build_a_container_with_num_slots() {
         random_property_enchant_ids: [0; 3],
         item_text_id: 0,
         enchantment: 0,
+        temporary_enchantment: TemporaryEnchantmentView::default(),
     };
     let msg = build_item_create_object(&inst);
     let mut buf = Vec::new();

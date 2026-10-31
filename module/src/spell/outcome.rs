@@ -74,6 +74,7 @@ pub(crate) enum CastRefusalReason {
     MountIndoors,
     MountInDeepWater,
     TargetLevelTooLow,
+    ItemGone,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -224,6 +225,7 @@ pub(crate) fn request_cast(
         caster.level as u8,
         target_guid,
         false,
+        None,
         None,
         CreatureSpellCasterAdmission::Living,
     )

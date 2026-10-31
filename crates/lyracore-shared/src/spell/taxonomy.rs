@@ -100,6 +100,8 @@ effect_kinds! {
     A_FLAG => AuraFlag = 0xBE,
     E_SUMMON_GUARDIANS => SummonGuardians = 0x27,
     E_ADD_EXTRA_ATTACKS => AddExtraAttacks = 0x28,
+    // Effect points are the duration in seconds; p0 is the enchantment id.
+    E_ENCHANT_ITEM_TEMPORARY => EnchantItemTemporary = 0x29,
 }
 
 pub const KIND_AURA_BIT: u8 = 0x80;
@@ -212,6 +214,7 @@ mod tests {
         assert_eq!(E_DISPEL, 0x04);
         assert_eq!(E_SUMMON_GUARDIANS, 0x27);
         assert_eq!(E_ADD_EXTRA_ATTACKS, 0x28);
+        assert_eq!(E_ENCHANT_ITEM_TEMPORARY, 0x29);
         assert_eq!(A_PERIODIC_DAMAGE, 0x90);
         assert_eq!(A_PERIODIC_HEAL, 0x91);
         assert_eq!(A_ABSORB, 0xA2);

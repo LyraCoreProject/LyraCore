@@ -1,7 +1,9 @@
 use super::*;
 use lyracore_shared::item::{ItemRefusal, Proficiency};
 pub use wow_world_messages::vanilla::SellItemResult;
-use wow_world_messages::vanilla::{SMSG_ITEM_NAME_QUERY_RESPONSE, SMSG_SELL_ITEM};
+use wow_world_messages::vanilla::{
+    SMSG_ITEM_ENCHANT_TIME_UPDATE, SMSG_ITEM_NAME_QUERY_RESPONSE, SMSG_SELL_ITEM,
+};
 
 pub fn inventory_slot(bag: u8, slot: u8) -> Option<u8> {
     match (bag, slot) {
@@ -89,9 +91,21 @@ pub struct ItemInstanceView {
     pub random_property_enchant_ids: [u32; 3],
     pub item_text_id: u32,
     pub enchantment: u32,
+    pub temporary_enchantment: TemporaryEnchantmentView,
+}
+
+/// A zero `enchantment` is an empty slot. `duration_ms` is the time left as the item is sent.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct TemporaryEnchantmentView {
+    pub enchantment: u32,
+    pub duration_ms: u32,
+    pub charges: u32,
 }
 
 pub const ITEM_FIELD_ENCHANTMENT: u16 = 22;
+// vmangos TEMP_ENCHANTMENT_SLOT; each slot holds id, duration and charges words.
+pub const TEMPORARY_ENCHANTMENT_SLOT: u16 = 1;
+const TEMPORARY_ENCHANTMENT_FIELD: u16 = ITEM_FIELD_ENCHANTMENT + TEMPORARY_ENCHANTMENT_SLOT * 3;
 
 pub fn build_charter_petition_values(charter_item_guid: u64, petition_id: u32) -> (u16, Vec<u8>) {
     let mut mask = update_mask::UpdateMaskValues::new();
@@ -105,12 +119,15 @@ const RANDOM_PROPERTY_ENCHANT_ID_FIELDS: [u16; 3] = [
     ITEM_FIELD_ENCHANTMENT + 5 * 3,
 ];
 
-/// The typed CREATE reaches only enchantment slot 0; property slots follow in VALUES.
-pub fn build_random_property_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
-    if inst.random_property_enchant_ids == [0; 3] {
+/// The typed CREATE reaches only enchantment slot 0; later slots follow in VALUES.
+pub fn build_enchantment_slot_values(inst: &ItemInstanceView) -> Option<(u16, Vec<u8>)> {
+    if inst.random_property_enchant_ids == [0; 3] && inst.temporary_enchantment.enchantment == 0 {
         return None;
     }
     let mut mask = update_mask::UpdateMaskValues::new();
+    if inst.temporary_enchantment.enchantment != 0 {
+        set_temporary_enchantment(&mut mask, inst.temporary_enchantment);
+    }
     for (field, enchant_id) in RANDOM_PROPERTY_ENCHANT_ID_FIELDS
         .into_iter()
         .zip(inst.random_property_enchant_ids)
@@ -119,6 +136,39 @@ pub fn build_random_property_values(inst: &ItemInstanceView) -> Option<(u16, Vec
         mask.set_u32(field, enchant_id);
     }
     Some(build_values_update_raw(inst.guid, &mask))
+}
+
+/// Writes all three words, so an empty view clears the slot.
+pub fn build_temporary_enchantment_values(
+    item_guid: u64,
+    temporary: TemporaryEnchantmentView,
+) -> (u16, Vec<u8>) {
+    let mut mask = update_mask::UpdateMaskValues::new();
+    set_temporary_enchantment(&mut mask, temporary);
+    build_values_update_raw(item_guid, &mask)
+}
+
+fn set_temporary_enchantment(
+    mask: &mut update_mask::UpdateMaskValues,
+    temporary: TemporaryEnchantmentView,
+) {
+    mask.set_u32(TEMPORARY_ENCHANTMENT_FIELD, temporary.enchantment);
+    mask.set_u32(TEMPORARY_ENCHANTMENT_FIELD + 1, temporary.duration_ms);
+    mask.set_u32(TEMPORARY_ENCHANTMENT_FIELD + 2, temporary.charges);
+}
+
+/// The client counts the tooltip's time left down from `duration_s`.
+pub fn build_item_enchant_time_update(
+    item_guid: u64,
+    owner_guid: u64,
+    duration_s: u32,
+) -> SMSG_ITEM_ENCHANT_TIME_UPDATE {
+    SMSG_ITEM_ENCHANT_TIME_UPDATE {
+        item: Guid::new(item_guid),
+        slot: u32::from(TEMPORARY_ENCHANTMENT_SLOT),
+        duration: duration_s,
+        player: Guid::new(owner_guid),
+    }
 }
 
 pub fn build_item_query_response(
@@ -644,8 +694,8 @@ mod tests {
         }
     }
 
-    fn random_property_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
-        let (opcode, body) = build_random_property_values(inst).expect("a property update");
+    fn enchantment_slot_fields(inst: &ItemInstanceView) -> Vec<(u16, u32)> {
+        let (opcode, body) = build_enchantment_slot_values(inst).expect("a slot update");
         assert_eq!(opcode, 0x00A9);
         let updates = lyracore_shared::values_mask::parse_values_updates(&body);
         assert_eq!(updates.len(), 1);
@@ -657,7 +707,7 @@ mod tests {
     #[test]
     fn a_random_property_fills_enchantment_slots_three_to_five() {
         assert_eq!(
-            random_property_fields(&suffix_item([73, 74, 75])),
+            enchantment_slot_fields(&suffix_item([73, 74, 75])),
             vec![(31, 73), (34, 74), (37, 75)]
         );
     }
@@ -665,13 +715,53 @@ mod tests {
     #[test]
     fn a_single_enchant_random_property_leaves_the_other_slots_unwritten() {
         assert_eq!(
-            random_property_fields(&suffix_item([73, 0, 0])),
+            enchantment_slot_fields(&suffix_item([73, 0, 0])),
             vec![(31, 73)]
         );
     }
 
     #[test]
-    fn an_item_without_property_enchant_ids_sends_no_property_update() {
-        assert_eq!(build_random_property_values(&suffix_item([0; 3])), None);
+    fn an_item_without_property_or_temporary_enchantments_sends_no_slot_update() {
+        assert_eq!(build_enchantment_slot_values(&suffix_item([0; 3])), None);
+    }
+
+    const INSTANT_POISON: TemporaryEnchantmentView = TemporaryEnchantmentView {
+        enchantment: 323,
+        duration_ms: 1_800_000,
+        charges: 40,
+    };
+
+    #[test]
+    fn a_temporary_enchantment_fills_slot_one_with_its_id_duration_and_charges() {
+        let dagger = ItemInstanceView {
+            temporary_enchantment: INSTANT_POISON,
+            ..suffix_item([73, 0, 0])
+        };
+        assert_eq!(
+            enchantment_slot_fields(&dagger),
+            vec![(25, 323), (26, 1_800_000), (27, 40), (31, 73)]
+        );
+    }
+
+    #[test]
+    fn clearing_a_temporary_enchantment_zeroes_all_three_words() {
+        let (_, body) = build_temporary_enchantment_values(7, TemporaryEnchantmentView::default());
+        let updates = lyracore_shared::values_mask::parse_values_updates(&body);
+        assert_eq!(updates[0].fields, vec![(25, 0), (26, 0), (27, 0)]);
+    }
+
+    #[test]
+    fn the_enchant_time_update_names_slot_one_in_seconds() {
+        let message = ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(Box::new(
+            build_item_enchant_time_update(0x4000_0000_0000_0102, 1, 1800),
+        ));
+        let mut wire = Vec::new();
+        message.write_unencrypted_server(&mut wire).unwrap();
+        assert_eq!(u16::from_le_bytes([wire[2], wire[3]]), 0x01EB);
+        let mut expected = 0x4000_0000_0000_0102u64.to_le_bytes().to_vec();
+        expected.extend_from_slice(&1u32.to_le_bytes());
+        expected.extend_from_slice(&1800u32.to_le_bytes());
+        expected.extend_from_slice(&1u64.to_le_bytes());
+        assert_eq!(&wire[4..], expected.as_slice());
     }
 }

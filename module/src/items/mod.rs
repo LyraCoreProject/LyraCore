@@ -6,6 +6,7 @@ mod ops;
 mod properties;
 mod rules;
 mod tables;
+mod temporary_enchantment;
 
 use lyracore_shared::item::ItemRefusal;
 
@@ -62,6 +63,13 @@ pub use tables::{
     ItemInstance, ItemTemplate, NpcVendor, ALL_PLAYABLE_CLASS_MASK, ALL_PLAYABLE_RACE_MASK,
 };
 pub(crate) use tables::{item_in_slot, item_is_broken};
+pub(crate) use temporary_enchantment::{
+    enchant_item_temporarily, forget_item as forget_temporary_enchantment,
+    spend_charge as spend_temporary_enchantment_charge, temporary_enchant_id,
+    temporary_enchantment,
+};
+#[cfg(feature = "conformance_test_fixture")]
+pub(crate) use temporary_enchantment::{expire_temporary_enchantment, game_temporary_enchantment};
 
 pub(crate) use tables::{
     sweep_delete_game_character_buyback, sweep_delete_game_item_instance,

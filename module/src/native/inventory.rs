@@ -1,6 +1,9 @@
 use lyracore_protocol::{
     codec,
-    messages::vanilla::opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+    messages::vanilla::{
+        opcodes::{ClientOpcodeMessage, ServerOpcodeMessage},
+        SpellCastTargets_SpellCastTargetFlags_Item as ItemTarget,
+    },
     world::Packet,
 };
 use lyracore_shared::item::ItemRefusal;
@@ -139,7 +142,7 @@ pub(crate) fn changed(
         (None, Some(row)) => {
             let view = super::view::item(ctx, row);
             packets.push(update(codec::build_item_create_object(&view)));
-            if let Some((opcode, body)) = codec::build_random_property_values(&view) {
+            if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
                 packets.push(Packet { opcode, body });
             }
             slot(ctx, row.owner_guid, row.slot, &view, &mut packets);
@@ -160,7 +163,7 @@ pub(crate) fn changed(
                     codec::build_destroy_object(row.guid),
                 )));
                 packets.push(update(codec::build_item_create_object(&view)));
-                if let Some((opcode, body)) = codec::build_random_property_values(&view) {
+                if let Some((opcode, body)) = codec::build_enchantment_slot_values(&view) {
                     packets.push(Packet { opcode, body });
                 }
                 if old.slot == row.slot {
@@ -228,6 +231,30 @@ pub(crate) fn changed(
             super::quest::item_changed(ctx, old.owner_guid, old.entry);
         }
     }
+}
+
+pub(crate) fn temporary_enchantment_changed(ctx: &ReducerContext, item: &ItemInstance) {
+    let Some(owner) = ctx
+        .db
+        .game_native_player()
+        .character_guid()
+        .find(item.owner_guid)
+    else {
+        return;
+    };
+    let temporary = super::view::item(ctx, item).temporary_enchantment;
+    let (opcode, body) = codec::build_temporary_enchantment_values(item.guid, temporary);
+    let mut packets = vec![Packet { opcode, body }];
+    if temporary.enchantment != 0 {
+        packets.push(packet(ServerOpcodeMessage::SMSG_ITEM_ENCHANT_TIME_UPDATE(
+            Box::new(codec::build_item_enchant_time_update(
+                item.guid,
+                item.owner_guid,
+                temporary.duration_ms / 1000,
+            )),
+        )));
+    }
+    send(ctx, owner.connection_id, packets);
 }
 
 pub(super) fn receive(
@@ -312,7 +339,7 @@ pub(super) fn receive(
                     slots[1].ok_or(ItemRefusal::WrongSlot)?,
                 )
             }
-            ClientOpcodeMessage::CMSG_USE_ITEM(_) => {
+            ClientOpcodeMessage::CMSG_USE_ITEM(c) => {
                 if let Some(item) = item_in_slot(ctx, guid, source) {
                     if let Some(template) = ctx
                         .db
@@ -330,7 +357,11 @@ pub(super) fn receive(
                         return Ok(());
                     }
                 }
-                crate::items::apply_item_use(ctx, guid, source)
+                let item_target = match c.targets.target_flags.get_item() {
+                    Some(ItemTarget::Item { item }) => Some(item.guid()),
+                    _ => None,
+                };
+                crate::items::apply_item_use(ctx, guid, source, item_target)
             }
             ClientOpcodeMessage::CMSG_READ_ITEM(_) => {
                 let item = item_in_slot(ctx, guid, source).ok_or(ItemRefusal::ItemNotFound)?;

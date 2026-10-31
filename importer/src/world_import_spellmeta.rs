@@ -81,12 +81,23 @@ pub(super) fn plan(source: &impl TableRows) -> Result<DumpPlan> {
         anyhow::ensure!(ppm.is_finite(), "spell_proc_item_enchant {id}: invalid PPM");
         enchant_rates.push(format!("({id},{ppm})"));
     }
+    let mut enchant_charges = Vec::new();
+    for row in source.rows("spell_enchant_charges")?.iter() {
+        let id: u32 = row.number("entry")?;
+        let charges: u32 = row.number("charges")?;
+        anyhow::ensure!(
+            id != 0 && known(id),
+            "spell_enchant_charges {id}: missing spell"
+        );
+        enchant_charges.push(format!("({id},{charges})"));
+    }
     let mut statements = Vec::new();
     for (table,key,columns,rows) in [
         ("game_spell_chain","spell_id","spell_id,prev_spell,first_spell,rank,req_spell",chains),
         ("game_spell_learn","id","id,parent_spell,learn_spell",learns),
         ("game_spell_proc_event","spell_id","spell_id,proc_flags,proc_ex,school_mask,family_name,family_flags,ppm_rate,custom_chance,icd_ms",procs),
         ("game_enchant_proc_rate","spell_id","spell_id,ppm_rate",enchant_rates),
+        ("game_spell_enchant_charges","spell_id","spell_id,charges",enchant_charges),
     ] {
         statements.push(if table == "game_spell_proc_event" {format!("DELETE FROM {table} WHERE spell_id < {SYNTHETIC_PROC_EVENT_FLOOR}")}else{format!("DELETE FROM {table} WHERE {key} > 0")});
         push_insert(&mut statements,table,columns,&rows);
@@ -262,7 +273,9 @@ mod tests {
             CREATE TABLE spell_proc_event (entry INTEGER,SchoolMask INTEGER,SpellFamilyName INTEGER,SpellFamilyMask0 INTEGER,SpellFamilyMask1 INTEGER,SpellFamilyMask2 INTEGER,procFlags INTEGER,procEx INTEGER,ppmRate REAL,CustomChance REAL,Cooldown INTEGER,build_min INTEGER,build_max INTEGER);
             INSERT INTO spell_proc_event VALUES (10,4,3,5,99,88,64,2,1.5,12.5,2,0,5875);
             CREATE TABLE spell_proc_item_enchant (entry INTEGER PRIMARY KEY,ppmRate REAL);
-            INSERT INTO spell_proc_item_enchant VALUES (20,1.6);").unwrap();
+            INSERT INTO spell_proc_item_enchant VALUES (20,1.6);
+            CREATE TABLE spell_enchant_charges (entry INTEGER PRIMARY KEY,charges INTEGER);
+            INSERT INTO spell_enchant_charges VALUES (20,40);").unwrap();
         WorldSource::Vmangos(connection)
     }
 
@@ -277,6 +290,8 @@ mod tests {
         assert!(
             sql.contains("INSERT INTO game_enchant_proc_rate (spell_id,ppm_rate) VALUES (20,1.6)")
         );
+        assert!(sql
+            .contains("INSERT INTO game_spell_enchant_charges (spell_id,charges) VALUES (20,40)"));
         let manifest: serde_json::Value =
             serde_json::from_str(plan.world_source_manifest.as_ref().unwrap()).unwrap();
         assert_eq!(

@@ -152,6 +152,21 @@ exist in the imported spells.
 - Sinister Strike hits for the dagger's damage plus its bonus, not for a few points. A dodged or
   parried strike shows Dodge or Parry, and awards no combo point.
 
+## Temporary enchantment
+
+Tests: `temporary_enchantment.rs`. No `check.py` scenario.
+
+Setup. A Rogue with a dagger in the main hand and a stack of Instant Poison (6947), and a Shaman who
+knows Rockbiter Weapon (8017), next to a low-level Creature. Import the `spell`, `spellmeta` and
+`items` families with `--dbc`.
+
+- Using the poison shows a 3-second cast bar, takes one poison from the stack and adds an
+  Instant Poison line with its time left and 40 charges to the dagger's tooltip.
+- Hitting the Creature sometimes deals extra Nature damage, and the tooltip's charges count down.
+- Rockbiter Weapon adds its line to the Shaman's weapon tooltip. Record whether the weapon glows.
+- After a relog the tooltip line is still there with the time left.
+- A Rough Sharpening Stone adds 2 to the weapon damage on the character sheet.
+
 ## Energy regeneration
 
 Tests: `energy_regen.rs`. No `check.py` scenario.

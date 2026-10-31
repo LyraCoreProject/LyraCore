@@ -2683,6 +2683,15 @@
       },
       "locked_rows": 1094
     },
+    "spell_enchant_charges": {
+      "columns": {
+        "integer": [
+          "charges",
+          "entry"
+        ]
+      },
+      "locked_rows": 19
+    },
     "spell_learn_spell": {
       "columns": {
         "integer": [
