@@ -5244,13 +5244,25 @@ def check_continent_shards(host):
             assert [opcode for opcode, _ in departure if opcode in (0x3f, 0x3e)] == [0x3f, 0x3e]
             assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', target)
             client.send(0xdc)
+            for sequence in range(256):
+                client.send(0x1dc, struct.pack('<II', sequence, 0))
+                client.send(0x2ce, struct.pack('<QI', guid, 30))
+                client.send(0x97, b'Transfer channel\0\0')
             arrival = []
             while guid not in creates(arrival):
                 arrival.append(client.read())
             assert not any(opcode == 0x236 for opcode, _ in arrival)
+            sequence = secrets.randbits(32) | 0x80000000
+            client.send(0x1dc, struct.pack('<II', sequence, 0))
+            while client.read() != (0x1dd, struct.pack('<I', sequence)):
+                pass
             host.wait_until(lambda: host.rows('SELECT character_guid FROM game_native_player', target) == [[guid]],
                 'Transfer did not enter the Character on the target World Shard')
             assert host.rows('SELECT connection_id FROM game_native_world_connection', target) == connection
+            host.wait_until(lambda: not host.rows('SELECT connection_id FROM game_native_world_connection', source)
+                and not host.rows('SELECT connection_id FROM game_native_transfer_pending', source),
+                'the source retained the departed connection or its pending Transfer')
+            assert not host.rows('SELECT connection_id FROM game_native_transfer_pending', target)
             assert host.rows(f'SELECT map_id, x FROM game_character WHERE guid = {guid}', target) == [[map_id, 20]]
             assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', source)
             for world in (source, target):
@@ -5264,6 +5276,10 @@ def check_continent_shards(host):
 
         cross(shard, other, 1 if other == kalimdor else 0)
         assert host.rows('SELECT teleport_counter FROM game_native_player', other) == [[counter + 1]]
+        cross(other, shard, 0 if shard == eastern else 1)
+        assert host.rows('SELECT teleport_counter FROM game_native_player', shard) == [[counter + 2]]
+        cross(shard, other, 1 if other == kalimdor else 0)
+        assert host.rows('SELECT teleport_counter FROM game_native_player', other) == [[counter + 3]]
         client.collect()
         client.send(0x4b)
         while client.read()[0] != 0x4d:
@@ -5312,6 +5328,7 @@ def check_continent_shards(host):
     host.wait_until(lambda: host.rows(f'SELECT map_id FROM game_character WHERE guid = {guid}', kalimdor) == [[1]]
         and not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', eastern)
         and not host.rows('SELECT transfer_id FROM game_transfer_in', kalimdor)
+        and not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
         and not host.rows('SELECT account_id FROM game_native_away'),
         'a lost connection did not leave one released target copy')
     characters[0] = (guid, kalimdor)
@@ -5340,6 +5357,7 @@ def check_continent_shards(host):
     client.read_until_closed()
     host.wait_until(lambda: not host.rows('SELECT transfer_id FROM game_transfer_out', eastern),
         'refused Transfer retained source Escrow')
+    assert not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
     assert host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', eastern) == original
     assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', kalimdor)
     directory_is_current()

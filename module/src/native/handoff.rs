@@ -1,5 +1,6 @@
 use spacetimedb::{reducer, table, ConnectionId, Identity, ReducerContext, SpacetimeType, Table};
 
+use super::transfer::game_native_transfer_pending;
 use super::{
     game_native_cipher, game_native_packet, game_native_world_connection, NativeCipher,
     NativeWorldConnection, NativeWorldState,
@@ -58,6 +59,10 @@ pub fn native_world_adopt(ctx: &ReducerContext) -> Result<(), String> {
         .find(connection_id)
         .ok_or("no Handoff waits for this connection")?;
     handoffs.connection_id().delete(connection_id);
+    ctx.db
+        .game_native_transfer_pending()
+        .connection_id()
+        .delete(connection_id);
     let account = ctx
         .db
         .game_account()

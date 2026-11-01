@@ -249,10 +249,6 @@ pub fn native_transfer_answered(
         let origin: Option<NativeTeleportOrigin> =
             bsatn::from_slice(&call.origin).map_err(|error| error.to_string())?;
         super::teleport::restore_origin(ctx, call.character_guid, origin);
-        ctx.db
-            .game_native_transfer_pending()
-            .connection_id()
-            .delete(connection_id);
         super::disconnect(ctx, connection_id);
         return Ok(());
     }
@@ -510,10 +506,6 @@ pub fn native_transfer_release_answered(
         return;
     }
     let connection_id = ConnectionId::from_u128(call.connection);
-    ctx.db
-        .game_native_transfer_pending()
-        .connection_id()
-        .delete(connection_id);
     if ctx
         .db
         .game_native_world_connection()
@@ -522,10 +514,16 @@ pub fn native_transfer_release_answered(
         .is_some()
     {
         super::handoff::write_marker(ctx, connection_id, call.database.0);
-    } else if call.connected {
-        call.id = 0;
-        call.connected = false;
-        ctx.db.game_native_transfer_release().insert(call);
+    } else {
+        ctx.db
+            .game_native_transfer_pending()
+            .connection_id()
+            .delete(connection_id);
+        if call.connected {
+            call.id = 0;
+            call.connected = false;
+            ctx.db.game_native_transfer_release().insert(call);
+        }
     }
 }
 
