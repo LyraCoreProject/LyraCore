@@ -1192,7 +1192,7 @@ pub(crate) fn do_repop(ctx: &ReducerContext, guid: u64) -> Result<(), crate::Ref
     let gy = graveyard::resolve_graveyard(ctx, death_map_id, death_x, death_y, death_race);
     teleport_player(ctx, player_guid, gy.map, 0, gy.x, gy.y, gy.z, gy.o);
 
-    crate::spell::clear_resurrect_request(ctx, player_guid);
+    crate::spell::clear_resurrect_request_and_option(ctx, player_guid);
     Ok(())
 }
 

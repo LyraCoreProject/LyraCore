@@ -534,9 +534,9 @@ elapsed time, modulo its cycle period. LyraCore sends the phase within the curre
 
 **Self-Resurrection Option**:
 The one spell a dead Character may cast on itself from the death dialog. Chosen at death from the
-Character's Soulstone aura or, if none exists, ready Reincarnation with a carried Ankh. Kept through
-Release Spirit, and spent when the Character is resurrected by any path or leaves the world. The client
-sees it as `PLAYER_SELF_RES_SPELL`.
+Character's Soulstone aura or, if none exists, ready Reincarnation with a carried Ankh. Cleared on
+Release Spirit, resurrection by any path, leaving the world or Transfer. The client sees it as
+`PLAYER_SELF_RES_SPELL`.
 _Avoid_: self-res offer, rez offer, resurrect offer (an offer is a resurrect request from another Character)
 
 **Soulstone**:

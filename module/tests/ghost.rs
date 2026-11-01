@@ -181,7 +181,7 @@ fn corpse_reclaim_restores_native_form() {
 
 #[test]
 #[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
-fn self_resurrection_restores_native_form() {
+fn a_ghost_cannot_use_a_stale_self_resurrection_option() {
     let shard = fixture("ghost-self-res", 4);
     release(&shard);
     insert_spell(
@@ -193,8 +193,21 @@ fn self_resurrection_restores_native_form() {
     shard.assert_sql(
         "INSERT INTO game_self_resurrect_option (character_guid, spell_id) VALUES (1, 5090000)",
     );
-    shard.assert_call("debug_self_resurrect", &["1"]);
-    assert_alive(&shard);
+    let refusal = shard.call("gw_self_resurrect", &[&actor("1")]);
+    assert!(!refusal.status.success());
+    let output = format!(
+        "{}{}",
+        String::from_utf8_lossy(&refusal.stdout),
+        String::from_utf8_lossy(&refusal.stderr)
+    );
+    assert!(output.contains("caller is a ghost"), "{output}");
+    assert_ghost(&shard, true);
+    assert_eq!(
+        shard
+            .query_rows("SELECT guid FROM game_corpse WHERE owner_guid = 1")
+            .len(),
+        1
+    );
 }
 
 #[test]
