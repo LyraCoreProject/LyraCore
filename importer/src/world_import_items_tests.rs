@@ -363,3 +363,34 @@ fn imported_items_cannot_use_the_operator_template_range() {
         "{refusal}"
     );
 }
+
+#[test]
+fn starting_stacks_keep_their_createinfo_amount() {
+    let row = |item, amount| {
+        [
+            ("race", N(1)),
+            ("class", N(4)),
+            ("itemid", N(item)),
+            ("amount", N(amount)),
+        ]
+    };
+    let (knives, bread, dagger) = (row(2947, 100), row(2070, 4), row(2092, 1));
+    let source = sqlite_fixture(&[FixtureTable {
+        name: "playercreateinfo_item",
+        columns: &[
+            ("race", "INTEGER"),
+            ("class", "INTEGER"),
+            ("itemid", "INTEGER"),
+            ("amount", "INTEGER"),
+        ],
+        key: &["race", "class", "itemid"],
+        rows: &[&knives, &bread, &dagger],
+    }])
+    .unwrap();
+    let race_class = packed_race_class_id(1, 4);
+    let outfit = HashSet::from([(race_class, 2947), (race_class, 2092)]);
+    let sql = createinfo_item_sql(&source, &outfit).unwrap().join(";");
+    assert!(sql.contains(&format!(",{race_class},2947,100)")), "{sql}");
+    assert!(sql.contains(&format!(",{race_class},2070,4)")), "{sql}");
+    assert!(!sql.contains(",2092,"), "{sql}");
+}

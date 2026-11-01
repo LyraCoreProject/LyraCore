@@ -66,7 +66,6 @@ pub(crate) mod pci {
     pub const RACE: &str = "race";
     pub const CLASS: &str = "class";
     pub const ITEM: &str = "itemid";
-    #[allow(dead_code)]
     pub const AMOUNT: &str = "amount";
 }
 

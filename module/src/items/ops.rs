@@ -50,7 +50,7 @@ pub(crate) fn grant_starter_item(
                 owner_identity,
                 owner_guid,
                 slot,
-                stack_count: stack,
+                stack_count: stack.min(tmpl.max_stack.max(1)),
                 durability: tmpl.max_durability,
                 created_at: crate::time::now(ctx),
                 enchant_id: 0,
@@ -74,17 +74,21 @@ pub(crate) fn grant_starter_item(
         .find(owner_guid)
         .map(|c| packed_race_class_id(c.race, c.class) as u16)
         .unwrap_or(0);
-    let outfit: Vec<u32> = ctx
-        .db
-        .game_start_item()
-        .by_race_class()
-        .filter(&race_class)
-        .map(|s| s.item_entry)
-        .collect();
+    // An outfit row carries no count, so a createinfo row for the same item supplies its stack.
+    let mut outfit: Vec<(u32, u32)> = Vec::new();
+    for row in ctx.db.game_start_item().by_race_class().filter(&race_class) {
+        match outfit
+            .iter_mut()
+            .find(|(entry, _)| *entry == row.item_entry)
+        {
+            Some((_, count)) => *count = (*count).max(row.count),
+            None => outfit.push((row.item_entry, row.count.max(1))),
+        }
+    }
     if !outfit.is_empty() {
         let mut occupied: std::collections::HashSet<u8> = std::collections::HashSet::new();
         let mut backpack = starter_item::BACKPACK_SLOT_0;
-        for entry in outfit {
+        for (entry, count) in outfit {
             // CharStartOutfit includes the Hearthstone already granted above.
             if entry == starter_item::HEARTHSTONE_ENTRY {
                 continue;
@@ -92,9 +96,6 @@ pub(crate) fn grant_starter_item(
             let Some(tmpl) = ctx.db.game_item_template().entry().find(entry) else {
                 continue;
             };
-            // CharStartOutfit omits counts; vanilla starting ammunition is 200 rounds.
-            const CLASS_AMMO: u8 = 6;
-            let count = if tmpl.class == CLASS_AMMO { 200 } else { 1 };
             match resolve_equip_slot(tmpl.inventory_type, false, |s| occupied.contains(&s)) {
                 Some(eq) => {
                     occupied.insert(eq);
