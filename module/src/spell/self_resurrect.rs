@@ -2,18 +2,51 @@ use lyracore_shared::packing::power_type;
 use spacetimedb::ReducerContext;
 
 use super::{
-    auras_on, game_self_resurrect_option, game_spell_effect, SelfResurrectOption, A_SELF_RESURRECT,
-    E_SELF_RESURRECT,
+    auras_on, game_self_resurrect_option, game_spell, game_spell_cd, game_spell_effect,
+    SelfResurrectOption, A_SELF_RESURRECT, E_SELF_RESURRECT,
 };
 use crate::game_world_entity;
+
+const REINCARNATION_PASSIVE: u32 = 20608;
+const REINCARNATION: u32 = 21169;
 
 // Record the option before death removes the Soulstone aura.
 pub(crate) fn record_self_resurrect_option(ctx: &ReducerContext, character_guid: u64) {
     let chosen = auras_on(ctx, character_guid)
         .filter(|a| a.eff_kind == A_SELF_RESURRECT && a.eff_p0 > 0)
         .map(|a| a.eff_p0 as u32)
-        .max();
+        .max()
+        .or_else(|| reincarnation_ready(ctx, character_guid).then_some(REINCARNATION));
     SelfResurrectOption::set(ctx, character_guid, chosen);
+}
+
+fn reincarnation_ready(ctx: &ReducerContext, character_guid: u64) -> bool {
+    super::knows_spell(ctx, character_guid, REINCARNATION_PASSIVE)
+        && ctx.db.game_spell().spell_id().find(REINCARNATION).is_some()
+        && prepare_self_resurrect_reagents(ctx, character_guid, REINCARNATION).is_ok()
+}
+
+fn prepare_self_resurrect_reagents(
+    ctx: &ReducerContext,
+    character_guid: u64,
+    spell_id: u32,
+) -> Result<crate::items::ItemStoragePlan, crate::Refusal> {
+    if ctx
+        .db
+        .game_spell_cd()
+        .by_caster()
+        .filter(&character_guid)
+        .any(|cd| cd.spell_id == spell_id && cd.ready_at > crate::time::now(ctx))
+    {
+        return Err("self-resurrection spell is on cooldown".into());
+    }
+    let character = crate::helpers::live_entity(ctx, character_guid)?;
+    let mut plan =
+        crate::items::ItemStoragePlan::read(ctx, character_guid, character.owner_identity);
+    for (entry, count) in super::recipe_reagents(ctx, spell_id) {
+        plan.consume(entry, count).map_err(String::from)?;
+    }
+    Ok(plan)
 }
 
 pub(crate) fn do_self_resurrect(
@@ -42,6 +75,21 @@ pub(crate) fn do_self_resurrect(
         .find(|e| e.kind == E_SELF_RESURRECT)
         .ok_or_else(|| format!("spell {} has no self-resurrect effect", option.spell_id))?;
 
+    let header = ctx
+        .db
+        .game_spell()
+        .spell_id()
+        .find(option.spell_id)
+        .ok_or_else(|| format!("no such spell {}", option.spell_id))?;
+    if option.spell_id == REINCARNATION
+        && !super::knows_spell(ctx, character_guid, REINCARNATION_PASSIVE)
+    {
+        return Err("Reincarnation requires the learned spell".into());
+    }
+    let reagents = prepare_self_resurrect_reagents(ctx, character_guid, option.spell_id)?;
+    reagents.commit(ctx).map_err(String::from)?;
+    super::cast::start_spell_cooldown(ctx, character_guid, option.spell_id, header.cooldown_ms);
+
     let (health, power) = self_resurrect_vitals(
         character.max_health,
         character.max_power,
@@ -53,6 +101,7 @@ pub(crate) fn do_self_resurrect(
     character.power = power;
     character.update(ctx);
     crate::ghost::finish_resurrection(ctx, character_guid);
+    crate::native::spell_cooldown(ctx, character_guid, option.spell_id, header.cooldown_ms);
     Ok(())
 }
 

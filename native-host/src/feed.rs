@@ -92,7 +92,7 @@ pub(super) struct Delivery {
 }
 
 struct Client {
-    sender: mpsc::Sender<Delivery>,
+    sender: mpsc::UnboundedSender<Delivery>,
     budget: Arc<tokio::sync::Semaphore>,
 }
 
@@ -233,7 +233,7 @@ impl Feed {
     pub(super) fn register(
         self: &Arc<Self>,
         connection_id: ConnectionId,
-    ) -> Result<(Registration, mpsc::Receiver<Delivery>)> {
+    ) -> Result<(Registration, mpsc::UnboundedReceiver<Delivery>)> {
         let mut state = self
             .0
             .lock()
@@ -243,7 +243,8 @@ impl Feed {
             !state.clients.contains_key(&connection_id),
             "native connection id collision"
         );
-        let (tx, rx) = mpsc::channel(64);
+        // Each queued delivery holds byte permits for its payload and storage.
+        let (tx, rx) = mpsc::unbounded_channel();
         state.clients.insert(
             connection_id,
             Client {
@@ -335,12 +336,24 @@ impl Feed {
             let Some(client) = state.clients.get(&connection) else {
                 continue;
             };
-            let size: usize = delivery
-                .packets
-                .iter()
-                .map(|packet| packet.body.len() + 4)
-                .sum();
-            let permit = u32::try_from(size.max(1))
+            let size = std::mem::size_of::<Delivery>()
+                + delivery.packets.capacity() * std::mem::size_of::<Arc<Packet>>()
+                + delivery
+                    .packets
+                    .iter()
+                    .map(|packet| {
+                        // Arc stores its strong and weak reference counts beside the Packet.
+                        std::mem::size_of::<Packet>()
+                            + 2 * std::mem::size_of::<usize>()
+                            + packet.body.capacity()
+                    })
+                    .sum::<usize>()
+                + delivery.cipher.as_ref().map_or(0, |cipher| {
+                    cipher.username.capacity()
+                        + cipher.session_key.capacity()
+                        + cipher.client_proof.capacity()
+                });
+            let permit = u32::try_from(size)
                 .ok()
                 .and_then(|size| client.budget.clone().try_acquire_many_owned(size).ok());
             let Some(permit) = permit else {
@@ -349,7 +362,7 @@ impl Feed {
                 continue;
             };
             delivery.budget = Some(permit);
-            if client.sender.try_send(delivery).is_err() {
+            if client.sender.send(delivery).is_err() {
                 state.remove(connection);
                 log::warn!("native output queue closed for connection {connection}");
             }
@@ -541,6 +554,85 @@ mod tests {
             .collect();
         route(&mut router, grants);
         router
+    }
+
+    fn transaction(packet: Packet) -> OutboundMessage {
+        let bytes = bsatn::to_vec(&packet).unwrap();
+        let events = v2::BsatnRowList::new(
+            spacetimedb_client_api_messages::websocket::v1::RowSizeHint::FixedSize(
+                bytes.len().try_into().unwrap(),
+            ),
+            bytes.into(),
+        );
+        OutboundMessage::V2(v2::ServerMessage::TransactionUpdate(
+            v2::TransactionUpdate {
+                query_sets: vec![v2::QuerySetUpdate {
+                    query_set_id: v2::QuerySetId::new(1),
+                    tables: vec![v2::TableUpdate {
+                        table_name: "game_native_packet".into(),
+                        rows: vec![v2::TableUpdateRows::EventTable(v2::EventTableRows {
+                            events,
+                        })]
+                        .into(),
+                    }]
+                    .into(),
+                }]
+                .into(),
+            },
+        ))
+    }
+
+    #[test]
+    fn output_burst_preserves_order_until_drained() {
+        let feed = Arc::new(Feed::default());
+        let (_registration, mut deliveries) = feed.register(CONNECTION).unwrap();
+        for _ in 0..2 {
+            for sequence in 0u32..256 {
+                feed.apply(transaction(row(
+                    u64::from(sequence),
+                    Audience::Connection(CONNECTION),
+                    Some(0x1dd),
+                    sequence.to_le_bytes().to_vec(),
+                )))
+                .unwrap();
+            }
+            for sequence in 0u32..256 {
+                let delivery = deliveries.try_recv().unwrap();
+                assert_eq!(delivery.packets.len(), 1);
+                assert_eq!(delivery.packets[0].opcode, Some(0x1dd));
+                assert_eq!(delivery.packets[0].body, sequence.to_le_bytes());
+            }
+        }
+    }
+
+    #[test]
+    fn output_budget_closes_only_the_slow_reader() {
+        for (messages, opcode, body_size) in [(40, Some(0x180), 60_000), (32_768, None, 0)] {
+            let feed = Arc::new(Feed::default());
+            let (_slow_registration, mut slow) = feed.register(VIEWER).unwrap();
+            let (_fast_registration, mut fast) = feed.register(OTHER_VIEWER).unwrap();
+            for id in 0..messages {
+                for connection in [VIEWER, OTHER_VIEWER] {
+                    feed.apply(transaction(row(
+                        id,
+                        Audience::Connection(connection),
+                        opcode,
+                        vec![0; body_size],
+                    )))
+                    .unwrap();
+                }
+                assert_eq!(fast.try_recv().unwrap().packets[0].id, id);
+            }
+            while slow.try_recv().is_ok() {}
+            assert!(matches!(
+                slow.try_recv(),
+                Err(mpsc::error::TryRecvError::Disconnected)
+            ));
+            assert!(matches!(
+                fast.try_recv(),
+                Err(mpsc::error::TryRecvError::Empty)
+            ));
+        }
     }
 
     #[test]
