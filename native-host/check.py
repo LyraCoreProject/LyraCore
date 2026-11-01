@@ -21,6 +21,7 @@ from operator_spells import check_operator_spells
 from operator_characters import check_operator_characters
 from operator_creatures import check_operator_creatures
 import reload
+import realm_communication
 import retention
 from spell_source import check_spell_source_behavior
 
@@ -5448,6 +5449,7 @@ ALONE = {
     'handoff': (check_handoff, {}),
     'realm-shard': (check_realm_shard, {'seeded': True}),
     'continent-shards': (check_continent_shards, {'seeded': True}),
+    'realm-communication': (realm_communication.check, {'seeded': True}),
 }
 
 

@@ -27,6 +27,8 @@ pub struct NativeAway {
     pub connection_id: ConnectionId,
     #[default(None::<Identity>)]
     pub world: Option<Identity>,
+    #[default(0u64)]
+    pub character_guid: u64,
 }
 
 pub(crate) fn away_accounts(ctx: &ReducerContext) -> Vec<u64> {
@@ -250,6 +252,7 @@ pub fn world_entry_answered(ctx: &ReducerContext, entry: WorldEntry, result: Res
         account_id,
         connection_id,
         world: Some(entry.database.0),
+        character_guid: entry.character_guid,
     });
     super::handoff::write_marker(ctx, connection_id, entry.database.0);
 }

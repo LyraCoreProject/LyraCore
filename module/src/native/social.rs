@@ -34,7 +34,7 @@ pub(super) fn receive(
                 .game_native_world_connection()
                 .connection_id()
                 .update(connection);
-            who(ctx, id, actor.race(), &request);
+            who(ctx, id, actor.race(), &request)?;
             Ok(())
         }
         ClientOpcodeMessage::CMSG_FRIEND_LIST => lists(ctx, id, &actor),
@@ -261,11 +261,32 @@ pub(super) fn presence(ctx: &ReducerContext, guid: u64, present: bool) {
     }
 }
 
-fn who(ctx: &ReducerContext, connection: ConnectionId, race: u8, request: &CMSG_WHO) {
+fn who(
+    ctx: &ReducerContext,
+    connection: ConnectionId,
+    race: u8,
+    request: &CMSG_WHO,
+) -> Result<(), Rollback> {
     let Some(filter) = WhoFilter::from_request(race, request) else {
-        return;
+        return Ok(());
     };
-    let reads_zones = request.search_strings.iter().any(|s| !s.is_empty());
+    if super::realm_communication::who(ctx, connection, &filter)? {
+        return Ok(());
+    }
+    let matches = who_matches(ctx, &filter)
+        .into_iter()
+        .map(|(_, view)| view)
+        .collect::<Vec<_>>();
+    let (opcode, body) = codec::build_who_response_raw(&matches);
+    super::send_raw(ctx, connection, opcode, body, false);
+    Ok(())
+}
+
+pub(super) fn who_matches(
+    ctx: &ReducerContext,
+    filter: &WhoFilter<'_>,
+) -> Vec<(u64, codec::WhoPlayerView)> {
+    let reads_zones = filter.search_strings.iter().any(|s| !s.is_empty());
     let mut matches = Vec::new();
     for player in ctx.db.game_native_player().iter() {
         if player.teleport == Some(super::teleport::NativeTeleport::WorldPort) {
@@ -295,7 +316,7 @@ fn who(ctx: &ReducerContext, connection: ConnectionId, race: u8, request: &CMSG_
             String::new()
         };
         if lyracore_protocol::who::matches(
-            &filter,
+            filter,
             &WhoCandidate {
                 name: &character.name,
                 guild_name: &guild,
@@ -306,16 +327,18 @@ fn who(ctx: &ReducerContext, connection: ConnectionId, race: u8, request: &CMSG_
                 zone_name: &zone_name,
             },
         ) {
-            matches.push(codec::WhoPlayerView {
-                name: character.name,
-                guild,
-                level: entity.level.min(u32::from(u8::MAX)) as u8,
-                class: entity.class(),
-                race: entity.race(),
-                zone_id: entity.zone_id,
-            });
+            matches.push((
+                character.guid,
+                codec::WhoPlayerView {
+                    name: character.name,
+                    guild,
+                    level: entity.level.min(u32::from(u8::MAX)) as u8,
+                    class: entity.class(),
+                    race: entity.race(),
+                    zone_id: entity.zone_id,
+                },
+            ));
         }
     }
-    let (opcode, body) = codec::build_who_response_raw(&matches);
-    super::send_raw(ctx, connection, opcode, body, false);
+    matches
 }

@@ -24,6 +24,7 @@ mod environment;
 mod gossip;
 mod guild;
 mod handoff;
+mod realm_communication;
 mod realm_shard;
 pub(crate) use realm_shard::account_changed;
 mod instance;

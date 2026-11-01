@@ -142,6 +142,23 @@ correlated replies and directory changes. The previous `game_selection_reply` la
 additive migration. `game_selection_request.selection_id` and `game_native_away.world` are typed,
 END-appended defaults; a legacy away row uses the default World Shard.
 
+### Realm communication (`module/src/native/realm_communication.rs`)
+
+`game_native_away.character_guid` is END-appended with default zero. New world entries record the
+Character guid. Existing away rows with zero cannot use Realm whispers or `/who` until logout and
+world entry, or reconnect. This prevents replies reaching a different Character on the same
+connection. A planned update closes existing World Sessions; development reload cannot add this
+column.
+
+`game_realm_communication_request`, `game_world_query`, `game_world_query_answer` and
+`game_world_delivery` are IDC outboxes. `game_realm_query` joins replies from the configured World
+Shards and expires after 15 seconds. `game_realm_delivery` holds a reply batch for one Account,
+Character and connection, with a 15-second expiry; `game_realm_delivery_retry` schedules another
+attempt only after a refused IDC. Successful delivery removes the pending batch. These tables
+belong to the Realm communication flow and do not follow Character Transfer or deletion sweeps.
+All new tables start empty on migration. See [Realm routing](architecture.md#durable-state-and-extension-points) for the
+snapshot and delivery limits.
+
 ### Map catalogue (`module/src/config.rs`)
 
 `game_map` stores selected vmangos `map_template` rows. `internal_name` alone comes from the
