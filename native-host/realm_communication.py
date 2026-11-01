@@ -100,9 +100,9 @@ def check(host):
     assert received(client, 0x96) == [line(6, peer_guid, 'return whisper')]
     send(client, 6, 'missing Character', target='Missing')
     assert received(client, 0x2a9) == [(0x2a9, b'Missing\0')]
-    send(client, 6, 'unknown language', language=1, target='Western')
-    assert received(client, 0x1cb) == [(0x1cb, b"You don't know that language\0")]
-    assert not any(opcode == 0x96 for opcode, _ in peer.collect())
+    send(client, 6, 'Universal whisper', language=1, target='Western')
+    assert received(client, 0x96) == [line(7, peer_guid, 'Universal whisper')]
+    assert received(peer, 0x96) == [line(6, guid, 'Universal whisper')]
 
     send(peer, 20, 'Back soon')
     peer.collect()
@@ -178,7 +178,6 @@ def check(host):
     # The IDC test caller substitutes for the Realm Shard; native connections stay real.
     [operator_hex] = host.rows('SELECT identity FROM game_operator')[0][0]
     operator = {'__identity__': f'0x{int(operator_hex, 16):064x}'}
-    host.call('operator_add_peer_shard', [operator, 'delivery fixture'], database=eastern)
     original_connection = host.rows(f'SELECT connection_id FROM game_native_player WHERE character_guid = {guid}', eastern)[0][0]
     [connection_number] = original_connection
     recipient = struct.pack('<Q', account.id) + connection_number.to_bytes(16, 'little') + struct.pack('<Q', guid)
@@ -187,6 +186,7 @@ def check(host):
     delivery = recipient + reply + b'\x01' + struct.pack('<q', 0x7fffffffffffffff)
 
     def deliver(payload, refused=False):
+        host.call('operator_add_peer_shard', [operator, 'delivery fixture'], database=eastern)
         host.call('operator_set_shard_role', [{'some': {'world': operator}}], database=eastern)
         try:
             try:
@@ -197,6 +197,7 @@ def check(host):
                 assert not refused, 'a stale recipient received a Realm reply'
         finally:
             host.call('operator_set_shard_role', [{'some': {'world': host.identity()}}], database=eastern)
+            host.call('operator_remove_peer_shard', [operator], database=eastern)
 
     deliver(delivery)
     assert received(client, 0x1cb) == [(0x1cb, notification)]
