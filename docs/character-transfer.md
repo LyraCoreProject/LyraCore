@@ -24,7 +24,8 @@ outboxes and results resume on restart. A timeout alone never releases cross-Sha
    rows, Account and Session copies, connection proof, Character guid and teleport counter. Its
    Transfer id comes from the source's GUID allocator, whose ranges are distinct across Shards.
    Before this transaction commits, the source remains the sole copy. After it commits, only the
-   queued call's result may settle Escrow. Gameplay packets wait while this connection is pending.
+   queued call's result may settle Escrow. The source silently drops requests while this connection
+   has a pending departure.
 3. The target requires a Peer World Shard that names its Realm Shard, checks map ownership and
    Account ownership, imports through the existing idempotent import code, and writes an Escrow-in
    receipt and a WorldPort Handoff. All of these commit together. A refusal rolls back everything.
@@ -49,6 +50,8 @@ outboxes and results resume on restart. A timeout alone never releases cross-Sha
    World Session.
 7. The Native Host attaches the same connection to the target. `native_world_adopt` enters with
    `WorldEntry::WorldPort` and the saved teleport counter. Self CREATE finishes the loading screen.
+   The source keeps its pending departure through the Handoff marker until connection cleanup.
+   Adoption clears any pending departure left by an earlier visit to the target on this connection.
    If the connection is lost, the next login routes to the target through the updated directory.
    A crash after a marker commits relies on the Native Host's existing ordered Handoff delivery.
 

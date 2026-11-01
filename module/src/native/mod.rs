@@ -158,6 +158,7 @@ use spacetimedb::{reducer, table, ConnectionId, ReducerContext, SpacetimeType, T
 
 use crate::{game_account, game_character, game_session, Refusal};
 use rollback::Rollback;
+use transfer::game_native_transfer_pending;
 
 #[derive(SpacetimeType)]
 pub enum NativeWorldState {
@@ -305,6 +306,10 @@ fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
     });
     admission::remove(ctx, connection_id);
     world::leave(ctx, connection_id);
+    ctx.db
+        .game_native_transfer_pending()
+        .connection_id()
+        .delete(connection_id);
     ctx.db
         .game_native_cipher()
         .connection_id()
@@ -737,6 +742,10 @@ pub(crate) fn close(ctx: &ReducerContext) {
         logon::close(ctx, connection_id);
         admission::remove(ctx, connection_id);
         world::leave(ctx, connection_id);
+        ctx.db
+            .game_native_transfer_pending()
+            .connection_id()
+            .delete(connection_id);
         ctx.db
             .game_native_cipher()
             .connection_id()
