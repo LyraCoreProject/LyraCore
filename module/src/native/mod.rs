@@ -93,7 +93,7 @@ pub(crate) use progression::{explored, levelup, xp};
 pub(crate) use query::{broadcast_creature_query, broadcast_item_query};
 pub(crate) use quest::{changed as quest_changed, event_credit as quest_event_credit};
 pub(crate) use reputation::{changed as reputation_changed, watched as watched_faction};
-pub(crate) use spell::{cast_event, spell_impact};
+pub(crate) use spell::{cast_event, spell_cooldown, spell_impact};
 pub(crate) use taxi::{
     aborted as taxi_aborted, landed as taxi_landed, spline_changed as taxi_spline_changed,
 };

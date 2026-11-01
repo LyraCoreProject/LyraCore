@@ -43,6 +43,26 @@ pub(crate) fn cast_event(ctx: &ReducerContext, event: &SpellCastEvent) {
     }
 }
 
+pub(crate) fn spell_cooldown(
+    ctx: &ReducerContext,
+    caster_guid: u64,
+    spell_id: u32,
+    cooldown_ms: u32,
+) {
+    if let Some(packet) = cooldown_message(caster_guid, spell_id, cooldown_ms) {
+        deliver(ctx, caster_guid, EventAudience::Source, packet);
+    }
+}
+
+fn cooldown_message(caster_guid: u64, spell_id: u32, cooldown_ms: u32) -> Option<Packet> {
+    // SMSG_SPELL_GO releases pending casts. A zero-duration cooldown can leave the button stuck.
+    (cooldown_ms > 0).then(|| {
+        message(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(Box::new(
+            codec::build_spell_cooldown(caster_guid, spell_id, cooldown_ms),
+        )))
+    })
+}
+
 // vmangos sets CAST_FLAG_AMMO on START and GO for every ranged-slot spell.
 fn projectile(ctx: &ReducerContext, event: &SpellCastEvent) -> Option<(u32, u32)> {
     use crate::spell::game_spell;
@@ -256,13 +276,8 @@ fn cast_event_messages(
         ));
     }
 
-    // SMSG_SPELL_GO releases pending casts. A zero-duration cooldown can leave the button stuck.
-    if row.cooldown_ms > 0 {
-        let cd = codec::build_spell_cooldown(row.caster_guid, row.spell_id, row.cooldown_ms);
-        out.push((
-            EventAudience::Everyone,
-            message(ServerOpcodeMessage::SMSG_SPELL_COOLDOWN(Box::new(cd))),
-        ));
+    if let Some(packet) = cooldown_message(row.caster_guid, row.spell_id, row.cooldown_ms) {
+        out.push((EventAudience::Everyone, packet));
     }
     out
 }

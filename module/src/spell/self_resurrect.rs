@@ -101,6 +101,7 @@ pub(crate) fn do_self_resurrect(
     character.power = power;
     character.update(ctx);
     crate::ghost::finish_resurrection(ctx, character_guid);
+    crate::native::spell_cooldown(ctx, character_guid, option.spell_id, header.cooldown_ms);
     Ok(())
 }
 
