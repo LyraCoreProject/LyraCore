@@ -1405,7 +1405,17 @@ pub(crate) fn remove_live_character(ctx: &ReducerContext, entity: WorldEntity) {
     );
 }
 
-pub(crate) fn remove_loading_character(ctx: &ReducerContext, guid: u64) {
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum CharacterDeparture {
+    Logout,
+    Transfer,
+}
+
+pub(crate) fn remove_loading_character(
+    ctx: &ReducerContext,
+    guid: u64,
+    departure: CharacterDeparture,
+) {
     crate::hooks::fire_on_logout(
         ctx,
         &crate::hooks::LogoutPayload {
@@ -1417,8 +1427,10 @@ pub(crate) fn remove_loading_character(ctx: &ReducerContext, guid: u64) {
     };
     character.online = false;
     character.last_logout_micros = crate::time::now(ctx).to_micros_since_unix_epoch() as u64;
-    character.pending_godmode = false;
-    character.pending_run_speed_mult_bp = RUN_SPEED_BP_1X;
+    if departure == CharacterDeparture::Logout {
+        character.pending_godmode = false;
+        character.pending_run_speed_mult_bp = RUN_SPEED_BP_1X;
+    }
     crate::rest::materialize_on_logout(
         &mut character,
         crate::time::now(ctx).to_micros_since_unix_epoch(),

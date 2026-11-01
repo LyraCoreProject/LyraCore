@@ -305,7 +305,7 @@ fn disconnect(ctx: &ReducerContext, connection_id: ConnectionId) {
         authentication_complete: false,
     });
     admission::remove(ctx, connection_id);
-    world::leave(ctx, connection_id);
+    world::leave(ctx, connection_id, crate::world::CharacterDeparture::Logout);
     ctx.db
         .game_native_transfer_pending()
         .connection_id()
@@ -741,7 +741,7 @@ pub(crate) fn close(ctx: &ReducerContext) {
         debug::close(ctx, connection_id);
         logon::close(ctx, connection_id);
         admission::remove(ctx, connection_id);
-        world::leave(ctx, connection_id);
+        world::leave(ctx, connection_id, crate::world::CharacterDeparture::Logout);
         ctx.db
             .game_native_transfer_pending()
             .connection_id()

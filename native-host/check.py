@@ -5191,6 +5191,7 @@ def check_continent_shards(host):
     for race, map_id in ((1, 0), (2, 1)):
         host.call('operator_set_character_start_map', [race, 1, map_id])
     account = host.account('CONTINENTS')
+    host.sql(f'UPDATE game_account SET gm_level = 1 WHERE id = {account.id}')
     client = host.connect('CONTINENTS')
     assert client.read()[0] == 0x1ee
     client.send(0x37)
@@ -5203,6 +5204,25 @@ def check_continent_shards(host):
         rows = host.rows(f'SELECT guid, account_id, world FROM game_character_directory WHERE account_id = {account.id}')
         expected = [[guid, account.id, owners[0 if shard == eastern else 1]] for guid, shard in characters]
         assert sorted(rows) == sorted(expected), (rows, expected)
+
+    def enable_playtest(shard):
+        for command in ('.god on', '.speed 2'):
+            client.send(0x95, struct.pack('<II', 0, 7) + command.encode() + b'\0')
+            client.collect()
+        assert host.rows(f'SELECT godmode, run_speed_mult_bp FROM game_world_entity WHERE guid = {guid}', shard) == [[True, 20000]]
+
+    def assert_playtest(shard, packets, enabled=True):
+        expected = [[True, 20000]] if enabled else [[False, 10000]]
+        assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', shard) == expected
+        assert host.rows(f'SELECT godmode, run_speed_mult_bp FROM game_world_entity WHERE guid = {guid}', shard) == expected
+        bodies = [body for opcode, body in packets if opcode == 0xa9 and body[5] == 3 and packed_guid(body[6:]) == guid]
+        assert len(bodies) == 1
+        body = bodies[0]
+        offset = 7 + body[6].bit_count()
+        assert body[offset:offset + 2] == bytes([4, 0x71])
+        assert struct.unpack_from('<I', body, offset + 2)[0] == 0
+        # Build 5875 has 28 movement bytes and walk speed before run speed.
+        assert struct.unpack_from('<f', body, offset + 34)[0] == (14.0 if enabled else 7.0)
 
     for name, race, shard in (('Eastern', 1, eastern), ('Western', 2, kalimdor)):
         client.send(0x36, name.encode() + b'\0' + bytes([race, 1, 0, 0, 0, 0, 0, 0, 0]))
@@ -5235,7 +5255,7 @@ def check_continent_shards(host):
         connection = host.rows('SELECT connection_id FROM game_native_world_connection', shard)
         counter = host.rows('SELECT teleport_counter FROM game_native_player', shard)[0][0]
 
-        def cross(source, target, map_id):
+        def cross(source, target, map_id, playtest=True):
             client.collect()
             away_before = host.rows('SELECT world FROM game_native_away')
             inventory = host.rows(f'SELECT guid, entry, slot, stack_count FROM game_item_instance WHERE owner_guid = {guid}', source)
@@ -5251,6 +5271,7 @@ def check_continent_shards(host):
             arrival = []
             while guid not in creates(arrival):
                 arrival.append(client.read())
+            assert_playtest(target, arrival, playtest)
             assert not any(opcode == 0x236 for opcode, _ in arrival)
             sequence = secrets.randbits(32) | 0x80000000
             client.send(0x1dc, struct.pack('<II', sequence, 0))
@@ -5274,6 +5295,7 @@ def check_continent_shards(host):
             characters[index] = (guid, target)
             directory_is_current()
 
+        enable_playtest(shard)
         cross(shard, other, 1 if other == kalimdor else 0)
         assert host.rows('SELECT teleport_counter FROM game_native_player', other) == [[counter + 1]]
         cross(other, shard, 0 if shard == eastern else 1)
@@ -5287,6 +5309,7 @@ def check_continent_shards(host):
         host.wait_until(lambda: host.rows('SELECT connection_id FROM game_native_world_connection')
             and not host.rows('SELECT connection_id FROM game_native_world_connection', other),
             'logout after Transfer did not return to the Realm Shard')
+        assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', other) == [[False, 10000]]
         client.send(0x37)
         opcode, body = client.read()
         assert opcode == 0x3b and body[0] == 2
@@ -5296,7 +5319,8 @@ def check_continent_shards(host):
         while guid not in creates(entered):
             entered.append(client.read())
         assert host.rows('SELECT character_guid FROM game_native_player', other) == [[guid]]
-        cross(other, shard, 0 if shard == eastern else 1)
+        assert_playtest(other, entered, False)
+        cross(other, shard, 0 if shard == eastern else 1, playtest=False)
         client.collect()
         client.send(0x4b)
         while client.read()[0] != 0x4d:
@@ -5321,6 +5345,7 @@ def check_continent_shards(host):
     while guid not in creates(entered):
         entered.append(client.read())
     client.collect()
+    enable_playtest(eastern)
     host.call('debug_teleport', [guid, 1, 30, 0, 0, 0], database=eastern)
     client.collect(auto_ack=False)
     client.send(0xdc)
@@ -5331,6 +5356,7 @@ def check_continent_shards(host):
         and not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
         and not host.rows('SELECT account_id FROM game_native_away'),
         'a lost connection did not leave one released target copy')
+    assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', kalimdor) == [[False, 10000]]
     characters[0] = (guid, kalimdor)
     directory_is_current()
     client = host.connect('CONTINENTS')
@@ -5340,6 +5366,7 @@ def check_continent_shards(host):
     while guid not in creates(entered):
         entered.append(client.read())
     client.collect()
+    assert_playtest(kalimdor, entered, False)
     host.call('debug_teleport', [guid, 0, 20, 0, 0, 0], database=kalimdor)
     client.collect(auto_ack=False)
     client.send(0xdc)
@@ -5348,7 +5375,24 @@ def check_continent_shards(host):
         returned.append(client.read())
     characters[0] = (guid, eastern)
     directory_is_current()
-    original = host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', shard)
+    original = host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', eastern)
+    enable_playtest(eastern)
+    host.call('debug_teleport', [guid, 1, 40, 0, 0, 0], database=eastern)
+    client.collect(auto_ack=False)
+    client.close()
+    host.wait_until(lambda: host.rows(f'SELECT online, pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', eastern) == [[False, False, 10000]]
+        and not host.rows('SELECT account_id FROM game_native_away'),
+        'connection loss during loading did not clear playtest state')
+    assert host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', eastern) == original
+    assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', kalimdor)
+    client = host.connect('CONTINENTS')
+    assert client.read()[0] == 0x1ee
+    client.send(0x3d, struct.pack('<Q', guid))
+    entered = []
+    while guid not in creates(entered):
+        entered.append(client.read())
+    assert_playtest(eastern, entered, False)
+    enable_playtest(eastern)
     host.call('operator_remove_peer_shard', [host.identity(eastern)], database=kalimdor)
     client.collect()
     host.call('debug_teleport', [guid, 1, 50, 0, 0, 0], database=eastern)
@@ -5357,6 +5401,7 @@ def check_continent_shards(host):
     client.read_until_closed()
     host.wait_until(lambda: not host.rows('SELECT transfer_id FROM game_transfer_out', eastern),
         'refused Transfer retained source Escrow')
+    assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', eastern) == [[False, 10000]]
     assert not host.rows('SELECT connection_id FROM game_native_transfer_pending', eastern)
     assert host.rows(f'SELECT map_id, x, y, z FROM game_character WHERE guid = {guid}', eastern) == original
     assert not host.rows(f'SELECT guid FROM game_character WHERE guid = {guid}', kalimdor)
