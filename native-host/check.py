@@ -5215,7 +5215,7 @@ def check_continent_shards(host):
         expected = [[True, 20000]] if enabled else [[False, 10000]]
         assert host.rows(f'SELECT pending_godmode, pending_run_speed_mult_bp FROM game_character WHERE guid = {guid}', shard) == expected
         assert host.rows(f'SELECT godmode, run_speed_mult_bp FROM game_world_entity WHERE guid = {guid}', shard) == expected
-        bodies = [body for opcode, body in packets if opcode == 0xa9 and body[5] == 3 and packed_guid(body[6:]) == guid]
+        bodies = [body for opcode, body in packets if opcode == 0xa9 and body[5] in (2, 3) and packed_guid(body[6:]) == guid]
         assert len(bodies) == 1
         body = bodies[0]
         offset = 7 + body[6].bit_count()
