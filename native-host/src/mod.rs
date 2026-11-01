@@ -107,7 +107,7 @@ impl Drop for ClientLifetime {
 /// A native connection's attachment to one Shard. Dropping it disconnects the client from that Shard.
 struct Shard {
     client: ClientConnection,
-    deliveries: mpsc::Receiver<feed::Delivery>,
+    deliveries: mpsc::UnboundedReceiver<feed::Delivery>,
     closed: oneshot::Receiver<()>,
     _stop: oneshot::Sender<()>,
     _registration: feed::Registration,
