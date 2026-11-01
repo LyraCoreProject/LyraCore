@@ -54,6 +54,8 @@ pub struct StartItem {
     pub id: u64,
     pub race_class: u16,
     pub item_entry: u32,
+    #[default(1u32)]
+    pub count: u32,
 }
 
 #[table(accessor = game_race_info, public)]

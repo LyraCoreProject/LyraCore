@@ -2099,6 +2099,7 @@
     "playercreateinfo_item": {
       "columns": {
         "integer": [
+          "amount",
           "class",
           "itemid",
           "race"

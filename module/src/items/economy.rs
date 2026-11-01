@@ -539,12 +539,13 @@ pub(crate) fn apply_buy_item(
     player.money = player.money.saturating_sub(cost);
     let owner_identity = player.owner_identity;
     player.update(ctx);
+    // vmangos BuyItemFromVendor: the client buys lots, and each lot holds the template's BuyCount.
     Ok(store_item(
         ctx,
         player_guid,
         owner_identity,
         &tmpl,
-        count,
+        count.saturating_mul(tmpl.buy_count.max(1)),
         false,
         None,
     )?)

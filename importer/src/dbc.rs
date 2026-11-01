@@ -433,7 +433,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
         let race_class = packed_race_class_id(race as u8, class as u8);
         for &item in o.item_id.iter() {
             if item > 0 && seen.insert((race_class, item)) {
-                rows.push(format!("({id},{race_class},{item})"));
+                rows.push(format!("({id},{race_class},{item},1)"));
                 id += 1;
             }
         }
@@ -443,7 +443,7 @@ fn start_item_sql(chain: &mut PatchChain) -> Result<(Vec<String>, usize)> {
     push_insert(
         &mut stmts,
         "game_start_item",
-        "id,race_class,item_entry",
+        "id,race_class,item_entry,count",
         &rows,
     );
     Ok((stmts, n))

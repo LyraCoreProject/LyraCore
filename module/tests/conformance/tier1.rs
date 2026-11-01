@@ -357,7 +357,7 @@ fn seed_visibility_world(
     let race_class = race_class.context("visibility Character fixture")?;
     for (id, entry) in [25, 38, 39, 40, 2362].into_iter().enumerate() {
         shard.assert_sql(&format!(
-            "INSERT INTO game_start_item (id,race_class,item_entry) VALUES ({},{race_class},{entry})",
+            "INSERT INTO game_start_item (id,race_class,item_entry,count) VALUES ({},{race_class},{entry},1)",
             id + 1
         ));
     }

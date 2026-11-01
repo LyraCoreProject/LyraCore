@@ -138,6 +138,12 @@ also reimport the `spellmeta` family, and a poison proc needs the combat-spell e
 an `items` reimport with `--dbc`. The new `game_temporary_enchantment` table starts empty and needs
 no repair.
 
+### Starting stack migration
+
+`game_start_item.count` defaults to one. Until you reimport the `globals` family, a new Character
+starts with one of each item: one throwing knife, one arrow or bullet, one piece of food. After you
+publish this schema to an existing Shard, reimport `globals` before new Characters are created.
+
 ### Native Relay events
 
 Combat, spell cast, spell impact, Speech and emote notifications use SpacetimeDB event tables. Each

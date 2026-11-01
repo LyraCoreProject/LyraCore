@@ -388,6 +388,13 @@ fn build_createinfo_item_sql(
         }
         None => std::collections::HashSet::new(),
     };
+    createinfo_item_sql(dump, &outfit_seen)
+}
+
+fn createinfo_item_sql(
+    dump: &(impl crate::dump::TableRows + ?Sized),
+    outfit_seen: &std::collections::HashSet<(u64, i32)>,
+) -> Result<Vec<String>> {
     let mut race_class_pairs: Vec<(u32, u32)> = Vec::new();
     let mut seen_extra: std::collections::HashSet<(u64, i32)> = std::collections::HashSet::new();
     let mut deduped = 0usize;
@@ -397,11 +404,13 @@ fn build_createinfo_item_sql(
         let race = r.number::<u32>(pci::RACE)?;
         let class = r.number::<u32>(pci::CLASS)?;
         let item = r.number::<i32>(pci::ITEM)?;
+        let amount = r.number::<u32>(pci::AMOUNT)?.max(1);
         if item <= 0 {
             continue;
         }
         let race_class = packed_race_class_id(race as u8, class as u8);
-        if outfit_seen.contains(&(race_class, item)) {
+        // CharStartOutfit has no counts, so a stack the outfit also lists still needs its row.
+        if amount == 1 && outfit_seen.contains(&(race_class, item)) {
             deduped += 1;
             continue;
         }
@@ -409,7 +418,7 @@ fn build_createinfo_item_sql(
             continue;
         }
         race_class_pairs.push((race, class));
-        rows.push(format!("({id},{race_class},{item})"));
+        rows.push(format!("({id},{race_class},{item},{amount})"));
         id += 1;
     }
     let n = rows.len();
@@ -419,7 +428,7 @@ fn build_createinfo_item_sql(
     push_insert(
         &mut stmts,
         "game_start_item",
-        "id,race_class,item_entry",
+        "id,race_class,item_entry,count",
         &rows,
     );
     eprintln!(
