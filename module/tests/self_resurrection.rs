@@ -252,12 +252,70 @@ fn reincarnation_rechecks_its_requirements_before_spending_the_option() {
     assert_alive_in_place(&entity(&shard));
 }
 
+#[test]
+#[ignore = "requires the SpacetimeDB 2.14.0 CLI and Wasm toolchain"]
+fn reincarnation_uses_edited_reagents_and_cooldown_without_partial_consumption() {
+    let shard = start("self-res-edited-cost");
+    reincarnation(&shard);
+    shard.assert_sql("UPDATE game_spell SET cooldown_ms = 120000 WHERE spell_id = 21169");
+    shard.assert_sql(
+        "UPDATE game_spell_reagent SET item_entry = 6948, count = 2 WHERE spell_id = 21169",
+    );
+    shard.assert_sql("INSERT INTO game_spell_reagent (id, spell_id, item_entry, count) VALUES (169353, 21169, 17030, 3)");
+    shard.assert_call("debug_grant_item", &["1", "6948", "1"]);
+    shard.assert_sql(
+        "UPDATE game_item_instance SET stack_count = 2 WHERE owner_guid = 1 AND entry = 6948",
+    );
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), None);
+
+    shard.assert_call("debug_set_health", &["1", "1000"]);
+    shard.assert_sql(
+        "UPDATE game_item_instance SET stack_count = 3 WHERE owner_guid = 1 AND entry = 17030",
+    );
+    shard.assert_call("debug_set_health", &["1", "0"]);
+    assert_eq!(option_spell(&shard), Some(21169));
+    shard.assert_sql(
+        "UPDATE game_item_instance SET stack_count = 1 WHERE owner_guid = 1 AND entry = 17030",
+    );
+    let inventory = shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1");
+    assert!(!shard.call("debug_self_resurrect", &["1"]).status.success());
+    assert_eq!(
+        shard.query_rows("SELECT * FROM game_item_instance WHERE owner_guid = 1"),
+        inventory
+    );
+    assert_eq!(entity(&shard)["dead"], "true");
+    assert_eq!(option_spell(&shard), Some(21169));
+    assert!(shard
+        .query_rows("SELECT id FROM game_spell_cd WHERE caster_guid = 1")
+        .is_empty());
+
+    shard.assert_sql(
+        "UPDATE game_item_instance SET stack_count = 3 WHERE owner_guid = 1 AND entry = 17030",
+    );
+    shard.assert_call("debug_self_resurrect", &["1"]);
+    assert_alive_in_place(&entity(&shard));
+    assert!(shard
+        .query_rows("SELECT guid FROM game_item_instance WHERE owner_guid = 1")
+        .is_empty());
+    let cooldowns = shard.query_rows(
+        "SELECT ready_at FROM game_spell_cd WHERE caster_guid = 1 AND spell_id = 21169",
+    );
+    assert_eq!(cooldowns.len(), 1);
+    let ready_at = spacetimedb::Timestamp::parse_from_rfc3339(&cooldowns[0]["ready_at"])
+        .unwrap()
+        .to_micros_since_unix_epoch();
+    assert_eq!(ready_at, 1_000_120_000_000);
+}
+
 fn reincarnation(shard: &Standalone) {
     shard.assert_call("claim_operator", &[]);
     shard.assert_call("install_guid_range", &["0"]);
     shard.assert_sql("INSERT INTO game_conformance_clock (id, now_micros, elapsed_micros) VALUES (0, 1000000000000, 0)");
     set_class(shard, 7, MANA, 2000);
     insert_spell(shard, 21169, "Reincarnation", 0);
+    shard.assert_sql("UPDATE game_spell SET cooldown_ms = 3600000 WHERE spell_id = 21169");
+    shard.assert_sql("INSERT INTO game_spell_reagent (id, spell_id, item_entry, count) VALUES (169352, 21169, 17030, 1)");
     insert_effect(
         shard,
         21169,
