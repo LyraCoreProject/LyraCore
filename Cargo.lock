@@ -1254,6 +1254,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "benilla-protocol",
+ "flate2",
  "lyracore-conformance",
  "lyracore-shared",
  "lyracore-test-support",

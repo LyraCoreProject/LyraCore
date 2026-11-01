@@ -16,6 +16,7 @@ test = true
 [dependencies]
 lyracore-shared.workspace = true
 anyhow = "1"
+flate2 = { version = "1", default-features = false, features = ["rust_backend"] }
 sha1 = "0.10"
 subtle = "2"
 num-bigint = "0.4"

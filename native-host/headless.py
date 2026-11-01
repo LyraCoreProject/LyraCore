@@ -2,6 +2,7 @@ import hashlib
 import secrets
 import socket
 import struct
+import zlib
 
 KEY = bytes([0x57] * 40)
 PRIME = bytes.fromhex('b79b3e2a87823cab8f5ebfbf8eb10108535006298b5badbd5b53e1895e644b89')
@@ -116,33 +117,47 @@ def reply_header(header):
     return size - 2, struct.unpack('<H', header[2:])[0]
 
 
-def auth_session(username, key, server_seed, build=5875, valid_proof=True):
+def auth_session(username, key, server_seed, build=5875, valid_proof=True, addons=()):
     client_seed = secrets.token_bytes(4)
     proof = sha(username.encode(), bytes(4), client_seed, server_seed, key) if valid_proof else bytes(20)
-    body = struct.pack('<II', build, 0) + username.encode() + b'\0' + client_seed + proof + bytes(4)
+    addon_bytes = b''.join(name.encode() + b'\0' + struct.pack('<BII', flags, crc, url_crc)
+                           for name, flags, crc, url_crc in addons)
+    addon_block = struct.pack('<I', len(addon_bytes))
+    if addon_bytes:
+        addon_block += zlib.compress(addon_bytes)
+    body = struct.pack('<II', build, 0) + username.encode() + b'\0' + client_seed + proof + addon_block
     return request_header(0x1ed, len(body)) + body
 
 
 class World:
     """One World Session. `guid` is the Character it entered, or None."""
 
-    def __init__(self, port, username='NATIVE', build=5875, valid_proof=True, key=KEY):
+    def __init__(self, port, username='NATIVE', build=5875, valid_proof=True, key=KEY, addons=()):
         self.socket = socket.create_connection(('127.0.0.1', port), timeout=10)
         self.username = username
         self.guid = None
         self.entered = []
+        self.addon_info = None
+        self.has_addons = bool(addons)
         self.encrypt = Cipher(key)
         self.decrypt = Cipher(key)
         header = read_exact(self.socket, 4)
         assert header == AUTH_CHALLENGE, header.hex()
-        self.socket.sendall(auth_session(username, key, read_exact(self.socket, 4), build, valid_proof))
+        self.socket.sendall(auth_session(username, key, read_exact(self.socket, 4), build, valid_proof, addons))
 
     def read(self, encrypted=True):
+        """Consumes the addon reply with the first successful or queued authentication response."""
         header = read_exact(self.socket, 4)
         if encrypted:
             header = self.decrypt.decrypt(header)
         size, opcode = reply_header(header)
-        return opcode, read_exact(self.socket, size)
+        body = read_exact(self.socket, size)
+        if opcode == 0x1ee and body[:1] in (b'\x0c', b'\x1b') and self.addon_info is None:
+            addon_opcode, self.addon_info = self.read()
+            assert addon_opcode == 0x2ef, hex(addon_opcode)
+            if not self.has_addons:
+                assert self.addon_info == b'', self.addon_info.hex()
+        return opcode, body
 
     def send(self, opcode, body=b''):
         self.socket.sendall(self.encrypt.encrypt(request_header(opcode, len(body))) + body)
