@@ -67,8 +67,11 @@ The Transfer uses the existing Character-owned BSATN manifest. Items, skills, sp
 and other transported Character-owned rows travel in one batch. Auras keep their absolute expiry.
 AOI Grants, the NativePlayer row, Transport attachment and other explicitly omitted transient rows
 are rebuilt or dropped. A pending cast is cancelled before export. Melee, threat and other combat
-state do not survive. Leaving the world applies the existing logout cleanup, including pet despawn
-and buyback cleanup. Connection request limits start with the adopted connection state.
+state do not survive. Pending godmode and the run speed multiplier survive export and adoption,
+as they do for a cross-map teleport within one Shard. A real logout or connection loss clears them;
+a refused Transfer or connection loss before adoption also clears them on the resident copy.
+Leaving the world keeps pet despawn, buyback cleanup and the rest of the existing logout cleanup.
+Connection request limits start with the adopted connection state.
 
 Groups, guilds, whispers, who, friends, mail and auctions across World Shards remain unsupported.
 The manifest does not make Shard-owned social or economic state shared. Transport attachment does

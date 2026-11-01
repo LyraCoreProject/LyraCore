@@ -94,7 +94,11 @@ pub(super) fn begin(
         o: character.orientation,
     };
     let transfer_id = *crate::auth::reserve_guids(ctx, 1, u64::MAX)?.start();
-    super::world::leave(ctx, connection.connection_id);
+    super::world::leave(
+        ctx,
+        connection.connection_id,
+        crate::world::CharacterDeparture::Transfer,
+    );
     let mut character = crate::helpers::character_by_guid(ctx, player.character_guid)
         .ok_or("Character vanished during departure")?;
     character.relocate(destination);
@@ -246,6 +250,7 @@ pub fn native_transfer_answered(
     if let Err(error) = result {
         spacetimedb::log::warn!("Transfer {} refused: {error}", call.transfer_id);
         transfer::apply_abort(&mut CtxShard { ctx }, call.transfer_id)?;
+        clear_pending_playtest(ctx, call.character_guid);
         let origin: Option<NativeTeleportOrigin> =
             bsatn::from_slice(&call.origin).map_err(|error| error.to_string())?;
         super::teleport::restore_origin(ctx, call.character_guid, origin);
@@ -472,6 +477,7 @@ pub fn idc_native_transfer_release(
         transfer::apply_release(&mut CtxShard { ctx }, transfer_id)?;
     }
     if !connected {
+        clear_pending_playtest(ctx, character_guid);
         ctx.db
             .game_world_session_closed()
             .insert(WorldSessionClosed {
@@ -486,6 +492,19 @@ pub fn idc_native_transfer_release(
             .delete(handoff.connection_id);
     }
     Ok(())
+}
+
+fn clear_pending_playtest(ctx: &ReducerContext, guid: u64) {
+    if let Some(mut character) = crate::helpers::character_by_guid(ctx, guid) {
+        let (godmode, speed) = crate::world::persisted_gm_playtest(
+            character.pending_godmode,
+            character.pending_run_speed_mult_bp,
+            true,
+        );
+        character.pending_godmode = godmode;
+        character.pending_run_speed_mult_bp = speed;
+        ctx.db.game_character().guid().update(character);
+    }
 }
 
 #[reducer(on_result(game_native_transfer_release))]

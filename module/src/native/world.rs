@@ -8,6 +8,7 @@ use crate::game_world_entity;
 use crate::reputation::game_player_reputation;
 use crate::skill::game_player_skill;
 use crate::spell::spellbook::game_player_spell;
+use crate::world::CharacterDeparture;
 
 use super::{
     game_native_player, game_native_world_connection, NativeActive, NativePlayer,
@@ -256,7 +257,11 @@ pub(super) fn enter_character(
     Ok(())
 }
 
-pub(super) fn leave(ctx: &ReducerContext, connection_id: ConnectionId) {
+pub(super) fn leave(
+    ctx: &ReducerContext,
+    connection_id: ConnectionId,
+    departure: CharacterDeparture,
+) {
     let players = ctx.db.game_native_player();
     if let Some(player) = players.connection_id().find(connection_id) {
         super::clear_audience(ctx, connection_id);
@@ -275,7 +280,7 @@ pub(super) fn leave(ctx: &ReducerContext, connection_id: ConnectionId) {
         {
             crate::world::remove_live_character(ctx, entity);
         } else {
-            crate::world::remove_loading_character(ctx, player.character_guid);
+            crate::world::remove_loading_character(ctx, player.character_guid, departure);
         }
         super::party::roster(ctx, player.character_guid, true);
     }
@@ -682,7 +687,7 @@ pub(super) fn receive(
             }) {
                 ServerOpcodeMessage::SMSG_LOGOUT_RESPONSE(codec::logout_denied_in_combat())
             } else {
-                leave(ctx, connection.connection_id);
+                leave(ctx, connection.connection_id, CharacterDeparture::Logout);
                 let (connection_id, server_seed) =
                     (connection.connection_id, connection.server_seed);
                 let NativeWorldState::InWorld(NativeActive { account_id, .. }) = connection.state
